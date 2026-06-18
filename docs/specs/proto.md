@@ -42,7 +42,14 @@ pub fn parse_stream_line(line: &str) -> Result<StreamMsg, ProtoError>;
 pub fn encode_user_input(input: &UserInput) -> String;          // encodes a stream-json user turn
 pub fn encode_control_response(resp: &ControlResponse) -> String;
 
-pub enum IpcMsg { /* GUI<->agent: LaunchSession, ResumeSession, AttachSession, StopSession, SendPrompt, AnswerGate, Subscribe, VmUpdate, AgentEvent, ... */ }
+// Shared session-launch parameters. These are PROTOCOL DATA (what the GUI/core sends over IPC for
+// the agent to start a session), so they live here at the bottom of the DAG — NOT in marsad-core.
+// Both marsad-core (which builds them from the UI) and marsad-agent (which consumes them in
+// `launch`/`claude_argv`) depend on marsad-proto, so neither needs to depend on the other.
+pub enum Posture { Ask, AutoApproveSafe, FullAutonomy }
+pub struct LaunchSpec { pub project: String, pub host_id: String, pub model: String, pub posture: Posture, pub first_prompt: Option<String> }
+
+pub enum IpcMsg { /* GUI<->agent: LaunchSession(LaunchSpec), ResumeSession, AttachSession, StopSession, SendPrompt, AnswerGate, Subscribe, VmUpdate, AgentEvent, ... */ }
 pub fn parse_ipc(line: &str) -> Result<IpcMsg, ProtoError>;
 pub fn encode_ipc(msg: &IpcMsg) -> String;
 

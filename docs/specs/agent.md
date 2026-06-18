@@ -25,14 +25,14 @@ impl Agent {
     pub fn serve(self) -> Result<(), AgentError>;                 // blocking event loop (the daemon)
 
     // Composition seams (unit-testable without real claude):
-    pub fn launch(&mut self, spec: marsad_core::LaunchSpec) -> Result<String, AgentError>;
+    pub fn launch(&mut self, spec: marsad_proto::LaunchSpec) -> Result<String, AgentError>;
     pub fn handle_ipc(&mut self, line: &str) -> Result<Vec<String>, AgentError>;   // inbound IPC -> outbound IPC lines
     pub fn handle_hook(&mut self, payload: &str) -> Result<(), AgentError>;        // Claude Code hook callback
     pub fn reconcile_all(&mut self) -> Vec<marsad_lifecycle::SessionRuntime>;       // on startup, re-adopt/resume/stale
 }
 
 /// The exact claude invocation the supervisor runs inside a container.
-pub fn claude_argv(spec: &marsad_core::LaunchSpec) -> Vec<String>;
+pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String>;
 // => ["claude","--print","--input-format","stream-json","--output-format","stream-json","--verbose", ...]
 
 pub enum AgentError { Listen(String), Spawn(String), Transport(String), Protocol(String), Lifecycle(String) }

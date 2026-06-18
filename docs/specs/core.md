@@ -17,8 +17,10 @@ via `marsad-viewmodel`, and sends commands (launch/resume/attach/stop/prompt/gat
 pub struct Core { /* ... */ }
 
 pub struct CoreConfig { pub agent_endpoint: String, pub data_root: String }
-pub struct LaunchSpec { pub project: String, pub host_id: String, pub model: String, pub posture: Posture, pub first_prompt: Option<String> }
-pub enum Posture { Ask, AutoApproveSafe, FullAutonomy }
+
+// LaunchSpec/Posture are protocol data defined in marsad-proto (shared with marsad-agent). Core
+// re-exports them so callers can keep naming `marsad_core::{LaunchSpec, Posture}`.
+pub use marsad_proto::{LaunchSpec, Posture};
 
 pub enum VmUpdate { Overview(/*...*/), Session(/*...*/), Toast { icon: String, text: String }, HostHealth(/*...*/) }
 

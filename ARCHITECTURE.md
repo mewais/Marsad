@@ -58,7 +58,9 @@ Tiers: **L0** pure data/logic; **L1** logic behind mockable traits; **L2** integ
 
 **Dependency DAG (acyclic):** `proto ← events,gates,transport`; `format,diff,gates ← viewmodel`;
 `proto,events,transport,lifecycle,store,hosts,notify ← agent`; `everything ← core`;
-`core ← D01/M01/M02`.
+`core ← D01/M01/M02`. Shared session-launch types (`LaunchSpec`, `Posture`) live in `marsad-proto`
+(protocol data) and are re-exported by `marsad-core`; `marsad-agent` consumes them from `marsad-proto`
+directly — so there is **no `agent → core` edge** (core is the client of agent, never the reverse).
 
 ## Test-first isolation regime
 
