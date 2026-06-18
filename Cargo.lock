@@ -288,6 +288,7 @@ dependencies = [
  "marsad-events",
  "marsad-format",
  "marsad-gates",
+ "marsad-hosts",
  "marsad-proto",
  "serde",
 ]

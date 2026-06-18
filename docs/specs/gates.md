@@ -11,10 +11,15 @@ one** session and that re-delivering the same decision is a no-op (idempotent).
 ## Public API (authoritative)
 
 ```rust
+// Re-export the diff line types so downstream crates (and tests) can name them as
+// `marsad_gates::DiffLine` / `marsad_gates::Sig` without each depending on marsad-diff directly.
+// REQUIRED public surface — `marsad-format` tests import `marsad_gates::{DiffLine, Sig}`.
+pub use marsad_diff::{DiffLine, Sig};
+
 pub enum Gate {
     Permission { command: String, cwd: String, risk: String, explanation: String },
     Plan { summary: String, steps: Vec<PlanStep> },
-    Edit { file: String, diff: Vec<marsad_diff::DiffLine> },   // diff lines re-used by viewmodel/diff
+    Edit { file: String, diff: Vec<DiffLine> },   // DiffLine re-exported above
 }
 pub struct PlanStep { pub title: String, pub detail: String }
 
@@ -70,4 +75,6 @@ Derive `Debug, Clone, PartialEq` (+ serde) on public types.
 ## Edit scope
 
 Code-agent: write `crates/marsad-gates/src/**` + `Cargo.toml`; read-only `tests/`, this spec.
-Note: depends on `marsad-diff::DiffLine` for the Edit gate — keep the type re-exported/aligned.
+The crate already depends on `marsad-diff`; the code-agent MUST add `pub use marsad_diff::{DiffLine,
+Sig};` at the crate root so the re-export above is part of the public API (the `marsad-format` test
+suite relies on `marsad_gates::{DiffLine, Sig}` resolving).

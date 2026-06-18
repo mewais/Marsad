@@ -15,3 +15,4 @@ marsad-events = { workspace = true }
 marsad-gates = { workspace = true }
 marsad-diff = { workspace = true }
 marsad-format = { workspace = true }
+marsad-hosts = { workspace = true }
