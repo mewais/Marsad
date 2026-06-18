@@ -3,13 +3,6 @@
 ///
 /// These tests WILL fail to compile until the code-agent implements `marsad_viewmodel`.
 /// That is the expected tests-first signal.
-///
-/// NOTE(ambiguity): The spec says `AppSnapshot.hosts: Vec<marsad_hosts::Host>`, but
-/// `marsad-hosts` is not listed in marsad-viewmodel's Cargo.toml dependencies.
-/// The code-agent MUST add `marsad-hosts` as a dependency (to expose Host in the
-/// public type) AND re-export `Host` and `HostStatus` from `marsad_viewmodel` so
-/// these tests can reference them. If the code-agent instead pulls Host from a
-/// different path, update these imports accordingly.
 use marsad_diff::{DiffLine, Sig};
 use marsad_events::Phase;
 use marsad_gates::{Gate, PlanStep};
@@ -405,7 +398,7 @@ fn rescope_restricts_sessions_to_workspace_ids() {
         id: "ws1".to_string(),
         name: "Backend".to_string(),
         session_ids: vec!["s1".to_string(), "s3".to_string()],
-        saved_at: None,
+        saved_at: String::new(),
     }];
     let scoped = rescope("ws1", &snap);
     assert_eq!(scoped.sessions.len(), 2);
@@ -421,7 +414,7 @@ fn rescope_counts_reflect_restricted_sessions() {
         id: "ws1".to_string(),
         name: "Backend".to_string(),
         session_ids: vec!["s1".to_string()], // only s1 (needs)
-        saved_at: None,
+        saved_at: String::new(),
     }];
     let scoped = rescope("ws1", &snap);
     let c = counts(&scoped);

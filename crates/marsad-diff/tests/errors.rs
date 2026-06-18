@@ -47,6 +47,9 @@ fn split_single_add_line() {
     let rows = split_side_by_side(&lines);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].left.kind, CellKind::Empty);
+    assert_eq!(rows[0].left.ln, "");
+    assert_eq!(rows[0].left.sig, ' ');
+    assert_eq!(rows[0].left.text, "");
     assert_eq!(rows[0].right.kind, CellKind::Add);
     assert_eq!(rows[0].right.text, "lone add");
 }
@@ -58,8 +61,11 @@ fn split_single_del_line() {
     let rows = split_side_by_side(&lines);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].left.kind, CellKind::Del);
-    assert_eq!(rows[0].right.kind, CellKind::Empty);
     assert_eq!(rows[0].left.text, "lone del");
+    assert_eq!(rows[0].right.kind, CellKind::Empty);
+    assert_eq!(rows[0].right.ln, "");
+    assert_eq!(rows[0].right.sig, ' ');
+    assert_eq!(rows[0].right.text, "");
 }
 
 #[test]

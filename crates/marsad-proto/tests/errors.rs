@@ -116,10 +116,29 @@ fn stream_type_field_is_null() {
 
 // ---------------------------------------------------------------------------
 // UnknownDiscriminant — valid JSON, "type" present but not a recognized variant
-// (NOTE: for stream, unrecognized types become Unknown, not an error — see branches.rs.
-//  For IPC, unrecognized types are UnknownDiscriminant because IPC has no Unknown escape hatch
-//  per spec.  If the spec later adds Unknown to IPC, update accordingly.)
+//
+// Stream protocol: unrecognized types become StreamMsg::Unknown (forward-compat),
+// NOT an error. That positive case lives in branches.rs::unknown_type_becomes_unknown_variant.
+//
+// IPC protocol: unrecognized types are UnknownDiscriminant (an error). The IPC
+// protocol is a closed GUI<->agent surface; an unknown type is a bug, not
+// forward-compat. There is no Unknown variant in IpcMsg — this is final per spec.
 // ---------------------------------------------------------------------------
+
+/// Stream: unrecognized type must NOT return UnknownDiscriminant — it must succeed
+/// and produce StreamMsg::Unknown. (Positive assertion lives in branches.rs;
+/// this guard confirms the error is NOT raised.)
+#[test]
+fn stream_unknown_type_is_not_an_error() {
+    use marsad_proto::StreamMsg;
+    let line = r#"{"type":"totally_unrecognized_type","extra":99}"#;
+    let msg = parse_stream_line(line)
+        .expect("stream: unrecognized type must parse as Unknown, never UnknownDiscriminant");
+    assert!(
+        matches!(msg, StreamMsg::Unknown(_)),
+        "stream: unrecognized type must become Unknown, got {msg:?}"
+    );
+}
 
 #[test]
 fn ipc_unknown_discriminant() {

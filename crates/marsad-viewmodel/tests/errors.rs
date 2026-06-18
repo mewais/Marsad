@@ -3,10 +3,6 @@
 ///
 /// These tests WILL fail to compile until the code-agent implements `marsad_viewmodel`.
 /// That is the expected tests-first signal.
-///
-/// NOTE(ambiguity): Host and HostStatus are imported via marsad_viewmodel re-exports.
-/// The code-agent must re-export these types from marsad_viewmodel (which depends on
-/// marsad-hosts). See happy.rs NOTE for details.
 use marsad_events::Phase;
 use marsad_viewmodel::{
     counts, gate_vm, group_overview, rescope, session_detail, sidebar_list, AppSnapshot, Filter,
@@ -211,7 +207,7 @@ fn rescope_unknown_workspace_returns_unchanged_snapshot() {
             id: "ws-real".to_string(),
             name: "Real WS".to_string(),
             session_ids: vec!["s1".to_string()],
-            saved_at: None,
+            saved_at: String::new(),
         }],
         active_ws: None,
         selected_id: None,
@@ -250,7 +246,7 @@ fn rescope_empty_workspace_session_ids_gives_no_sessions() {
             id: "empty-ws".to_string(),
             name: "Empty".to_string(),
             session_ids: vec![],
-            saved_at: None,
+            saved_at: String::new(),
         }],
         active_ws: None,
         selected_id: None,

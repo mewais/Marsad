@@ -6,10 +6,6 @@
 //   - state_meta: every Phase including Stale/Detached
 //   - gate_meta: each Gate variant; empty plan steps edge case
 
-// NOTE: Tests that construct Gate::Edit need DiffLine/Sig. Since marsad-diff is not
-// a direct dependency of marsad-format, these types must be re-exported from marsad_gates.
-// The code-agent for marsad-gates should add: `pub use marsad_diff::{DiffLine, Sig};`
-
 use marsad_format::{
     ctx_color, fmt_elapsed, fmt_tokens, gate_meta, state_meta, Phase, Token,
 };
@@ -173,12 +169,6 @@ fn state_meta_stale() {
 
 #[test]
 fn state_meta_detached() {
-    // Detached is extended beyond prototype; spec says Detached→Accent2-ish
-    // NOTE: The spec says "Accent2-ish" without naming the exact token. We test
-    // that label is "Detached" and color is Token::Accent2 (the most natural choice).
-    // The code-agent should use Token::Accent2 here; if a different token is chosen
-    // the implementation must update this test (per test-first invariant the tests
-    // are read-only, but the spec is ambiguous — leaving this as Accent2 for now).
     let m = state_meta(Phase::Detached);
     assert_eq!(m.label, "Detached");
     assert_eq!(m.color, Token::Accent2);
@@ -249,12 +239,7 @@ fn gate_meta_plan_with_single_step() {
 #[test]
 fn gate_meta_plan_empty_steps() {
     // Edge: 0 steps — the prototype would panic on steps[0].title; the Rust impl
-    // must handle this gracefully. We expect kind/icon/lead/approve_label to still
-    // be set; summary should be "0 steps · …" or similar without panicking.
-    // NOTE: The spec does not define the exact fallback — see AMBIGUITY note below.
-    // We assert only that it does not panic and that the static fields are correct.
-    // AMBIGUITY: empty steps summary is unspecified; the code-agent must choose a
-    // safe default (e.g. "0 steps · …"). This assertion is intentionally loose.
+    // must handle this gracefully.
     let gate = Gate::Plan {
         summary: String::from("Empty plan"),
         steps: vec![],
@@ -262,8 +247,7 @@ fn gate_meta_plan_empty_steps() {
     let gm = gate_meta(&gate);
     assert_eq!(gm.kind, "Plan review");
     assert_eq!(gm.approve_label, "Approve plan");
-    // No panic is the primary requirement; summary must start with "0 steps"
-    assert!(gm.summary.starts_with("0 steps"));
+    assert_eq!(gm.summary, "0 steps");
 }
 
 #[test]

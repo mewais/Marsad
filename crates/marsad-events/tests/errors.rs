@@ -165,17 +165,16 @@ fn unknown_stream_msg_is_total() {
 }
 
 // ---------------------------------------------------------------------------
-// Stale phase: out-of-order assistant event does not panic, invariants hold
+// Stale phase: non-init stream events preserve Stale (totality no-ops)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn out_of_order_on_stale_phase_does_not_panic() {
+fn stale_preserved_by_assistant_stream() {
     let mut s = after_init();
     s.phase = Phase::Stale;
-    // Receiving an assistant message while Stale must not panic.
-    // Spec: "preserve [Stale] until a stream event supersedes" — assistant is
-    // arguably a superseding event. We only assert totality here.
+    // Spec: assistant while Stale is a totality no-op that preserves the phase.
     let s1 = reduce(s, stream(&assistant_json("msg-stale")));
+    assert_eq!(s1.phase, Phase::Stale, "assistant must not escape Stale phase");
     assert!(s1.tokens <= u64::MAX);
     assert!(s1.context_pct <= 100.0);
 }

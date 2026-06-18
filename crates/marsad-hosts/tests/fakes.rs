@@ -112,11 +112,9 @@ fn health_check_unreachable_via_fake_err_unreachable() {
 
 #[test]
 fn health_check_reconnecting_via_fake_err_non_unreachable() {
-    // NOTE(test-agent): Uses a non-Unreachable HostError to represent a transient failure.
-    // The spec states transient failure -> Reconnecting, hard failure -> Unreachable.
-    // We rely on the code-agent to distinguish HostError::Unreachable (hard) from other
-    // variants (transient). If the impl maps all errors to Unreachable, this test will fail,
-    // and the code-agent must revise without editing the tests.
+    // Spec-pinned: HostError::Unreachable(_) -> hard -> HostStatus::Unreachable;
+    // any other HostError -> transient -> HostStatus::Reconnecting.
+    // NotFound is used here as the representative non-Unreachable error.
     let mut fake = FakeSshRunner::new();
     fake.respond(
         "user@flaky.example.com",

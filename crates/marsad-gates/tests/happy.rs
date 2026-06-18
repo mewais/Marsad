@@ -5,8 +5,7 @@
 //! - to_control_response mapping: Approve -> allow behavior, Reject -> deny with reason as message
 //! - route yields exactly the decision's session_id
 
-use marsad_diff::{DiffLine, Sig};
-use marsad_gates::{approve, reject, route, to_control_response, Decision, Gate, GateDecision, PlanStep};
+use marsad_gates::{approve, reject, route, to_control_response, Decision, DiffLine, Gate, GateDecision, PlanStep, Sig};
 
 // ---------------------------------------------------------------------------
 // Helpers

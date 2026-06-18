@@ -5,8 +5,7 @@
 //! - GateError::DuplicateDecision on second DecisionLedger::record call (idempotency)
 //! - DecisionLedger::seen false before record, true after
 
-use marsad_diff::{DiffLine, Sig};
-use marsad_gates::{approve, reject, GateError, Gate, DecisionLedger, PlanStep, decision_id};
+use marsad_gates::{approve, decision_id, reject, DecisionLedger, DiffLine, Gate, GateError, PlanStep, Sig};
 
 // ---------------------------------------------------------------------------
 // Helpers

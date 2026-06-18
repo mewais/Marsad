@@ -7,9 +7,10 @@
 //! - StoreError::BadImport       — wrong envelope (missing marsadWorkspace key)
 //! - StoreError::NotFound        — export_workspace on a non-existent workspace id
 //! - StoreError::Backend(String) — backend read/write failure propagated to Store
+//!                                 (via MemoryBackend::fail_next(BackendOp::...))
 //! - All StoreError variants implement Debug (spec: derive Debug)
 
-use marsad_store::{Backend, MemoryBackend, PersistedSession, Store, StoreError, Workspace};
+use marsad_store::{Backend, BackendOp, MemoryBackend, PersistedSession, Store, StoreError, Workspace};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -227,31 +228,16 @@ fn export_workspace_unknown_id_returns_not_found() {
 // StoreError::Backend — backend read/write failure propagated
 // ---------------------------------------------------------------------------
 
-// NOTE(test-agent): The spec declares a Backend write-failure path for StoreError::Backend, but
-// does not specify a public API on MemoryBackend to force write or read failures (it only exposes
-// `corrupt`). To trigger Backend errors we use a small inline fake that always returns errors.
-
-struct AlwaysErrorBackend;
-
-impl Backend for AlwaysErrorBackend {
-    fn read(&self, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
-        Err(StoreError::Backend(format!("forced read error for {key}")))
-    }
-    fn write(&self, key: &str, _bytes: &[u8]) -> Result<(), StoreError> {
-        Err(StoreError::Backend(format!("forced write error for {key}")))
-    }
-    fn list(&self, _prefix: &str) -> Result<Vec<String>, StoreError> {
-        Err(StoreError::Backend("forced list error".to_string()))
-    }
-    fn delete(&self, key: &str) -> Result<(), StoreError> {
-        Err(StoreError::Backend(format!("forced delete error for {key}")))
-    }
-}
+// Each test arms a fresh MemoryBackend with fail_next(BackendOp::...) to force the next matching
+// operation to return StoreError::Backend, exercising the blessed public fake rather than an inline
+// hand-rolled error backend.
 
 #[test]
 fn backend_write_failure_propagates_from_upsert_session() {
-    let mut store = Store::new(Box::new(AlwaysErrorBackend));
-    let sess = make_session("sess-fail");
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::Write);
+    let mut store = Store::new(Box::new(backend));
+    let sess = make_session("sess-fail-write");
     match store.upsert_session(&sess) {
         Err(StoreError::Backend(_)) => {}
         other => panic!("expected Backend error from write failure, got: {other:?}"),
@@ -260,8 +246,10 @@ fn backend_write_failure_propagates_from_upsert_session() {
 
 #[test]
 fn backend_write_failure_propagates_from_snapshot_workspace() {
-    let mut store = Store::new(Box::new(AlwaysErrorBackend));
-    let ws = make_workspace("ws-fail");
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::Write);
+    let mut store = Store::new(Box::new(backend));
+    let ws = make_workspace("ws-fail-write");
     match store.snapshot_workspace(&ws) {
         Err(StoreError::Backend(_)) => {}
         other => panic!("expected Backend error, got: {other:?}"),
@@ -270,20 +258,24 @@ fn backend_write_failure_propagates_from_snapshot_workspace() {
 
 #[test]
 fn backend_write_failure_propagates_from_append_transcript() {
-    let mut store = Store::new(Box::new(AlwaysErrorBackend));
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::Write);
+    let mut store = Store::new(Box::new(backend));
     let entry = marsad_store::TranscriptEntry {
         kind: "text".to_string(),
         payload: "hello".to_string(),
     };
-    match store.append_transcript("sess-fail", &entry) {
+    match store.append_transcript("sess-fail-write", &entry) {
         Err(StoreError::Backend(_)) => {}
         other => panic!("expected Backend error, got: {other:?}"),
     }
 }
 
 #[test]
-fn backend_read_failure_propagates_from_restore() {
-    let store = Store::new(Box::new(AlwaysErrorBackend));
+fn backend_list_failure_propagates_from_restore() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::List);
+    let store = Store::new(Box::new(backend));
     match store.restore() {
         Err(StoreError::Backend(_)) => {}
         other => panic!("expected Backend error from restore, got: {other:?}"),
@@ -291,8 +283,23 @@ fn backend_read_failure_propagates_from_restore() {
 }
 
 #[test]
+fn backend_read_failure_propagates_from_restore() {
+    // Arm a read failure: first write a key so restore tries to read it, then fail_next(Read).
+    let backend = MemoryBackend::new();
+    backend.write("session:seed", b"dummy").expect("write seed");
+    backend.fail_next(BackendOp::Read);
+    let store = Store::new(Box::new(backend));
+    match store.restore() {
+        Err(StoreError::Backend(_)) => {}
+        other => panic!("expected Backend error from restore read, got: {other:?}"),
+    }
+}
+
+#[test]
 fn backend_read_failure_propagates_from_export_workspace() {
-    let store = Store::new(Box::new(AlwaysErrorBackend));
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::Any);
+    let store = Store::new(Box::new(backend));
     match store.export_workspace("any-id") {
         Err(StoreError::Backend(_)) | Err(StoreError::NotFound(_)) => {}
         other => panic!("expected Backend or NotFound error, got: {other:?}"),

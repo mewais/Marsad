@@ -5,10 +5,6 @@
 ///
 /// These tests WILL fail to compile until the code-agent implements `marsad_viewmodel`.
 /// That is the expected tests-first signal.
-///
-/// NOTE(ambiguity): Host and HostStatus are imported via marsad_viewmodel re-exports.
-/// The code-agent must re-export these types from marsad_viewmodel (which depends on
-/// marsad-hosts). See happy.rs NOTE for details.
 use marsad_events::Phase;
 use marsad_viewmodel::{
     parse_slash, session_detail, sidebar_list, slash_catalog, AppSnapshot, Filter, Host,
@@ -476,8 +472,8 @@ fn slash_catalog_entry_has_name_and_description() {
     let entries = slash_catalog("");
     for entry in &entries {
         assert!(!entry.name.is_empty(), "every entry must have a non-empty name");
-        // description/desc field should exist; we just ensure it's accessible
-        let _desc: &str = &entry.description;
+        // desc field should exist; we just ensure it's accessible
+        let _desc: &str = &entry.desc;
     }
 }
 

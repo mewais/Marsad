@@ -8,8 +8,7 @@
 //! - DecisionLedger::seen true/false
 //! - Approve and Reject for all three gate types in table-driven form
 
-use marsad_diff::{DiffLine, Sig};
-use marsad_gates::{approve, decision_id, reject, Decision, DecisionLedger, Gate, GateError, PlanStep};
+use marsad_gates::{approve, decision_id, reject, Decision, DecisionLedger, DiffLine, Gate, GateError, PlanStep, Sig};
 
 // ---------------------------------------------------------------------------
 // Helpers

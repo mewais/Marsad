@@ -129,12 +129,8 @@ fn remove_unknown_id_returns_not_found() {
 
 #[test]
 fn health_check_unknown_id_returns_unreachable_status() {
-    // NOTE(test-agent): The spec says health_check returns HostStatus (not Result), so
-    // it cannot return HostError::NotFound directly. It presumably maps a missing host
-    // to HostStatus::Unreachable. If the impl chooses to panic or return a different
-    // status, the code-agent should clarify. We assert Unreachable here as the safest
-    // public behavior for a truly unknown id. If the spec allows a different variant,
-    // the code-agent may need to adjust, but must NOT edit this test.
+    // Spec-pinned: health_check returns HostStatus (not Result); unknown id -> HostStatus::Unreachable.
+    // Callers that need to distinguish "no such host" use list()/lookup first.
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
     let status = reg.health_check("nonexistent-id-xyz");

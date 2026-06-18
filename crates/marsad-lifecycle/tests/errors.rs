@@ -1,10 +1,13 @@
 //! Error paths:
-//!   • AttachRace  — exists() true, attach() fails → re-probe → falls to Resume or Stale.
+//!   • AttachRace  — exists()=true, attach() fails → re-probe once:
+//!       still alive → Err(AttachRace)
+//!       now gone + session_id  → Ok(Resume)
+//!       now gone + no session  → Ok(MarkStale)
 //!   • ResumeFailed — spawn returns error during Resume path.
 //!   • Spawn failure mapped to appropriate error variant.
 
 use marsad_lifecycle::{
-    reconcile, Action, FakeContainer, LifecycleError, Persisted, RuntimePhase, SessionRuntime,
+    reconcile, Action, FakeContainer, LifecycleError, Persisted, RuntimePhase,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -31,42 +34,65 @@ fn persisted_no_session(container: &str) -> Persisted {
 //
 // Scenario: exists() → true, but between the probe and the attach the container
 // disappeared (TOCTOU / race).  The attach() returns AttachRace.
-// After the failure reconcile re-probes: if the container is now dead and
-// session_id is known it falls through to Resume; if there is no session_id
-// it surfaces Stale.
+// reconcile then re-probes exactly once:
+//   - still alive → return Err(AttachRace)  (transient; caller retries)
+//   - now gone + session_id known → Ok(Resume(...))
+//   - now gone + no session_id   → Ok(MarkStale)
+//
+// FakeContainer::set_exists queues return values per name: calling
+// set_exists("x", true) then set_exists("x", false) makes the first exists("x")
+// return true and the second return false — matching the TOCTOU scenario.
+
+#[test]
+fn attach_race_reprobe_still_alive_returns_attach_race_error() {
+    // exists()→true, attach()→fail, re-probe→true  ⟹  Err(AttachRace)
+    let p = persisted_with_session("sid-persistent-race", "marsad-pr");
+    let mut container = FakeContainer::new();
+    // Both probes see alive: queue [true, true]
+    container.set_exists("marsad-pr", true);
+    container.set_exists("marsad-pr", true);
+    container.fail_attach("marsad-pr");
+
+    let err = reconcile(&p, &mut container)
+        .expect_err("re-probe still alive → must return Err(AttachRace)");
+    assert!(
+        matches!(err, LifecycleError::AttachRace(_)),
+        "re-probe still alive → AttachRace, got {err:?}"
+    );
+}
 
 #[test]
 fn attach_race_with_session_id_falls_to_resume() {
+    // exists()→true, attach()→fail, re-probe→false, session_id known  ⟹  Ok(Resume)
     let p = persisted_with_session("sid-race", "marsad-sid-race");
     let mut container = FakeContainer::new();
-    // Report alive so reconcile tries to adopt, but attach will fail
+    // First probe alive, re-probe dead: queue [true, false]
     container.set_exists("marsad-sid-race", true);
-    container.fail_attach("marsad-sid-race");
-    // After re-probe the container is gone (set_exists stays false after the
-    // race — FakeContainer should re-query; the default is false so after we
-    // flip to false the second probe sees dead).
-    // We switch it to false so re-probe returns dead.
-    // NOTE(test-agent): the order of operations matters — fail_attach is
-    // called before set_exists(false) so that the first exists() returns true.
     container.set_exists("marsad-sid-race", false);
+    container.fail_attach("marsad-sid-race");
 
     let result = reconcile(&p, &mut container).expect("reconcile must succeed after race recovery");
-    // Falls through to Resume because session_id is known
     assert!(
         matches!(result.action, Action::Resume(_)),
         "after AttachRace + re-probe dead + session_id known → Resume, got {:?}",
         result.action
     );
+    // Resume → phase is None (not Stale, not Detached)
+    assert!(
+        result.phase.is_none(),
+        "successful Resume → phase None, got {:?}", result.phase
+    );
 }
 
 #[test]
 fn attach_race_without_session_id_falls_to_stale() {
+    // exists()→true, attach()→fail, re-probe→false, no session_id  ⟹  Ok(MarkStale)
     let p = persisted_no_session("marsad-race2");
     let mut container = FakeContainer::new();
+    // First probe alive, re-probe dead: queue [true, false]
     container.set_exists("marsad-race2", true);
-    container.fail_attach("marsad-race2");
-    // After re-probe: container dead, no session_id → MarkStale
     container.set_exists("marsad-race2", false);
+    container.fail_attach("marsad-race2");
 
     let result =
         reconcile(&p, &mut container).expect("reconcile must succeed after race with no session");
@@ -82,38 +108,14 @@ fn attach_race_without_session_id_falls_to_stale() {
     );
 }
 
-#[test]
-fn attach_race_still_alive_after_reprobe_readopts() {
-    // Edge: exists()=true, attach fails, re-probe still true → try again (or
-    // surface an error).  The spec says "re-probe → may fall to Resume/Stale";
-    // if the container is still alive after the race the implementation may
-    // succeed on a second attach attempt or return an error.
-    // NOTE(test-agent): The spec does not enumerate what happens when the
-    // re-probe also returns alive but attach keeps failing.  We test that
-    // reconcile returns either Ok (adopted eventually) or an Err — it must NOT
-    // silently drop the session.
-    let p = persisted_with_session("sid-persistent-race", "marsad-pr");
-    let mut container = FakeContainer::new();
-    container.set_exists("marsad-pr", true);
-    container.fail_attach("marsad-pr");
-    // Re-probe still alive — leave set_exists(true)
-    // Result is either Ok or Err; both are acceptable per the spec.
-    let result = reconcile(&p, &mut container);
-    // The result must be deterministic (no panic)
-    let _ = result; // just ensure it doesn't panic
-}
-
 // ── ResumeFailed ─────────────────────────────────────────────────────────────
 
 #[test]
 fn resume_failed_when_spawn_errors() {
-    // NOTE(test-agent): FakeContainer needs a `fail_spawn(&mut self, name: &str)`
-    // method so we can trigger spawn failures.  The code-agent must add it.
-    // We call it here; if the method is not on the concrete type the test will
-    // fail to compile and the code-agent will see a clear signal.
+    // fail_spawn is part of the spec API (lifecycle.md §Public API).
+    // container dead → reconcile takes Resume path → calls spawn → Err(ResumeFailed).
     let p = persisted_with_session("sid-rfail", "marsad-sid-rfail");
     let mut container = FakeContainer::new();
-    // container dead → resume path will call spawn
     container.fail_spawn("marsad-sid-rfail");
 
     let err = reconcile(&p, &mut container).expect_err("spawn failure must propagate as Err");
@@ -127,10 +129,9 @@ fn resume_failed_when_spawn_errors() {
 
 #[test]
 fn spawn_failure_variant_is_returned() {
-    // When spawn() returns a Spawn error the reconcile must surface it.
-    // NOTE(test-agent): If the implementation wraps spawn errors as Spawn
-    // rather than ResumeFailed, both variants are acceptable — the test
-    // asserts at least one of the two error kinds.
+    // When spawn() errors on the Resume path, reconcile returns ResumeFailed
+    // (the canonical mapping).  Spawn is also acceptable if the implementation
+    // distinguishes infrastructure failures from session-resume failures.
     let p = persisted_with_session("sid-spawnfail", "marsad-sf");
     let mut container = FakeContainer::new();
     container.fail_spawn("marsad-sf");

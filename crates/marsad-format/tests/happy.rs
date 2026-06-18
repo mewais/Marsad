@@ -156,10 +156,6 @@ fn gate_meta_plan_fields() {
 
 #[test]
 fn gate_meta_edit_fields() {
-    // NOTE: marsad_gates must re-export DiffLine and Sig from marsad_diff so that
-    // tests in marsad-format (which only depend on marsad-gates) can construct Edit gates.
-    // If the code-agent chooses not to re-export, marsad-diff must be added as a
-    // dev-dependency in marsad-format/Cargo.toml (test-agent cannot do this).
     use marsad_gates::{DiffLine, Sig};
     let gate = Gate::Edit {
         file: String::from("/home/user/project/src/main.rs"),

@@ -1,10 +1,10 @@
 //! Full matrix of branches — drives 100 % region coverage.
 //!
-//! Matrix:
-//!   container_alive=T × session_id=Some → Adopt    (Detached phase)
-//!   container_alive=T × session_id=None → Adopt    (Detached phase)
-//!   container_alive=F × session_id=Some → Resume   (no Stale phase)
-//!   container_alive=F × session_id=None → MarkStale (Stale phase)
+//! Matrix (action → phase):
+//!   container_alive=T × session_id=Some → Adopt    → Some(Detached)
+//!   container_alive=T × session_id=None → Adopt    → Some(Detached)
+//!   container_alive=F × session_id=Some → Resume   → None
+//!   container_alive=F × session_id=None → MarkStale → Some(Stale)
 //!
 //! No-duplication invariant: Adopt paths MUST NOT call spawn.
 
@@ -173,18 +173,17 @@ fn stale_phase_only_when_container_dead_and_no_session() {
 }
 
 #[test]
-fn resume_action_phase_is_none_or_not_stale() {
-    // When we successfully resume there is no RuntimePhase classification —
-    // the session is not Stale (it is being resumed).
-    // NOTE(test-agent): The spec does not specify the phase for a successful
-    // Resume; we assert it is NOT Stale.
+fn resume_action_phase_is_none() {
+    // A successful Resume means the container is freshly live and attached.
+    // The phase is None — neither Detached nor Stale.  The caller derives
+    // the running phase from the event stream (spec §RuntimePhase mapping).
     let p = persisted(Some("sid-nr"), "marsad-nr");
     let mut f = FakeContainer::new();
 
     let rt = reconcile(&p, &mut f).unwrap();
     assert!(
-        !matches!(rt.phase, Some(RuntimePhase::Stale)),
-        "successful Resume must not be Stale, got {:?}", rt.phase
+        rt.phase.is_none(),
+        "successful Resume → phase must be None, got {:?}", rt.phase
     );
 }
 

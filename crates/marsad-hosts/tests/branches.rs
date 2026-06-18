@@ -159,19 +159,10 @@ fn health_check_transitions_connected_to_unreachable_on_hard_failure() {
 
 #[test]
 fn health_check_reconnecting_status_on_transient_failure() {
-    // NOTE(test-agent): The spec says "transient failure → Reconnecting".
-    // FakeSshRunner scripted responses are consumed in order; an unscripted call
-    // (no respond registered) should be treated as a transient failure yielding
-    // Reconnecting. If the impl panics instead, the code-agent must clarify, but
-    // must NOT edit this test. We pick a target with no scripted Ok to trigger the
-    // transient path by simply not registering a success for the target.
+    // Spec-pinned: HostError::Unreachable(_) -> hard -> HostStatus::Unreachable;
+    // any other HostError -> transient -> HostStatus::Reconnecting.
+    // We script a non-Unreachable error (NotFound) to exercise the transient path.
     let mut fake = FakeSshRunner::new();
-    // Register a generic error that is NOT HostError::Unreachable (simulate transient)
-    // We use a non-Unreachable variant to indicate "transient" as opposed to "hard failure".
-    // NOTE(test-agent): The spec distinguishes transient failure -> Reconnecting from hard failure
-    // -> Unreachable but does not say how SshRunner signals the difference. We assume
-    // a NotFound or other non-Unreachable error maps to Reconnecting. The code-agent
-    // decides the exact mapping.
     fake.respond(
         "user@transient.example.com",
         Err(HostError::NotFound("transient".to_string())),

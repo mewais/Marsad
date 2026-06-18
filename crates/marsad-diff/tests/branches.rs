@@ -65,12 +65,14 @@ fn ragged_del_gt_add_exact_rows() {
     assert_eq!(rows[1].left.text, "B");
     assert_eq!(rows[1].right.kind, CellKind::Empty);
     assert_eq!(rows[1].right.ln, "");
+    assert_eq!(rows[1].right.sig, ' ');
     assert_eq!(rows[1].right.text, "");
 
     assert_eq!(rows[2].left.kind, CellKind::Del);
     assert_eq!(rows[2].left.text, "C");
     assert_eq!(rows[2].right.kind, CellKind::Empty);
     assert_eq!(rows[2].right.ln, "");
+    assert_eq!(rows[2].right.sig, ' ');
     assert_eq!(rows[2].right.text, "");
 }
 
@@ -100,12 +102,14 @@ fn ragged_add_gt_del_exact_rows() {
 
     assert_eq!(rows[1].left.kind, CellKind::Empty);
     assert_eq!(rows[1].left.ln, "");
+    assert_eq!(rows[1].left.sig, ' ');
     assert_eq!(rows[1].left.text, "");
     assert_eq!(rows[1].right.kind, CellKind::Add);
     assert_eq!(rows[1].right.text, "B");
 
     assert_eq!(rows[2].left.kind, CellKind::Empty);
     assert_eq!(rows[2].left.ln, "");
+    assert_eq!(rows[2].left.sig, ' ');
     assert_eq!(rows[2].left.text, "");
     assert_eq!(rows[2].right.kind, CellKind::Add);
     assert_eq!(rows[2].right.text, "C");
@@ -197,6 +201,9 @@ fn context_interleaved_between_change_blocks() {
     assert_eq!(rows[3].left.kind, CellKind::Del);
     assert_eq!(rows[3].left.text, "old2b");
     assert_eq!(rows[3].right.kind, CellKind::Empty);
+    assert_eq!(rows[3].right.ln, "");
+    assert_eq!(rows[3].right.sig, ' ');
+    assert_eq!(rows[3].right.text, "");
 }
 
 // ── Multiple context lines between blocks ────────────────────────────────────
@@ -282,6 +289,8 @@ fn ragged_three_del_two_add_exact_rows() {
 
     assert_eq!(rows[2].left.text, "D3");
     assert_eq!(rows[2].right.kind, CellKind::Empty);
+    assert_eq!(rows[2].right.ln, "");
+    assert_eq!(rows[2].right.sig, ' ');
     assert_eq!(rows[2].right.text, "");
 }
 
@@ -311,11 +320,15 @@ fn ragged_two_del_four_add_exact_rows() {
     assert_eq!(rows[1].right.text, "A2");
 
     assert_eq!(rows[2].left.kind, CellKind::Empty);
+    assert_eq!(rows[2].left.ln, "");
+    assert_eq!(rows[2].left.sig, ' ');
     assert_eq!(rows[2].left.text, "");
     assert_eq!(rows[2].right.kind, CellKind::Add);
     assert_eq!(rows[2].right.text, "A3");
 
     assert_eq!(rows[3].left.kind, CellKind::Empty);
+    assert_eq!(rows[3].left.ln, "");
+    assert_eq!(rows[3].left.sig, ' ');
     assert_eq!(rows[3].left.text, "");
     assert_eq!(rows[3].right.kind, CellKind::Add);
     assert_eq!(rows[3].right.text, "A4");
@@ -336,7 +349,10 @@ fn ragged_ln_values_correct() {
     assert_eq!(rows[0].left.ln, "10");
     assert_eq!(rows[0].right.ln, "20");
     assert_eq!(rows[1].left.ln, "11");
-    assert_eq!(rows[1].right.ln, ""); // Empty padding has empty ln
+    assert_eq!(rows[1].right.kind, CellKind::Empty);
+    assert_eq!(rows[1].right.ln, "");
+    assert_eq!(rows[1].right.sig, ' ');
+    assert_eq!(rows[1].right.text, "");
 }
 
 // ── Two consecutive change blocks, no context between them ───────────────────

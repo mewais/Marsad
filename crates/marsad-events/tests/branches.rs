@@ -391,7 +391,8 @@ fn hook_pre_compact_preserves_working() {
 }
 
 // ---------------------------------------------------------------------------
-// Stale / Detached: superseded by a real SystemInit stream event
+// Stale / Detached: superseded ONLY by a real SystemInit; all other stream
+// messages (Assistant, User, Result, control) are totality no-ops.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -422,6 +423,120 @@ fn detached_superseded_by_new_system_init() {
         Phase::Working,
         "SystemInit must supersede Detached"
     );
+}
+
+#[test]
+fn stale_preserved_by_assistant_stream() {
+    let mut s = init_with_model("claude-opus-4-5");
+    s.phase = Phase::Stale;
+    let s1 = reduce(s, stream(&assistant_json("msg-stale-a", 50, 10)));
+    assert_eq!(s1.phase, Phase::Stale, "Assistant must not escape Stale");
+}
+
+#[test]
+fn detached_preserved_by_assistant_stream() {
+    let mut s = init_with_model("claude-opus-4-5");
+    s.phase = Phase::Detached;
+    let s1 = reduce(s, stream(&assistant_json("msg-detach-a", 50, 10)));
+    assert_eq!(s1.phase, Phase::Detached, "Assistant must not escape Detached");
+}
+
+#[test]
+fn stale_preserved_by_user_stream() {
+    let mut s = init_with_model("claude-opus-4-5");
+    s.phase = Phase::Stale;
+    let s1 = reduce(
+        s,
+        stream(r#"{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}"#),
+    );
+    assert_eq!(s1.phase, Phase::Stale, "User message must not escape Stale");
+}
+
+#[test]
+fn detached_preserved_by_user_stream() {
+    let mut s = init_with_model("claude-opus-4-5");
+    s.phase = Phase::Detached;
+    let s1 = reduce(
+        s,
+        stream(r#"{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}"#),
+    );
+    assert_eq!(s1.phase, Phase::Detached, "User message must not escape Detached");
+}
+
+#[test]
+fn stale_preserved_by_result_stream() {
+    let mut s = init_with_model("claude-opus-4-5");
+    s.phase = Phase::Stale;
+    let s1 = reduce(s, stream(result_success_json()));
+    assert_eq!(s1.phase, Phase::Stale, "Result must not escape Stale");
+}
+
+#[test]
+fn detached_preserved_by_result_stream() {
+    let mut s = init_with_model("claude-opus-4-5");
+    s.phase = Phase::Detached;
+    let s1 = reduce(s, stream(result_success_json()));
+    assert_eq!(s1.phase, Phase::Detached, "Result must not escape Detached");
+}
+
+#[test]
+fn stale_preserved_by_control_stream() {
+    let mut s = init_with_model("claude-opus-4-5");
+    s.phase = Phase::Stale;
+    let s1 = reduce(
+        s,
+        stream(r#"{"type":"control","subtype":"can_use_tool","tool_name":"Bash","input":{},"request_id":"req-stale"}"#),
+    );
+    assert_eq!(s1.phase, Phase::Stale, "Control request must not escape Stale");
+}
+
+#[test]
+fn detached_preserved_by_control_stream() {
+    let mut s = init_with_model("claude-opus-4-5");
+    s.phase = Phase::Detached;
+    let s1 = reduce(
+        s,
+        stream(r#"{"type":"control","subtype":"can_use_tool","tool_name":"Bash","input":{},"request_id":"req-detach"}"#),
+    );
+    assert_eq!(s1.phase, Phase::Detached, "Control request must not escape Detached");
+}
+
+#[test]
+fn stale_preserved_by_all_hooks_except_superseding() {
+    // All hook events (except none — there is no superseding hook) preserve Stale.
+    let hooks = vec![
+        Event::Hook(HookEvent::Stop),
+        Event::Hook(HookEvent::SubagentStop { name: "a".to_string() }),
+        Event::Hook(HookEvent::PreToolUse { tool: "Bash".to_string() }),
+        Event::Hook(HookEvent::PostToolUse { tool: "Bash".to_string() }),
+        Event::Hook(HookEvent::SessionStart),
+        Event::Hook(HookEvent::PreCompact),
+    ];
+    for hook in hooks {
+        let mut s = init_with_model("claude-opus-4-5");
+        s.phase = Phase::Stale;
+        let s1 = reduce(s, hook);
+        assert_eq!(s1.phase, Phase::Stale, "hook event must preserve Stale");
+    }
+}
+
+#[test]
+fn detached_preserved_by_all_hooks_except_superseding() {
+    // All hook events preserve Detached.
+    let hooks = vec![
+        Event::Hook(HookEvent::Stop),
+        Event::Hook(HookEvent::SubagentStop { name: "b".to_string() }),
+        Event::Hook(HookEvent::PreToolUse { tool: "Write".to_string() }),
+        Event::Hook(HookEvent::PostToolUse { tool: "Write".to_string() }),
+        Event::Hook(HookEvent::SessionStart),
+        Event::Hook(HookEvent::PreCompact),
+    ];
+    for hook in hooks {
+        let mut s = init_with_model("claude-opus-4-5");
+        s.phase = Phase::Detached;
+        let s1 = reduce(s, hook);
+        assert_eq!(s1.phase, Phase::Detached, "hook event must preserve Detached");
+    }
 }
 
 // ---------------------------------------------------------------------------

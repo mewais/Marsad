@@ -12,7 +12,7 @@
 //! - Workspace with empty session_ids list
 //! - All phases of a PersistedSession last_phase field survive round-trip
 
-use marsad_store::{Backend, MemoryBackend, PersistedSession, Store, TranscriptEntry, Workspace};
+use marsad_store::{Backend, MemoryBackend, PersistedSession, Store, StoreError, TranscriptEntry, Workspace};
 use std::collections::HashSet;
 
 // ---------------------------------------------------------------------------
@@ -101,24 +101,77 @@ fn workspace_overwrite_does_not_duplicate() {
 }
 
 // ---------------------------------------------------------------------------
-// active_ws — set/cleared/returned
+// active_ws — set_active_workspace / restore round-trip
 // ---------------------------------------------------------------------------
 
-// NOTE(test-agent): The spec declares `active_ws: Option<String>` on `Restored` but does not
-// specify a public API on `Store` to explicitly set or clear the active workspace. The tests below
-// assert the field is observable via restore; if the implementation exposes `set_active_workspace`
-// or a similar call, the code-agent should add a test hook. For now we assert the None/Some
-// contract through restore on known state.
-
 #[test]
-fn active_ws_none_when_no_workspace_marked_active() {
+fn active_ws_none_when_no_set_active_workspace_called() {
     let mut store = fresh_store();
     let ws = workspace("ws-inactive", &[]);
     store.snapshot_workspace(&ws).expect("snapshot");
     let r = store.restore().expect("restore");
-    // With no explicit active-selection call, active_ws may be None or Some — we only
-    // assert it is consistent (not a crash).
-    let _ = r.active_ws;
+    assert!(
+        r.active_ws.is_none(),
+        "active_ws must be None when set_active_workspace was never called"
+    );
+}
+
+#[test]
+fn set_active_workspace_then_restore_returns_that_active_ws() {
+    let mut store = fresh_store();
+    let ws = workspace("ws-active", &[]);
+    store.snapshot_workspace(&ws).expect("snapshot");
+    store
+        .set_active_workspace("ws-active")
+        .expect("set_active_workspace must succeed for a known workspace");
+    let r = store.restore().expect("restore");
+    assert_eq!(
+        r.active_ws,
+        Some("ws-active".to_string()),
+        "restore must return the active workspace id set via set_active_workspace"
+    );
+}
+
+#[test]
+fn set_active_workspace_unknown_id_returns_not_found() {
+    let mut store = fresh_store();
+    // No workspaces snapshotted — "ghost-ws" does not exist.
+    match store.set_active_workspace("ghost-ws") {
+        Err(StoreError::NotFound(id)) => {
+            assert!(
+                id.contains("ghost-ws"),
+                "NotFound message must reference the unknown id, got: {id}"
+            );
+        }
+        other => panic!("expected NotFound for unknown workspace id, got: {other:?}"),
+    }
+}
+
+#[test]
+fn set_active_workspace_overwrites_previous_selection() {
+    let mut store = fresh_store();
+    for id in &["ws-first", "ws-second"] {
+        store.snapshot_workspace(&workspace(id, &[])).expect("snapshot");
+    }
+    store.set_active_workspace("ws-first").expect("set first");
+    store.set_active_workspace("ws-second").expect("set second");
+    let r = store.restore().expect("restore");
+    assert_eq!(
+        r.active_ws,
+        Some("ws-second".to_string()),
+        "second set_active_workspace call must overwrite the first"
+    );
+}
+
+#[test]
+fn set_active_workspace_unknown_id_when_some_workspaces_exist_returns_not_found() {
+    let mut store = fresh_store();
+    store.snapshot_workspace(&workspace("ws-real", &[])).expect("snapshot");
+    // "ws-ghost" was never snapshotted.
+    match store.set_active_workspace("ws-ghost") {
+        Err(StoreError::NotFound(_)) => {}
+        other => panic!("expected NotFound even when other workspaces exist, got: {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
