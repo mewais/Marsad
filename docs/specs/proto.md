@@ -53,9 +53,14 @@ All public types derive `serde::{Serialize, Deserialize}`, `Debug`, `Clone`, `Pa
 
 ## Behavior notes
 
-- `Unknown` is the forward-compat escape hatch: a syntactically valid JSON object with an
-  unrecognized `type` parses to `Unknown`, **not** an error. A *missing* `type` is
-  `MissingDiscriminant`. Non-JSON is `MalformedJson`.
+- `Unknown` is the forward-compat escape hatch **for the stream protocol only**: a syntactically
+  valid JSON object with an unrecognized `type` parses (via `parse_stream_line`) to
+  `StreamMsg::Unknown`, **not** an error. A *missing* `type` is `MissingDiscriminant`. Non-JSON is
+  `MalformedJson`.
+- The **IPC protocol has no `Unknown` variant**: `parse_ipc` treats an unrecognized message `type` as
+  `UnknownDiscriminant` (an error). Rationale: stream-json is an external surface that may add message
+  types over time (must tolerate), whereas the GUI⇄agent IPC is our own closed protocol where an
+  unknown type is a bug, not forward-compat.
 - Round-trip: `parse_stream_line` then re-encode must preserve semantically meaningful fields
   (test as value equality on the typed struct, not byte equality).
 - `Usage` fields default to 0 when absent.

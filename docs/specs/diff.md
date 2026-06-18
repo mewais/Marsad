@@ -19,7 +19,7 @@ pub enum CellKind { Context, Add, Del, Empty }                           // Empt
 pub struct SideRow { pub left: Cell, pub right: Cell }
 pub struct UnifiedRow { pub cell: Cell }
 
-pub fn cell_style(line: Option<&DiffLine>) -> Cell;          // None -> Empty padding cell
+pub fn cell_style(line: Option<&DiffLine>) -> Cell;          // None -> Empty padding cell (ln:"", sig:' ', text:"", kind:Empty)
 pub fn split_side_by_side(lines: &[DiffLine]) -> Vec<SideRow>;
 pub fn unified(lines: &[DiffLine]) -> Vec<UnifiedRow>;
 ```

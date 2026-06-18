@@ -54,9 +54,15 @@ Derive `Debug, Clone, PartialEq` (+ serde) on data types.
   `CannotRemoveLocalhost`.
 - `add` rejects a duplicate label and a malformed target (must look like `user@host` or a known ssh
   alias). New hosts start `Reconnecting` until a successful `health_check`.
-- `health_check` runs a cheap remote probe via `SshRunner`; success → `Connected`, transient failure
-  → `Reconnecting`, hard failure → `Unreachable` (distinguish "host unreachable" from session state,
-  per README resilience).
+- `health_check` runs a cheap remote probe via `SshRunner`; success → `Connected`. The failure split
+  is keyed on the `HostError` the runner returns: `HostError::Unreachable(_)` → **hard** →
+  `Unreachable`; any other `HostError` (or a non-empty/garbled but non-fatal result) → **transient**
+  → `Reconnecting`. (This keeps "host unreachable" distinct from session state, per README
+  resilience.)
+- `health_check` on an **unknown id**: since the return type is `HostStatus` (not `Result`), an
+  unknown id yields `HostStatus::Unreachable` (there is nothing to reach). Callers that need to
+  distinguish "no such host" use `list()`/lookup first; `add`/`remove` are the `Result`-returning
+  ops that surface `NotFound`.
 
 ## Test buckets (`tests/`)
 

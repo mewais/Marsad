@@ -21,8 +21,17 @@ pub trait Container {
 
 pub struct TmuxContainer;     // Linux/macOS
 pub struct ConPtyContainer;   // Windows
-pub struct FakeContainer { /* scripted exists/attach/spawn results */ }
-impl FakeContainer { pub fn new() -> Self; pub fn set_exists(&mut self, name: &str, v: bool); pub fn fail_attach(&mut self, name: &str); }
+pub struct FakeContainer { /* scripted exists/attach/spawn results + a call log */ }
+impl FakeContainer {
+    pub fn new() -> Self;
+    pub fn set_exists(&mut self, name: &str, v: bool);
+    pub fn fail_attach(&mut self, name: &str);   // next attach(name) -> Err(AttachRace)
+    pub fn fail_spawn(&mut self, name: &str);     // next spawn(name,..) -> Err(Spawn)
+    /// Ordered log of trait calls as strings like "exists:marsad-A", "attach:marsad-A",
+    /// "spawn:marsad-A". Lets tests prove the no-duplication invariant (no "spawn:" entry
+    /// on an Adopt path). REQUIRED — the test suite calls `.calls()`.
+    pub fn calls(&self) -> &[String];
+}
 
 pub struct Persisted { pub session_id: Option<String>, pub container_name: String, pub project: String, pub model: String }
 pub struct Probe { pub container_alive: bool }
@@ -55,6 +64,13 @@ pub enum LifecycleError { AttachRace(String), ResumeFailed(String), Spawn(String
   recoverable. These are the two new states beyond the design's original five.
 - A re-adopt must never start a second `claude` for the same session — the `i03` test asserts no
   duplication by checking process/container identity.
+- **AttachRace resolution:** when `exists` returned true but `attach` fails, re-probe once via
+  `exists`. If still alive → return `Err(AttachRace)` (transient; caller retries). If now gone →
+  fall through to the normal dead-container path: `Resume(session_id)` if a session_id is known, else
+  `MarkStale`. (So a lost race degrades gracefully rather than erroring permanently.)
+- **RuntimePhase mapping of `SessionRuntime.phase`:** `Adopt` → `Some(Detached)`; `MarkStale` →
+  `Some(Stale)`; a successful `Resume` → `None` (the container is freshly live and attached, so it is
+  neither Detached nor Stale — the caller will derive the running phase from the event stream).
 
 ## Test buckets (`tests/`)
 

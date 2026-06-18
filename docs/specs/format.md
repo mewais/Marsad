@@ -38,11 +38,14 @@ Derive `Debug, Clone, PartialEq` (+ serde) where applicable.
   literal ordering means 90+ still resolves via the 75 branch first; **the correct intended behavior
   is 90+ → Error, 75–89 → Needs, else Accent** (fix the design's ordering bug; the spec is
   authoritative over the prototype here). Mobile `ctxColor` only had the 75 threshold.
-- `state_meta`: provide a `Meta` for every `Phase` incl. `Stale`/`Detached` (extend the prototype's
-  five with sensible tokens: Stale→Neutral, Detached→Accent2-ish — see ARCHITECTURE states).
+- `state_meta`: provide a `Meta` for every `Phase`. Tokens: Starting→Neutral, Working→Accent,
+  Needs→Needs, Error→Error, Done→Done, **Stale→Neutral**, **Detached→Accent2**. Labels mirror the
+  prototype ("Working", "Needs you", "Error", "Done", "Starting") plus "Stale" and "Detached".
 - `gate_meta`: permission → kind "Permission", icon "⌘", lead "Wants to run", summary `"$ "+command`,
   approve "Approve & run"; plan → "Plan review"/"❑"/"Proposed plan"/`"N steps · <first title>…"`/
   "Approve plan"; edit → "File change"/"±"/"Wants to edit"/`"<basename> · +A −D"`/"Approve change".
+  Empty-plan edge case: when `steps` is empty the plan summary is exactly `"0 steps"` (no `· …`
+  suffix, no index into a missing first step).
 
 ## Test buckets (`tests/`)
 

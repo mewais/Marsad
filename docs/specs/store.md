@@ -20,7 +20,15 @@ pub trait Backend {
 }
 
 pub struct MemoryBackend { /* ... */ }   // in-crate fake for tests
-impl MemoryBackend { pub fn new() -> Self; pub fn corrupt(&self, key: &str); }  // corrupt() to test recovery
+impl MemoryBackend {
+    pub fn new() -> Self;
+    pub fn corrupt(&self, key: &str);     // make a stored blob unparseable -> StoreError::Corrupt on read
+    pub fn fail_next(&self, op: BackendOp);  // force the next matching op to return StoreError::Backend
+}
+/// Selects which Backend operation `MemoryBackend::fail_next` should fail — lets tests reach the
+/// `StoreError::Backend` arm without a separate hand-rolled error backend.
+pub enum BackendOp { Read, Write, List, Delete, Any }
+
 pub struct FsBackend { /* root dir */ }  // production
 impl FsBackend { pub fn new(root: impl Into<std::path::PathBuf>) -> Self; }
 
@@ -30,6 +38,7 @@ impl Store {
     pub fn upsert_session(&mut self, s: &PersistedSession) -> Result<(), StoreError>;
     pub fn append_transcript(&mut self, session_id: &str, entry: &TranscriptEntry) -> Result<(), StoreError>;
     pub fn snapshot_workspace(&mut self, ws: &Workspace) -> Result<(), StoreError>;
+    pub fn set_active_workspace(&mut self, id: &str) -> Result<(), StoreError>;  // persists Restored.active_ws; NotFound if absent
     pub fn restore(&self) -> Result<Restored, StoreError>;
     pub fn export_workspace(&self, id: &str) -> Result<String, StoreError>;   // .marsad.json text
     pub fn import_workspace(&mut self, json: &str) -> Result<Workspace, StoreError>;

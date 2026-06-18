@@ -66,6 +66,13 @@ Derive `Debug, Clone, PartialEq` (+ serde) on all public types.
   user/assistant turn).
 - **Totality:** an out-of-order or impossible event clamps/ignores rather than panicking; values
   never go negative; `context_pct` never exceeds 100.
+- **Stale/Detached supersede rule:** when the current phase is `Stale` or `Detached` (set by the
+  lifecycle layer, not by stream folding), `reduce` PRESERVES it for hook events and
+  `StreamMsg::Unknown`, and only a `SystemInit` supersedes it (a fresh `system/init` means the
+  session is genuinely live again → `Working`). All other stream messages (`Assistant`/`User`/
+  `Result`/control) while `Stale`/`Detached` are treated as totality no-ops that preserve the phase
+  (they cannot arrive from a dead/detached container without an init first). This keeps the two
+  lifecycle states authoritative until a real re-init is observed.
 
 ## Test buckets (`tests/`)
 
