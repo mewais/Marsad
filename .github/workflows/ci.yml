@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-coverage:
+    name: Rust blocks — 100% coverage gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Per-crate coverage (line + region must be 100%)
+        run: |
+          set -euo pipefail
+          for crate in marsad-proto marsad-events marsad-gates marsad-diff marsad-format \
+                       marsad-store marsad-hosts marsad-transport marsad-lifecycle \
+                       marsad-notify marsad-viewmodel marsad-core; do
+            echo "::group::coverage $crate"
+            cargo llvm-cov -p "$crate" --fail-under-lines 100 --fail-under-regions 100
+            echo "::endgroup::"
+          done
+      - name: Agent block — unit logic coverage (non-IO)
+        run: cargo llvm-cov -p marsad-agent --fail-under-lines 100 --fail-under-regions 100
+
+  rust-lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  desktop-ui:
+    name: Desktop UI (Vitest + Playwright)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm, cache-dependency-path: apps/desktop/pnpm-lock.yaml }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+
+  integration-live:
+    name: Integration (real claude — gated)
+    runs-on: ubuntu-latest
+    # Only runs where a CLAUDE_CODE_OAUTH_TOKEN (or equivalent) is configured, so the real
+    # binary is genuinely exercised. Recorded-real scenarios run in rust-coverage above.
+    if: ${{ github.repository == 'mewais/Marsad' }}
+    env:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install claude + tmux
+        run: |
+          sudo apt-get update && sudo apt-get install -y tmux
+          curl -fsSL https://claude.ai/install.sh | bash || echo "install step is environment-specific"
+      - name: Run live integration scenarios
+        if: ${{ env.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        run: |
+          for it in i02_gate_roundtrip i03_lifecycle_real i06_hosts_ssh i07_core_facade; do
+            cargo test -p "marsad-it-$it" -- --nocapture
+          done
+      - name: Recorded-real / pure integration scenarios (always)
+        run: |
+          for it in i01_stream_to_vm i04_persistence i05_notify i08_workspace_export_import; do
+            cargo test -p "marsad-it-$it" -- --nocapture
+          done
+
+  # NOTE: phones (apps/ios, apps/android) build on native toolchains and are intentionally
+  # not part of this Linux CI. Add macOS (xcodebuild) and Android (gradlew) jobs there.

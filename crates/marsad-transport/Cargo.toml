@@ -1,0 +1,13 @@
+[package]
+name = "marsad-transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Line transport to claude: LocalIpc, SshStdio, loopback fake; NDJSON framing"
+
+[dependencies]
+thiserror = { workspace = true }
+marsad-proto = { workspace = true }

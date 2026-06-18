@@ -1,0 +1,59 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/marsad-proto",
+    "crates/marsad-events",
+    "crates/marsad-gates",
+    "crates/marsad-diff",
+    "crates/marsad-format",
+    "crates/marsad-store",
+    "crates/marsad-hosts",
+    "crates/marsad-transport",
+    "crates/marsad-lifecycle",
+    "crates/marsad-notify",
+    "crates/marsad-viewmodel",
+    "crates/marsad-core",
+    "crates/marsad-agent",
+    "tests/integration/i01_stream_to_vm",
+    "tests/integration/i02_gate_roundtrip",
+    "tests/integration/i03_lifecycle_real",
+    "tests/integration/i04_persistence",
+    "tests/integration/i05_notify",
+    "tests/integration/i06_hosts_ssh",
+    "tests/integration/i07_core_facade",
+    "tests/integration/i08_workspace_export_import",
+]
+# apps/desktop/src-tauri is intentionally NOT a workspace member: Tauri apps build
+# with their own profile/runner. It depends on marsad-core by path. See its own Cargo.toml.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+authors = ["Mohammad Ewais <mohammad.a.ewais@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/mewais/Marsad"
+
+[workspace.dependencies]
+# Shared third-party deps. Crate authors pull these via `dep.workspace = true`.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+# Internal crates (path deps) — referenced the same way from any member.
+marsad-proto = { path = "crates/marsad-proto" }
+marsad-events = { path = "crates/marsad-events" }
+marsad-gates = { path = "crates/marsad-gates" }
+marsad-diff = { path = "crates/marsad-diff" }
+marsad-format = { path = "crates/marsad-format" }
+marsad-store = { path = "crates/marsad-store" }
+marsad-hosts = { path = "crates/marsad-hosts" }
+marsad-transport = { path = "crates/marsad-transport" }
+marsad-lifecycle = { path = "crates/marsad-lifecycle" }
+marsad-notify = { path = "crates/marsad-notify" }
+marsad-viewmodel = { path = "crates/marsad-viewmodel" }
+marsad-core = { path = "crates/marsad-core" }
+marsad-agent = { path = "crates/marsad-agent" }
+
+[profile.release]
+lto = true
+strip = true

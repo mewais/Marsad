@@ -1,0 +1,26 @@
+[package]
+name = "marsad-desktop"
+version = "0.1.0"
+edition = "2021"
+authors = ["Mohammad Ewais <mohammad.a.ewais@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/mewais/Marsad"
+description = "Marsad desktop (Tauri) — Rust bridge over marsad-core"
+# Standalone package: builds with Tauri's own runner, not part of the cargo workspace.
+
+[lib]
+name = "marsad_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+marsad-core = { path = "../../../crates/marsad-core" }
+
+[workspace]
+# Empty table: detaches this package from the parent workspace so `cargo tauri`
+# builds it independently with the Tauri profile.

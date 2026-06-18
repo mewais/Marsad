@@ -1,0 +1,20 @@
+[package]
+name = "marsad-it-i04_persistence"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Marsad integration scenario i04_persistence"
+
+[dependencies]
+marsad-proto = { workspace = true }
+marsad-events = { workspace = true }
+marsad-gates = { workspace = true }
+marsad-diff = { workspace = true }
+marsad-format = { workspace = true }
+marsad-store = { workspace = true }
+marsad-hosts = { workspace = true }
+marsad-transport = { workspace = true }
+marsad-lifecycle = { workspace = true }
+marsad-notify = { workspace = true }
+marsad-viewmodel = { workspace = true }
+marsad-core = { workspace = true }
