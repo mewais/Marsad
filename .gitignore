@@ -7,6 +7,10 @@ Cargo.lock.bak
 .cargo-cache/
 .cargo/
 
+# Project-local dev tools (e.g. cargo-llvm-cov) installed because the global
+# cargo bin dir is read-only in this environment. Machine-specific; never commit.
+.tools/
+
 # Node / desktop UI
 node_modules/
 apps/desktop/dist/
