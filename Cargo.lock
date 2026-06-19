@@ -141,6 +141,7 @@ dependencies = [
  "marsad-store",
  "marsad-transport",
  "marsad-viewmodel",
+ "serde_json",
 ]
 
 [[package]]
@@ -201,6 +202,7 @@ dependencies = [
 name = "marsad-it-i07_core_facade"
 version = "0.1.0"
 dependencies = [
+ "marsad-agent",
  "marsad-core",
  "marsad-diff",
  "marsad-events",
@@ -213,6 +215,7 @@ dependencies = [
  "marsad-store",
  "marsad-transport",
  "marsad-viewmodel",
+ "serde_json",
 ]
 
 [[package]]
