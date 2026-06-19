@@ -20,6 +20,12 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 marsad-core = { path = "../../../crates/marsad-core" }
+marsad-viewmodel = { path = "../../../crates/marsad-viewmodel" }
+marsad-gates = { path = "../../../crates/marsad-gates" }
+marsad-events = { path = "../../../crates/marsad-events" }
+marsad-hosts = { path = "../../../crates/marsad-hosts" }
+marsad-diff = { path = "../../../crates/marsad-diff" }
+marsad-transport = { path = "../../../crates/marsad-transport" }
 
 [workspace]
 # Empty table: detaches this package from the parent workspace so `cargo tauri`

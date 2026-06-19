@@ -1,0 +1,498 @@
+/**
+ * useVm — app-wide state store seeded from snapshot() and updated
+ * by "vm-update" Tauri events. This is THE single source of truth
+ * for all screens. Selectors are derived synchronously (no extra state).
+ */
+
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useReducer,
+} from "react";
+import type {
+  AppSnapshot,
+  Counts,
+  Filter,
+  GateVM,
+  Host,
+  OverviewGroups,
+  Phase,
+  SessionCard,
+  SessionDetailVM,
+  SessionRow,
+  SessionView,
+  Tab,
+  VmUpdateEvent,
+  Workspace,
+} from "./types";
+import { listenVmUpdate, snapshot as fetchSnapshot } from "./api";
+
+// ---------------------------------------------------------------------------
+// Screen / nav state (UI only — not in AppSnapshot)
+// ---------------------------------------------------------------------------
+
+export type Screen =
+  | "overview"
+  | "session"
+  | "gate"
+  | "new-session"
+  | "settings"
+  | "workspaces";
+
+// ---------------------------------------------------------------------------
+// Store state
+// ---------------------------------------------------------------------------
+
+export interface VmState {
+  snapshot: AppSnapshot | null;
+  // UI-only nav
+  screen: Screen;
+  selectedId: string | null;
+  tab: Tab;
+  filter: Filter;
+  search: string;
+  wsMenuOpen: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
+
+type Action =
+  | { type: "SNAPSHOT_LOADED"; payload: AppSnapshot }
+  | { type: "VM_UPDATE"; payload: VmUpdateEvent }
+  | { type: "SET_SCREEN"; screen: Screen }
+  | { type: "SELECT_SESSION"; id: string | null }
+  | { type: "SET_TAB"; tab: Tab }
+  | { type: "SET_FILTER"; filter: Filter }
+  | { type: "SET_SEARCH"; search: string }
+  | { type: "SET_WORKSPACE"; id: string }
+  | { type: "TOGGLE_WS_MENU" }
+  | { type: "CLOSE_WS_MENU" };
+
+// ---------------------------------------------------------------------------
+// Reducer
+// ---------------------------------------------------------------------------
+
+function reducer(state: VmState, action: Action): VmState {
+  switch (action.type) {
+    case "SNAPSHOT_LOADED":
+      return {
+        ...state,
+        snapshot: action.payload,
+        filter: action.payload.filter,
+        search: action.payload.search,
+        tab: action.payload.tab,
+        selectedId: action.payload.selected_id,
+      };
+
+    case "VM_UPDATE": {
+      if (!state.snapshot) return state;
+      const ev = action.payload;
+      if (ev.kind === "session") {
+        const sessions = state.snapshot.sessions.map((s) =>
+          s.id === ev.session.id ? ev.session : s
+        );
+        return { ...state, snapshot: { ...state.snapshot, sessions } };
+      }
+      if (ev.kind === "overview") {
+        // Overview groups are derived; no stored state change needed.
+        return state;
+      }
+      if (ev.kind === "host_health") {
+        const hosts = state.snapshot.hosts.map((h) =>
+          h.id === ev.host_id
+            ? { ...h, status: ev.status as Host["status"] }
+            : h
+        );
+        return { ...state, snapshot: { ...state.snapshot, hosts } };
+      }
+      return state;
+    }
+
+    case "SET_SCREEN":
+      return { ...state, screen: action.screen };
+
+    case "SELECT_SESSION":
+      return {
+        ...state,
+        selectedId: action.id,
+        screen: action.id ? "session" : state.screen,
+      };
+
+    case "SET_TAB":
+      return { ...state, tab: action.tab };
+
+    case "SET_FILTER":
+      return { ...state, filter: action.filter };
+
+    case "SET_SEARCH":
+      return { ...state, search: action.search };
+
+    case "SET_WORKSPACE":
+      if (!state.snapshot) return state;
+      return {
+        ...state,
+        snapshot: { ...state.snapshot, active_ws: action.id },
+        wsMenuOpen: false,
+      };
+
+    case "TOGGLE_WS_MENU":
+      return { ...state, wsMenuOpen: !state.wsMenuOpen };
+
+    case "CLOSE_WS_MENU":
+      return { ...state, wsMenuOpen: false };
+
+    default:
+      return state;
+  }
+}
+
+const initialState: VmState = {
+  snapshot: null,
+  screen: "overview",
+  selectedId: null,
+  tab: "Activity",
+  filter: "All",
+  search: "",
+  wsMenuOpen: false,
+};
+
+// ---------------------------------------------------------------------------
+// Context
+// ---------------------------------------------------------------------------
+
+export interface VmContextValue {
+  state: VmState;
+  dispatch: React.Dispatch<Action>;
+  // Selectors
+  counts: Counts;
+  overviewGroups: OverviewGroups;
+  sidebarList: SessionRow[];
+  selectedSession: SessionView | null;
+  selectedDetail: SessionDetailVM | null;
+  selectedGate: GateVM | null;
+  workspaces: Workspace[];
+  hosts: Host[];
+  activeWs: Workspace | null;
+}
+
+const EMPTY_GROUPS: OverviewGroups = { attention: [], active: [], idle: [] };
+
+// ---------------------------------------------------------------------------
+// Helpers (mirrors marsad-viewmodel Rust logic)
+// ---------------------------------------------------------------------------
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+function hostLabel(hostId: string, hosts: Host[]): string {
+  return hosts.find((h) => h.id === hostId)?.label ?? hostId;
+}
+
+function stateOrder(p: Phase): number {
+  const order: Record<Phase, number> = {
+    Needs: 0,
+    Error: 1,
+    Working: 2,
+    Starting: 3,
+    Done: 4,
+    Stale: 5,
+    Detached: 6,
+  };
+  return order[p] ?? 99;
+}
+
+function gateKind(sv: SessionView): string | null {
+  if (!sv.gate) return null;
+  if ("Permission" in sv.gate) return "permission";
+  if ("Plan" in sv.gate) return "plan";
+  if ("Edit" in sv.gate) return "edit";
+  return null;
+}
+
+function gateSummary(sv: SessionView): string | null {
+  if (!sv.gate) return null;
+  if ("Permission" in sv.gate) return sv.gate.Permission.command;
+  if ("Plan" in sv.gate) return sv.gate.Plan.summary;
+  if ("Edit" in sv.gate) return sv.gate.Edit.file;
+  return null;
+}
+
+function toCard(sv: SessionView, hosts: Host[]): SessionCard {
+  return {
+    id: sv.id,
+    name: sv.name,
+    state: sv.state,
+    host_label: hostLabel(sv.host_id, hosts),
+    project: sv.project,
+    branch: sv.branch,
+    gate_kind: gateKind(sv),
+    gate_summary: gateSummary(sv),
+    last_action: null,
+    context_pct: sv.context_pct,
+    tokens_label: fmtTokens(sv.tokens),
+    elapsed_label: "",
+  };
+}
+
+function computeCounts(sessions: SessionView[], _hosts: Host[]): Counts {
+  const total = sessions.length;
+  const needs = sessions.filter((s) => s.state === "Needs").length;
+  const errors = sessions.filter((s) => s.state === "Error").length;
+  const working = sessions.filter((s) => s.state === "Working").length;
+  const costSum = sessions.reduce((a, s) => a + s.cost_usd, 0);
+  const tokenSum = sessions.reduce((a, s) => a + s.tokens, 0);
+  const seenHosts = new Set(sessions.map((s) => s.host_id));
+  return {
+    total,
+    needs,
+    errors,
+    working,
+    cost: `$${Math.abs(costSum).toFixed(2)}`,
+    tokens: fmtTokens(tokenSum),
+    host_count: seenHosts.size,
+  };
+}
+
+function computeGroups(sessions: SessionView[], hosts: Host[]): OverviewGroups {
+  const attention = [
+    ...sessions.filter((s) => s.state === "Needs"),
+    ...sessions.filter((s) => s.state === "Error"),
+  ].map((s) => toCard(s, hosts));
+  const active = sessions
+    .filter((s) => s.state === "Working" || s.state === "Starting")
+    .map((s) => toCard(s, hosts));
+  const idle = sessions
+    .filter((s) => s.state === "Done")
+    .map((s) => toCard(s, hosts));
+  return { attention, active, idle };
+}
+
+function computeSidebar(
+  sessions: SessionView[],
+  hosts: Host[],
+  filter: Filter,
+  search: string
+): SessionRow[] {
+  const term = search.trim().toLowerCase();
+  let filtered = sessions.filter((sv) => {
+    if (filter === "Needs") return sv.state === "Needs";
+    if (filter === "Working") return sv.state === "Working";
+    if (filter === "Error") return sv.state === "Error";
+    return true;
+  });
+  if (term) {
+    filtered = filtered.filter((sv) => {
+      const hl = hostLabel(sv.host_id, hosts).toLowerCase();
+      return (
+        sv.name.toLowerCase().includes(term) ||
+        sv.project.toLowerCase().includes(term) ||
+        hl.includes(term) ||
+        sv.branch.toLowerCase().includes(term)
+      );
+    });
+  }
+  const rows = filtered.map((s) => toCard(s, hosts));
+  rows.sort((a, b) => stateOrder(a.state) - stateOrder(b.state));
+  return rows;
+}
+
+function computeDetail(
+  sessions: SessionView[],
+  selectedId: string | null,
+  hosts: Host[]
+): SessionDetailVM | null {
+  if (!selectedId) return null;
+  const sv = sessions.find((s) => s.id === selectedId);
+  if (!sv) return null;
+  return {
+    name: sv.name,
+    host_label: hostLabel(sv.host_id, hosts),
+    branch: sv.branch,
+    model: sv.model,
+    ctx_warn: sv.context_pct >= 75,
+    context_pct: sv.context_pct,
+    tokens_label: fmtTokens(sv.tokens),
+    cost_label: `$${sv.cost_usd.toFixed(2)}`,
+    elapsed_label: "",
+  };
+}
+
+function diffCellBg(sig: string): string {
+  if (sig === "Add") return "rgba(70,192,138,0.12)";
+  if (sig === "Del") return "rgba(224,89,74,0.12)";
+  return "transparent";
+}
+
+function diffCellFg(sig: string): string {
+  if (sig === "Add") return "#46c08a";
+  if (sig === "Del") return "#e0594a";
+  return "var(--txt2)";
+}
+
+function computeGate(
+  sessions: SessionView[],
+  selectedId: string | null
+): GateVM | null {
+  if (!selectedId) return null;
+  const sv = sessions.find((s) => s.id === selectedId);
+  if (!sv || !sv.gate) return null;
+  const g = sv.gate;
+  if ("Permission" in g) {
+    return {
+      kind: "permission",
+      icon: "⌘",
+      lead: "Permission request",
+      summary: `${g.Permission.command} in ${g.Permission.cwd}`,
+      is_permission: true,
+      is_plan: false,
+      is_edit: false,
+      diff_rows: [],
+    };
+  }
+  if ("Plan" in g) {
+    return {
+      kind: "plan",
+      icon: "□",
+      lead: "Plan for approval",
+      summary: g.Plan.summary,
+      is_permission: false,
+      is_plan: true,
+      is_edit: false,
+      diff_rows: [],
+    };
+  }
+  if ("Edit" in g) {
+    // Build side-by-side diff rows
+    const diff_rows = g.Edit.diff.map((line) => {
+      const bg = diffCellBg(line.sig);
+      const fg = diffCellFg(line.sig);
+      const sigChar = line.sig === "Add" ? "+" : line.sig === "Del" ? "-" : " ";
+      const sigColor = line.sig === "Add" ? "#46c08a" : line.sig === "Del" ? "#e0594a" : "var(--txt3)";
+      return {
+        l: { ln: line.sig !== "Add" ? line.ln : "", sig: sigChar, sigColor, text: line.sig !== "Add" ? line.text : "", fg, bg },
+        r: { ln: line.sig !== "Del" ? line.ln : "", sig: sigChar, sigColor, text: line.sig !== "Del" ? line.text : "", fg, bg },
+      };
+    });
+    return {
+      kind: "edit",
+      icon: "±",
+      lead: "File edit",
+      summary: g.Edit.file,
+      is_permission: false,
+      is_plan: false,
+      is_edit: true,
+      diff_rows,
+    };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Context export
+// ---------------------------------------------------------------------------
+
+export const VmContext = createContext<VmContextValue | null>(null);
+
+export function useVm(): VmContextValue {
+  const ctx = useContext(VmContext);
+  if (!ctx) throw new Error("useVm must be used inside VmProvider");
+  return ctx;
+}
+
+// ---------------------------------------------------------------------------
+// Provider
+// ---------------------------------------------------------------------------
+
+export interface VmProviderProps {
+  children: React.ReactNode;
+  /** Override initial state (used in tests to inject mock store). */
+  initialState?: Partial<VmState>;
+}
+
+export function VmProvider({ children, initialState: init }: VmProviderProps) {
+  // When a snapshot is injected via initialState (e.g. tests), skip all async
+  // fetching and event subscription so no act() warnings fire and no network
+  // calls are made.
+  const hasPreloadedSnapshot = init?.snapshot != null;
+
+  const [state, dispatch] = useReducer(reducer, {
+    ...initialState,
+    ...init,
+  });
+
+  // Seed from snapshot on mount — skipped when snapshot pre-injected.
+  useEffect(() => {
+    if (hasPreloadedSnapshot) return;
+    fetchSnapshot().then((snap) => {
+      dispatch({ type: "SNAPSHOT_LOADED", payload: snap });
+    });
+  }, [hasPreloadedSnapshot]);
+
+  // Listen for live vm-update events — skipped when snapshot pre-injected.
+  useEffect(() => {
+    if (hasPreloadedSnapshot) return;
+    let unlisten: (() => void) | undefined;
+    listenVmUpdate((ev) => {
+      dispatch({ type: "VM_UPDATE", payload: ev as VmUpdateEvent });
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, [hasPreloadedSnapshot]);
+
+  const sessions = state.snapshot?.sessions ?? [];
+  const hosts = state.snapshot?.hosts ?? [];
+  const workspaces = state.snapshot?.workspaces ?? [];
+
+  // Memoised selectors.
+  const counts = useMemo(() => computeCounts(sessions, hosts), [sessions, hosts]);
+  const overviewGroups = useMemo(
+    () => (state.snapshot ? computeGroups(sessions, hosts) : EMPTY_GROUPS),
+    [sessions, hosts]
+  );
+  const sidebarList = useMemo(
+    () => computeSidebar(sessions, hosts, state.filter, state.search),
+    [sessions, hosts, state.filter, state.search]
+  );
+  const selectedSession = useMemo(
+    () => sessions.find((s) => s.id === state.selectedId) ?? null,
+    [sessions, state.selectedId]
+  );
+  const selectedDetail = useMemo(
+    () => computeDetail(sessions, state.selectedId, hosts),
+    [sessions, state.selectedId, hosts]
+  );
+  const selectedGate = useMemo(
+    () => computeGate(sessions, state.selectedId),
+    [sessions, state.selectedId]
+  );
+  const activeWs = useMemo(
+    () => workspaces.find((w) => w.id === state.snapshot?.active_ws) ?? null,
+    [workspaces, state.snapshot?.active_ws]
+  );
+
+  const value: VmContextValue = {
+    state,
+    dispatch,
+    counts,
+    overviewGroups,
+    sidebarList,
+    selectedSession,
+    selectedDetail,
+    selectedGate,
+    workspaces,
+    hosts,
+    activeWs,
+  };
+
+  return React.createElement(VmContext.Provider, { value }, children);
+}

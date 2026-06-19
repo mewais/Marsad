@@ -1,0 +1,57 @@
+//! D01 — Event bridge: forwards marsad_core::VmUpdate payloads to the webview.
+//!
+//! The webview listens to the "vm-update" Tauri event and updates the React
+//! store via the useVm hook (src/bridge/useVm.ts).
+
+use serde::Serialize;
+use tauri::{AppHandle, Emitter};
+
+use marsad_core::VmUpdate;
+use marsad_viewmodel::{OverviewGroups, SessionView};
+
+// ---------------------------------------------------------------------------
+// Wire-format envelope emitted as "vm-update"
+// ---------------------------------------------------------------------------
+
+/// JSON-serializable envelope matching the TS VmUpdateEvent union.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VmUpdateEnvelope {
+    Overview { groups: OverviewGroups },
+    Session { session: SessionView },
+    Toast { icon: String, text: String },
+    HostHealth { host_id: String, status: String },
+}
+
+impl From<VmUpdate> for VmUpdateEnvelope {
+    fn from(u: VmUpdate) -> Self {
+        match u {
+            VmUpdate::Overview(groups) => VmUpdateEnvelope::Overview { groups },
+            VmUpdate::Session(sv) => VmUpdateEnvelope::Session { session: sv },
+            VmUpdate::Toast { icon, text } => VmUpdateEnvelope::Toast { icon, text },
+            VmUpdate::HostHealth(payload) => {
+                let status = match payload.status {
+                    Some(marsad_hosts::HostStatus::Connected) => "connected".to_string(),
+                    Some(marsad_hosts::HostStatus::Reconnecting) => "reconnecting".to_string(),
+                    Some(marsad_hosts::HostStatus::Unreachable) => "unreachable".to_string(),
+                    None => "unknown".to_string(),
+                };
+                VmUpdateEnvelope::HostHealth { host_id: payload.host_id, status }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public helper
+// ---------------------------------------------------------------------------
+
+/// Emit a list of VmUpdates to the webview as "vm-update" events.
+///
+/// Silently ignores emit errors (e.g. webview not yet attached).
+pub fn emit_updates(app: &AppHandle, updates: Vec<VmUpdate>) {
+    for update in updates {
+        let envelope = VmUpdateEnvelope::from(update);
+        let _ = app.emit("vm-update", envelope);
+    }
+}

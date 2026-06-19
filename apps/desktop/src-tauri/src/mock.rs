@@ -1,0 +1,296 @@
+//! D01 — Mock state for MARSAD_MOCK=1.
+//!
+//! Builds a seeded AppSnapshot mirroring the .dc.html prototype with
+//! ~10 sessions across 3 hosts, 3 gate variants, and 2 workspaces.
+//! All types are real marsad_viewmodel / marsad_gates types so the same
+//! bridge code paths serve both live and mock modes.
+
+use marsad_diff::{DiffLine, Sig};
+use marsad_events::Phase;
+use marsad_gates::{Gate, PlanStep};
+use marsad_hosts::{Host, HostStatus};
+use marsad_viewmodel::{AppSnapshot, Filter, SessionView, Tab, Workspace};
+
+// ---------------------------------------------------------------------------
+// MockState
+// ---------------------------------------------------------------------------
+
+pub struct MockState {
+    pub snapshot: AppSnapshot,
+}
+
+impl MockState {
+    pub fn snapshot(&self) -> AppSnapshot {
+        self.snapshot.clone()
+    }
+
+    pub fn set_active_ws(&mut self, id: String) {
+        self.snapshot.active_ws = Some(id);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Seeded snapshot builder
+// ---------------------------------------------------------------------------
+
+pub fn seeded_mock() -> MockState {
+    let hosts = vec![
+        Host {
+            id: "local".to_string(),
+            label: "localhost".to_string(),
+            target: "this machine".to_string(),
+            status: HostStatus::Connected,
+            session_count: 4,
+            is_local: true,
+            removable: false,
+        },
+        Host {
+            id: "hetzner".to_string(),
+            label: "hetzner-cx51".to_string(),
+            target: "dev@hetzner-cx51.example.com".to_string(),
+            status: HostStatus::Connected,
+            session_count: 4,
+            is_local: false,
+            removable: true,
+        },
+        Host {
+            id: "gpu".to_string(),
+            label: "gpu-worker".to_string(),
+            target: "dev@gpu-worker.example.com".to_string(),
+            status: HostStatus::Reconnecting,
+            session_count: 2,
+            is_local: false,
+            removable: true,
+        },
+    ];
+
+    // Gate variants mirroring the .dc.html prototype
+    let permission_gate = Gate::Permission {
+        command: "prisma migrate deploy".to_string(),
+        cwd: "/app".to_string(),
+        risk: "medium".to_string(),
+        explanation: "Runs pending database migrations against the production schema.".to_string(),
+    };
+
+    let plan_gate = Gate::Plan {
+        summary: "Refactor the job queue to use async workers with backpressure".to_string(),
+        steps: vec![
+            PlanStep {
+                title: "Extract queue interface".to_string(),
+                detail: "Move JobQueue trait to its own module".to_string(),
+            },
+            PlanStep {
+                title: "Implement AsyncWorker".to_string(),
+                detail: "Add tokio::spawn based workers with bounded channel".to_string(),
+            },
+            PlanStep {
+                title: "Wire backpressure".to_string(),
+                detail: "Apply semaphore to cap in-flight tasks".to_string(),
+            },
+        ],
+    };
+
+    let edit_gate = Gate::Edit {
+        file: "src/features.py".to_string(),
+        diff: vec![
+            DiffLine { sig: Sig::Context, ln: "1".to_string(), text: "def compute_features(df):".to_string() },
+            DiffLine { sig: Sig::Del, ln: "2".to_string(), text: "    return df.fillna(0)".to_string() },
+            DiffLine { sig: Sig::Add, ln: "2".to_string(), text: "    df = df.fillna(0)".to_string() },
+            DiffLine { sig: Sig::Add, ln: "3".to_string(), text: "    df['log_amount'] = df['amount'].apply(np.log1p)".to_string() },
+            DiffLine { sig: Sig::Add, ln: "4".to_string(), text: "    return df".to_string() },
+        ],
+    };
+
+    let sessions = vec![
+        // Needs attention — permission gate
+        SessionView {
+            id: "s01".to_string(),
+            name: "api-auth-refactor".to_string(),
+            host_id: "local".to_string(),
+            project: "~/projects/api".to_string(),
+            branch: "feature/auth-v2".to_string(),
+            model: "claude-sonnet-4-5".to_string(),
+            state: Phase::Needs,
+            changed_files: 7,
+            subagents: 0,
+            cost_usd: 0.34,
+            tokens: 42_000,
+            context_pct: 38.0,
+            gate: Some(permission_gate),
+        },
+        // Needs attention — plan gate
+        SessionView {
+            id: "s02".to_string(),
+            name: "queue-async-workers".to_string(),
+            host_id: "hetzner".to_string(),
+            project: "~/projects/worker-svc".to_string(),
+            branch: "refactor/async-workers".to_string(),
+            model: "claude-opus-4-5".to_string(),
+            state: Phase::Needs,
+            changed_files: 0,
+            subagents: 0,
+            cost_usd: 1.20,
+            tokens: 98_000,
+            context_pct: 62.0,
+            gate: Some(plan_gate),
+        },
+        // Error — edit gate shown for reference
+        SessionView {
+            id: "s03".to_string(),
+            name: "ml-feature-engineering".to_string(),
+            host_id: "gpu".to_string(),
+            project: "~/projects/ml-pipeline".to_string(),
+            branch: "exp/feature-v3".to_string(),
+            model: "claude-sonnet-4-5".to_string(),
+            state: Phase::Error,
+            changed_files: 3,
+            subagents: 0,
+            cost_usd: 0.55,
+            tokens: 61_000,
+            context_pct: 44.0,
+            gate: Some(edit_gate),
+        },
+        // Working sessions
+        SessionView {
+            id: "s04".to_string(),
+            name: "frontend-dashboard".to_string(),
+            host_id: "local".to_string(),
+            project: "~/projects/dashboard".to_string(),
+            branch: "feat/overview-v2".to_string(),
+            model: "claude-sonnet-4-5".to_string(),
+            state: Phase::Working,
+            changed_files: 12,
+            subagents: 2,
+            cost_usd: 0.89,
+            tokens: 74_000,
+            context_pct: 55.0,
+            gate: None,
+        },
+        SessionView {
+            id: "s05".to_string(),
+            name: "infra-terraform".to_string(),
+            host_id: "hetzner".to_string(),
+            project: "~/projects/infra".to_string(),
+            branch: "main".to_string(),
+            model: "claude-haiku-4-5".to_string(),
+            state: Phase::Working,
+            changed_files: 4,
+            subagents: 0,
+            cost_usd: 0.12,
+            tokens: 18_000,
+            context_pct: 22.0,
+            gate: None,
+        },
+        SessionView {
+            id: "s06".to_string(),
+            name: "data-ingestion-pipeline".to_string(),
+            host_id: "gpu".to_string(),
+            project: "~/projects/data".to_string(),
+            branch: "feat/kafka-consumer".to_string(),
+            model: "claude-sonnet-4-5".to_string(),
+            state: Phase::Working,
+            changed_files: 8,
+            subagents: 1,
+            cost_usd: 0.67,
+            tokens: 55_000,
+            context_pct: 48.0,
+            gate: None,
+        },
+        // Done sessions
+        SessionView {
+            id: "s07".to_string(),
+            name: "ci-pipeline-fix".to_string(),
+            host_id: "local".to_string(),
+            project: "~/projects/ci".to_string(),
+            branch: "fix/gh-actions".to_string(),
+            model: "claude-haiku-4-5".to_string(),
+            state: Phase::Done,
+            changed_files: 2,
+            subagents: 0,
+            cost_usd: 0.08,
+            tokens: 9_200,
+            context_pct: 12.0,
+            gate: None,
+        },
+        SessionView {
+            id: "s08".to_string(),
+            name: "docs-update".to_string(),
+            host_id: "local".to_string(),
+            project: "~/projects/docs".to_string(),
+            branch: "docs/api-v3".to_string(),
+            model: "claude-haiku-4-5".to_string(),
+            state: Phase::Done,
+            changed_files: 5,
+            subagents: 0,
+            cost_usd: 0.14,
+            tokens: 16_000,
+            context_pct: 18.0,
+            gate: None,
+        },
+        SessionView {
+            id: "s09".to_string(),
+            name: "test-coverage-boost".to_string(),
+            host_id: "hetzner".to_string(),
+            project: "~/projects/api".to_string(),
+            branch: "test/coverage-90".to_string(),
+            model: "claude-sonnet-4-5".to_string(),
+            state: Phase::Done,
+            changed_files: 18,
+            subagents: 0,
+            cost_usd: 0.43,
+            tokens: 38_000,
+            context_pct: 31.0,
+            gate: None,
+        },
+        // Stale session
+        SessionView {
+            id: "s10".to_string(),
+            name: "design-tokens-sync".to_string(),
+            host_id: "hetzner".to_string(),
+            project: "~/projects/design".to_string(),
+            branch: "chore/tokens".to_string(),
+            model: "claude-haiku-4-5".to_string(),
+            state: Phase::Stale,
+            changed_files: 0,
+            subagents: 0,
+            cost_usd: 0.03,
+            tokens: 4_500,
+            context_pct: 6.0,
+            gate: None,
+        },
+    ];
+
+    let workspaces = vec![
+        Workspace {
+            id: "ws-default".to_string(),
+            name: "Default".to_string(),
+            session_ids: sessions.iter().map(|s| s.id.clone()).collect(),
+            saved_at: "just now".to_string(),
+        },
+        Workspace {
+            id: "ws-backend".to_string(),
+            name: "Backend work".to_string(),
+            session_ids: vec!["s01".to_string(), "s02".to_string(), "s09".to_string()],
+            saved_at: "2h ago".to_string(),
+        },
+        Workspace {
+            id: "ws-ml".to_string(),
+            name: "ML pipeline".to_string(),
+            session_ids: vec!["s03".to_string(), "s06".to_string()],
+            saved_at: "yesterday".to_string(),
+        },
+    ];
+
+    MockState {
+        snapshot: AppSnapshot {
+            sessions,
+            hosts,
+            workspaces,
+            active_ws: Some("ws-default".to_string()),
+            selected_id: None,
+            filter: Filter::All,
+            search: String::new(),
+            tab: Tab::Activity,
+        },
+    }
+}

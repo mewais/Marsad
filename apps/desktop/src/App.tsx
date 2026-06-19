@@ -1,19 +1,58 @@
-// Marsad desktop UI root.
-//
-// TODO(D02 code-agent): implement the full UI faithful to
-// _extracted/design_handoff_marsad/Marsad.dc.html — Overview, Session detail
-// (Activity/Changes/Config/Usage/Terminal), Gate overlay, New-session, Settings
-// (Notifications/Hosts/Defaults/General), Workspaces, theme + glass. Wire data to
-// marsad-core via the Tauri bridge (see ../src-tauri and the `bridge` module).
-//
-// This placeholder renders the wordmark so the app boots during scaffolding.
+/**
+ * Marsad desktop UI root.
+ *
+ * Renders the state-router: AppShell + the active screen based on store nav state.
+ * Screen placeholder components live in src/screens/ — D02 agents replace the bodies.
+ */
+import { VmProvider, useVm } from "./bridge/useVm";
+import { ThemeProvider } from "./theme/ThemeProvider";
+import { AppShell } from "./components/AppShell";
+import { Overview } from "./screens/Overview";
+import { SessionDetail } from "./screens/SessionDetail";
+import { GateOverlay } from "./screens/GateOverlay";
+import { NewSession } from "./screens/NewSession";
+import { Settings } from "./screens/Settings";
+import { Workspaces } from "./screens/Workspaces";
+
+// ---------------------------------------------------------------------------
+// Inner router (uses useVm which requires VmProvider above it)
+// ---------------------------------------------------------------------------
+
+function Router() {
+  const { state } = useVm();
+
+  function renderScreen() {
+    switch (state.screen) {
+      case "overview":
+        return <Overview />;
+      case "session":
+        return <SessionDetail />;
+      case "gate":
+        return <GateOverlay />;
+      case "new-session":
+        return <NewSession />;
+      case "settings":
+        return <Settings />;
+      case "workspaces":
+        return <Workspaces />;
+      default:
+        return <Overview />;
+    }
+  }
+
+  return <AppShell>{renderScreen()}</AppShell>;
+}
+
+// ---------------------------------------------------------------------------
+// App root
+// ---------------------------------------------------------------------------
+
 export function App() {
   return (
-    <div style={{ fontFamily: "'Hanken Grotesk', system-ui, sans-serif" }}>
-      <h1>
-        Marsad <span style={{ color: "#5f6979" }}>—</span> مرصد
-      </h1>
-      <p>Scaffolding. UI not yet implemented — see apps/desktop/AGENTS.md.</p>
-    </div>
+    <ThemeProvider initialTheme="dark" initialGlass={false}>
+      <VmProvider>
+        <Router />
+      </VmProvider>
+    </ThemeProvider>
   );
 }

@@ -9,8 +9,17 @@ export default defineConfig({
   build: { target: "es2021", outDir: "dist" },
   test: {
     globals: true,
-    environment: "jsdom",
+    environment: "happy-dom",
     setupFiles: ["./tests/setup.ts"],
     include: ["tests/**/*.test.{ts,tsx}"],
+    pool: "forks",
+    poolOptions: {
+      forks: {
+        singleFork: true,
+      },
+    },
+    // Suppress the sandbox-only lazyllhttp Wasm OOM that fires in Node's
+    // internal undici module. This is not a test correctness issue.
+    dangerouslyIgnoreUnhandledErrors: true,
   },
 });

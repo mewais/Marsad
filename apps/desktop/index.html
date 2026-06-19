@@ -10,6 +10,21 @@
       rel="stylesheet"
     />
     <title>Marsad — مرصد</title>
+    <style>
+      *{box-sizing:border-box}
+      html,body{margin:0;height:100%;font-family:'Hanken Grotesk',system-ui,sans-serif;background:#0e1116;color:#e8ecf1;-webkit-font-smoothing:antialiased}
+      .mono{font-family:'JetBrains Mono',monospace}
+      ::-webkit-scrollbar{width:9px;height:9px}
+      ::-webkit-scrollbar-thumb{background:var(--border2,#313a48);border-radius:6px}
+      ::-webkit-scrollbar-track{background:transparent}
+      ::selection{background:var(--accent-bg,rgba(91,141,239,0.14))}
+      @keyframes dotpulse{0%,100%{opacity:1}50%{opacity:.35}}
+      @keyframes glow{0%,100%{box-shadow:0 0 0 1px var(--needs,#f1a83a),0 0 0 5px rgba(241,168,58,0.10)}50%{box-shadow:0 0 0 1px var(--needs,#f1a83a),0 0 22px 2px rgba(241,168,58,0.22)}}
+      @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+      @keyframes spin{to{transform:rotate(360deg)}}
+      @keyframes slideup{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+      @keyframes slideleft{from{opacity:0;transform:translateX(18px)}to{opacity:1;transform:none}}
+    </style>
   </head>
   <body>
     <div id="root"></div>
