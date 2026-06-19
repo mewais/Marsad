@@ -296,6 +296,43 @@ fn backend_read_failure_propagates_from_restore() {
 }
 
 #[test]
+fn backend_write_failure_propagates_from_set_active_workspace() {
+    // We need a handle to the backend AFTER it has been moved into the Store,
+    // so that we can call fail_next after snapshot_workspace consumes its write.
+    // Wrap an Arc<MemoryBackend> in a local newtype that implements Backend by
+    // delegating to the shared Arc; retain the Arc to arm fail_next later.
+    use std::sync::Arc;
+
+    struct SharedBackend(Arc<MemoryBackend>);
+    impl marsad_store::Backend for SharedBackend {
+        fn read(&self, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
+            self.0.read(key)
+        }
+        fn write(&self, key: &str, bytes: &[u8]) -> Result<(), StoreError> {
+            self.0.write(key, bytes)
+        }
+        fn list(&self, prefix: &str) -> Result<Vec<String>, StoreError> {
+            self.0.list(prefix)
+        }
+        fn delete(&self, key: &str) -> Result<(), StoreError> {
+            self.0.delete(key)
+        }
+    }
+
+    let backend = Arc::new(MemoryBackend::new());
+    let mut store = Store::new(Box::new(SharedBackend(Arc::clone(&backend))));
+    let ws = make_workspace("ws-active-fail");
+    store.snapshot_workspace(&ws).expect("snapshot must succeed");
+    backend.fail_next(BackendOp::Write);
+    match store.set_active_workspace("ws-active-fail") {
+        Err(StoreError::Backend(_)) => {}
+        other => panic!(
+            "expected Backend error from set_active_workspace write, got: {other:?}"
+        ),
+    }
+}
+
+#[test]
 fn backend_read_failure_propagates_from_export_workspace() {
     let backend = MemoryBackend::new();
     backend.fail_next(BackendOp::Any);
