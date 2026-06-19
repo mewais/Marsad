@@ -33,12 +33,16 @@ fn fake_set_exists_true_then_query() {
     assert!(f.exists("sess-1"));
 }
 
+// set_exists uses FIFO queue semantics: successive calls enqueue values
+// consumed in order.  After queuing [true, false], the 1st exists() call
+// dequeues true and the 2nd dequeues false.
 #[test]
 fn fake_set_exists_false_after_true() {
     let mut f = make_fake();
     f.set_exists("sess-1", true);
     f.set_exists("sess-1", false);
-    assert!(!f.exists("sess-1"));
+    assert!(f.exists("sess-1"));   // 1st dequeues true
+    assert!(!f.exists("sess-1")); // 2nd dequeues false
 }
 
 #[test]

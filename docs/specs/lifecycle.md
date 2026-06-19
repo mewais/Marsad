@@ -24,6 +24,12 @@ pub struct ConPtyContainer;   // Windows
 pub struct FakeContainer { /* scripted exists/attach/spawn results + a call log */ }
 impl FakeContainer {
     pub fn new() -> Self;
+    /// ENQUEUE a return value for `exists(name)`. Successive calls queue successive
+    /// values consumed in **FIFO** order: after `set_exists("x",true); set_exists("x",false)`,
+    /// the 1st `exists("x")` returns `true` and the 2nd returns `false`. Once a name's queue
+    /// is exhausted, `exists` returns `false`. (FIFO is REQUIRED: the AttachRace re-probe relies
+    /// on two sequential probes returning distinct values — a last-write-wins/override semantics
+    /// would make the re-probe path untestable. Any test that assumes override semantics is wrong.)
     pub fn set_exists(&mut self, name: &str, v: bool);
     pub fn fail_attach(&mut self, name: &str);   // next attach(name) -> Err(AttachRace)
     pub fn fail_spawn(&mut self, name: &str);     // next spawn(name,..) -> Err(Spawn)

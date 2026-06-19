@@ -67,6 +67,7 @@ pub fn parse_ssh_config(text: &str) -> Vec<HostEntry> {
             // keyword is guaranteed to be "hostname", "user", or "identityfile"
             // (KNOWN filter above) and current is always Some when a sub-directive
             // follows a Host line in well-formed SSH configs.
+            #[allow(clippy::option_map_unit_fn)]
             current.as_mut().map(|entry| match keyword.as_str() {
                 "hostname" => entry.hostname = Some(value),
                 "user" => entry.user = Some(value),
@@ -154,6 +155,7 @@ pub struct FakeSshRunner {
     responses: RefCell<HashMap<String, VecDeque<Result<String, HostError>>>>,
 }
 
+#[allow(clippy::new_without_default)]
 impl FakeSshRunner {
     /// Create a new, empty [`FakeSshRunner`].
     pub fn new() -> Self {
