@@ -8,6 +8,11 @@ license.workspace = true
 repository.workspace = true
 description = "Line transport to claude: LocalIpc, SshStdio, loopback fake; NDJSON framing"
 
+[lints.rust]
+# cargo-llvm-cov sets cfg(coverage); declare it here to silence the
+# unexpected_cfg warning without requiring a build script.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
+
 [dependencies]
 thiserror = { workspace = true }
 marsad-proto = { workspace = true }
