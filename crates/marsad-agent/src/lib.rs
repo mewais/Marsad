@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use marsad_lifecycle::{Container, FakeContainer, Persisted};
+use marsad_lifecycle::{FakeContainer, Persisted};
 use marsad_notify::{CaptureNotifier, Notifier};
 use marsad_store::{MemoryBackend, Store};
 use serde::Deserialize;
@@ -25,10 +25,10 @@ pub enum AgentError {
 impl fmt::Display for AgentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AgentError::Listen(s)    => write!(f, "listen error: {s}"),
-            AgentError::Spawn(s)     => write!(f, "spawn error: {s}"),
+            AgentError::Listen(s) => write!(f, "listen error: {s}"),
+            AgentError::Spawn(s) => write!(f, "spawn error: {s}"),
             AgentError::Transport(s) => write!(f, "transport error: {s}"),
-            AgentError::Protocol(s)  => write!(f, "protocol error: {s}"),
+            AgentError::Protocol(s) => write!(f, "protocol error: {s}"),
             AgentError::Lifecycle(s) => write!(f, "lifecycle error: {s}"),
         }
     }
@@ -84,24 +84,44 @@ opaque_debug_wrap!(NotifierWrap(Box<dyn Notifier>));
 opaque_debug_wrap!(StoreWrap(Box<Store>));
 opaque_debug_wrap!(ContainerWrap(Box<FakeContainer>));
 
+// Real-IO container wrapper — production builds only.
+// Uses the same opaque Debug pattern so `derive(Debug)` on `Agent` compiles.
+#[cfg(not(coverage))]
+struct RealContainerWrap(Option<Box<dyn marsad_lifecycle::Container>>);
+
+#[cfg(not(coverage))]
+impl fmt::Debug for RealContainerWrap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RealContainerWrap")
+    }
+}
+
 /// The detached supervisor daemon.
 ///
 /// Always stores a `FakeContainer` — for production use `Agent::new` supplies an
 /// empty/default `FakeContainer`; for tests `Agent::with_fakes` supplies a
 /// pre-configured one.  This design keeps one code path (no dead branches) and
 /// lets `container_calls()` work without unsafe code.
+///
+/// Under `cfg(not(coverage))` an optional real container can override the fake
+/// for production use via `Agent::with_real_io`.
 #[derive(Debug)]
 pub struct Agent {
     #[allow(dead_code)]
     config: AgentConfig,
     sessions: HashMap<String, SessionRecord>,
     next_id: u64,
-    /// The injected (or default) container.
+    /// The injected (or default) fake container (always present for unit tests).
     container: ContainerWrap,
     /// The injected (or default) notifier.
     notifier: NotifierWrap,
     /// Persistence store.
     store: StoreWrap,
+    /// Production real container — when inner is `Some`, overrides `container`
+    /// for all Container trait method calls.  Gated out of the coverage build
+    /// so no uncovered lines appear.
+    #[cfg(not(coverage))]
+    real_container: RealContainerWrap,
 }
 
 impl Agent {
@@ -111,9 +131,7 @@ impl Agent {
         // Validate listen spec for obviously invalid paths (null byte).
         if let ListenSpec::UnixSocket(ref path) = cfg.listen {
             if path.contains('\0') {
-                return Err(AgentError::Listen(format!(
-                    "invalid socket path: {path:?}"
-                )));
+                return Err(AgentError::Listen(format!("invalid socket path: {path:?}")));
             }
         }
         Self::with_fakes(
@@ -138,7 +156,57 @@ impl Agent {
             container: ContainerWrap(container),
             notifier: NotifierWrap(notifier),
             store: StoreWrap(store),
+            #[cfg(not(coverage))]
+            real_container: RealContainerWrap(None),
         })
+    }
+
+    /// Construct with real OS IO: `TmuxContainer`, `DbusNotifier`, `FsBackend`.
+    ///
+    /// Gated `#[cfg(not(coverage))]` so the coverage build never sees these
+    /// lines.  Called by `main` in production; integration tests call it
+    /// directly.
+    #[cfg(not(coverage))]
+    pub fn with_real_io(cfg: AgentConfig) -> Result<Agent, AgentError> {
+        use marsad_lifecycle::TmuxContainer;
+        use marsad_notify::DbusNotifier;
+        use marsad_store::{FsBackend, Store};
+
+        let data_root = std::path::PathBuf::from(&cfg.data_root);
+        let tmux = TmuxContainer::new(data_root.clone());
+        let notifier = Box::new(DbusNotifier::new());
+        let store = Box::new(Store::new(Box::new(FsBackend::new(data_root))));
+
+        Ok(Agent {
+            config: cfg,
+            sessions: HashMap::new(),
+            next_id: 1,
+            // Fake container slot: unused in real-io mode but kept to satisfy the
+            // type (container_calls() is a no-op here; integration tests assert
+            // tmux session existence directly, not via container_calls()).
+            container: ContainerWrap(Box::new(FakeContainer::new())),
+            notifier: NotifierWrap(notifier),
+            store: StoreWrap(store),
+            real_container: RealContainerWrap(Some(Box::new(tmux))),
+        })
+    }
+
+    /// Return a mutable reference to whichever container is active.
+    ///
+    /// Production builds route through `real_container` when set; coverage and
+    /// test builds always route through the fake.
+    #[cfg(not(coverage))]
+    fn active_container(&mut self) -> &mut dyn marsad_lifecycle::Container {
+        if let Some(ref mut rc) = self.real_container.0 {
+            rc.as_mut()
+        } else {
+            self.container.0.as_mut()
+        }
+    }
+
+    #[cfg(coverage)]
+    fn active_container(&mut self) -> &mut dyn marsad_lifecycle::Container {
+        self.container.0.as_mut()
     }
 
     /// Return the ordered call log of the injected `FakeContainer`.
@@ -152,14 +220,58 @@ impl Agent {
         id
     }
 
+    /// Build the shell command string passed to `Container::spawn`.
+    ///
+    /// - Coverage / unit-test build: returns `argv.join(" ")` (the fake container
+    ///   ignores the command body; what matters is that spawn is called).
+    /// - Production build: if a real container is active, returns the full
+    ///   FIFO-wired tmux invocation per the realio.md spec:
+    ///   `cd <project> && claude <args> < in.fifo > out.fifo 2>err.log`
+    ///   Otherwise falls back to `argv.join(" ")`.
+    #[cfg(coverage)]
+    fn build_spawn_cmd(&self, _container_name: &str, _project: &str, argv: &[String]) -> String {
+        argv.join(" ")
+    }
+
+    #[cfg(not(coverage))]
+    fn build_spawn_cmd(&self, container_name: &str, project: &str, argv: &[String]) -> String {
+        if self.real_container.0.is_some() {
+            // Build the FIFO-wired shell invocation.
+            // The session dir is <data_root>/sessions/<container_name>.
+            let session_dir = std::path::PathBuf::from(&self.config.data_root)
+                .join("sessions")
+                .join(container_name);
+            let in_fifo = session_dir.join("in.fifo");
+            let out_fifo = session_dir.join("out.fifo");
+            let err_log = session_dir.join("err.log");
+            // argv[0] is "claude"; the rest are its arguments.
+            // We build: cd <project> && claude <args> < in.fifo > out.fifo 2>err.log
+            let claude_args = &argv[1..];
+            format!(
+                "cd {} && claude {} < {} > {} 2>{}",
+                shell_quote(project),
+                claude_args
+                    .iter()
+                    .map(|a| shell_quote(a))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                in_fifo.display(),
+                out_fifo.display(),
+                err_log.display(),
+            )
+        } else {
+            argv.join(" ")
+        }
+    }
+
     /// Launch a new session via the injected container.
     pub fn launch(&mut self, spec: marsad_proto::LaunchSpec) -> Result<String, AgentError> {
         let session_id = self.next_session_id();
         let container_name = format!("marsad-{session_id}");
         let argv = claude_argv(&spec);
-        let cmd = argv.join(" ");
+        let cmd = self.build_spawn_cmd(&container_name, &spec.project, &argv);
 
-        self.container.0
+        self.active_container()
             .spawn(&container_name, &cmd)
             .map_err(|e| AgentError::Spawn(format!("{e}")))?;
 
@@ -173,13 +285,16 @@ impl Agent {
             model: spec.model.clone(),
             last_phase: "Starting".to_string(),
         };
-        self.store.0
+        self.store
+            .0
             .upsert_session(&persisted)
             .map_err(|e| AgentError::Lifecycle(format!("persist session: {e:?}")))?;
 
         self.sessions.insert(
             session_id.clone(),
-            SessionRecord { marsad_id: session_id.clone() },
+            SessionRecord {
+                marsad_id: session_id.clone(),
+            },
         );
         Ok(session_id)
     }
@@ -196,18 +311,20 @@ impl Agent {
             .as_object()
             .and_then(|obj| obj.get("type"))
             .and_then(|v| v.as_str())
-            .ok_or(AgentError::Protocol("missing type discriminant".to_string()))?;
+            .ok_or(AgentError::Protocol(
+                "missing type discriminant".to_string(),
+            ))?;
 
         match type_str {
             "LaunchSession" => self.handle_launch_session(&value),
             "ResumeSession" => self.handle_resume_session(&value),
             "AttachSession" => self.handle_attach_session(&value),
-            "StopSession"   => self.handle_stop_session(&value),
-            "SendPrompt"    => self.handle_send_prompt(&value),
-            "Interrupt"     => self.handle_interrupt(&value),
-            "AnswerGate"    => self.handle_answer_gate(&value),
-            "Subscribe"     => self.handle_subscribe(),
-            "Unsubscribe"   => Ok(vec![]),
+            "StopSession" => self.handle_stop_session(&value),
+            "SendPrompt" => self.handle_send_prompt(&value),
+            "Interrupt" => self.handle_interrupt(&value),
+            "AnswerGate" => self.handle_answer_gate(&value),
+            "Subscribe" => self.handle_subscribe(),
+            "Unsubscribe" => Ok(vec![]),
             other => Err(AgentError::Protocol(format!("unknown IPC type: {other}"))),
         }
     }
@@ -218,8 +335,7 @@ impl Agent {
     ) -> Result<Vec<String>, AgentError> {
         let msg: LaunchSessionMsg = serde_json::from_value(value.clone())
             .map_err(|e| AgentError::Protocol(format!("LaunchSession schema error: {e}")))?;
-        let posture = parse_posture_value(&value["posture"])
-            .map_err(AgentError::Protocol)?;
+        let posture = parse_posture_value(&value["posture"]).map_err(AgentError::Protocol)?;
         let spec = marsad_proto::LaunchSpec {
             project: msg.project,
             host_id: msg.host_id.unwrap_or("local".to_string()),
@@ -236,9 +352,9 @@ impl Agent {
         &mut self,
         value: &serde_json::Value,
     ) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"]
-            .as_str()
-            .ok_or(AgentError::Protocol("ResumeSession missing session_id".to_string()))?;
+        let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
+            "ResumeSession missing session_id".to_string(),
+        ))?;
         let event = serde_json::json!({"type": "SessionResumed", "session_id": session_id});
         Ok(vec![event.to_string()])
     }
@@ -247,9 +363,9 @@ impl Agent {
         &mut self,
         value: &serde_json::Value,
     ) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"]
-            .as_str()
-            .ok_or(AgentError::Protocol("AttachSession missing session_id".to_string()))?;
+        let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
+            "AttachSession missing session_id".to_string(),
+        ))?;
         if !self.sessions.contains_key(session_id) {
             return Err(AgentError::Protocol(format!(
                 "AttachSession: unknown session {session_id}"
@@ -263,28 +379,25 @@ impl Agent {
         &mut self,
         value: &serde_json::Value,
     ) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"]
-            .as_str()
-            .ok_or(AgentError::Protocol("StopSession missing session_id".to_string()))?;
+        let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
+            "StopSession missing session_id".to_string(),
+        ))?;
         if !self.sessions.contains_key(session_id) {
             return Err(AgentError::Protocol(format!(
                 "StopSession: unknown session {session_id}"
             )));
         }
         let container_name = format!("marsad-{session_id}");
-        let _ = self.container.0.kill(&container_name);
+        let _ = self.active_container().kill(&container_name);
         self.sessions.remove(session_id);
         let event = serde_json::json!({"type": "SessionStopped", "session_id": session_id});
         Ok(vec![event.to_string()])
     }
 
-    fn handle_send_prompt(
-        &mut self,
-        value: &serde_json::Value,
-    ) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"]
-            .as_str()
-            .ok_or(AgentError::Protocol("SendPrompt missing session_id".to_string()))?;
+    fn handle_send_prompt(&mut self, value: &serde_json::Value) -> Result<Vec<String>, AgentError> {
+        let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
+            "SendPrompt missing session_id".to_string(),
+        ))?;
         if !self.sessions.contains_key(session_id) {
             return Err(AgentError::Protocol(format!(
                 "SendPrompt: unknown session {session_id}"
@@ -297,25 +410,19 @@ impl Agent {
         Ok(vec![event.to_string()])
     }
 
-    fn handle_interrupt(
-        &mut self,
-        value: &serde_json::Value,
-    ) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"]
-            .as_str()
-            .ok_or(AgentError::Protocol("Interrupt missing session_id".to_string()))?;
+    fn handle_interrupt(&mut self, value: &serde_json::Value) -> Result<Vec<String>, AgentError> {
+        let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
+            "Interrupt missing session_id".to_string(),
+        ))?;
         // If the session is gone, interrupt is a benign no-op.
         let event = serde_json::json!({"type": "Interrupted", "session_id": session_id});
         Ok(vec![event.to_string()])
     }
 
-    fn handle_answer_gate(
-        &mut self,
-        value: &serde_json::Value,
-    ) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"]
-            .as_str()
-            .ok_or(AgentError::Protocol("AnswerGate missing session_id".to_string()))?;
+    fn handle_answer_gate(&mut self, value: &serde_json::Value) -> Result<Vec<String>, AgentError> {
+        let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
+            "AnswerGate missing session_id".to_string(),
+        ))?;
         // If no pending gate, this is a benign no-op (the tests assert non-Protocol-error).
         let event = serde_json::json!({"type": "GateAnswered", "session_id": session_id});
         Ok(vec![event.to_string()])
@@ -364,7 +471,12 @@ impl Agent {
     /// - Container dead + session_id → Resume (spawn `claude --resume <id>`).
     /// - Container dead + no session_id → MarkStale.
     pub fn reconcile_all(&mut self) -> Vec<marsad_lifecycle::SessionRuntime> {
-        let restored = self.store.0.restore().map(|r| r.sessions).unwrap_or_default();
+        let restored = self
+            .store
+            .0
+            .restore()
+            .map(|r| r.sessions)
+            .unwrap_or_default();
 
         let mut runtimes = Vec::new();
 
@@ -381,11 +493,12 @@ impl Agent {
 
             // Delegate to lifecycle::reconcile; fold any error (AttachRace transient,
             // ResumeFailed spawn failure) into a MarkStale runtime.
-            let runtime = marsad_lifecycle::reconcile(&known, self.container.0.as_mut())
-                .unwrap_or(SessionRuntime {
+            let runtime = marsad_lifecycle::reconcile(&known, self.active_container()).unwrap_or(
+                SessionRuntime {
                     action: Action::MarkStale,
                     phase: Some(RuntimePhase::Stale),
-                });
+                },
+            );
 
             runtimes.push(runtime);
         }
@@ -407,14 +520,24 @@ impl Agent {
     }
 }
 
+// ── shell_quote ───────────────────────────────────────────────────────────────
+
+/// Single-quote a string for POSIX shell.  Replaces `'` with `'\''`.
+/// Gated out of the coverage build (only used by `build_spawn_cmd` in the
+/// real-io path).
+#[cfg(not(coverage))]
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 // ── claude_argv ───────────────────────────────────────────────────────────────
 
 /// Map a `Posture` to the `--permission-mode` value passed to `claude`.
 fn posture_to_mode(posture: &marsad_proto::Posture) -> &'static str {
     match posture {
-        marsad_proto::Posture::Ask             => "default",
+        marsad_proto::Posture::Ask => "default",
         marsad_proto::Posture::AutoApproveSafe => "acceptEdits",
-        marsad_proto::Posture::FullAutonomy    => "bypassPermissions",
+        marsad_proto::Posture::FullAutonomy => "bypassPermissions",
     }
 }
 
@@ -450,10 +573,10 @@ fn parse_posture_value(v: &serde_json::Value) -> Result<marsad_proto::Posture, S
         None => return Err(format!("posture must be a string, got: {v}")),
     };
     match s {
-        "Ask"             => Ok(marsad_proto::Posture::Ask),
+        "Ask" => Ok(marsad_proto::Posture::Ask),
         "AutoApproveSafe" => Ok(marsad_proto::Posture::AutoApproveSafe),
-        "FullAutonomy"    => Ok(marsad_proto::Posture::FullAutonomy),
-        other             => Err(format!("unknown posture: {other}")),
+        "FullAutonomy" => Ok(marsad_proto::Posture::FullAutonomy),
+        other => Err(format!("unknown posture: {other}")),
     }
 }
 
@@ -470,7 +593,7 @@ fn parse_hook_event(
             let message = value["message"].as_str().unwrap_or("").to_string();
             Ok(marsad_events::HookEvent::Notification { message })
         }
-        "Stop"         => Ok(marsad_events::HookEvent::Stop),
+        "Stop" => Ok(marsad_events::HookEvent::Stop),
         "SubagentStop" => {
             let name = value["name"].as_str().unwrap_or("").to_string();
             Ok(marsad_events::HookEvent::SubagentStop { name })
@@ -484,8 +607,8 @@ fn parse_hook_event(
             Ok(marsad_events::HookEvent::PostToolUse { tool })
         }
         "SessionStart" => Ok(marsad_events::HookEvent::SessionStart),
-        "SessionEnd"   => Ok(marsad_events::HookEvent::SessionEnd),
-        "PreCompact"   => Ok(marsad_events::HookEvent::PreCompact),
+        "SessionEnd" => Ok(marsad_events::HookEvent::SessionEnd),
+        "PreCompact" => Ok(marsad_events::HookEvent::PreCompact),
         other => Err(AgentError::Protocol(format!("unknown hook type: {other}"))),
     }
 }

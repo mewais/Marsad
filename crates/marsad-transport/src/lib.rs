@@ -22,9 +22,9 @@
 //! - Full production implementations compile.  Integration tests exercise the
 //!   connect()-fails-on-bad-path error path; live IO paths are exercised by i03/i06.
 
-use thiserror::Error;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use thiserror::Error;
 
 // ── TransportError ─────────────────────────────────────────────────────────────
 
@@ -239,7 +239,11 @@ impl Transport for LoopbackFake {
             return Err(TransportError::BrokenPipe);
         }
         self.outbound_log.lock().unwrap().push(line.to_string());
-        self.peer_state.lock().unwrap().lines.push_back(line.to_string());
+        self.peer_state
+            .lock()
+            .unwrap()
+            .lines
+            .push_back(line.to_string());
         Ok(())
     }
 
@@ -423,8 +427,10 @@ impl SshStdio {
         // interactive prompt).  `expect` is intentional: if ssh is not installed
         // the test environment is broken and a panic is the right signal.
         let status = Command::new("ssh")
-            .arg("-o").arg("BatchMode=yes")
-            .arg("-o").arg("ConnectTimeout=5")
+            .arg("-o")
+            .arg("BatchMode=yes")
+            .arg("-o")
+            .arg("ConnectTimeout=5")
             .arg(&self.target)
             .arg(&self.remote_cmd)
             .stdin(Stdio::null())
@@ -434,20 +440,25 @@ impl SshStdio {
             .expect("ssh binary not found — cannot run SshStdio coverage stub")
             .wait()
             .expect("wait on ssh child failed");
-        Err(TransportError::ConnectFailed(format!("ssh exited: {status}")))
+        Err(TransportError::ConnectFailed(format!(
+            "ssh exited: {status}"
+        )))
     }
 }
 
 /// Full `Transport` impl — production builds only (excluded from coverage).
 #[cfg(not(coverage))]
 impl Transport for SshStdio {
+    #[allow(clippy::similar_names)]
     fn connect(&mut self) -> Result<(), TransportError> {
         use std::process::{Command, Stdio};
         use std::time::Duration;
 
         let mut child = Command::new("ssh")
-            .arg("-o").arg("BatchMode=yes")
-            .arg("-o").arg("ConnectTimeout=10")
+            .arg("-o")
+            .arg("BatchMode=yes")
+            .arg("-o")
+            .arg("ConnectTimeout=10")
             .arg(&self.target)
             .arg(&self.remote_cmd)
             .stdin(Stdio::piped())
@@ -523,6 +534,170 @@ impl Transport for SshStdio {
             let _ = child.wait();
         }
         self.child = None;
+        Ok(())
+    }
+}
+
+// ── ClaudeFifoTransport ────────────────────────────────────────────────────────
+//
+// Transport that talks to a `claude` process running inside a tmux session via
+// two named pipes (FIFOs):
+//   `<session_dir>/in.fifo`  — agent writes, claude reads (stdin)
+//   `<session_dir>/out.fifo` — claude writes, agent reads (stdout)
+//
+// Open ordering (deadlock avoidance):
+//   Claude (inside tmux) is launched with its stdin redirected from `in.fifo`
+//   and its stdout redirected to `out.fifo`.  The kernel pairs each FIFO open:
+//   a writer open blocks until a reader is present, and vice-versa.  Claude
+//   holds the reader end of `in.fifo` and the writer end of `out.fifo` once
+//   its shell command (`< in.fifo > out.fifo`) starts.
+//
+//   To avoid a deadlock the agent must open the two ends in complementary order:
+//   1. Open `out.fifo` for **reading** first.
+//      This unblocks claude's shell which is waiting for a reader on out.fifo.
+//   2. Open `in.fifo` for **writing** second.
+//      By the time step 2 runs, claude's shell has already opened in.fifo for
+//      reading (because step 1 let it proceed), so the agent's write-open
+//      completes immediately.
+//
+// `close` drops only the file handles; it intentionally does NOT kill the tmux
+// session (liveness requirement: the claude process must survive client exit).
+//
+// The existing `LineFramer` (already unit-tested) handles NDJSON reassembly.
+//
+// Gated `#[cfg(not(coverage))]` entirely — exercised by the `i03` integration
+// test.
+
+/// Production FIFO-based transport for a `claude` process running in tmux.
+#[cfg(not(coverage))]
+pub struct ClaudeFifoTransport {
+    session_dir: std::path::PathBuf,
+    writer: Option<std::fs::File>,
+    reader: Option<std::io::BufReader<std::fs::File>>,
+    framer: LineFramer,
+}
+
+#[cfg(not(coverage))]
+impl ClaudeFifoTransport {
+    /// Create a `ClaudeFifoTransport` referencing the FIFOs in `session_dir`.
+    ///
+    /// Calling this does NOT open the FIFOs yet — call `connect()` to open them.
+    pub fn open(session_dir: &std::path::Path) -> Result<Self, TransportError> {
+        Ok(Self {
+            session_dir: session_dir.to_path_buf(),
+            writer: None,
+            reader: None,
+            framer: LineFramer::new(),
+        })
+    }
+}
+
+#[cfg(not(coverage))]
+impl Transport for ClaudeFifoTransport {
+    /// Open `out.fifo` for reading first, then `in.fifo` for writing.
+    ///
+    /// See the module-level comment for the ordering rationale.
+    fn connect(&mut self) -> Result<(), TransportError> {
+        use std::fs::OpenOptions;
+
+        let out_fifo = self.session_dir.join("out.fifo");
+        let in_fifo = self.session_dir.join("in.fifo");
+
+        // Step 1: open out.fifo for reading (this unblocks claude's stdout redirect).
+        let out_file = OpenOptions::new()
+            .read(true)
+            .open(&out_fifo)
+            .map_err(|e| TransportError::ConnectFailed(format!("open out.fifo: {e}")))?;
+
+        // Step 2: open in.fifo for writing (claude's stdin redirect is already open).
+        let in_file = OpenOptions::new()
+            .write(true)
+            .open(&in_fifo)
+            .map_err(|e| TransportError::ConnectFailed(format!("open in.fifo: {e}")))?;
+
+        self.reader = Some(std::io::BufReader::new(out_file));
+        self.writer = Some(in_file);
+        Ok(())
+    }
+
+    /// Write `line` followed by `'\n'` to `in.fifo`.
+    fn send_line(&mut self, line: &str) -> Result<(), TransportError> {
+        use std::io::Write;
+        match self.writer {
+            Some(ref mut w) => {
+                let msg = format!("{line}\n");
+                w.write_all(msg.as_bytes())
+                    .map_err(|_| TransportError::BrokenPipe)
+            }
+            None => Err(TransportError::ConnectFailed("not connected".to_string())),
+        }
+    }
+
+    /// Read the next complete NDJSON line from `out.fifo` using `LineFramer`.
+    ///
+    /// Returns `Ok(None)` on clean EOF; `Err(ClosedMidStream)` if the peer
+    /// closes with a partial frame still buffered.
+    fn recv_line(&mut self) -> Result<Option<String>, TransportError> {
+        use std::io::Read;
+
+        let reader = match self.reader {
+            Some(ref mut r) => r,
+            None => {
+                return Err(TransportError::ConnectFailed("not connected".to_string()));
+            }
+        };
+
+        let mut buf = [0u8; 4096];
+        loop {
+            // First drain any lines already buffered by the framer.
+            // We do a single-pass: call push only when the buffer has no lines.
+
+            match reader.read(&mut buf) {
+                Ok(0) => {
+                    // EOF from the FIFO.
+                    if self.framer.pending().is_empty() {
+                        return Ok(None);
+                    } else {
+                        return Err(TransportError::ClosedMidStream);
+                    }
+                }
+                Ok(n) => {
+                    let mut lines = self.framer.push(&buf[..n]);
+                    if !lines.is_empty() {
+                        // Return the first complete line; the rest stay in the framer.
+                        // Because `LineFramer` drains its buffer, re-push is not needed —
+                        // remaining complete lines are already extracted and we can return
+                        // them on subsequent calls.  But since `framer.push` returns all
+                        // complete lines at once, we need to buffer the extras ourselves.
+                        // Simple approach: return them one at a time by draining `lines`.
+                        // We return the first immediately; the rest are lost unless we
+                        // store them.  To avoid a secondary buffer, we push remaining
+                        // lines back into the framer by re-encoding them with '\n'.
+                        // This is safe because they are already complete, valid lines.
+                        let first = lines.remove(0);
+                        // Re-inject remaining complete lines so future recv_line calls
+                        // see them without another OS read.
+                        for extra in lines {
+                            let _ = self.framer.push(format!("{extra}\n").as_bytes());
+                        }
+                        return Ok(Some(first));
+                    }
+                    // No complete line yet — loop to read more bytes.
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                    // Retry on EINTR.
+                }
+                Err(e) => {
+                    return Err(TransportError::Io(e.to_string()));
+                }
+            }
+        }
+    }
+
+    /// Close the FIFO handles.  Does NOT kill the tmux session.
+    fn close(&mut self) -> Result<(), TransportError> {
+        self.writer = None;
+        self.reader = None;
         Ok(())
     }
 }

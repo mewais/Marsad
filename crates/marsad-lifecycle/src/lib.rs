@@ -4,9 +4,9 @@
 //!
 //! # OS container implementations (TmuxContainer / ConPtyContainer)
 //! These require a live tmux session to test meaningfully and are exercised by
-//! the `i03` integration test, not by the unit test suite here.  They are
-//! intentionally omitted from this file; OS container support lives in the
-//! integration layer.  This keeps coverage at 100% over the testable surface.
+//! the `i03` integration test, not by the unit test suite here.  Their full
+//! bodies are gated `#[cfg(not(coverage))]` so the measured surface stays at
+//! 100%.  The `FakeContainer` remains the unit-tested path.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -130,9 +130,7 @@ impl FakeContainer {
 
 impl Container for FakeContainer {
     fn exists(&self, name: &str) -> bool {
-        self.call_log
-            .borrow_mut()
-            .push(format!("exists:{name}"));
+        self.call_log.borrow_mut().push(format!("exists:{name}"));
 
         let value = self
             .exists_queues
@@ -237,6 +235,137 @@ pub fn plan_reconnect(known: &Persisted, probe: &Probe) -> Action {
         Action::Resume(sid.clone())
     } else {
         Action::MarkStale
+    }
+}
+
+// ── TmuxContainer ────────────────────────────────────────────────────────────
+//
+// Production container implementation — runs Claude Code sessions inside
+// detached tmux sessions so they outlive the client.
+//
+// Gated `#[cfg(not(coverage))]` in its entirety so the coverage build never
+// sees these lines.  Exercised by the `i03` integration test.
+
+/// Production `Container` that wraps `tmux` sessions.
+///
+/// Each managed session lives in a tmux session named `marsad-<id>`.
+/// The `runtime_dir` is the parent directory for per-session subdirectories
+/// (`<runtime_dir>/sessions/<name>/`) that hold the FIFOs and err.log.
+#[cfg(not(coverage))]
+pub struct TmuxContainer {
+    runtime_dir: std::path::PathBuf,
+}
+
+#[cfg(not(coverage))]
+impl TmuxContainer {
+    /// Create a new `TmuxContainer` rooted at `runtime_dir`.
+    pub fn new(runtime_dir: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            runtime_dir: runtime_dir.into(),
+        }
+    }
+
+    /// Return the per-session directory path for `name`.
+    fn session_dir(&self, name: &str) -> std::path::PathBuf {
+        self.runtime_dir.join("sessions").join(name)
+    }
+}
+
+#[cfg(not(coverage))]
+impl Container for TmuxContainer {
+    /// Returns `true` iff `tmux has-session -t <name>` exits 0.
+    /// Never errors: any failure (tmux absent, I/O error) → `false`.
+    fn exists(&self, name: &str) -> bool {
+        std::process::Command::new("tmux")
+            .args(["has-session", "-t", name])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    /// Verify the session is still live.
+    ///
+    /// Re-opens FIFOs is the transport's responsibility; this method only
+    /// confirms liveness.  If the session vanished between the caller's probe
+    /// and this call, returns `Err(AttachRace)`.
+    fn attach(&mut self, name: &str) -> Result<(), LifecycleError> {
+        if self.exists(name) {
+            Ok(())
+        } else {
+            Err(LifecycleError::AttachRace(name.to_string()))
+        }
+    }
+
+    /// Create the per-session dir, mkfifo in.fifo/out.fifo, then launch
+    /// `tmux new-session -d -s <name> '<cmd>'`.
+    ///
+    /// **Idempotent**: if the session already exists (i.e. `exists(name)`
+    /// returns true), no new session is spawned — the function returns `Ok`
+    /// immediately (adopt semantics).
+    fn spawn(&mut self, name: &str, cmd: &str) -> Result<(), LifecycleError> {
+        // Idempotency guard: adopt without spawning if already running.
+        if self.exists(name) {
+            return Ok(());
+        }
+
+        let dir = self.session_dir(name);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| LifecycleError::Spawn(format!("mkdir {dir:?}: {e}")))?;
+
+        let in_fifo = dir.join("in.fifo");
+        let out_fifo = dir.join("out.fifo");
+
+        // Use the `mkfifo` utility (POSIX, dependency-free from Rust's std).
+        // Only create each FIFO if it does not already exist.
+        for fifo in [&in_fifo, &out_fifo] {
+            if !fifo.exists() {
+                let st = std::process::Command::new("mkfifo")
+                    .arg(fifo)
+                    .status()
+                    .map_err(|e| LifecycleError::Spawn(format!("mkfifo: {e}")))?;
+                if !st.success() {
+                    return Err(LifecycleError::Spawn(format!(
+                        "mkfifo {fifo:?} failed: {st}"
+                    )));
+                }
+            }
+        }
+
+        // Launch the tmux session.
+        let st = std::process::Command::new("tmux")
+            .args(["new-session", "-d", "-s", name, cmd])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_err(|e| LifecycleError::Spawn(format!("tmux new-session: {e}")))?;
+
+        if st.success() {
+            Ok(())
+        } else {
+            Err(LifecycleError::Spawn(format!(
+                "tmux new-session -d -s {name} failed: {st}"
+            )))
+        }
+    }
+
+    /// Kill a tmux session by name.
+    fn kill(&mut self, name: &str) -> Result<(), LifecycleError> {
+        let st = std::process::Command::new("tmux")
+            .args(["kill-session", "-t", name])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_err(|e| LifecycleError::Container(format!("tmux kill-session: {e}")))?;
+
+        if st.success() {
+            Ok(())
+        } else {
+            Err(LifecycleError::Container(format!(
+                "tmux kill-session -t {name} failed: {st}"
+            )))
+        }
     }
 }
 

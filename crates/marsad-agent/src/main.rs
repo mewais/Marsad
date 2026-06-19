@@ -12,11 +12,14 @@ fn main() {
 
     let cfg = AgentConfig {
         listen: ListenSpec::Stdio,
-        data_root: std::env::var("MARSAD_DATA_ROOT")
-            .unwrap_or_else(|_| "/var/lib/marsad".to_string()),
+        data_root: std::env::var("MARSAD_DATA_ROOT").unwrap_or_else(|_| {
+            dirs_home()
+                .map(|h| format!("{h}/.local/share/marsad"))
+                .unwrap_or_else(|| "/var/lib/marsad".to_string())
+        }),
     };
 
-    let agent = match Agent::new(cfg) {
+    let agent = match Agent::with_real_io(cfg) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("marsad-agent: failed to initialize: {e}");
@@ -28,6 +31,12 @@ fn main() {
         eprintln!("marsad-agent: serve error: {e}");
         std::process::exit(1);
     }
+}
+
+/// Return the user's home directory as a `String`, if determinable.
+#[cfg(not(coverage))]
+fn dirs_home() -> Option<String> {
+    std::env::var("HOME").ok()
 }
 
 #[cfg(coverage)]
