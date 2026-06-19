@@ -8,6 +8,11 @@ license.workspace = true
 repository.workspace = true
 description = "Notification content/priority/prefs/DND/grouping; Notifier trait"
 
+[lints.rust]
+# cargo-llvm-cov sets cfg(coverage); declare it here to silence the
+# unexpected_cfg warning without requiring a build script.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
+
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
