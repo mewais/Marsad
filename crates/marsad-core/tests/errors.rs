@@ -260,6 +260,24 @@ fn on_agent_line_empty_string_returns_protocol_error() {
 }
 
 // ---------------------------------------------------------------------------
+// CoreError::UnknownSession — on_agent_line for a never-launched session
+// ---------------------------------------------------------------------------
+
+#[test]
+fn on_agent_line_for_unregistered_session_returns_unknown_session() {
+    let (mut core, _peer) = make_core();
+    // A well-formed agent_event for a session_id that was never launched/registered.
+    // Uses an assistant event (not system/init) so the impl cannot auto-register on first sight.
+    let line = r#"{"type":"agent_event","session_id":"never-launched-session","event":{"type":"assistant","message":{"id":"msg-x","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}"#;
+    match core.on_agent_line(line) {
+        Err(CoreError::UnknownSession(_)) => {}
+        other => panic!(
+            "agent_event for an unlaunched session must return UnknownSession, got: {other:?}"
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CoreError::Agent — variant is constructible and matchable
 // ---------------------------------------------------------------------------
 

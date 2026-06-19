@@ -153,6 +153,13 @@ impl SideState {
 /// Create a connected pair with `LoopbackFake::pair()`.  Each end has its own
 /// inbound queue; `send_line` on side A enqueues into B's inbound, and vice
 /// versa.
+///
+/// The `outbound_log` is shared between both ends of the pair: when side A
+/// calls `send_line`, the line is appended to the shared log.  Either end can
+/// call `drain_outbound()` to retrieve (and clear) all lines sent through the
+/// pair so far.  This lets tests hold onto the peer end (side B) and observe
+/// every command that the core (side A) sent — the canonical pattern used by
+/// the `marsad-core` test suite.
 pub struct LoopbackFake {
     /// Whether `connect()` has been called on this end.
     connected: bool,
@@ -162,8 +169,9 @@ pub struct LoopbackFake {
     my_state: Arc<Mutex<SideState>>,
     /// The peer's inbound state (lines we send go here).
     peer_state: Arc<Mutex<SideState>>,
-    /// Lines we sent via `send_line` (logical content, no trailing `'\n'`).
-    outbound_log: Vec<String>,
+    /// Shared ordered log of every line sent through this pair.
+    /// Both ends share the same Arc so either can drain it.
+    outbound_log: Arc<Mutex<Vec<String>>>,
 }
 
 impl LoopbackFake {
@@ -171,20 +179,22 @@ impl LoopbackFake {
     pub fn pair() -> (LoopbackFake, LoopbackFake) {
         let a_state = Arc::new(Mutex::new(SideState::new()));
         let b_state = Arc::new(Mutex::new(SideState::new()));
+        // Single shared outbound log for the pair.
+        let shared_log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
         let a = LoopbackFake {
             connected: false,
             closed: false,
             my_state: Arc::clone(&a_state),
             peer_state: Arc::clone(&b_state),
-            outbound_log: Vec::new(),
+            outbound_log: Arc::clone(&shared_log),
         };
         let b = LoopbackFake {
             connected: false,
             closed: false,
             my_state: Arc::clone(&b_state),
             peer_state: Arc::clone(&a_state),
-            outbound_log: Vec::new(),
+            outbound_log: Arc::clone(&shared_log),
         };
         (a, b)
     }
@@ -202,9 +212,11 @@ impl LoopbackFake {
         }
     }
 
-    /// Drain the ordered log of lines sent via `send_line`.  Clears the log.
+    /// Drain the ordered log of lines sent via `send_line` on either end.
+    /// Clears the shared log.
     pub fn drain_outbound(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.outbound_log)
+        let mut log = self.outbound_log.lock().unwrap();
+        std::mem::take(&mut *log)
     }
 }
 
@@ -226,7 +238,7 @@ impl Transport for LoopbackFake {
         if self.closed || peer_closed {
             return Err(TransportError::BrokenPipe);
         }
-        self.outbound_log.push(line.to_string());
+        self.outbound_log.lock().unwrap().push(line.to_string());
         self.peer_state.lock().unwrap().lines.push_back(line.to_string());
         Ok(())
     }

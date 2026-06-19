@@ -30,8 +30,12 @@ pub struct LoopbackFake { /* in-memory duplex */ }
 impl LoopbackFake {
     pub fn pair() -> (LoopbackFake, LoopbackFake);     // two ends wired together
     pub fn push_inbound(&mut self, raw: &str);          // feed raw bytes (may be partial frames)
-    pub fn drain_outbound(&mut self) -> Vec<String>;    // what was sent
+    pub fn drain_outbound(&mut self) -> Vec<String>;    // drain the pair's SHARED outbound log
 }
+// drain_outbound semantics: the two ends of a pair() share ONE outbound log. A line sent via
+// `send_line` on EITHER end is appended to that shared log; `drain_outbound` on EITHER end drains
+// (and clears) it. This is what lets a test hold the peer end (`b`) and observe the commands the
+// unit-under-test (driving `a`) sent — the pattern the marsad-core test suite relies on.
 
 /// Pure framing helper, separately testable.
 pub struct LineFramer { /* buffer */ }
