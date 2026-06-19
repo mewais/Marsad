@@ -394,3 +394,238 @@ fn handle_ipc_attach_unknown_session_returns_error() {
         "AttachSession for unknown session must return Err; got {result:?}"
     );
 }
+
+// ── parse_posture_value: non-string posture field ──────────────────────────────
+
+/// When `posture` is a non-string JSON value (e.g. an integer) but the rest of
+/// the LaunchSession message is valid, `parse_posture_value` hits the `None`
+/// branch on line 450 and returns `Err(AgentError::Protocol(_))`.
+///
+/// The previous schema-mismatch test used `{"posture":99}` WITHOUT a `model`
+/// field, which caused the `LaunchSessionMsg` serde deserialization to fail
+/// first (missing required `model`), never reaching `parse_posture_value`.
+/// This test supplies a fully-valid `LaunchSessionMsg` (project + model) so
+/// deserialization succeeds and control reaches `parse_posture_value`.
+#[test]
+fn handle_ipc_launch_posture_non_string_returns_protocol_error() {
+    let mut agent = make_agent_with_container(FakeContainer::new());
+
+    // `posture` is an integer — LaunchSessionMsg parses fine (no posture field
+    // in the struct), but parse_posture_value(&value["posture"]) gets a Number
+    // not a string, hitting the None arm (line 450).
+    let result = agent.handle_ipc(
+        r#"{"type":"LaunchSession","project":"/p","host_id":"local","model":"m","posture":99}"#,
+    );
+    assert!(
+        matches!(result, Err(AgentError::Protocol(_))),
+        "posture non-string must return AgentError::Protocol; got {result:?}"
+    );
+}
+
+// ── missing type discriminant in handle_ipc ────────────────────────────────────
+
+/// A valid JSON object with no `type` field at all must produce
+/// `AgentError::Protocol("missing type discriminant")`.
+#[test]
+fn handle_ipc_missing_type_discriminant_returns_protocol_error() {
+    let mut agent = make_agent_with_container(FakeContainer::new());
+
+    let result = agent.handle_ipc(r#"{"foo":1}"#);
+    assert!(
+        matches!(result, Err(AgentError::Protocol(_))),
+        "JSON object with no type field must return AgentError::Protocol; got {result:?}"
+    );
+}
+
+/// Each session-scoped command returns Protocol when `session_id` is absent.
+#[test]
+fn handle_ipc_missing_session_id_resume_session() {
+    let mut agent = make_agent_with_container(FakeContainer::new());
+    let result = agent.handle_ipc(r#"{"type":"ResumeSession"}"#);
+    assert!(
+        matches!(result, Err(AgentError::Protocol(_))),
+        "ResumeSession missing session_id must return Protocol; got {result:?}"
+    );
+}
+
+#[test]
+fn handle_ipc_missing_session_id_attach_session() {
+    let mut agent = make_agent_with_container(FakeContainer::new());
+    let result = agent.handle_ipc(r#"{"type":"AttachSession"}"#);
+    assert!(
+        matches!(result, Err(AgentError::Protocol(_))),
+        "AttachSession missing session_id must return Protocol; got {result:?}"
+    );
+}
+
+#[test]
+fn handle_ipc_missing_session_id_stop_session() {
+    let mut agent = make_agent_with_container(FakeContainer::new());
+    let result = agent.handle_ipc(r#"{"type":"StopSession"}"#);
+    assert!(
+        matches!(result, Err(AgentError::Protocol(_))),
+        "StopSession missing session_id must return Protocol; got {result:?}"
+    );
+}
+
+#[test]
+fn handle_ipc_missing_session_id_send_prompt() {
+    let mut agent = make_agent_with_container(FakeContainer::new());
+    let result = agent.handle_ipc(r#"{"type":"SendPrompt","text":"hi"}"#);
+    assert!(
+        matches!(result, Err(AgentError::Protocol(_))),
+        "SendPrompt missing session_id must return Protocol; got {result:?}"
+    );
+}
+
+#[test]
+fn handle_ipc_missing_session_id_interrupt() {
+    let mut agent = make_agent_with_container(FakeContainer::new());
+    let result = agent.handle_ipc(r#"{"type":"Interrupt"}"#);
+    assert!(
+        matches!(result, Err(AgentError::Protocol(_))),
+        "Interrupt missing session_id must return Protocol; got {result:?}"
+    );
+}
+
+#[test]
+fn handle_ipc_missing_session_id_answer_gate() {
+    let mut agent = make_agent_with_container(FakeContainer::new());
+    let result = agent.handle_ipc(r#"{"type":"AnswerGate","decision":"Allow"}"#);
+    assert!(
+        matches!(result, Err(AgentError::Protocol(_))),
+        "AnswerGate missing session_id must return Protocol; got {result:?}"
+    );
+}
+
+// ── launch: spawn failure with predictable container name ─────────────────────
+
+/// `Agent::next_session_id()` starts at 1, so the very first `launch` call on a
+/// fresh Agent uses container name `"marsad-session-1"`.  Pre-arm that name in
+/// FakeContainer so spawn definitely fails and returns `AgentError::Spawn`.
+#[test]
+fn launch_spawn_failure_deterministic_container_name() {
+    let mut container = FakeContainer::new();
+    container.fail_spawn("marsad-session-1");
+    let notifier = CaptureNotifier::new();
+    let backend = MemoryBackend::new();
+    let mut agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(container),
+        Box::new(notifier),
+        Box::new(marsad_store::Store::new(Box::new(backend))),
+    )
+    .expect("with_fakes");
+
+    let spec = marsad_proto::LaunchSpec {
+        project: "/p".to_string(),
+        host_id: "local".to_string(),
+        model: "m".to_string(),
+        posture: marsad_proto::Posture::Ask,
+        first_prompt: None,
+    };
+    match agent.launch(spec) {
+        Err(AgentError::Spawn(_)) => {}
+        other => panic!("expected AgentError::Spawn, got {other:?}"),
+    }
+}
+
+// ── launch: upsert failure → AgentError::Lifecycle ────────────────────────────
+
+/// After a successful spawn, `launch` calls `store.upsert_session(...)`.
+/// `MemoryBackend` holds its state in an `Arc<Mutex<...>>` internally, so
+/// calling `fail_next` BEFORE moving the backend into `Store`/`with_fakes`
+/// arms the failure flag inside that Arc.  Since `with_fakes` itself does not
+/// write to the backend, the armed flag is still pending when `launch` calls
+/// `upsert_session`, making the write fail and returning `AgentError::Lifecycle`.
+#[test]
+fn launch_upsert_failure_returns_lifecycle_error() {
+    use marsad_store::BackendOp;
+
+    let backend = MemoryBackend::new();
+    // Arm the write failure NOW — with_fakes does not write to the backend,
+    // so this flag will still be live when launch's upsert_session fires.
+    backend.fail_next(BackendOp::Write);
+
+    let notifier = CaptureNotifier::new();
+    let mut agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(FakeContainer::new()),
+        Box::new(notifier),
+        Box::new(marsad_store::Store::new(Box::new(backend))),
+    )
+    .expect("with_fakes");
+
+    let spec = marsad_proto::LaunchSpec {
+        project: "/p".to_string(),
+        host_id: "local".to_string(),
+        model: "m".to_string(),
+        posture: marsad_proto::Posture::Ask,
+        first_prompt: None,
+    };
+    match agent.launch(spec) {
+        Err(AgentError::Lifecycle(_)) => {}
+        other => panic!("expected AgentError::Lifecycle, got {other:?}"),
+    }
+}
+
+// ── handle_launch_session: launch error arm via handle_ipc (line 230 col 43) ──
+
+/// `handle_launch_session` calls `self.launch(spec)?` on line 230.  The `?`
+/// error branch fires when spawn fails inside `handle_ipc("LaunchSession")`.
+/// We arm `"marsad-session-1"` (first deterministic container name) to fail,
+/// then call via `handle_ipc` so the error propagates through the `?` on line 230.
+#[test]
+fn handle_ipc_launch_session_spawn_failure_via_handle_ipc() {
+    let mut container = FakeContainer::new();
+    container.fail_spawn("marsad-session-1");
+    let notifier = CaptureNotifier::new();
+    let backend = MemoryBackend::new();
+    let mut agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(container),
+        Box::new(notifier),
+        Box::new(marsad_store::Store::new(Box::new(backend))),
+    )
+    .expect("with_fakes");
+
+    let line = r#"{"type":"LaunchSession","project":"/p","host_id":"local","model":"m","posture":"Ask"}"#;
+    match agent.handle_ipc(line) {
+        Err(AgentError::Spawn(_)) => {}
+        other => panic!("expected AgentError::Spawn via handle_ipc, got {other:?}"),
+    }
+}
+
+// ── handle_send_prompt: missing text field (line 295 col 80) ─────────────────
+
+/// `handle_send_prompt` calls `value["text"].as_str().ok_or(...)?.` on line 295.
+/// The `?` error branch fires when `text` is absent.  We launch a session first
+/// so the session_id check passes, then send a `SendPrompt` with no `text`.
+#[test]
+fn handle_ipc_send_prompt_missing_text_returns_protocol_error() {
+    let notifier = CaptureNotifier::new();
+    let backend = MemoryBackend::new();
+    let mut agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(FakeContainer::new()),
+        Box::new(notifier),
+        Box::new(marsad_store::Store::new(Box::new(backend))),
+    )
+    .expect("with_fakes");
+
+    // Launch to register a session.
+    let launch = r#"{"type":"LaunchSession","project":"/p","host_id":"local","model":"m","posture":"Ask"}"#;
+    let launched = agent.handle_ipc(launch).expect("launch must succeed");
+    let session_id: String = launched.iter().find_map(|l| {
+        serde_json::from_str::<serde_json::Value>(l).ok()
+            .and_then(|v| v.get("session_id").and_then(|s| s.as_str()).map(str::to_string))
+    }).expect("session_id in launch response");
+
+    // SendPrompt with session_id present but text absent.
+    let prompt = format!(r#"{{"type":"SendPrompt","session_id":"{session_id}"}}"#);
+    let result = agent.handle_ipc(&prompt);
+    assert!(
+        matches!(result, Err(AgentError::Protocol(_))),
+        "SendPrompt missing text must return AgentError::Protocol; got {result:?}"
+    );
+}

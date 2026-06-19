@@ -129,6 +129,66 @@ fn claude_argv_no_prompt_when_none() {
     );
 }
 
+/// `claude_argv` with `Posture::Ask` must emit `--permission-mode` immediately followed by `default`.
+#[test]
+fn claude_argv_permission_mode_ask() {
+    let spec = basic_launch_spec(); // posture: Posture::Ask
+    let argv = claude_argv(&spec);
+    let idx = argv
+        .iter()
+        .position(|a| a == "--permission-mode")
+        .expect("claude_argv must include --permission-mode flag");
+    assert_eq!(
+        argv.get(idx + 1).map(String::as_str),
+        Some("default"),
+        "--permission-mode value for Ask must be \"default\"; argv: {argv:?}"
+    );
+}
+
+/// `claude_argv` with `Posture::AutoApproveSafe` must emit `--permission-mode` then `acceptEdits`.
+#[test]
+fn claude_argv_permission_mode_auto_approve_safe() {
+    let spec = LaunchSpec {
+        project: "/home/user/myproject".to_string(),
+        host_id: "local".to_string(),
+        model: "claude-opus-4-5".to_string(),
+        posture: marsad_proto::Posture::AutoApproveSafe,
+        first_prompt: None,
+    };
+    let argv = claude_argv(&spec);
+    let idx = argv
+        .iter()
+        .position(|a| a == "--permission-mode")
+        .expect("claude_argv must include --permission-mode flag");
+    assert_eq!(
+        argv.get(idx + 1).map(String::as_str),
+        Some("acceptEdits"),
+        "--permission-mode value for AutoApproveSafe must be \"acceptEdits\"; argv: {argv:?}"
+    );
+}
+
+/// `claude_argv` with `Posture::FullAutonomy` must emit `--permission-mode` then `bypassPermissions`.
+#[test]
+fn claude_argv_permission_mode_full_autonomy() {
+    let spec = LaunchSpec {
+        project: "/home/user/myproject".to_string(),
+        host_id: "local".to_string(),
+        model: "claude-opus-4-5".to_string(),
+        posture: marsad_proto::Posture::FullAutonomy,
+        first_prompt: None,
+    };
+    let argv = claude_argv(&spec);
+    let idx = argv
+        .iter()
+        .position(|a| a == "--permission-mode")
+        .expect("claude_argv must include --permission-mode flag");
+    assert_eq!(
+        argv.get(idx + 1).map(String::as_str),
+        Some("bypassPermissions"),
+        "--permission-mode value for FullAutonomy must be \"bypassPermissions\"; argv: {argv:?}"
+    );
+}
+
 /// Argv is stable (no non-determinism) — two calls with equal specs produce equal vecs.
 #[test]
 fn claude_argv_is_deterministic() {
@@ -506,4 +566,24 @@ fn extract_session_id_from_lines(lines: &[String]) -> String {
         }
     }
     panic!("No session_id found in outbound IPC lines: {lines:?}");
+}
+
+// ── Agent Debug impl: exercise the opaque_debug_wrap fmt bodies ───────────────
+
+/// The `opaque_debug_wrap!` macro generates `fmt` bodies for `NotifierWrap`,
+/// `StoreWrap`, and `ContainerWrap` (lines 76-78 in lib.rs).  Those bodies are
+/// only executed when `Agent` is formatted with `{:?}`.  Existing tests use
+/// `assert!(result.is_ok(), "{result:?}")` which never fires on success, so the
+/// fmt bodies are never executed.  This test formats the Agent directly.
+#[test]
+fn agent_debug_format_executes() {
+    let agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(FakeContainer::new()),
+        Box::new(CaptureNotifier::new()),
+        Box::new(marsad_store::Store::new(Box::new(MemoryBackend::new()))),
+    )
+    .expect("with_fakes");
+    let s = format!("{agent:?}");
+    assert!(!s.is_empty(), "Agent Debug output must be non-empty");
 }

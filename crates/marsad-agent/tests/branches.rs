@@ -771,6 +771,53 @@ fn ipc_command_answer_gate_deny() {
     }
 }
 
+/// LaunchSession with `"posture":"AutoApproveSafe"` must be accepted (Ok) by handle_ipc.
+#[test]
+fn handle_ipc_launch_auto_approve_safe_posture() {
+    let mut agent = make_agent();
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"AutoApproveSafe"}"#;
+    let result = agent.handle_ipc(line);
+    assert!(
+        result.is_ok(),
+        "LaunchSession with AutoApproveSafe posture must return Ok; got {result:?}"
+    );
+    let lines = result.unwrap();
+    assert!(
+        !lines.is_empty(),
+        "LaunchSession(AutoApproveSafe) must emit at least one outbound IPC event line"
+    );
+}
+
+/// LaunchSession with `"posture":"FullAutonomy"` must be accepted (Ok) by handle_ipc.
+#[test]
+fn handle_ipc_launch_full_autonomy_posture() {
+    let mut agent = make_agent();
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"FullAutonomy"}"#;
+    let result = agent.handle_ipc(line);
+    assert!(
+        result.is_ok(),
+        "LaunchSession with FullAutonomy posture must return Ok; got {result:?}"
+    );
+    let lines = result.unwrap();
+    assert!(
+        !lines.is_empty(),
+        "LaunchSession(FullAutonomy) must emit at least one outbound IPC event line"
+    );
+}
+
+/// LaunchSession with an unknown posture string must return `Err(AgentError::Protocol(_))`.
+/// The posture field is a valid string but not a recognised enum variant.
+#[test]
+fn handle_ipc_launch_unknown_posture_is_protocol_error() {
+    let mut agent = make_agent();
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"Nonsense"}"#;
+    let result = agent.handle_ipc(line);
+    assert!(
+        matches!(result, Err(AgentError::Protocol(_))),
+        "LaunchSession with unknown posture string must return AgentError::Protocol; got {result:?}"
+    );
+}
+
 /// Multiple LaunchSession calls create independent sessions (no cross-routing).
 #[test]
 fn multiple_launch_sessions_are_independent() {

@@ -33,7 +33,19 @@ impl Agent {
 
 /// The exact claude invocation the supervisor runs inside a container.
 pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String>;
-// => ["claude","--print","--input-format","stream-json","--output-format","stream-json","--verbose", ...]
+// => ["claude","--print","--input-format","stream-json","--output-format","stream-json","--verbose",
+//     "--model", <spec.model>,
+//     "--permission-mode", <mode>,        // Ask->"default", AutoApproveSafe->"acceptEdits",
+//                                         // FullAutonomy->"bypassPermissions"
+//     "--resume", <session_id>,           // ONLY when resuming an existing session (never on fresh launch)
+//     <spec.project>,                     // the working directory / project path
+//     <spec.first_prompt>]                // ONLY when spec.first_prompt is Some
+//
+// IMPLEMENTATION RULE (anti-cheat): every posture maps to a real --permission-mode value here; the
+// non-Ask arms are real behavior, NOT optional. They must be covered by REAL tests exercising each
+// posture — do NOT cfg-gate or stub them out of the coverage build. Likewise `parse_posture` (used by
+// handle_ipc to decode the LaunchSession `posture` field) handles "Ask"/"AutoApproveSafe"/
+// "FullAutonomy" plus the error cases (unknown string, non-string) — all real arms, all to be tested.
 
 pub enum AgentError { Listen(String), Spawn(String), Transport(String), Protocol(String), Lifecycle(String) }
 ```
