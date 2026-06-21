@@ -307,10 +307,11 @@ pub fn parse_stream_line(line: &str) -> Result<StreamMsg, ProtoError> {
 
 /// Encode a `UserInput` as a stream-json `user` message NDJSON line.
 pub fn encode_user_input(input: &UserInput) -> String {
-    // Build the wire object: {"type":"user","message":{"content":[...]}}
+    // Build the wire object: {"type":"user","message":{"role":"user","content":[...]}}
     let wire = serde_json::json!({
         "type": "user",
         "message": {
+            "role": "user",
             "content": input.content,
         }
     });

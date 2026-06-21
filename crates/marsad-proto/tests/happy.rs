@@ -183,7 +183,15 @@ fn encode_user_input_produces_valid_json() {
         }],
     };
     let encoded = encode_user_input(&input);
-    // Must be valid JSON and must round-trip to a user message
+    // The raw JSON must contain "role":"user" so the claude binary accepts it.
+    let raw: serde_json::Value =
+        serde_json::from_str(&encoded).expect("encoded user input must be valid JSON");
+    assert_eq!(
+        raw["message"]["role"].as_str(),
+        Some("user"),
+        "message object must include \"role\":\"user\""
+    );
+    // Must also round-trip to a typed user message.
     let parsed = parse_stream_line(&encoded).expect("encoded user input must parse back");
     match parsed {
         StreamMsg::User(u) => {
