@@ -383,6 +383,77 @@ impl Transport for LocalIpc {
     }
 }
 
+// ── LocalIpcListener ──────────────────────────────────────────────────────────
+//
+// Server-side Unix socket listener used by marsad-agent to accept GUI clients.
+// Gated `#[cfg(not(coverage))]` entirely — exercised by the i06 integration test.
+
+/// Server-side Unix domain socket listener.
+///
+/// Creates and owns the socket file.  Call `bind()` once, then `accept()` in a
+/// loop.  Each call to `accept()` returns a fully-connected `LocalIpc` that is
+/// ready to use (stream + BufReader already populated) without calling
+/// `connect()`.
+#[cfg(not(coverage))]
+pub struct LocalIpcListener {
+    inner: std::os::unix::net::UnixListener,
+}
+
+#[cfg(not(coverage))]
+impl LocalIpcListener {
+    /// Bind a new Unix domain socket at `endpoint`.
+    ///
+    /// Any stale socket file at `endpoint` is removed first so that a prior
+    /// crash does not prevent re-binding.  Parent directories are created
+    /// automatically if they do not exist.
+    pub fn bind(endpoint: &str) -> Result<Self, TransportError> {
+        use std::os::unix::net::UnixListener;
+
+        // Remove stale socket file if present (best-effort; ignore error).
+        std::fs::remove_file(endpoint).ok();
+
+        // Ensure parent directory exists.
+        if let Some(parent) = std::path::Path::new(endpoint).parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| TransportError::ConnectFailed(format!("mkdir: {e}")))?;
+        }
+
+        let listener = UnixListener::bind(endpoint)
+            .map_err(|e| TransportError::ConnectFailed(format!("bind {endpoint}: {e}")))?;
+
+        Ok(Self { inner: listener })
+    }
+
+    /// Accept the next incoming connection.
+    ///
+    /// Blocks until a client connects.  Returns a `LocalIpc` whose stream and
+    /// BufReader are already populated — no need to call `connect()` on it.
+    pub fn accept(&self) -> Result<LocalIpc, TransportError> {
+        let (stream, _addr) = self
+            .inner
+            .accept()
+            .map_err(|e| TransportError::Io(e.to_string()))?;
+        LocalIpc::from_stream(stream)
+    }
+}
+
+#[cfg(not(coverage))]
+impl LocalIpc {
+    /// Wrap an already-accepted (or already-connected) `UnixStream` into a
+    /// ready-to-use `LocalIpc`.  Both the write end (`stream`) and the read end
+    /// (`BufReader` over a `try_clone`) are populated.
+    pub fn from_stream(stream: std::os::unix::net::UnixStream) -> Result<Self, TransportError> {
+        let stream2 = stream
+            .try_clone()
+            .map_err(|e| TransportError::Io(e.to_string()))?;
+        Ok(Self {
+            endpoint: String::new(),
+            stream: Some(stream),
+            reader: Some(std::io::BufReader::new(stream2)),
+        })
+    }
+}
+
 // ── SshStdio ───────────────────────────────────────────────────────────────────
 //
 // Same two-mode pattern as LocalIpc.
