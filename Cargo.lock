@@ -237,6 +237,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "marsad-it-i09_gui_agent_live"
+version = "0.1.0"
+dependencies = [
+ "marsad-agent",
+ "marsad-core",
+ "marsad-proto",
+ "marsad-transport",
+ "serde_json",
+]
+
+[[package]]
 name = "marsad-lifecycle"
 version = "0.1.0"
 dependencies = [
