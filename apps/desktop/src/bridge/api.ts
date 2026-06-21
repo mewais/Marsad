@@ -1,7 +1,7 @@
 /**
  * Typed wrappers over @tauri-apps/api invoke() for every bridge command.
  *
- * Browser/test mode: when window.__TAURI__ is absent, falls back to the JS
+ * Browser/test mode: when the Tauri runtime is absent, falls back to the JS
  * mock fixture so Vitest + Playwright work without the Rust side.
  */
 
@@ -13,7 +13,14 @@ import { MOCK_SNAPSHOT } from "./mockFixture";
 // ---------------------------------------------------------------------------
 
 function isTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI__" in window;
+  // Tauri v2 always injects `__TAURI_INTERNALS__` into the webview (that's what
+  // `invoke()` uses). `__TAURI__` only exists when `app.withGlobalTauri` is
+  // enabled, which it is NOT here — so checking only `__TAURI__` made the real
+  // app fall back to mock data. Detect either, preferring the internals global.
+  return (
+    typeof window !== "undefined" &&
+    ("__TAURI_INTERNALS__" in window || "__TAURI__" in window)
+  );
 }
 
 // ---------------------------------------------------------------------------
