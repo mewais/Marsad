@@ -110,6 +110,29 @@ impl fmt::Debug for SessionWritersWrap {
     }
 }
 
+/// A `can_use_tool` permission request claude is blocked on, awaiting an answer.
+/// Keyed by session_id (claude asks one tool at a time per session and blocks
+/// until the control_response arrives).
+#[cfg(not(coverage))]
+#[derive(Clone)]
+struct PendingGate {
+    request_id: String,
+    input: serde_json::Value,
+}
+
+/// Per-session pending-gate registry. Shared (Arc) between the FIFO reader
+/// threads (which insert when a `can_use_tool` arrives) and the agent command
+/// loop (`handle_answer_gate`, which reads + clears when the GUI answers).
+#[cfg(not(coverage))]
+struct PendingGatesWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, PendingGate>>>);
+
+#[cfg(not(coverage))]
+impl fmt::Debug for PendingGatesWrap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PendingGatesWrap")
+    }
+}
+
 /// The detached supervisor daemon.
 ///
 /// Always stores a `FakeContainer` — for production use `Agent::new` supplies an
@@ -141,6 +164,10 @@ pub struct Agent {
     /// Production builds only — gated out of the coverage build.
     #[cfg(not(coverage))]
     session_writers: SessionWritersWrap,
+    /// Per-session pending permission gates awaiting a GUI answer.
+    /// Production builds only — gated out of the coverage build.
+    #[cfg(not(coverage))]
+    pending_gates: PendingGatesWrap,
 }
 
 impl Agent {
@@ -181,6 +208,10 @@ impl Agent {
             session_writers: SessionWritersWrap(std::sync::Arc::new(
                 std::sync::Mutex::new(HashMap::new()),
             )),
+            #[cfg(not(coverage))]
+            pending_gates: PendingGatesWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
         })
     }
 
@@ -214,6 +245,9 @@ impl Agent {
             session_writers: SessionWritersWrap(std::sync::Arc::new(
                 std::sync::Mutex::new(HashMap::new()),
             )),
+            pending_gates: PendingGatesWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
         })
     }
 
@@ -474,6 +508,45 @@ impl Agent {
         let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
             "AnswerGate missing session_id".to_string(),
         ))?;
+
+        // In production builds, translate the answer into a real
+        // `control_response` and write it to the session's in.fifo so claude
+        // unblocks the gated tool. The `allow` decision pairs the original
+        // tool input (captured when the `can_use_tool` arrived) back as
+        // `updatedInput` — claude USES that value, so a plain approval must
+        // echo the original input verbatim.
+        //
+        // Under cfg(coverage) this block is absent: the fake path returns the
+        // GateAnswered ack without IO, which is what the unit tests assert.
+        #[cfg(not(coverage))]
+        {
+            use std::io::Write;
+            let allow = value["allow"].as_bool().unwrap_or(false);
+            let deny_reason = value["deny_reason"].as_str().map(|s| s.to_string());
+
+            // Pull (and clear) the pending gate for this session.
+            let pending = {
+                let mut gates = self.pending_gates.0.lock().unwrap();
+                gates.remove(session_id)
+            };
+
+            if let Some(gate) = pending {
+                let resp = marsad_proto::ControlResponse {
+                    request_id: gate.request_id,
+                    allow,
+                    deny_reason,
+                    updated_input: if allow { Some(gate.input) } else { None },
+                };
+                let encoded = marsad_proto::encode_control_response(&resp);
+                let mut writers = self.session_writers.0.lock().unwrap();
+                if let Some(writer) = writers.get_mut(session_id) {
+                    let _ = writer.write_all(encoded.as_bytes());
+                    let _ = writer.write_all(b"\n");
+                    let _ = writer.flush();
+                }
+            }
+        }
+
         // If no pending gate, this is a benign no-op (the tests assert non-Protocol-error).
         let event = serde_json::json!({"type": "GateAnswered", "session_id": session_id});
         Ok(vec![event.to_string()])
@@ -651,6 +724,11 @@ impl Agent {
         // insert via `session_writers_for_fifo`.
         let session_writers_for_fifo = Arc::clone(&self.session_writers.0);
 
+        // ── Pending-gate registry ──────────────────────────────────────────
+        // Shared across the serve thread (handle_answer_gate via self) and the
+        // FIFO threads (which insert when claude emits a `can_use_tool`).
+        let pending_gates_for_fifo = Arc::clone(&self.pending_gates.0);
+
         // ── Accept thread ──────────────────────────────────────────────────
         // We spin off the accept loop in a separate thread so that the current
         // thread can run the agent command loop below.  The accept thread
@@ -688,6 +766,7 @@ impl Agent {
                 let data_root_client = data_root.clone();
                 let subs_for_fifo = Arc::clone(&subs_accept);
                 let writers_for_fifo = Arc::clone(&session_writers_for_fifo);
+                let pending_for_fifo = Arc::clone(&pending_gates_for_fifo);
 
                 // Split the client into independent write and read halves so
                 // each thread has exclusive ownership — no Mutex required.
@@ -784,6 +863,7 @@ impl Agent {
                                             // can register the writer and the serve thread
                                             // can look it up via self.session_writers.0.
                                             let writers_fifo = Arc::clone(&writers_for_fifo);
+                                            let pending_fifo = Arc::clone(&pending_for_fifo);
 
                                             std::thread::spawn(move || {
                                                 use marsad_transport::ClaudeFifoTransport;
@@ -819,6 +899,23 @@ impl Agent {
                                                             return;
                                                         }
                                                     };
+
+                                                // Send the control-protocol `initialize`
+                                                // handshake first. This is required before claude
+                                                // will route tool-permission prompts back to us as
+                                                // `can_use_tool` control_requests (it pairs with
+                                                // `--permission-prompt-tool stdio` in claude_argv).
+                                                // Fire-and-forget: the CLI's ack is ignored.
+                                                {
+                                                    use std::io::Write;
+                                                    let init =
+                                                        marsad_proto::encode_control_request_initialize(
+                                                            "req_1_init",
+                                                        );
+                                                    let _ = writer.write_all(init.as_bytes());
+                                                    let _ = writer.write_all(b"\n");
+                                                    let _ = writer.flush();
+                                                }
 
                                                 // Deliver the first_prompt (if any) immediately
                                                 // so claude receives its initial task.  claude in
@@ -862,6 +959,30 @@ impl Agent {
                                                         Ok(0) | Err(_) => break,
                                                         Ok(_) => {
                                                             let raw = raw.trim_end_matches('\n');
+
+                                                            // Capture a `can_use_tool` control
+                                                            // request as a pending gate so a later
+                                                            // AnswerGate can write the matching
+                                                            // control_response. The event is still
+                                                            // broadcast (below) so the GUI can
+                                                            // render the gate and answer it.
+                                                            if let Ok(
+                                                                marsad_proto::StreamMsg::ControlRequest(
+                                                                    cr,
+                                                                ),
+                                                            ) = marsad_proto::parse_stream_line(raw)
+                                                            {
+                                                                let mut gates =
+                                                                    pending_fifo.lock().unwrap();
+                                                                gates.insert(
+                                                                    sid.clone(),
+                                                                    PendingGate {
+                                                                        request_id: cr.request_id,
+                                                                        input: cr.input,
+                                                                    },
+                                                                );
+                                                            }
+
                                                             let event: serde_json::Value =
                                                                 serde_json::from_str(raw)
                                                                     .unwrap_or_else(|_| {
@@ -992,7 +1113,7 @@ fn posture_to_mode(posture: &marsad_proto::Posture) -> &'static str {
 /// stream-json` mode the prompt must be delivered via `in.fifo` as a
 /// stream-json user message, not as a positional CLI argument.
 pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
-    vec![
+    let mut argv = vec![
         "claude".to_string(),
         "--print".to_string(),
         "--input-format".to_string(),
@@ -1004,8 +1125,21 @@ pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
         spec.model.clone(),
         "--permission-mode".to_string(),
         posture_to_mode(&spec.posture).to_string(),
-        spec.project.clone(),
-    ]
+    ];
+
+    // Route tool-permission prompts to the control-protocol stream so the GUI
+    // can approve/deny them — but ONLY when the posture wants human approval.
+    // `--permission-prompt-tool stdio` is the CLI sentinel that makes claude
+    // emit `can_use_tool` control_requests on stdout (verified against the 2.1.x
+    // binary: `mx9("stdio") => createCanUseTool`). For AutoApproveSafe /
+    // FullAutonomy we leave the CLI's own permission mode in charge.
+    if matches!(spec.posture, marsad_proto::Posture::Ask) {
+        argv.push("--permission-prompt-tool".to_string());
+        argv.push("stdio".to_string());
+    }
+
+    argv.push(spec.project.clone());
+    argv
 }
 
 // ── parse_posture_value ───────────────────────────────────────────────────────

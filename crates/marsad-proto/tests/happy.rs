@@ -132,43 +132,67 @@ fn parse_result_error_during_execution() {
 
 #[test]
 fn parse_control_request() {
-    let line = r#"{"type":"control","subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls /"},"request_id":"req-42"}"#;
-    let msg = parse_stream_line(line).expect("should parse control/can_use_tool");
+    // Real Agent-SDK control protocol: payload nested under `request`.
+    let line = r#"{"type":"control_request","request_id":"req-42","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls /"}}}"#;
+    let msg = parse_stream_line(line).expect("should parse control_request/can_use_tool");
     match msg {
         StreamMsg::ControlRequest(cr) => {
             assert_eq!(cr.tool_name, "Bash");
             assert_eq!(cr.request_id, "req-42");
             assert!(cr.input.is_object());
+            assert_eq!(cr.input["command"].as_str(), Some("ls /"));
         }
         other => panic!("expected ControlRequest, got {other:?}"),
     }
 }
 
 #[test]
-fn parse_control_response_allow() {
-    let line =
-        r#"{"type":"control_response","request_id":"req-42","allow":true,"deny_reason":null}"#;
-    let msg = parse_stream_line(line).expect("should parse control_response allow");
+fn parse_control_request_missing_tool_name_and_input_defaults() {
+    // can_use_tool with no tool_name / input → empty name + Null input (no panic).
+    let line = r#"{"type":"control_request","request_id":"req-7","request":{"subtype":"can_use_tool"}}"#;
+    let msg = parse_stream_line(line).expect("should parse");
     match msg {
-        StreamMsg::ControlResponse(cr) => {
-            assert_eq!(cr.request_id, "req-42");
-            assert!(cr.allow);
+        StreamMsg::ControlRequest(cr) => {
+            assert_eq!(cr.tool_name, "");
+            assert_eq!(cr.request_id, "req-7");
+            assert!(cr.input.is_null());
         }
-        other => panic!("expected ControlResponse, got {other:?}"),
+        other => panic!("expected ControlRequest, got {other:?}"),
     }
 }
 
 #[test]
-fn parse_control_response_deny_with_reason() {
-    let line = r#"{"type":"control_response","request_id":"req-99","allow":false,"deny_reason":"not permitted"}"#;
-    let msg = parse_stream_line(line).expect("should parse control_response deny");
-    match msg {
-        StreamMsg::ControlResponse(cr) => {
-            assert!(!cr.allow);
-            assert_eq!(cr.deny_reason.as_deref(), Some("not permitted"));
-        }
-        other => panic!("expected ControlResponse, got {other:?}"),
-    }
+fn parse_control_request_non_can_use_tool_subtype_is_unknown() {
+    // A control_request with a different subtype is forward-compat Unknown.
+    let line = r#"{"type":"control_request","request_id":"req-9","request":{"subtype":"mcp_message","payload":{}}}"#;
+    let msg = parse_stream_line(line).expect("should parse");
+    assert!(
+        matches!(msg, StreamMsg::Unknown(_)),
+        "non-can_use_tool control_request must be Unknown, got {msg:?}"
+    );
+}
+
+#[test]
+fn parse_control_request_missing_request_object_is_unknown() {
+    // Missing `request` object → Unknown rather than an error.
+    let line = r#"{"type":"control_request","request_id":"req-10"}"#;
+    let msg = parse_stream_line(line).expect("should parse");
+    assert!(
+        matches!(msg, StreamMsg::Unknown(_)),
+        "control_request without `request` must be Unknown, got {msg:?}"
+    );
+}
+
+#[test]
+fn parse_control_response_init_ack_is_noop_unknown() {
+    // The CLI's `initialize` ack arrives as a `control_response`; the agent
+    // does not act on it, so it parses as a forward-compat Unknown (no-op).
+    let line = r#"{"type":"control_response","response":{"subtype":"success","request_id":"req_1_init","response":{"commands":[],"output_style":"default"}}}"#;
+    let msg = parse_stream_line(line).expect("should parse control_response ack");
+    assert!(
+        matches!(msg, StreamMsg::Unknown(_)),
+        "control_response init-ack must be Unknown (no-op), got {msg:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -206,41 +230,85 @@ fn encode_user_input_produces_valid_json() {
 }
 
 #[test]
-fn encode_control_response_allow_produces_valid_json() {
+fn encode_control_response_allow_with_updated_input() {
     let resp = ControlResponse {
         request_id: "req-1".to_string(),
         allow: true,
         deny_reason: None,
+        updated_input: Some(serde_json::json!({"command": "ls /"})),
     };
     let encoded = encode_control_response(&resp);
-    let parsed = parse_stream_line(&encoded).expect("encoded control response must parse back");
-    match parsed {
-        StreamMsg::ControlResponse(cr) => {
-            assert_eq!(cr.request_id, "req-1");
-            assert!(cr.allow);
-            assert!(cr.deny_reason.is_none());
-        }
-        other => panic!("expected ControlResponse after encoding, got {other:?}"),
-    }
+    let raw: serde_json::Value =
+        serde_json::from_str(&encoded).expect("encoded allow must be valid JSON");
+    assert_eq!(raw["type"], "control_response");
+    assert_eq!(raw["response"]["subtype"], "success");
+    assert_eq!(raw["response"]["request_id"], "req-1");
+    assert_eq!(raw["response"]["response"]["behavior"], "allow");
+    // updatedInput must echo the original tool input so the CLI runs the right command.
+    assert_eq!(
+        raw["response"]["response"]["updatedInput"]["command"].as_str(),
+        Some("ls /")
+    );
 }
 
 #[test]
-fn encode_control_response_deny_produces_valid_json() {
+fn encode_control_response_allow_without_updated_input_defaults_to_empty_object() {
+    let resp = ControlResponse {
+        request_id: "req-1b".to_string(),
+        allow: true,
+        deny_reason: None,
+        updated_input: None,
+    };
+    let encoded = encode_control_response(&resp);
+    let raw: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
+    assert_eq!(raw["response"]["response"]["behavior"], "allow");
+    assert!(
+        raw["response"]["response"]["updatedInput"].is_object(),
+        "updatedInput defaults to an (empty) object"
+    );
+}
+
+#[test]
+fn encode_control_response_deny_with_reason() {
     let resp = ControlResponse {
         request_id: "req-2".to_string(),
         allow: false,
         deny_reason: Some("blocked".to_string()),
+        updated_input: None,
     };
     let encoded = encode_control_response(&resp);
-    let parsed =
-        parse_stream_line(&encoded).expect("encoded deny control response must parse back");
-    match parsed {
-        StreamMsg::ControlResponse(cr) => {
-            assert!(!cr.allow);
-            assert_eq!(cr.deny_reason.as_deref(), Some("blocked"));
-        }
-        other => panic!("expected ControlResponse, got {other:?}"),
-    }
+    let raw: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
+    assert_eq!(raw["response"]["response"]["behavior"], "deny");
+    assert_eq!(raw["response"]["response"]["message"], "blocked");
+    assert_eq!(raw["response"]["request_id"], "req-2");
+}
+
+#[test]
+fn encode_control_response_deny_without_reason_defaults_to_empty_message() {
+    let resp = ControlResponse {
+        request_id: "req-2b".to_string(),
+        allow: false,
+        deny_reason: None,
+        updated_input: None,
+    };
+    let encoded = encode_control_response(&resp);
+    let raw: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
+    assert_eq!(raw["response"]["response"]["behavior"], "deny");
+    assert_eq!(raw["response"]["response"]["message"], "");
+}
+
+#[test]
+fn encode_initialize_handshake_shape() {
+    let encoded = marsad_proto::encode_control_request_initialize("req_1_init");
+    let raw: serde_json::Value =
+        serde_json::from_str(&encoded).expect("encoded initialize must be valid JSON");
+    assert_eq!(raw["type"], "control_request");
+    assert_eq!(raw["request_id"], "req_1_init");
+    assert_eq!(raw["request"]["subtype"], "initialize");
+    assert!(
+        raw["request"].get("hooks").is_some(),
+        "initialize request carries a (null) hooks field"
+    );
 }
 
 // ---------------------------------------------------------------------------

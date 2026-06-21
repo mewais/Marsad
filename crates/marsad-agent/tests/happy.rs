@@ -156,6 +156,48 @@ fn claude_argv_permission_mode_ask() {
     );
 }
 
+/// `claude_argv` with `Posture::Ask` must route permission prompts to the
+/// control stream via `--permission-prompt-tool stdio` (so the GUI can
+/// approve/deny). This is what makes claude emit `can_use_tool` control
+/// requests instead of auto-handling permissions.
+#[test]
+fn claude_argv_ask_adds_permission_prompt_tool_stdio() {
+    let spec = basic_launch_spec(); // posture: Posture::Ask
+    let argv = claude_argv(&spec);
+    let idx = argv
+        .iter()
+        .position(|a| a == "--permission-prompt-tool")
+        .expect("Ask posture must include --permission-prompt-tool; argv: {argv:?}");
+    assert_eq!(
+        argv.get(idx + 1).map(String::as_str),
+        Some("stdio"),
+        "--permission-prompt-tool value for Ask must be \"stdio\"; argv: {argv:?}"
+    );
+}
+
+/// Non-Ask postures must NOT add `--permission-prompt-tool` — the CLI's own
+/// permission mode handles approvals (acceptEdits / bypassPermissions).
+#[test]
+fn claude_argv_non_ask_omits_permission_prompt_tool() {
+    for posture in [
+        marsad_proto::Posture::AutoApproveSafe,
+        marsad_proto::Posture::FullAutonomy,
+    ] {
+        let spec = LaunchSpec {
+            project: "/home/user/myproject".to_string(),
+            host_id: "local".to_string(),
+            model: "claude-opus-4-5".to_string(),
+            posture,
+            first_prompt: None,
+        };
+        let argv = claude_argv(&spec);
+        assert!(
+            !argv.iter().any(|a| a == "--permission-prompt-tool"),
+            "non-Ask posture must omit --permission-prompt-tool; argv: {argv:?}"
+        );
+    }
+}
+
 /// `claude_argv` with `Posture::AutoApproveSafe` must emit `--permission-mode` then `acceptEdits`.
 #[test]
 fn claude_argv_permission_mode_auto_approve_safe() {

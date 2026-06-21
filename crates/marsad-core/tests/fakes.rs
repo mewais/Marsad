@@ -46,7 +46,7 @@ fn agent_assistant_text(session_id: &str, msg_id: &str, text: &str) -> String {
 
 fn agent_control_request(session_id: &str, request_id: &str, tool: &str) -> String {
     format!(
-        r#"{{"type":"agent_event","session_id":"{session_id}","event":{{"type":"control","subtype":"can_use_tool","tool_name":"{tool}","input":{{"command":"ls /etc"}},"request_id":"{request_id}"}}}}"#
+        r#"{{"type":"agent_event","session_id":"{session_id}","event":{{"type":"control_request","request_id":"{request_id}","request":{{"subtype":"can_use_tool","tool_name":"{tool}","input":{{"command":"ls /etc"}}}}}}}}"#
     )
 }
 

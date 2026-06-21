@@ -153,12 +153,24 @@ pub struct ControlRequest {
     pub request_id: String,
 }
 
+/// Outbound permission answer the GUI/agent sends back to the `claude` CLI in
+/// response to a `can_use_tool` control request.
+///
+/// Wire shape (see `encode_control_response`) is the real Agent-SDK control
+/// protocol envelope, NOT a flat object — this struct is the in-memory payload
+/// the agent fills in before encoding.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ControlResponse {
     pub request_id: String,
     pub allow: bool,
     #[serde(default)]
     pub deny_reason: Option<String>,
+    /// For `allow`, the (possibly edited) tool input echoed back as
+    /// `updatedInput`. The CLI USES this value as the tool's input, so for a
+    /// plain approval it must equal the original `can_use_tool` input — an
+    /// empty object would run e.g. Bash with no command. `None` encodes `{}`.
+    #[serde(default)]
+    pub updated_input: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -295,9 +307,45 @@ pub fn parse_stream_line(line: &str) -> Result<StreamMsg, ProtoError> {
         "assistant" => from_val("assistant", value).map(StreamMsg::Assistant),
         "user" => from_val("user", value).map(StreamMsg::User),
         "result" => from_val("result", value).map(StreamMsg::Result),
-        "control" => from_val("control_request", value).map(StreamMsg::ControlRequest),
-        "control_response" => from_val("control_response", value).map(StreamMsg::ControlResponse),
+        "control_request" => Ok(parse_control_request(value)),
+        // Inbound `control_response` from the CLI is the `initialize` handshake
+        // ack (carries `commands`/`output_style`, not a permission decision).
+        // The agent sends `initialize` fire-and-forget, so this is a no-op —
+        // preserved verbatim for forward-compat, same as `Unknown`.
+        "control_response" => Ok(StreamMsg::Unknown(value)),
         _ => Ok(StreamMsg::Unknown(value)),
+    }
+}
+
+/// Parse a real `control_request` line.
+///
+/// The Agent-SDK control protocol nests the payload under `request`:
+/// `{"type":"control_request","request_id":"X","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{…}}}`.
+/// Only the `can_use_tool` subtype maps to a [`ControlRequest`] (a permission
+/// gate); any other subtype (or a malformed/missing `request`) is preserved as
+/// `Unknown` for forward-compatibility rather than rejected.
+fn parse_control_request(value: serde_json::Value) -> StreamMsg {
+    let request_id = value.get("request_id").and_then(|v| v.as_str());
+    let request = value.get("request").and_then(|v| v.as_object());
+
+    match (request_id, request) {
+        (Some(rid), Some(req)) if req.get("subtype").and_then(|v| v.as_str()) == Some("can_use_tool") => {
+            let tool_name = req
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let input = req
+                .get("input")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            StreamMsg::ControlRequest(ControlRequest {
+                tool_name,
+                input,
+                request_id: rid.to_string(),
+            })
+        }
+        _ => StreamMsg::Unknown(value),
     }
 }
 
@@ -322,15 +370,53 @@ pub fn encode_user_input(input: &UserInput) -> String {
 // encode_control_response
 // ---------------------------------------------------------------------------
 
-/// Encode a `ControlResponse` as a stream-json NDJSON line.
+/// Encode a [`ControlResponse`] as a stream-json NDJSON line answering a
+/// `can_use_tool` control request.
+///
+/// Real Agent-SDK control protocol envelope:
+/// - allow: `{"type":"control_response","response":{"subtype":"success","request_id":"X","response":{"behavior":"allow","updatedInput":{…}}}}`
+/// - deny:  `{"type":"control_response","response":{"subtype":"success","request_id":"X","response":{"behavior":"deny","message":"…"}}}`
 pub fn encode_control_response(resp: &ControlResponse) -> String {
+    let inner = if resp.allow {
+        serde_json::json!({
+            "behavior": "allow",
+            "updatedInput": resp
+                .updated_input
+                .clone()
+                .unwrap_or_else(|| serde_json::json!({})),
+        })
+    } else {
+        serde_json::json!({
+            "behavior": "deny",
+            "message": resp.deny_reason.clone().unwrap_or_default(),
+        })
+    };
     let wire = serde_json::json!({
         "type": "control_response",
-        "request_id": resp.request_id,
-        "allow": resp.allow,
-        "deny_reason": resp.deny_reason,
+        "response": {
+            "subtype": "success",
+            "request_id": resp.request_id,
+            "response": inner,
+        }
     });
     serde_json::to_string(&wire).expect("ControlResponse is always serializable")
+}
+
+/// Encode the `initialize` control request the agent sends to the `claude` CLI
+/// once on connect. This handshake is required for the control protocol; the
+/// CLI replies with a `control_response` ack (which the agent ignores).
+///
+/// Shape: `{"type":"control_request","request_id":"X","request":{"subtype":"initialize","hooks":null}}`.
+pub fn encode_control_request_initialize(request_id: &str) -> String {
+    let wire = serde_json::json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "initialize",
+            "hooks": serde_json::Value::Null,
+        }
+    });
+    serde_json::to_string(&wire).expect("initialize request is always serializable")
 }
 
 // ---------------------------------------------------------------------------

@@ -37,7 +37,7 @@ fn ipc_agent_event_assistant(session_id: &str, msg_id: &str) -> String {
 
 fn ipc_agent_event_control_request(session_id: &str, request_id: &str) -> String {
     format!(
-        r#"{{"type":"agent_event","session_id":"{session_id}","event":{{"type":"control","subtype":"can_use_tool","tool_name":"Bash","input":{{}},"request_id":"{request_id}"}}}}"#
+        r#"{{"type":"agent_event","session_id":"{session_id}","event":{{"type":"control_request","request_id":"{request_id}","request":{{"subtype":"can_use_tool","tool_name":"Bash","input":{{}}}}}}}}"#
     )
 }
 

@@ -46,7 +46,7 @@ fn tool_use_assistant_json(id: &str, tool_name: &str) -> String {
 
 fn control_request_json(request_id: &str, tool_name: &str) -> String {
     format!(
-        r#"{{"type":"control","subtype":"can_use_tool","tool_name":"{tool_name}","input":{{}},"request_id":"{request_id}"}}"#
+        r#"{{"type":"control_request","request_id":"{request_id}","request":{{"subtype":"can_use_tool","tool_name":"{tool_name}","input":{{}}}}}}"#
     )
 }
 

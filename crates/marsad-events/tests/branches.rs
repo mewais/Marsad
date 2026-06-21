@@ -71,7 +71,7 @@ fn phase_needs_reachable_via_control_request() {
     let s1 = reduce(
         s0,
         stream(
-            r#"{"type":"control","subtype":"can_use_tool","tool_name":"Bash","input":{},"request_id":"req-1"}"#,
+            r#"{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{}}}"#,
         ),
     );
     assert_eq!(s1.phase, Phase::Needs);
@@ -493,7 +493,7 @@ fn stale_preserved_by_control_stream() {
     let s1 = reduce(
         s,
         stream(
-            r#"{"type":"control","subtype":"can_use_tool","tool_name":"Bash","input":{},"request_id":"req-stale"}"#,
+            r#"{"type":"control_request","request_id":"req-stale","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{}}}"#,
         ),
     );
     assert_eq!(
@@ -510,7 +510,7 @@ fn detached_preserved_by_control_stream() {
     let s1 = reduce(
         s,
         stream(
-            r#"{"type":"control","subtype":"can_use_tool","tool_name":"Bash","input":{},"request_id":"req-detach"}"#,
+            r#"{"type":"control_request","request_id":"req-detach","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{}}}"#,
         ),
     );
     assert_eq!(

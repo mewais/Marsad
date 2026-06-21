@@ -122,7 +122,7 @@ fn control_request_before_system_init_does_not_panic() {
     let s1 = reduce(
         s0,
         stream(
-            r#"{"type":"control","subtype":"can_use_tool","tool_name":"Bash","input":{},"request_id":"req-oo"}"#,
+            r#"{"type":"control_request","request_id":"req-oo","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{}}}"#,
         ),
     );
     // Must not panic; phase must be a valid variant

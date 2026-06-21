@@ -216,11 +216,16 @@ pub fn to_control_response(decision: &GateDecision) -> marsad_proto::ControlResp
             request_id: decision.id.0.clone(),
             allow: true,
             deny_reason: None,
+            // The original tool input isn't known at the gate-domain layer; the
+            // agent fills `updated_input` from the pending `can_use_tool`
+            // request before encoding the wire response.
+            updated_input: None,
         },
         Decision::Reject { reason } => marsad_proto::ControlResponse {
             request_id: decision.id.0.clone(),
             allow: false,
             deny_reason: Some(reason.clone()),
+            updated_input: None,
         },
     }
 }
