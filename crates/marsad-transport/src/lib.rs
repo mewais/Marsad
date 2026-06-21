@@ -439,6 +439,27 @@ impl LocalIpcListener {
 
 #[cfg(not(coverage))]
 impl LocalIpc {
+    /// Consume this `LocalIpc` and return the independent write and read halves.
+    ///
+    /// Returns `Some((write_half, read_half))` when both halves are present
+    /// (i.e. after a successful `accept()` or `connect()`); returns `None`
+    /// otherwise.
+    ///
+    /// After splitting, the write half and read half are completely independent
+    /// OS handles: the writer thread can own `write_half` exclusively while the
+    /// reader thread owns `read_half`, with no `Mutex` required.
+    pub fn into_split(
+        self,
+    ) -> Option<(
+        std::os::unix::net::UnixStream,
+        std::io::BufReader<std::os::unix::net::UnixStream>,
+    )> {
+        match (self.stream, self.reader) {
+            (Some(w), Some(r)) => Some((w, r)),
+            _ => None,
+        }
+    }
+
     /// Wrap an already-accepted (or already-connected) `UnixStream` into a
     /// ready-to-use `LocalIpc`.  Both the write end (`stream`) and the read end
     /// (`BufReader` over a `try_clone`) are populated.
@@ -660,6 +681,25 @@ impl ClaudeFifoTransport {
             reader: None,
             framer: LineFramer::new(),
         })
+    }
+
+    /// Consume this transport and return the split writer + reader handles.
+    ///
+    /// Returns `Some((writer, reader))` if `connect()` has been called
+    /// successfully; returns `None` if the transport is not yet connected.
+    ///
+    /// After splitting, the caller owns the writer (to forward prompts to
+    /// claude's stdin via `in.fifo`) and the reader (to stream claude's
+    /// NDJSON output from `out.fifo`).  The two handles are independent:
+    /// writing to the writer while the reader blocks on a read is safe
+    /// because they refer to different kernel FIFO objects.
+    pub fn into_split(
+        mut self,
+    ) -> Option<(std::fs::File, std::io::BufReader<std::fs::File>)> {
+        match (self.writer.take(), self.reader.take()) {
+            (Some(w), Some(r)) => Some((w, r)),
+            _ => None,
+        }
     }
 }
 

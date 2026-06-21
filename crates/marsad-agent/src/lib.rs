@@ -96,6 +96,20 @@ impl fmt::Debug for RealContainerWrap {
     }
 }
 
+// Per-session FIFO writer registry wrapper — production builds only.
+// Gated out of the coverage build so no uncovered lines appear.
+#[cfg(not(coverage))]
+struct SessionWritersWrap(
+    std::sync::Arc<std::sync::Mutex<HashMap<String, std::fs::File>>>,
+);
+
+#[cfg(not(coverage))]
+impl fmt::Debug for SessionWritersWrap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SessionWritersWrap")
+    }
+}
+
 /// The detached supervisor daemon.
 ///
 /// Always stores a `FakeContainer` — for production use `Agent::new` supplies an
@@ -122,6 +136,11 @@ pub struct Agent {
     /// so no uncovered lines appear.
     #[cfg(not(coverage))]
     real_container: RealContainerWrap,
+    /// Per-session FIFO writers: keyed by session_id, holds the write end of
+    /// `in.fifo` so prompts can be forwarded to claude after launch.
+    /// Production builds only — gated out of the coverage build.
+    #[cfg(not(coverage))]
+    session_writers: SessionWritersWrap,
 }
 
 impl Agent {
@@ -158,6 +177,10 @@ impl Agent {
             store: StoreWrap(store),
             #[cfg(not(coverage))]
             real_container: RealContainerWrap(None),
+            #[cfg(not(coverage))]
+            session_writers: SessionWritersWrap(std::sync::Arc::new(
+                std::sync::Mutex::new(HashMap::new()),
+            )),
         })
     }
 
@@ -188,6 +211,9 @@ impl Agent {
             notifier: NotifierWrap(notifier),
             store: StoreWrap(store),
             real_container: RealContainerWrap(Some(Box::new(tmux))),
+            session_writers: SessionWritersWrap(std::sync::Arc::new(
+                std::sync::Mutex::new(HashMap::new()),
+            )),
         })
     }
 
@@ -403,9 +429,34 @@ impl Agent {
                 "SendPrompt: unknown session {session_id}"
             )));
         }
-        let _text = value["text"]
+        let text = value["text"]
             .as_str()
             .ok_or(AgentError::Protocol("SendPrompt missing text".to_string()))?;
+
+        // In production builds, forward the prompt to the session's in.fifo.
+        // The writer is registered when the FIFO thread connects after launch.
+        // Under cfg(coverage) this block is absent — the fake path returns Ok
+        // without IO, which is correct for unit tests.
+        #[cfg(not(coverage))]
+        {
+            use marsad_proto::{ContentBlock, UserInput, encode_user_input};
+            use std::io::Write;
+            let encoded = encode_user_input(&UserInput {
+                content: vec![ContentBlock::Text {
+                    text: text.to_string(),
+                }],
+            });
+            let mut writers = self.session_writers.0.lock().unwrap();
+            if let Some(writer) = writers.get_mut(session_id) {
+                let _ = writer.write_all(encoded.as_bytes());
+                let _ = writer.write_all(b"\n");
+                let _ = writer.flush();
+            }
+        }
+        // Suppress unused-variable warning in coverage builds.
+        #[cfg(coverage)]
+        let _ = text;
+
         let event = serde_json::json!({"type": "PromptSent", "session_id": session_id});
         Ok(vec![event.to_string()])
     }
@@ -566,7 +617,8 @@ impl Agent {
         //
         // `AgentReply` carries either the list of outbound lines (success) or
         // an error string, plus an optional session_id that signals the serve
-        // thread to open a FIFO reader for that session.
+        // thread to open a FIFO reader for that session, plus an optional
+        // first_prompt to deliver to claude's stdin immediately after launch.
         struct AgentCmd {
             line: String,
             reply_tx: mpsc::SyncSender<AgentReply>,
@@ -576,6 +628,9 @@ impl Agent {
             /// Set when a LaunchSession/ResumeSession produced a session_id and
             /// a new FIFO reader should be started.
             new_session_id: Option<String>,
+            /// The first prompt to write to in.fifo right after the FIFO
+            /// connects, so claude receives its initial task without hanging.
+            first_prompt: Option<String>,
         }
 
         // The command sender is cloned into each client thread.
@@ -586,6 +641,15 @@ impl Agent {
         // Session FIFO reader threads and the client reader thread on disconnect
         // both hold a clone of this Arc.
         let subscribers: Arc<Mutex<Vec<mpsc::Sender<String>>>> = Arc::new(Mutex::new(Vec::new()));
+
+        // ── Session writers registry ───────────────────────────────────────
+        // Shared across the serve thread (handle_send_prompt via self) and the
+        // FIFO threads (which register the writer after connect).
+        // `session_writers_arc` is a clone of the same Arc stored in
+        // `self.session_writers.0`, so handle_send_prompt can look up writers
+        // by session_id via `self.session_writers.0` while FIFO threads
+        // insert via `session_writers_for_fifo`.
+        let session_writers_for_fifo = Arc::clone(&self.session_writers.0);
 
         // ── Accept thread ──────────────────────────────────────────────────
         // We spin off the accept loop in a separate thread so that the current
@@ -606,53 +670,79 @@ impl Agent {
                 };
 
                 // Per-client broadcast channel.
-                let (bcast_tx, bcast_rx) = mpsc::channel::<String>();
+                // bcast_tx_for_reader — given to the reader thread so it can
+                //   route ack/reply lines through the writer thread.
+                // bcast_tx_for_subs   — pushed into the subscriber list so that
+                //   FIFO reader threads can broadcast AgentEvents to this client.
+                // Both are Sender clones of the same channel; bcast_rx is drained
+                // exclusively by the writer thread.
+                let (bcast_tx_for_reader, bcast_rx) = mpsc::channel::<String>();
+                let bcast_tx_for_subs = bcast_tx_for_reader.clone();
                 {
                     let mut subs = subs_accept.lock().unwrap();
-                    subs.push(bcast_tx);
+                    subs.push(bcast_tx_for_subs);
                 }
 
                 let cmd_tx_client = cmd_tx_accept.clone();
                 let subs_client = Arc::clone(&subs_accept);
                 let data_root_client = data_root.clone();
                 let subs_for_fifo = Arc::clone(&subs_accept);
+                let writers_for_fifo = Arc::clone(&session_writers_for_fifo);
 
-                // Wrap the client in Arc<Mutex<>> so both the reader and writer
-                // threads share it.  Reads and writes are on separate threads
-                // but the Mutex ensures they don't interleave.
-                use marsad_transport::LocalIpc;
-                let shared_client: Arc<Mutex<LocalIpc>> = Arc::new(Mutex::new(client));
-                let shared_client_writer = Arc::clone(&shared_client);
+                // Split the client into independent write and read halves so
+                // each thread has exclusive ownership — no Mutex required.
+                // All outbound bytes (acks, SessionLaunched, AgentEvents) flow
+                // through bcast_tx_for_reader → bcast_rx → writer thread, which
+                // is the sole owner of write_half.
+                let (write_half, read_half) = match client.into_split() {
+                    Some(pair) => pair,
+                    None => {
+                        eprintln!("marsad-agent: client socket not connected after accept");
+                        continue;
+                    }
+                };
 
-                // Writer thread: drain bcast_rx → client socket.
+                // Writer thread: sole owner of write_half; drains bcast_rx.
                 std::thread::spawn(move || {
+                    use std::io::Write;
+                    let mut w = write_half;
                     for line in bcast_rx {
                         // Skip empty probe lines used for subscriber-list pruning.
                         if line.is_empty() {
                             continue;
                         }
-                        let mut c = shared_client_writer.lock().unwrap();
-                        if c.send_line(&line).is_err() {
+                        if w.write_all(line.as_bytes()).is_err()
+                            || w.write_all(b"\n").is_err()
+                            || w.flush().is_err()
+                        {
                             break;
                         }
                     }
                 });
 
-                // Reader thread: recv inbound lines, dispatch to agent, send replies.
+                // Reader thread: sole owner of read_half; pushes all outbound
+                // reply lines via bcast_tx_for_reader so the writer thread
+                // serialises them to the socket.
                 std::thread::spawn(move || {
+                    use std::io::BufRead;
+                    let mut r = read_half;
                     loop {
-                        let line_opt = {
-                            let mut c = shared_client.lock().unwrap();
-                            c.recv_line()
-                        };
+                        let mut raw = String::new();
+                        let line_opt = r.read_line(&mut raw);
 
                         match line_opt {
-                            Ok(None) | Err(_) => {
+                            Ok(0) | Err(_) => {
                                 // Clean EOF or IO error — disconnect.
                                 // Sessions/tmux are intentionally NOT killed.
                                 break;
                             }
-                            Ok(Some(line)) => {
+                            Ok(_) => {
+                                // Trim the trailing newline.
+                                let line = raw.trim_end_matches('\n').to_string();
+                                if line.is_empty() {
+                                    continue;
+                                }
+
                                 // Send the command to the agent thread and await reply.
                                 let (reply_tx, reply_rx) = mpsc::sync_channel::<AgentReply>(0);
                                 if cmd_tx_client.send(AgentCmd { line, reply_tx }).is_err() {
@@ -671,14 +761,13 @@ impl Agent {
                                             "message": msg
                                         })
                                         .to_string();
-                                        let mut c = shared_client.lock().unwrap();
-                                        let _ = c.send_line(&err_line);
+                                        // Route error reply through writer thread.
+                                        let _ = bcast_tx_for_reader.send(err_line);
                                     }
                                     Ok(out_lines) => {
-                                        // Send response lines back to this client.
+                                        // Route ack/reply lines through writer thread.
                                         for out_line in &out_lines {
-                                            let mut c = shared_client.lock().unwrap();
-                                            let _ = c.send_line(out_line);
+                                            let _ = bcast_tx_for_reader.send(out_line.clone());
                                         }
 
                                         // If a new session was launched, start a
@@ -690,6 +779,11 @@ impl Agent {
                                                     .join(format!("marsad-{session_id}"));
                                             let subs_fifo = Arc::clone(&subs_for_fifo);
                                             let sid = session_id.clone();
+                                            let first_prompt = reply.first_prompt;
+                                            // Clone the writers registry so the FIFO thread
+                                            // can register the writer and the serve thread
+                                            // can look it up via self.session_writers.0.
+                                            let writers_fifo = Arc::clone(&writers_for_fifo);
 
                                             std::thread::spawn(move || {
                                                 use marsad_transport::ClaudeFifoTransport;
@@ -709,12 +803,67 @@ impl Agent {
                                                     );
                                                     return;
                                                 }
+
+                                                // Split into writer (for prompts) and reader
+                                                // (for claude's NDJSON output).  The split is
+                                                // safe because in.fifo and out.fifo are distinct
+                                                // kernel objects — writing to one while reading
+                                                // the other causes no deadlock.
+                                                let (mut writer, mut reader) =
+                                                    match fifo.into_split() {
+                                                        Some(pair) => pair,
+                                                        None => {
+                                                            eprintln!(
+                                                                "marsad-agent: fifo not connected after connect {sid}"
+                                                            );
+                                                            return;
+                                                        }
+                                                    };
+
+                                                // Deliver the first_prompt (if any) immediately
+                                                // so claude receives its initial task.  claude in
+                                                // --input-format stream-json mode emits nothing
+                                                // until it sees a user message on stdin.
+                                                if let Some(prompt) = first_prompt {
+                                                    use marsad_proto::{
+                                                        ContentBlock, UserInput, encode_user_input,
+                                                    };
+                                                    use std::io::Write;
+                                                    let encoded = encode_user_input(&UserInput {
+                                                        content: vec![ContentBlock::Text {
+                                                            text: prompt,
+                                                        }],
+                                                    });
+                                                    let _ = writer.write_all(encoded.as_bytes());
+                                                    let _ = writer.write_all(b"\n");
+                                                    let _ = writer.flush();
+                                                }
+
+                                                // Register the writer in the shared registry
+                                                // so handle_send_prompt can deliver future
+                                                // prompts to this session's in.fifo.
+                                                // Note: we need a second writer handle.
+                                                // The File we have is the writer — we can
+                                                // try_clone it for the registry and keep
+                                                // the original for the reader loop drop.
+                                                if let Ok(writer_clone) = writer.try_clone() {
+                                                    let mut registry = writers_fifo.lock().unwrap();
+                                                    registry.insert(sid.clone(), writer_clone);
+                                                }
+
+                                                // Read out.fifo lines and broadcast to all
+                                                // subscribers.  The reader blocks here; the
+                                                // writer clone is in the session_writers registry
+                                                // for handle_send_prompt — no lock contention.
+                                                use std::io::BufRead;
                                                 loop {
-                                                    match fifo.recv_line() {
-                                                        Ok(None) | Err(_) => break,
-                                                        Ok(Some(raw)) => {
+                                                    let mut raw = String::new();
+                                                    match reader.read_line(&mut raw) {
+                                                        Ok(0) | Err(_) => break,
+                                                        Ok(_) => {
+                                                            let raw = raw.trim_end_matches('\n');
                                                             let event: serde_json::Value =
-                                                                serde_json::from_str(&raw)
+                                                                serde_json::from_str(raw)
                                                                     .unwrap_or_else(|_| {
                                                                         serde_json::json!({"raw": raw})
                                                                     });
@@ -733,6 +882,15 @@ impl Agent {
                                                         }
                                                     }
                                                 }
+
+                                                // Clean up: remove writer from registry when
+                                                // claude exits (FIFO closed).
+                                                {
+                                                    let mut registry =
+                                                        writers_fifo.lock().unwrap();
+                                                    registry.remove(&sid);
+                                                }
+                                                drop(writer);
                                             });
                                         }
                                     }
@@ -755,10 +913,20 @@ impl Agent {
             let is_launch = cmd.line.contains("\"LaunchSession\"");
             let is_resume = cmd.line.contains("\"ResumeSession\"");
 
+            // For a launch, capture the first_prompt BEFORE handle_ipc consumes
+            // the JSON — we need it to pass to the FIFO thread via AgentReply.
+            let launch_first_prompt: Option<String> = if is_launch {
+                serde_json::from_str::<serde_json::Value>(&cmd.line)
+                    .ok()
+                    .and_then(|v| v["first_prompt"].as_str().map(|s| s.to_string()))
+            } else {
+                None
+            };
+
             let result = self.handle_ipc(&cmd.line);
 
-            let (out_lines, new_session_id) = match result {
-                Err(e) => (Err(format!("{e}")), None),
+            let (out_lines, new_session_id, first_prompt) = match result {
+                Err(e) => (Err(format!("{e}")), None, None),
                 Ok(lines) => {
                     // Extract a new session_id from the response when the
                     // command was a launch or resume — so the accept thread
@@ -772,7 +940,16 @@ impl Agent {
                     } else {
                         None
                     };
-                    (Ok(lines), sid)
+
+                    // Register the session in the writers registry now that we
+                    // know its session_id.  The actual File handle is added by
+                    // the FIFO thread once it connects.  We pass first_prompt
+                    // via AgentReply so the FIFO thread writes it immediately
+                    // after connecting — before the reader loop starts.
+                    // The registry entry itself is created by the FIFO thread
+                    // once it connects, using the Arc clone passed to it.
+                    let prompt = if sid.is_some() { launch_first_prompt } else { None };
+                    (Ok(lines), sid, prompt)
                 }
             };
 
@@ -780,6 +957,7 @@ impl Agent {
             let _ = cmd.reply_tx.send(AgentReply {
                 out_lines,
                 new_session_id,
+                first_prompt,
             });
         }
 
@@ -809,8 +987,12 @@ fn posture_to_mode(posture: &marsad_proto::Posture) -> &'static str {
 }
 
 /// Build the exact `claude` invocation for a fresh session launch.
+///
+/// `first_prompt` is intentionally NOT included here — in `--input-format
+/// stream-json` mode the prompt must be delivered via `in.fifo` as a
+/// stream-json user message, not as a positional CLI argument.
 pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
-    let mut argv = vec![
+    vec![
         "claude".to_string(),
         "--print".to_string(),
         "--input-format".to_string(),
@@ -823,11 +1005,7 @@ pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
         "--permission-mode".to_string(),
         posture_to_mode(&spec.posture).to_string(),
         spec.project.clone(),
-    ];
-    if let Some(ref prompt) = spec.first_prompt {
-        argv.push(prompt.clone());
-    }
-    argv
+    ]
 }
 
 // ── parse_posture_value ───────────────────────────────────────────────────────

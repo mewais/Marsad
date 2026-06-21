@@ -110,15 +110,20 @@ fn claude_argv_includes_model() {
     );
 }
 
-/// When `first_prompt` is set it should appear as a flag (e.g. `--prompt` or positional).
+/// When `first_prompt` is set it must NOT appear in argv.
+///
+/// In `--input-format stream-json` mode, claude reads from stdin and emits
+/// nothing until it receives a stream-json user message.  The prompt must
+/// therefore be written to `in.fifo` after the process starts, not passed as
+/// a positional CLI argument.
 #[test]
-fn claude_argv_includes_first_prompt_when_set() {
+fn claude_argv_first_prompt_not_in_argv() {
     let spec = launch_spec_with_prompt("hello world");
     let argv = claude_argv(&spec);
     let joined = argv.join(" ");
     assert!(
-        joined.contains("hello world"),
-        "claude_argv with first_prompt must embed the prompt text; got {argv:?}"
+        !joined.contains("hello world"),
+        "claude_argv must NOT include first_prompt text in argv (deliver via in.fifo instead); got {argv:?}"
     );
 }
 
