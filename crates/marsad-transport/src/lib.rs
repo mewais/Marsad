@@ -693,9 +693,7 @@ impl ClaudeFifoTransport {
     /// NDJSON output from `out.fifo`).  The two handles are independent:
     /// writing to the writer while the reader blocks on a read is safe
     /// because they refer to different kernel FIFO objects.
-    pub fn into_split(
-        mut self,
-    ) -> Option<(std::fs::File, std::io::BufReader<std::fs::File>)> {
+    pub fn into_split(mut self) -> Option<(std::fs::File, std::io::BufReader<std::fs::File>)> {
         match (self.writer.take(), self.reader.take()) {
             (Some(w), Some(r)) => Some((w, r)),
             _ => None,

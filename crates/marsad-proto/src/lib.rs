@@ -329,16 +329,15 @@ fn parse_control_request(value: serde_json::Value) -> StreamMsg {
     let request = value.get("request").and_then(|v| v.as_object());
 
     match (request_id, request) {
-        (Some(rid), Some(req)) if req.get("subtype").and_then(|v| v.as_str()) == Some("can_use_tool") => {
+        (Some(rid), Some(req))
+            if req.get("subtype").and_then(|v| v.as_str()) == Some("can_use_tool") =>
+        {
             let tool_name = req
                 .get("tool_name")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
-            let input = req
-                .get("input")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
+            let input = req.get("input").cloned().unwrap_or(serde_json::Value::Null);
             StreamMsg::ControlRequest(ControlRequest {
                 tool_name,
                 input,

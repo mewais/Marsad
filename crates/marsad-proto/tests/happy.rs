@@ -149,7 +149,8 @@ fn parse_control_request() {
 #[test]
 fn parse_control_request_missing_tool_name_and_input_defaults() {
     // can_use_tool with no tool_name / input → empty name + Null input (no panic).
-    let line = r#"{"type":"control_request","request_id":"req-7","request":{"subtype":"can_use_tool"}}"#;
+    let line =
+        r#"{"type":"control_request","request_id":"req-7","request":{"subtype":"can_use_tool"}}"#;
     let msg = parse_stream_line(line).expect("should parse");
     match msg {
         StreamMsg::ControlRequest(cr) => {

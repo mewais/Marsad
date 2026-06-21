@@ -99,9 +99,7 @@ impl fmt::Debug for RealContainerWrap {
 // Per-session FIFO writer registry wrapper — production builds only.
 // Gated out of the coverage build so no uncovered lines appear.
 #[cfg(not(coverage))]
-struct SessionWritersWrap(
-    std::sync::Arc<std::sync::Mutex<HashMap<String, std::fs::File>>>,
-);
+struct SessionWritersWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, std::fs::File>>>);
 
 #[cfg(not(coverage))]
 impl fmt::Debug for SessionWritersWrap {
@@ -205,9 +203,9 @@ impl Agent {
             #[cfg(not(coverage))]
             real_container: RealContainerWrap(None),
             #[cfg(not(coverage))]
-            session_writers: SessionWritersWrap(std::sync::Arc::new(
-                std::sync::Mutex::new(HashMap::new()),
-            )),
+            session_writers: SessionWritersWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
             #[cfg(not(coverage))]
             pending_gates: PendingGatesWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
@@ -242,9 +240,9 @@ impl Agent {
             notifier: NotifierWrap(notifier),
             store: StoreWrap(store),
             real_container: RealContainerWrap(Some(Box::new(tmux))),
-            session_writers: SessionWritersWrap(std::sync::Arc::new(
-                std::sync::Mutex::new(HashMap::new()),
-            )),
+            session_writers: SessionWritersWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
             pending_gates: PendingGatesWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
@@ -473,7 +471,7 @@ impl Agent {
         // without IO, which is correct for unit tests.
         #[cfg(not(coverage))]
         {
-            use marsad_proto::{ContentBlock, UserInput, encode_user_input};
+            use marsad_proto::{encode_user_input, ContentBlock, UserInput};
             use std::io::Write;
             let encoded = encode_user_input(&UserInput {
                 content: vec![ContentBlock::Text {
@@ -889,16 +887,17 @@ impl Agent {
                                                 // safe because in.fifo and out.fifo are distinct
                                                 // kernel objects — writing to one while reading
                                                 // the other causes no deadlock.
-                                                let (mut writer, mut reader) =
-                                                    match fifo.into_split() {
-                                                        Some(pair) => pair,
-                                                        None => {
-                                                            eprintln!(
+                                                let (mut writer, mut reader) = match fifo
+                                                    .into_split()
+                                                {
+                                                    Some(pair) => pair,
+                                                    None => {
+                                                        eprintln!(
                                                                 "marsad-agent: fifo not connected after connect {sid}"
                                                             );
-                                                            return;
-                                                        }
-                                                    };
+                                                        return;
+                                                    }
+                                                };
 
                                                 // Send the control-protocol `initialize`
                                                 // handshake first. This is required before claude
@@ -923,7 +922,7 @@ impl Agent {
                                                 // until it sees a user message on stdin.
                                                 if let Some(prompt) = first_prompt {
                                                     use marsad_proto::{
-                                                        ContentBlock, UserInput, encode_user_input,
+                                                        encode_user_input, ContentBlock, UserInput,
                                                     };
                                                     use std::io::Write;
                                                     let encoded = encode_user_input(&UserInput {
@@ -1007,8 +1006,7 @@ impl Agent {
                                                 // Clean up: remove writer from registry when
                                                 // claude exits (FIFO closed).
                                                 {
-                                                    let mut registry =
-                                                        writers_fifo.lock().unwrap();
+                                                    let mut registry = writers_fifo.lock().unwrap();
                                                     registry.remove(&sid);
                                                 }
                                                 drop(writer);
@@ -1069,7 +1067,11 @@ impl Agent {
                     // after connecting — before the reader loop starts.
                     // The registry entry itself is created by the FIFO thread
                     // once it connects, using the Arc clone passed to it.
-                    let prompt = if sid.is_some() { launch_first_prompt } else { None };
+                    let prompt = if sid.is_some() {
+                        launch_first_prompt
+                    } else {
+                        None
+                    };
                     (Ok(lines), sid, prompt)
                 }
             };
