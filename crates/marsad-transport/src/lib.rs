@@ -665,29 +665,61 @@ impl ClaudeFifoTransport {
 
 #[cfg(not(coverage))]
 impl Transport for ClaudeFifoTransport {
-    /// Open `out.fifo` for reading first, then `in.fifo` for writing.
+    /// Open `in.fifo` (write) and `out.fifo` (read) **concurrently** to avoid
+    /// deadlock.
     ///
-    /// See the module-level comment for the ordering rationale.
+    /// Bash processes `< in.fifo > out.fifo` left-to-right:
+    ///   step 1 — bash opens in.fifo for reading (blocks until a writer appears)
+    ///   step 2 — bash opens out.fifo for writing (blocks until a reader appears)
+    ///
+    /// Sequential opens (out then in, or any single-threaded order) cause a
+    /// circular wait.  The correct approach mirrors the proven `connect_fifos`
+    /// helper in the i03 integration test:
+    ///   Thread A: write-opens in.fifo  → unblocks bash step 1
+    ///   Thread B: read-opens out.fifo  → unblocked by bash once step 2 runs
+    /// Both threads are started concurrently; Thread A gets a 50 ms head-start
+    /// so that bash is already unblocked before Thread B competes for out.fifo.
     fn connect(&mut self) -> Result<(), TransportError> {
-        use std::fs::OpenOptions;
+        use std::time::{Duration, Instant};
 
-        let out_fifo = self.session_dir.join("out.fifo");
         let in_fifo = self.session_dir.join("in.fifo");
+        let out_fifo = self.session_dir.join("out.fifo");
+        let deadline = Instant::now() + Duration::from_secs(15);
 
-        // Step 1: open out.fifo for reading (this unblocks claude's stdout redirect).
-        let out_file = OpenOptions::new()
-            .read(true)
-            .open(&out_fifo)
-            .map_err(|e| TransportError::ConnectFailed(format!("open out.fifo: {e}")))?;
+        // Thread A: write-open in.fifo — unblocks bash's stdin redirect (step 1).
+        let in_p = in_fifo.clone();
+        let writer_handle = std::thread::spawn(move || {
+            std::fs::OpenOptions::new().write(true).open(&in_p)
+        });
 
-        // Step 2: open in.fifo for writing (claude's stdin redirect is already open).
-        let in_file = OpenOptions::new()
-            .write(true)
-            .open(&in_fifo)
+        // Give Thread A a 50 ms head-start so bash can reach step 2 before
+        // Thread B tries to read-open out.fifo.
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Thread B: read-open out.fifo — unblocked once bash opens it for writing (step 2).
+        let out_p = out_fifo.clone();
+        let reader_handle = std::thread::spawn(move || {
+            std::fs::OpenOptions::new().read(true).open(&out_p)
+        });
+
+        let in_file = writer_handle
+            .join()
+            .map_err(|_| TransportError::ConnectFailed("writer thread panicked".to_string()))?
             .map_err(|e| TransportError::ConnectFailed(format!("open in.fifo: {e}")))?;
 
-        self.reader = Some(std::io::BufReader::new(out_file));
+        let out_file = reader_handle
+            .join()
+            .map_err(|_| TransportError::ConnectFailed("reader thread panicked".to_string()))?
+            .map_err(|e| TransportError::ConnectFailed(format!("open out.fifo: {e}")))?;
+
+        if Instant::now() > deadline {
+            return Err(TransportError::ConnectFailed(
+                "connect_fifos timed out after 15s".to_string(),
+            ));
+        }
+
         self.writer = Some(in_file);
+        self.reader = Some(std::io::BufReader::new(out_file));
         Ok(())
     }
 
