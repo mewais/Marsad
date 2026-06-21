@@ -39,11 +39,11 @@ export function Badge({ state, label }: BadgeProps) {
   return (
     <span
       style={{
-        fontSize: 9,
+        fontSize: 10,
         fontWeight: 700,
-        letterSpacing: 0.3,
-        padding: "1px 5px",
-        borderRadius: 4,
+        letterSpacing: 0.4,
+        padding: "3px 8px",
+        borderRadius: 6,
         color: phaseColor[state],
         background: phaseBg[state],
         textTransform: "uppercase",

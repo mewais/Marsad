@@ -109,7 +109,9 @@ export function ChangesTab() {
     setCommitMsg("");
   }
 
-  const changeStats = `${files.length} file${files.length !== 1 ? "s" : ""}`;
+  const totalAdded = files.reduce((sum, f) => sum + f.added, 0);
+  const totalRemoved = files.reduce((sum, f) => sum + f.removed, 0);
+  const changeStats = `+${totalAdded} −${totalRemoved}`;
 
   return (
     <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
@@ -215,7 +217,6 @@ export function ChangesTab() {
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
-                    color: "var(--txt)",
                   }}
                 >
                   {f.name}
@@ -280,7 +281,7 @@ export function ChangesTab() {
           }}
         >
           <span style={{ fontSize: 12, color: "var(--txt2)" }}>
-            {stagedCount} staged
+            {stagedCount} of {files.length} staged
           </span>
           <span style={{ flex: 1 }} />
           <button

@@ -139,6 +139,7 @@ export function UsageTab() {
             </div>
             <div
               data-testid="tokens-value"
+              className="mono"
               style={{ fontSize: 24, fontWeight: 800, marginTop: 5 }}
             >
               {tokens_label}
@@ -167,6 +168,7 @@ export function UsageTab() {
             </div>
             <div
               data-testid="cost-value"
+              className="mono"
               style={{ fontSize: 24, fontWeight: 800, marginTop: 5 }}
             >
               {cost_label}
@@ -195,6 +197,7 @@ export function UsageTab() {
             </div>
             <div
               data-testid="elapsed-value"
+              className="mono"
               style={{ fontSize: 24, fontWeight: 800, marginTop: 5 }}
             >
               {elapsed_label || "—"}

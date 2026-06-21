@@ -52,3 +52,6 @@ fixtures/_local/
 # The design handoff bundle is reference-only, not part of the repo source.
 _extracted/
 *.zip
+
+# Design reference PNGs — local only, never commit
+design_samples/

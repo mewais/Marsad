@@ -12,17 +12,19 @@ import { phaseColor, phaseBg, phaseLabel } from "../components/Badge";
 // Gate kind label helpers
 // ---------------------------------------------------------------------------
 
-function gateKindLabel(kind: string | null): string {
+function gateKindLabel(kind: string | null, state?: string): string {
+  if (state === "Error") return "Error";
   if (kind === "permission") return "Permission";
   if (kind === "plan") return "Plan";
-  if (kind === "edit") return "Edit";
+  if (kind === "edit") return "File change";
   return kind ?? "Gate";
 }
 
-function gateLead(kind: string | null): string {
+function gateLead(kind: string | null, state?: string): string {
+  if (state === "Error") return "Last error";
   if (kind === "permission") return "Permission request";
-  if (kind === "plan") return "Plan for approval";
-  if (kind === "edit") return "File edit";
+  if (kind === "plan") return "Proposed plan";
+  if (kind === "edit") return "Wants to start";
   return "Gate";
 }
 
@@ -110,11 +112,11 @@ function AttentionCard({ card, onReview, onOpen }: AttentionCardProps) {
                 textTransform: "uppercase",
               }}
             >
-              {gateKindLabel(kind)}
+              {gateKindLabel(kind, card.state)}
             </span>
             <span
+              className="mono"
               style={{
-                fontFamily: "var(--font-mono, monospace)",
                 fontSize: 10,
                 color: "var(--txt3)",
               }}
@@ -132,8 +134,8 @@ function AttentionCard({ card, onReview, onOpen }: AttentionCardProps) {
             {card.name}
           </div>
           <div
+            className="mono"
             style={{
-              fontFamily: "var(--font-mono, monospace)",
               fontSize: 10.5,
               color: "var(--txt3)",
               marginTop: 2,
@@ -164,11 +166,11 @@ function AttentionCard({ card, onReview, onOpen }: AttentionCardProps) {
             marginBottom: 5,
           }}
         >
-          {gateLead(kind)}
+          {gateLead(kind, card.state)}
         </div>
         <div
+          className="mono"
           style={{
-            fontFamily: "var(--font-mono, monospace)",
             fontSize: 12,
             color: "var(--txt)",
             wordBreak: "break-word",
@@ -190,13 +192,13 @@ function AttentionCard({ card, onReview, onOpen }: AttentionCardProps) {
             fontSize: 12.5,
             padding: 9,
             borderRadius: 9,
-            border: "none",
-            background: color,
-            color: "#0e1116",
+            border: card.state === "Error" ? "1px solid var(--error)" : "none",
+            background: card.state === "Error" ? "transparent" : color,
+            color: card.state === "Error" ? "var(--error)" : "#0e1116",
             cursor: "pointer",
           }}
         >
-          Review →
+          {card.state === "Error" ? "Open session →" : "Review →"}
         </button>
         <button
           data-testid={`open-btn-${card.id}`}
@@ -270,8 +272,8 @@ function ActiveRow({ card, onClick }: ActiveRowProps) {
           }}
         >
           <span
+            className="mono"
             style={{
-              fontFamily: "var(--font-mono, monospace)",
               fontSize: 10,
               color: "var(--txt3)",
               whiteSpace: "nowrap",
@@ -314,8 +316,8 @@ function ActiveRow({ card, onClick }: ActiveRowProps) {
         }}
       >
         <span
+          className="mono"
           style={{
-            fontFamily: "var(--font-mono, monospace)",
             fontSize: 11,
             color: "var(--accent2)",
           }}
@@ -357,11 +359,7 @@ function ActiveRow({ card, onClick }: ActiveRowProps) {
           }}
         >
           <span>ctx {card.context_pct}%</span>
-          <span
-            style={{
-              fontFamily: "var(--font-mono, monospace)",
-            }}
-          >
+          <span className="mono">
             {card.tokens_label}
           </span>
         </div>
@@ -386,8 +384,8 @@ function ActiveRow({ card, onClick }: ActiveRowProps) {
 
       {/* Elapsed */}
       <span
+        className="mono"
         style={{
-          fontFamily: "var(--font-mono, monospace)",
           fontSize: 11,
           color: "var(--txt3)",
           width: 62,
@@ -453,8 +451,8 @@ function IdleCard({ card, onClick }: IdleCardProps) {
           {card.name}
         </div>
         <div
+          className="mono"
           style={{
-            fontFamily: "var(--font-mono, monospace)",
             fontSize: 10,
             color: "var(--txt3)",
             whiteSpace: "nowrap",
@@ -534,6 +532,13 @@ export function Overview() {
         </span>
       </div>
 
+      {/* Clock / live subtitle */}
+      <p style={{ fontSize: 12.5, color: "var(--txt3)", margin: "0 0 18px" }}>
+        {counts.working > 0
+          ? `Live · ${counts.working} working · updated just now`
+          : "Updated just now"}
+      </p>
+
       {/* ── Stat tiles ── */}
       <div
         style={{
@@ -543,6 +548,7 @@ export function Overview() {
           marginBottom: 22,
         }}
       >
+        {/* Needs you — amber border+bg, value in amber */}
         <StatTile
           label="Needs you"
           value={counts.needs}
@@ -551,24 +557,111 @@ export function Overview() {
           border="var(--needs)"
           bg="var(--needs-bg)"
         />
-        <StatTile
-          label="Errored"
-          value={counts.errors}
-          sub="need a look"
-          color="var(--error)"
-        />
-        <StatTile
-          label="Working"
-          value={counts.working}
-          sub="actively running"
-          color="var(--accent)"
-        />
-        <StatTile
-          label="Cost today"
-          value={counts.cost}
-          sub={`${counts.tokens} tokens`}
-          color="var(--txt3)"
-        />
+        {/* Errored — default panel bg; label in error color, value in default txt */}
+        <div
+          style={{
+            padding: "15px 16px",
+            borderRadius: 13,
+            border: "1px solid var(--border)",
+            background: "var(--panel)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 0.4,
+              textTransform: "uppercase",
+              color: "var(--error)",
+            }}
+          >
+            Errored
+          </div>
+          <div
+            style={{
+              fontSize: 30,
+              fontWeight: 800,
+              color: "var(--txt)",
+              lineHeight: 1.1,
+              marginTop: 4,
+            }}
+          >
+            {counts.errors}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--txt2)", marginTop: 2 }}>
+            need a look
+          </div>
+        </div>
+        {/* Working — default panel bg; label in accent color, value in default txt */}
+        <div
+          style={{
+            padding: "15px 16px",
+            borderRadius: 13,
+            border: "1px solid var(--border)",
+            background: "var(--panel)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 0.4,
+              textTransform: "uppercase",
+              color: "var(--accent)",
+            }}
+          >
+            Working
+          </div>
+          <div
+            style={{
+              fontSize: 30,
+              fontWeight: 800,
+              color: "var(--txt)",
+              lineHeight: 1.1,
+              marginTop: 4,
+            }}
+          >
+            {counts.working}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--txt2)", marginTop: 2 }}>
+            actively running
+          </div>
+        </div>
+        {/* Cost today — default panel bg; label in txt3, value in default txt */}
+        <div
+          style={{
+            padding: "15px 16px",
+            borderRadius: 13,
+            border: "1px solid var(--border)",
+            background: "var(--panel)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 0.4,
+              textTransform: "uppercase",
+              color: "var(--txt3)",
+            }}
+          >
+            Cost today
+          </div>
+          <div
+            style={{
+              fontSize: 30,
+              fontWeight: 800,
+              color: "var(--txt)",
+              lineHeight: 1.1,
+              marginTop: 4,
+            }}
+          >
+            {counts.cost}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--txt2)", marginTop: 2 }}>
+            {counts.tokens} tokens
+          </div>
+        </div>
       </div>
 
       {/* ── Needs your attention ── */}

@@ -17,7 +17,6 @@ import React, { useState } from "react";
 import { useVm } from "../bridge/useVm";
 import { useTheme } from "../theme/ThemeProvider";
 import { Toggle } from "../components/Toggle";
-import { Button } from "../components/Button";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,6 +48,14 @@ const NOTIF_EVENT_LABELS: Record<NotifEvent, string> = {
   host_unreachable: "Host unreachable",
 };
 
+const NOTIF_EVENT_DESCS: Record<NotifEvent, string> = {
+  gate_needs_you: "A permission gate, plan, or question is waiting",
+  gate_error: "A session hits an error and stops",
+  session_done: "A session completes its work and goes idle",
+  session_started: "A new session boots and begins working",
+  host_unreachable: "A host stops responding",
+};
+
 const DEFAULT_NOTIF_PREFS: Record<NotifEvent, NotifPref> = {
   gate_needs_you: { enabled: true, priority: "urgent", sound: true, group: false, dnd: false },
   gate_error: { enabled: true, priority: "urgent", sound: true, group: false, dnd: false },
@@ -74,51 +81,61 @@ const S: Record<string, React.CSSProperties> = {
     borderBottom: "1px solid var(--border)",
     flexShrink: 0,
   },
+  titleRow: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: 12,
+    marginBottom: 4,
+  },
   title: {
     fontSize: 21,
     fontWeight: 700,
-    margin: "0 0 14px",
+    margin: 0,
     letterSpacing: -0.3,
     color: "var(--txt)",
   },
+  titleTab: {
+    fontSize: 12.5,
+    color: "var(--txt2)",
+    fontWeight: 400,
+  },
+  subtitle: {
+    fontSize: 12.5,
+    color: "var(--txt3)",
+    margin: "0 0 22px",
+  },
   tabBar: {
     display: "flex",
-    gap: 2,
+    gap: 4,
     marginBottom: -1,
   },
   body: {
     flex: 1,
     overflowY: "auto",
-    padding: "24px 26px",
+    padding: "24px 26px 48px",
+    maxWidth: 980,
   },
-  section: {
-    marginBottom: 28,
-  },
-  sectionTitle: {
+  sectionLabel: {
     fontSize: 11,
     fontWeight: 700,
-    letterSpacing: 0.8,
+    letterSpacing: 0.5,
     textTransform: "uppercase" as const,
     color: "var(--txt3)",
     marginBottom: 10,
   },
-  row: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "10px 0",
-    borderBottom: "1px solid var(--border)",
+  sectionLabelBold: {
+    fontSize: 12,
+    fontWeight: 700,
+    color: "var(--txt2)",
+    marginBottom: 9,
   },
-  rowLabel: {
-    fontSize: 13,
-    fontWeight: 500,
-    color: "var(--txt)",
-  },
-  rowSub: {
-    fontSize: 11,
-    color: "var(--txt3)",
-    marginTop: 2,
-  },
+};
+
+const TAB_SUBTITLES: Record<SettingsTab, string> = {
+  Notifications: "Choose what pops up on your desktop when Marsad is minimized or in the background.",
+  Hosts: "Manage the local machine and the remote Linux hosts where sessions run.",
+  "Session defaults": "Set the defaults applied to every new session.",
+  General: "Appearance and app behavior.",
 };
 
 function TabButton({
@@ -139,9 +156,9 @@ function TabButton({
         border: "none",
         borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
         color: active ? "var(--txt)" : "var(--txt3)",
-        fontWeight: active ? 700 : 500,
-        fontSize: 13,
-        padding: "8px 14px",
+        fontWeight: active ? 600 : 500,
+        fontSize: 12.5,
+        padding: "9px 13px",
         cursor: "pointer",
         fontFamily: "inherit",
         letterSpacing: -0.1,
@@ -167,11 +184,65 @@ const NOTIF_EVENTS: NotifEvent[] = [
 
 const PRIORITY_OPTS: Array<"urgent" | "normal" | "low"> = ["urgent", "normal", "low"];
 
+const PRIORITY_COLORS: Record<"urgent" | "normal" | "low", { color: string; bg: string }> = {
+  urgent: { color: "var(--error)", bg: "rgba(224,89,74,0.12)" },
+  normal: { color: "var(--needs)", bg: "rgba(241,168,58,0.12)" },
+  low: { color: "var(--txt3)", bg: "var(--panel2)" },
+};
+
+// Popup preview specs (static illustrative data)
+const POPUP_SPECS = [
+  {
+    host: "localhost",
+    priority: "urgent" as const,
+    color: "var(--error)",
+    icon: "⚠",
+    title: "api-gateway needs you",
+    body: "api-auth-refactor is waiting for your approval on a Permission gate.",
+    actions: [
+      { l: "Approve", bg: "var(--done)", fg: "#0e1116", bd: "none" },
+      { l: "Reject", bg: "var(--panel2)", fg: "var(--txt2)", bd: "1px solid var(--border2)" },
+      { l: "Open", bg: "var(--panel2)", fg: "var(--txt2)", bd: "1px solid var(--border2)" },
+    ],
+    dim: 1,
+  },
+  {
+    host: "hetzner-fra1",
+    priority: "urgent" as const,
+    color: "var(--error)",
+    icon: "✕",
+    title: "payments-svc errored",
+    body: "TypeError in compute/fee (checkout.py:88)",
+    actions: [
+      { l: "Open", bg: "var(--done)", fg: "#0e1116", bd: "none" },
+      { l: "Retry", bg: "var(--panel2)", fg: "var(--txt2)", bd: "1px solid var(--border2)" },
+    ],
+    dim: 0.8,
+  },
+  {
+    host: "gpu-box",
+    priority: "low" as const,
+    color: "var(--done)",
+    icon: "✓",
+    title: "etl-pipeline finished",
+    body: "9 files changed · batch job 6.7s faster",
+    actions: [
+      { l: "Open", bg: "var(--done)", fg: "#0e1116", bd: "none" },
+      { l: "Dismiss", bg: "var(--panel2)", fg: "var(--txt2)", bd: "1px solid var(--border2)" },
+    ],
+    dim: 0.65,
+  },
+];
+
 function NotificationsTab() {
   // NOTE: backend command pending — notif prefs are local state only
   const [prefs, setPrefs] = useState<Record<NotifEvent, NotifPref>>(
     DEFAULT_NOTIF_PREFS
   );
+  // Delivery globals (sound, group, dnd) — local state
+  const [playSound, setPlaySound] = useState(true);
+  const [groupAlerts, setGroupAlerts] = useState(true);
+  const [doNotDisturb, setDoNotDisturb] = useState(false);
 
   function setPref<K extends keyof NotifPref>(
     ev: NotifEvent,
@@ -182,160 +253,316 @@ function NotificationsTab() {
   }
 
   return (
-    <div>
-      {/* Per-event toggles */}
-      <div style={S.section}>
-        <div style={S.sectionTitle}>Per-event settings</div>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 26, alignItems: "start" }}>
+      {/* LEFT: Notify me when + Delivery */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+        <div style={{ ...S.sectionLabel, marginBottom: 2 }}>Notify me when…</div>
+
+        {NOTIF_EVENTS.map((ev) => {
+          const p = prefs[ev];
+          const priStyle = PRIORITY_COLORS[p.priority];
+          return (
+            <div
+              key={ev}
+              data-testid={`notif-row-${ev}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 13,
+                padding: "13px 15px",
+                borderRadius: 11,
+                background: "var(--panel)",
+                border: "1px solid var(--border)",
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>
+                  {NOTIF_EVENT_LABELS[ev]}
+                </div>
+                <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+                  {NOTIF_EVENT_DESCS[ev]}
+                </div>
+              </div>
+              <span
+                style={{
+                  fontSize: 9,
+                  fontWeight: 700,
+                  letterSpacing: 0.3,
+                  textTransform: "uppercase",
+                  padding: "2px 7px",
+                  borderRadius: 5,
+                  color: priStyle.color,
+                  background: priStyle.bg,
+                  flexShrink: 0,
+                  cursor: p.enabled ? "pointer" : "default",
+                }}
+                onClick={() => {
+                  if (!p.enabled) return;
+                  const opts = PRIORITY_OPTS;
+                  const idx = opts.indexOf(p.priority);
+                  setPref(ev, "priority", opts[(idx + 1) % opts.length]);
+                }}
+                title="Click to cycle priority"
+              >
+                {p.priority}
+              </span>
+              <div style={{ flexShrink: 0 }}>
+                <Toggle
+                  checked={p.enabled}
+                  onChange={(v) => setPref(ev, "enabled", v)}
+                />
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Delivery section */}
+        <div style={{ ...S.sectionLabel, marginTop: 14, marginBottom: 2 }}>Delivery</div>
+
         <div
           style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 13,
+            padding: "13px 15px",
+            borderRadius: 11,
+            background: "var(--panel)",
             border: "1px solid var(--border)",
-            borderRadius: 10,
-            overflow: "hidden",
           }}
         >
-          {/* Header row */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>Play a sound</div>
+            <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+              Audible alerts only.
+            </div>
+          </div>
+          <Toggle checked={playSound} onChange={setPlaySound} />
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 13,
+            padding: "13px 15px",
+            borderRadius: 11,
+            background: "var(--panel)",
+            border: "1px solid var(--border)",
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>Group similar alerts</div>
+            <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+              Collapses repeated "session done" notifications.
+            </div>
+          </div>
+          <Toggle checked={groupAlerts} onChange={setGroupAlerts} />
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 13,
+            padding: "13px 15px",
+            borderRadius: 11,
+            background: "var(--panel)",
+            border: "1px solid var(--border)",
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>Do Not Disturb</div>
+            <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+              DND-off respects the dashboard-dnd-bypass tile.
+            </div>
+          </div>
+          <Toggle checked={doNotDisturb} onChange={setDoNotDisturb} />
+        </div>
+
+        <div
+          className="mono"
+          style={{
+            fontSize: 10.5,
+            color: "var(--txt3)",
+            marginTop: 8,
+            lineHeight: 1.5,
+          }}
+        >
+          Delivered to this workstation via your desktop's notification service.{" "}
+          No phone push, no cloud — per the local-first design.
+        </div>
+      </div>
+
+      {/* RIGHT: Pop-up preview */}
+      <div>
+        <div style={{ ...S.sectionLabel, marginBottom: 7 }}>Pop-up preview</div>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 7,
+            fontSize: 11,
+            color: "var(--txt3)",
+            marginBottom: 13,
+            lineHeight: 1.45,
+          }}
+        >
+          <span style={{ flexShrink: 0 }}>ⓘ</span>
+          <span>
+            Approximate. Your desktop environment (GNOME, KDE, …) renders the final style —
+            Marsad controls the content and actions, not the chrome.
+          </span>
+        </div>
+
+        <div
+          style={{
+            borderRadius: 16,
+            padding: "18px 16px",
+            border: "1px dashed var(--border2)",
+            background:
+              "linear-gradient(160deg, color-mix(in srgb, var(--accent) 14%, var(--bg)), var(--bg) 70%)",
+          }}
+        >
           <div
             style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 110px 56px 56px 56px",
-              gap: 8,
-              padding: "8px 14px",
-              background: "var(--panel2)",
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: 0.5,
-              textTransform: "uppercase",
-              color: "var(--txt3)",
+              display: "flex",
+              alignItems: "center",
+              gap: 7,
+              marginBottom: 14,
+              opacity: 0.7,
             }}
           >
-            <span>Event</span>
-            <span style={{ textAlign: "center" }}>Priority</span>
-            <span style={{ textAlign: "center" }}>Sound</span>
-            <span style={{ textAlign: "center" }}>Group</span>
-            <span style={{ textAlign: "center" }}>DND</span>
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: "var(--txt3)",
+              }}
+            />
+            <span
+              className="mono"
+              style={{ fontSize: 9.5, color: "var(--txt3)" }}
+            >
+              your desktop · top-right corner
+            </span>
           </div>
-          {NOTIF_EVENTS.map((ev, i) => {
-            const p = prefs[ev];
+
+          {POPUP_SPECS.map((p, i) => {
+            const priStyle = PRIORITY_COLORS[p.priority];
             return (
               <div
-                key={ev}
-                data-testid={`notif-row-${ev}`}
+                key={i}
                 style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 110px 56px 56px 56px",
-                  gap: 8,
-                  alignItems: "center",
-                  padding: "10px 14px",
-                  borderTop: i === 0 ? "none" : "1px solid var(--border)",
-                  background: p.enabled ? "transparent" : "var(--panel2)",
-                  opacity: p.enabled ? 1 : 0.55,
+                  background: "var(--elev)",
+                  border: `1px solid var(--border2)`,
+                  borderLeft: `3px solid ${p.color}`,
+                  borderRadius: 13,
+                  boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
+                  marginBottom: 12,
+                  overflow: "hidden",
+                  opacity: p.dim,
                 }}
               >
-                {/* Event label + enabled toggle */}
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <Toggle
-                    checked={p.enabled}
-                    onChange={(v) => setPref(ev, "enabled", v)}
-                  />
-                  <span style={{ fontSize: 13, fontWeight: 500, color: "var(--txt)" }}>
-                    {NOTIF_EVENT_LABELS[ev]}
-                  </span>
-                </div>
-                {/* Priority picker */}
-                <select
-                  value={p.priority}
-                  disabled={!p.enabled}
-                  onChange={(e) =>
-                    setPref(ev, "priority", e.target.value as NotifPref["priority"])
-                  }
+                <div
                   style={{
-                    background: "var(--panel2)",
-                    color: "var(--txt)",
-                    border: "1px solid var(--border2)",
-                    borderRadius: 6,
-                    fontSize: 11,
-                    padding: "3px 6px",
-                    cursor: p.enabled ? "pointer" : "default",
-                    fontFamily: "inherit",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "8px 13px",
+                    borderBottom: "1px solid var(--border)",
                   }}
                 >
-                  {PRIORITY_OPTS.map((o) => (
-                    <option key={o} value={o}>
-                      {o.charAt(0).toUpperCase() + o.slice(1)}
-                    </option>
-                  ))}
-                </select>
-                {/* Sound */}
-                <div style={{ display: "flex", justifyContent: "center" }}>
-                  <Toggle
-                    checked={p.sound}
-                    onChange={(v) => setPref(ev, "sound", v)}
-                    disabled={!p.enabled}
-                  />
+                  <div
+                    style={{
+                      width: 17,
+                      height: 17,
+                      borderRadius: 5,
+                      background: "linear-gradient(135deg, var(--accent), var(--accent2))",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: "#fff",
+                      fontWeight: 800,
+                      fontSize: 9.5,
+                    }}
+                  >
+                    M
+                  </div>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--txt2)" }}>
+                    Marsad
+                  </span>
+                  <span className="mono" style={{ fontSize: 9, color: "var(--txt3)" }}>
+                    {p.host}
+                  </span>
+                  <span style={{ flex: 1 }} />
+                  <span
+                    style={{
+                      fontSize: 8.5,
+                      fontWeight: 700,
+                      letterSpacing: 0.3,
+                      textTransform: "uppercase",
+                      padding: "1px 6px",
+                      borderRadius: 5,
+                      color: priStyle.color,
+                      background: priStyle.bg,
+                    }}
+                  >
+                    {p.priority}
+                  </span>
+                  <span className="mono" style={{ fontSize: 9, color: "var(--txt3)" }}>
+                    now
+                  </span>
                 </div>
-                {/* Group */}
-                <div style={{ display: "flex", justifyContent: "center" }}>
-                  <Toggle
-                    checked={p.group}
-                    onChange={(v) => setPref(ev, "group", v)}
-                    disabled={!p.enabled}
-                  />
-                </div>
-                {/* DND */}
-                <div style={{ display: "flex", justifyContent: "center" }}>
-                  <Toggle
-                    checked={p.dnd}
-                    onChange={(v) => setPref(ev, "dnd", v)}
-                    disabled={!p.enabled}
-                  />
+                <div style={{ padding: "12px 13px" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 7,
+                      marginBottom: 5,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: p.color,
+                        lineHeight: 1.5,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {p.icon}
+                    </span>
+                    <span style={{ fontWeight: 700, fontSize: 12.5, lineHeight: 1.35 }}>
+                      {p.title}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "var(--txt2)", lineHeight: 1.45 }}>
+                    {p.body}
+                  </div>
+                  <div style={{ display: "flex", gap: 7, marginTop: 11 }}>
+                    {p.actions.map((a, ai) => (
+                      <span
+                        key={ai}
+                        style={{
+                          fontFamily: "inherit",
+                          fontWeight: 700,
+                          fontSize: 11,
+                          padding: "6px 12px",
+                          borderRadius: 7,
+                          background: a.bg,
+                          color: a.fg,
+                          border: a.bd,
+                        }}
+                      >
+                        {a.l}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               </div>
             );
           })}
-        </div>
-      </div>
-
-      {/* OS pop-up preview panel (static) */}
-      <div style={S.section}>
-        <div style={S.sectionTitle}>Approximate OS notification preview</div>
-        <div
-          style={{
-            border: "1px solid var(--border2)",
-            borderRadius: 12,
-            background: "var(--elev)",
-            padding: "14px 16px",
-            maxWidth: 360,
-            boxShadow: "0 4px 20px rgba(0,0,0,0.25)",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-            <div
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: 8,
-                background: "var(--accent)",
-                flexShrink: 0,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 16,
-              }}
-            >
-              M
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "var(--txt)", marginBottom: 2 }}>
-                Marsad · Gate needs you
-              </div>
-              <div style={{ fontSize: 11, color: "var(--txt2)" }}>
-                api-auth-refactor is waiting for your approval on a Permission gate.
-              </div>
-              <div style={{ fontSize: 10, color: "var(--txt3)", marginTop: 4 }}>
-                now
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -356,8 +583,8 @@ function HostStatusDot({ status }: { status: string }) {
   return (
     <span
       style={{
-        width: 8,
-        height: 8,
+        width: 9,
+        height: 9,
         borderRadius: "50%",
         background: color,
         display: "inline-block",
@@ -384,161 +611,212 @@ function HostsTab() {
   }
 
   return (
-    <div>
-      <div style={S.section}>
-        <div style={S.sectionTitle}>Connected hosts</div>
-        <div
-          style={{
-            border: "1px solid var(--border)",
-            borderRadius: 10,
-            overflow: "hidden",
-          }}
-        >
-          {hosts.map((h, i) => (
-            <div
-              key={h.id}
-              data-testid={`host-row-${h.id}`}
+    <div style={{ maxWidth: 640 }}>
+      {/* Registered hosts */}
+      <div style={{ ...S.sectionLabel, marginBottom: 10 }}>Registered hosts</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 9, marginBottom: 26 }}>
+        {hosts.map((h) => (
+          <div
+            key={h.id}
+            data-testid={`host-row-${h.id}`}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 13,
+              padding: "13px 15px",
+              borderRadius: 11,
+              background: "var(--panel)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <HostStatusDot status={h.status} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>
+                  {h.label}
+                </span>
+                {h.is_local && (
+                  <span
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      padding: "1px 6px",
+                      borderRadius: 5,
+                      background: "var(--panel2)",
+                      color: "var(--txt3)",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    this machine
+                  </span>
+                )}
+              </div>
+              <div
+                className="mono"
+                style={{ fontSize: 10.5, color: "var(--txt3)", marginTop: 2 }}
+              >
+                {h.target} · {h.session_count} session{h.session_count !== 1 ? "s" : ""}
+              </div>
+            </div>
+            <span
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-                padding: "12px 16px",
-                borderTop: i === 0 ? "none" : "1px solid var(--border)",
-                background: "transparent",
+                fontSize: 11,
+                color:
+                  h.status === "Connected"
+                    ? "var(--done)"
+                    : h.status === "Reconnecting"
+                    ? "var(--needs)"
+                    : "var(--txt3)",
+                fontWeight: 600,
               }}
             >
-              <HostStatusDot status={h.status} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 600,
-                    color: "var(--txt)",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                  }}
-                >
-                  {h.label}
-                  {h.is_local && (
-                    <span
-                      style={{
-                        fontSize: 9,
-                        fontWeight: 700,
-                        letterSpacing: 0.3,
-                        padding: "1px 5px",
-                        borderRadius: 4,
-                        color: "var(--txt3)",
-                        background: "var(--panel2)",
-                        textTransform: "uppercase",
-                      }}
-                    >
-                      this machine
-                    </span>
-                  )}
-                </div>
-                <div style={{ fontSize: 11, color: "var(--txt3)", marginTop: 2 }}>
-                  {h.target} · {h.session_count} session{h.session_count !== 1 ? "s" : ""}
-                </div>
-              </div>
-              <div style={{ fontSize: 11, color: "var(--txt3)", minWidth: 80, textAlign: "right" }}>
-                {h.status}
-              </div>
-              {h.removable ? (
-                <Button
-                  variant="danger"
-                  size="sm"
-                  // NOTE: removeHost backend command pending
-                  onClick={() => {}}
-                  style={{ opacity: 0.65 }}
-                >
-                  Remove
-                </Button>
-              ) : (
-                <Button variant="secondary" size="sm" disabled>
-                  Protected
-                </Button>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Add remote form */}
-      <div style={S.section}>
-        <div style={S.sectionTitle}>Add remote host</div>
-        <div
-          style={{
-            border: "1px solid var(--border)",
-            borderRadius: 10,
-            padding: "16px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-          }}
-        >
-          <div style={{ display: "flex", gap: 10 }}>
-            <div style={{ flex: 1 }}>
-              <label style={{ fontSize: 11, color: "var(--txt3)", display: "block", marginBottom: 4 }}>
-                Label
-              </label>
-              <input
-                data-testid="host-add-label"
-                value={label}
-                onChange={(e) => setLabel(e.target.value)}
-                placeholder="e.g. hetzner-cx21"
+              {h.status}
+            </span>
+            {h.removable ? (
+              <button
+                // NOTE: removeHost backend command pending
+                onClick={() => {}}
                 style={{
-                  width: "100%",
-                  background: "var(--panel2)",
-                  border: "1px solid var(--border2)",
-                  borderRadius: 7,
-                  color: "var(--txt)",
-                  fontSize: 13,
-                  padding: "8px 10px",
                   fontFamily: "inherit",
-                  boxSizing: "border-box",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: "6px 11px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border2)",
+                  background: "transparent",
+                  color: "var(--txt2)",
+                  cursor: "pointer",
                 }}
-              />
-            </div>
-            <div style={{ flex: 2 }}>
-              <label style={{ fontSize: 11, color: "var(--txt3)", display: "block", marginBottom: 4 }}>
-                SSH target
-              </label>
-              <input
-                data-testid="host-add-target"
-                value={target}
-                onChange={(e) => setTarget(e.target.value)}
-                placeholder="user@hostname"
+              >
+                Remove
+              </button>
+            ) : (
+              <span
                 style={{
-                  width: "100%",
+                  fontSize: 10,
+                  fontWeight: 600,
+                  padding: "3px 8px",
+                  borderRadius: 6,
                   background: "var(--panel2)",
-                  border: "1px solid var(--border2)",
-                  borderRadius: 7,
-                  color: "var(--txt)",
-                  fontSize: 13,
-                  padding: "8px 10px",
-                  fontFamily: "inherit",
-                  boxSizing: "border-box",
+                  color: "var(--txt3)",
+                  border: "1px solid var(--border)",
                 }}
-              />
-            </div>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <Button
-              data-testid="host-add-btn"
-              variant="primary"
-              size="sm"
-              disabled={!label.trim() || !target.trim()}
-              onClick={handleAdd}
-            >
-              Add remote
-            </Button>
-            {added && (
-              <span style={{ fontSize: 11, color: "var(--done)" }}>
-                Queued (backend command pending)
+              >
+                Protected
               </span>
             )}
           </div>
+        ))}
+      </div>
+
+      {/* Add a remote host */}
+      <div style={{ ...S.sectionLabel, marginBottom: 10 }}>Add a host</div>
+      <div
+        style={{
+          padding: 15,
+          borderRadius: 12,
+          border: "1px dashed var(--border2)",
+          background: "var(--panel2)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 11,
+        }}
+      >
+        <div style={{ display: "flex", gap: 11 }}>
+          <div style={{ flex: 1 }}>
+            <div
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                color: "var(--txt3)",
+                marginBottom: 5,
+              }}
+            >
+              Label
+            </div>
+            <input
+              data-testid="host-add-label"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="gpu-box-2"
+              className="mono"
+              style={{
+                width: "100%",
+                background: "var(--panel)",
+                border: "1px solid var(--border2)",
+                borderRadius: 8,
+                padding: "9px 11px",
+                color: "var(--txt)",
+                fontSize: 12,
+                outline: "none",
+                boxSizing: "border-box",
+                fontFamily: "var(--font-mono)",
+              }}
+            />
+          </div>
+          <div style={{ flex: 1.6 }}>
+            <div
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                color: "var(--txt3)",
+                marginBottom: 5,
+              }}
+            >
+              SSH target
+            </div>
+            <input
+              data-testid="host-add-target"
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              placeholder="user@10.0.0.5"
+              className="mono"
+              style={{
+                width: "100%",
+                background: "var(--panel)",
+                border: "1px solid var(--border2)",
+                borderRadius: 8,
+                padding: "9px 11px",
+                color: "var(--txt)",
+                fontSize: 12,
+                outline: "none",
+                boxSizing: "border-box",
+                fontFamily: "var(--font-mono)",
+              }}
+            />
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span
+            className="mono"
+            style={{ fontSize: 10, color: "var(--txt3)", flex: 1 }}
+          >
+            Honors your ~/.ssh/config · installs a small helper on first connect · no inbound ports
+          </span>
+          <button
+            data-testid="host-add-btn"
+            disabled={!label.trim() || !target.trim()}
+            onClick={handleAdd}
+            style={{
+              fontFamily: "inherit",
+              fontWeight: 700,
+              fontSize: 12,
+              padding: "8px 15px",
+              borderRadius: 8,
+              border: "none",
+              background: !label.trim() || !target.trim() ? "var(--border2)" : "var(--accent)",
+              color: "#fff",
+              cursor: !label.trim() || !target.trim() ? "default" : "pointer",
+              opacity: !label.trim() || !target.trim() ? 0.55 : 1,
+            }}
+          >
+            Add &amp; connect
+          </button>
+          {added && (
+            <span style={{ fontSize: 11, color: "var(--done)" }}>
+              Queued (backend command pending)
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -550,107 +828,128 @@ function HostsTab() {
 // ---------------------------------------------------------------------------
 
 const MODELS = [
-  "claude-haiku-4-5",
-  "claude-sonnet-4-5",
-  "claude-opus-4-5",
+  { key: "claude-haiku-4-5", label: "Claude Haiku 4" },
+  { key: "claude-sonnet-4-5", label: "Claude Sonnet 4.6" },
+  { key: "claude-opus-4-5", label: "Claude Opus 4.5" },
 ];
 
 const POSTURES: Array<{ key: "ask" | "auto" | "full"; label: string; desc: string }> = [
-  { key: "ask", label: "Ask", desc: "Confirm before every action" },
-  { key: "auto", label: "Auto", desc: "Confirm risky actions only" },
-  { key: "full", label: "Full auto", desc: "Run without confirmation" },
+  {
+    key: "ask",
+    label: "Ask every time",
+    desc: "You'll be prompted before any side-effecting action.",
+  },
+  {
+    key: "auto",
+    label: "Auto-approve safe actions",
+    desc: "Reads & edits run freely; commands and writes still ask.",
+  },
+  {
+    key: "full",
+    label: "Full autonomy",
+    desc: "Act without asking — sandboxes only.",
+  },
 ];
 
 function SessionDefaultsTab() {
   // NOTE: backend command pending for persisting session defaults
   const [model, setModel] = useState("claude-sonnet-4-5");
-  const [posture, setPosture] = useState<"ask" | "auto" | "full">("auto");
+  const [posture, setPosture] = useState<"ask" | "auto" | "full">("ask");
 
   return (
-    <div>
-      <div style={S.section}>
-        <div style={S.sectionTitle}>Default model</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {MODELS.map((m) => (
-            <button
-              key={m}
-              data-testid={`defaults-model-${m}`}
-              onClick={() => setModel(m)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "10px 14px",
-                borderRadius: 9,
-                border:
-                  model === m
-                    ? "1px solid var(--accent)"
-                    : "1px solid var(--border2)",
-                background: model === m ? "var(--accent-bg)" : "var(--panel2)",
-                cursor: "pointer",
-                fontFamily: "inherit",
-                textAlign: "left",
-              }}
-            >
-              <span
+    <div style={{ maxWidth: 640, display: "flex", flexDirection: "column", gap: 22 }}>
+      {/* Default model */}
+      <div>
+        <div style={S.sectionLabelBold}>Default model</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {MODELS.map((m) => {
+            const active = model === m.key;
+            return (
+              <button
+                key={m.key}
+                data-testid={`defaults-model-${m.key}`}
+                onClick={() => setModel(m.key)}
                 style={{
-                  width: 14,
-                  height: 14,
-                  borderRadius: "50%",
-                  border:
-                    model === m
-                      ? "4px solid var(--accent)"
-                      : "2px solid var(--border2)",
-                  background: "transparent",
-                  flexShrink: 0,
-                  transition: "border 0.15s",
+                  fontFamily: "inherit",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: "9px 14px",
+                  borderRadius: 9,
+                  cursor: "pointer",
+                  border: active ? "1px solid var(--accent)" : "1px solid var(--border2)",
+                  background: active ? "rgba(91,141,239,0.12)" : "var(--panel2)",
+                  color: active ? "var(--accent2)" : "var(--txt2)",
+                  transition: "all 0.15s",
                 }}
-              />
-              <span style={{ fontSize: 13, fontWeight: 500, color: "var(--txt)" }}>
-                {m}
-              </span>
-            </button>
-          ))}
+              >
+                {m.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      <div style={S.section}>
-        <div style={S.sectionTitle}>Default posture</div>
-        <div style={{ display: "flex", gap: 10 }}>
-          {POSTURES.map((p) => (
-            <button
-              key={p.key}
-              data-testid={`defaults-posture-${p.key}`}
-              onClick={() => setPosture(p.key)}
-              style={{
-                flex: 1,
-                padding: "12px 10px",
-                borderRadius: 9,
-                border:
-                  posture === p.key
-                    ? "1px solid var(--accent)"
-                    : "1px solid var(--border2)",
-                background: posture === p.key ? "var(--accent-bg)" : "var(--panel2)",
-                cursor: "pointer",
-                fontFamily: "inherit",
-                textAlign: "center",
-              }}
-            >
+      {/* Default permission posture */}
+      <div>
+        <div style={S.sectionLabelBold}>Default permission posture</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {POSTURES.map((p) => {
+            const active = posture === p.key;
+            return (
               <div
+                key={p.key}
+                data-testid={`defaults-posture-${p.key}`}
+                onClick={() => setPosture(p.key)}
                 style={{
-                  fontSize: 13,
-                  fontWeight: 700,
-                  color:
-                    posture === p.key ? "var(--accent2)" : "var(--txt)",
-                  marginBottom: 4,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 11,
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  border: active ? "1px solid var(--accent)" : "1px solid var(--border2)",
+                  background: active ? "rgba(91,141,239,0.12)" : "var(--panel2)",
+                  transition: "all 0.15s",
                 }}
               >
-                {p.label}
+                <span
+                  style={{
+                    width: 16,
+                    height: 16,
+                    borderRadius: "50%",
+                    border: `2px solid ${active ? "var(--accent)" : "var(--border2)"}`,
+                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: "50%",
+                      background: active ? "var(--accent)" : "transparent",
+                    }}
+                  />
+                </span>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 12.5, color: "var(--txt)" }}>
+                    {p.label}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--txt3)" }}>{p.desc}</div>
+                </div>
               </div>
-              <div style={{ fontSize: 11, color: "var(--txt3)" }}>{p.desc}</div>
-            </button>
-          ))}
+            );
+          })}
         </div>
+      </div>
+
+      <div
+        className="mono"
+        style={{ fontSize: 10.5, color: "var(--txt3)" }}
+      >
+        New Session can override any of these per launch.
       </div>
     </div>
   );
@@ -671,144 +970,240 @@ function GeneralTab() {
   // NOTE: behavior toggles local state — backend command pending
   const [restoreOnLaunch, setRestoreOnLaunch] = useState(true);
   const [confirmBeforeStop, setConfirmBeforeStop] = useState(true);
+  const [startMarsad, setStartMarsad] = useState(true);
 
   return (
-    <div>
-      <div style={S.section}>
-        <div style={S.sectionTitle}>Appearance</div>
-        <div
-          style={{
-            border: "1px solid var(--border)",
-            borderRadius: 10,
-            overflow: "hidden",
-          }}
-        >
-          {/* Theme */}
-          <div style={S.row}>
-            <div style={{ padding: "0 0 0 16px" }}>
-              <div style={S.rowLabel}>Theme</div>
-              <div style={S.rowSub}>Interface color scheme</div>
-            </div>
-            <div
-              style={{
-                display: "flex",
-                gap: 6,
-                padding: "0 16px",
-              }}
-            >
-              {(["dark", "light"] as const).map((t) => (
-                <button
-                  key={t}
-                  data-testid={`general-theme-${t}`}
-                  onClick={() => toggleTheme()}
-                  style={{
-                    padding: "5px 12px",
-                    borderRadius: 7,
-                    border:
-                      theme === t
-                        ? "1px solid var(--accent)"
-                        : "1px solid var(--border2)",
-                    background: theme === t ? "var(--accent-bg)" : "var(--panel2)",
-                    color: theme === t ? "var(--accent2)" : "var(--txt2)",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                    textTransform: "capitalize",
-                  }}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Glass */}
-          <div style={{ ...S.row, borderTop: "1px solid var(--border)" }}>
-            <div style={{ padding: "0 0 0 16px" }}>
-              <div style={S.rowLabel}>Translucent (glass)</div>
-              <div style={S.rowSub}>Blur + backdrop transparency</div>
-            </div>
-            <div style={{ padding: "0 16px" }} data-testid="general-glass-toggle-wrap">
-              <Toggle
-                checked={glass}
-                onChange={toggleGlass}
-              />
-            </div>
-          </div>
-
-          {/* Background */}
-          <div style={{ ...S.row, borderTop: "1px solid var(--border)", alignItems: "flex-start" }}>
-            <div style={{ padding: "10px 0 10px 16px" }}>
-              <div style={S.rowLabel}>Background</div>
-              <div style={S.rowSub}>Wallpaper shown in glass mode</div>
-            </div>
-            <div
-              style={{
-                display: "flex",
-                gap: 6,
-                padding: "10px 16px",
-              }}
-            >
-              {BG_OPTIONS.map((bg) => (
-                <button
-                  key={bg}
-                  data-testid={`general-bg-${bg.toLowerCase().replace(/\s+/g, "-")}`}
-                  onClick={() => setBackground(bg)}
-                  style={{
-                    padding: "5px 10px",
-                    borderRadius: 7,
-                    border:
-                      background === bg
-                        ? "1px solid var(--accent)"
-                        : "1px solid var(--border2)",
-                    background: background === bg ? "var(--accent-bg)" : "var(--panel2)",
-                    color: background === bg ? "var(--accent2)" : "var(--txt2)",
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                  }}
-                >
-                  {bg}
-                </button>
-              ))}
-            </div>
-          </div>
+    <div style={{ maxWidth: 640, display: "flex", flexDirection: "column", gap: 22 }}>
+      {/* Appearance */}
+      <div>
+        <div style={S.sectionLabelBold}>Appearance</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {(["dark", "light"] as const).map((t) => {
+            const active = theme === t;
+            return (
+              <button
+                key={t}
+                data-testid={`general-theme-${t}`}
+                onClick={() => toggleTheme()}
+                style={{
+                  fontFamily: "inherit",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: "9px 18px",
+                  borderRadius: 9,
+                  cursor: "pointer",
+                  border: active ? "1px solid var(--accent)" : "1px solid var(--border2)",
+                  background: active ? "rgba(91,141,239,0.12)" : "var(--panel2)",
+                  color: active ? "var(--accent2)" : "var(--txt2)",
+                  textTransform: "capitalize",
+                  transition: "all 0.15s",
+                }}
+              >
+                {t.charAt(0).toUpperCase() + t.slice(1)}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      <div style={S.section}>
-        <div style={S.sectionTitle}>Behavior</div>
-        <div
-          style={{
-            border: "1px solid var(--border)",
-            borderRadius: 10,
-            overflow: "hidden",
-          }}
-        >
-          <div style={S.row}>
-            <div style={{ padding: "0 0 0 16px" }}>
-              <div style={S.rowLabel}>Restore workspace on launch</div>
-              <div style={S.rowSub}>Re-open the active workspace when Marsad starts</div>
+      {/* Background */}
+      <div>
+        <div style={S.sectionLabelBold}>Background</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          {BG_OPTIONS.map((bg) => {
+            const active = background === bg;
+            return (
+              <button
+                key={bg}
+                data-testid={`general-bg-${bg.toLowerCase().replace(/\s+/g, "-")}`}
+                onClick={() => setBackground(bg)}
+                style={{
+                  fontFamily: "inherit",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: "9px 16px",
+                  borderRadius: 9,
+                  cursor: "pointer",
+                  border: active ? "1px solid var(--accent)" : "1px solid var(--border2)",
+                  background: active ? "rgba(91,141,239,0.12)" : "var(--panel2)",
+                  color: active ? "var(--accent2)" : "var(--txt2)",
+                  transition: "all 0.15s",
+                }}
+              >
+                {bg}
+              </button>
+            );
+          })}
+        </div>
+        {background === "Custom image" && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: "12px 14px",
+              borderRadius: 11,
+              border: "1px dashed var(--border2)",
+              background: "var(--panel2)",
+            }}
+          >
+            <div
+              style={{
+                width: 48,
+                height: 32,
+                borderRadius: 6,
+                background: "var(--border2)",
+                backgroundSize: "cover",
+                backgroundPosition: "center",
+                border: "1px solid var(--border2)",
+                flexShrink: 0,
+              }}
+            />
+            <div style={{ flex: 1, fontSize: 11.5, color: "var(--txt3)" }}>
+              No image selected
             </div>
-            <div style={{ padding: "0 16px" }} data-testid="general-restore-toggle-wrap">
-              <Toggle
-                checked={restoreOnLaunch}
-                onChange={setRestoreOnLaunch}
-              />
+            <button
+              style={{
+                fontFamily: "inherit",
+                fontWeight: 600,
+                fontSize: 11.5,
+                padding: "7px 13px",
+                borderRadius: 8,
+                border: "1px solid var(--border2)",
+                background: "var(--panel)",
+                color: "var(--txt2)",
+                cursor: "pointer",
+              }}
+            >
+              Upload image…
+            </button>
+          </div>
+        )}
+        {background === "Desktop" && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 8,
+              padding: "11px 13px",
+              borderRadius: 10,
+              background: "var(--panel2)",
+              border: "1px solid var(--border)",
+              fontSize: 11,
+              color: "var(--txt3)",
+              lineHeight: 1.45,
+            }}
+          >
+            <span style={{ flexShrink: 0 }}>ⓘ</span>
+            <span>
+              Blurs your live desktop where the compositor supports window translucency (KWin,
+              Mutter, picom…). Falls back to the gradient automatically where it doesn't.
+            </span>
+          </div>
+        )}
+        <div style={{ fontSize: 10.5, color: "var(--txt3)", marginTop: 8 }}>
+          Shows through translucent surfaces — enable "Translucent surfaces (glass)" below to see
+          it.
+        </div>
+      </div>
+
+      {/* Behavior */}
+      <div>
+        <div style={S.sectionLabelBold}>Behavior</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 13,
+              padding: "13px 15px",
+              borderRadius: 11,
+              background: "var(--panel)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>
+                Start Marsad on login
+              </div>
+              <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+                Keep the app ready and reattach to running sessions.
+              </div>
+            </div>
+            <div>
+              <Toggle checked={startMarsad} onChange={setStartMarsad} />
             </div>
           </div>
-          <div style={{ ...S.row, borderTop: "1px solid var(--border)" }}>
-            <div style={{ padding: "0 0 0 16px" }}>
-              <div style={S.rowLabel}>Confirm before stopping a session</div>
-              <div style={S.rowSub}>Show a confirmation dialog before sending stop</div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 13,
+              padding: "13px 15px",
+              borderRadius: 11,
+              background: "var(--panel)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>
+                Restore workspace on launch
+              </div>
+              <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+                Re-open the workspace and active filters from last time.
+              </div>
             </div>
-            <div style={{ padding: "0 16px" }} data-testid="general-confirm-toggle-wrap">
-              <Toggle
-                checked={confirmBeforeStop}
-                onChange={setConfirmBeforeStop}
-              />
+            <div data-testid="general-restore-toggle-wrap">
+              <Toggle checked={restoreOnLaunch} onChange={setRestoreOnLaunch} />
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 13,
+              padding: "13px 15px",
+              borderRadius: 11,
+              background: "var(--panel)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>
+                Confirm before stopping a session
+              </div>
+              <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+                Ask before you stop any session.
+              </div>
+            </div>
+            <div data-testid="general-confirm-toggle-wrap">
+              <Toggle checked={confirmBeforeStop} onChange={setConfirmBeforeStop} />
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 13,
+              padding: "13px 15px",
+              borderRadius: 11,
+              background: "var(--panel)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>
+                Translucent surfaces (glass)
+              </div>
+              <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+                Frosted, semi-transparent panels over a backdrop.
+              </div>
+            </div>
+            <div data-testid="general-glass-toggle-wrap">
+              <Toggle checked={glass} onChange={toggleGlass} />
             </div>
           </div>
         </div>
@@ -829,7 +1224,11 @@ export function Settings() {
   return (
     <div style={S.root} data-testid="settings-screen">
       <div style={S.header}>
-        <h1 style={S.title}>Settings</h1>
+        <div style={S.titleRow}>
+          <h1 style={S.title}>Settings</h1>
+          <span style={S.titleTab}>{activeTab}</span>
+        </div>
+        <p style={S.subtitle}>{TAB_SUBTITLES[activeTab]}</p>
         <div style={S.tabBar}>
           {TABS.map((t) => (
             <TabButton

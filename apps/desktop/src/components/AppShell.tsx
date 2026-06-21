@@ -22,8 +22,8 @@ function hostStatusColor(status: HostStatus): string {
 }
 
 function hostStatusLabel(status: HostStatus): string {
-  if (status === "Connected") return "online";
-  if (status === "Reconnecting") return "reconnecting…";
+  if (status === "Connected") return "connected";
+  if (status === "Reconnecting") return "reconnecting";
   return "unreachable";
 }
 

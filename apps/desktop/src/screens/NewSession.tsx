@@ -1,12 +1,10 @@
 /**
  * NewSession modal — project dir, host, model, posture, first prompt, launch.
  */
-import { useState } from "react";
+import React, { useState } from "react";
 import { useVm } from "../bridge/useVm";
 import { launchSession } from "../bridge/api";
 import { Modal } from "../components/Modal";
-import { Button } from "../components/Button";
-import { Chip } from "../components/Chip";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -20,9 +18,9 @@ const MODELS = [
 
 const POSTURES: { value: "ask" | "auto" | "full"; label: string; desc: string }[] =
   [
-    { value: "ask", label: "Ask", desc: "Gate every action" },
-    { value: "auto", label: "Auto", desc: "Gate risky actions only" },
-    { value: "full", label: "Full auto", desc: "No gates" },
+    { value: "ask", label: "Ask each time", desc: "Gate every action" },
+    { value: "auto", label: "Auto-approve safe", desc: "Gate risky actions only" },
+    { value: "full", label: "Full autonomy", desc: "No gates" },
   ];
 
 const RECENT_DIRS = [
@@ -31,6 +29,19 @@ const RECENT_DIRS = [
   "~/projects/worker-svc",
   "~/projects/ml-pipeline",
 ];
+
+// ---------------------------------------------------------------------------
+// Section label style (shared across all field headings)
+// ---------------------------------------------------------------------------
+
+const sectionLabel: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: 0.4,
+  color: "var(--txt3)",
+  marginBottom: 8,
+};
 
 // ---------------------------------------------------------------------------
 // NewSession
@@ -74,34 +85,72 @@ export function NewSession() {
   }
 
   return (
-    <Modal open={open} onClose={close} width={520}>
+    <Modal open={open} onClose={close} width={560}>
       {/* ===== HEADER ===== */}
       <div
         style={{
+          padding: "18px 22px",
+          borderBottom: "1px solid var(--border)",
           display: "flex",
           alignItems: "center",
-          gap: 10,
-          padding: "18px 22px 14px",
-          borderBottom: "1px solid var(--border)",
+          gap: 12,
+          background: "var(--panel)",
         }}
       >
+        {/* Gradient "+" icon box */}
+        <div
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: 9,
+            background: "linear-gradient(135deg, var(--accent), var(--accent2))",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#fff",
+            fontWeight: 800,
+            fontSize: 16,
+            flexShrink: 0,
+          }}
+        >
+          ＋
+        </div>
+
         <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>New session</div>
-          <div style={{ fontSize: 11, color: "var(--txt3)", marginTop: 2 }}>
-            Launch a new Claude Code session
+          <h2
+            style={{
+              fontSize: 16,
+              fontWeight: 700,
+              margin: 0,
+              letterSpacing: -0.2,
+              color: "var(--txt)",
+            }}
+          >
+            Launch a new session
+          </h2>
+          <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 2 }}>
+            Pick a directory and host — no terminal needed
           </div>
         </div>
+
+        {/* Close button — styled box */}
         <button
           onClick={close}
           aria-label="Close"
           style={{
-            background: "none",
-            border: "none",
+            width: 30,
+            height: 30,
+            borderRadius: 8,
+            border: "1px solid var(--border)",
+            background: "var(--panel2)",
+            color: "var(--txt2)",
             cursor: "pointer",
-            fontSize: 18,
-            color: "var(--txt3)",
+            fontSize: 14,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
             lineHeight: 1,
-            padding: "2px 4px",
           }}
         >
           ✕
@@ -111,41 +160,32 @@ export function NewSession() {
       {/* ===== BODY ===== */}
       <div
         style={{
-          padding: "18px 22px",
+          flex: 1,
+          overflowY: "auto",
+          padding: "20px 22px",
           display: "flex",
           flexDirection: "column",
           gap: 18,
+          background: "var(--panel)",
         }}
       >
         {/* ---- Project directory ---- */}
         <div>
-          <label
-            htmlFor="ns-project"
-            style={{
-              display: "block",
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: 0.6,
-              textTransform: "uppercase",
-              color: "var(--txt3)",
-              marginBottom: 6,
-            }}
-          >
-            Project directory
-          </label>
+          <div style={sectionLabel}>Project directory</div>
           <input
             id="ns-project"
             data-testid="ns-project-input"
             value={project}
             onChange={(e) => setProject(e.target.value)}
-            placeholder="~/projects/my-app"
+            placeholder="~/code/my-project"
+            className="mono"
             style={{
               width: "100%",
               boxSizing: "border-box",
               background: "var(--panel2)",
               border: "1px solid var(--border2)",
-              borderRadius: 8,
-              padding: "9px 12px",
+              borderRadius: 9,
+              padding: "11px 13px",
               color: "var(--txt)",
               fontFamily: "var(--font-mono, monospace)",
               fontSize: 12.5,
@@ -162,31 +202,33 @@ export function NewSession() {
             }}
           >
             {RECENT_DIRS.map((dir) => (
-              <Chip
+              <span
                 key={dir}
-                label={dir}
-                active={project === dir}
+                className="mono"
                 onClick={() => handleRecentDir(dir)}
-              />
+                style={{
+                  fontSize: 10.5,
+                  padding: "5px 9px",
+                  borderRadius: 7,
+                  border: project === dir
+                    ? "1px solid var(--accent)"
+                    : "1px solid var(--border)",
+                  background: project === dir ? "var(--accent-bg)" : "var(--panel2)",
+                  color: project === dir ? "var(--accent2)" : "var(--txt2)",
+                  cursor: "pointer",
+                  fontFamily: "var(--font-mono, monospace)",
+                }}
+              >
+                {dir}
+              </span>
             ))}
           </div>
         </div>
 
         {/* ---- Host picker ---- */}
         <div>
-          <div
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: 0.6,
-              textTransform: "uppercase",
-              color: "var(--txt3)",
-              marginBottom: 8,
-            }}
-          >
-            Host
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={sectionLabel}>Host</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {hosts.map((h) => {
               const selected = hostId === h.id;
               return (
@@ -195,18 +237,22 @@ export function NewSession() {
                   data-testid={`ns-host-${h.id}`}
                   onClick={() => setHostId(h.id)}
                   style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: "9px 13px",
+                    fontFamily: "inherit",
+                    flex: "1 1 110px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    padding: 10,
                     borderRadius: 9,
+                    cursor: "pointer",
                     border: selected
                       ? "1px solid var(--accent)"
                       : "1px solid var(--border)",
                     background: selected ? "var(--accent-bg)" : "var(--panel2)",
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                    textAlign: "left",
+                    color: selected ? "var(--accent2)" : "var(--txt)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 7,
                   }}
                 >
                   <span
@@ -223,131 +269,93 @@ export function NewSession() {
                       flexShrink: 0,
                     }}
                   />
-                  <span
-                    style={{
-                      fontWeight: 600,
-                      fontSize: 12.5,
-                      color: selected ? "var(--accent2)" : "var(--txt)",
-                      flex: 1,
-                    }}
-                  >
-                    {h.label}
-                  </span>
-                  <span
-                    className="mono"
-                    style={{ fontSize: 10, color: "var(--txt3)" }}
-                  >
-                    {h.target}
-                  </span>
+                  {h.label}
                 </button>
               );
             })}
           </div>
-        </div>
-
-        {/* ---- Model picker ---- */}
-        <div>
+          {/* Manage hosts link — inside body, under hosts */}
           <div
+            data-testid="ns-manage-hosts"
+            onClick={() => dispatch({ type: "SET_SCREEN", screen: "settings" })}
             style={{
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: 0.6,
-              textTransform: "uppercase",
-              color: "var(--txt3)",
-              marginBottom: 8,
+              marginTop: 8,
+              fontSize: 11,
+              color: "var(--accent2)",
+              cursor: "pointer",
+              fontWeight: 600,
             }}
           >
-            Model
+            Manage hosts in Settings →
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            {MODELS.map((m) => {
-              const selected = model === m.id;
-              return (
-                <button
-                  key={m.id}
-                  data-testid={`ns-model-${m.id}`}
-                  onClick={() => setModel(m.id)}
-                  style={{
-                    flex: 1,
-                    padding: "9px 10px",
-                    borderRadius: 9,
-                    border: selected
-                      ? "1px solid var(--accent)"
-                      : "1px solid var(--border)",
-                    background: selected ? "var(--accent-bg)" : "var(--panel2)",
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                    textAlign: "center",
-                  }}
-                >
-                  <div
+        </div>
+
+        {/* ---- Model + Posture side-by-side ---- */}
+        <div style={{ display: "flex", gap: 16 }}>
+          {/* Model picker */}
+          <div style={{ flex: 1 }}>
+            <div style={sectionLabel}>Model</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {MODELS.map((m) => {
+                const selected = model === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    data-testid={`ns-model-${m.id}`}
+                    onClick={() => setModel(m.id)}
                     style={{
-                      fontWeight: 700,
-                      fontSize: 12.5,
-                      color: selected ? "var(--accent2)" : "var(--txt)",
+                      fontFamily: "inherit",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      padding: "9px 11px",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      textAlign: "left",
+                      border: selected
+                        ? "1px solid var(--accent)"
+                        : "1px solid var(--border2)",
+                      background: selected ? "var(--accent-bg)" : "var(--panel2)",
+                      color: selected ? "var(--accent2)" : "var(--txt2)",
                     }}
                   >
                     {m.label}
-                  </div>
-                  <div style={{ fontSize: 10, color: "var(--txt3)", marginTop: 2 }}>
-                    {m.sublabel}
-                  </div>
-                </button>
-              );
-            })}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
 
-        {/* ---- Permission posture ---- */}
-        <div>
-          <div
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: 0.6,
-              textTransform: "uppercase",
-              color: "var(--txt3)",
-              marginBottom: 8,
-            }}
-          >
-            Permission posture
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            {POSTURES.map((p) => {
-              const selected = posture === p.value;
-              return (
-                <button
-                  key={p.value}
-                  data-testid={`ns-posture-${p.value}`}
-                  onClick={() => setPosture(p.value)}
-                  style={{
-                    flex: 1,
-                    padding: "9px 10px",
-                    borderRadius: 9,
-                    border: selected
-                      ? "1px solid var(--accent)"
-                      : "1px solid var(--border)",
-                    background: selected ? "var(--accent-bg)" : "var(--panel2)",
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                    textAlign: "center",
-                  }}
-                >
-                  <div
+          {/* Permission posture picker */}
+          <div style={{ flex: 1 }}>
+            <div style={sectionLabel}>Permission posture</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {POSTURES.map((p) => {
+                const selected = posture === p.value;
+                return (
+                  <button
+                    key={p.value}
+                    data-testid={`ns-posture-${p.value}`}
+                    onClick={() => setPosture(p.value)}
                     style={{
-                      fontWeight: 700,
-                      fontSize: 12.5,
-                      color: selected ? "var(--accent2)" : "var(--txt)",
+                      fontFamily: "inherit",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      padding: "9px 11px",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      textAlign: "left",
+                      border: selected
+                        ? "1px solid var(--accent)"
+                        : "1px solid var(--border2)",
+                      background: selected ? "var(--accent-bg)" : "var(--panel2)",
+                      color: selected ? "var(--accent2)" : "var(--txt2)",
                     }}
                   >
                     {p.label}
-                  </div>
-                  <div style={{ fontSize: 10, color: "var(--txt3)", marginTop: 2 }}>
-                    {p.desc}
-                  </div>
-                </button>
-              );
-            })}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -355,18 +363,10 @@ export function NewSession() {
         <div>
           <label
             htmlFor="ns-first-prompt"
-            style={{
-              display: "block",
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: 0.6,
-              textTransform: "uppercase",
-              color: "var(--txt3)",
-              marginBottom: 6,
-            }}
+            style={{ ...sectionLabel, display: "block" }}
           >
             First prompt{" "}
-            <span style={{ fontWeight: 400, textTransform: "none" }}>
+            <span style={{ opacity: 0.6, fontWeight: 500, textTransform: "none" }}>
               (optional)
             </span>
           </label>
@@ -375,15 +375,15 @@ export function NewSession() {
             data-testid="ns-first-prompt"
             value={firstPrompt}
             onChange={(e) => setFirstPrompt(e.target.value)}
-            placeholder="e.g. Add a login endpoint to the API"
-            rows={3}
+            placeholder="What should this session start working on?"
+            rows={2}
             style={{
               width: "100%",
               boxSizing: "border-box",
               background: "var(--panel2)",
               border: "1px solid var(--border2)",
-              borderRadius: 8,
-              padding: "9px 12px",
+              borderRadius: 9,
+              padding: "11px 13px",
               color: "var(--txt)",
               fontFamily: "inherit",
               fontSize: 12.5,
@@ -397,45 +397,68 @@ export function NewSession() {
       {/* ===== FOOTER ===== */}
       <div
         style={{
+          flexShrink: 0,
+          padding: "15px 22px",
+          borderTop: "1px solid var(--border)",
           display: "flex",
           alignItems: "center",
           gap: 10,
-          padding: "12px 22px 18px",
-          borderTop: "1px solid var(--border)",
-          justifyContent: "space-between",
+          background: "var(--panel)",
         }}
       >
-        {/* Manage hosts link */}
-        <button
-          data-testid="ns-manage-hosts"
-          onClick={() => dispatch({ type: "SET_SCREEN", screen: "settings" })}
+        {/* Informational mono note */}
+        <div
+          className="mono"
           style={{
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            fontSize: 12,
+            fontSize: 10.5,
             color: "var(--txt3)",
-            fontFamily: "inherit",
-            padding: 0,
+            flex: 1,
+            fontFamily: "var(--font-mono, monospace)",
           }}
         >
-          Manage hosts →
+          Runs over your existing SSH config · nothing installed inbound
+        </div>
+
+        {/* Cancel */}
+        <button
+          onClick={close}
+          disabled={busy}
+          style={{
+            fontFamily: "inherit",
+            fontWeight: 600,
+            fontSize: 12.5,
+            padding: "9px 16px",
+            borderRadius: 9,
+            border: "1px solid var(--border2)",
+            background: "var(--panel2)",
+            color: "var(--txt2)",
+            cursor: busy ? "not-allowed" : "pointer",
+            opacity: busy ? 0.5 : 1,
+          }}
+        >
+          Cancel
         </button>
 
-        <div style={{ display: "flex", gap: 10 }}>
-          <Button variant="ghost" size="md" onClick={close} disabled={busy}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            size="md"
-            data-testid="ns-launch-btn"
-            onClick={handleLaunch}
-            disabled={busy || !project.trim()}
-          >
-            Launch
-          </Button>
-        </div>
+        {/* Launch */}
+        <button
+          data-testid="ns-launch-btn"
+          onClick={handleLaunch}
+          disabled={busy || !project.trim()}
+          style={{
+            fontFamily: "inherit",
+            fontWeight: 700,
+            fontSize: 12.5,
+            padding: "9px 20px",
+            borderRadius: 9,
+            border: "none",
+            background: "var(--accent)",
+            color: "#fff",
+            cursor: busy || !project.trim() ? "not-allowed" : "pointer",
+            opacity: busy || !project.trim() ? 0.5 : 1,
+          }}
+        >
+          Launch session →
+        </button>
       </div>
     </Modal>
   );

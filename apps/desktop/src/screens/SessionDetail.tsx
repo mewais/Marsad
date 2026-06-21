@@ -112,11 +112,12 @@ export function SessionDetail() {
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 14,
+                gap: 0,
                 marginTop: 7,
                 color: "var(--txt3)",
                 fontSize: 11.5,
                 flexWrap: "wrap",
+                rowGap: 4,
               }}
             >
               <span>
@@ -125,13 +126,19 @@ export function SessionDetail() {
                   : "○"}{" "}
                 {host_label}
               </span>
+              <span style={{ margin: "0 8px", opacity: 0.4 }}>·</span>
               <span>⎇ {branch}</span>
+              <span style={{ margin: "0 8px", opacity: 0.4 }}>·</span>
               <span>{selectedSession.project}</span>
+              <span style={{ margin: "0 8px", opacity: 0.4 }}>·</span>
               <span>{model}</span>
               {ctx_warn && (
-                <span style={{ color: "var(--needs)" }}>
-                  ⚠ {context_pct}% ctx
-                </span>
+                <>
+                  <span style={{ margin: "0 8px", opacity: 0.4 }}>·</span>
+                  <span style={{ color: "var(--needs)" }}>
+                    ⚠ {context_pct}% ctx
+                  </span>
+                </>
               )}
             </div>
           </div>

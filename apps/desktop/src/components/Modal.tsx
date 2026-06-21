@@ -28,10 +28,14 @@ export function Modal({ open, onClose, children, width = 560 }: ModalProps) {
         position: "fixed",
         inset: 0,
         zIndex: 100,
-        background: "rgba(0,0,0,0.55)",
+        // Design backdrop: deep + slightly blurred (matches GateOverlay).
+        background: "rgba(5,7,10,0.62)",
+        backdropFilter: "blur(3px)",
+        WebkitBackdropFilter: "blur(3px)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
+        padding: 32,
       }}
     >
       <div
@@ -39,11 +43,12 @@ export function Modal({ open, onClose, children, width = 560 }: ModalProps) {
         style={{
           width,
           maxWidth: "90vw",
-          maxHeight: "85vh",
+          maxHeight: "88vh",
           overflowY: "auto",
-          background: "var(--elev)",
+          // Design modal surface is --panel (not --elev), 18px radius.
+          background: "var(--panel)",
           border: "1px solid var(--border2)",
-          borderRadius: 16,
+          borderRadius: 18,
           boxShadow: "var(--shadow)",
           animation: "slideup 0.15s ease",
         }}

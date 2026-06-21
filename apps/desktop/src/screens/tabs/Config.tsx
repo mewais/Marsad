@@ -11,9 +11,9 @@ import { useVm } from "../../bridge/useVm";
 // ---------------------------------------------------------------------------
 
 const MODEL_OPTIONS = [
-  { id: "claude-haiku-4-5", label: "Haiku" },
-  { id: "claude-sonnet-4-5", label: "Sonnet" },
-  { id: "claude-opus-4-5", label: "Opus" },
+  { id: "claude-opus-4-5", label: "Claude Opus 4.6" },
+  { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.6" },
+  { id: "claude-haiku-4-5", label: "Claude Haiku 4" },
 ] as const;
 
 type PostureId = "ask" | "auto" | "full";
@@ -25,31 +25,31 @@ const POSTURE_OPTIONS: {
 }[] = [
   {
     id: "ask",
-    label: "Ask always",
-    desc: "Gate every tool call and file edit — maximum control.",
+    label: "Ask every time",
+    desc: "Pause for approval before any action with side effects.",
   },
   {
     id: "auto",
-    label: "Auto-approve safe ops",
-    desc: "Allow read-only tools automatically; gate writes and commands.",
+    label: "Auto-approve safe actions",
+    desc: "Reads and edits run freely; commands & writes still ask.",
   },
   {
     id: "full",
-    label: "Full auto",
-    desc: "Approve all operations without prompting — fastest, least safe.",
+    label: "Full autonomy",
+    desc: "Act without asking. Use only in throwaway sandboxes.",
   },
 ];
 
 const TOOL_CHIPS = [
-  "bash",
-  "read_file",
-  "write_file",
-  "web_search",
-  "git",
-  "mcp",
+  { id: "bash", label: "Bash" },
+  { id: "edit", label: "Edit" },
+  { id: "read", label: "Read" },
+  { id: "web_search", label: "WebSearch" },
+  { id: "git", label: "Git" },
+  { id: "mcp", label: "MCP·postgres" },
 ] as const;
 
-type ToolId = (typeof TOOL_CHIPS)[number];
+type ToolId = (typeof TOOL_CHIPS)[number]["id"];
 
 // ---------------------------------------------------------------------------
 // ConfigTab
@@ -64,7 +64,7 @@ export function ConfigTab() {
   const [selectedModel, setSelectedModel] = useState(initialModel);
   const [posture, setPosture] = useState<PostureId>("ask");
   const [activeTools, setActiveTools] = useState<Set<ToolId>>(
-    new Set(["bash", "read_file", "write_file", "git"])
+    new Set(["bash", "edit", "read", "git"])
   );
 
   function toggleTool(tool: ToolId) {
@@ -167,7 +167,7 @@ export function ConfigTab() {
                     border: active
                       ? "1px solid var(--accent)"
                       : "1px solid var(--border)",
-                    background: active ? "var(--accent-bg)" : "transparent",
+                    background: active ? "var(--accent-bg)" : "var(--panel2)",
                   }}
                 >
                   {/* Radio dot */}
@@ -220,12 +220,12 @@ export function ConfigTab() {
           </div>
           <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
             {TOOL_CHIPS.map((tc) => {
-              const active = activeTools.has(tc);
+              const active = activeTools.has(tc.id);
               return (
                 <span
-                  key={tc}
-                  data-testid={`tool-chip-${tc}`}
-                  onClick={() => toggleTool(tc)}
+                  key={tc.id}
+                  data-testid={`tool-chip-${tc.id}`}
+                  onClick={() => toggleTool(tc.id)}
                   style={{
                     fontFamily: "inherit",
                     fontSize: 11.5,
@@ -236,13 +236,13 @@ export function ConfigTab() {
                     border: active
                       ? "1px solid var(--accent)"
                       : "1px solid var(--border)",
-                    background: active ? "var(--accent-bg)" : "transparent",
-                    color: active ? "var(--accent2)" : "var(--txt2)",
+                    background: active ? "var(--accent-bg)" : "var(--panel2)",
+                    color: active ? "var(--accent2)" : "var(--txt3)",
                     userSelect: "none" as const,
                   }}
                 >
                   {active ? "● " : "○ "}
-                  {tc}
+                  {tc.label}
                 </span>
               );
             })}
