@@ -29,7 +29,11 @@ jobs:
             echo "::endgroup::"
           done
       - name: Agent block — unit logic coverage (non-IO)
-        run: cargo llvm-cov -p marsad-agent --fail-under-lines 100 --fail-under-regions 100
+        # Exclude src/main.rs: it is the daemon entry point (blocking socket/pipe
+        # real-IO), compiled to an empty stub under cfg(coverage) and exercised
+        # by the live i09 integration test, not the unit suite. The library
+        # surface (lib.rs) must still be a strict 100%.
+        run: cargo llvm-cov -p marsad-agent --fail-under-lines 100 --fail-under-regions 100 --ignore-filename-regex 'src/main\.rs'
 
   rust-lint:
     name: fmt + clippy

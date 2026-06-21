@@ -11,7 +11,13 @@ description = "Detached supervisor daemon: owns claude processes, serves IPC, fi
 # cargo-llvm-cov does not instrument the binary entry point (which is
 # unreachable from unit tests and would permanently show 0% coverage).
 # The binary is declared explicitly below so the crate still ships a daemon.
+# Under `cfg(coverage)` (set by cargo-llvm-cov) `main` compiles to an empty
+# stub (see src/main.rs), so the measured surface stays 100%.
 autobins = false
+
+[[bin]]
+name = "marsad-agent"
+path = "src/main.rs"
 
 [dependencies]
 serde = { workspace = true }
