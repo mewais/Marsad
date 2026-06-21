@@ -2,18 +2,32 @@
 // Tests: cell_style for each Sig variant, split_side_by_side with a mixed diff,
 //        unified row ordering, context lines appear on BOTH sides.
 
-use marsad_diff::{cell_style, split_side_by_side, unified, Cell, CellKind, DiffLine, Sig, SideRow, UnifiedRow};
+use marsad_diff::{
+    cell_style, split_side_by_side, unified, CellKind, DiffLine, SideRow, Sig, UnifiedRow,
+};
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 fn ctx(ln: &str, text: &str) -> DiffLine {
-    DiffLine { sig: Sig::Context, text: text.to_string(), ln: ln.to_string() }
+    DiffLine {
+        sig: Sig::Context,
+        text: text.to_string(),
+        ln: ln.to_string(),
+    }
 }
 fn add(ln: &str, text: &str) -> DiffLine {
-    DiffLine { sig: Sig::Add, text: text.to_string(), ln: ln.to_string() }
+    DiffLine {
+        sig: Sig::Add,
+        text: text.to_string(),
+        ln: ln.to_string(),
+    }
 }
 fn del(ln: &str, text: &str) -> DiffLine {
-    DiffLine { sig: Sig::Del, text: text.to_string(), ln: ln.to_string() }
+    DiffLine {
+        sig: Sig::Del,
+        text: text.to_string(),
+        ln: ln.to_string(),
+    }
 }
 
 // ── cell_style: each Sig variant ────────────────────────────────────────────
@@ -172,7 +186,10 @@ fn types_derive_clone_and_partial_eq() {
     let cell = cell_style(Some(&line));
     assert_eq!(cell.clone(), cell);
 
-    let row = SideRow { left: cell.clone(), right: cell.clone() };
+    let row = SideRow {
+        left: cell.clone(),
+        right: cell.clone(),
+    };
     assert_eq!(row.clone(), row);
 
     let urow = UnifiedRow { cell: cell.clone() };

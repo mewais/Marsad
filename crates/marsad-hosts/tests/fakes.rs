@@ -34,7 +34,10 @@ fn fake_ssh_runner_implements_ssh_runner_trait() {
 #[test]
 fn fake_runner_returns_scripted_ok_output() {
     let mut fake = FakeSshRunner::new();
-    fake.respond("user@target.example.com", Ok("hello from target".to_string()));
+    fake.respond(
+        "user@target.example.com",
+        Ok("hello from target".to_string()),
+    );
     let result = fake.run("user@target.example.com", "echo hello");
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "hello from target");
@@ -85,7 +88,11 @@ fn health_check_connected_via_fake_ok() {
     fake.respond("user@alive.example.com", Ok("alive".to_string()));
     let runner = Box::new(fake);
     let mut reg = HostRegistry::new(runner);
-    let id = reg.add("alive", "user@alive.example.com").unwrap().id.clone();
+    let id = reg
+        .add("alive", "user@alive.example.com")
+        .unwrap()
+        .id
+        .clone();
     assert_eq!(reg.health_check(&id), HostStatus::Connected);
 }
 
@@ -122,7 +129,11 @@ fn health_check_reconnecting_via_fake_err_non_unreachable() {
     );
     let runner = Box::new(fake);
     let mut reg = HostRegistry::new(runner);
-    let id = reg.add("flaky", "user@flaky.example.com").unwrap().id.clone();
+    let id = reg
+        .add("flaky", "user@flaky.example.com")
+        .unwrap()
+        .id
+        .clone();
     assert_eq!(reg.health_check(&id), HostStatus::Reconnecting);
 }
 

@@ -534,23 +534,19 @@ impl Store {
             .iter()
             .filter_map(|sess_id| {
                 let sess_key = format!("{}{}", PREFIX_SESSION, sess_id);
-                self.backend
-                    .read(&sess_key)
-                    .ok()
-                    .flatten()
-                    .map(|sb| {
-                        let sess: PersistedSession = decode_payload(&sb);
-                        ExportSession {
-                            id: sess.id,
-                            session_id: sess.session_id,
-                            name: sess.name,
-                            host_id: sess.host_id,
-                            project: sess.project,
-                            branch: sess.branch,
-                            model: sess.model,
-                            last_phase: sess.last_phase,
-                        }
-                    })
+                self.backend.read(&sess_key).ok().flatten().map(|sb| {
+                    let sess: PersistedSession = decode_payload(&sb);
+                    ExportSession {
+                        id: sess.id,
+                        session_id: sess.session_id,
+                        name: sess.name,
+                        host_id: sess.host_id,
+                        project: sess.project,
+                        branch: sess.branch,
+                        model: sess.model,
+                        last_phase: sess.last_phase,
+                    }
+                })
             })
             .collect();
 

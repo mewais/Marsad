@@ -103,10 +103,7 @@ fn proc_address_space_limit_bytes() -> u64 {
 /// even when physical RAM is ample.
 fn enough_memory_for_multi_session() -> bool {
     // Check 1: physical memory available.
-    let content = match std::fs::read_to_string("/proc/meminfo") {
-        Ok(c) => c,
-        Err(_) => String::new(), // unreadable → skip this check
-    };
+    let content = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
     for line in content.lines() {
         if line.starts_with("MemAvailable:") {
             // Format: "MemAvailable:   12345678 kB"

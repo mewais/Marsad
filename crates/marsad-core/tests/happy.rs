@@ -10,7 +10,7 @@
 //! These tests WILL fail to compile until the code-agent implements `marsad_core`.
 //! That is the expected tests-first compile-failure signal.
 
-use marsad_core::{Core, CoreConfig, CoreError, LaunchSpec, Posture, VmUpdate};
+use marsad_core::{Core, CoreConfig, LaunchSpec, Posture, VmUpdate};
 use marsad_gates::{approve, Gate};
 use marsad_transport::LoopbackFake;
 use marsad_viewmodel::SlashCmd;
@@ -97,11 +97,16 @@ fn launch_session_returns_id_and_sends_ipc() {
         posture: Posture::Ask,
         first_prompt: None,
     };
-    let id = core.launch_session(spec).expect("launch_session should succeed");
+    let id = core
+        .launch_session(spec)
+        .expect("launch_session should succeed");
     assert!(!id.is_empty(), "session id must not be empty");
 
     let outbound = peer.drain_outbound();
-    assert!(!outbound.is_empty(), "launch_session must emit an outbound IPC line");
+    assert!(
+        !outbound.is_empty(),
+        "launch_session must emit an outbound IPC line"
+    );
     let line = &outbound[0];
     assert!(
         line.contains("launch") || line.contains("Launch"),
@@ -128,7 +133,9 @@ fn launch_session_with_first_prompt_includes_prompt_in_ipc() {
     assert!(!outbound.is_empty());
     let combined = outbound.join(" ");
     assert!(
-        combined.contains("Hello agent") || combined.contains("first_prompt") || combined.contains("prompt"),
+        combined.contains("Hello agent")
+            || combined.contains("first_prompt")
+            || combined.contains("prompt"),
         "outbound should encode the first_prompt, got: {combined}"
     );
 }
@@ -155,9 +162,13 @@ fn resume_session_sends_ipc() {
         .expect("launch");
     let _ = peer.drain_outbound(); // consume launch IPC
 
-    core.resume_session(&id).expect("resume_session should succeed for known id");
+    core.resume_session(&id)
+        .expect("resume_session should succeed for known id");
     let outbound = peer.drain_outbound();
-    assert!(!outbound.is_empty(), "resume_session must emit an outbound IPC line");
+    assert!(
+        !outbound.is_empty(),
+        "resume_session must emit an outbound IPC line"
+    );
     let line = &outbound[0];
     assert!(
         line.contains("resume") || line.contains("Resume"),
@@ -183,9 +194,13 @@ fn attach_session_sends_ipc() {
         .expect("launch");
     let _ = peer.drain_outbound();
 
-    core.attach_session(&id).expect("attach_session should succeed for known id");
+    core.attach_session(&id)
+        .expect("attach_session should succeed for known id");
     let outbound = peer.drain_outbound();
-    assert!(!outbound.is_empty(), "attach_session must emit an outbound IPC line");
+    assert!(
+        !outbound.is_empty(),
+        "attach_session must emit an outbound IPC line"
+    );
     let line = &outbound[0];
     assert!(
         line.contains("attach") || line.contains("Attach"),
@@ -211,9 +226,13 @@ fn stop_session_sends_ipc() {
         .expect("launch");
     let _ = peer.drain_outbound();
 
-    core.stop_session(&id).expect("stop_session should succeed for known id");
+    core.stop_session(&id)
+        .expect("stop_session should succeed for known id");
     let outbound = peer.drain_outbound();
-    assert!(!outbound.is_empty(), "stop_session must emit an outbound IPC line");
+    assert!(
+        !outbound.is_empty(),
+        "stop_session must emit an outbound IPC line"
+    );
     let line = &outbound[0];
     assert!(
         line.contains("stop") || line.contains("Stop"),
@@ -239,9 +258,13 @@ fn send_prompt_sends_ipc() {
         .expect("launch");
     let _ = peer.drain_outbound();
 
-    core.send_prompt(&id, "What is 2+2?").expect("send_prompt should succeed");
+    core.send_prompt(&id, "What is 2+2?")
+        .expect("send_prompt should succeed");
     let outbound = peer.drain_outbound();
-    assert!(!outbound.is_empty(), "send_prompt must emit an outbound IPC line");
+    assert!(
+        !outbound.is_empty(),
+        "send_prompt must emit an outbound IPC line"
+    );
     let line = &outbound[0];
     assert!(
         line.contains("What is 2+2?") || line.contains("prompt") || line.contains("Prompt"),
@@ -269,7 +292,10 @@ fn interrupt_sends_ipc() {
 
     core.interrupt(&id).expect("interrupt should succeed");
     let outbound = peer.drain_outbound();
-    assert!(!outbound.is_empty(), "interrupt must emit an outbound IPC line");
+    assert!(
+        !outbound.is_empty(),
+        "interrupt must emit an outbound IPC line"
+    );
     let line = &outbound[0];
     assert!(
         line.contains("interrupt") || line.contains("Interrupt"),
@@ -302,13 +328,20 @@ fn answer_gate_sends_ipc_and_routes_to_one_session() {
         explanation: "directory listing".to_string(),
     };
     let decision = approve(&id, &gate);
-    core.answer_gate(decision).expect("answer_gate should succeed");
+    core.answer_gate(decision)
+        .expect("answer_gate should succeed");
 
     let outbound = peer.drain_outbound();
-    assert!(!outbound.is_empty(), "answer_gate must emit an outbound IPC line");
+    assert!(
+        !outbound.is_empty(),
+        "answer_gate must emit an outbound IPC line"
+    );
     let combined = outbound.join(" ");
     assert!(
-        combined.contains("gate") || combined.contains("Gate") || combined.contains("answer") || combined.contains("Answer"),
+        combined.contains("gate")
+            || combined.contains("Gate")
+            || combined.contains("answer")
+            || combined.contains("Answer"),
         "outbound must reference gate answer, got: {combined}"
     );
 }
@@ -331,9 +364,13 @@ fn run_slash_sends_ipc() {
         .expect("launch");
     let _ = peer.drain_outbound();
 
-    core.run_slash(&id, SlashCmd::Clear).expect("run_slash should succeed");
+    core.run_slash(&id, SlashCmd::Clear)
+        .expect("run_slash should succeed");
     let outbound = peer.drain_outbound();
-    assert!(!outbound.is_empty(), "run_slash must emit an outbound IPC line");
+    assert!(
+        !outbound.is_empty(),
+        "run_slash must emit an outbound IPC line"
+    );
     let combined = outbound.join(" ");
     assert!(
         combined.contains("clear") || combined.contains("Clear") || combined.contains("slash"),
@@ -362,7 +399,8 @@ fn set_workspace_sends_ipc() {
         .expect("launch");
     let _ = peer.drain_outbound();
 
-    core.set_workspace(&id).expect("set_workspace should succeed");
+    core.set_workspace(&id)
+        .expect("set_workspace should succeed");
     let outbound = peer.drain_outbound();
     // set_workspace may or may not produce outbound IPC; what matters is no panic and no error
     let _ = outbound;
@@ -387,11 +425,19 @@ fn on_agent_line_init_yields_session_vm_update() {
         .expect("launch");
 
     let line = ipc_agent_event_system_init(&id);
-    let updates = core.on_agent_line(&line).expect("on_agent_line must succeed for system_init");
-    assert!(!updates.is_empty(), "system_init must produce at least one VmUpdate");
+    let updates = core
+        .on_agent_line(&line)
+        .expect("on_agent_line must succeed for system_init");
+    assert!(
+        !updates.is_empty(),
+        "system_init must produce at least one VmUpdate"
+    );
     // Must include a Session update
     let has_session = updates.iter().any(|u| matches!(u, VmUpdate::Session(_)));
-    assert!(has_session, "system_init must produce a VmUpdate::Session, got: {updates:?}");
+    assert!(
+        has_session,
+        "system_init must produce a VmUpdate::Session, got: {updates:?}"
+    );
 }
 
 #[test]
@@ -411,9 +457,14 @@ fn on_agent_line_assistant_yields_session_vm_update() {
     let _ = core.on_agent_line(&ipc_agent_event_system_init(&id));
 
     let line = ipc_agent_event_assistant(&id, "msg-001");
-    let updates = core.on_agent_line(&line).expect("on_agent_line must succeed for assistant");
+    let updates = core
+        .on_agent_line(&line)
+        .expect("on_agent_line must succeed for assistant");
     let has_session = updates.iter().any(|u| matches!(u, VmUpdate::Session(_)));
-    assert!(has_session, "assistant event must produce a VmUpdate::Session, got: {updates:?}");
+    assert!(
+        has_session,
+        "assistant event must produce a VmUpdate::Session, got: {updates:?}"
+    );
 }
 
 #[test]
@@ -432,9 +483,14 @@ fn on_agent_line_control_request_yields_session_needs_update() {
     let _ = core.on_agent_line(&ipc_agent_event_system_init(&id));
 
     let line = ipc_agent_event_control_request(&id, "req-1");
-    let updates = core.on_agent_line(&line).expect("on_agent_line must succeed for control_request");
+    let updates = core
+        .on_agent_line(&line)
+        .expect("on_agent_line must succeed for control_request");
     let has_session = updates.iter().any(|u| matches!(u, VmUpdate::Session(_)));
-    assert!(has_session, "control_request must produce a VmUpdate::Session (Needs phase)");
+    assert!(
+        has_session,
+        "control_request must produce a VmUpdate::Session (Needs phase)"
+    );
 }
 
 #[test]
@@ -454,9 +510,14 @@ fn on_agent_line_result_success_yields_done_update() {
     let _ = core.on_agent_line(&ipc_agent_event_assistant(&id, "msg-x"));
 
     let line = ipc_agent_event_result_success(&id);
-    let updates = core.on_agent_line(&line).expect("on_agent_line must succeed for result");
+    let updates = core
+        .on_agent_line(&line)
+        .expect("on_agent_line must succeed for result");
     let has_session = updates.iter().any(|u| matches!(u, VmUpdate::Session(_)));
-    assert!(has_session, "result/success must produce a VmUpdate::Session (Done phase)");
+    assert!(
+        has_session,
+        "result/success must produce a VmUpdate::Session (Done phase)"
+    );
 }
 
 #[test]
@@ -484,15 +545,23 @@ fn on_agent_line_full_lifecycle_produces_overview_updates() {
     .collect();
 
     // Must have produced at least Session updates across the sequence
-    let session_count = all_updates.iter().filter(|u| matches!(u, VmUpdate::Session(_))).count();
+    let session_count = all_updates
+        .iter()
+        .filter(|u| matches!(u, VmUpdate::Session(_)))
+        .count();
     assert!(
         session_count >= 3,
         "full lifecycle must produce multiple VmUpdate::Session, got {session_count}"
     );
 
     // Must also produce at least one Overview update
-    let has_overview = all_updates.iter().any(|u| matches!(u, VmUpdate::Overview(_)));
-    assert!(has_overview, "lifecycle must produce at least one VmUpdate::Overview");
+    let has_overview = all_updates
+        .iter()
+        .any(|u| matches!(u, VmUpdate::Overview(_)));
+    assert!(
+        has_overview,
+        "lifecycle must produce at least one VmUpdate::Overview"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -544,7 +613,11 @@ fn core_config_fields_are_accessible() {
 
 #[test]
 fn launch_spec_fields_all_postures() {
-    for posture in [Posture::Ask, Posture::AutoApproveSafe, Posture::FullAutonomy] {
+    for posture in [
+        Posture::Ask,
+        Posture::AutoApproveSafe,
+        Posture::FullAutonomy,
+    ] {
         let spec = LaunchSpec {
             project: "p".to_string(),
             host_id: "h".to_string(),

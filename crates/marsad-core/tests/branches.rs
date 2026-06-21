@@ -76,7 +76,9 @@ fn ipc_result_success(session_id: &str) -> String {
 #[test]
 fn posture_ask_launches_successfully() {
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(spec("p", Posture::Ask)).expect("launch Ask");
+    let id = core
+        .launch_session(spec("p", Posture::Ask))
+        .expect("launch Ask");
     assert!(!id.is_empty());
 }
 
@@ -105,19 +107,29 @@ fn posture_full_autonomy_launches_successfully() {
 #[test]
 fn vm_update_overview_variant_reachable() {
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(spec("proj-ov", Posture::Ask)).expect("launch");
+    let id = core
+        .launch_session(spec("proj-ov", Posture::Ask))
+        .expect("launch");
     let updates = core.on_agent_line(&ipc_init(&id)).expect("on_agent_line");
     let has_overview = updates.iter().any(|u| matches!(u, VmUpdate::Overview(_)));
-    assert!(has_overview, "VmUpdate::Overview must be reachable after a system/init event");
+    assert!(
+        has_overview,
+        "VmUpdate::Overview must be reachable after a system/init event"
+    );
 }
 
 #[test]
 fn vm_update_session_variant_reachable() {
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(spec("proj-sess", Posture::Ask)).expect("launch");
+    let id = core
+        .launch_session(spec("proj-sess", Posture::Ask))
+        .expect("launch");
     let updates = core.on_agent_line(&ipc_init(&id)).expect("on_agent_line");
     let has_session = updates.iter().any(|u| matches!(u, VmUpdate::Session(_)));
-    assert!(has_session, "VmUpdate::Session must be reachable after system/init");
+    assert!(
+        has_session,
+        "VmUpdate::Session must be reachable after system/init"
+    );
 }
 
 #[test]
@@ -141,7 +153,9 @@ fn vm_update_host_health_variant_is_constructible() {
 
 fn slash_roundtrip(cmd: SlashCmd) {
     let (mut core, mut peer) = make_core();
-    let id = core.launch_session(spec("slash-proj", Posture::Ask)).expect("launch");
+    let id = core
+        .launch_session(spec("slash-proj", Posture::Ask))
+        .expect("launch");
     let _ = peer.drain_outbound();
     core.run_slash(&id, cmd).expect("run_slash");
     let out = peer.drain_outbound();
@@ -206,7 +220,9 @@ fn run_slash_help() {
 #[test]
 fn run_slash_unknown_dispatches_without_panic() {
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(spec("slash-unk", Posture::Ask)).expect("launch");
+    let id = core
+        .launch_session(spec("slash-unk", Posture::Ask))
+        .expect("launch");
     // Unknown slash commands must not panic; may succeed or return an error
     let _result = core.run_slash(&id, SlashCmd::Unknown("/foobar".to_string()));
 }
@@ -218,14 +234,21 @@ fn run_slash_unknown_dispatches_without_panic() {
 #[test]
 fn set_workspace_rescopes_snapshot() {
     let (mut core, _peer) = make_core();
-    let id_a = core.launch_session(spec("proj-ws-a", Posture::Ask)).expect("launch a");
-    let id_b = core.launch_session(spec("proj-ws-b", Posture::Ask)).expect("launch b");
+    let id_a = core
+        .launch_session(spec("proj-ws-a", Posture::Ask))
+        .expect("launch a");
+    let id_b = core
+        .launch_session(spec("proj-ws-b", Posture::Ask))
+        .expect("launch b");
 
     // Before set_workspace, snapshot has both sessions
     let snap_before = core.snapshot();
     let has_a = snap_before.sessions.iter().any(|s| s.id == id_a);
     let has_b = snap_before.sessions.iter().any(|s| s.id == id_b);
-    assert!(has_a && has_b, "snapshot must contain both sessions before workspace switch");
+    assert!(
+        has_a && has_b,
+        "snapshot must contain both sessions before workspace switch"
+    );
 
     // Switch workspace to id_a's context
     core.set_workspace(&id_a).expect("set_workspace");
@@ -260,7 +283,10 @@ fn answer_gate_idempotent_second_call_is_noop() {
     let d1 = approve(&id, &gate);
     core.answer_gate(d1.clone()).expect("first answer_gate");
     let first_outbound = peer.drain_outbound();
-    assert!(!first_outbound.is_empty(), "first answer_gate must emit outbound IPC");
+    assert!(
+        !first_outbound.is_empty(),
+        "first answer_gate must emit outbound IPC"
+    );
 
     // Second answer with the SAME decision id — must be a no-op (idempotent via DecisionLedger)
     let d2 = approve(&id, &gate); // same gate → same DecisionId
@@ -289,7 +315,9 @@ fn answer_gate_different_decisions_are_not_idempotent() {
     // OR the second one for a different session may route differently.
     // We test: two approve calls produce the same DecisionId, so the second is a no-op.
     let (mut core, mut peer) = make_core();
-    let id = core.launch_session(spec("proj-gate2", Posture::Ask)).expect("launch");
+    let id = core
+        .launch_session(spec("proj-gate2", Posture::Ask))
+        .expect("launch");
     let _ = peer.drain_outbound();
 
     let gate = Gate::Plan {
@@ -309,14 +337,12 @@ fn answer_gate_different_decisions_are_not_idempotent() {
     // So approve and reject produce the SAME id → second is idempotent/no-op.
     let result = core.answer_gate(d2);
     let out2 = peer.drain_outbound();
-    match result {
-        Ok(()) => {
-            assert!(
-                out2.is_empty(),
-                "reject on same gate after approve must be no-op, got: {out2:?}"
-            );
-        }
-        Err(_) => {} // DuplicateDecision error is acceptable
+    // DuplicateDecision error is acceptable; if Ok, output must be empty.
+    if let Ok(()) = result {
+        assert!(
+            out2.is_empty(),
+            "reject on same gate after approve must be no-op, got: {out2:?}"
+        );
     }
 }
 
@@ -328,36 +354,38 @@ fn answer_gate_different_decisions_are_not_idempotent() {
 fn concurrent_sessions_do_not_cross_route() {
     let (mut core, _peer) = make_core();
 
-    let id_x = core.launch_session(spec("session-x", Posture::Ask)).expect("launch x");
-    let id_y = core.launch_session(spec("session-y", Posture::Ask)).expect("launch y");
+    let id_x = core
+        .launch_session(spec("session-x", Posture::Ask))
+        .expect("launch x");
+    let id_y = core
+        .launch_session(spec("session-y", Posture::Ask))
+        .expect("launch y");
 
     // Feed init events for both sessions
     let _ = core.on_agent_line(&ipc_init(&id_x)).expect("init x");
     let _ = core.on_agent_line(&ipc_init(&id_y)).expect("init y");
 
     // Feed assistant event only to x
-    let updates_x = core.on_agent_line(&ipc_assistant(&id_x, "msg-001")).expect("asst x");
+    let updates_x = core
+        .on_agent_line(&ipc_assistant(&id_x, "msg-001"))
+        .expect("asst x");
 
     // Session-x update must reference x's id, not y's
     for u in &updates_x {
         if let VmUpdate::Session(sv) = u {
-            assert_ne!(
-                sv.id, id_y,
-                "session x update must not have session y's id"
-            );
+            assert_ne!(sv.id, id_y, "session x update must not have session y's id");
         }
     }
 
     // Feed result only to y
-    let updates_y = core.on_agent_line(&ipc_result_success(&id_y)).expect("result y");
+    let updates_y = core
+        .on_agent_line(&ipc_result_success(&id_y))
+        .expect("result y");
 
     // Session-y update must reference y's id
     for u in &updates_y {
         if let VmUpdate::Session(sv) = u {
-            assert_ne!(
-                sv.id, id_x,
-                "session y update must not have session x's id"
-            );
+            assert_ne!(sv.id, id_x, "session y update must not have session x's id");
         }
     }
 }
@@ -366,8 +394,12 @@ fn concurrent_sessions_do_not_cross_route() {
 fn snapshot_contains_all_launched_sessions() {
     let (mut core, _peer) = make_core();
     let id1 = core.launch_session(spec("s1", Posture::Ask)).expect("l1");
-    let id2 = core.launch_session(spec("s2", Posture::AutoApproveSafe)).expect("l2");
-    let id3 = core.launch_session(spec("s3", Posture::FullAutonomy)).expect("l3");
+    let id2 = core
+        .launch_session(spec("s2", Posture::AutoApproveSafe))
+        .expect("l2");
+    let id3 = core
+        .launch_session(spec("s3", Posture::FullAutonomy))
+        .expect("l3");
 
     let snap = core.snapshot();
     let ids: Vec<&str> = snap.sessions.iter().map(|s| s.id.as_str()).collect();
@@ -385,14 +417,25 @@ fn session_update_after_init_reflects_working_phase() {
     use marsad_events::Phase;
 
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(spec("proj-phase", Posture::Ask)).expect("launch");
+    let id = core
+        .launch_session(spec("proj-phase", Posture::Ask))
+        .expect("launch");
 
     let updates = core.on_agent_line(&ipc_init(&id)).expect("init");
     let session_updates: Vec<_> = updates
         .into_iter()
-        .filter_map(|u| if let VmUpdate::Session(sv) = u { Some(sv) } else { None })
+        .filter_map(|u| {
+            if let VmUpdate::Session(sv) = u {
+                Some(sv)
+            } else {
+                None
+            }
+        })
         .collect();
-    assert!(!session_updates.is_empty(), "must have at least one Session update");
+    assert!(
+        !session_updates.is_empty(),
+        "must have at least one Session update"
+    );
     for sv in &session_updates {
         if sv.id == id {
             assert_eq!(
@@ -409,15 +452,27 @@ fn session_update_after_result_reflects_done_phase() {
     use marsad_events::Phase;
 
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(spec("proj-done-ph", Posture::Ask)).expect("launch");
+    let id = core
+        .launch_session(spec("proj-done-ph", Posture::Ask))
+        .expect("launch");
 
     let _ = core.on_agent_line(&ipc_init(&id)).expect("init");
-    let _ = core.on_agent_line(&ipc_assistant(&id, "msg-Z")).expect("asst");
+    let _ = core
+        .on_agent_line(&ipc_assistant(&id, "msg-Z"))
+        .expect("asst");
 
-    let updates = core.on_agent_line(&ipc_result_success(&id)).expect("result");
+    let updates = core
+        .on_agent_line(&ipc_result_success(&id))
+        .expect("result");
     let session_updates: Vec<_> = updates
         .into_iter()
-        .filter_map(|u| if let VmUpdate::Session(sv) = u { Some(sv) } else { None })
+        .filter_map(|u| {
+            if let VmUpdate::Session(sv) = u {
+                Some(sv)
+            } else {
+                None
+            }
+        })
         .collect();
     assert!(!session_updates.is_empty());
     for sv in &session_updates {
@@ -436,14 +491,24 @@ fn session_update_after_control_request_reflects_needs_phase() {
     use marsad_events::Phase;
 
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(spec("proj-needs", Posture::Ask)).expect("launch");
+    let id = core
+        .launch_session(spec("proj-needs", Posture::Ask))
+        .expect("launch");
 
     let _ = core.on_agent_line(&ipc_init(&id)).expect("init");
 
-    let updates = core.on_agent_line(&ipc_control_request(&id, "rq-99")).expect("ctrl");
+    let updates = core
+        .on_agent_line(&ipc_control_request(&id, "rq-99"))
+        .expect("ctrl");
     let session_updates: Vec<_> = updates
         .into_iter()
-        .filter_map(|u| if let VmUpdate::Session(sv) = u { Some(sv) } else { None })
+        .filter_map(|u| {
+            if let VmUpdate::Session(sv) = u {
+                Some(sv)
+            } else {
+                None
+            }
+        })
         .collect();
     assert!(!session_updates.is_empty());
     for sv in &session_updates {
@@ -464,7 +529,9 @@ fn session_update_after_control_request_reflects_needs_phase() {
 #[test]
 fn answer_gate_permission_gate_outbound_references_gate() {
     let (mut core, mut peer) = make_core();
-    let id = core.launch_session(spec("gate-perm", Posture::Ask)).expect("launch");
+    let id = core
+        .launch_session(spec("gate-perm", Posture::Ask))
+        .expect("launch");
     let _ = peer.drain_outbound();
 
     let gate = Gate::Permission {
@@ -482,7 +549,9 @@ fn answer_gate_permission_gate_outbound_references_gate() {
 #[test]
 fn answer_gate_plan_gate_outbound_references_gate() {
     let (mut core, mut peer) = make_core();
-    let id = core.launch_session(spec("gate-plan", Posture::Ask)).expect("launch");
+    let id = core
+        .launch_session(spec("gate-plan", Posture::Ask))
+        .expect("launch");
     let _ = peer.drain_outbound();
 
     let gate = Gate::Plan {
@@ -498,7 +567,9 @@ fn answer_gate_plan_gate_outbound_references_gate() {
 #[test]
 fn answer_gate_edit_gate_outbound_references_gate() {
     let (mut core, mut peer) = make_core();
-    let id = core.launch_session(spec("gate-edit", Posture::Ask)).expect("launch");
+    let id = core
+        .launch_session(spec("gate-edit", Posture::Ask))
+        .expect("launch");
     let _ = peer.drain_outbound();
 
     let gate = Gate::Edit {

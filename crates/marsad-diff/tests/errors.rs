@@ -6,13 +6,25 @@ use marsad_diff::{cell_style, split_side_by_side, unified, CellKind, DiffLine, S
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 fn ctx(ln: &str, text: &str) -> DiffLine {
-    DiffLine { sig: Sig::Context, text: text.to_string(), ln: ln.to_string() }
+    DiffLine {
+        sig: Sig::Context,
+        text: text.to_string(),
+        ln: ln.to_string(),
+    }
 }
 fn add(ln: &str, text: &str) -> DiffLine {
-    DiffLine { sig: Sig::Add, text: text.to_string(), ln: ln.to_string() }
+    DiffLine {
+        sig: Sig::Add,
+        text: text.to_string(),
+        ln: ln.to_string(),
+    }
 }
 fn del(ln: &str, text: &str) -> DiffLine {
-    DiffLine { sig: Sig::Del, text: text.to_string(), ln: ln.to_string() }
+    DiffLine {
+        sig: Sig::Del,
+        text: text.to_string(),
+        ln: ln.to_string(),
+    }
 }
 
 // ── empty input → empty output ───────────────────────────────────────────────

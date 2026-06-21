@@ -106,8 +106,8 @@ fn result_before_system_init_does_not_panic() {
 fn assistant_before_system_init_does_not_panic() {
     let s0 = SessionState::initial();
     let s1 = reduce(s0, stream(&assistant_json("msg-oo")));
-    // tokens must not underflow / go negative (u64 so just must be ≤ MAX)
-    assert!(s1.tokens <= u64::MAX, "token overflow");
+    // assistant_json has input=50, output=10, cache=0 → 60 tokens counted (no dedup yet)
+    assert_eq!(s1.tokens, 60, "token count must reflect assistant usage");
     // context_pct must be valid
     assert!(s1.context_pct <= 100.0, "context_pct exceeded 100");
 }
@@ -140,8 +140,9 @@ fn double_result_does_not_panic_or_go_negative() {
     assert_eq!(s1.phase, Phase::Done);
 
     let s2 = reduce(s1, stream(&result_json("success", false)));
-    // No panic, no token overflow
-    assert!(s2.tokens <= u64::MAX);
+    // reduce_result overwrites (not adds) tokens with authoritative usage:
+    // input=50 + output=10 + cache=0 = 60; same on both results
+    assert_eq!(s2.tokens, 60, "double-result token count must remain 60");
     assert!(
         s2.context_pct <= 100.0,
         "context_pct exceeded 100 on double result: {}",
@@ -174,8 +175,13 @@ fn stale_preserved_by_assistant_stream() {
     s.phase = Phase::Stale;
     // Spec: assistant while Stale is a totality no-op that preserves the phase.
     let s1 = reduce(s, stream(&assistant_json("msg-stale")));
-    assert_eq!(s1.phase, Phase::Stale, "assistant must not escape Stale phase");
-    assert!(s1.tokens <= u64::MAX);
+    assert_eq!(
+        s1.phase,
+        Phase::Stale,
+        "assistant must not escape Stale phase"
+    );
+    // Stale is a no-op: assistant usage must NOT be counted (tokens stay at 0)
+    assert_eq!(s1.tokens, 0, "Stale no-op must not accumulate tokens");
     assert!(s1.context_pct <= 100.0);
 }
 
@@ -187,9 +193,6 @@ fn stale_preserved_by_assistant_stream() {
 fn detached_phase_preserved_on_unknown_event() {
     let mut s = after_init();
     s.phase = Phase::Detached;
-    let s1 = reduce(
-        s,
-        stream(r#"{"type":"unknown_future","x":1}"#),
-    );
+    let s1 = reduce(s, stream(r#"{"type":"unknown_future","x":1}"#));
     assert_eq!(s1.phase, Phase::Detached);
 }

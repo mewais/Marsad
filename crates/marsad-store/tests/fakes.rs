@@ -28,7 +28,9 @@ fn new_backend_is_empty() {
 #[test]
 fn new_backend_read_returns_none_for_any_key() {
     let b = MemoryBackend::new();
-    let val = b.read("any-key").expect("read on empty backend must not error");
+    let val = b
+        .read("any-key")
+        .expect("read on empty backend must not error");
     assert!(val.is_none(), "read of missing key must return None");
 }
 
@@ -169,7 +171,9 @@ fn delete_existing_key_then_read_returns_none() {
     let b = MemoryBackend::new();
     b.write("del-read", b"payload").expect("write");
     b.delete("del-read").expect("delete");
-    let val = b.read("del-read").expect("read after delete must not error");
+    let val = b
+        .read("del-read")
+        .expect("read after delete must not error");
     assert!(
         val.is_none(),
         "read after delete must return None, got: {val:?}"
@@ -183,7 +187,10 @@ fn delete_existing_key_removes_from_list() {
     b.write("pfx:gone", b"2").expect("write gone");
     b.delete("pfx:gone").expect("delete");
     let keys = b.list("pfx:").expect("list");
-    assert!(keys.contains(&"pfx:keep".to_string()), "pfx:keep must remain");
+    assert!(
+        keys.contains(&"pfx:keep".to_string()),
+        "pfx:keep must remain"
+    );
     assert!(
         !keys.contains(&"pfx:gone".to_string()),
         "pfx:gone must be absent after delete"
@@ -204,8 +211,10 @@ fn delete_missing_key_returns_ok() {
 #[test]
 fn delete_missing_key_twice_both_ok() {
     let b = MemoryBackend::new();
-    b.delete("ghost").expect("first delete of missing must be Ok");
-    b.delete("ghost").expect("second delete of missing must be Ok");
+    b.delete("ghost")
+        .expect("first delete of missing must be Ok");
+    b.delete("ghost")
+        .expect("second delete of missing must be Ok");
 }
 
 // ---------------------------------------------------------------------------
@@ -237,8 +246,14 @@ fn corrupt_does_not_affect_other_keys() {
     b.corrupt("corrupt-target");
 
     // The non-corrupted key must still read fine.
-    let val = b.read("intact-key").expect("read intact key").expect("Some");
-    assert_eq!(val, b"good data", "intact key must not be affected by corrupt()");
+    let val = b
+        .read("intact-key")
+        .expect("read intact key")
+        .expect("Some");
+    assert_eq!(
+        val, b"good data",
+        "intact key must not be affected by corrupt()"
+    );
 }
 
 #[test]
@@ -284,10 +299,7 @@ fn two_memory_backends_are_independent() {
     let b2 = MemoryBackend::new();
     b1.write("shared-key", b"value-in-b1").expect("write b1");
     let val = b2.read("shared-key").expect("read from b2");
-    assert!(
-        val.is_none(),
-        "b2 must not see data written to b1"
-    );
+    assert!(val.is_none(), "b2 must not see data written to b1");
 }
 
 // ---------------------------------------------------------------------------
@@ -297,7 +309,8 @@ fn two_memory_backends_are_independent() {
 #[test]
 fn key_with_colon_separators_works() {
     let b = MemoryBackend::new();
-    b.write("session:host:project:branch:id", b"complex").expect("write");
+    b.write("session:host:project:branch:id", b"complex")
+        .expect("write");
     let keys = b.list("session:host:").expect("list complex prefix");
     assert!(keys.contains(&"session:host:project:branch:id".to_string()));
 }

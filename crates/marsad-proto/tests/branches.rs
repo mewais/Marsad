@@ -144,7 +144,10 @@ fn result_subtype_error_during_execution_parses() {
 fn result_subtype_equality() {
     assert_eq!(ResultSubtype::Success, ResultSubtype::Success);
     assert_ne!(ResultSubtype::Success, ResultSubtype::ErrorMaxTurns);
-    assert_ne!(ResultSubtype::ErrorMaxTurns, ResultSubtype::ErrorDuringExecution);
+    assert_ne!(
+        ResultSubtype::ErrorMaxTurns,
+        ResultSubtype::ErrorDuringExecution
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +161,9 @@ fn content_block_text() {
     match msg {
         StreamMsg::Assistant(a) => {
             assert_eq!(a.message.content.len(), 1);
-            assert!(matches!(&a.message.content[0], ContentBlock::Text { text } if text == "hello"));
+            assert!(
+                matches!(&a.message.content[0], ContentBlock::Text { text } if text == "hello")
+            );
         }
         other => panic!("{other:?}"),
     }
@@ -270,7 +275,10 @@ fn assistant_multiple_content_blocks() {
         StreamMsg::Assistant(a) => {
             assert_eq!(a.message.content.len(), 3);
             assert!(matches!(&a.message.content[0], ContentBlock::Text { .. }));
-            assert!(matches!(&a.message.content[1], ContentBlock::ToolUse { .. }));
+            assert!(matches!(
+                &a.message.content[1],
+                ContentBlock::ToolUse { .. }
+            ));
             assert!(matches!(&a.message.content[2], ContentBlock::Text { .. }));
         }
         other => panic!("{other:?}"),

@@ -158,7 +158,10 @@ fn push_inbound_multiple_frames_at_once() {
     let l1 = b.recv_line().expect("recv 1").expect("not EOF");
     let l2 = b.recv_line().expect("recv 2").expect("not EOF");
     let l3 = b.recv_line().expect("recv 3").expect("not EOF");
-    assert_eq!((l1.as_str(), l2.as_str(), l3.as_str()), ("alpha", "beta", "gamma"));
+    assert_eq!(
+        (l1.as_str(), l2.as_str(), l3.as_str()),
+        ("alpha", "beta", "gamma")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +200,7 @@ fn close_before_connect_no_panic() {
 
 #[test]
 fn transport_is_object_safe() {
-    let (mut a, _b) = LoopbackFake::pair();
+    let (a, _b) = LoopbackFake::pair();
     let _boxed: Box<dyn Transport> = Box::new(a);
     // The mere existence of this code proves object safety.
 }
@@ -251,5 +254,8 @@ fn drain_outbound_empty_initially() {
     let (mut a, _b) = LoopbackFake::pair();
     a.connect().expect("connect");
     let drained = a.drain_outbound();
-    assert!(drained.is_empty(), "drain_outbound before any sends must be empty");
+    assert!(
+        drained.is_empty(),
+        "drain_outbound before any sends must be empty"
+    );
 }

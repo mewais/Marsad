@@ -17,13 +17,25 @@ use marsad_diff::{cell_style, split_side_by_side, unified, CellKind, DiffLine, S
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 fn ctx(ln: &str, text: &str) -> DiffLine {
-    DiffLine { sig: Sig::Context, text: text.to_string(), ln: ln.to_string() }
+    DiffLine {
+        sig: Sig::Context,
+        text: text.to_string(),
+        ln: ln.to_string(),
+    }
 }
 fn add(ln: &str, text: &str) -> DiffLine {
-    DiffLine { sig: Sig::Add, text: text.to_string(), ln: ln.to_string() }
+    DiffLine {
+        sig: Sig::Add,
+        text: text.to_string(),
+        ln: ln.to_string(),
+    }
 }
 fn del(ln: &str, text: &str) -> DiffLine {
-    DiffLine { sig: Sig::Del, text: text.to_string(), ln: ln.to_string() }
+    DiffLine {
+        sig: Sig::Del,
+        text: text.to_string(),
+        ln: ln.to_string(),
+    }
 }
 
 // ── cell_style(None) → Empty padding cell ───────────────────────────────────
@@ -47,12 +59,7 @@ fn cell_style_none_is_empty_kind() {
 
 #[test]
 fn ragged_del_gt_add_exact_rows() {
-    let lines = vec![
-        del("1", "A"),
-        del("2", "B"),
-        del("3", "C"),
-        add("4", "X"),
-    ];
+    let lines = vec![del("1", "A"), del("2", "B"), del("3", "C"), add("4", "X")];
     let rows = split_side_by_side(&lines);
     assert_eq!(rows.len(), 3, "3 rows: max(3 dels, 1 add)");
 
@@ -86,12 +93,7 @@ fn ragged_del_gt_add_exact_rows() {
 
 #[test]
 fn ragged_add_gt_del_exact_rows() {
-    let lines = vec![
-        del("1", "X"),
-        add("2", "A"),
-        add("3", "B"),
-        add("4", "C"),
-    ];
+    let lines = vec![del("1", "X"), add("2", "A"), add("3", "B"), add("4", "C")];
     let rows = split_side_by_side(&lines);
     assert_eq!(rows.len(), 3, "3 rows: max(1 del, 3 adds)");
 
@@ -132,7 +134,11 @@ fn ragged_all_del_no_add() {
     assert_eq!(rows.len(), 4);
     for (i, row) in rows.iter().enumerate() {
         assert_eq!(row.left.kind, CellKind::Del, "row {i} left must be Del");
-        assert_eq!(row.right.kind, CellKind::Empty, "row {i} right must be Empty");
+        assert_eq!(
+            row.right.kind,
+            CellKind::Empty,
+            "row {i} right must be Empty"
+        );
     }
 }
 
@@ -259,7 +265,10 @@ fn unified_interleaved_order_preserved() {
         CellKind::Context,
     ];
     for (i, (row, expected_kind)) in rows.iter().zip(expected.iter()).enumerate() {
-        assert_eq!(row.cell.kind, *expected_kind, "unified row {i} kind mismatch");
+        assert_eq!(
+            row.cell.kind, *expected_kind,
+            "unified row {i} kind mismatch"
+        );
     }
 }
 
@@ -338,11 +347,7 @@ fn ragged_two_del_four_add_exact_rows() {
 
 #[test]
 fn ragged_ln_values_correct() {
-    let lines = vec![
-        del("10", "D"),
-        del("11", "E"),
-        add("20", "A"),
-    ];
+    let lines = vec![del("10", "D"), del("11", "E"), add("20", "A")];
     let rows = split_side_by_side(&lines);
     assert_eq!(rows.len(), 2);
 

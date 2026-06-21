@@ -6,8 +6,7 @@
 //! - deliver via CaptureNotifier and assert delivered()
 
 use marsad_notify::{
-    build_notification, Action, CaptureNotifier, NotifEvent, NotifKind, NotifPrefs, Notifier,
-    Notification, Priority,
+    build_notification, CaptureNotifier, NotifEvent, NotifKind, NotifPrefs, Notifier, Priority,
 };
 
 // ---------------------------------------------------------------------------
@@ -83,7 +82,10 @@ fn build_notification_needs_returns_some_with_default_prefs() {
     let ev = needs_event();
     let prefs = default_prefs();
     let note = build_notification(&ev, &prefs);
-    assert!(note.is_some(), "Needs event with default prefs must produce a notification");
+    assert!(
+        note.is_some(),
+        "Needs event with default prefs must produce a notification"
+    );
 }
 
 #[test]
@@ -98,7 +100,11 @@ fn build_notification_needs_title_and_body() {
 fn build_notification_needs_priority_high() {
     let ev = needs_event();
     let note = build_notification(&ev, &default_prefs()).unwrap();
-    assert_eq!(note.priority, Priority::High, "Needs must map to High priority");
+    assert_eq!(
+        note.priority,
+        Priority::High,
+        "Needs must map to High priority"
+    );
 }
 
 #[test]
@@ -131,7 +137,10 @@ fn build_notification_needs_play_sound_true_with_default_prefs() {
     // sound=true, priority=High, dnd=false → play_sound should be true
     let ev = needs_event();
     let note = build_notification(&ev, &default_prefs()).unwrap();
-    assert!(note.play_sound, "Needs/High + sound on + dnd off must play sound");
+    assert!(
+        note.play_sound,
+        "Needs/High + sound on + dnd off must play sound"
+    );
 }
 
 #[test]
@@ -149,7 +158,10 @@ fn build_notification_needs_kind_field() {
 fn build_notification_error_returns_some_with_default_prefs() {
     let ev = error_event();
     let note = build_notification(&ev, &default_prefs());
-    assert!(note.is_some(), "Error event with default prefs must produce a notification");
+    assert!(
+        note.is_some(),
+        "Error event with default prefs must produce a notification"
+    );
 }
 
 #[test]
@@ -164,7 +176,11 @@ fn build_notification_error_title_and_body() {
 fn build_notification_error_priority_high() {
     let ev = error_event();
     let note = build_notification(&ev, &default_prefs()).unwrap();
-    assert_eq!(note.priority, Priority::High, "Error must map to High priority");
+    assert_eq!(
+        note.priority,
+        Priority::High,
+        "Error must map to High priority"
+    );
 }
 
 #[test]
@@ -185,7 +201,10 @@ fn build_notification_error_actions_open_primary_retry() {
 fn build_notification_error_play_sound_true_with_default_prefs() {
     let ev = error_event();
     let note = build_notification(&ev, &default_prefs()).unwrap();
-    assert!(note.play_sound, "Error/High + sound on + dnd off must play sound");
+    assert!(
+        note.play_sound,
+        "Error/High + sound on + dnd off must play sound"
+    );
 }
 
 #[test]
@@ -203,7 +222,10 @@ fn build_notification_error_kind_field() {
 fn build_notification_done_returns_some_with_default_prefs() {
     let ev = done_event();
     let note = build_notification(&ev, &default_prefs());
-    assert!(note.is_some(), "Done event with default prefs must produce a notification");
+    assert!(
+        note.is_some(),
+        "Done event with default prefs must produce a notification"
+    );
 }
 
 #[test]
@@ -219,7 +241,11 @@ fn build_notification_done_title_body_host() {
 fn build_notification_done_priority_low() {
     let ev = done_event();
     let note = build_notification(&ev, &default_prefs()).unwrap();
-    assert_eq!(note.priority, Priority::Low, "Done must map to Low priority");
+    assert_eq!(
+        note.priority,
+        Priority::Low,
+        "Done must map to Low priority"
+    );
 }
 
 #[test]
@@ -241,7 +267,10 @@ fn build_notification_done_play_sound_false_low_priority() {
     // sound=true but priority=Low → play_sound must be false
     let ev = done_event();
     let note = build_notification(&ev, &default_prefs()).unwrap();
-    assert!(!note.play_sound, "Done/Low priority must not play sound even if sound pref is on");
+    assert!(
+        !note.play_sound,
+        "Done/Low priority must not play sound even if sound pref is on"
+    );
 }
 
 #[test]
@@ -260,7 +289,10 @@ fn build_notification_started_returns_none_with_default_prefs() {
     // started is OFF by default
     let ev = started_event();
     let note = build_notification(&ev, &default_prefs());
-    assert!(note.is_none(), "Started is off by default; must return None");
+    assert!(
+        note.is_none(),
+        "Started is off by default; must return None"
+    );
 }
 
 #[test]
@@ -269,7 +301,10 @@ fn build_notification_started_returns_some_when_enabled() {
     let mut prefs = default_prefs();
     prefs.started = true;
     let note = build_notification(&ev, &prefs);
-    assert!(note.is_some(), "Started with started=true must produce a notification");
+    assert!(
+        note.is_some(),
+        "Started with started=true must produce a notification"
+    );
 }
 
 #[test]
@@ -278,7 +313,11 @@ fn build_notification_started_priority_low() {
     let mut prefs = default_prefs();
     prefs.started = true;
     let note = build_notification(&ev, &prefs).unwrap();
-    assert_eq!(note.priority, Priority::Low, "Started must map to Low priority");
+    assert_eq!(
+        note.priority,
+        Priority::Low,
+        "Started must map to Low priority"
+    );
 }
 
 #[test]
@@ -289,7 +328,10 @@ fn build_notification_started_actions_open_only() {
     let note = build_notification(&ev, &prefs).unwrap();
     assert_eq!(note.actions.len(), 1, "Started must have exactly 1 action");
     assert_eq!(note.actions[0].label, "Open");
-    assert!(!note.actions[0].primary, "Open must not be primary for Started");
+    assert!(
+        !note.actions[0].primary,
+        "Open must not be primary for Started"
+    );
 }
 
 #[test]
@@ -310,7 +352,8 @@ fn capture_notifier_deliver_needs_notification() {
     let ev = needs_event();
     let note = build_notification(&ev, &default_prefs()).unwrap();
     let mut cap = CaptureNotifier::new();
-    cap.deliver(&note).expect("deliver must succeed for CaptureNotifier");
+    cap.deliver(&note)
+        .expect("deliver must succeed for CaptureNotifier");
     assert_eq!(cap.delivered().len(), 1);
     assert_eq!(cap.delivered()[0].title, ev.title);
 }
@@ -348,5 +391,9 @@ fn capture_notifier_deliver_all_kinds() {
         let note = build_notification(ev, &prefs).unwrap();
         cap.deliver(&note).expect("deliver must succeed");
     }
-    assert_eq!(cap.delivered().len(), 4, "All four kinds must be deliverable");
+    assert_eq!(
+        cap.delivered().len(),
+        4,
+        "All four kinds must be deliverable"
+    );
 }

@@ -2,7 +2,7 @@
 // Covers nominal paths for every public fn/variant.
 
 use marsad_format::{
-    ctx_color, fmt_elapsed, fmt_tokens, gate_meta, state_meta, GateMeta, Meta, Phase, Token,
+    ctx_color, fmt_elapsed, fmt_tokens, gate_meta, state_meta, GateMeta, Phase, Token,
 };
 use marsad_gates::{Gate, PlanStep};
 

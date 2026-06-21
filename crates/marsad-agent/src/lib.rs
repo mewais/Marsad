@@ -539,7 +539,7 @@ impl Agent {
     #[cfg(not(coverage))]
     pub fn serve(mut self) -> Result<(), AgentError> {
         use marsad_transport::{LocalIpcListener, Transport};
-        use std::sync::{Arc, Mutex, mpsc};
+        use std::sync::{mpsc, Arc, Mutex};
 
         // ── Bind ──────────────────────────────────────────────────────────────
         let socket_path = match &self.config.listen {
@@ -585,8 +585,7 @@ impl Agent {
         // Arc<Mutex<Vec<Sender>>> — every connected client has one slot.
         // Session FIFO reader threads and the client reader thread on disconnect
         // both hold a clone of this Arc.
-        let subscribers: Arc<Mutex<Vec<mpsc::Sender<String>>>> =
-            Arc::new(Mutex::new(Vec::new()));
+        let subscribers: Arc<Mutex<Vec<mpsc::Sender<String>>>> = Arc::new(Mutex::new(Vec::new()));
 
         // ── Accept thread ──────────────────────────────────────────────────
         // We spin off the accept loop in a separate thread so that the current
@@ -728,8 +727,9 @@ impl Agent {
                                                                 marsad_proto::encode_ipc(&ipc_msg);
                                                             // Broadcast to all subscribers.
                                                             let subs = subs_fifo.lock().unwrap();
-                                                            subs.iter()
-                                                                .for_each(|s| { let _ = s.send(encoded.clone()); });
+                                                            subs.iter().for_each(|s| {
+                                                                let _ = s.send(encoded.clone());
+                                                            });
                                                         }
                                                     }
                                                 }

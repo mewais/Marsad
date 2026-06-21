@@ -72,7 +72,10 @@ fn clean_eof_returns_none() {
     a.close().expect("close");
     // Now the reader side should see clean EOF.
     let result = b.recv_line().expect("no error on clean EOF");
-    assert!(result.is_none(), "expected Ok(None) on clean EOF, got Some(_)");
+    assert!(
+        result.is_none(),
+        "expected Ok(None) on clean EOF, got Some(_)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -132,5 +135,8 @@ fn drain_outbound_accumulates_and_clears() {
     assert_eq!(first_drain, vec!["alpha", "beta"]);
     // Second drain should be empty — items were consumed.
     let second_drain = a.drain_outbound();
-    assert!(second_drain.is_empty(), "drain should clear after first call");
+    assert!(
+        second_drain.is_empty(),
+        "drain should clear after first call"
+    );
 }

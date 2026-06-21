@@ -50,8 +50,10 @@ fn ssh_stdio_connect_failed_bad_target() {
     // host to trigger ConnectFailed (the OS will refuse or time out immediately
     // for a clearly invalid hostname format).
     use marsad_transport::SshStdio;
-    let mut ssh =
-        SshStdio::new("invalid-host-that-does-not-exist-xyz.invalid", "marsad-agent");
+    let mut ssh = SshStdio::new(
+        "invalid-host-that-does-not-exist-xyz.invalid",
+        "marsad-agent",
+    );
     let err = ssh.connect().expect_err("should fail to connect");
     assert!(
         is_connect_failed(&err) || matches!(err, TransportError::Io(_)),
@@ -76,10 +78,7 @@ fn broken_pipe_after_peer_close() {
 
     // Now a's next send should surface BrokenPipe.
     let err = a.send_line("should fail").expect_err("expected BrokenPipe");
-    assert!(
-        is_broken_pipe(&err),
-        "expected BrokenPipe, got {err:?}"
-    );
+    assert!(is_broken_pipe(&err), "expected BrokenPipe, got {err:?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -130,7 +129,9 @@ fn closed_mid_stream_via_push_inbound_then_eof() {
     b.push_inbound("partial-line");
     _a.close().expect("close a");
 
-    let result = b.recv_line().expect_err("expected ClosedMidStream or error");
+    let result = b
+        .recv_line()
+        .expect_err("expected ClosedMidStream or error");
     assert!(
         is_closed_mid_stream(&result),
         "expected ClosedMidStream, got {result:?}"

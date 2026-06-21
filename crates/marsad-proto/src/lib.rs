@@ -276,8 +276,8 @@ fn from_val<T: serde::de::DeserializeOwned>(
 /// - JSON object with recognized `type` but wrong field types → `SchemaMismatch`
 pub fn parse_stream_line(line: &str) -> Result<StreamMsg, ProtoError> {
     // Parse the raw JSON value first.
-    let value: serde_json::Value = serde_json::from_str(line)
-        .map_err(|e| ProtoError::MalformedJson(e.to_string()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(line).map_err(|e| ProtoError::MalformedJson(e.to_string()))?;
 
     // Must be an object (not array, string, number, etc.)
     let obj = value
@@ -341,8 +341,8 @@ pub fn encode_control_response(resp: &ControlResponse) -> String {
 /// Unlike the stream protocol, an unrecognized `type` is `UnknownDiscriminant` (a bug).
 pub fn parse_ipc(line: &str) -> Result<IpcMsg, ProtoError> {
     // Parse raw JSON.
-    let value: serde_json::Value = serde_json::from_str(line)
-        .map_err(|e| ProtoError::MalformedJson(e.to_string()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(line).map_err(|e| ProtoError::MalformedJson(e.to_string()))?;
 
     // Extract the `type` discriminant — must be a string field in the object.
     let type_str = value

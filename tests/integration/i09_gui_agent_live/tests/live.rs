@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use marsad_agent::{AgentConfig, ListenSpec};
-use marsad_proto::{IpcMsg, parse_ipc};
+use marsad_proto::{parse_ipc, IpcMsg};
 use marsad_transport::{LocalIpc, Transport};
 
 // ── test-local counter ─────────────────────────────────────────────────────────
@@ -124,7 +124,11 @@ macro_rules! skip_if_no_deps {
                 .unwrap_or(0);
             let as_mb = {
                 let b = proc_address_space_limit_bytes();
-                if b == u64::MAX { u64::MAX } else { b / (1024 * 1024) }
+                if b == u64::MAX {
+                    u64::MAX
+                } else {
+                    b / (1024 * 1024)
+                }
             };
             eprintln!(
                 "\n========================================================\n\
@@ -197,7 +201,10 @@ fn poll_connect(socket: &str, timeout: Duration) -> Result<LocalIpc, String> {
             return Ok(client);
         }
         if Instant::now() >= deadline {
-            return Err(format!("socket {socket} not ready after {}s", timeout.as_secs()));
+            return Err(format!(
+                "socket {socket} not ready after {}s",
+                timeout.as_secs()
+            ));
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -208,18 +215,17 @@ fn poll_connect(socket: &str, timeout: Duration) -> Result<LocalIpc, String> {
 /// Drain AgentEvent lines from the IPC client until `pred` returns true or
 /// timeout expires.  Returns all lines received (including the matching one).
 /// On timeout returns whatever was accumulated with a warning.
-fn recv_until<F>(
-    client: &mut LocalIpc,
-    deadline: Instant,
-    pred: F,
-) -> Vec<IpcMsg>
+fn recv_until<F>(client: &mut LocalIpc, deadline: Instant, pred: F) -> Vec<IpcMsg>
 where
     F: Fn(&IpcMsg) -> bool,
 {
     let mut msgs = Vec::new();
     loop {
         if Instant::now() >= deadline {
-            eprintln!("[i09] recv_until: deadline exceeded after {} msgs", msgs.len());
+            eprintln!(
+                "[i09] recv_until: deadline exceeded after {} msgs",
+                msgs.len()
+            );
             break;
         }
         match client.recv_line() {
@@ -283,8 +289,7 @@ fn all_scenarios() {
             listen: ListenSpec::UnixSocket(socket_for_thread),
             data_root: data_root_for_thread,
         };
-        let agent = marsad_agent::Agent::with_real_io(cfg)
-            .expect("Agent::with_real_io failed");
+        let agent = marsad_agent::Agent::with_real_io(cfg).expect("Agent::with_real_io failed");
         if let Err(e) = agent.serve() {
             eprintln!("[i09] agent serve error: {e}");
         }
@@ -314,7 +319,10 @@ fn all_scenarios() {
     client.send_line(&subscribe_line).expect("send Subscribe");
 
     // Read back the Subscribed ack.
-    let ack_line = client.recv_line().expect("recv Subscribed ack").expect("non-empty ack");
+    let ack_line = client
+        .recv_line()
+        .expect("recv Subscribed ack")
+        .expect("non-empty ack");
     eprintln!("[i09/s1] ack: {:.120}", ack_line);
 
     // LaunchSession — send the raw JSON that matches the agent's handler expectations.
@@ -334,12 +342,16 @@ fn all_scenarios() {
     client.send_line(&launch_line).expect("send LaunchSession");
 
     // Read back SessionLaunched (the agent's immediate reply).
-    let sl_line = client.recv_line().expect("recv SessionLaunched").expect("non-empty");
+    let sl_line = client
+        .recv_line()
+        .expect("recv SessionLaunched")
+        .expect("non-empty");
     eprintln!("[i09/s1] SessionLaunched: {:.120}", sl_line);
-    let sl_val: serde_json::Value = serde_json::from_str(&sl_line)
-        .expect("SessionLaunched must be JSON");
+    let sl_val: serde_json::Value =
+        serde_json::from_str(&sl_line).expect("SessionLaunched must be JSON");
     assert_eq!(
-        sl_val["type"].as_str(), Some("SessionLaunched"),
+        sl_val["type"].as_str(),
+        Some("SessionLaunched"),
         "[s1] First reply must be SessionLaunched, got: {}",
         sl_line
     );
@@ -382,15 +394,29 @@ fn all_scenarios() {
             .join(", ")
     );
 
-    if let Some(IpcMsg::AgentEvent { session_id: sid, event }) = init_msg {
-        eprintln!("[i09/s1] system/init arrived: session_id={sid} model={} cwd={}",
+    if let Some(IpcMsg::AgentEvent {
+        session_id: sid,
+        event,
+    }) = init_msg
+    {
+        eprintln!(
+            "[i09/s1] system/init arrived: session_id={sid} model={} cwd={}",
             event.get("model").and_then(|v| v.as_str()).unwrap_or("?"),
             event.get("cwd").and_then(|v| v.as_str()).unwrap_or("?")
         );
-        assert!(!sid.is_empty(), "[s1] AgentEvent session_id must be non-empty");
-        assert_eq!(sid.as_str(), session_id, "[s1] AgentEvent session_id must match launched session");
+        assert!(
+            !sid.is_empty(),
+            "[s1] AgentEvent session_id must be non-empty"
+        );
+        assert_eq!(
+            sid.as_str(),
+            session_id,
+            "[s1] AgentEvent session_id must match launched session"
+        );
     }
-    eprintln!("[i09/s1] PASS — system/init received over the socket. GUI<->agent<->claude path verified.");
+    eprintln!(
+        "[i09/s1] PASS — system/init received over the socket. GUI<->agent<->claude path verified."
+    );
 
     // ─────────────────────────────────────────────────────────────────────────
     // Scenario 2 (optional): wait for an assistant/text AgentEvent.
@@ -441,7 +467,10 @@ fn all_scenarios() {
     // It's plausible the claude --print session already finished (it ran a tiny
     // prompt), in which case tmux auto-removed the session.  Log but do not fail.
     if tmux_alive {
-        eprintln!("[i09/s3] PASS — tmux session '{}' still alive after client disconnect.", tmux_session_name);
+        eprintln!(
+            "[i09/s3] PASS — tmux session '{}' still alive after client disconnect.",
+            tmux_session_name
+        );
     } else {
         eprintln!(
             "[i09/s3] NOTE — tmux session '{}' is already gone (claude --print exits after output; \

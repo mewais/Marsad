@@ -4,8 +4,7 @@
 //! - NotifyError::Delivery surfaced from a failing Notifier implementation
 
 use marsad_notify::{
-    build_notification, NotifEvent, NotifKind, NotifPrefs, Notifier, Notification, NotifyError,
-    Priority,
+    build_notification, NotifEvent, NotifKind, NotifPrefs, Notification, Notifier, NotifyError,
 };
 
 // ---------------------------------------------------------------------------
@@ -18,7 +17,9 @@ struct FailingNotifier {
 
 impl FailingNotifier {
     fn new(msg: &str) -> Self {
-        Self { message: msg.to_string() }
+        Self {
+            message: msg.to_string(),
+        }
     }
 }
 

@@ -84,15 +84,9 @@ Host *
         .iter()
         .find(|e| e.alias == "prod-web-01")
         .expect("prod-web-01 entry not found");
-    assert_eq!(
-        prod.hostname.as_deref(),
-        Some("prod-web-01.example.com")
-    );
+    assert_eq!(prod.hostname.as_deref(), Some("prod-web-01.example.com"));
     assert_eq!(prod.user.as_deref(), Some("deploy"));
-    assert_eq!(
-        prod.identity_file.as_deref(),
-        Some("~/.ssh/deploy_ed25519")
-    );
+    assert_eq!(prod.identity_file.as_deref(), Some("~/.ssh/deploy_ed25519"));
 
     // ── wildcard * ───────────────────────────────────────────────────────────
     let wildcard = entries
@@ -305,11 +299,11 @@ fn part_a_duplicate_label_error() {
 #[test]
 fn part_a_malformed_target_errors() {
     let cases: &[&str] = &[
-        "",             // empty
-        "nousernoslash",// no @
-        "@host",        // missing user
-        "user@",        // missing host
-        "@",            // both missing
+        "",              // empty
+        "nousernoslash", // no @
+        "@host",         // missing user
+        "user@",         // missing host
+        "@",             // both missing
     ];
 
     for &bad in cases {
@@ -333,10 +327,7 @@ fn part_a_malformed_target_errors() {
 
 /// Check whether `ssh` binary is on PATH.
 fn ssh_available() -> bool {
-    std::process::Command::new("ssh")
-        .arg("-V")
-        .output()
-        .is_ok()
+    std::process::Command::new("ssh").arg("-V").output().is_ok()
 }
 
 /// Test passwordless ssh to localhost with BatchMode=yes, ConnectTimeout=5.

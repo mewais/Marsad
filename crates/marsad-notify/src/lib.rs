@@ -88,7 +88,10 @@ pub struct Action {
 
 impl Action {
     fn new(label: &str, primary: bool) -> Self {
-        Self { label: label.to_string(), primary }
+        Self {
+            label: label.to_string(),
+            primary,
+        }
     }
 }
 
@@ -156,17 +159,9 @@ pub fn build_notification(ev: &NotifEvent, prefs: &NotifPrefs) -> Option<Notific
             Action::new("Reject", false),
             Action::new("Open", false),
         ],
-        NotifKind::Error => vec![
-            Action::new("Open", true),
-            Action::new("Retry", false),
-        ],
-        NotifKind::Done => vec![
-            Action::new("Open", false),
-            Action::new("Dismiss", false),
-        ],
-        NotifKind::Started => vec![
-            Action::new("Open", false),
-        ],
+        NotifKind::Error => vec![Action::new("Open", true), Action::new("Retry", false)],
+        NotifKind::Done => vec![Action::new("Open", false), Action::new("Dismiss", false)],
+        NotifKind::Started => vec![Action::new("Open", false)],
     };
 
     // play_sound = sound && priority==High && !dnd.
@@ -299,7 +294,9 @@ pub struct CaptureNotifier {
 impl CaptureNotifier {
     /// Create a new, empty `CaptureNotifier`.
     pub fn new() -> Self {
-        Self { delivered: Vec::new() }
+        Self {
+            delivered: Vec::new(),
+        }
     }
 
     /// Return the ordered slice of all delivered notifications.

@@ -3,17 +3,20 @@
 //! Proves: real folded stream state → NotifEvent → build_notification → CaptureNotifier,
 //! plus DND suppression, per-kind toggle suppression, sound gating, and burst grouping.
 
-use marsad_events::{Event, Phase, SessionState, reduce};
+use marsad_events::{reduce, Event, Phase, SessionState};
 use marsad_notify::{
-    Action, CaptureNotifier, NotifEvent, NotifKind, NotifPrefs, Notification, Notifier,
-    Priority, build_notification, group,
+    build_notification, group, Action, CaptureNotifier, NotifEvent, NotifKind, NotifPrefs,
+    Notification, Notifier, Priority,
 };
 use marsad_proto::parse_stream_line;
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
 /// The qa.ndjson fixture path, resolved at compile time relative to the workspace root.
-const QA_NDJSON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../fixtures/streams/qa.ndjson");
+const QA_NDJSON: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../fixtures/streams/qa.ndjson"
+);
 
 /// Fold every line in the given NDJSON text into a SessionState and return the final state.
 fn fold_ndjson(ndjson: &str) -> SessionState {
@@ -63,14 +66,21 @@ fn notif_event(kind: NotifKind, session_id: &str) -> NotifEvent {
 /// Fold qa.ndjson and verify it reaches Phase::Done, then build a Done notification.
 #[test]
 fn fold_qa_stream_to_done_and_notify() {
-    let ndjson = std::fs::read_to_string(QA_NDJSON)
-        .unwrap_or_else(|e| panic!("cannot read qa.ndjson: {e}"));
+    let ndjson =
+        std::fs::read_to_string(QA_NDJSON).unwrap_or_else(|e| panic!("cannot read qa.ndjson: {e}"));
 
     let state = fold_ndjson(&ndjson);
 
     // The fixture is init → assistant → result/success: must reach Done.
-    assert_eq!(state.phase, Phase::Done, "qa.ndjson must fold to Phase::Done");
-    assert!(state.session_id.is_some(), "session_id must be set after init");
+    assert_eq!(
+        state.phase,
+        Phase::Done,
+        "qa.ndjson must fold to Phase::Done"
+    );
+    assert!(
+        state.session_id.is_some(),
+        "session_id must be set after init"
+    );
     assert!(state.tokens > 0, "token count must accumulate");
     assert!(state.cost_usd > 0.0, "cost must accumulate");
 
@@ -92,11 +102,23 @@ fn fold_qa_stream_to_done_and_notify() {
     assert_eq!(note.kind, NotifKind::Done);
     assert_eq!(note.session_id, sid);
     assert_eq!(note.priority, Priority::Low);
-    assert_eq!(note.play_sound, false, "Done is Low priority; no sound");
+    assert!(!note.play_sound, "Done is Low priority; no sound");
     // Actions: Open (not primary) + Dismiss (not primary).
     assert_eq!(note.actions.len(), 2);
-    assert_eq!(note.actions[0], Action { label: "Open".to_string(), primary: false });
-    assert_eq!(note.actions[1], Action { label: "Dismiss".to_string(), primary: false });
+    assert_eq!(
+        note.actions[0],
+        Action {
+            label: "Open".to_string(),
+            primary: false
+        }
+    );
+    assert_eq!(
+        note.actions[1],
+        Action {
+            label: "Dismiss".to_string(),
+            primary: false
+        }
+    );
 
     // Deliver via CaptureNotifier.
     let mut cap = CaptureNotifier::new();
@@ -117,11 +139,29 @@ fn build_notification_all_kinds_default_prefs() {
         let ev = notif_event(NotifKind::Needs, "sess-needs");
         let note = build_notification(&ev, &prefs).expect("Needs must build");
         assert_eq!(note.priority, Priority::High);
-        assert_eq!(note.play_sound, true);
+        assert!(note.play_sound);
         assert_eq!(note.actions.len(), 3);
-        assert_eq!(note.actions[0], Action { label: "Approve".to_string(), primary: true });
-        assert_eq!(note.actions[1], Action { label: "Reject".to_string(), primary: false });
-        assert_eq!(note.actions[2], Action { label: "Open".to_string(), primary: false });
+        assert_eq!(
+            note.actions[0],
+            Action {
+                label: "Approve".to_string(),
+                primary: true
+            }
+        );
+        assert_eq!(
+            note.actions[1],
+            Action {
+                label: "Reject".to_string(),
+                primary: false
+            }
+        );
+        assert_eq!(
+            note.actions[2],
+            Action {
+                label: "Open".to_string(),
+                primary: false
+            }
+        );
     }
 
     // Error → High + [Open(primary), Retry] + sound=true.
@@ -129,10 +169,22 @@ fn build_notification_all_kinds_default_prefs() {
         let ev = notif_event(NotifKind::Error, "sess-err");
         let note = build_notification(&ev, &prefs).expect("Error must build");
         assert_eq!(note.priority, Priority::High);
-        assert_eq!(note.play_sound, true);
+        assert!(note.play_sound);
         assert_eq!(note.actions.len(), 2);
-        assert_eq!(note.actions[0], Action { label: "Open".to_string(), primary: true });
-        assert_eq!(note.actions[1], Action { label: "Retry".to_string(), primary: false });
+        assert_eq!(
+            note.actions[0],
+            Action {
+                label: "Open".to_string(),
+                primary: true
+            }
+        );
+        assert_eq!(
+            note.actions[1],
+            Action {
+                label: "Retry".to_string(),
+                primary: false
+            }
+        );
     }
 
     // Done → Low + [Open, Dismiss] + sound=false.
@@ -140,10 +192,22 @@ fn build_notification_all_kinds_default_prefs() {
         let ev = notif_event(NotifKind::Done, "sess-done");
         let note = build_notification(&ev, &prefs).expect("Done must build");
         assert_eq!(note.priority, Priority::Low);
-        assert_eq!(note.play_sound, false);
+        assert!(!note.play_sound);
         assert_eq!(note.actions.len(), 2);
-        assert_eq!(note.actions[0], Action { label: "Open".to_string(), primary: false });
-        assert_eq!(note.actions[1], Action { label: "Dismiss".to_string(), primary: false });
+        assert_eq!(
+            note.actions[0],
+            Action {
+                label: "Open".to_string(),
+                primary: false
+            }
+        );
+        assert_eq!(
+            note.actions[1],
+            Action {
+                label: "Dismiss".to_string(),
+                primary: false
+            }
+        );
     }
 
     // Started → default prefs has started=false → None.
@@ -158,7 +222,10 @@ fn build_notification_all_kinds_default_prefs() {
 
 #[test]
 fn dnd_suppresses_all_kinds() {
-    let prefs = NotifPrefs { dnd: true, ..NotifPrefs::default() };
+    let prefs = NotifPrefs {
+        dnd: true,
+        ..NotifPrefs::default()
+    };
 
     for kind in [NotifKind::Needs, NotifKind::Error, NotifKind::Done] {
         let ev = notif_event(kind, "sess-dnd");
@@ -175,31 +242,58 @@ fn dnd_suppresses_all_kinds() {
 fn kind_toggle_off_suppresses() {
     // needs=false
     {
-        let prefs = NotifPrefs { needs: false, ..NotifPrefs::default() };
+        let prefs = NotifPrefs {
+            needs: false,
+            ..NotifPrefs::default()
+        };
         let ev = notif_event(NotifKind::Needs, "s1");
-        assert!(build_notification(&ev, &prefs).is_none(), "needs=false → None");
+        assert!(
+            build_notification(&ev, &prefs).is_none(),
+            "needs=false → None"
+        );
     }
     // error=false
     {
-        let prefs = NotifPrefs { error: false, ..NotifPrefs::default() };
+        let prefs = NotifPrefs {
+            error: false,
+            ..NotifPrefs::default()
+        };
         let ev = notif_event(NotifKind::Error, "s2");
-        assert!(build_notification(&ev, &prefs).is_none(), "error=false → None");
+        assert!(
+            build_notification(&ev, &prefs).is_none(),
+            "error=false → None"
+        );
     }
     // done=false
     {
-        let prefs = NotifPrefs { done: false, ..NotifPrefs::default() };
+        let prefs = NotifPrefs {
+            done: false,
+            ..NotifPrefs::default()
+        };
         let ev = notif_event(NotifKind::Done, "s3");
-        assert!(build_notification(&ev, &prefs).is_none(), "done=false → None");
+        assert!(
+            build_notification(&ev, &prefs).is_none(),
+            "done=false → None"
+        );
     }
     // started=true (explicit enable)
     {
-        let prefs = NotifPrefs { started: true, ..NotifPrefs::default() };
+        let prefs = NotifPrefs {
+            started: true,
+            ..NotifPrefs::default()
+        };
         let ev = notif_event(NotifKind::Started, "s4");
         let note = build_notification(&ev, &prefs).expect("started=true → Some");
         assert_eq!(note.priority, Priority::Low);
-        assert_eq!(note.play_sound, false);
+        assert!(!note.play_sound);
         assert_eq!(note.actions.len(), 1);
-        assert_eq!(note.actions[0], Action { label: "Open".to_string(), primary: false });
+        assert_eq!(
+            note.actions[0],
+            Action {
+                label: "Open".to_string(),
+                primary: false
+            }
+        );
     }
 }
 
@@ -209,28 +303,44 @@ fn kind_toggle_off_suppresses() {
 fn play_sound_gating() {
     // sound=true, High priority, dnd=false → play_sound=true.
     {
-        let prefs = NotifPrefs { sound: true, dnd: false, ..NotifPrefs::default() };
+        let prefs = NotifPrefs {
+            sound: true,
+            dnd: false,
+            ..NotifPrefs::default()
+        };
         let ev = notif_event(NotifKind::Needs, "s-snd");
         let note = build_notification(&ev, &prefs).unwrap();
         assert!(note.play_sound);
     }
     // sound=false → no sound even for High.
     {
-        let prefs = NotifPrefs { sound: false, dnd: false, ..NotifPrefs::default() };
+        let prefs = NotifPrefs {
+            sound: false,
+            dnd: false,
+            ..NotifPrefs::default()
+        };
         let ev = notif_event(NotifKind::Needs, "s-nosnd");
         let note = build_notification(&ev, &prefs).unwrap();
         assert!(!note.play_sound);
     }
     // Low priority (Done) → no sound even with sound=true.
     {
-        let prefs = NotifPrefs { sound: true, dnd: false, ..NotifPrefs::default() };
+        let prefs = NotifPrefs {
+            sound: true,
+            dnd: false,
+            ..NotifPrefs::default()
+        };
         let ev = notif_event(NotifKind::Done, "s-low");
         let note = build_notification(&ev, &prefs).unwrap();
         assert!(!note.play_sound);
     }
     // DND → build returns None; this also means no sound path (already covered by C).
     {
-        let prefs = NotifPrefs { sound: true, dnd: true, ..NotifPrefs::default() };
+        let prefs = NotifPrefs {
+            sound: true,
+            dnd: true,
+            ..NotifPrefs::default()
+        };
         let ev = notif_event(NotifKind::Needs, "s-dnd");
         assert!(build_notification(&ev, &prefs).is_none());
     }
@@ -278,7 +388,10 @@ fn group_unchanged_when_off() {
         .map(|i| make_note(NotifKind::Done, &format!("sess-{i}")))
         .collect();
 
-    let prefs = NotifPrefs { group: false, ..NotifPrefs::default() };
+    let prefs = NotifPrefs {
+        group: false,
+        ..NotifPrefs::default()
+    };
     let result = group(&notes, &prefs);
     assert_eq!(result.len(), 3, "group=false must return input unchanged");
 }
@@ -352,8 +465,8 @@ fn capture_notifier_records_all_delivered_in_order() {
 
 #[test]
 fn full_pipeline_stream_fold_to_group_to_capture() {
-    let ndjson = std::fs::read_to_string(QA_NDJSON)
-        .unwrap_or_else(|e| panic!("cannot read qa.ndjson: {e}"));
+    let ndjson =
+        std::fs::read_to_string(QA_NDJSON).unwrap_or_else(|e| panic!("cannot read qa.ndjson: {e}"));
 
     // Fold the fixture (represents one finished session).
     let state = fold_ndjson(&ndjson);

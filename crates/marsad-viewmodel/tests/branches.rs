@@ -55,11 +55,18 @@ fn host(id: &str, label: &str) -> Host {
 fn all_states_snapshot() -> AppSnapshot {
     AppSnapshot {
         sessions: vec![
-            make_session("sN", "needs-sess",   "local", "proj", "main",   Phase::Needs),
-            make_session("sE", "error-sess",   "local", "proj", "main",   Phase::Error),
-            make_session("sW", "working-sess", "local", "proj", "main",   Phase::Working),
-            make_session("sS", "start-sess",   "local", "proj", "main",   Phase::Starting),
-            make_session("sD", "done-sess",    "local", "proj", "main",   Phase::Done),
+            make_session("sN", "needs-sess", "local", "proj", "main", Phase::Needs),
+            make_session("sE", "error-sess", "local", "proj", "main", Phase::Error),
+            make_session(
+                "sW",
+                "working-sess",
+                "local",
+                "proj",
+                "main",
+                Phase::Working,
+            ),
+            make_session("sS", "start-sess", "local", "proj", "main", Phase::Starting),
+            make_session("sD", "done-sess", "local", "proj", "main", Phase::Done),
         ],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -167,9 +174,16 @@ fn search_no_match_returns_empty() {
 
 #[test]
 fn search_matches_project_case_insensitively() {
-    let mut snap = AppSnapshot {
+    let snap = AppSnapshot {
         sessions: vec![
-            make_session("s1", "my-service", "local", "MyBackend", "main", Phase::Done),
+            make_session(
+                "s1",
+                "my-service",
+                "local",
+                "MyBackend",
+                "main",
+                Phase::Done,
+            ),
             make_session("s2", "other", "local", "frontend", "main", Phase::Done),
         ],
         hosts: vec![host("local", "localhost")],
@@ -191,15 +205,12 @@ fn search_matches_project_case_insensitively() {
 
 #[test]
 fn search_matches_host_label_case_insensitively() {
-    let mut snap = AppSnapshot {
+    let snap = AppSnapshot {
         sessions: vec![
             make_session("s1", "job1", "hetz", "proj", "main", Phase::Done),
             make_session("s2", "job2", "local", "proj", "main", Phase::Done),
         ],
-        hosts: vec![
-            host("hetz", "Hetzner-FRA1"),
-            host("local", "localhost"),
-        ],
+        hosts: vec![host("hetz", "Hetzner-FRA1"), host("local", "localhost")],
         workspaces: vec![],
         active_ws: None,
         selected_id: None,
@@ -218,9 +229,16 @@ fn search_matches_host_label_case_insensitively() {
 
 #[test]
 fn search_matches_branch_case_insensitively() {
-    let mut snap = AppSnapshot {
+    let snap = AppSnapshot {
         sessions: vec![
-            make_session("s1", "svc", "local", "proj", "feature/AUTH-123", Phase::Done),
+            make_session(
+                "s1",
+                "svc",
+                "local",
+                "proj",
+                "feature/AUTH-123",
+                Phase::Done,
+            ),
             make_session("s2", "svc2", "local", "proj", "main", Phase::Done),
         ],
         hosts: vec![host("local", "localhost")],
@@ -244,13 +262,13 @@ fn search_matches_branch_case_insensitively() {
 #[test]
 fn state_sort_full_ordering_all_five_states() {
     // Insert in reverse order (done, starting, working, error, needs) to force sort
-    let mut snap = AppSnapshot {
+    let snap = AppSnapshot {
         sessions: vec![
-            make_session("sD", "done",    "local", "p", "main", Phase::Done),
-            make_session("sS", "start",   "local", "p", "main", Phase::Starting),
+            make_session("sD", "done", "local", "p", "main", Phase::Done),
+            make_session("sS", "start", "local", "p", "main", Phase::Starting),
             make_session("sW", "working", "local", "p", "main", Phase::Working),
-            make_session("sE", "error",   "local", "p", "main", Phase::Error),
-            make_session("sN", "needs",   "local", "p", "main", Phase::Needs),
+            make_session("sE", "error", "local", "p", "main", Phase::Error),
+            make_session("sN", "needs", "local", "p", "main", Phase::Needs),
         ],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -262,11 +280,11 @@ fn state_sort_full_ordering_all_five_states() {
     };
     let list = sidebar_list(&snap);
     assert_eq!(list.len(), 5);
-    assert_eq!(list[0].state, Phase::Needs,    "index 0 = needs");
-    assert_eq!(list[1].state, Phase::Error,    "index 1 = error");
-    assert_eq!(list[2].state, Phase::Working,  "index 2 = working");
+    assert_eq!(list[0].state, Phase::Needs, "index 0 = needs");
+    assert_eq!(list[1].state, Phase::Error, "index 1 = error");
+    assert_eq!(list[2].state, Phase::Working, "index 2 = working");
     assert_eq!(list[3].state, Phase::Starting, "index 3 = starting");
-    assert_eq!(list[4].state, Phase::Done,     "index 4 = done");
+    assert_eq!(list[4].state, Phase::Done, "index 4 = done");
 }
 
 #[test]
@@ -352,17 +370,17 @@ fn ctx_warn_true_at_75_pct() {
 #[test]
 fn parse_slash_all_11_known_commands() {
     let cases = vec![
-        ("/clear",    SlashCmd::Clear),
-        ("/compact",  SlashCmd::Compact),
-        ("/cost",     SlashCmd::Cost),
-        ("/model",    SlashCmd::Model),
-        ("/config",   SlashCmd::Config),
-        ("/init",     SlashCmd::Init),
-        ("/review",   SlashCmd::Review),
-        ("/agents",   SlashCmd::Agents),
-        ("/resume",   SlashCmd::Resume),
+        ("/clear", SlashCmd::Clear),
+        ("/compact", SlashCmd::Compact),
+        ("/cost", SlashCmd::Cost),
+        ("/model", SlashCmd::Model),
+        ("/config", SlashCmd::Config),
+        ("/init", SlashCmd::Init),
+        ("/review", SlashCmd::Review),
+        ("/agents", SlashCmd::Agents),
+        ("/resume", SlashCmd::Resume),
         ("/terminal", SlashCmd::Terminal),
-        ("/help",     SlashCmd::Help),
+        ("/help", SlashCmd::Help),
     ];
     for (input, expected) in cases {
         assert_eq!(
@@ -440,8 +458,8 @@ fn slash_catalog_prefix_co_matches_three() {
     let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
     // /compact, /cost, /config all start with /co
     assert!(names.contains(&"/compact"), "/compact must match /co");
-    assert!(names.contains(&"/cost"),    "/cost must match /co");
-    assert!(names.contains(&"/config"),  "/config must match /co");
+    assert!(names.contains(&"/cost"), "/cost must match /co");
+    assert!(names.contains(&"/config"), "/config must match /co");
     // /clear does NOT start with /co
     assert!(!names.contains(&"/clear"), "/clear must not match /co");
 }
@@ -456,7 +474,10 @@ fn slash_catalog_prefix_help_matches_one() {
 #[test]
 fn slash_catalog_prefix_no_match_empty() {
     let entries = slash_catalog("/zzz");
-    assert!(entries.is_empty(), "unmatched prefix should return empty list");
+    assert!(
+        entries.is_empty(),
+        "unmatched prefix should return empty list"
+    );
 }
 
 #[test]
@@ -471,7 +492,10 @@ fn slash_catalog_prefix_r_matches_review_resume() {
 fn slash_catalog_entry_has_name_and_description() {
     let entries = slash_catalog("");
     for entry in &entries {
-        assert!(!entry.name.is_empty(), "every entry must have a non-empty name");
+        assert!(
+            !entry.name.is_empty(),
+            "every entry must have a non-empty name"
+        );
         // desc field should exist; we just ensure it's accessible
         let _desc: &str = &entry.desc;
     }
@@ -488,8 +512,17 @@ fn slash_catalog_exact_slash_clear() {
 fn slash_catalog_order_stable_for_empty_query() {
     // The 11 commands in spec order:
     let expected_order = [
-        "/clear", "/compact", "/cost", "/model", "/config",
-        "/init", "/review", "/agents", "/resume", "/terminal", "/help",
+        "/clear",
+        "/compact",
+        "/cost",
+        "/model",
+        "/config",
+        "/init",
+        "/review",
+        "/agents",
+        "/resume",
+        "/terminal",
+        "/help",
     ];
     let entries = slash_catalog("");
     assert_eq!(entries.len(), 11);
@@ -509,9 +542,9 @@ fn slash_catalog_order_stable_for_empty_query() {
 fn filter_and_search_combined_narrows_correctly() {
     let snap = AppSnapshot {
         sessions: vec![
-            make_session("s1", "api-needs",   "local", "proj", "main", Phase::Needs),
-            make_session("s2", "api-working",  "local", "proj", "main", Phase::Working),
-            make_session("s3", "other-needs",  "local", "proj", "main", Phase::Needs),
+            make_session("s1", "api-needs", "local", "proj", "main", Phase::Needs),
+            make_session("s2", "api-working", "local", "proj", "main", Phase::Working),
+            make_session("s3", "other-needs", "local", "proj", "main", Phase::Needs),
         ],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -536,7 +569,7 @@ fn search_with_leading_trailing_whitespace_trims_correctly() {
     let snap = AppSnapshot {
         sessions: vec![
             make_session("s1", "trimtest", "local", "proj", "main", Phase::Done),
-            make_session("s2", "other",    "local", "proj", "main", Phase::Done),
+            make_session("s2", "other", "local", "proj", "main", Phase::Done),
         ],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -547,7 +580,11 @@ fn search_with_leading_trailing_whitespace_trims_correctly() {
         tab: Tab::Activity,
     };
     let list = sidebar_list(&snap);
-    assert_eq!(list.len(), 1, "whitespace-trimmed search should match 'trimtest'");
+    assert_eq!(
+        list.len(),
+        1,
+        "whitespace-trimmed search should match 'trimtest'"
+    );
     assert_eq!(list[0].id, "s1");
 }
 

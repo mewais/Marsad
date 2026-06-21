@@ -5,7 +5,9 @@
 //! - GateError::DuplicateDecision on second DecisionLedger::record call (idempotency)
 //! - DecisionLedger::seen false before record, true after
 
-use marsad_gates::{approve, decision_id, reject, DecisionLedger, DiffLine, Gate, GateError, PlanStep, Sig};
+use marsad_gates::{
+    approve, decision_id, reject, DecisionLedger, DiffLine, Gate, GateError, PlanStep, Sig,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -113,7 +115,10 @@ fn ledger_record_first_time_returns_ok_permission() {
     let gate = make_permission_gate();
     let d = approve("session-ledger-perm", &gate);
     let result = ledger.record(&d);
-    assert!(result.is_ok(), "first record should return Ok, got: {result:?}");
+    assert!(
+        result.is_ok(),
+        "first record should return Ok, got: {result:?}"
+    );
 }
 
 #[test]
@@ -122,7 +127,10 @@ fn ledger_record_first_time_returns_ok_plan() {
     let gate = make_plan_gate();
     let d = approve("session-ledger-plan", &gate);
     let result = ledger.record(&d);
-    assert!(result.is_ok(), "first record should return Ok, got: {result:?}");
+    assert!(
+        result.is_ok(),
+        "first record should return Ok, got: {result:?}"
+    );
 }
 
 #[test]
@@ -131,7 +139,10 @@ fn ledger_record_first_time_returns_ok_edit() {
     let gate = make_edit_gate();
     let d = approve("session-ledger-edit", &gate);
     let result = ledger.record(&d);
-    assert!(result.is_ok(), "first record should return Ok, got: {result:?}");
+    assert!(
+        result.is_ok(),
+        "first record should return Ok, got: {result:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +223,10 @@ fn ledger_seen_false_for_different_session() {
     ledger.record(&d1).expect("first record should succeed");
     // Different session -> different id -> should not be seen
     let d2 = approve("session-B", &gate);
-    assert!(!ledger.seen(&d2.id), "seen should be false for a different session's id");
+    assert!(
+        !ledger.seen(&d2.id),
+        "seen should be false for a different session's id"
+    );
 }
 
 // ---------------------------------------------------------------------------

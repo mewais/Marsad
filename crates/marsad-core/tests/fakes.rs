@@ -96,13 +96,18 @@ fn scripted_full_happy_path_session() {
     );
 
     // ── Step 2: Agent feeds system/init ──────────────────────────────────────
-    let init_updates = core.on_agent_line(&agent_init(&id)).expect("on_agent_line init");
+    let init_updates = core
+        .on_agent_line(&agent_init(&id))
+        .expect("on_agent_line init");
     {
         let session_ups: Vec<_> = init_updates
             .iter()
             .filter(|u| matches!(u, VmUpdate::Session(_)))
             .collect();
-        assert!(!session_ups.is_empty(), "system/init must produce VmUpdate::Session");
+        assert!(
+            !session_ups.is_empty(),
+            "system/init must produce VmUpdate::Session"
+        );
         // Check the session update has Working phase
         use marsad_events::Phase;
         for u in &session_ups {
@@ -115,18 +120,27 @@ fn scripted_full_happy_path_session() {
     }
     // Overview must also be updated
     assert!(
-        init_updates.iter().any(|u| matches!(u, VmUpdate::Overview(_))),
+        init_updates
+            .iter()
+            .any(|u| matches!(u, VmUpdate::Overview(_))),
         "system/init must produce VmUpdate::Overview"
     );
 
     // ── Step 3: Agent feeds a permission gate (ControlRequest) ───────────────
-    let ctrl_updates =
-        core.on_agent_line(&agent_control_request(&id, "rq-001", "Bash")).expect("ctrl");
+    let ctrl_updates = core
+        .on_agent_line(&agent_control_request(&id, "rq-001", "Bash"))
+        .expect("ctrl");
     {
         use marsad_events::Phase;
         let needs = ctrl_updates
             .iter()
-            .filter_map(|u| if let VmUpdate::Session(sv) = u { Some(sv) } else { None })
+            .filter_map(|u| {
+                if let VmUpdate::Session(sv) = u {
+                    Some(sv)
+                } else {
+                    None
+                }
+            })
             .find(|sv| sv.id == id);
         assert!(
             needs.is_some(),
@@ -156,14 +170,23 @@ fn scripted_full_happy_path_session() {
 
     // ── Assert outbound: AnswerGate IPC was sent ─────────────────────────────
     let outbound_gate = peer.drain_outbound();
-    assert!(!outbound_gate.is_empty(), "answer_gate must emit outbound IPC");
+    assert!(
+        !outbound_gate.is_empty(),
+        "answer_gate must emit outbound IPC"
+    );
 
     // ── Step 5: Agent sends assistant text ───────────────────────────────────
     let asst_updates = core
-        .on_agent_line(&agent_assistant_text(&id, "msg-001", "I will add the health check."))
+        .on_agent_line(&agent_assistant_text(
+            &id,
+            "msg-001",
+            "I will add the health check.",
+        ))
         .expect("asst");
     assert!(
-        asst_updates.iter().any(|u| matches!(u, VmUpdate::Session(_))),
+        asst_updates
+            .iter()
+            .any(|u| matches!(u, VmUpdate::Session(_))),
         "assistant text must produce VmUpdate::Session"
     );
 
@@ -175,9 +198,18 @@ fn scripted_full_happy_path_session() {
         use marsad_events::Phase;
         let done = done_updates
             .iter()
-            .filter_map(|u| if let VmUpdate::Session(sv) = u { Some(sv) } else { None })
+            .filter_map(|u| {
+                if let VmUpdate::Session(sv) = u {
+                    Some(sv)
+                } else {
+                    None
+                }
+            })
             .find(|sv| sv.id == id);
-        assert!(done.is_some(), "result/success must produce VmUpdate::Session");
+        assert!(
+            done.is_some(),
+            "result/success must produce VmUpdate::Session"
+        );
         assert_eq!(
             done.unwrap().state,
             Phase::Done,
@@ -190,7 +222,11 @@ fn scripted_full_happy_path_session() {
     let sess = snap.sessions.iter().find(|s| s.id == id);
     assert!(sess.is_some(), "snapshot must contain the session");
     use marsad_events::Phase;
-    assert_eq!(sess.unwrap().state, Phase::Done, "snapshot session must be Done");
+    assert_eq!(
+        sess.unwrap().state,
+        Phase::Done,
+        "snapshot session must be Done"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +249,9 @@ fn scripted_gate_rejection_sends_deny_ipc() {
     let _ = peer.drain_outbound();
 
     let _ = core.on_agent_line(&agent_init(&id)).expect("init");
-    let _ = core.on_agent_line(&agent_control_request(&id, "rq-002", "Write")).expect("ctrl");
+    let _ = core
+        .on_agent_line(&agent_control_request(&id, "rq-002", "Write"))
+        .expect("ctrl");
 
     let gate = Gate::Permission {
         command: "DROP TABLE users".to_string(),
@@ -229,9 +267,12 @@ fn scripted_gate_rejection_sends_deny_ipc() {
     let combined = outbound.join(" ");
     // The outbound should include a deny signal
     assert!(
-        combined.contains("deny") || combined.contains("Deny")
-            || combined.contains("reject") || combined.contains("Reject")
-            || combined.contains("gate") || combined.contains("Gate"),
+        combined.contains("deny")
+            || combined.contains("Deny")
+            || combined.contains("reject")
+            || combined.contains("Reject")
+            || combined.contains("gate")
+            || combined.contains("Gate"),
         "reject gate outbound must reference deny/reject/gate; got: {combined}"
     );
 }
@@ -256,13 +297,24 @@ fn scripted_agent_error_result_sets_error_phase() {
         .expect("launch");
 
     let _ = core.on_agent_line(&agent_init(&id)).expect("init");
-    let err_updates = core.on_agent_line(&agent_result_error(&id)).expect("error result");
+    let err_updates = core
+        .on_agent_line(&agent_result_error(&id))
+        .expect("error result");
 
     let error_sess = err_updates
         .iter()
-        .filter_map(|u| if let VmUpdate::Session(sv) = u { Some(sv) } else { None })
+        .filter_map(|u| {
+            if let VmUpdate::Session(sv) = u {
+                Some(sv)
+            } else {
+                None
+            }
+        })
         .find(|sv| sv.id == id);
-    assert!(error_sess.is_some(), "error result must produce a Session update");
+    assert!(
+        error_sess.is_some(),
+        "error result must produce a Session update"
+    );
     assert_eq!(
         error_sess.unwrap().state,
         Phase::Error,
@@ -291,7 +343,8 @@ fn scripted_send_prompt_during_live_session() {
     let _ = core.on_agent_line(&agent_init(&id)).expect("init");
 
     // GUI sends a follow-up prompt
-    core.send_prompt(&id, "Now write the tests too.").expect("send_prompt");
+    core.send_prompt(&id, "Now write the tests too.")
+        .expect("send_prompt");
     let outbound = peer.drain_outbound();
     assert!(!outbound.is_empty(), "send_prompt must emit outbound IPC");
     let combined = outbound.join(" ");
@@ -365,8 +418,12 @@ fn scripted_two_concurrent_sessions_no_cross_routing() {
         .expect("launch beta");
 
     // Both inits
-    let _ = core.on_agent_line(&agent_init(&id_alpha)).expect("init alpha");
-    let _ = core.on_agent_line(&agent_init(&id_beta)).expect("init beta");
+    let _ = core
+        .on_agent_line(&agent_init(&id_alpha))
+        .expect("init alpha");
+    let _ = core
+        .on_agent_line(&agent_init(&id_beta))
+        .expect("init beta");
 
     // Alpha gets a result, beta stays in Working
     let alpha_done_updates = core
@@ -392,8 +449,16 @@ fn scripted_two_concurrent_sessions_no_cross_routing() {
 
     // Verify snapshot: alpha=Done, beta=Working
     let snap = core.snapshot();
-    let alpha_snap = snap.sessions.iter().find(|s| s.id == id_alpha).expect("alpha in snap");
-    let beta_snap = snap.sessions.iter().find(|s| s.id == id_beta).expect("beta in snap");
+    let alpha_snap = snap
+        .sessions
+        .iter()
+        .find(|s| s.id == id_alpha)
+        .expect("alpha in snap");
+    let beta_snap = snap
+        .sessions
+        .iter()
+        .find(|s| s.id == id_beta)
+        .expect("beta in snap");
     assert_eq!(alpha_snap.state, Phase::Done, "snapshot: alpha Done");
     assert_eq!(beta_snap.state, Phase::Working, "snapshot: beta Working");
 }
@@ -418,13 +483,13 @@ fn scripted_slash_compact_dispatches_ipc() {
     let _ = core.on_agent_line(&agent_init(&id)).expect("init");
     let _ = peer.drain_outbound();
 
-    core.run_slash(&id, SlashCmd::Compact).expect("run /compact");
+    core.run_slash(&id, SlashCmd::Compact)
+        .expect("run /compact");
     let outbound = peer.drain_outbound();
     assert!(!outbound.is_empty(), "/compact must emit outbound IPC");
     let combined = outbound.join(" ");
     assert!(
-        combined.contains("compact") || combined.contains("Compact")
-            || combined.contains("slash"),
+        combined.contains("compact") || combined.contains("Compact") || combined.contains("slash"),
         "/compact outbound must reference compact; got: {combined}"
     );
 }
@@ -448,7 +513,9 @@ fn scripted_idempotent_answer_gate_end_to_end() {
     let _ = peer.drain_outbound();
 
     let _ = core.on_agent_line(&agent_init(&id)).expect("init");
-    let _ = core.on_agent_line(&agent_control_request(&id, "rq-idem", "Bash")).expect("ctrl");
+    let _ = core
+        .on_agent_line(&agent_control_request(&id, "rq-idem", "Bash"))
+        .expect("ctrl");
 
     let gate = Gate::Permission {
         command: "make build".to_string(),
@@ -461,7 +528,10 @@ fn scripted_idempotent_answer_gate_end_to_end() {
     let d1 = approve(&id, &gate);
     core.answer_gate(d1).expect("first answer");
     let first_out = peer.drain_outbound();
-    assert!(!first_out.is_empty(), "first answer_gate must emit outbound IPC");
+    assert!(
+        !first_out.is_empty(),
+        "first answer_gate must emit outbound IPC"
+    );
     let first_count = first_out.len();
 
     // Second approval with the SAME gate (same DecisionId) — must not emit another IPC

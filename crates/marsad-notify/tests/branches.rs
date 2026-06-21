@@ -27,7 +27,15 @@ fn make_prefs(
     group_on: bool,
     dnd: bool,
 ) -> NotifPrefs {
-    NotifPrefs { needs, error, done, started, sound, group: group_on, dnd }
+    NotifPrefs {
+        needs,
+        error,
+        done,
+        started,
+        sound,
+        group: group_on,
+        dnd,
+    }
 }
 
 fn all_on_prefs() -> NotifPrefs {
@@ -196,7 +204,10 @@ fn dnd_on_suppresses_started() {
 fn play_sound_true_when_sound_high_no_dnd() {
     let prefs = make_prefs(true, true, true, true, true, true, false);
     let note = build_notification(&needs_ev(), &prefs).unwrap(); // Needs is High
-    assert!(note.play_sound, "sound=true + High + dnd=false must play sound");
+    assert!(
+        note.play_sound,
+        "sound=true + High + dnd=false must play sound"
+    );
 }
 
 // sound=false, High, dnd=false → play_sound=false
@@ -204,7 +215,10 @@ fn play_sound_true_when_sound_high_no_dnd() {
 fn play_sound_false_when_sound_off_high_no_dnd() {
     let prefs = make_prefs(true, true, true, true, false, true, false);
     let note = build_notification(&needs_ev(), &prefs).unwrap();
-    assert!(!note.play_sound, "sound=false must prevent sound even for High priority");
+    assert!(
+        !note.play_sound,
+        "sound=false must prevent sound even for High priority"
+    );
 }
 
 // sound=true, Low, dnd=false → play_sound=false
@@ -212,7 +226,10 @@ fn play_sound_false_when_sound_off_high_no_dnd() {
 fn play_sound_false_when_sound_on_low_no_dnd() {
     let prefs = make_prefs(true, true, true, true, true, true, false);
     let note = build_notification(&done_ev(), &prefs).unwrap(); // Done is Low
-    assert!(!note.play_sound, "Low priority must not play sound even if sound=true");
+    assert!(
+        !note.play_sound,
+        "Low priority must not play sound even if sound=true"
+    );
 }
 
 // sound=false, Low, dnd=false → play_sound=false
@@ -265,7 +282,10 @@ fn dnd_on_sound_off_low_returns_none() {
 fn play_sound_true_for_error_kind() {
     let prefs = make_prefs(true, true, true, true, true, true, false);
     let note = build_notification(&error_ev(), &prefs).unwrap();
-    assert!(note.play_sound, "Error/High + sound=true + dnd=false must play sound");
+    assert!(
+        note.play_sound,
+        "Error/High + sound=true + dnd=false must play sound"
+    );
 }
 
 // Started (Low) + sound=true, dnd=false → play_sound=false
@@ -357,7 +377,11 @@ fn group_on_single_notification_unchanged() {
     let prefs = all_on_prefs();
     let notes = build_done_burst(1);
     let result = group(&notes, &prefs);
-    assert_eq!(result.len(), 1, "Single notification must pass through unchanged");
+    assert_eq!(
+        result.len(),
+        1,
+        "Single notification must pass through unchanged"
+    );
 }
 
 #[test]
@@ -365,7 +389,11 @@ fn group_on_two_done_collapses_to_one() {
     let prefs = all_on_prefs();
     let notes = build_done_burst(2);
     let result = group(&notes, &prefs);
-    assert_eq!(result.len(), 1, "Two Done notifications must collapse to one with group=true");
+    assert_eq!(
+        result.len(),
+        1,
+        "Two Done notifications must collapse to one with group=true"
+    );
 }
 
 #[test]
@@ -373,7 +401,11 @@ fn group_on_five_done_collapses_to_one() {
     let prefs = all_on_prefs();
     let notes = build_done_burst(5);
     let result = group(&notes, &prefs);
-    assert_eq!(result.len(), 1, "Five Done notifications must collapse to one with group=true");
+    assert_eq!(
+        result.len(),
+        1,
+        "Five Done notifications must collapse to one with group=true"
+    );
 }
 
 #[test]
@@ -395,7 +427,11 @@ fn group_on_needs_burst_collapses_to_one() {
     let prefs = all_on_prefs();
     let notes = build_needs_burst(3);
     let result = group(&notes, &prefs);
-    assert_eq!(result.len(), 1, "Three Needs notifications must collapse to one");
+    assert_eq!(
+        result.len(),
+        1,
+        "Three Needs notifications must collapse to one"
+    );
 }
 
 #[test]
@@ -403,7 +439,11 @@ fn group_on_summary_kind_preserved() {
     let prefs = all_on_prefs();
     let notes = build_done_burst(3);
     let result = group(&notes, &prefs);
-    assert_eq!(result[0].kind, NotifKind::Done, "Summary must preserve the collapsed kind");
+    assert_eq!(
+        result[0].kind,
+        NotifKind::Done,
+        "Summary must preserve the collapsed kind"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -425,7 +465,11 @@ fn group_off_burst_not_collapsed() {
     prefs.group = false;
     let notes = build_done_burst(5);
     let result = group(&notes, &prefs);
-    assert_eq!(result.len(), 5, "group=false must return all 5 notifications unchanged");
+    assert_eq!(
+        result.len(),
+        5,
+        "group=false must return all 5 notifications unchanged"
+    );
 }
 
 #[test]
@@ -435,7 +479,11 @@ fn group_off_mixed_kinds_not_collapsed() {
     let mut notes = build_done_burst(2);
     notes.extend(build_needs_burst(2));
     let result = group(&notes, &prefs);
-    assert_eq!(result.len(), 4, "group=false must not collapse any notifications");
+    assert_eq!(
+        result.len(),
+        4,
+        "group=false must not collapse any notifications"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -512,7 +560,10 @@ fn group_on_all_four_kinds_two_each() {
 fn group_on_empty_input_returns_empty() {
     let prefs = all_on_prefs();
     let result = group(&[], &prefs);
-    assert!(result.is_empty(), "group() on empty input must return empty vec");
+    assert!(
+        result.is_empty(),
+        "group() on empty input must return empty vec"
+    );
 }
 
 #[test]
@@ -520,5 +571,8 @@ fn group_off_empty_input_returns_empty() {
     let mut prefs = all_on_prefs();
     prefs.group = false;
     let result = group(&[], &prefs);
-    assert!(result.is_empty(), "group() with group=false on empty input must return empty vec");
+    assert!(
+        result.is_empty(),
+        "group() with group=false on empty input must return empty vec"
+    );
 }

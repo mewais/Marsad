@@ -7,7 +7,9 @@
 ///   - helper_install_descriptor: all fields inspected
 ///   - HostEntry with partial fields (no IdentityFile, no User, etc.)
 ///   - Multiple health_check calls updating status in-place
-use marsad_hosts::{parse_ssh_config, FakeSshRunner, HelperDescriptor, HostError, HostRegistry, HostStatus};
+use marsad_hosts::{
+    parse_ssh_config, FakeSshRunner, HelperDescriptor, HostError, HostRegistry, HostStatus,
+};
 
 // ---------------------------------------------------------------------------
 // parse_ssh_config — comments are ignored
@@ -46,8 +48,14 @@ Host 10.0.*
 "#;
     let entries = parse_ssh_config(config);
     assert_eq!(entries.len(), 2, "both wildcard blocks must be parsed");
-    assert!(entries.iter().any(|e| e.alias == "*.internal"), "wildcard alias kept");
-    assert!(entries.iter().any(|e| e.alias == "10.0.*"), "wildcard alias kept");
+    assert!(
+        entries.iter().any(|e| e.alias == "*.internal"),
+        "wildcard alias kept"
+    );
+    assert!(
+        entries.iter().any(|e| e.alias == "10.0.*"),
+        "wildcard alias kept"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +130,11 @@ fn health_check_transitions_reconnecting_to_connected() {
     let mut reg = HostRegistry::new(runner);
     let id = {
         let h = reg.add("ok", "user@ok.example.com").unwrap();
-        assert_eq!(h.status, HostStatus::Reconnecting, "must start Reconnecting");
+        assert_eq!(
+            h.status,
+            HostStatus::Reconnecting,
+            "must start Reconnecting"
+        );
         h.id.clone()
     };
     let status = reg.health_check(&id);
@@ -185,7 +197,11 @@ fn health_check_reconnecting_status_on_transient_failure() {
 fn localhost_is_local_true() {
     let runner = Box::new(FakeSshRunner::new());
     let reg = HostRegistry::new(runner);
-    let local = reg.list().iter().find(|h| h.is_local).expect("localhost must exist");
+    let local = reg
+        .list()
+        .iter()
+        .find(|h| h.is_local)
+        .expect("localhost must exist");
     assert!(local.is_local);
 }
 
@@ -193,7 +209,11 @@ fn localhost_is_local_true() {
 fn localhost_removable_false() {
     let runner = Box::new(FakeSshRunner::new());
     let reg = HostRegistry::new(runner);
-    let local = reg.list().iter().find(|h| h.is_local).expect("localhost must exist");
+    let local = reg
+        .list()
+        .iter()
+        .find(|h| h.is_local)
+        .expect("localhost must exist");
     assert!(!local.removable);
 }
 
@@ -239,7 +259,10 @@ fn helper_descriptor_removable_true() {
     let runner = Box::new(FakeSshRunner::new());
     let reg = HostRegistry::new(runner);
     let desc: HelperDescriptor = reg.helper_install_descriptor();
-    assert!(desc.removable, "helper must be marked removable (user can uninstall)");
+    assert!(
+        desc.removable,
+        "helper must be marked removable (user can uninstall)"
+    );
 }
 
 #[test]

@@ -65,7 +65,10 @@ fn agent_error_variants_implement_display() {
     ];
     for v in variants {
         let s = format!("{v}");
-        assert!(!s.is_empty(), "Display must produce non-empty string for {v:?}");
+        assert!(
+            !s.is_empty(),
+            "Display must produce non-empty string for {v:?}"
+        );
     }
 }
 
@@ -353,7 +356,11 @@ fn reconcile_all_lifecycle_error_folds_into_stale() {
     let runtimes = agent.reconcile_all();
     // The one session must appear — folded as Stale or as an adopt/resume.
     // (Exact variant depends on whether AttachRace re-probe falls to MarkStale here.)
-    assert_eq!(runtimes.len(), 1, "one session → one runtime; got {runtimes:?}");
+    assert_eq!(
+        runtimes.len(),
+        1,
+        "one session → one runtime; got {runtimes:?}"
+    );
 }
 
 // ── StopSession for unknown session id ───────────────────────────────────────
@@ -589,7 +596,8 @@ fn handle_ipc_launch_session_spawn_failure_via_handle_ipc() {
     )
     .expect("with_fakes");
 
-    let line = r#"{"type":"LaunchSession","project":"/p","host_id":"local","model":"m","posture":"Ask"}"#;
+    let line =
+        r#"{"type":"LaunchSession","project":"/p","host_id":"local","model":"m","posture":"Ask"}"#;
     match agent.handle_ipc(line) {
         Err(AgentError::Spawn(_)) => {}
         other => panic!("expected AgentError::Spawn via handle_ipc, got {other:?}"),
@@ -614,12 +622,21 @@ fn handle_ipc_send_prompt_missing_text_returns_protocol_error() {
     .expect("with_fakes");
 
     // Launch to register a session.
-    let launch = r#"{"type":"LaunchSession","project":"/p","host_id":"local","model":"m","posture":"Ask"}"#;
+    let launch =
+        r#"{"type":"LaunchSession","project":"/p","host_id":"local","model":"m","posture":"Ask"}"#;
     let launched = agent.handle_ipc(launch).expect("launch must succeed");
-    let session_id: String = launched.iter().find_map(|l| {
-        serde_json::from_str::<serde_json::Value>(l).ok()
-            .and_then(|v| v.get("session_id").and_then(|s| s.as_str()).map(str::to_string))
-    }).expect("session_id in launch response");
+    let session_id: String = launched
+        .iter()
+        .find_map(|l| {
+            serde_json::from_str::<serde_json::Value>(l)
+                .ok()
+                .and_then(|v| {
+                    v.get("session_id")
+                        .and_then(|s| s.as_str())
+                        .map(str::to_string)
+                })
+        })
+        .expect("session_id in launch response");
 
     // SendPrompt with session_id present but text absent.
     let prompt = format!(r#"{{"type":"SendPrompt","session_id":"{session_id}"}}"#);

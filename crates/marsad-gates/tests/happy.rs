@@ -5,7 +5,9 @@
 //! - to_control_response mapping: Approve -> allow behavior, Reject -> deny with reason as message
 //! - route yields exactly the decision's session_id
 
-use marsad_gates::{approve, reject, route, to_control_response, Decision, DiffLine, Gate, GateDecision, PlanStep, Sig};
+use marsad_gates::{
+    approve, reject, route, to_control_response, Decision, DiffLine, Gate, PlanStep, Sig,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,10 +42,26 @@ fn make_edit_gate() -> Gate {
     Gate::Edit {
         file: "src/main.rs".to_string(),
         diff: vec![
-            DiffLine { sig: Sig::Context, text: "fn main() {".to_string(), ln: "1".to_string() },
-            DiffLine { sig: Sig::Del, text: "    println!(\"hello\");".to_string(), ln: "2".to_string() },
-            DiffLine { sig: Sig::Add, text: "    println!(\"world\");".to_string(), ln: "2".to_string() },
-            DiffLine { sig: Sig::Context, text: "}".to_string(), ln: "3".to_string() },
+            DiffLine {
+                sig: Sig::Context,
+                text: "fn main() {".to_string(),
+                ln: "1".to_string(),
+            },
+            DiffLine {
+                sig: Sig::Del,
+                text: "    println!(\"hello\");".to_string(),
+                ln: "2".to_string(),
+            },
+            DiffLine {
+                sig: Sig::Add,
+                text: "    println!(\"world\");".to_string(),
+                ln: "2".to_string(),
+            },
+            DiffLine {
+                sig: Sig::Context,
+                text: "}".to_string(),
+                ln: "3".to_string(),
+            },
         ],
     }
 }
@@ -285,7 +303,10 @@ fn gate_decision_implements_clone_and_debug() {
 
 #[test]
 fn plan_step_implements_clone_and_debug() {
-    let s = PlanStep { title: "t".to_string(), detail: "d".to_string() };
+    let s = PlanStep {
+        title: "t".to_string(),
+        detail: "d".to_string(),
+    };
     let s2 = s.clone();
     assert_eq!(s, s2);
     let _dbg = format!("{s:?}");

@@ -123,7 +123,10 @@ fn sidebar_list_empty_snapshot_returns_empty() {
 fn session_detail_no_selection_returns_none() {
     let snap = empty_snapshot();
     let detail = session_detail(&snap);
-    assert!(detail.is_none(), "session_detail should return None when no session is selected");
+    assert!(
+        detail.is_none(),
+        "session_detail should return None when no session is selected"
+    );
 }
 
 #[test]
@@ -142,7 +145,10 @@ fn session_detail_no_selection_with_sessions_present_returns_none() {
 fn gate_vm_no_selection_returns_none() {
     let snap = empty_snapshot();
     let vm = gate_vm(&snap);
-    assert!(vm.is_none(), "gate_vm should return None when no session is selected");
+    assert!(
+        vm.is_none(),
+        "gate_vm should return None when no session is selected"
+    );
 }
 
 #[test]
@@ -152,7 +158,10 @@ fn gate_vm_selection_but_no_gate_returns_none() {
     snap.selected_id = Some("s1".to_string());
     // gate is None on the session (set by single_session_snapshot)
     let vm = gate_vm(&snap);
-    assert!(vm.is_none(), "gate_vm should return None when selected session has no gate");
+    assert!(
+        vm.is_none(),
+        "gate_vm should return None when selected session has no gate"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -256,5 +265,9 @@ fn rescope_empty_workspace_session_ids_gives_no_sessions() {
     };
 
     let result = rescope("empty-ws", &snap);
-    assert_eq!(result.sessions.len(), 0, "workspace with no session_ids should produce empty sessions");
+    assert_eq!(
+        result.sessions.len(),
+        0,
+        "workspace with no session_ids should produce empty sessions"
+    );
 }

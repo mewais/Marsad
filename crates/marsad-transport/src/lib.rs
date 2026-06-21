@@ -688,9 +688,8 @@ impl Transport for ClaudeFifoTransport {
 
         // Thread A: write-open in.fifo — unblocks bash's stdin redirect (step 1).
         let in_p = in_fifo.clone();
-        let writer_handle = std::thread::spawn(move || {
-            std::fs::OpenOptions::new().write(true).open(&in_p)
-        });
+        let writer_handle =
+            std::thread::spawn(move || std::fs::OpenOptions::new().write(true).open(&in_p));
 
         // Give Thread A a 50 ms head-start so bash can reach step 2 before
         // Thread B tries to read-open out.fifo.
@@ -698,9 +697,8 @@ impl Transport for ClaudeFifoTransport {
 
         // Thread B: read-open out.fifo — unblocked once bash opens it for writing (step 2).
         let out_p = out_fifo.clone();
-        let reader_handle = std::thread::spawn(move || {
-            std::fs::OpenOptions::new().read(true).open(&out_p)
-        });
+        let reader_handle =
+            std::thread::spawn(move || std::fs::OpenOptions::new().read(true).open(&out_p));
 
         let in_file = writer_handle
             .join()

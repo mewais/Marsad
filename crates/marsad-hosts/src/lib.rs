@@ -35,15 +35,11 @@ pub fn parse_ssh_config(text: &str) -> Vec<HostEntry> {
         .lines()
         .map(str::trim)
         .filter(|t| {
-            !t.is_empty()
-                && !t.starts_with('#')
-                && t.contains(|c: char| c.is_ascii_whitespace())
+            !t.is_empty() && !t.starts_with('#') && t.contains(|c: char| c.is_ascii_whitespace())
         })
         .map(|t| {
             // Safe: the filter above guarantees at least one ASCII whitespace.
-            let (kw, val) = t
-                .split_once(|c: char| c.is_ascii_whitespace())
-                .unwrap();
+            let (kw, val) = t.split_once(|c: char| c.is_ascii_whitespace()).unwrap();
             (kw.to_ascii_lowercase(), val.trim().to_string())
         })
         .filter(|(kw, _)| KNOWN.contains(&kw.as_str()))

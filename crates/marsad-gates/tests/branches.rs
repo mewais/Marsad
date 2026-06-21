@@ -8,7 +8,10 @@
 //! - DecisionLedger::seen true/false
 //! - Approve and Reject for all three gate types in table-driven form
 
-use marsad_gates::{approve, decision_id, reject, Decision, DecisionLedger, DiffLine, Gate, GateError, PlanStep, Sig};
+use marsad_gates::{
+    approve, decision_id, reject, Decision, DecisionLedger, DiffLine, Gate, GateError, PlanStep,
+    Sig,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -53,7 +56,10 @@ fn decision_id_stable_same_session_same_permission_gate() {
     let gate = permission_gate("cat /etc/passwd");
     let id1 = decision_id("session-stable", &gate);
     let id2 = decision_id("session-stable", &gate);
-    assert_eq!(id1, id2, "decision_id must be deterministic for the same (session_id, gate)");
+    assert_eq!(
+        id1, id2,
+        "decision_id must be deterministic for the same (session_id, gate)"
+    );
 }
 
 #[test]
@@ -61,7 +67,10 @@ fn decision_id_stable_same_session_same_plan_gate() {
     let gate = plan_gate("Refactor auth");
     let id1 = decision_id("session-stable", &gate);
     let id2 = decision_id("session-stable", &gate);
-    assert_eq!(id1, id2, "decision_id must be deterministic for the same (session_id, gate)");
+    assert_eq!(
+        id1, id2,
+        "decision_id must be deterministic for the same (session_id, gate)"
+    );
 }
 
 #[test]
@@ -69,7 +78,10 @@ fn decision_id_stable_same_session_same_edit_gate() {
     let gate = edit_gate("src/lib.rs");
     let id1 = decision_id("session-stable", &gate);
     let id2 = decision_id("session-stable", &gate);
-    assert_eq!(id1, id2, "decision_id must be deterministic for the same (session_id, gate)");
+    assert_eq!(
+        id1, id2,
+        "decision_id must be deterministic for the same (session_id, gate)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -81,7 +93,10 @@ fn decision_id_distinct_different_session_permission() {
     let gate = permission_gate("ls");
     let id1 = decision_id("session-X", &gate);
     let id2 = decision_id("session-Y", &gate);
-    assert_ne!(id1, id2, "different session_id must produce distinct decision_id");
+    assert_ne!(
+        id1, id2,
+        "different session_id must produce distinct decision_id"
+    );
 }
 
 #[test]
@@ -89,7 +104,10 @@ fn decision_id_distinct_different_session_plan() {
     let gate = plan_gate("Deploy plan");
     let id1 = decision_id("session-1", &gate);
     let id2 = decision_id("session-2", &gate);
-    assert_ne!(id1, id2, "different session_id must produce distinct decision_id");
+    assert_ne!(
+        id1, id2,
+        "different session_id must produce distinct decision_id"
+    );
 }
 
 #[test]
@@ -97,7 +115,10 @@ fn decision_id_distinct_different_session_edit() {
     let gate = edit_gate("main.rs");
     let id1 = decision_id("session-alpha", &gate);
     let id2 = decision_id("session-beta", &gate);
-    assert_ne!(id1, id2, "different session_id must produce distinct decision_id");
+    assert_ne!(
+        id1, id2,
+        "different session_id must produce distinct decision_id"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +131,10 @@ fn decision_id_distinct_different_permission_command() {
     let gate2 = permission_gate("rm /tmp/x");
     let id1 = decision_id("session-same", &gate1);
     let id2 = decision_id("session-same", &gate2);
-    assert_ne!(id1, id2, "different gate content must produce distinct decision_id");
+    assert_ne!(
+        id1, id2,
+        "different gate content must produce distinct decision_id"
+    );
 }
 
 #[test]
@@ -119,7 +143,10 @@ fn decision_id_distinct_different_plan_summary() {
     let gate2 = plan_gate("Plan B");
     let id1 = decision_id("session-same", &gate1);
     let id2 = decision_id("session-same", &gate2);
-    assert_ne!(id1, id2, "different plan summary must produce distinct decision_id");
+    assert_ne!(
+        id1, id2,
+        "different plan summary must produce distinct decision_id"
+    );
 }
 
 #[test]
@@ -128,16 +155,22 @@ fn decision_id_distinct_different_edit_file() {
     let gate2 = edit_gate("src/lib.rs");
     let id1 = decision_id("session-same", &gate1);
     let id2 = decision_id("session-same", &gate2);
-    assert_ne!(id1, id2, "different file path must produce distinct decision_id");
+    assert_ne!(
+        id1, id2,
+        "different file path must produce distinct decision_id"
+    );
 }
 
 #[test]
 fn decision_id_distinct_different_gate_variants() {
     let perm = permission_gate("ls");
-    let plan = plan_gate("ls");  // same "content" text but different variant
+    let plan = plan_gate("ls"); // same "content" text but different variant
     let id1 = decision_id("session-same", &perm);
     let id2 = decision_id("session-same", &plan);
-    assert_ne!(id1, id2, "different Gate variants must produce distinct decision_id");
+    assert_ne!(
+        id1, id2,
+        "different Gate variants must produce distinct decision_id"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +187,10 @@ fn each_gate_variant_approve_produces_correct_session_id() {
 
     for (session, gate) in &cases {
         let d = approve(session, gate);
-        assert_eq!(&d.session_id, session, "session_id mismatch for gate: {gate:?}");
+        assert_eq!(
+            &d.session_id, session,
+            "session_id mismatch for gate: {gate:?}"
+        );
         assert_eq!(d.decision, Decision::Approve);
     }
 }
@@ -237,7 +273,7 @@ fn ledger_seen_true_only_after_record() {
 fn ledger_seen_does_not_bleed_across_gate_types() {
     let mut ledger = DecisionLedger::new();
     let perm_gate = permission_gate("command");
-    let plan_gate_inst = plan_gate("command");  // same text, different variant
+    let plan_gate_inst = plan_gate("command"); // same text, different variant
 
     let d_perm = approve("session-bleed", &perm_gate);
     ledger.record(&d_perm).expect("record permission");
@@ -276,9 +312,18 @@ fn decision_id_matches_gate_decision_id_field() {
     let d_approve = approve(session, &gate);
     let d_reject = reject(session, &gate, "reason");
 
-    assert_eq!(standalone_id, d_approve.id, "decision_id() must match approve().id");
-    assert_eq!(standalone_id, d_reject.id, "decision_id() must match reject().id");
-    assert_eq!(d_approve.id, d_reject.id, "approve and reject for same inputs share the same id");
+    assert_eq!(
+        standalone_id, d_approve.id,
+        "decision_id() must match approve().id"
+    );
+    assert_eq!(
+        standalone_id, d_reject.id,
+        "decision_id() must match reject().id"
+    );
+    assert_eq!(
+        d_approve.id, d_reject.id,
+        "approve and reject for same inputs share the same id"
+    );
 }
 
 // ---------------------------------------------------------------------------

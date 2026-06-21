@@ -13,7 +13,7 @@
 //! constructor (see happy.rs for the full rationale).
 
 use marsad_agent::{Agent, AgentConfig, AgentError, ListenSpec};
-use marsad_lifecycle::{Action, FakeContainer, RuntimePhase, SessionRuntime};
+use marsad_lifecycle::{Action, FakeContainer, RuntimePhase};
 use marsad_notify::CaptureNotifier;
 use marsad_store::MemoryBackend;
 
@@ -30,16 +30,6 @@ fn make_agent() -> Agent {
     Agent::with_fakes(
         stdio_cfg(),
         Box::new(FakeContainer::new()),
-        Box::new(CaptureNotifier::new()),
-        Box::new(marsad_store::Store::new(Box::new(MemoryBackend::new()))),
-    )
-    .expect("with_fakes must succeed")
-}
-
-fn make_agent_with_container(container: FakeContainer) -> Agent {
-    Agent::with_fakes(
-        stdio_cfg(),
-        Box::new(container),
         Box::new(CaptureNotifier::new()),
         Box::new(marsad_store::Store::new(Box::new(MemoryBackend::new()))),
     )
@@ -133,10 +123,7 @@ fn ipc_command_send_prompt() {
 
     let prompt = format!(r#"{{"type":"SendPrompt","session_id":"{sid}","text":"do the thing"}}"#);
     let result = agent.handle_ipc(&prompt);
-    assert!(
-        result.is_ok(),
-        "SendPrompt must return Ok; got {result:?}"
-    );
+    assert!(result.is_ok(), "SendPrompt must return Ok; got {result:?}");
 }
 
 /// Interrupt → sends an interrupt signal to an active session.
@@ -147,10 +134,7 @@ fn ipc_command_interrupt() {
 
     let interrupt = format!(r#"{{"type":"Interrupt","session_id":"{sid}"}}"#);
     let result = agent.handle_ipc(&interrupt);
-    assert!(
-        result.is_ok(),
-        "Interrupt must return Ok; got {result:?}"
-    );
+    assert!(result.is_ok(), "Interrupt must return Ok; got {result:?}");
 }
 
 /// AnswerGate → provides an allow/deny answer to a pending gate request.
@@ -163,9 +147,7 @@ fn ipc_command_answer_gate() {
     // already be queued.  In the fake environment there is no real claude, so the
     // agent may handle this as a no-op (no pending gate) or return Ok immediately.
     // We assert it does not return a Protocol error (which would indicate parsing failure).
-    let answer = format!(
-        r#"{{"type":"AnswerGate","session_id":"{sid}","decision":"Allow"}}"#
-    );
+    let answer = format!(r#"{{"type":"AnswerGate","session_id":"{sid}","decision":"Allow"}}"#);
     let result = agent.handle_ipc(&answer);
     // Must not be a Protocol error.
     if let Err(ref e) = result {
@@ -181,10 +163,7 @@ fn ipc_command_answer_gate() {
 fn ipc_command_subscribe() {
     let mut agent = make_agent();
     let result = agent.handle_ipc(r#"{"type":"Subscribe"}"#);
-    assert!(
-        result.is_ok(),
-        "Subscribe must return Ok; got {result:?}"
-    );
+    assert!(result.is_ok(), "Subscribe must return Ok; got {result:?}");
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -295,7 +274,8 @@ fn reconcile_all_adopt_branch() {
     let rt = &runtimes[0];
     assert!(
         matches!(rt.action, Action::Adopt),
-        "live container → Adopt; got {:?}", rt.action
+        "live container → Adopt; got {:?}",
+        rt.action
     );
     // No spawn ever.
     let calls = agent.container_calls();
@@ -341,7 +321,8 @@ fn reconcile_all_resume_branch() {
     let rt = &runtimes[0];
     assert!(
         matches!(rt.action, Action::Resume(_)),
-        "dead container + session_id → Resume; got {:?}", rt.action
+        "dead container + session_id → Resume; got {:?}",
+        rt.action
     );
     // Spawn must have been called exactly once (fresh container for resume).
     let calls = agent.container_calls();
@@ -388,12 +369,15 @@ fn reconcile_all_stale_branch() {
     let rt = &runtimes[0];
     assert!(
         matches!(rt.action, Action::MarkStale),
-        "dead container + no session_id → MarkStale; got {:?}", rt.action
+        "dead container + no session_id → MarkStale; got {:?}",
+        rt.action
     );
     // Neither attach nor spawn.
     let calls = agent.container_calls();
     assert!(
-        !calls.iter().any(|c| c.contains("attach") || c.contains("spawn")),
+        !calls
+            .iter()
+            .any(|c| c.contains("attach") || c.contains("spawn")),
         "stale branch: no attach/spawn; calls: {calls:?}"
     );
 }
@@ -457,9 +441,18 @@ fn reconcile_all_mixed_adopt_resume_stale() {
     let runtimes = agent.reconcile_all();
     assert_eq!(runtimes.len(), 3, "three sessions → three runtimes");
 
-    let adopt_count = runtimes.iter().filter(|r| matches!(r.action, Action::Adopt)).count();
-    let resume_count = runtimes.iter().filter(|r| matches!(r.action, Action::Resume(_))).count();
-    let stale_count = runtimes.iter().filter(|r| matches!(r.action, Action::MarkStale)).count();
+    let adopt_count = runtimes
+        .iter()
+        .filter(|r| matches!(r.action, Action::Adopt))
+        .count();
+    let resume_count = runtimes
+        .iter()
+        .filter(|r| matches!(r.action, Action::Resume(_)))
+        .count();
+    let stale_count = runtimes
+        .iter()
+        .filter(|r| matches!(r.action, Action::MarkStale))
+        .count();
 
     assert_eq!(adopt_count, 1, "one adopt");
     assert_eq!(resume_count, 1, "one resume");
@@ -469,7 +462,10 @@ fn reconcile_all_mixed_adopt_resume_stale() {
     let calls = agent.container_calls();
     // One spawn for the resume, zero for adopt, zero for stale.
     let spawn_count = calls.iter().filter(|c| c.contains("spawn")).count();
-    assert_eq!(spawn_count, 1, "exactly one spawn (for Resume); calls: {calls:?}");
+    assert_eq!(
+        spawn_count, 1,
+        "exactly one spawn (for Resume); calls: {calls:?}"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -504,13 +500,15 @@ fn subscriber_drop_does_not_kill_session() {
     // Attempt to extract a subscriber_id from the response.
     // NOTE(test-agent): the agent should return a subscriber_id token in the
     // Subscribe ack so the client can later unsubscribe cleanly.
-    let subscriber_id = sub_lines
-        .iter()
-        .find_map(|l| {
-            serde_json::from_str::<serde_json::Value>(l)
-                .ok()
-                .and_then(|v| v.get("subscriber_id").and_then(|s| s.as_str()).map(str::to_string))
-        });
+    let subscriber_id = sub_lines.iter().find_map(|l| {
+        serde_json::from_str::<serde_json::Value>(l)
+            .ok()
+            .and_then(|v| {
+                v.get("subscriber_id")
+                    .and_then(|s| s.as_str())
+                    .map(str::to_string)
+            })
+    });
 
     // 3. Drop the subscriber (simulate disconnect).
     if let Some(sid) = &subscriber_id {
@@ -546,16 +544,22 @@ fn dropping_one_subscriber_leaves_others_and_session_intact() {
 
     // Subscribe twice.
     let sub1 = agent.handle_ipc(r#"{"type":"Subscribe"}"#).expect("sub1");
-    let sub2 = agent.handle_ipc(r#"{"type":"Subscribe"}"#).expect("sub2");
+    let _sub2 = agent.handle_ipc(r#"{"type":"Subscribe"}"#).expect("sub2");
 
     // Drop first subscriber.
     let sub1_id = sub1.iter().find_map(|l| {
         serde_json::from_str::<serde_json::Value>(l)
             .ok()
-            .and_then(|v| v.get("subscriber_id").and_then(|s| s.as_str()).map(str::to_string))
+            .and_then(|v| {
+                v.get("subscriber_id")
+                    .and_then(|s| s.as_str())
+                    .map(str::to_string)
+            })
     });
     if let Some(sid) = &sub1_id {
-        let _ = agent.handle_ipc(&format!(r#"{{"type":"Unsubscribe","subscriber_id":"{sid}"}}"#));
+        let _ = agent.handle_ipc(&format!(
+            r#"{{"type":"Unsubscribe","subscriber_id":"{sid}"}}"#
+        ));
     }
 
     // Session must still be reachable.
@@ -580,10 +584,16 @@ fn session_survives_all_subscribers_disconnecting() {
     let sub_id = sub_result.iter().find_map(|l| {
         serde_json::from_str::<serde_json::Value>(l)
             .ok()
-            .and_then(|v| v.get("subscriber_id").and_then(|s| s.as_str()).map(str::to_string))
+            .and_then(|v| {
+                v.get("subscriber_id")
+                    .and_then(|s| s.as_str())
+                    .map(str::to_string)
+            })
     });
     if let Some(sid) = &sub_id {
-        let _ = agent.handle_ipc(&format!(r#"{{"type":"Unsubscribe","subscriber_id":"{sid}"}}"#));
+        let _ = agent.handle_ipc(&format!(
+            r#"{{"type":"Unsubscribe","subscriber_id":"{sid}"}}"#
+        ));
     }
 
     // The agent (daemon) must still hold the session.
@@ -621,7 +631,10 @@ fn agent_new_with_unix_socket_listen_spec() {
         data_root: "/tmp/marsad-ls-unix".to_string(),
     };
     // NOTE(test-agent): construction must succeed (no actual bind at new time).
-    assert!(Agent::new(cfg).is_ok(), "UnixSocket ListenSpec must succeed");
+    assert!(
+        Agent::new(cfg).is_ok(),
+        "UnixSocket ListenSpec must succeed"
+    );
 }
 
 #[test]
@@ -673,7 +686,8 @@ fn reconcile_all_adopt_phase_is_detached() {
     assert_eq!(runtimes.len(), 1);
     assert!(
         matches!(runtimes[0].phase, Some(RuntimePhase::Detached)),
-        "adopt → Detached phase; got {:?}", runtimes[0].phase
+        "adopt → Detached phase; got {:?}",
+        runtimes[0].phase
     );
 }
 
@@ -710,7 +724,8 @@ fn reconcile_all_resume_phase_is_none() {
     assert_eq!(runtimes.len(), 1);
     assert!(
         runtimes[0].phase.is_none(),
-        "resume → phase None; got {:?}", runtimes[0].phase
+        "resume → phase None; got {:?}",
+        runtimes[0].phase
     );
 }
 
@@ -747,7 +762,8 @@ fn reconcile_all_stale_phase_is_stale() {
     assert_eq!(runtimes.len(), 1);
     assert!(
         matches!(runtimes[0].phase, Some(RuntimePhase::Stale)),
-        "stale → Stale phase; got {:?}", runtimes[0].phase
+        "stale → Stale phase; got {:?}",
+        runtimes[0].phase
     );
 }
 
@@ -826,7 +842,10 @@ fn multiple_launch_sessions_are_independent() {
     let (_, sid_a) = do_launch(&mut agent);
     let (_, sid_b) = do_launch(&mut agent);
 
-    assert_ne!(sid_a, sid_b, "two launches must produce distinct session ids");
+    assert_ne!(
+        sid_a, sid_b,
+        "two launches must produce distinct session ids"
+    );
 
     // Each can be addressed independently.
     let stop_a = format!(r#"{{"type":"StopSession","session_id":"{sid_a}"}}"#);

@@ -30,9 +30,8 @@ fn fold_ndjson_into(initial: SessionState, ndjson: &str) -> SessionState {
         if line.is_empty() {
             continue;
         }
-        let msg = parse_stream_line(line).unwrap_or_else(|e| {
-            panic!("fixture line {i} failed to parse: {e:?}\nline: {line}")
-        });
+        let msg = parse_stream_line(line)
+            .unwrap_or_else(|e| panic!("fixture line {i} failed to parse: {e:?}\nline: {line}"));
         state = reduce(state, Event::Stream(msg));
     }
     state
@@ -47,7 +46,11 @@ const QA_NDJSON: &str = include_str!("../../../fixtures/streams/qa.ndjson");
 #[test]
 fn fixture_qa_phase_is_done() {
     let state = fold_ndjson(QA_NDJSON);
-    assert_eq!(state.phase, Phase::Done, "qa fixture must end with Phase::Done");
+    assert_eq!(
+        state.phase,
+        Phase::Done,
+        "qa fixture must end with Phase::Done"
+    );
 }
 
 #[test]
@@ -169,9 +172,8 @@ fn fixture_qa_all_lines_parse_clean() {
         if line.is_empty() {
             continue;
         }
-        parse_stream_line(line).unwrap_or_else(|e| {
-            panic!("qa.ndjson line {i} failed to parse: {e:?}\nline: {line}")
-        });
+        parse_stream_line(line)
+            .unwrap_or_else(|e| panic!("qa.ndjson line {i} failed to parse: {e:?}\nline: {line}"));
     }
 }
 

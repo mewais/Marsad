@@ -8,6 +8,7 @@
 //!     "exists:<name>", "attach:<name>", "spawn:<name>", "kill:<name>".
 //!   - `fail_spawn(&mut self, name: &str)` — makes the next spawn(name,..)
 //!     return Err(Spawn).
+//!
 //! Both are part of the blessed spec API (lifecycle.md §Public API).
 
 use marsad_lifecycle::{Container, FakeContainer, LifecycleError};
@@ -41,7 +42,7 @@ fn fake_set_exists_false_after_true() {
     let mut f = make_fake();
     f.set_exists("sess-1", true);
     f.set_exists("sess-1", false);
-    assert!(f.exists("sess-1"));   // 1st dequeues true
+    assert!(f.exists("sess-1")); // 1st dequeues true
     assert!(!f.exists("sess-1")); // 2nd dequeues false
 }
 
@@ -98,11 +99,12 @@ fn fake_kill_succeeds_by_default() {
 
 #[test]
 fn fake_records_exists_call() {
-    let mut f = make_fake();
+    let f = make_fake();
     let _ = f.exists("s");
     assert!(
         f.calls().iter().any(|c| c == "exists:s"),
-        "call log should contain 'exists:s', got {:?}", f.calls()
+        "call log should contain 'exists:s', got {:?}",
+        f.calls()
     );
 }
 
@@ -113,7 +115,8 @@ fn fake_records_attach_call() {
     let _ = f.attach("s");
     assert!(
         f.calls().iter().any(|c| c == "attach:s"),
-        "call log should contain 'attach:s', got {:?}", f.calls()
+        "call log should contain 'attach:s', got {:?}",
+        f.calls()
     );
 }
 
@@ -123,7 +126,8 @@ fn fake_records_spawn_call() {
     let _ = f.spawn("s", "cmd");
     assert!(
         f.calls().iter().any(|c| c.starts_with("spawn:s")),
-        "call log should contain 'spawn:s...', got {:?}", f.calls()
+        "call log should contain 'spawn:s...', got {:?}",
+        f.calls()
     );
 }
 
@@ -133,7 +137,8 @@ fn fake_records_kill_call() {
     let _ = f.kill("s");
     assert!(
         f.calls().iter().any(|c| c == "kill:s"),
-        "call log should contain 'kill:s', got {:?}", f.calls()
+        "call log should contain 'kill:s', got {:?}",
+        f.calls()
     );
 }
 
@@ -163,10 +168,22 @@ fn fake_call_log_format_includes_name() {
     let _ = f.kill("marsad-A");
 
     let calls = f.calls();
-    assert!(calls.contains(&"exists:marsad-A".to_string()), "calls: {calls:?}");
-    assert!(calls.contains(&"attach:marsad-A".to_string()), "calls: {calls:?}");
-    assert!(calls.iter().any(|c| c.starts_with("spawn:marsad-A")), "calls: {calls:?}");
-    assert!(calls.contains(&"kill:marsad-A".to_string()), "calls: {calls:?}");
+    assert!(
+        calls.contains(&"exists:marsad-A".to_string()),
+        "calls: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"attach:marsad-A".to_string()),
+        "calls: {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|c| c.starts_with("spawn:marsad-A")),
+        "calls: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"kill:marsad-A".to_string()),
+        "calls: {calls:?}"
+    );
 }
 
 #[test]

@@ -156,7 +156,10 @@ fn ipc_unknown_discriminant_carries_the_type_string() {
     let err = parse_ipc(line).expect_err("unknown IPC type must be an error");
     match err {
         ProtoError::UnknownDiscriminant(s) => {
-            assert_eq!(s, "FutureMsg", "discriminant string must match the type field");
+            assert_eq!(
+                s, "FutureMsg",
+                "discriminant string must match the type field"
+            );
         }
         other => panic!("expected UnknownDiscriminant(\"FutureMsg\"), got {other:?}"),
     }

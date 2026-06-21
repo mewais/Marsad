@@ -24,7 +24,9 @@ fn persisted(session_id: Option<&str>, container: &str) -> Persisted {
 }
 
 fn probe(alive: bool) -> Probe {
-    Probe { container_alive: alive }
+    Probe {
+        container_alive: alive,
+    }
 }
 
 // ── plan_reconnect full matrix ────────────────────────────────────────────────
@@ -39,19 +41,35 @@ fn plan_reconnect_matrix() {
     }
 
     let cases = [
-        Case { alive: true,  session_id: Some("s1"), label: "Adopt" },
-        Case { alive: true,  session_id: None,        label: "Adopt" },
-        Case { alive: false, session_id: Some("s2"), label: "Resume" },
-        Case { alive: false, session_id: None,        label: "MarkStale" },
+        Case {
+            alive: true,
+            session_id: Some("s1"),
+            label: "Adopt",
+        },
+        Case {
+            alive: true,
+            session_id: None,
+            label: "Adopt",
+        },
+        Case {
+            alive: false,
+            session_id: Some("s2"),
+            label: "Resume",
+        },
+        Case {
+            alive: false,
+            session_id: None,
+            label: "MarkStale",
+        },
     ];
 
     for c in &cases {
         let p = persisted(c.session_id, "marsad-x");
         let action = plan_reconnect(&p, &probe(c.alive));
         let got = match &action {
-            Action::Adopt       => "Adopt",
-            Action::Resume(_)   => "Resume",
-            Action::MarkStale   => "MarkStale",
+            Action::Adopt => "Adopt",
+            Action::Resume(_) => "Resume",
+            Action::MarkStale => "MarkStale",
         };
         assert_eq!(
             got, c.label,
@@ -75,12 +93,14 @@ fn reconcile_alive_with_session_adopt_detached_no_spawn() {
     assert!(matches!(rt.action, Action::Adopt), "expected Adopt");
     assert!(
         matches!(rt.phase, Some(RuntimePhase::Detached)),
-        "expected Detached, got {:?}", rt.phase
+        "expected Detached, got {:?}",
+        rt.phase
     );
     // NO-DUPLICATION PROOF: spawn must not appear in the call log
     assert!(
         !f.calls().iter().any(|c| c.contains("spawn")),
-        "Adopt must never call spawn — calls: {:?}", f.calls()
+        "Adopt must never call spawn — calls: {:?}",
+        f.calls()
     );
 }
 
@@ -96,11 +116,13 @@ fn reconcile_alive_no_session_adopt_detached_no_spawn() {
     assert!(matches!(rt.action, Action::Adopt), "expected Adopt");
     assert!(
         matches!(rt.phase, Some(RuntimePhase::Detached)),
-        "expected Detached, got {:?}", rt.phase
+        "expected Detached, got {:?}",
+        rt.phase
     );
     assert!(
         !f.calls().iter().any(|c| c.contains("spawn")),
-        "Adopt (no session) must never call spawn — calls: {:?}", f.calls()
+        "Adopt (no session) must never call spawn — calls: {:?}",
+        f.calls()
     );
 }
 
@@ -116,12 +138,16 @@ fn reconcile_dead_with_session_resume_no_extra_spawn() {
     assert!(matches!(rt.action, Action::Resume(_)), "expected Resume");
 
     let spawn_count = f.calls().iter().filter(|c| c.contains("spawn")).count();
-    assert_eq!(spawn_count, 1, "Resume must call spawn exactly once, got {spawn_count}");
+    assert_eq!(
+        spawn_count, 1,
+        "Resume must call spawn exactly once, got {spawn_count}"
+    );
 
     // attach must NOT be called (no container existed)
     assert!(
         !f.calls().iter().any(|c| c.contains("attach")),
-        "Resume must not call attach — calls: {:?}", f.calls()
+        "Resume must not call attach — calls: {:?}",
+        f.calls()
     );
 }
 
@@ -136,12 +162,16 @@ fn reconcile_dead_no_session_mark_stale() {
     assert!(matches!(rt.action, Action::MarkStale), "expected MarkStale");
     assert!(
         matches!(rt.phase, Some(RuntimePhase::Stale)),
-        "MarkStale → Stale phase, got {:?}", rt.phase
+        "MarkStale → Stale phase, got {:?}",
+        rt.phase
     );
     // Neither attach nor spawn should be called
     assert!(
-        !f.calls().iter().any(|c| c.contains("attach") || c.contains("spawn")),
-        "MarkStale must not call attach or spawn — calls: {:?}", f.calls()
+        !f.calls()
+            .iter()
+            .any(|c| c.contains("attach") || c.contains("spawn")),
+        "MarkStale must not call attach or spawn — calls: {:?}",
+        f.calls()
     );
 }
 
@@ -156,7 +186,8 @@ fn detached_phase_only_when_container_alive() {
     let rt = reconcile(&p, &mut f).unwrap();
     assert!(
         matches!(rt.phase, Some(RuntimePhase::Detached)),
-        "alive container → Detached, got {:?}", rt.phase
+        "alive container → Detached, got {:?}",
+        rt.phase
     );
 }
 
@@ -168,7 +199,8 @@ fn stale_phase_only_when_container_dead_and_no_session() {
     let rt = reconcile(&p, &mut f).unwrap();
     assert!(
         matches!(rt.phase, Some(RuntimePhase::Stale)),
-        "dead + no session → Stale, got {:?}", rt.phase
+        "dead + no session → Stale, got {:?}",
+        rt.phase
     );
 }
 
@@ -183,7 +215,8 @@ fn resume_action_phase_is_none() {
     let rt = reconcile(&p, &mut f).unwrap();
     assert!(
         rt.phase.is_none(),
-        "successful Resume → phase must be None, got {:?}", rt.phase
+        "successful Resume → phase must be None, got {:?}",
+        rt.phase
     );
 }
 
@@ -205,7 +238,8 @@ fn no_duplication_on_adopt_with_any_session_id() {
         );
         assert!(
             !f.calls().iter().any(|c| c.contains("spawn")),
-            "session {name}: Adopt must not spawn — calls: {:?}", f.calls()
+            "session {name}: Adopt must not spawn — calls: {:?}",
+            f.calls()
         );
     }
 }

@@ -4,8 +4,8 @@
 //!   • `reconcile` resume path → spawns fresh container with claude --resume.
 
 use marsad_lifecycle::{
-    plan_reconnect, reconcile, Action, FakeContainer, LifecycleError, Persisted, Probe,
-    RuntimePhase, SessionRuntime,
+    plan_reconnect, reconcile, Action, FakeContainer, Persisted, Probe, RuntimePhase,
+    SessionRuntime,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -29,11 +29,15 @@ fn persisted_no_session(container: &str) -> Persisted {
 }
 
 fn alive() -> Probe {
-    Probe { container_alive: true }
+    Probe {
+        container_alive: true,
+    }
 }
 
 fn dead() -> Probe {
-    Probe { container_alive: false }
+    Probe {
+        container_alive: false,
+    }
 }
 
 // ── plan_reconnect: Adopt ────────────────────────────────────────────────────
@@ -156,7 +160,9 @@ fn reconcile_resume_spawn_command_contains_resume_flag() {
         .collect();
     assert!(!spawn_calls.is_empty(), "spawn must be called");
     assert!(
-        spawn_calls.iter().any(|c| c.contains("resume") && c.contains("sid-r2")),
+        spawn_calls
+            .iter()
+            .any(|c| c.contains("resume") && c.contains("sid-r2")),
         "spawn command must contain '--resume sid-r2', calls: {spawn_calls:?}"
     );
 }

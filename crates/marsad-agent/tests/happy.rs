@@ -19,10 +19,10 @@
 //! code-agent should expose whichever name it chooses and adjust the call sites accordingly.
 //! Tests document their assumed injection seam with `// NOTE(test-agent): injection`.
 
-use marsad_agent::{claude_argv, Agent, AgentConfig, AgentError, ListenSpec};
-use marsad_proto::LaunchSpec;
+use marsad_agent::{claude_argv, Agent, AgentConfig, ListenSpec};
 use marsad_lifecycle::FakeContainer;
 use marsad_notify::CaptureNotifier;
+use marsad_proto::LaunchSpec;
 use marsad_store::MemoryBackend;
 
 // ── helpers ────────────────────────────────────────────────────────────────────
@@ -71,13 +71,19 @@ fn claude_argv_prefix_exact_order() {
         argv.len()
     );
 
-    assert_eq!(argv[0], "claude",           "argv[0] must be \"claude\"");
-    assert_eq!(argv[1], "--print",          "argv[1] must be \"--print\"");
-    assert_eq!(argv[2], "--input-format",   "argv[2] must be \"--input-format\"");
-    assert_eq!(argv[3], "stream-json",      "argv[3] must be \"stream-json\"");
-    assert_eq!(argv[4], "--output-format",  "argv[4] must be \"--output-format\"");
-    assert_eq!(argv[5], "stream-json",      "argv[5] must be \"stream-json\"");
-    assert_eq!(argv[6], "--verbose",        "argv[6] must be \"--verbose\"");
+    assert_eq!(argv[0], "claude", "argv[0] must be \"claude\"");
+    assert_eq!(argv[1], "--print", "argv[1] must be \"--print\"");
+    assert_eq!(
+        argv[2], "--input-format",
+        "argv[2] must be \"--input-format\""
+    );
+    assert_eq!(argv[3], "stream-json", "argv[3] must be \"stream-json\"");
+    assert_eq!(
+        argv[4], "--output-format",
+        "argv[4] must be \"--output-format\""
+    );
+    assert_eq!(argv[5], "stream-json", "argv[5] must be \"stream-json\"");
+    assert_eq!(argv[6], "--verbose", "argv[6] must be \"--verbose\"");
 }
 
 /// `claude_argv` must include the project path somewhere after the prefix.
@@ -241,7 +247,7 @@ fn handle_ipc_launch_session_returns_event() {
     // NOTE(test-agent): requires injection of FakeContainer so launch doesn't
     // attempt to spawn a real tmux session.  Assumed constructor:
     //   Agent::with_fakes(cfg, container, notifier, store)
-    let mut container = FakeContainer::new();
+    let container = FakeContainer::new();
     // Make a container name succeed on spawn.
     // (The actual container name is agent-chosen; we allow any name here.)
     // fail_spawn is NOT called — default is success.
@@ -319,10 +325,7 @@ fn handle_ipc_subscribe_returns_ack() {
 
     let line = r#"{"type":"Subscribe"}"#;
     let result = agent.handle_ipc(line);
-    assert!(
-        result.is_ok(),
-        "Subscribe must return Ok; got {result:?}"
-    );
+    assert!(result.is_ok(), "Subscribe must return Ok; got {result:?}");
 }
 
 /// A `SendPrompt` for an existing session must route and return Ok.
@@ -345,9 +348,8 @@ fn handle_ipc_send_prompt_routes() {
     let launched = agent.handle_ipc(launch_line).expect("launch");
     let session_id = extract_session_id_from_lines(&launched);
 
-    let prompt_line = format!(
-        r#"{{"type":"SendPrompt","session_id":"{session_id}","text":"hello"}}"#
-    );
+    let prompt_line =
+        format!(r#"{{"type":"SendPrompt","session_id":"{session_id}","text":"hello"}}"#);
     let result = agent.handle_ipc(&prompt_line);
     assert!(
         result.is_ok(),
@@ -448,7 +450,9 @@ fn handle_hook_notification_fires_notifier() {
     .expect("with_fakes");
 
     let payload = r#"{"hook":"Notification","message":"Tests passed"}"#;
-    agent.handle_hook(payload).expect("handle_hook must succeed");
+    agent
+        .handle_hook(payload)
+        .expect("handle_hook must succeed");
 
     // NOTE(test-agent): To assert notifier.delivered().len() > 0, the impl must
     // expose access to the inner CaptureNotifier.  Preferred: `agent.capture_notifier()`.

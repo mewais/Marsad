@@ -10,10 +10,11 @@
 ///      session and drive plan_reconnect / reconcile with a FakeContainer to
 ///      assert the B06+B09 cross-block contract.
 use marsad_lifecycle::{
-    Action, FakeContainer, Persisted, Probe, RuntimePhase, plan_reconnect, reconcile,
+    plan_reconnect, reconcile, Action, FakeContainer, Persisted, Probe, RuntimePhase,
 };
-use marsad_store::{Backend, MemoryBackend, PersistedSession, Store, StoreError,
-                   TranscriptEntry, Workspace};
+use marsad_store::{
+    Backend, MemoryBackend, PersistedSession, Store, StoreError, TranscriptEntry, Workspace,
+};
 use std::sync::Arc;
 
 // ── SharedBackend ─────────────────────────────────────────────────────────────
@@ -103,16 +104,24 @@ fn persistence_round_trip_across_simulated_crash() {
     let entry1 = make_entry("user", "hello");
     let entry2 = make_entry("assistant", "world");
     let entry3 = make_entry("user", "goodbye");
-    store1.append_transcript("sess-a", &entry1).expect("append 1");
-    store1.append_transcript("sess-a", &entry2).expect("append 2");
-    store1.append_transcript("sess-b", &entry3).expect("append 3");
+    store1
+        .append_transcript("sess-a", &entry1)
+        .expect("append 1");
+    store1
+        .append_transcript("sess-a", &entry2)
+        .expect("append 2");
+    store1
+        .append_transcript("sess-b", &entry3)
+        .expect("append 3");
 
     // Snapshot a workspace.
     let ws = make_workspace("ws-main", vec!["sess-a", "sess-b"]);
     store1.snapshot_workspace(&ws).expect("snapshot workspace");
 
     // Set the active workspace.
-    store1.set_active_workspace("ws-main").expect("set active ws");
+    store1
+        .set_active_workspace("ws-main")
+        .expect("set active ws");
 
     // --- "crash" happens: drop Store #1 ---
     drop(store1);
@@ -163,15 +172,29 @@ fn persistence_round_trip_across_simulated_crash() {
         .transcripts
         .get("sess-a")
         .expect("sess-a transcript missing");
-    assert_eq!(transcript_a.len(), 2, "sess-a should have 2 transcript entries");
-    assert_eq!(transcript_a[0], entry1, "first entry must be the user message");
-    assert_eq!(transcript_a[1], entry2, "second entry must be the assistant reply");
+    assert_eq!(
+        transcript_a.len(),
+        2,
+        "sess-a should have 2 transcript entries"
+    );
+    assert_eq!(
+        transcript_a[0], entry1,
+        "first entry must be the user message"
+    );
+    assert_eq!(
+        transcript_a[1], entry2,
+        "second entry must be the assistant reply"
+    );
 
     let transcript_b = restored
         .transcripts
         .get("sess-b")
         .expect("sess-b transcript missing");
-    assert_eq!(transcript_b.len(), 1, "sess-b should have 1 transcript entry");
+    assert_eq!(
+        transcript_b.len(),
+        1,
+        "sess-b should have 1 transcript entry"
+    );
     assert_eq!(transcript_b[0], entry3);
 
     // sess-c has no transcripts.
@@ -199,7 +222,9 @@ fn classification_detached_when_container_alive() {
     };
 
     // plan_reconnect: container alive → Adopt.
-    let probe_alive = Probe { container_alive: true };
+    let probe_alive = Probe {
+        container_alive: true,
+    };
     let action = plan_reconnect(&known, &probe_alive);
     assert!(
         matches!(action, Action::Adopt),
@@ -242,7 +267,9 @@ fn classification_resume_when_container_dead_and_session_id_known() {
     };
 
     // plan_reconnect: container dead, session_id known → Resume.
-    let probe_dead = Probe { container_alive: false };
+    let probe_dead = Probe {
+        container_alive: false,
+    };
     let action = plan_reconnect(&known, &probe_dead);
     assert!(
         matches!(action, Action::Resume(ref sid) if sid == "claude-session-bbb"),
@@ -283,7 +310,9 @@ fn classification_stale_when_container_dead_and_no_session_id() {
     };
 
     // plan_reconnect: container dead, no session_id → MarkStale.
-    let probe_dead = Probe { container_alive: false };
+    let probe_dead = Probe {
+        container_alive: false,
+    };
     let action = plan_reconnect(&known, &probe_dead);
     assert!(
         matches!(action, Action::MarkStale),
@@ -351,7 +380,12 @@ fn store_restore_then_lifecycle_classify_cross_block_contract() {
         match sess.id.as_str() {
             "alive" => {
                 // Container alive → Adopt → Detached.
-                let action = plan_reconnect(&known, &Probe { container_alive: true });
+                let action = plan_reconnect(
+                    &known,
+                    &Probe {
+                        container_alive: true,
+                    },
+                );
                 assert!(matches!(action, Action::Adopt), "alive → Adopt");
 
                 let mut fake = FakeContainer::new();
@@ -362,7 +396,12 @@ fn store_restore_then_lifecycle_classify_cross_block_contract() {
             }
             "dead-known" => {
                 // Container dead + session_id → Resume → phase None.
-                let action = plan_reconnect(&known, &Probe { container_alive: false });
+                let action = plan_reconnect(
+                    &known,
+                    &Probe {
+                        container_alive: false,
+                    },
+                );
                 assert!(
                     matches!(action, Action::Resume(ref s) if s == "claude-session-dead"),
                     "dead-known → Resume"
@@ -375,8 +414,16 @@ fn store_restore_then_lifecycle_classify_cross_block_contract() {
             }
             "dead-unknown" => {
                 // Container dead + no session_id → MarkStale → Stale.
-                let action = plan_reconnect(&known, &Probe { container_alive: false });
-                assert!(matches!(action, Action::MarkStale), "dead-unknown → MarkStale");
+                let action = plan_reconnect(
+                    &known,
+                    &Probe {
+                        container_alive: false,
+                    },
+                );
+                assert!(
+                    matches!(action, Action::MarkStale),
+                    "dead-unknown → MarkStale"
+                );
 
                 let mut fake = FakeContainer::new();
                 let rt = reconcile(&known, &mut fake).unwrap();

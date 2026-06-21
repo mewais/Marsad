@@ -106,9 +106,21 @@ pub struct Counts {
 /// Compute dashboard counts from a snapshot.
 pub fn counts(s: &AppSnapshot) -> Counts {
     let total = s.sessions.len() as u32;
-    let needs = s.sessions.iter().filter(|sv| sv.state == Phase::Needs).count() as u32;
-    let errors = s.sessions.iter().filter(|sv| sv.state == Phase::Error).count() as u32;
-    let working = s.sessions.iter().filter(|sv| sv.state == Phase::Working).count() as u32;
+    let needs = s
+        .sessions
+        .iter()
+        .filter(|sv| sv.state == Phase::Needs)
+        .count() as u32;
+    let errors = s
+        .sessions
+        .iter()
+        .filter(|sv| sv.state == Phase::Error)
+        .count() as u32;
+    let working = s
+        .sessions
+        .iter()
+        .filter(|sv| sv.state == Phase::Working)
+        .count() as u32;
 
     let cost_sum: f64 = s.sessions.iter().map(|sv| sv.cost_usd).sum::<f64>();
     // Use abs() to guard against -0.0 from certain float sums.
@@ -126,7 +138,15 @@ pub fn counts(s: &AppSnapshot) -> Counts {
     }
     let host_count = seen_hosts.len() as u32;
 
-    Counts { total, needs, errors, working, cost, tokens, host_count }
+    Counts {
+        total,
+        needs,
+        errors,
+        working,
+        cost,
+        tokens,
+        host_count,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -207,14 +227,22 @@ pub fn group_overview(s: &AppSnapshot) -> OverviewGroups {
     for sv in s.sessions.iter().filter(|sv| sv.state == Phase::Error) {
         attention.push(session_card(sv, &s.hosts));
     }
-    for sv in s.sessions.iter().filter(|sv| matches!(sv.state, Phase::Working | Phase::Starting)) {
+    for sv in s
+        .sessions
+        .iter()
+        .filter(|sv| matches!(sv.state, Phase::Working | Phase::Starting))
+    {
         active.push(session_card(sv, &s.hosts));
     }
     for sv in s.sessions.iter().filter(|sv| sv.state == Phase::Done) {
         idle.push(session_card(sv, &s.hosts));
     }
 
-    OverviewGroups { attention, active, idle }
+    OverviewGroups {
+        attention,
+        active,
+        idle,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -312,9 +340,10 @@ pub struct SessionDetailVM {
 
 /// Return a detail view-model for the currently selected session, or `None`.
 pub fn session_detail(s: &AppSnapshot) -> Option<SessionDetailVM> {
-    let sv = s.sessions.iter().find(|sv| {
-        s.selected_id.as_deref() == Some(sv.id.as_str())
-    })?;
+    let sv = s
+        .sessions
+        .iter()
+        .find(|sv| s.selected_id.as_deref() == Some(sv.id.as_str()))?;
 
     Some(SessionDetailVM {
         name: sv.name.clone(),
@@ -353,16 +382,17 @@ pub struct GateVM {
 fn gate_icon(gate: &marsad_gates::Gate) -> &'static str {
     match gate {
         marsad_gates::Gate::Permission { .. } => "\u{2318}", // ⌘
-        marsad_gates::Gate::Plan { .. }       => "\u{25a1}", // □
-        marsad_gates::Gate::Edit { .. }       => "\u{00b1}", // ±
+        marsad_gates::Gate::Plan { .. } => "\u{25a1}",       // □
+        marsad_gates::Gate::Edit { .. } => "\u{00b1}",       // ±
     }
 }
 
 /// Return a gate view-model for the currently selected session, or `None`.
 pub fn gate_vm(s: &AppSnapshot) -> Option<GateVM> {
-    let sv = s.sessions.iter().find(|sv| {
-        s.selected_id.as_deref() == Some(sv.id.as_str())
-    })?;
+    let sv = s
+        .sessions
+        .iter()
+        .find(|sv| s.selected_id.as_deref() == Some(sv.id.as_str()))?;
     let gate = sv.gate.as_ref()?;
 
     let meta = marsad_format::gate_meta(gate);
@@ -411,18 +441,18 @@ pub enum SlashCmd {
 /// Parse a slash command string into a `SlashCmd` variant.
 pub fn parse_slash(input: &str) -> SlashCmd {
     match input {
-        "/clear"    => SlashCmd::Clear,
-        "/compact"  => SlashCmd::Compact,
-        "/cost"     => SlashCmd::Cost,
-        "/model"    => SlashCmd::Model,
-        "/config"   => SlashCmd::Config,
-        "/init"     => SlashCmd::Init,
-        "/review"   => SlashCmd::Review,
-        "/agents"   => SlashCmd::Agents,
-        "/resume"   => SlashCmd::Resume,
+        "/clear" => SlashCmd::Clear,
+        "/compact" => SlashCmd::Compact,
+        "/cost" => SlashCmd::Cost,
+        "/model" => SlashCmd::Model,
+        "/config" => SlashCmd::Config,
+        "/init" => SlashCmd::Init,
+        "/review" => SlashCmd::Review,
+        "/agents" => SlashCmd::Agents,
+        "/resume" => SlashCmd::Resume,
         "/terminal" => SlashCmd::Terminal,
-        "/help"     => SlashCmd::Help,
-        _           => SlashCmd::Unknown(input.to_string()),
+        "/help" => SlashCmd::Help,
+        _ => SlashCmd::Unknown(input.to_string()),
     }
 }
 
@@ -441,17 +471,50 @@ pub struct SlashEntry {
 /// The canonical 11-command catalog in spec order.
 fn all_slash_entries() -> [SlashEntry; 11] {
     [
-        SlashEntry { name: "/clear".to_string(),    desc: "Clear conversation history".to_string() },
-        SlashEntry { name: "/compact".to_string(),  desc: "Compact context to save tokens".to_string() },
-        SlashEntry { name: "/cost".to_string(),     desc: "Show token usage and cost".to_string() },
-        SlashEntry { name: "/model".to_string(),    desc: "Switch the active model".to_string() },
-        SlashEntry { name: "/config".to_string(),   desc: "Open configuration".to_string() },
-        SlashEntry { name: "/init".to_string(),     desc: "Initialize CLAUDE.md for this project".to_string() },
-        SlashEntry { name: "/review".to_string(),   desc: "Review recent changes".to_string() },
-        SlashEntry { name: "/agents".to_string(),   desc: "List running sub-agents".to_string() },
-        SlashEntry { name: "/resume".to_string(),   desc: "Resume a previous conversation".to_string() },
-        SlashEntry { name: "/terminal".to_string(), desc: "Open integrated terminal".to_string() },
-        SlashEntry { name: "/help".to_string(),     desc: "Show available commands".to_string() },
+        SlashEntry {
+            name: "/clear".to_string(),
+            desc: "Clear conversation history".to_string(),
+        },
+        SlashEntry {
+            name: "/compact".to_string(),
+            desc: "Compact context to save tokens".to_string(),
+        },
+        SlashEntry {
+            name: "/cost".to_string(),
+            desc: "Show token usage and cost".to_string(),
+        },
+        SlashEntry {
+            name: "/model".to_string(),
+            desc: "Switch the active model".to_string(),
+        },
+        SlashEntry {
+            name: "/config".to_string(),
+            desc: "Open configuration".to_string(),
+        },
+        SlashEntry {
+            name: "/init".to_string(),
+            desc: "Initialize CLAUDE.md for this project".to_string(),
+        },
+        SlashEntry {
+            name: "/review".to_string(),
+            desc: "Review recent changes".to_string(),
+        },
+        SlashEntry {
+            name: "/agents".to_string(),
+            desc: "List running sub-agents".to_string(),
+        },
+        SlashEntry {
+            name: "/resume".to_string(),
+            desc: "Resume a previous conversation".to_string(),
+        },
+        SlashEntry {
+            name: "/terminal".to_string(),
+            desc: "Open integrated terminal".to_string(),
+        },
+        SlashEntry {
+            name: "/help".to_string(),
+            desc: "Show available commands".to_string(),
+        },
     ]
 }
 

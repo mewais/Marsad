@@ -68,16 +68,24 @@ impl LiveSession {
         let tmux_name = format!("marsad-it-i07-{unique}");
         let dir = std::env::temp_dir().join(format!("marsad-it-i07-{unique}"));
         let proj_dir = dir.join("proj");
-        LiveSession { id, tmux_name, dir, proj_dir }
+        LiveSession {
+            id,
+            tmux_name,
+            dir,
+            proj_dir,
+        }
     }
 
-    fn in_fifo(&self) -> PathBuf { self.dir.join("in.fifo") }
-    fn out_fifo(&self) -> PathBuf { self.dir.join("out.fifo") }
+    fn in_fifo(&self) -> PathBuf {
+        self.dir.join("in.fifo")
+    }
+    fn out_fifo(&self) -> PathBuf {
+        self.dir.join("out.fifo")
+    }
 
     /// Create temp dirs and FIFOs on disk.
     fn prepare(&self) -> Result<(), String> {
-        std::fs::create_dir_all(&self.proj_dir)
-            .map_err(|e| format!("mkdir proj: {e}"))?;
+        std::fs::create_dir_all(&self.proj_dir).map_err(|e| format!("mkdir proj: {e}"))?;
         std::fs::write(self.proj_dir.join("README.md"), b"marsad i07 test\n")
             .map_err(|e| format!("write README: {e}"))?;
         mkfifo(&self.in_fifo())?;
@@ -91,20 +99,20 @@ impl LiveSession {
     /// background prefetches — the session starts faster and produces cleaner
     /// stream-json output with no cross-session state.
     fn spawn_in_tmux(&self, claude_bin: &Path) -> Result<(), String> {
-        let in_fifo  = self.in_fifo();
+        let in_fifo = self.in_fifo();
         let out_fifo = self.out_fifo();
-        let err_log  = self.dir.join("err.log");
+        let err_log = self.dir.join("err.log");
 
         let cmd = format!(
             "cd '{proj}' && '{claude}' \
              --print --input-format stream-json --output-format stream-json \
              --verbose --model claude-haiku-4-5 --permission-mode default --bare \
              < '{in_f}' > '{out_f}' 2>'{err}'",
-            proj    = self.proj_dir.display(),
-            claude  = claude_bin.display(),
-            in_f    = in_fifo.display(),
-            out_f   = out_fifo.display(),
-            err     = err_log.display(),
+            proj = self.proj_dir.display(),
+            claude = claude_bin.display(),
+            in_f = in_fifo.display(),
+            out_f = out_fifo.display(),
+            err = err_log.display(),
         );
 
         let st = std::process::Command::new("tmux")
@@ -117,7 +125,10 @@ impl LiveSession {
         if st.success() {
             Ok(())
         } else {
-            Err(format!("tmux new-session -d -s {} failed: {st}", self.tmux_name))
+            Err(format!(
+                "tmux new-session -d -s {} failed: {st}",
+                self.tmux_name
+            ))
         }
     }
 
@@ -132,7 +143,7 @@ impl LiveSession {
     ///      step 1 let it proceed past its stdout open), so we don't block.
     fn run_prompt(&self, prompt_text: &str, timeout: Duration) -> Result<Vec<StreamMsg>, String> {
         let out_fifo = self.out_fifo();
-        let in_fifo  = self.in_fifo();
+        let in_fifo = self.in_fifo();
 
         // Background reader thread: opens out.fifo (blocks until claude's tmux
         // session reaches the `> out.fifo` part of its shell command), then
@@ -150,8 +161,12 @@ impl LiveSession {
                 match line {
                     Ok(l) => {
                         let done = l.contains("\"type\":\"result\"");
-                        if tx.send(l).is_err() { break; }
-                        if done { break; }
+                        if tx.send(l).is_err() {
+                            break;
+                        }
+                        if done {
+                            break;
+                        }
                     }
                     Err(_) => break,
                 }
@@ -184,20 +199,21 @@ impl LiveSession {
 
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() { break; }
+            if remaining.is_zero() {
+                break;
+            }
             match rx.recv_timeout(remaining.min(Duration::from_millis(500))) {
                 Ok(line) => {
                     if line.starts_with("__ERR__:") {
                         return Err(format!("[{}] {line}", self.id));
                     }
-                    match parse_stream_line(&line) {
-                        Ok(msg) => {
-                            let done = matches!(msg, StreamMsg::Result(_));
-                            msgs.push(msg);
-                            if done { break; }
+                    // Unknown subtypes (thinking_tokens, etc.) — skip.
+                    if let Ok(msg) = parse_stream_line(&line) {
+                        let done = matches!(msg, StreamMsg::Result(_));
+                        msgs.push(msg);
+                        if done {
+                            break;
                         }
-                        // Unknown subtypes (thinking_tokens, etc.) — skip.
-                        Err(_) => {}
                     }
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -216,7 +232,8 @@ impl LiveSession {
             let err_content = std::fs::read_to_string(&err_log).unwrap_or_default();
             return Err(format!(
                 "[{}] no messages within {:?}; err.log: {:?}",
-                self.id, timeout,
+                self.id,
+                timeout,
                 err_content.lines().take(5).collect::<Vec<_>>().join(" | ")
             ));
         }
@@ -256,7 +273,10 @@ fn has_system_init(msgs: &[StreamMsg]) -> bool {
 fn has_assistant_text(msgs: &[StreamMsg]) -> bool {
     msgs.iter().any(|m| {
         if let StreamMsg::Assistant(a) = m {
-            a.message.content.iter().any(|c| matches!(c, ContentBlock::Text { .. }))
+            a.message
+                .content
+                .iter()
+                .any(|c| matches!(c, ContentBlock::Text { .. }))
         } else {
             false
         }
@@ -264,9 +284,8 @@ fn has_assistant_text(msgs: &[StreamMsg]) -> bool {
 }
 
 fn has_result_success(msgs: &[StreamMsg]) -> bool {
-    msgs.iter().any(|m| {
-        matches!(m, StreamMsg::Result(r) if r.subtype == ResultSubtype::Success)
-    })
+    msgs.iter()
+        .any(|m| matches!(m, StreamMsg::Result(r) if r.subtype == ResultSubtype::Success))
 }
 
 fn session_id_of(msgs: &[StreamMsg]) -> Option<String> {
@@ -280,19 +299,21 @@ fn session_id_of(msgs: &[StreamMsg]) -> Option<String> {
 }
 
 fn first_assistant_text(msgs: &[StreamMsg]) -> String {
-    msgs.iter().find_map(|m| {
-        if let StreamMsg::Assistant(a) = m {
-            a.message.content.iter().find_map(|c| {
-                if let ContentBlock::Text { text } = c {
-                    Some(text.clone())
-                } else {
-                    None
-                }
-            })
-        } else {
-            None
-        }
-    }).unwrap_or_default()
+    msgs.iter()
+        .find_map(|m| {
+            if let StreamMsg::Assistant(a) = m {
+                a.message.content.iter().find_map(|c| {
+                    if let ContentBlock::Text { text } = c {
+                        Some(text.clone())
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -338,7 +359,8 @@ fn test_concurrent_independent_advance_and_no_cross_routing() {
     let expected = ["ALPHA", "BETA", "GAMMA"];
 
     for s in &sessions.0 {
-        s.prepare().unwrap_or_else(|e| panic!("prepare {}: {e}", s.id));
+        s.prepare()
+            .unwrap_or_else(|e| panic!("prepare {}: {e}", s.id));
     }
 
     // ── spawn all three sessions in tmux ──────────────────────────────────────
@@ -349,38 +371,41 @@ fn test_concurrent_independent_advance_and_no_cross_routing() {
 
     // ── run prompts concurrently ──────────────────────────────────────────────
     let timeout = Duration::from_secs(90);
-    let results: Vec<Result<Vec<StreamMsg>, String>> =
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = sessions.0
-                .iter()
-                .zip(prompts.iter())
-                .map(|(s, p)| scope.spawn(move || s.run_prompt(p, timeout)))
-                .collect();
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
-        });
+    let results: Vec<Result<Vec<StreamMsg>, String>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = sessions
+            .0
+            .iter()
+            .zip(prompts.iter())
+            .map(|(s, p)| scope.spawn(move || s.run_prompt(p, timeout)))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
 
     // ── per-session assertions ────────────────────────────────────────────────
     let mut session_ids: Vec<String> = Vec::new();
 
     for (i, res) in results.iter().enumerate() {
-        let msgs = res.as_ref().unwrap_or_else(|e| {
-            panic!("session {} failed: {e}", sessions.0[i].id)
-        });
+        let msgs = res
+            .as_ref()
+            .unwrap_or_else(|e| panic!("session {} failed: {e}", sessions.0[i].id));
 
         assert!(
             has_system_init(msgs),
             "session {} missing system/init (got {} msgs)",
-            sessions.0[i].id, msgs.len()
+            sessions.0[i].id,
+            msgs.len()
         );
         assert!(
             has_assistant_text(msgs),
             "session {} missing assistant text (got {} msgs)",
-            sessions.0[i].id, msgs.len()
+            sessions.0[i].id,
+            msgs.len()
         );
         assert!(
             has_result_success(msgs),
             "session {} missing result/success (got {} msgs)",
-            sessions.0[i].id, msgs.len()
+            sessions.0[i].id,
+            msgs.len()
         );
 
         // No cross-routing: the assistant text must contain this session's keyword.
@@ -388,7 +413,8 @@ fn test_concurrent_independent_advance_and_no_cross_routing() {
         assert!(
             text.to_uppercase().contains(expected[i]),
             "session {} cross-routing detected — expected keyword {:?}, got {:?}",
-            sessions.0[i].id, expected[i],
+            sessions.0[i].id,
+            expected[i],
             &text[..text.len().min(120)]
         );
 
@@ -398,15 +424,25 @@ fn test_concurrent_independent_advance_and_no_cross_routing() {
     }
 
     // All three claude session_ids must be distinct.
-    assert_eq!(session_ids.len(), 3,
-        "expected 3 session_ids, got {}: {:?}", session_ids.len(), session_ids);
+    assert_eq!(
+        session_ids.len(),
+        3,
+        "expected 3 session_ids, got {}: {:?}",
+        session_ids.len(),
+        session_ids
+    );
     let unique_set: HashSet<_> = session_ids.iter().collect();
-    assert_eq!(unique_set.len(), 3,
-        "session_ids not all distinct: {:?}", session_ids);
+    assert_eq!(
+        unique_set.len(),
+        3,
+        "session_ids not all distinct: {:?}",
+        session_ids
+    );
 
     eprintln!(
         "PASS i07/concurrency: 3 concurrent sessions ran independently; \
-         session_ids={:?}", session_ids
+         session_ids={:?}",
+        session_ids
     );
     // TeardownGuard drops here → kills all tmux sessions + removes temp dirs.
 }
@@ -442,7 +478,8 @@ fn test_interrupt_one_session_others_unaffected() {
     ]);
 
     for s in &sessions.0 {
-        s.prepare().unwrap_or_else(|e| panic!("prepare {}: {e}", s.id));
+        s.prepare()
+            .unwrap_or_else(|e| panic!("prepare {}: {e}", s.id));
     }
 
     for s in &sessions.0 {
@@ -455,12 +492,10 @@ fn test_interrupt_one_session_others_unaffected() {
 
     let (res_b, res_c) = std::thread::scope(|scope| {
         // B and C run their full prompts.
-        let hb = scope.spawn(|| {
-            sessions.0[1].run_prompt("reply with the single word BETA", timeout)
-        });
-        let hc = scope.spawn(|| {
-            sessions.0[2].run_prompt("reply with the single word GAMMA", timeout)
-        });
+        let hb =
+            scope.spawn(|| sessions.0[1].run_prompt("reply with the single word BETA", timeout));
+        let hc =
+            scope.spawn(|| sessions.0[2].run_prompt("reply with the single word GAMMA", timeout));
 
         // A is interrupted shortly after launch: kill its tmux session.
         // This closes in.fifo (EOF) and out.fifo, simulating an interrupt.
@@ -479,9 +514,9 @@ fn test_interrupt_one_session_others_unaffected() {
     });
 
     for (label, res) in [("B", &res_b), ("C", &res_c)] {
-        let msgs = res.as_ref().unwrap_or_else(|e| {
-            panic!("session {label} failed after A interrupted: {e}")
-        });
+        let msgs = res
+            .as_ref()
+            .unwrap_or_else(|e| panic!("session {label} failed after A interrupted: {e}"));
         assert!(
             has_system_init(msgs),
             "session {label} missing system/init after interrupt"
@@ -496,8 +531,6 @@ fn test_interrupt_one_session_others_unaffected() {
         );
     }
 
-    eprintln!(
-        "PASS i07/interrupt: session A interrupted; B and C completed independently"
-    );
+    eprintln!("PASS i07/interrupt: session A interrupted; B and C completed independently");
     // TeardownGuard drops → all three sessions torn down.
 }

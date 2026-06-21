@@ -10,8 +10,7 @@
 //!   Restored, StoreError
 
 use marsad_store::{
-    Backend, MemoryBackend, PersistedSession, Restored, Store, StoreError, TranscriptEntry,
-    Workspace,
+    MemoryBackend, PersistedSession, Restored, Store, StoreError, TranscriptEntry, Workspace,
 };
 
 // ---------------------------------------------------------------------------
@@ -59,7 +58,9 @@ fn fresh_store() -> Store {
 fn upsert_session_then_restore_returns_session() {
     let mut store = fresh_store();
     let sess = make_session("sess-001");
-    store.upsert_session(&sess).expect("upsert_session must succeed");
+    store
+        .upsert_session(&sess)
+        .expect("upsert_session must succeed");
     let restored: Restored = store.restore().expect("restore must succeed");
     assert!(
         restored.sessions.iter().any(|s| s.id == "sess-001"),
@@ -191,7 +192,9 @@ fn snapshot_workspace_preserves_all_fields() {
 #[test]
 fn restore_empty_store_returns_empty_restored() {
     let store = fresh_store();
-    let restored = store.restore().expect("restore on empty store must succeed");
+    let restored = store
+        .restore()
+        .expect("restore on empty store must succeed");
     assert!(restored.sessions.is_empty());
     assert!(restored.workspaces.is_empty());
     assert!(restored.active_ws.is_none());
@@ -233,7 +236,9 @@ fn export_workspace_returns_json_string() {
     let ws = make_workspace("wx", vec!["sx".to_string()]);
     store.snapshot_workspace(&ws).expect("snapshot");
 
-    let json = store.export_workspace("wx").expect("export_workspace must succeed");
+    let json = store
+        .export_workspace("wx")
+        .expect("export_workspace must succeed");
     assert!(!json.is_empty(), "exported JSON must not be empty");
     // The spec mandates envelope: { marsadWorkspace:1, name, savedAt, sessions:[...] }
     assert!(

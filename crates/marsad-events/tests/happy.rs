@@ -195,10 +195,10 @@ fn usage_accumulates_over_multiple_assistant_messages() {
 #[test]
 fn cost_updated_from_result() {
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&result_success_json(100, 10, 3.14)));
+    let s1 = reduce(s0, stream(&result_success_json(100, 10, 0.42)));
     assert!(
-        (s1.cost_usd - 3.14).abs() < 1e-9,
-        "expected cost 3.14, got {}",
+        (s1.cost_usd - 0.42).abs() < 1e-9,
+        "expected cost 0.42, got {}",
         s1.cost_usd
     );
 }
@@ -211,7 +211,9 @@ fn cost_updated_from_result() {
 fn last_action_set_by_tool_use() {
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
     let s1 = reduce(s0, stream(&tool_use_assistant_json("msg-001", "Read")));
-    let action = s1.last_action.expect("last_action must be set after ToolUse");
+    let action = s1
+        .last_action
+        .expect("last_action must be set after ToolUse");
     assert!(
         action.contains("Read"),
         "expected 'Read' in last_action, got: {action}"

@@ -7,8 +7,7 @@
 use marsad_events::{Event, Phase, SessionState};
 use marsad_proto::parse_stream_line;
 use marsad_viewmodel::{
-    AppSnapshot, Filter, SessionView, Tab,
-    counts, group_overview, session_detail,
+    counts, group_overview, session_detail, AppSnapshot, Filter, SessionView, Tab,
 };
 
 /// Absolute path to the fixture, resolved via CARGO_MANIFEST_DIR at compile time.
@@ -44,7 +43,11 @@ fn fold_qa_stream_into_session_state_and_viewmodel() {
     // -----------------------------------------------------------------------
 
     // Phase must be Done (result subtype=success, is_error=false).
-    assert_eq!(state.phase, Phase::Done, "phase should be Done after success result");
+    assert_eq!(
+        state.phase,
+        Phase::Done,
+        "phase should be Done after success result"
+    );
 
     // Session ID must match the fixture.
     assert_eq!(
@@ -54,7 +57,10 @@ fn fold_qa_stream_into_session_state_and_viewmodel() {
     );
 
     // Model must be present.
-    assert!(state.model.is_some(), "model should be set after SystemInit");
+    assert!(
+        state.model.is_some(),
+        "model should be set after SystemInit"
+    );
     let model = state.model.as_deref().unwrap();
     assert!(
         model.contains("claude"),
@@ -62,7 +68,11 @@ fn fold_qa_stream_into_session_state_and_viewmodel() {
     );
 
     // Tokens must be positive (result.usage: input=2, cache_creation=42448, output=13).
-    assert!(state.tokens > 0, "tokens should be > 0, got {}", state.tokens);
+    assert!(
+        state.tokens > 0,
+        "tokens should be > 0, got {}",
+        state.tokens
+    );
 
     // Cost must match the fixture's total_cost_usd=0.796905 within a small epsilon.
     let expected_cost = 0.796905_f64;
@@ -128,7 +138,11 @@ fn fold_qa_stream_into_session_state_and_viewmodel() {
     assert_eq!(c.errors, 0, "counts.errors should be 0");
     assert_eq!(c.working, 0, "counts.working should be 0");
     // Cost string starts with '$' and contains the total.
-    assert!(c.cost.starts_with('$'), "counts.cost should start with '$', got {:?}", c.cost);
+    assert!(
+        c.cost.starts_with('$'),
+        "counts.cost should start with '$', got {:?}",
+        c.cost
+    );
 
     // group_overview(): the Done session must land in the idle group.
     let groups = group_overview(&snapshot);
@@ -142,7 +156,11 @@ fn fold_qa_stream_into_session_state_and_viewmodel() {
         "active should be empty (not working/starting), got {:?}",
         groups.active,
     );
-    assert_eq!(groups.idle.len(), 1, "idle should contain exactly 1 Done session");
+    assert_eq!(
+        groups.idle.len(),
+        1,
+        "idle should contain exactly 1 Done session"
+    );
     assert_eq!(
         groups.idle[0].id, session_id,
         "idle[0].id should match our session",
@@ -154,7 +172,8 @@ fn fold_qa_stream_into_session_state_and_viewmodel() {
     );
 
     // session_detail(): selected_id is set, so we get Some.
-    let detail = session_detail(&snapshot).expect("session_detail should return Some when selected_id is set");
+    let detail = session_detail(&snapshot)
+        .expect("session_detail should return Some when selected_id is set");
     assert!(!detail.model.is_empty(), "detail.model should not be empty");
     assert!(
         detail.cost_label.starts_with('$'),
@@ -162,6 +181,12 @@ fn fold_qa_stream_into_session_state_and_viewmodel() {
         detail.cost_label,
     );
     // The Done session has context_pct well below 75, so ctx_warn should be false.
-    assert!(!detail.ctx_warn, "ctx_warn should be false for a low context_pct session");
-    assert_eq!(detail.context_pct, state.context_pct, "detail.context_pct should match state");
+    assert!(
+        !detail.ctx_warn,
+        "ctx_warn should be false for a low context_pct session"
+    );
+    assert_eq!(
+        detail.context_pct, state.context_pct,
+        "detail.context_pct should match state"
+    );
 }

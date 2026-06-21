@@ -11,8 +11,8 @@
 //!   - Skips loudly with eprintln! if either is missing or gate doesn't appear in time.
 
 use marsad_gates::{
-    Decision, DecisionId, DecisionLedger, Gate, GateError, PlanStep,
-    approve, decision_id, reject, route, to_control_response, DiffLine, Sig,
+    approve, decision_id, reject, route, to_control_response, Decision, DecisionId, DecisionLedger,
+    DiffLine, Gate, GateError, PlanStep, Sig,
 };
 use marsad_proto::encode_control_response;
 use marsad_transport::{LoopbackFake, Transport};
@@ -34,8 +34,14 @@ fn plan_gate() -> Gate {
     Gate::Plan {
         summary: "Refactor module".to_string(),
         steps: vec![
-            PlanStep { title: "Step 1".to_string(), detail: "do thing A".to_string() },
-            PlanStep { title: "Step 2".to_string(), detail: "do thing B".to_string() },
+            PlanStep {
+                title: "Step 1".to_string(),
+                detail: "do thing A".to_string(),
+            },
+            PlanStep {
+                title: "Step 2".to_string(),
+                detail: "do thing B".to_string(),
+            },
         ],
     }
 }
@@ -44,8 +50,16 @@ fn edit_gate() -> Gate {
     Gate::Edit {
         file: "src/main.rs".to_string(),
         diff: vec![
-            DiffLine { ln: "1".to_string(), sig: Sig::Del, text: "let x = 0;".to_string() },
-            DiffLine { ln: "1".to_string(), sig: Sig::Add, text: "let x = 1;".to_string() },
+            DiffLine {
+                ln: "1".to_string(),
+                sig: Sig::Del,
+                text: "let x = 0;".to_string(),
+            },
+            DiffLine {
+                ln: "1".to_string(),
+                sig: Sig::Add,
+                text: "let x = 1;".to_string(),
+            },
         ],
     }
 }
@@ -69,8 +83,14 @@ fn permission_gate_approve() {
     // to_control_response: Approve → allow=true, no deny_reason
     let ctrl = to_control_response(&decision);
     assert!(ctrl.allow, "approve should yield allow=true");
-    assert!(ctrl.deny_reason.is_none(), "approve should have no deny_reason");
-    assert_eq!(ctrl.request_id, decision.id.0, "request_id must equal decision id");
+    assert!(
+        ctrl.deny_reason.is_none(),
+        "approve should have no deny_reason"
+    );
+    assert_eq!(
+        ctrl.request_id, decision.id.0,
+        "request_id must equal decision id"
+    );
 }
 
 #[test]
@@ -82,7 +102,12 @@ fn permission_gate_reject() {
     let decision = reject(sid, &gate, reason);
 
     assert_eq!(decision.session_id, sid);
-    assert_eq!(decision.decision, Decision::Reject { reason: reason.to_string() });
+    assert_eq!(
+        decision.decision,
+        Decision::Reject {
+            reason: reason.to_string()
+        }
+    );
     assert_eq!(route(&decision), sid);
 
     let ctrl = to_control_response(&decision);
@@ -215,7 +240,10 @@ fn approve_and_reject_share_same_decision_id() {
     let gate = permission_gate();
     let id_approve = approve(sid, &gate).id;
     let id_reject = reject(sid, &gate, "nope").id;
-    assert_eq!(id_approve, id_reject, "approve and reject for same gate must share the same id");
+    assert_eq!(
+        id_approve, id_reject,
+        "approve and reject for same gate must share the same id"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +256,10 @@ fn ledger_records_first_delivery_ok() {
     let decision = approve("sess-ledger-1", &permission_gate());
 
     assert!(!ledger.seen(&decision.id), "not yet recorded");
-    assert!(ledger.record(&decision).is_ok(), "first record must succeed");
+    assert!(
+        ledger.record(&decision).is_ok(),
+        "first record must succeed"
+    );
     assert!(ledger.seen(&decision.id), "must be seen after record");
 }
 
@@ -238,11 +269,16 @@ fn ledger_rejects_duplicate_delivery() {
     let decision = approve("sess-ledger-dup", &permission_gate());
 
     ledger.record(&decision).expect("first record");
-    let err = ledger.record(&decision).expect_err("second record must be Err");
+    let err = ledger
+        .record(&decision)
+        .expect_err("second record must be Err");
 
     match err {
         GateError::DuplicateDecision(ref id) => {
-            assert_eq!(id, &decision.id, "DuplicateDecision must carry the decision's id");
+            assert_eq!(
+                id, &decision.id,
+                "DuplicateDecision must carry the decision's id"
+            );
         }
         other => panic!("expected DuplicateDecision, got {other:?}"),
     }
@@ -281,7 +317,11 @@ fn ledger_duplicate_routes_to_exactly_one_session() {
     ledger.record(&decision).expect("first");
     // re-delivery is a DuplicateDecision; routing still yields the same session
     let _ = ledger.record(&decision); // ignore the error (no-op)
-    assert_eq!(route(&decision), sid, "route still yields the original session");
+    assert_eq!(
+        route(&decision),
+        sid,
+        "route still yields the original session"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -306,7 +346,10 @@ fn control_response_round_trips_over_loopback() {
     // Send from one end; the peer receives exactly that one line.
     sender.send_line(&wire_line).expect("send_line");
 
-    let received = receiver.recv_line().expect("recv_line").expect("expected a line");
+    let received = receiver
+        .recv_line()
+        .expect("recv_line")
+        .expect("expected a line");
     assert_eq!(received, wire_line, "received line must equal sent line");
 
     // No more lines available.
@@ -443,8 +486,7 @@ fn attempt_live_gate() -> Result<(), String> {
 
     // Create a unique temp dir for our FIFOs and runtime.
     let tmp_dir = std::env::temp_dir().join(format!("marsad-it-i02-{run_id}"));
-    std::fs::create_dir_all(&tmp_dir)
-        .map_err(|e| format!("create tmp dir: {e}"))?;
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("create tmp dir: {e}"))?;
 
     let in_fifo = tmp_dir.join("in.fifo");
     let out_fifo = tmp_dir.join("out.fifo");
@@ -492,9 +534,14 @@ fn attempt_live_gate() -> Result<(), String> {
     // Launch in a detached tmux session.
     let tmux_status = std::process::Command::new("tmux")
         .args([
-            "new-session", "-d",
-            "-s", &session_name,
-            "--", "sh", "-c", &claude_cmd,
+            "new-session",
+            "-d",
+            "-s",
+            &session_name,
+            "--",
+            "sh",
+            "-c",
+            &claude_cmd,
         ])
         .status()
         .map_err(|e| format!("tmux new-session: {e}"))?;
@@ -584,7 +631,9 @@ fn attempt_live_gate() -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    write_handle.join().map_err(|_| "prompt write thread panicked".to_string())
+    write_handle
+        .join()
+        .map_err(|_| "prompt write thread panicked".to_string())
         .and_then(|r| r.map_err(|e| format!("prompt write: {e}")))?;
 
     // Read lines from out.fifo looking for a ControlRequest (can_use_tool).
@@ -593,9 +642,7 @@ fn attempt_live_gate() -> Result<(), String> {
     let gate_deadline = Duration::from_secs(30);
     let gate_start = Instant::now();
 
-    let mut ctrl_request_id = String::new();
-
-    loop {
+    let ctrl_request_id: String = loop {
         if gate_start.elapsed() > gate_deadline {
             return Err(format!(
                 "timeout after {:.1}s waiting for permission gate (control request) from claude",
@@ -607,7 +654,9 @@ fn attempt_live_gate() -> Result<(), String> {
         match reader.read_line(&mut line) {
             Ok(0) => {
                 // EOF — claude exited before sending a gate.
-                return Err("claude exited (EOF on out.fifo) before emitting a permission gate".to_string());
+                return Err(
+                    "claude exited (EOF on out.fifo) before emitting a permission gate".to_string(),
+                );
             }
             Ok(_) => {
                 let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
@@ -618,13 +667,18 @@ fn attempt_live_gate() -> Result<(), String> {
 
                 match marsad_proto::parse_stream_line(trimmed) {
                     Ok(marsad_proto::StreamMsg::ControlRequest(ctrl)) => {
-                        eprintln!("[i02 Part B] Got ControlRequest: tool={}, id={}", ctrl.tool_name, ctrl.request_id);
-                        ctrl_request_id = ctrl.request_id.clone();
-                        break;
+                        eprintln!(
+                            "[i02 Part B] Got ControlRequest: tool={}, id={}",
+                            ctrl.tool_name, ctrl.request_id
+                        );
+                        break ctrl.request_id.clone();
                     }
                     Ok(marsad_proto::StreamMsg::Result(result)) => {
                         if result.is_error {
-                            return Err(format!("claude returned error result before gate: {:?}", result.subtype));
+                            return Err(format!(
+                                "claude returned error result before gate: {:?}",
+                                result.subtype
+                            ));
                         }
                         // Successful result without a gate — claude completed without needing permission.
                         return Err("claude completed without emitting a permission gate (model may have answered without tool use)".to_string());
@@ -641,7 +695,7 @@ fn attempt_live_gate() -> Result<(), String> {
                 return Err(format!("read error on out.fifo: {e}"));
             }
         }
-    }
+    };
 
     // ctrl_request_id is set when we break out of the loop above.
     // Build and send an approval response.
@@ -658,11 +712,14 @@ fn attempt_live_gate() -> Result<(), String> {
         .open(&in_fifo)
         .map_err(|e| format!("re-open in.fifo for approval: {e}"))?;
 
-    in_file_approval.write_all(approval_line.as_bytes())
+    in_file_approval
+        .write_all(approval_line.as_bytes())
         .map_err(|e| format!("write approval: {e}"))?;
-    in_file_approval.write_all(b"\n")
+    in_file_approval
+        .write_all(b"\n")
         .map_err(|e| format!("write approval newline: {e}"))?;
-    in_file_approval.flush()
+    in_file_approval
+        .flush()
         .map_err(|e| format!("flush approval: {e}"))?;
 
     eprintln!("[i02 Part B] Sent approval for request_id={ctrl_request_id}");
@@ -689,16 +746,21 @@ fn attempt_live_gate() -> Result<(), String> {
                 let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
                 if !trimmed.is_empty() {
                     eprintln!("[i02 Part B] post-approval line: {trimmed}");
-                    match marsad_proto::parse_stream_line(trimmed) {
-                        Ok(marsad_proto::StreamMsg::Result(r)) => {
-                            eprintln!("[i02 Part B] Got result after approval: is_error={}", r.is_error);
-                            if r.is_error {
-                                return Err(format!("claude returned error result after gate approval: {:?}", r.subtype));
-                            }
-                            eprintln!("[i02 Part B] Gate round-trip: session completed successfully.");
-                            break;
+                    if let Ok(marsad_proto::StreamMsg::Result(r)) =
+                        marsad_proto::parse_stream_line(trimmed)
+                    {
+                        eprintln!(
+                            "[i02 Part B] Got result after approval: is_error={}",
+                            r.is_error
+                        );
+                        if r.is_error {
+                            return Err(format!(
+                                "claude returned error result after gate approval: {:?}",
+                                r.subtype
+                            ));
                         }
-                        _ => {}
+                        eprintln!("[i02 Part B] Gate round-trip: session completed successfully.");
+                        break;
                     }
                 }
             }

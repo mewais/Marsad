@@ -4,8 +4,7 @@
 /// That is the expected tests-first signal.
 use marsad_proto::{
     encode_control_response, encode_ipc, encode_user_input, parse_ipc, parse_stream_line,
-    ContentBlock, ControlRequest, ControlResponse, IpcMsg, ResultMsg, ResultSubtype, StreamMsg,
-    SystemInit, Usage, UserInput, UserMsg,
+    ContentBlock, ControlResponse, IpcMsg, ResultSubtype, StreamMsg, UserInput,
 };
 
 // ---------------------------------------------------------------------------
@@ -147,7 +146,8 @@ fn parse_control_request() {
 
 #[test]
 fn parse_control_response_allow() {
-    let line = r#"{"type":"control_response","request_id":"req-42","allow":true,"deny_reason":null}"#;
+    let line =
+        r#"{"type":"control_response","request_id":"req-42","allow":true,"deny_reason":null}"#;
     let msg = parse_stream_line(line).expect("should parse control_response allow");
     match msg {
         StreamMsg::ControlResponse(cr) => {
@@ -224,7 +224,8 @@ fn encode_control_response_deny_produces_valid_json() {
         deny_reason: Some("blocked".to_string()),
     };
     let encoded = encode_control_response(&resp);
-    let parsed = parse_stream_line(&encoded).expect("encoded deny control response must parse back");
+    let parsed =
+        parse_stream_line(&encoded).expect("encoded deny control response must parse back");
     match parsed {
         StreamMsg::ControlResponse(cr) => {
             assert!(!cr.allow);

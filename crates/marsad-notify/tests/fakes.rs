@@ -9,7 +9,7 @@
 //! - CaptureNotifier always returns Ok(())
 
 use marsad_notify::{
-    build_notification, CaptureNotifier, NotifEvent, NotifKind, NotifPrefs, Notifier, Notification,
+    build_notification, CaptureNotifier, NotifEvent, NotifKind, NotifPrefs, Notification, Notifier,
 };
 
 // ---------------------------------------------------------------------------
@@ -79,7 +79,10 @@ fn started_notification() -> Notification {
 #[test]
 fn capture_notifier_new_is_empty() {
     let cap = CaptureNotifier::new();
-    assert!(cap.delivered().is_empty(), "new CaptureNotifier must have no delivered notifications");
+    assert!(
+        cap.delivered().is_empty(),
+        "new CaptureNotifier must have no delivered notifications"
+    );
 }
 
 #[test]
@@ -97,7 +100,10 @@ fn capture_notifier_deliver_returns_ok() {
     let mut cap = CaptureNotifier::new();
     let note = needs_notification();
     let result = cap.deliver(&note);
-    assert!(result.is_ok(), "CaptureNotifier::deliver must always return Ok(())");
+    assert!(
+        result.is_ok(),
+        "CaptureNotifier::deliver must always return Ok(())"
+    );
 }
 
 #[test]
@@ -140,7 +146,10 @@ fn capture_notifier_records_delivery_title_and_body() {
     let note = needs_notification();
     cap.deliver(&note).unwrap();
     assert_eq!(cap.delivered()[0].title, "api-gateway needs you");
-    assert_eq!(cap.delivered()[0].body, "Wants to run: prisma migrate deploy");
+    assert_eq!(
+        cap.delivered()[0].body,
+        "Wants to run: prisma migrate deploy"
+    );
 }
 
 #[test]
@@ -219,7 +228,11 @@ fn capture_notifier_accumulates_ten_deliveries() {
     for _ in 0..10 {
         cap.deliver(&note).unwrap();
     }
-    assert_eq!(cap.delivered().len(), 10, "CaptureNotifier must accumulate all 10 deliveries");
+    assert_eq!(
+        cap.delivered().len(),
+        10,
+        "CaptureNotifier must accumulate all 10 deliveries"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -233,7 +246,10 @@ fn capture_notifier_delivered_accessible_multiple_times() {
     // Call delivered() twice — must not move or consume
     let first = cap.delivered().len();
     let second = cap.delivered().len();
-    assert_eq!(first, second, "delivered() must be accessible multiple times");
+    assert_eq!(
+        first, second,
+        "delivered() must be accessible multiple times"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +260,8 @@ fn capture_notifier_delivered_accessible_multiple_times() {
 fn capture_notifier_via_trait_object() {
     let mut cap: Box<dyn Notifier> = Box::new(CaptureNotifier::new());
     let note = needs_notification();
-    cap.deliver(&note).expect("trait-object deliver must succeed");
+    cap.deliver(&note)
+        .expect("trait-object deliver must succeed");
     // NOTE(test-agent): we cannot call .delivered() through a trait object because it
     // is not part of the Notifier trait. This is by design — callers downcast or use
     // the concrete type. The test validates that CaptureNotifier satisfies the trait.
@@ -253,11 +270,17 @@ fn capture_notifier_via_trait_object() {
 #[test]
 fn capture_notifier_is_notifier_via_generic() {
     fn deliver_via_generic<N: Notifier>(notifier: &mut N, note: &Notification) {
-        notifier.deliver(note).expect("generic deliver must succeed");
+        notifier
+            .deliver(note)
+            .expect("generic deliver must succeed");
     }
     let mut cap = CaptureNotifier::new();
     deliver_via_generic(&mut cap, &needs_notification());
-    assert_eq!(cap.delivered().len(), 1, "Generic deliver must record the notification");
+    assert_eq!(
+        cap.delivered().len(),
+        1,
+        "Generic deliver must record the notification"
+    );
 }
 
 // ---------------------------------------------------------------------------

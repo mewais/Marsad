@@ -193,8 +193,16 @@ fn group_overview_needs_comes_before_error_in_attention() {
     // needs must appear before error
     let first_state = &groups.attention[0].state;
     let second_state = &groups.attention[1].state;
-    assert_eq!(*first_state, Phase::Needs, "needs must be first in attention");
-    assert_eq!(*second_state, Phase::Error, "error must be second in attention");
+    assert_eq!(
+        *first_state,
+        Phase::Needs,
+        "needs must be first in attention"
+    );
+    assert_eq!(
+        *second_state,
+        Phase::Error,
+        "error must be second in attention"
+    );
 }
 
 #[test]
@@ -257,7 +265,10 @@ fn sidebar_list_sorted_by_state_order() {
 fn session_detail_returns_some_when_session_selected() {
     let snap = representative_snapshot();
     let detail = session_detail(&snap);
-    assert!(detail.is_some(), "should return Some when a session is selected");
+    assert!(
+        detail.is_some(),
+        "should return Some when a session is selected"
+    );
 }
 
 #[test]
@@ -272,7 +283,10 @@ fn session_detail_ctx_warn_false_below_75() {
     // s1 has context_pct = 10.0 — below 75
     let snap = representative_snapshot();
     let detail = session_detail(&snap).unwrap();
-    assert!(!detail.ctx_warn, "ctx_warn should be false when context_pct < 75");
+    assert!(
+        !detail.ctx_warn,
+        "ctx_warn should be false when context_pct < 75"
+    );
 }
 
 #[test]
@@ -281,7 +295,10 @@ fn session_detail_ctx_warn_true_at_75() {
     let mut snap = representative_snapshot();
     snap.selected_id = Some("s3".to_string());
     let detail = session_detail(&snap).unwrap();
-    assert!(detail.ctx_warn, "ctx_warn should be true when context_pct >= 75");
+    assert!(
+        detail.ctx_warn,
+        "ctx_warn should be true when context_pct >= 75"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -300,7 +317,10 @@ fn gate_vm_returns_some_for_permission_gate() {
     snap.sessions[0].gate = Some(gate);
     snap.selected_id = Some("s1".to_string());
     let vm = gate_vm(&snap);
-    assert!(vm.is_some(), "gate_vm should return Some when selected session has a gate");
+    assert!(
+        vm.is_some(),
+        "gate_vm should return Some when selected session has a gate"
+    );
 }
 
 #[test]
@@ -351,8 +371,16 @@ fn gate_vm_plan_kind_and_icon() {
 #[test]
 fn gate_vm_edit_kind_and_icon() {
     let diff_lines = vec![
-        DiffLine { sig: Sig::Del, text: "old code".to_string(), ln: "1".to_string() },
-        DiffLine { sig: Sig::Add, text: "new code".to_string(), ln: "1".to_string() },
+        DiffLine {
+            sig: Sig::Del,
+            text: "old code".to_string(),
+            ln: "1".to_string(),
+        },
+        DiffLine {
+            sig: Sig::Add,
+            text: "new code".to_string(),
+            ln: "1".to_string(),
+        },
     ];
     let gate = Gate::Edit {
         file: "src/lib.rs".to_string(),
@@ -372,8 +400,16 @@ fn gate_vm_edit_kind_and_icon() {
 #[test]
 fn gate_vm_edit_has_diff_rows() {
     let diff_lines = vec![
-        DiffLine { sig: Sig::Del, text: "old".to_string(), ln: "1".to_string() },
-        DiffLine { sig: Sig::Add, text: "new".to_string(), ln: "1".to_string() },
+        DiffLine {
+            sig: Sig::Del,
+            text: "old".to_string(),
+            ln: "1".to_string(),
+        },
+        DiffLine {
+            sig: Sig::Add,
+            text: "new".to_string(),
+            ln: "1".to_string(),
+        },
     ];
     let gate = Gate::Edit {
         file: "foo.rs".to_string(),
@@ -489,7 +525,11 @@ fn parse_slash_help() {
 #[test]
 fn slash_catalog_empty_query_returns_all_11_commands() {
     let catalog = slash_catalog("");
-    assert_eq!(catalog.len(), 11, "empty query should return all 11 slash commands");
+    assert_eq!(
+        catalog.len(),
+        11,
+        "empty query should return all 11 slash commands"
+    );
 }
 
 #[test]
@@ -514,5 +554,8 @@ fn slash_catalog_prefix_match_filters_results() {
 #[test]
 fn slash_catalog_no_match_returns_empty() {
     let catalog = slash_catalog("/zzz");
-    assert!(catalog.is_empty(), "no-match query should return empty list");
+    assert!(
+        catalog.is_empty(),
+        "no-match query should return empty list"
+    );
 }

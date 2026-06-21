@@ -41,8 +41,8 @@ fn make_broken_core() -> Core {
     b.connect().ok();
     // Close the peer so the Core's transport sends to a closed pipe
     b.close().ok();
-    let core = Core::new(cfg(), Box::new(a)).expect("Core::new");
-    core
+
+    Core::new(cfg(), Box::new(a)).expect("Core::new")
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +193,9 @@ fn send_prompt_transport_failure_returns_transport_error() {
 #[test]
 fn on_agent_line_non_json_returns_protocol_error() {
     let (mut core, _peer) = make_core();
-    let err = core.on_agent_line("this is not json at all!!!").unwrap_err();
+    let err = core
+        .on_agent_line("this is not json at all!!!")
+        .unwrap_err();
     assert!(
         matches!(err, CoreError::Protocol(_)),
         "expected Protocol error for non-JSON input, got {err:?}"

@@ -12,7 +12,9 @@
 //! - Workspace with empty session_ids list
 //! - All phases of a PersistedSession last_phase field survive round-trip
 
-use marsad_store::{Backend, MemoryBackend, PersistedSession, Store, StoreError, TranscriptEntry, Workspace};
+use marsad_store::{
+    Backend, MemoryBackend, PersistedSession, Store, StoreError, TranscriptEntry, Workspace,
+};
 use std::collections::HashSet;
 
 // ---------------------------------------------------------------------------
@@ -151,7 +153,9 @@ fn set_active_workspace_unknown_id_returns_not_found() {
 fn set_active_workspace_overwrites_previous_selection() {
     let mut store = fresh_store();
     for id in &["ws-first", "ws-second"] {
-        store.snapshot_workspace(&workspace(id, &[])).expect("snapshot");
+        store
+            .snapshot_workspace(&workspace(id, &[]))
+            .expect("snapshot");
     }
     store.set_active_workspace("ws-first").expect("set first");
     store.set_active_workspace("ws-second").expect("set second");
@@ -166,7 +170,9 @@ fn set_active_workspace_overwrites_previous_selection() {
 #[test]
 fn set_active_workspace_unknown_id_when_some_workspaces_exist_returns_not_found() {
     let mut store = fresh_store();
-    store.snapshot_workspace(&workspace("ws-real", &[])).expect("snapshot");
+    store
+        .snapshot_workspace(&workspace("ws-real", &[]))
+        .expect("snapshot");
     // "ws-ghost" was never snapshotted.
     match store.set_active_workspace("ws-ghost") {
         Err(StoreError::NotFound(_)) => {}
@@ -262,11 +268,7 @@ fn transcripts_for_multiple_sessions_are_independent() {
     assert_eq!(beta_tx.len(), 2);
 
     // s-gamma may have no entry in the map or an empty vec
-    let gamma_len = r
-        .transcripts
-        .get("s-gamma")
-        .map(|v| v.len())
-        .unwrap_or(0);
+    let gamma_len = r.transcripts.get("s-gamma").map(|v| v.len()).unwrap_or(0);
     assert_eq!(gamma_len, 0, "s-gamma must have 0 transcript entries");
 }
 
@@ -284,7 +286,10 @@ fn list_by_prefix_returns_only_matching_keys() {
 
     let session_keys = backend.list("session:").expect("list session:");
     for k in &session_keys {
-        assert!(k.starts_with("session:"), "key '{k}' does not start with 'session:'");
+        assert!(
+            k.starts_with("session:"),
+            "key '{k}' does not start with 'session:'"
+        );
     }
     assert!(session_keys.contains(&"session:a".to_string()));
     assert!(session_keys.contains(&"session:b".to_string()));
@@ -311,7 +316,10 @@ fn list_by_prefix_no_match_returns_empty_vec() {
     backend.write("session:a", b"1").expect("write");
 
     let keys = backend.list("workspace:").expect("list workspace:");
-    assert!(keys.is_empty(), "list with non-matching prefix must return empty vec");
+    assert!(
+        keys.is_empty(),
+        "list with non-matching prefix must return empty vec"
+    );
 }
 
 // ---------------------------------------------------------------------------

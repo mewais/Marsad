@@ -16,8 +16,11 @@ use marsad_hosts::{FakeSshRunner, HostError, HostRegistry, HostStatus};
 fn add_duplicate_label_returns_duplicate_label_error() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    reg.add("server1", "alice@server1.example.com").expect("first add must succeed");
-    let err = reg.add("server1", "bob@server2.example.com").expect_err("duplicate add must fail");
+    reg.add("server1", "alice@server1.example.com")
+        .expect("first add must succeed");
+    let err = reg
+        .add("server1", "bob@server2.example.com")
+        .expect_err("duplicate add must fail");
     match err {
         HostError::DuplicateLabel(label) => assert_eq!(label, "server1"),
         other => panic!("expected DuplicateLabel, got {:?}", other),
@@ -39,7 +42,9 @@ fn remove_localhost_returns_cannot_remove_localhost() {
         .find(|h| h.is_local)
         .map(|h| h.id.clone())
         .expect("localhost must be seeded");
-    let err = reg.remove(&local_id).expect_err("remove localhost must fail");
+    let err = reg
+        .remove(&local_id)
+        .expect_err("remove localhost must fail");
     match err {
         HostError::CannotRemoveLocalhost => {}
         other => panic!("expected CannotRemoveLocalhost, got {:?}", other),
@@ -68,7 +73,9 @@ fn add_target_without_at_sign_returns_malformed_target() {
     // A bare hostname with no user@ is not a valid user@host target.
     // NOTE(test-agent): The spec says target must look like "user@host" or a known ssh alias.
     // We test the user@host path here; the "known ssh alias" branch is tested in branches.rs.
-    let err = reg.add("badhost2", "notauserathostformat").expect_err("no-@ target must fail");
+    let err = reg
+        .add("badhost2", "notauserathostformat")
+        .expect_err("no-@ target must fail");
     match err {
         HostError::MalformedTarget(_) => {}
         other => panic!("expected MalformedTarget, got {:?}", other),
@@ -90,7 +97,9 @@ fn add_target_at_only_returns_malformed_target() {
 fn add_target_missing_user_returns_malformed_target() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    let err = reg.add("badhost4", "@somehost.example.com").expect_err("missing user must fail");
+    let err = reg
+        .add("badhost4", "@somehost.example.com")
+        .expect_err("missing user must fail");
     match err {
         HostError::MalformedTarget(_) => {}
         other => panic!("expected MalformedTarget, got {:?}", other),
@@ -101,7 +110,9 @@ fn add_target_missing_user_returns_malformed_target() {
 fn add_target_missing_host_returns_malformed_target() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    let err = reg.add("badhost5", "user@").expect_err("missing host must fail");
+    let err = reg
+        .add("badhost5", "user@")
+        .expect_err("missing host must fail");
     match err {
         HostError::MalformedTarget(_) => {}
         other => panic!("expected MalformedTarget, got {:?}", other),
@@ -116,7 +127,9 @@ fn add_target_missing_host_returns_malformed_target() {
 fn remove_unknown_id_returns_not_found() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    let err = reg.remove("nonexistent-id-xyz").expect_err("remove unknown id must fail");
+    let err = reg
+        .remove("nonexistent-id-xyz")
+        .expect_err("remove unknown id must fail");
     match err {
         HostError::NotFound(id) => assert_eq!(id, "nonexistent-id-xyz"),
         other => panic!("expected NotFound, got {:?}", other),

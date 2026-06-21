@@ -6,9 +6,7 @@
 //!   • ResumeFailed — spawn returns error during Resume path.
 //!   • Spawn failure mapped to appropriate error variant.
 
-use marsad_lifecycle::{
-    reconcile, Action, FakeContainer, LifecycleError, Persisted, RuntimePhase,
-};
+use marsad_lifecycle::{reconcile, Action, FakeContainer, LifecycleError, Persisted, RuntimePhase};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -80,7 +78,8 @@ fn attach_race_with_session_id_falls_to_resume() {
     // Resume → phase is None (not Stale, not Detached)
     assert!(
         result.phase.is_none(),
-        "successful Resume → phase None, got {:?}", result.phase
+        "successful Resume → phase None, got {:?}",
+        result.phase
     );
 }
 

@@ -7,10 +7,12 @@
 //! - StoreError::BadImport       — wrong envelope (missing marsadWorkspace key)
 //! - StoreError::NotFound        — export_workspace on a non-existent workspace id
 //! - StoreError::Backend(String) — backend read/write failure propagated to Store
-//!                                 (via MemoryBackend::fail_next(BackendOp::...))
+//!   (via MemoryBackend::fail_next(BackendOp::...))
 //! - All StoreError variants implement Debug (spec: derive Debug)
 
-use marsad_store::{Backend, BackendOp, MemoryBackend, PersistedSession, Store, StoreError, Workspace};
+use marsad_store::{
+    Backend, BackendOp, MemoryBackend, PersistedSession, Store, StoreError, Workspace,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -48,7 +50,7 @@ fn fresh_store() -> Store {
 
 #[test]
 fn corrupt_session_key_returns_corrupt_error() {
-    let backend = MemoryBackend::new();
+    let _backend = MemoryBackend::new();
 
     // Write a valid session first so the key exists, then corrupt it.
     {
@@ -322,13 +324,13 @@ fn backend_write_failure_propagates_from_set_active_workspace() {
     let backend = Arc::new(MemoryBackend::new());
     let mut store = Store::new(Box::new(SharedBackend(Arc::clone(&backend))));
     let ws = make_workspace("ws-active-fail");
-    store.snapshot_workspace(&ws).expect("snapshot must succeed");
+    store
+        .snapshot_workspace(&ws)
+        .expect("snapshot must succeed");
     backend.fail_next(BackendOp::Write);
     match store.set_active_workspace("ws-active-fail") {
         Err(StoreError::Backend(_)) => {}
-        other => panic!(
-            "expected Backend error from set_active_workspace write, got: {other:?}"
-        ),
+        other => panic!("expected Backend error from set_active_workspace write, got: {other:?}"),
     }
 }
 

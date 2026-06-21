@@ -6,9 +6,7 @@
 //   - state_meta: every Phase including Stale/Detached
 //   - gate_meta: each Gate variant; empty plan steps edge case
 
-use marsad_format::{
-    ctx_color, fmt_elapsed, fmt_tokens, gate_meta, state_meta, Phase, Token,
-};
+use marsad_format::{ctx_color, fmt_elapsed, fmt_tokens, gate_meta, state_meta, Phase, Token};
 use marsad_gates::{Gate, PlanStep};
 
 // ===== fmt_tokens branches =====
@@ -305,7 +303,6 @@ fn gate_meta_edit_zero_adds_zero_dels() {
 
 #[test]
 fn gate_meta_edit_empty_diff() {
-    use marsad_gates::DiffLine;
     let gate = Gate::Edit {
         file: String::from("empty.rs"),
         diff: vec![],

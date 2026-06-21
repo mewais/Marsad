@@ -33,8 +33,8 @@ fn hook_path(filename: &str) -> std::path::PathBuf {
 #[test]
 fn qa_fixture_parses_all_lines_without_errors() {
     let path = fixture_path("qa.ndjson");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
+    let content =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
 
     for (i, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
@@ -49,8 +49,8 @@ fn qa_fixture_parses_all_lines_without_errors() {
 #[test]
 fn qa_fixture_variant_sequence() {
     let path = fixture_path("qa.ndjson");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
+    let content =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
 
     let msgs: Vec<StreamMsg> = content
         .lines()
@@ -80,8 +80,7 @@ fn qa_fixture_variant_sequence() {
 #[test]
 fn qa_fixture_system_init_fields() {
     let path = fixture_path("qa.ndjson");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{e}"));
+    let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
     let first_line = content.lines().next().expect("qa.ndjson must not be empty");
     let msg = parse_stream_line(first_line).expect("SystemInit must parse");
 
@@ -107,15 +106,21 @@ fn qa_fixture_system_init_fields() {
 #[test]
 fn qa_fixture_assistant_message_fields() {
     let path = fixture_path("qa.ndjson");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{e}"));
-    let second_line = content.lines().nth(1).expect("qa.ndjson must have 2+ lines");
+    let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+    let second_line = content
+        .lines()
+        .nth(1)
+        .expect("qa.ndjson must have 2+ lines");
     let msg = parse_stream_line(second_line).expect("Assistant must parse");
 
     match msg {
         StreamMsg::Assistant(a) => {
             assert_eq!(a.message.id, "msg_vrtx_019BtVq34GVCztT9N466pLQd");
-            assert_eq!(a.message.content.len(), 1, "must have exactly one content block");
+            assert_eq!(
+                a.message.content.len(),
+                1,
+                "must have exactly one content block"
+            );
             match &a.message.content[0] {
                 ContentBlock::Text { text } => {
                     assert!(
@@ -139,8 +144,7 @@ fn qa_fixture_assistant_message_fields() {
 #[test]
 fn qa_fixture_result_message_fields() {
     let path = fixture_path("qa.ndjson");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{e}"));
+    let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
     let third_line = content.lines().nth(2).expect("qa.ndjson must have 3 lines");
     let msg = parse_stream_line(third_line).expect("Result must parse");
 
@@ -165,8 +169,7 @@ fn qa_fixture_result_message_fields() {
 #[test]
 fn qa_fixture_variant_counts() {
     let path = fixture_path("qa.ndjson");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{e}"));
+    let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
 
     let (mut inits, mut assistants, mut results, mut unknowns) = (0u32, 0u32, 0u32, 0u32);
     for line in content.lines().filter(|l| !l.trim().is_empty()) {
@@ -181,7 +184,10 @@ fn qa_fixture_variant_counts() {
     assert_eq!(inits, 1, "qa.ndjson: 1 SystemInit");
     assert_eq!(assistants, 1, "qa.ndjson: 1 Assistant");
     assert_eq!(results, 1, "qa.ndjson: 1 Result");
-    assert_eq!(unknowns, 0, "qa.ndjson: 0 Unknown (all lines are recognized)");
+    assert_eq!(
+        unknowns, 0,
+        "qa.ndjson: 0 Unknown (all lines are recognized)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -197,15 +203,15 @@ fn qa_fixture_variant_counts() {
 #[ignore = "fixture not yet captured — see fixtures/README.md"]
 fn permission_fixture_parses_all_lines() {
     let path = fixture_path("permission.ndjson");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
+    let content =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
     let mut control_requests = 0u32;
     for (i, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        let msg = parse_stream_line(line)
-            .unwrap_or_else(|e| panic!("line {} failed: {e:?}", i + 1));
+        let msg =
+            parse_stream_line(line).unwrap_or_else(|e| panic!("line {} failed: {e:?}", i + 1));
         if matches!(msg, StreamMsg::ControlRequest(_)) {
             control_requests += 1;
         }
@@ -224,14 +230,13 @@ fn permission_fixture_parses_all_lines() {
 #[ignore = "fixture not yet captured — see fixtures/README.md"]
 fn plan_fixture_parses_all_lines() {
     let path = fixture_path("plan.ndjson");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
+    let content =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
     for (i, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        parse_stream_line(line)
-            .unwrap_or_else(|e| panic!("line {} failed: {e:?}", i + 1));
+        parse_stream_line(line).unwrap_or_else(|e| panic!("line {} failed: {e:?}", i + 1));
     }
 }
 
@@ -243,14 +248,13 @@ fn plan_fixture_parses_all_lines() {
 #[ignore = "fixture not yet captured — see fixtures/README.md"]
 fn edit_fixture_parses_all_lines() {
     let path = fixture_path("edit.ndjson");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
+    let content =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
     for (i, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        parse_stream_line(line)
-            .unwrap_or_else(|e| panic!("line {} failed: {e:?}", i + 1));
+        parse_stream_line(line).unwrap_or_else(|e| panic!("line {} failed: {e:?}", i + 1));
     }
 }
 
@@ -262,14 +266,13 @@ fn edit_fixture_parses_all_lines() {
 #[ignore = "fixture not yet captured — see fixtures/README.md"]
 fn subagent_fixture_parses_all_lines() {
     let path = fixture_path("subagent.ndjson");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
+    let content =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
     for (i, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        parse_stream_line(line)
-            .unwrap_or_else(|e| panic!("line {} failed: {e:?}", i + 1));
+        parse_stream_line(line).unwrap_or_else(|e| panic!("line {} failed: {e:?}", i + 1));
     }
 }
 
@@ -281,14 +284,13 @@ fn subagent_fixture_parses_all_lines() {
 #[ignore = "fixture not yet captured — see fixtures/README.md"]
 fn compaction_fixture_parses_all_lines() {
     let path = fixture_path("compaction.ndjson");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
+    let content =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
     for (i, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        parse_stream_line(line)
-            .unwrap_or_else(|e| panic!("line {} failed: {e:?}", i + 1));
+        parse_stream_line(line).unwrap_or_else(|e| panic!("line {} failed: {e:?}", i + 1));
     }
 }
 
@@ -306,8 +308,8 @@ fn compaction_fixture_parses_all_lines() {
 #[ignore = "hook fixtures not yet captured — see fixtures/README.md"]
 fn hook_notification_is_valid_json() {
     let path = hook_path("Notification.json");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
+    let content =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read {:?}: {e}", path));
     let _v: serde_json::Value =
         serde_json::from_str(&content).expect("Notification.json must be valid JSON");
 }
@@ -316,17 +318,16 @@ fn hook_notification_is_valid_json() {
 #[ignore = "hook fixtures not yet captured — see fixtures/README.md"]
 fn hook_stop_is_valid_json() {
     let path = hook_path("Stop.json");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{e}"));
-    let _v: serde_json::Value = serde_json::from_str(&content).expect("Stop.json must be valid JSON");
+    let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+    let _v: serde_json::Value =
+        serde_json::from_str(&content).expect("Stop.json must be valid JSON");
 }
 
 #[test]
 #[ignore = "hook fixtures not yet captured — see fixtures/README.md"]
 fn hook_pre_tool_use_is_valid_json() {
     let path = hook_path("PreToolUse.json");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{e}"));
+    let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
     let _v: serde_json::Value =
         serde_json::from_str(&content).expect("PreToolUse.json must be valid JSON");
 }
@@ -335,8 +336,7 @@ fn hook_pre_tool_use_is_valid_json() {
 #[ignore = "hook fixtures not yet captured — see fixtures/README.md"]
 fn hook_post_tool_use_is_valid_json() {
     let path = hook_path("PostToolUse.json");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{e}"));
+    let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
     let _v: serde_json::Value =
         serde_json::from_str(&content).expect("PostToolUse.json must be valid JSON");
 }

@@ -228,10 +228,7 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
     }
 }
 
-fn reduce_assistant(
-    mut state: SessionState,
-    msg: marsad_proto::AssistantMsg,
-) -> SessionState {
+fn reduce_assistant(mut state: SessionState, msg: marsad_proto::AssistantMsg) -> SessionState {
     let id = &msg.message.id;
 
     // DEDUP: skip counting if we've already processed this message id.

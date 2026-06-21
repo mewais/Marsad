@@ -8,7 +8,9 @@
 ///   - HostRegistry::remove: removes a remote host by id
 ///   - HostRegistry::health_check -> Connected when SshRunner returns Ok
 ///   - HostRegistry::helper_install_descriptor: returns a valid HelperDescriptor
-use marsad_hosts::{parse_ssh_config, FakeSshRunner, HelperDescriptor, Host, HostEntry, HostRegistry, HostStatus};
+use marsad_hosts::{
+    parse_ssh_config, FakeSshRunner, HelperDescriptor, HostEntry, HostRegistry, HostStatus,
+};
 
 // ---------------------------------------------------------------------------
 // parse_ssh_config — multi-Host nominal path
@@ -30,12 +32,18 @@ Host devbox
     let entries = parse_ssh_config(config);
     assert_eq!(entries.len(), 2, "expected 2 entries");
 
-    let web = entries.iter().find(|e| e.alias == "webserver").expect("webserver not found");
+    let web = entries
+        .iter()
+        .find(|e| e.alias == "webserver")
+        .expect("webserver not found");
     assert_eq!(web.hostname.as_deref(), Some("192.168.1.10"));
     assert_eq!(web.user.as_deref(), Some("deploy"));
     assert_eq!(web.identity_file.as_deref(), Some("~/.ssh/deploy_rsa"));
 
-    let dev = entries.iter().find(|e| e.alias == "devbox").expect("devbox not found");
+    let dev = entries
+        .iter()
+        .find(|e| e.alias == "devbox")
+        .expect("devbox not found");
     assert_eq!(dev.hostname.as_deref(), Some("devbox.example.com"));
     assert_eq!(dev.user.as_deref(), Some("alice"));
     assert_eq!(dev.identity_file.as_deref(), Some("~/.ssh/id_ed25519"));
@@ -66,7 +74,7 @@ fn new_seeds_localhost_entry() {
     assert!(!hosts.is_empty(), "localhost must be seeded on new");
     let local = hosts.iter().find(|h| h.is_local).expect("no local entry");
     assert!(!local.removable, "localhost must not be removable");
-    assert_eq!(local.label.to_lowercase().contains("local") || local.is_local, true);
+    assert!(local.label.to_lowercase().contains("local") || local.is_local);
 }
 
 // ---------------------------------------------------------------------------
@@ -98,8 +106,14 @@ fn list_includes_localhost_and_added_remote() {
     reg.add("remote1", "bob@remote1.example.com").unwrap();
     let hosts = reg.list();
     assert!(hosts.len() >= 2);
-    assert!(hosts.iter().any(|h| h.is_local), "localhost must be in list");
-    assert!(hosts.iter().any(|h| h.label == "remote1"), "remote1 must be in list");
+    assert!(
+        hosts.iter().any(|h| h.is_local),
+        "localhost must be in list"
+    );
+    assert!(
+        hosts.iter().any(|h| h.label == "remote1"),
+        "remote1 must be in list"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +132,10 @@ fn remove_remote_host_succeeds() {
     reg.remove(&id).expect("remove should succeed");
     let count_after = reg.list().len();
     assert_eq!(count_after, count_before - 1);
-    assert!(!reg.list().iter().any(|h| h.id == id), "removed host should not appear in list");
+    assert!(
+        !reg.list().iter().any(|h| h.id == id),
+        "removed host should not appear in list"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +166,10 @@ fn helper_install_descriptor_fields_are_populated() {
     let reg = HostRegistry::new(runner);
     let desc: HelperDescriptor = reg.helper_install_descriptor();
     assert!(!desc.path.is_empty(), "descriptor path must not be empty");
-    assert!(!desc.purpose.is_empty(), "descriptor purpose must not be empty");
+    assert!(
+        !desc.purpose.is_empty(),
+        "descriptor purpose must not be empty"
+    );
     // removable must be true: users can uninstall the helper
     assert!(desc.removable, "helper must be marked as removable");
 }
@@ -175,7 +195,8 @@ fn host_entry_derives_debug_clone_partialeq() {
 fn host_derives_debug_clone_partialeq() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    reg.add("derivetest", "user@derivetest.example.com").unwrap();
+    reg.add("derivetest", "user@derivetest.example.com")
+        .unwrap();
     let hosts = reg.list();
     let h = &hosts[0];
     let cloned = h.clone();

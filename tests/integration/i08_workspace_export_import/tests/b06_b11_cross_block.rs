@@ -11,8 +11,7 @@
 use marsad_events::Phase;
 use marsad_store::{MemoryBackend, PersistedSession, Store, StoreError, Workspace};
 use marsad_viewmodel::{
-    counts, rescope, AppSnapshot, Filter, SessionView, Tab,
-    Workspace as VmWorkspace,
+    counts, rescope, AppSnapshot, Filter, SessionView, Tab, Workspace as VmWorkspace,
 };
 
 // ---------------------------------------------------------------------------
@@ -80,7 +79,9 @@ fn b06_export_import_fidelity() {
     store.snapshot_workspace(&ws).unwrap();
 
     // Export.
-    let json = store.export_workspace("ws-fidelity").expect("export must succeed");
+    let json = store
+        .export_workspace("ws-fidelity")
+        .expect("export must succeed");
 
     // Sanity: the JSON contains the expected envelope fields.
     assert!(json.contains("marsadWorkspace"), "envelope key present");
@@ -97,7 +98,10 @@ fn b06_export_import_fidelity() {
     assert_eq!(imported.saved_at, ws.saved_at, "saved_at round-trips");
 
     // The spec says id is reconstructed as "imported-{name-with-dashes}".
-    assert_eq!(imported.id, "imported-My-Workspace", "id reconstructed per spec");
+    assert_eq!(
+        imported.id, "imported-My-Workspace",
+        "id reconstructed per spec"
+    );
 
     // session_ids list has the same elements (order may vary in export).
     let mut got_ids = imported.session_ids.clone();
@@ -114,7 +118,10 @@ fn b06_export_import_fidelity() {
 
     // The imported workspace is persisted as well.
     assert!(
-        restored.workspaces.iter().any(|w| w.id == "imported-My-Workspace"),
+        restored
+            .workspaces
+            .iter()
+            .any(|w| w.id == "imported-My-Workspace"),
         "imported workspace is persisted"
     );
 }
@@ -170,8 +177,8 @@ fn make_snapshot() -> AppSnapshot {
     let sessions = vec![
         sv("s1", 1.00, 1000, Phase::Working),
         sv("s2", 2.00, 2000, Phase::Done),
-        sv("s3", 0.50, 500,  Phase::Needs),
-        sv("s4", 0.25, 250,  Phase::Error),
+        sv("s3", 0.50, 500, Phase::Needs),
+        sv("s4", 0.25, 250, Phase::Error),
         sv("s5", 3.00, 3000, Phase::Done),
     ];
     let workspaces = vec![
@@ -252,12 +259,19 @@ fn b11_rescope_unknown_workspace_unchanged() {
 
     // Unknown id → snapshot returned unchanged.
     let scoped = rescope("ws-does-not-exist", &snap);
-    assert_eq!(scoped.sessions.len(), before_len, "unchanged session count for unknown ws");
+    assert_eq!(
+        scoped.sessions.len(),
+        before_len,
+        "unchanged session count for unknown ws"
+    );
 
     // The unchanged snapshot's counts should match the original.
     let orig_counts = counts(&snap);
     let scoped_counts = counts(&scoped);
-    assert_eq!(orig_counts, scoped_counts, "counts unchanged for unknown workspace");
+    assert_eq!(
+        orig_counts, scoped_counts,
+        "counts unchanged for unknown workspace"
+    );
 }
 
 #[test]
