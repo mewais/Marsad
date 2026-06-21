@@ -1,4 +1,13 @@
 import "@testing-library/jest-dom/vitest";
+import { cleanup } from "@testing-library/react";
+import { afterEach } from "vitest";
+
+// Unmount all rendered components and reset the DOM between every test.
+// Required in singleFork mode (happy-dom persists across test files otherwise)
+// so getByTestId queries don't find stale DOM from a previous test file.
+afterEach(() => {
+  cleanup();
+});
 
 // Suppress the lazyllhttp WebAssembly unhandled rejection that fires in the
 // sandbox environment where RLIMIT_AS prevents Wasm guard-region allocation.

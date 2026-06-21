@@ -1,19 +1,707 @@
 /**
- * Overview screen — command center with stat tiles, gate grid, active rows, idle grid.
- * Placeholder stub — D02 screen-agent will implement the full layout.
+ * Overview screen — command center with stat tiles, attention gate grid,
+ * active rows, and idle/finished grid.
  */
 import { useVm } from "../bridge/useVm";
+import type { SessionCard } from "../bridge/types";
+import { StatTile } from "../components/StatTile";
+import { StateDot } from "../components/StateDot";
+import { phaseColor, phaseBg, phaseLabel } from "../components/Badge";
+
+// ---------------------------------------------------------------------------
+// Gate kind label helpers
+// ---------------------------------------------------------------------------
+
+function gateKindLabel(kind: string | null): string {
+  if (kind === "permission") return "Permission";
+  if (kind === "plan") return "Plan";
+  if (kind === "edit") return "Edit";
+  return kind ?? "Gate";
+}
+
+function gateLead(kind: string | null): string {
+  if (kind === "permission") return "Permission request";
+  if (kind === "plan") return "Plan for approval";
+  if (kind === "edit") return "File edit";
+  return "Gate";
+}
+
+// ---------------------------------------------------------------------------
+// Context bar color thresholds
+// ---------------------------------------------------------------------------
+
+function ctxColor(pct: number): string {
+  if (pct >= 85) return "var(--error)";
+  if (pct >= 65) return "var(--needs)";
+  return "var(--accent)";
+}
+
+// ---------------------------------------------------------------------------
+// Attention gate card
+// ---------------------------------------------------------------------------
+
+interface AttentionCardProps {
+  card: SessionCard;
+  onReview: () => void;
+  onOpen: () => void;
+}
+
+function AttentionCard({ card, onReview, onOpen }: AttentionCardProps) {
+  const color = phaseColor[card.state];
+  const bg = phaseBg[card.state];
+  const kind = card.gate_kind;
+
+  // Glow animation keyframes depend on phase
+  const glowStyle =
+    card.state === "Needs"
+      ? "0 0 0 1px var(--needs), 0 0 14px 2px rgba(241,168,58,0.18)"
+      : card.state === "Error"
+      ? "0 0 0 1px var(--error), 0 0 14px 2px rgba(224,89,74,0.18)"
+      : undefined;
+
+  return (
+    <div
+      data-testid={`attention-card-${card.id}`}
+      style={{
+        borderRadius: 14,
+        padding: 16,
+        background: "var(--panel)",
+        border: `1px solid ${color}`,
+        boxShadow: glowStyle,
+        position: "relative",
+        overflow: "hidden",
+        animation:
+          card.state === "Needs" ? "glow 2.6s ease-in-out infinite" : undefined,
+      }}
+    >
+      {/* Left accent bar */}
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          bottom: 0,
+          width: 3,
+          background: color,
+        }}
+      />
+
+      {/* Card header */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 5,
+            }}
+          >
+            {/* Gate kind badge */}
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 700,
+                letterSpacing: 0.4,
+                padding: "2px 7px",
+                borderRadius: 5,
+                color,
+                background: bg,
+                textTransform: "uppercase",
+              }}
+            >
+              {gateKindLabel(kind)}
+            </span>
+            <span
+              style={{
+                fontFamily: "var(--font-mono, monospace)",
+                fontSize: 10,
+                color: "var(--txt3)",
+              }}
+            >
+              {card.host_label}
+            </span>
+          </div>
+          <div
+            style={{
+              fontWeight: 700,
+              fontSize: 15,
+              letterSpacing: -0.2,
+            }}
+          >
+            {card.name}
+          </div>
+          <div
+            style={{
+              fontFamily: "var(--font-mono, monospace)",
+              fontSize: 10.5,
+              color: "var(--txt3)",
+              marginTop: 2,
+            }}
+          >
+            {card.project}
+          </div>
+        </div>
+      </div>
+
+      {/* Gate summary box */}
+      <div
+        style={{
+          margin: "12px 0",
+          padding: "11px 12px",
+          borderRadius: 9,
+          background: "var(--panel2)",
+          border: "1px solid var(--border)",
+        }}
+      >
+        <div
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: 0.4,
+            textTransform: "uppercase",
+            color: "var(--txt3)",
+            marginBottom: 5,
+          }}
+        >
+          {gateLead(kind)}
+        </div>
+        <div
+          style={{
+            fontFamily: "var(--font-mono, monospace)",
+            fontSize: 12,
+            color: "var(--txt)",
+            wordBreak: "break-word",
+          }}
+        >
+          {card.gate_summary ?? "—"}
+        </div>
+      </div>
+
+      {/* Action buttons */}
+      <div style={{ display: "flex", gap: 8 }}>
+        <button
+          data-testid={`review-btn-${card.id}`}
+          onClick={onReview}
+          style={{
+            flex: 1,
+            fontFamily: "inherit",
+            fontWeight: 700,
+            fontSize: 12.5,
+            padding: 9,
+            borderRadius: 9,
+            border: "none",
+            background: color,
+            color: "#0e1116",
+            cursor: "pointer",
+          }}
+        >
+          Review →
+        </button>
+        <button
+          data-testid={`open-btn-${card.id}`}
+          onClick={onOpen}
+          style={{
+            fontFamily: "inherit",
+            fontWeight: 600,
+            fontSize: 12.5,
+            padding: "9px 13px",
+            borderRadius: 9,
+            border: "1px solid var(--border2)",
+            background: "transparent",
+            color: "var(--txt2)",
+            cursor: "pointer",
+          }}
+        >
+          Open
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Active row
+// ---------------------------------------------------------------------------
+
+interface ActiveRowProps {
+  card: SessionCard;
+  onClick: () => void;
+}
+
+function ActiveRow({ card, onClick }: ActiveRowProps) {
+  return (
+    <div
+      data-testid={`active-row-${card.id}`}
+      onClick={onClick}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 14,
+        padding: "13px 15px",
+        borderRadius: 12,
+        background: "var(--panel)",
+        border: "1px solid var(--border)",
+        cursor: "pointer",
+      }}
+    >
+      {/* Pulsing dot */}
+      <StateDot state={card.state} size={9} />
+
+      {/* Name + host/branch */}
+      <div style={{ minWidth: 170, maxWidth: 230 }}>
+        <div
+          style={{
+            fontWeight: 600,
+            fontSize: 13,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {card.name}
+        </div>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            marginTop: 1,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: "var(--font-mono, monospace)",
+              fontSize: 10,
+              color: "var(--txt3)",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {card.host_label} · {card.branch}
+          </span>
+          {/* Subagent chip — SessionCard doesn't carry subagent count, show badge when last_action hints it */}
+          {card.last_action?.startsWith("⊟") && (
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 700,
+                color: "var(--accent2)",
+                background: "var(--accent-bg)",
+                padding: "1px 6px",
+                borderRadius: 5,
+                whiteSpace: "nowrap",
+                flexShrink: 0,
+              }}
+            >
+              {card.last_action}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Live action line */}
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          color: "var(--txt2)",
+          fontSize: 12,
+        }}
+      >
+        <span
+          style={{
+            fontFamily: "var(--font-mono, monospace)",
+            fontSize: 11,
+            color: "var(--accent2)",
+          }}
+        >
+          ⚙
+        </span>
+        <span
+          style={{
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {card.last_action ?? "Working…"}
+        </span>
+        {/* Blinking cursor */}
+        <span
+          style={{
+            width: 4,
+            height: 13,
+            background: "var(--accent2)",
+            display: "inline-block",
+            animation: "blink 1s step-end infinite",
+            borderRadius: 1,
+            flexShrink: 0,
+          }}
+        />
+      </div>
+
+      {/* Context bar */}
+      <div style={{ width: 120, flexShrink: 0 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            fontSize: 10,
+            color: "var(--txt3)",
+            marginBottom: 3,
+          }}
+        >
+          <span>ctx {card.context_pct}%</span>
+          <span
+            style={{
+              fontFamily: "var(--font-mono, monospace)",
+            }}
+          >
+            {card.tokens_label}
+          </span>
+        </div>
+        <div
+          style={{
+            height: 5,
+            borderRadius: 3,
+            background: "var(--border)",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              height: "100%",
+              borderRadius: 3,
+              background: ctxColor(card.context_pct),
+              width: `${Math.min(card.context_pct, 100)}%`,
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Elapsed */}
+      <span
+        style={{
+          fontFamily: "var(--font-mono, monospace)",
+          fontSize: 11,
+          color: "var(--txt3)",
+          width: 62,
+          textAlign: "right",
+          flexShrink: 0,
+        }}
+      >
+        {card.elapsed_label || "—"}
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Idle card
+// ---------------------------------------------------------------------------
+
+interface IdleCardProps {
+  card: SessionCard;
+  onClick: () => void;
+}
+
+function IdleCard({ card, onClick }: IdleCardProps) {
+  const color = phaseColor[card.state];
+  const bg = phaseBg[card.state];
+  const label = phaseLabel[card.state];
+
+  return (
+    <div
+      data-testid={`idle-card-${card.id}`}
+      onClick={onClick}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 11,
+        padding: "12px 14px",
+        borderRadius: 11,
+        background: "var(--panel)",
+        border: "1px solid var(--border)",
+        cursor: "pointer",
+      }}
+    >
+      <span
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          background: color,
+          flexShrink: 0,
+          display: "inline-block",
+        }}
+      />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontWeight: 600,
+            fontSize: 12.5,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {card.name}
+        </div>
+        <div
+          style={{
+            fontFamily: "var(--font-mono, monospace)",
+            fontSize: 10,
+            color: "var(--txt3)",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {card.host_label} · {card.branch}
+        </div>
+      </div>
+      <span
+        style={{
+          fontSize: 9,
+          fontWeight: 700,
+          padding: "2px 6px",
+          borderRadius: 5,
+          color,
+          background: bg,
+          textTransform: "uppercase",
+          flexShrink: 0,
+        }}
+      >
+        {label}
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Overview — main export
+// ---------------------------------------------------------------------------
 
 export function Overview() {
-  const { counts } = useVm();
+  const { counts, overviewGroups, dispatch } = useVm();
+  const { attention, active, idle } = overviewGroups;
+
+  function openSession(id: string) {
+    dispatch({ type: "SELECT_SESSION", id });
+  }
+
+  function reviewGate(id: string) {
+    // Select the session first so gate screen can read selectedId
+    dispatch({ type: "SELECT_SESSION", id });
+    dispatch({ type: "SET_SCREEN", screen: "gate" });
+  }
+
   return (
-    <div style={{ padding: "22px 26px", color: "var(--txt)" }}>
-      <h1 style={{ fontSize: 21, fontWeight: 700, margin: "0 0 8px", letterSpacing: -0.3 }}>
-        Command center
-      </h1>
-      <p style={{ color: "var(--txt3)", margin: 0 }}>
-        {counts.total} sessions — Overview screen placeholder (D02 agent fills this)
-      </p>
+    <div
+      style={{
+        padding: "22px 26px 40px",
+        maxWidth: 1180,
+        margin: "0 auto",
+        color: "var(--txt)",
+      }}
+    >
+      {/* Page title */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 12,
+          marginBottom: 4,
+        }}
+      >
+        <h1
+          style={{
+            fontSize: 21,
+            fontWeight: 700,
+            margin: 0,
+            letterSpacing: -0.3,
+          }}
+        >
+          Command center
+        </h1>
+        <span style={{ fontSize: 12.5, color: "var(--txt2)" }}>
+          {counts.total} sessions across {counts.host_count} hosts
+        </span>
+      </div>
+
+      {/* ── Stat tiles ── */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: 12,
+          marginBottom: 22,
+        }}
+      >
+        <StatTile
+          label="Needs you"
+          value={counts.needs}
+          sub="awaiting your decision"
+          color="var(--needs)"
+          border="var(--needs)"
+          bg="var(--needs-bg)"
+        />
+        <StatTile
+          label="Errored"
+          value={counts.errors}
+          sub="need a look"
+          color="var(--error)"
+        />
+        <StatTile
+          label="Working"
+          value={counts.working}
+          sub="actively running"
+          color="var(--accent)"
+        />
+        <StatTile
+          label="Cost today"
+          value={counts.cost}
+          sub={`${counts.tokens} tokens`}
+          color="var(--txt3)"
+        />
+      </div>
+
+      {/* ── Needs your attention ── */}
+      {attention.length > 0 && (
+        <>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 9,
+              margin: "0 0 12px",
+            }}
+          >
+            <span
+              style={{
+                width: 9,
+                height: 9,
+                borderRadius: "50%",
+                background: "var(--needs)",
+                animation: "dotpulse 1.4s infinite",
+                display: "inline-block",
+                flexShrink: 0,
+              }}
+            />
+            <h2
+              style={{
+                fontSize: 13,
+                fontWeight: 700,
+                letterSpacing: 0.4,
+                textTransform: "uppercase",
+                margin: 0,
+                color: "var(--needs)",
+              }}
+            >
+              Needs your attention
+            </h2>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))",
+              gap: 13,
+              marginBottom: 26,
+            }}
+          >
+            {attention.map((card) => (
+              <AttentionCard
+                key={card.id}
+                card={card}
+                onReview={() => reviewGate(card.id)}
+                onOpen={() => openSession(card.id)}
+              />
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* ── Active now ── */}
+      <h2
+        style={{
+          fontSize: 13,
+          fontWeight: 700,
+          letterSpacing: 0.4,
+          textTransform: "uppercase",
+          margin: "0 0 12px",
+          color: "var(--txt2)",
+        }}
+      >
+        Active now
+      </h2>
+      {active.length === 0 ? (
+        <p
+          style={{
+            fontSize: 12.5,
+            color: "var(--txt3)",
+            margin: "0 0 26px",
+          }}
+        >
+          No sessions actively running right now.
+        </p>
+      ) : (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            marginBottom: 26,
+          }}
+        >
+          {active.map((card) => (
+            <ActiveRow
+              key={card.id}
+              card={card}
+              onClick={() => openSession(card.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* ── Idle & finished ── */}
+      <h2
+        style={{
+          fontSize: 13,
+          fontWeight: 700,
+          letterSpacing: 0.4,
+          textTransform: "uppercase",
+          margin: "0 0 12px",
+          color: "var(--txt2)",
+        }}
+      >
+        Idle &amp; finished
+      </h2>
+      {idle.length === 0 ? (
+        <p style={{ fontSize: 12.5, color: "var(--txt3)", margin: 0 }}>
+          No idle or finished sessions.
+        </p>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+            gap: 10,
+          }}
+        >
+          {idle.map((card) => (
+            <IdleCard
+              key={card.id}
+              card={card}
+              onClick={() => openSession(card.id)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
