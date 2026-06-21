@@ -305,10 +305,7 @@ impl Container for TmuxContainer {
     /// returns true), no new session is spawned — the function returns `Ok`
     /// immediately (adopt semantics).
     fn spawn(&mut self, name: &str, cmd: &str) -> Result<(), LifecycleError> {
-        // Idempotency guard: adopt without spawning if already running.
-        if self.exists(name) {
-            return Ok(());
-        }
+        let already_running = self.exists(name);
 
         let dir = self.session_dir(name);
         std::fs::create_dir_all(&dir)
@@ -319,6 +316,12 @@ impl Container for TmuxContainer {
 
         // Use the `mkfifo` utility (POSIX, dependency-free from Rust's std).
         // Only create each FIFO if it does not already exist.
+        // NOTE: we always ensure the FIFOs exist, even on the adopt path
+        // (already_running == true).  A stale tmux session from a prior crashed
+        // run may exist without its FIFOs (e.g. the previous spawn failed after
+        // `tmux new-session` but before `mkfifo`, or a different data_root was
+        // used).  The idempotency guard must not skip FIFO creation; the
+        // `!fifo.exists()` check below makes this a no-op when they are present.
         for fifo in [&in_fifo, &out_fifo] {
             if !fifo.exists() {
                 let st = std::process::Command::new("mkfifo")
@@ -331,6 +334,12 @@ impl Container for TmuxContainer {
                     )));
                 }
             }
+        }
+
+        // Idempotency guard: adopt without spawning a new tmux session if one
+        // is already running under this name.
+        if already_running {
+            return Ok(());
         }
 
         // Launch the tmux session.
