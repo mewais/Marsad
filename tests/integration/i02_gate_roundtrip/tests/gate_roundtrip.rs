@@ -7,8 +7,11 @@
 //!   - Over LoopbackFake transport: send control-response line from one end, peer receives it.
 //!
 //! Part B — Live real gate (skip-guarded; best-effort):
-//!   - If `claude` and `tmux` are present, elicit a real permission gate and approve it.
-//!   - Skips loudly with eprintln! if either is missing or gate doesn't appear in time.
+//!   - If `claude` is present, drive the REAL control protocol through Marsad's
+//!     proto functions: initialize handshake → elicit a `can_use_tool` gate →
+//!     answer allow AND deny → assert the real side effect (a marker file is
+//!     created iff approved).
+//!   - Skips loudly with eprintln! if claude is missing or no gate appears in time.
 
 use marsad_gates::{
     approve, decision_id, reject, route, to_control_response, Decision, DecisionId, DecisionLedger,
@@ -430,366 +433,281 @@ fn drain_outbound_captures_sent_lines() {
 }
 
 // ---------------------------------------------------------------------------
-// Part B — LIVE gate round-trip (skip if claude or tmux absent)
+// Part B — LIVE gate round-trip against real `claude` (skip-guarded)
 // ---------------------------------------------------------------------------
+//
+// Proves the REAL Claude Code control protocol end-to-end, exercised entirely
+// through Marsad's own proto functions:
+//   1. launch claude with `--permission-prompt-tool stdio` (routes permission
+//      prompts to the control stream) from a temp cwd with `--setting-sources
+//      project` (so host/user allow-lists don't silently auto-approve);
+//   2. send the `initialize` control_request (encode_control_request_initialize);
+//   3. send a user prompt (encode_user_input) forcing a Bash tool use the CLI
+//      cannot auto-classify as safe (contains `rm -rf` + a redirect);
+//   4. read the `can_use_tool` control_request (parse_stream_line);
+//   5. answer with encode_control_response — allow OR deny;
+//   6. assert the REAL side effect: a marker file exists iff we allowed.
+//
+// Skips loudly (eprintln! + early return) if `claude` is missing or no gate is
+// elicited within the timeout — Part A proves the gate domain deterministically.
 
-#[test]
-fn live_gate_roundtrip_or_skip() {
-    // Check tool availability.
-    let claude_available = std::process::Command::new("which")
+use std::io::{BufRead, BufReader, Write as _};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+fn claude_present() -> bool {
+    Command::new("which")
         .arg("claude")
         .output()
         .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    let tmux_available = std::process::Command::new("which")
-        .arg("tmux")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !claude_available || !tmux_available {
-        eprintln!(
-            "[i02 Part B] SKIP: claude={claude_available}, tmux={tmux_available}. \
-             Part A fully proves the gate domain deterministically."
-        );
-        return;
-    }
-
-    // Both tools present — attempt the live gate.
-    eprintln!("[i02 Part B] claude and tmux detected; attempting live gate round-trip...");
-
-    let result = attempt_live_gate();
-    match result {
-        Ok(()) => eprintln!("[i02 Part B] PASS: live gate round-trip succeeded."),
-        Err(e) => {
-            eprintln!(
-                "[i02 Part B] SKIP: live gate not elicited within timeout ({e}). \
-                 Part A proves gate domain correctness; this is best-effort only."
-            );
-        }
-    }
+        .unwrap_or(false)
 }
 
-/// Attempt to spawn a real claude session, elicit a permission gate, and approve it.
-/// Returns Ok(()) if a real `can_use_tool` control request appeared and was answered;
-/// Returns Err(msg) if the gate didn't appear within a reasonable timeout (which causes a loud SKIP).
-fn attempt_live_gate() -> Result<(), String> {
-    use std::time::{Duration, Instant};
+/// Outcome of one live gate scenario.
+struct GateOutcome {
+    /// Tool name claude requested permission for (e.g. "Bash").
+    tool_name: String,
+    /// Whether the marker side effect happened (proves allow ran / deny blocked).
+    marker_exists: bool,
+}
 
-    // Unique identifiers for this run.
-    let run_id = std::time::SystemTime::now()
+/// Run one live gate scenario: elicit a real `can_use_tool` gate and answer it
+/// `allow` (true) or deny (false). Returns Ok(outcome) or Err(reason) for a loud skip.
+fn run_live_gate(allow: bool) -> Result<GateOutcome, String> {
+    let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let session_name = format!("marsad-it-i02-{run_id}");
+        .map_err(|e| format!("clock: {e}"))?
+        .as_nanos();
+    let label = if allow { "allow" } else { "deny" };
+    let tmp = std::env::temp_dir().join(format!("marsad-it-i02-{label}-{nanos}"));
+    std::fs::create_dir_all(&tmp).map_err(|e| format!("mkdir tmp: {e}"))?;
 
-    // Create a unique temp dir for our FIFOs and runtime.
-    let tmp_dir = std::env::temp_dir().join(format!("marsad-it-i02-{run_id}"));
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("create tmp dir: {e}"))?;
-
-    let in_fifo = tmp_dir.join("in.fifo");
-    let out_fifo = tmp_dir.join("out.fifo");
-    let err_log = tmp_dir.join("err.log");
-
-    // Drop guard: always clean up on exit (success or panic).
-    struct Guard {
-        session_name: String,
-        tmp_dir: std::path::PathBuf,
-    }
+    struct Guard(std::path::PathBuf);
     impl Drop for Guard {
         fn drop(&mut self) {
-            let _ = std::process::Command::new("tmux")
-                .args(["kill-session", "-t", &self.session_name])
-                .output();
-            let _ = std::fs::remove_dir_all(&self.tmp_dir);
+            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-    let _guard = Guard {
-        session_name: session_name.clone(),
-        tmp_dir: tmp_dir.clone(),
-    };
+    let _g = Guard(tmp.clone());
 
-    // Create named pipes.
-    for fifo_path in [&in_fifo, &out_fifo] {
-        let status = std::process::Command::new("mkfifo")
-            .arg(fifo_path)
-            .status()
-            .map_err(|e| format!("mkfifo: {e}"))?;
-        if !status.success() {
-            return Err(format!("mkfifo failed for {:?}", fifo_path));
-        }
-    }
-
-    // Build the claude command: ask it to run a shell command (which requires permission in
-    // default mode). We use --permission-mode default so claude will ask before running tools.
-    //
-    // The prompt asks claude to run `echo hello` which will trigger a permission gate in
-    // default mode (bash tool use requires approval).
-    let claude_cmd = format!(
-        "claude --print --input-format stream-json --output-format stream-json \
-         --verbose --permission-mode default < {in_fifo:?} > {out_fifo:?} 2>{err_log:?}",
+    // Exact marker path we control; created only if the gated command runs.
+    // (Fresh temp dir each run, so no cleanup/`rm` needed — and avoiding scary
+    // commands like `rm -rf` keeps the model from responding cautiously with
+    // text instead of actually invoking the tool.)
+    let marker_dir = tmp.join("gate_marker_dir");
+    let marker = marker_dir.join("marker.txt");
+    // The `>` redirect makes the CLI's Bash safety classifier treat this as
+    // NOT auto-safe, so the permission decision is "ask" → a real gate fires.
+    let command = format!(
+        "mkdir -p {md} && echo marsad-allowed > {mk}",
+        md = marker_dir.display(),
+        mk = marker.display(),
     );
 
-    // Launch in a detached tmux session.
-    let tmux_status = std::process::Command::new("tmux")
+    let mut child = Command::new("claude")
         .args([
-            "new-session",
-            "-d",
-            "-s",
-            &session_name,
-            "--",
-            "sh",
-            "-c",
-            &claude_cmd,
+            "--print",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--permission-mode",
+            "default",
+            "--permission-prompt-tool",
+            "stdio",
+            "--setting-sources",
+            "project",
         ])
-        .status()
-        .map_err(|e| format!("tmux new-session: {e}"))?;
+        .current_dir(&tmp)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("spawn claude: {e}"))?;
 
-    if !tmux_status.success() {
-        return Err(format!("tmux new-session failed: {tmux_status}"));
-    }
+    let mut stdin = child.stdin.take().ok_or("no child stdin")?;
+    let stdout = child.stdout.take().ok_or("no child stdout")?;
 
-    // Open out.fifo for reading (this unblocks claude's stdout redirect).
-    // We open with O_NONBLOCK to avoid hanging if claude hasn't started yet.
-    // We'll retry with a timeout.
-    let timeout = Duration::from_secs(20);
-    let start = Instant::now();
-
-    // Open out.fifo for reading first (deadlock-safe order per realio.md).
-    // Use O_NONBLOCK so the open itself doesn't block waiting for a writer.
-    #[cfg(unix)]
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let out_file = loop {
-        #[cfg(unix)]
-        let result = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc_o_nonblock())
-            .open(&out_fifo);
-        #[cfg(not(unix))]
-        let result = std::fs::OpenOptions::new().read(true).open(&out_fifo);
-
-        match result {
-            Ok(f) => break f,
-            Err(_) if start.elapsed() < timeout => {
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(e) => return Err(format!("open out.fifo: {e}")),
-        }
-    };
-
-    // Open in.fifo for writing (non-blocking so we don't deadlock before claude reads).
-    let in_file = loop {
-        #[cfg(unix)]
-        let result = std::fs::OpenOptions::new()
-            .write(true)
-            .custom_flags(libc_o_nonblock())
-            .open(&in_fifo);
-        #[cfg(not(unix))]
-        let result = std::fs::OpenOptions::new().write(true).open(&in_fifo);
-
-        match result {
-            Ok(f) => break f,
-            Err(_) if start.elapsed() < timeout => {
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(e) => return Err(format!("open in.fifo: {e}")),
-        }
-    };
-
-    // Send an initial prompt asking claude to run a bash command.
-    // This should trigger a permission gate in default mode.
-    use std::io::Write;
-    let prompt = marsad_proto::encode_user_input(&marsad_proto::UserInput {
-        content: vec![marsad_proto::ContentBlock::Text {
-            text: "Please run the bash command: echo hello".to_string(),
-        }],
-    });
-
-    // We need to unset O_NONBLOCK on in.fifo before writing so the write completes.
-    // Actually, just write with std::io::Write; if claude isn't reading yet, this blocks.
-    // Use a thread to write with a timeout.
-    let prompt_clone = prompt.clone();
-    let mut in_file_clone = in_file;
-    let write_handle = std::thread::spawn(move || -> std::io::Result<()> {
-        in_file_clone.write_all(prompt_clone.as_bytes())?;
-        in_file_clone.write_all(b"\n")?;
-        in_file_clone.flush()?;
-        Ok(())
-    });
-
-    // Wait for the write (with a timeout).
-    let write_deadline = Duration::from_secs(10);
-    let write_start = Instant::now();
-    loop {
-        if write_handle.is_finished() {
-            break;
-        }
-        if write_start.elapsed() > write_deadline {
-            return Err("timeout waiting for prompt write to complete".to_string());
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    write_handle
-        .join()
-        .map_err(|_| "prompt write thread panicked".to_string())
-        .and_then(|r| r.map_err(|e| format!("prompt write: {e}")))?;
-
-    // Read lines from out.fifo looking for a ControlRequest (can_use_tool).
-    use std::io::{BufRead, BufReader};
-    let mut reader = BufReader::new(out_file);
-    let gate_deadline = Duration::from_secs(30);
-    let gate_start = Instant::now();
-
-    let ctrl_request_id: String = loop {
-        if gate_start.elapsed() > gate_deadline {
-            return Err(format!(
-                "timeout after {:.1}s waiting for permission gate (control request) from claude",
-                gate_deadline.as_secs_f32()
-            ));
-        }
-
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => {
-                // EOF — claude exited before sending a gate.
-                return Err(
-                    "claude exited (EOF on out.fifo) before emitting a permission gate".to_string(),
-                );
-            }
-            Ok(_) => {
-                let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-                if trimmed.is_empty() {
-                    continue;
-                }
-                eprintln!("[i02 Part B] stream line: {trimmed}");
-
-                match marsad_proto::parse_stream_line(trimmed) {
-                    Ok(marsad_proto::StreamMsg::ControlRequest(ctrl)) => {
-                        eprintln!(
-                            "[i02 Part B] Got ControlRequest: tool={}, id={}",
-                            ctrl.tool_name, ctrl.request_id
-                        );
-                        break ctrl.request_id.clone();
-                    }
-                    Ok(marsad_proto::StreamMsg::Result(result)) => {
-                        if result.is_error {
-                            return Err(format!(
-                                "claude returned error result before gate: {:?}",
-                                result.subtype
-                            ));
-                        }
-                        // Successful result without a gate — claude completed without needing permission.
-                        return Err("claude completed without emitting a permission gate (model may have answered without tool use)".to_string());
-                    }
-                    _ => {
-                        // Other message types (system init, assistant, user) — continue reading.
-                    }
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => {
-                return Err(format!("read error on out.fifo: {e}"));
-            }
-        }
-    };
-
-    // ctrl_request_id is set when we break out of the loop above.
-    // Build and send an approval response.
-    let approval = marsad_proto::ControlResponse {
-        request_id: ctrl_request_id.clone(),
-        allow: true,
-        deny_reason: None,
-    };
-    let approval_line = encode_control_response(&approval);
-
-    // Re-open in.fifo to send the approval.
-    let mut in_file_approval = std::fs::OpenOptions::new()
-        .write(true)
-        .open(&in_fifo)
-        .map_err(|e| format!("re-open in.fifo for approval: {e}"))?;
-
-    in_file_approval
-        .write_all(approval_line.as_bytes())
-        .map_err(|e| format!("write approval: {e}"))?;
-    in_file_approval
-        .write_all(b"\n")
-        .map_err(|e| format!("write approval newline: {e}"))?;
-    in_file_approval
-        .flush()
-        .map_err(|e| format!("flush approval: {e}"))?;
-
-    eprintln!("[i02 Part B] Sent approval for request_id={ctrl_request_id}");
-
-    // Wait briefly for the session to continue after the approval.
-    // We don't need a full result — just confirmation the session is still running
-    // (no immediate EOF or error).
-    let continue_deadline = Duration::from_secs(10);
-    let continue_start = Instant::now();
-    loop {
-        if continue_start.elapsed() > continue_deadline {
-            // Session still running after timeout — that's fine; no error.
-            eprintln!("[i02 Part B] Session still active after approval (no EOF within timeout) — gate accepted.");
-            break;
-        }
-
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => {
-                eprintln!("[i02 Part B] Session completed (EOF) after approval — gate round-trip successful.");
-                break;
-            }
-            Ok(_) => {
-                let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-                if !trimmed.is_empty() {
-                    eprintln!("[i02 Part B] post-approval line: {trimmed}");
-                    if let Ok(marsad_proto::StreamMsg::Result(r)) =
-                        marsad_proto::parse_stream_line(trimmed)
-                    {
-                        eprintln!(
-                            "[i02 Part B] Got result after approval: is_error={}",
-                            r.is_error
-                        );
-                        if r.is_error {
-                            return Err(format!(
-                                "claude returned error result after gate approval: {:?}",
-                                r.subtype
-                            ));
-                        }
-                        eprintln!("[i02 Part B] Gate round-trip: session completed successfully.");
+    // Reader thread → streams non-empty lines over a channel.
+    let (tx, rx) = mpsc::channel::<String>();
+    let reader = std::thread::spawn(move || {
+        let mut r = BufReader::new(stdout);
+        loop {
+            let mut line = String::new();
+            match r.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let t = line.trim_end().to_string();
+                    if !t.is_empty() && tx.send(t).is_err() {
                         break;
                     }
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+
+    // 1) initialize handshake — Marsad proto.
+    let init = marsad_proto::encode_control_request_initialize("req_1_init");
+    stdin
+        .write_all(init.as_bytes())
+        .and_then(|_| stdin.write_all(b"\n"))
+        .and_then(|_| stdin.flush())
+        .map_err(|e| format!("write initialize: {e}"))?;
+
+    // 2) user prompt forcing the gated Bash tool — Marsad proto.
+    let prompt = marsad_proto::encode_user_input(&marsad_proto::UserInput {
+        content: vec![marsad_proto::ContentBlock::Text {
+            text: format!(
+                "Use the Bash tool to run exactly this command: {command} . \
+                 You MUST actually invoke the Bash tool with that exact command; do not simulate it."
+            ),
+        }],
+    });
+    stdin
+        .write_all(prompt.as_bytes())
+        .and_then(|_| stdin.write_all(b"\n"))
+        .and_then(|_| stdin.flush())
+        .map_err(|e| format!("write prompt: {e}"))?;
+
+    // 3-5) read until claude finishes, answering every can_use_tool gate via the
+    // real control protocol (Marsad proto parse + encode).
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut gate_tool: Option<String> = None;
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let line = match rx.recv_timeout(remaining) {
+            Ok(l) => l,
+            Err(_) => break, // timeout or claude exited (channel closed)
+        };
+        match marsad_proto::parse_stream_line(&line) {
+            Ok(marsad_proto::StreamMsg::ControlRequest(cr)) => {
+                let resp = marsad_proto::ControlResponse {
+                    request_id: cr.request_id.clone(),
+                    allow,
+                    deny_reason: if allow {
+                        None
+                    } else {
+                        Some("denied by i02 live test".to_string())
+                    },
+                    // On approval the CLI USES updatedInput as the tool input —
+                    // echo the original verbatim so the right command runs.
+                    updated_input: if allow { Some(cr.input.clone()) } else { None },
+                };
+                let wire = marsad_proto::encode_control_response(&resp);
+                stdin
+                    .write_all(wire.as_bytes())
+                    .and_then(|_| stdin.write_all(b"\n"))
+                    .and_then(|_| stdin.flush())
+                    .map_err(|e| format!("write control_response: {e}"))?;
+                if gate_tool.is_none() {
+                    gate_tool = Some(cr.tool_name.clone());
+                }
             }
-            Err(e) => {
-                return Err(format!("read error post-approval: {e}"));
-            }
+            Ok(marsad_proto::StreamMsg::Result(_)) => break,
+            _ => {}
         }
     }
 
-    Ok(())
+    // In `--input-format stream-json` mode claude keeps stdin open for further
+    // turns and will NOT exit on its own after the result — close stdin (EOF)
+    // and stop the process so we don't block forever. By the time we saw the
+    // `result`, the gated command has already run (or been blocked), so the
+    // marker reflects the real outcome.
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = reader.join();
+
+    let tool_name = gate_tool.ok_or_else(|| {
+        "no can_use_tool gate elicited within timeout (model answered without tool use)".to_string()
+    })?;
+
+    // Brief settle so a just-created marker is visible.
+    std::thread::sleep(Duration::from_millis(150));
+    Ok(GateOutcome {
+        tool_name,
+        marker_exists: marker.exists(),
+    })
 }
 
-/// Return the O_NONBLOCK flag value for this platform.
-#[cfg(target_os = "linux")]
-fn libc_o_nonblock() -> i32 {
-    // O_NONBLOCK on Linux is 0x800 (2048).
-    2048
+/// Retry `run_live_gate` until a real gate is actually elicited. The model
+/// occasionally answers a prompt without invoking the tool (no gate fires);
+/// that's not a failure of the protocol, just non-determinism — so we retry a
+/// few times before giving up and skipping loudly.
+fn run_live_gate_retry(allow: bool, attempts: u32) -> Result<GateOutcome, String> {
+    let mut last = String::from("no attempts made");
+    for i in 0..attempts {
+        match run_live_gate(allow) {
+            Ok(o) => return Ok(o),
+            Err(e) => {
+                eprintln!(
+                    "[i02 Part B] {} attempt {}/{} did not elicit a gate: {e}",
+                    if allow { "allow" } else { "deny" },
+                    i + 1,
+                    attempts
+                );
+                last = e;
+            }
+        }
+    }
+    Err(last)
 }
 
-#[cfg(target_os = "macos")]
-fn libc_o_nonblock() -> i32 {
-    // O_NONBLOCK on macOS is 0x4 (4).
-    4
-}
+#[test]
+fn live_gate_roundtrip_or_skip() {
+    if !claude_present() {
+        eprintln!(
+            "[i02 Part B] SKIP: `claude` not found on PATH. \
+             Part A fully proves the gate domain deterministically."
+        );
+        return;
+    }
+    eprintln!(
+        "[i02 Part B] claude detected; eliciting REAL permission gates over the control protocol..."
+    );
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn libc_o_nonblock() -> i32 {
-    0
+    // Scenario 1: ALLOW → the gated command runs → marker file is created.
+    match run_live_gate_retry(true, 3) {
+        Ok(o) => {
+            assert!(
+                !o.tool_name.is_empty(),
+                "allow: a real can_use_tool gate must name a tool"
+            );
+            assert!(
+                o.marker_exists,
+                "allow: the approved Bash command must have created the marker file (real side effect)"
+            );
+            eprintln!(
+                "[i02 Part B] PASS allow: real {} gate approved via the control protocol; command ran (marker created).",
+                o.tool_name
+            );
+        }
+        Err(e) => {
+            eprintln!("[i02 Part B] SKIP allow scenario: {e}");
+            return;
+        }
+    }
+
+    // Scenario 2: DENY → the gated command is blocked → marker file is NOT created.
+    match run_live_gate_retry(false, 3) {
+        Ok(o) => {
+            assert!(
+                !o.tool_name.is_empty(),
+                "deny: a real can_use_tool gate must name a tool"
+            );
+            assert!(
+                !o.marker_exists,
+                "deny: the rejected Bash command must NOT have run (no marker file)"
+            );
+            eprintln!(
+                "[i02 Part B] PASS deny: real {} gate denied via the control protocol; command blocked (no marker).",
+                o.tool_name
+            );
+        }
+        Err(e) => {
+            eprintln!("[i02 Part B] SKIP deny scenario: {e}");
+        }
+    }
 }
