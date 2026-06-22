@@ -248,6 +248,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "marsad-it-i10_core_e2e_live"
+version = "0.1.0"
+dependencies = [
+ "marsad-agent",
+ "marsad-core",
+ "marsad-events",
+ "marsad-gates",
+ "marsad-proto",
+ "marsad-transport",
+ "marsad-viewmodel",
+ "serde_json",
+]
+
+[[package]]
 name = "marsad-lifecycle"
 version = "0.1.0"
 dependencies = [

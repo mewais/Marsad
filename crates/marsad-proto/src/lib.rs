@@ -257,6 +257,9 @@ pub enum IpcMsg {
         text: String,
     },
     AnswerGate {
+        /// The session whose pending gate this answers (the agent keys pending
+        /// gates by session id).
+        session_id: String,
         request_id: String,
         allow: bool,
         #[serde(default)]

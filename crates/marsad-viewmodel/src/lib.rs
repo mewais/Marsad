@@ -33,6 +33,27 @@ pub struct SessionView {
     pub tokens: u64,
     pub context_pct: f32,
     pub gate: Option<marsad_gates::Gate>,
+    /// Conversation transcript, in arrival order (derived from the stream).
+    pub transcript: Vec<marsad_events::TranscriptEntry>,
+    /// Working-tree changes in the session's project dir (from a git probe).
+    pub changes: Vec<FileChange>,
+}
+
+// ---------------------------------------------------------------------------
+// FileChange — one changed file in a session's working tree
+// ---------------------------------------------------------------------------
+
+/// A single changed file, as reported by a git probe over the project dir.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileChange {
+    /// Path relative to the project root.
+    pub path: String,
+    /// Porcelain status code, e.g. "M", "A", "D", "??".
+    pub status: String,
+    /// Lines added (best-effort; 0 when unknown, e.g. untracked).
+    pub added: u32,
+    /// Lines removed (best-effort; 0 when unknown).
+    pub removed: u32,
 }
 
 // ---------------------------------------------------------------------------

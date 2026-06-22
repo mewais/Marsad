@@ -8,11 +8,11 @@
 
 use std::collections::HashMap;
 
-use marsad_events::{reduce, Event, SessionState};
+use marsad_events::{reduce, Event, Phase, SessionState};
 use marsad_gates::{DecisionLedger, GateDecision};
 use marsad_proto::{encode_ipc, IpcMsg};
 use marsad_transport::Transport;
-use marsad_viewmodel::{AppSnapshot, Filter, SessionView, Tab};
+use marsad_viewmodel::{AppSnapshot, FileChange, Filter, SessionView, Tab};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -61,7 +61,13 @@ pub struct HostHealthPayload {
 // ---------------------------------------------------------------------------
 
 /// A single UI update emitted by `on_agent_line` or other state-changing calls.
+///
+/// `Session` is the large, common variant (it carries the full `SessionView`).
+/// These updates are constructed and immediately consumed (emitted to the
+/// webview), never stored in bulk, so boxing the hot-path variant would add an
+/// allocation per event for no real benefit — we accept the size difference.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum VmUpdate {
     /// Overview-panel aggregates changed (counts, groups).
     Overview(marsad_viewmodel::OverviewGroups),
@@ -87,12 +93,89 @@ pub struct CoreConfig {
 }
 
 // ---------------------------------------------------------------------------
+// GitProbe — seam for reading a session's working-tree changes
+// ---------------------------------------------------------------------------
+
+/// Reads the working-tree changes in a session's project directory.
+///
+/// Injected into `Core` so the real (subprocess) implementation can be swapped
+/// for a fake in tests — mirroring how `Transport` is injected.
+pub trait GitProbe {
+    /// Return the changed files under `project_dir` (empty if not a repo / on error).
+    fn changes(&self, project_dir: &str) -> Vec<FileChange>;
+}
+
+/// Production `GitProbe` backed by the `git` CLI.
+pub struct RealGit;
+
+impl GitProbe for RealGit {
+    // Under coverage builds the real subprocess path is compiled out (its
+    // correctness is proven by the live i10 end-to-end test, not by `llvm-cov`).
+    #[cfg(coverage)]
+    fn changes(&self, _project_dir: &str) -> Vec<FileChange> {
+        Vec::new()
+    }
+
+    #[cfg(not(coverage))]
+    fn changes(&self, project_dir: &str) -> Vec<FileChange> {
+        use std::process::Command;
+
+        let status = match Command::new("git")
+            .args(["-C", project_dir, "status", "--porcelain"])
+            .output()
+        {
+            Ok(o) if o.status.success() => o.stdout,
+            _ => return Vec::new(),
+        };
+
+        // Per-file added/removed for tracked changes (untracked → 0/0).
+        let mut numstat: HashMap<String, (u32, u32)> = HashMap::new();
+        if let Ok(o) = Command::new("git")
+            .args(["-C", project_dir, "diff", "--numstat"])
+            .output()
+        {
+            if o.status.success() {
+                for line in String::from_utf8_lossy(&o.stdout).lines() {
+                    let mut it = line.split('\t');
+                    if let (Some(a), Some(d), Some(p)) = (it.next(), it.next(), it.next()) {
+                        numstat.insert(
+                            p.to_string(),
+                            (a.parse().unwrap_or(0), d.parse().unwrap_or(0)),
+                        );
+                    }
+                }
+            }
+        }
+
+        let mut out = Vec::new();
+        for line in String::from_utf8_lossy(&status).lines() {
+            // Porcelain v1 lines are "XY <path>" (status code in cols 0..2).
+            if line.len() < 4 {
+                continue;
+            }
+            let status_code = line[..2].trim().to_string();
+            let path = line[3..].trim().to_string();
+            let (added, removed) = numstat.get(&path).copied().unwrap_or((0, 0));
+            out.push(FileChange {
+                path,
+                status: status_code,
+                added,
+                removed,
+            });
+        }
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Per-session record
 // ---------------------------------------------------------------------------
 
 struct SessionRecord {
     project: String,
     state: SessionState,
+    /// Last-probed working-tree changes for this session's project dir.
+    changes: Vec<FileChange>,
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +185,7 @@ struct SessionRecord {
 pub struct Core {
     _cfg: CoreConfig,
     transport: Box<dyn Transport>,
+    git: Box<dyn GitProbe>,
     session_order: Vec<String>,
     sessions: HashMap<String, SessionRecord>,
     ledger: DecisionLedger,
@@ -113,12 +197,23 @@ impl Core {
     /// underlying connect() call fails (e.g. broken socket) the error is
     /// silently ignored here — the first send will surface a BrokenPipe instead.
     /// This keeps `Core::new` infallible in all committed test scenarios.
-    pub fn new(cfg: CoreConfig, mut transport: Box<dyn Transport>) -> Result<Core, CoreError> {
+    pub fn new(cfg: CoreConfig, transport: Box<dyn Transport>) -> Result<Core, CoreError> {
+        Core::with_git(cfg, transport, Box::new(RealGit))
+    }
+
+    /// Like [`Core::new`] but with an injected [`GitProbe`] (used by tests to
+    /// supply a fake instead of shelling out to `git`).
+    pub fn with_git(
+        cfg: CoreConfig,
+        mut transport: Box<dyn Transport>,
+        git: Box<dyn GitProbe>,
+    ) -> Result<Core, CoreError> {
         // Best-effort connect; ignore errors (send_line will detect them).
         let _ = transport.connect();
         Ok(Core {
             _cfg: cfg,
             transport,
+            git,
             session_order: Vec::new(),
             sessions: HashMap::new(),
             ledger: DecisionLedger::new(),
@@ -200,6 +295,7 @@ impl Core {
             SessionRecord {
                 project: spec.project,
                 state: SessionState::initial(),
+                changes: Vec::new(),
             },
         );
 
@@ -262,6 +358,7 @@ impl Core {
 
         let ctrl = marsad_gates::to_control_response(&decision);
         self.send_ipc(&IpcMsg::AnswerGate {
+            session_id,
             request_id: ctrl.request_id,
             allow: ctrl.allow,
             deny_reason: ctrl.deny_reason,
@@ -341,10 +438,27 @@ impl Core {
         let stream_msg = marsad_proto::parse_stream_line(&event_json)
             .unwrap_or(marsad_proto::StreamMsg::Unknown(env.event));
 
+        // Reduce the event, then decide whether the working tree may have changed.
         // Safe: require_session above guarantees the entry exists.
-        let record = self.sessions.get_mut(&session_id).unwrap();
-        let old_state = record.state.clone();
-        record.state = reduce(old_state, Event::Stream(stream_msg));
+        let (project, should_probe) = {
+            let record = self.sessions.get_mut(&session_id).unwrap();
+            let old_state = record.state.clone();
+            let old_last_action = old_state.last_action.clone();
+            let was_finished = matches!(old_state.phase, Phase::Done | Phase::Error);
+            record.state = reduce(old_state, Event::Stream(stream_msg));
+            // Re-probe git when a tool just ran (files may have changed) or the
+            // session just reached a terminal phase — not on every token.
+            let tool_ran = record.state.last_action != old_last_action;
+            let just_finished =
+                matches!(record.state.phase, Phase::Done | Phase::Error) && !was_finished;
+            (record.project.clone(), tool_ran || just_finished)
+        };
+
+        if should_probe {
+            let changes = self.git.changes(&project);
+            // Safe: entry still exists (single-threaded, no removal in between).
+            self.sessions.get_mut(&session_id).unwrap().changes = changes;
+        }
 
         let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
         let snap = self.snapshot();
@@ -382,12 +496,14 @@ impl Core {
             branch: String::new(),
             model: s.model.clone().unwrap_or_default(),
             state: s.phase.clone(),
-            changed_files: s.changed_files,
+            changed_files: record.changes.len() as u32,
             subagents: s.subagents.len() as u32,
             cost_usd: s.cost_usd,
             tokens: s.tokens,
             context_pct: s.context_pct,
             gate: s.gate.clone(),
+            transcript: s.transcript.clone(),
+            changes: record.changes.clone(),
         }
     }
 }

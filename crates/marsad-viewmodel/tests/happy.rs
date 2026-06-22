@@ -57,6 +57,8 @@ fn representative_snapshot() -> AppSnapshot {
             tokens: 1000,
             context_pct: 10.0,
             gate: None,
+            transcript: vec![],
+            changes: vec![],
         },
         SessionView {
             id: "s2".to_string(),
@@ -72,6 +74,8 @@ fn representative_snapshot() -> AppSnapshot {
             tokens: 2000,
             context_pct: 50.0,
             gate: None,
+            transcript: vec![],
+            changes: vec![],
         },
         SessionView {
             id: "s3".to_string(),
@@ -87,6 +91,8 @@ fn representative_snapshot() -> AppSnapshot {
             tokens: 500,
             context_pct: 80.0,
             gate: None,
+            transcript: vec![],
+            changes: vec![],
         },
         SessionView {
             id: "s4".to_string(),
@@ -102,6 +108,8 @@ fn representative_snapshot() -> AppSnapshot {
             tokens: 0,
             context_pct: 0.0,
             gate: None,
+            transcript: vec![],
+            changes: vec![],
         },
         SessionView {
             id: "s5".to_string(),
@@ -117,6 +125,8 @@ fn representative_snapshot() -> AppSnapshot {
             tokens: 3500,
             context_pct: 60.0,
             gate: None,
+            transcript: vec![],
+            changes: vec![],
         },
     ];
 

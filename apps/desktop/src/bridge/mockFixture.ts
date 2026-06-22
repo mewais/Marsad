@@ -11,6 +11,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
     {
       id: "s01",
       name: "api-auth-refactor",
+      transcript: [],
+      changes: [],
       host_id: "local",
       project: "~/projects/api",
       branch: "feature/auth-v2",
@@ -33,6 +35,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
     {
       id: "s02",
       name: "queue-async-workers",
+      transcript: [],
+      changes: [],
       host_id: "hetzner",
       project: "~/projects/worker-svc",
       branch: "refactor/async-workers",
@@ -57,6 +61,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
     {
       id: "s03",
       name: "ml-feature-engineering",
+      transcript: [],
+      changes: [],
       host_id: "gpu",
       project: "~/projects/ml-pipeline",
       branch: "exp/feature-v3",
@@ -83,6 +89,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
     {
       id: "s04",
       name: "frontend-dashboard",
+      transcript: [],
+      changes: [],
       host_id: "local",
       project: "~/projects/dashboard",
       branch: "feat/overview-v2",
@@ -98,6 +106,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
     {
       id: "s05",
       name: "infra-terraform",
+      transcript: [],
+      changes: [],
       host_id: "hetzner",
       project: "~/projects/infra",
       branch: "main",
@@ -113,6 +123,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
     {
       id: "s06",
       name: "data-ingestion-pipeline",
+      transcript: [],
+      changes: [],
       host_id: "gpu",
       project: "~/projects/data",
       branch: "feat/kafka-consumer",
@@ -128,6 +140,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
     {
       id: "s07",
       name: "ci-pipeline-fix",
+      transcript: [],
+      changes: [],
       host_id: "local",
       project: "~/projects/ci",
       branch: "fix/gh-actions",
@@ -143,6 +157,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
     {
       id: "s08",
       name: "docs-update",
+      transcript: [],
+      changes: [],
       host_id: "local",
       project: "~/projects/docs",
       branch: "docs/api-v3",
@@ -158,6 +174,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
     {
       id: "s09",
       name: "test-coverage-boost",
+      transcript: [],
+      changes: [],
       host_id: "hetzner",
       project: "~/projects/api",
       branch: "test/coverage-90",
@@ -173,6 +191,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
     {
       id: "s10",
       name: "design-tokens-sync",
+      transcript: [],
+      changes: [],
       host_id: "hetzner",
       project: "~/projects/design",
       branch: "chore/tokens",
@@ -241,3 +261,15 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
   search: "",
   tab: "Activity",
 };
+
+// Give each mock session a per-file changes list whose length matches its
+// `changed_files` count (deterministic — keeps the Changes tab populated and
+// `changed_files === changes.length`, as the real backend guarantees).
+for (const s of MOCK_SNAPSHOT.sessions) {
+  s.changes = Array.from({ length: s.changed_files }, (_, i) => ({
+    path: `src/changed-${i + 1}.ts`,
+    status: i === 0 ? "??" : i % 4 === 3 ? "D" : "M",
+    added: ((i * 7) % 30) + 1,
+    removed: (i * 3) % 12,
+  }));
+}

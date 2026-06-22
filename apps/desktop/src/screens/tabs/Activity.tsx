@@ -1,12 +1,10 @@
 /**
  * Activity tab — full transcript render + Composer at bottom.
  *
- * NOTE: SessionView has no transcript array field in the current store —
- * it only carries summary counts (tokens, cost, subagents, changed_files).
- * We render a placeholder transcript from the gate/state shape and leave a
- * clearly-marked injection point where a richer per-session transcript feed
- * (e.g. via a new "transcript" field on SessionView or a separate Tauri command)
- * will plug in once the backend exposes it.
+ * The conversation comes from `sv.transcript` (the real per-session feed the
+ * backend derives from claude's event stream). Live status rows (a pending
+ * gate, the working spinner, an error note, sub-agents) are appended after the
+ * transcript from the current session state.
  */
 import { useRef, useEffect } from "react";
 import { useVm } from "../../bridge/useVm";
@@ -52,9 +50,8 @@ interface TranscriptMsg {
 }
 
 // ---------------------------------------------------------------------------
-// Derive a synthetic transcript from whatever the snapshot exposes.
-// NOTE: Replace this function with a real transcript feed once the backend
-// exposes per-session message history (e.g. SessionView.transcript[]).
+// Build the transcript: the real per-session conversation feed
+// (`sv.transcript`) followed by live status rows from the current state.
 // ---------------------------------------------------------------------------
 
 function deriveTranscript(
@@ -63,11 +60,28 @@ function deriveTranscript(
 ): TranscriptMsg[] {
   const msgs: TranscriptMsg[] = [];
 
-  // Synthetic "session started" system note
+  // "session started" system note
   msgs.push({
     id: "sys-0",
     kind: "system",
-    text: `Session "${sv.name}" · ${sv.model} · ${sv.branch}`,
+    text: `Session "${sv.name}" · ${sv.model}${sv.branch ? ` · ${sv.branch}` : ""}`,
+  });
+
+  // The real conversation, in arrival order.
+  sv.transcript.forEach((entry, i) => {
+    if (entry.role === "assistant") {
+      msgs.push({ id: `t-${i}`, kind: "response", text: entry.text });
+    } else if (entry.role === "user") {
+      msgs.push({ id: `t-${i}`, kind: "prompt", text: entry.text });
+    } else {
+      msgs.push({
+        id: `t-${i}`,
+        kind: "tool",
+        tool: entry.name,
+        args: entry.input,
+        toolStatus: "done",
+      });
+    }
   });
 
   // If there's an active gate, show it as a pending-gate card
@@ -111,9 +125,6 @@ function deriveTranscript(
       subStatus: sv.state === "Working" ? "Working" : "Done",
     });
   }
-
-  // NOTE: Once backend exposes sv.transcript[], replace everything above
-  // with a direct map over sv.transcript to build TranscriptMsg[].
 
   return msgs;
 }

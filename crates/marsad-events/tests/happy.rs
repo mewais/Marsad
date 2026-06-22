@@ -309,3 +309,89 @@ fn hook_pre_compact_is_total_and_working() {
     let s1 = reduce(s0, Event::Hook(HookEvent::PreCompact));
     assert_eq!(s1.phase, Phase::Working);
 }
+
+// ---------------------------------------------------------------------------
+// Transcript — assistant prose, tool use, user prose, and message-id dedup
+// ---------------------------------------------------------------------------
+
+#[test]
+fn transcript_records_assistant_text() {
+    use marsad_events::TranscriptEntry;
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(s0, stream(&assistant_json("msg-t1", 10, 5)));
+    assert_eq!(
+        s1.transcript,
+        vec![TranscriptEntry::Assistant {
+            text: "Thinking…".to_string()
+        }]
+    );
+}
+
+#[test]
+fn transcript_records_tool_use() {
+    use marsad_events::TranscriptEntry;
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(s0, stream(&tool_use_assistant_json("msg-t2", "Read")));
+    assert_eq!(s1.transcript.len(), 1);
+    match &s1.transcript[0] {
+        TranscriptEntry::Tool { name, input } => {
+            assert_eq!(name, "Read");
+            assert!(input.contains("/etc/passwd"), "tool input: {input}");
+        }
+        other => panic!("expected Tool entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn transcript_records_user_text() {
+    use marsad_events::TranscriptEntry;
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(s0, stream(user_json()));
+    assert_eq!(
+        s1.transcript,
+        vec![TranscriptEntry::User {
+            text: "yes".to_string()
+        }]
+    );
+}
+
+#[test]
+fn transcript_dedups_repeated_message_id() {
+    // Folding the same assistant message id twice must append exactly one entry.
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(s0, stream(&assistant_json("msg-dup", 10, 5)));
+    let s2 = reduce(s1, stream(&assistant_json("msg-dup", 10, 5)));
+    assert_eq!(
+        s2.transcript.len(),
+        1,
+        "duplicate message id must not double-append to the transcript"
+    );
+}
+
+#[test]
+fn transcript_skips_non_text_non_tooluse_blocks() {
+    // An assistant message carrying only a tool_result block contributes no
+    // transcript entry (exercises the catch-all content arm).
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let msg = r#"{"type":"assistant","message":{"id":"msg-tr","content":[{"type":"tool_result","tool_use_id":"tu-1","content":"ok"}],"usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
+    let s1 = reduce(s0, stream(msg));
+    assert!(
+        s1.transcript.is_empty(),
+        "tool_result block must not append a transcript entry, got: {:?}",
+        s1.transcript
+    );
+}
+
+#[test]
+fn transcript_skips_non_text_user_blocks() {
+    // A user turn made solely of a tool_result block contributes no transcript
+    // entry (exercises the non-matching arm of the user `if let Text`).
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let msg = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu-9","content":"done"}]}}"#;
+    let s1 = reduce(s0, stream(msg));
+    assert!(
+        s1.transcript.is_empty(),
+        "tool_result user block must not append, got: {:?}",
+        s1.transcript
+    );
+}

@@ -47,6 +47,26 @@ pub struct Subagent {
 }
 
 // ---------------------------------------------------------------------------
+// TranscriptEntry
+// ---------------------------------------------------------------------------
+
+/// One rendered line of a session's conversation, derived from the event stream.
+///
+/// Serialized with a `role` tag so the UI can switch on it directly:
+/// `{"role":"assistant","text":...}`, `{"role":"user","text":...}`,
+/// `{"role":"tool","name":...,"input":...}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "role", rename_all = "snake_case")]
+pub enum TranscriptEntry {
+    /// Assistant prose (a `text` content block from claude).
+    Assistant { text: String },
+    /// A user/human turn (a `text` content block in a user message).
+    User { text: String },
+    /// A tool invocation by the assistant (`name` + JSON-encoded `input`).
+    Tool { name: String, input: String },
+}
+
+// ---------------------------------------------------------------------------
 // HookEvent
 // ---------------------------------------------------------------------------
 
@@ -92,6 +112,8 @@ pub struct SessionState {
     pub subagents: Vec<Subagent>,
     pub gate: Option<marsad_gates::Gate>,
     pub changed_files: u32,
+    /// Conversation transcript, in arrival order, derived from the stream.
+    pub transcript: Vec<TranscriptEntry>,
     /// Message ids already counted for usage DEDUP.
     #[serde(default, skip_serializing_if = "HashSet::is_empty")]
     seen_message_ids: HashSet<String>,
@@ -112,6 +134,7 @@ impl SessionState {
             subagents: Vec::new(),
             gate: None,
             changed_files: 0,
+            transcript: Vec::new(),
             seen_message_ids: HashSet::new(),
         }
     }
@@ -198,9 +221,18 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
             reduce_assistant(state, msg)
         }
 
-        StreamMsg::User(_) => {
+        StreamMsg::User(user) => {
             if stale_or_detached {
                 return state;
+            }
+            // Record any human/echoed prose from the user turn (tool_result
+            // blocks are machine noise — skipped).
+            for block in &user.message.content {
+                if let marsad_proto::ContentBlock::Text { text } = block {
+                    state
+                        .transcript
+                        .push(TranscriptEntry::User { text: text.clone() });
+                }
             }
             // A user turn answers a pending gate / need.
             state.gate = None;
@@ -243,6 +275,26 @@ fn reduce_assistant(mut state: SessionState, msg: marsad_proto::AssistantMsg) ->
             .saturating_add(u.cache_creation_input_tokens);
         state.tokens = state.tokens.saturating_add(new_tokens);
         state.update_context_pct();
+
+        // Append transcript entries once per message: assistant prose and any
+        // tool invocations, in content order.
+        for block in &msg.message.content {
+            match block {
+                marsad_proto::ContentBlock::Text { text } => {
+                    state
+                        .transcript
+                        .push(TranscriptEntry::Assistant { text: text.clone() });
+                }
+                marsad_proto::ContentBlock::ToolUse { name, input, .. } => {
+                    let input_str = serde_json::to_string(input).unwrap_or_default();
+                    state.transcript.push(TranscriptEntry::Tool {
+                        name: name.clone(),
+                        input: input_str,
+                    });
+                }
+                _ => {}
+            }
+        }
     }
 
     // Extract last_action from the first tool-use content block (if any).

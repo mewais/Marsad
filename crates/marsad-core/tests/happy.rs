@@ -726,3 +726,84 @@ fn launch_spec_fields_all_postures() {
         let _ = spec;
     }
 }
+
+// ---------------------------------------------------------------------------
+// GitProbe seam — changes flow into the SessionView
+// ---------------------------------------------------------------------------
+
+/// AgentEvent carrying a tool_use assistant message (sets last_action → triggers
+/// a git re-probe in Core).
+fn ipc_agent_event_tool_use(session_id: &str, msg_id: &str) -> String {
+    format!(
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"assistant","message":{{"id":"{msg_id}","content":[{{"type":"tool_use","id":"tu-1","name":"Write","input":{{"path":"hello.txt"}}}}],"usage":{{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}}}"#
+    )
+}
+
+struct FakeGit {
+    files: Vec<marsad_viewmodel::FileChange>,
+}
+
+impl marsad_core::GitProbe for FakeGit {
+    fn changes(&self, _project_dir: &str) -> Vec<marsad_viewmodel::FileChange> {
+        self.files.clone()
+    }
+}
+
+#[test]
+fn git_changes_flow_into_session_view_after_tool_runs() {
+    use marsad_viewmodel::FileChange;
+
+    let (transport_a, _b) = LoopbackFake::pair();
+    let cfg = CoreConfig {
+        agent_endpoint: "loopback://test".to_string(),
+        data_root: "/tmp/marsad-test".to_string(),
+    };
+    let fake = FakeGit {
+        files: vec![FileChange {
+            path: "hello.txt".to_string(),
+            status: "??".to_string(),
+            added: 0,
+            removed: 0,
+        }],
+    };
+    let mut core = Core::with_git(cfg, Box::new(transport_a), Box::new(fake)).expect("with_git");
+
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/tmp/proj".to_string(),
+            host_id: "local".to_string(),
+            model: "m".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: LaunchMode::Fresh,
+        })
+        .expect("launch");
+
+    // system/init does not run a tool → no probe → no changes yet.
+    let u0 = core
+        .on_agent_line(&ipc_agent_event_system_init(&id))
+        .unwrap();
+    let sv0 = u0
+        .iter()
+        .find_map(|u| match u {
+            VmUpdate::Session(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(sv0.changes.is_empty(), "no probe before any tool runs");
+
+    // A tool_use assistant turn triggers a re-probe → changes populated.
+    let u1 = core
+        .on_agent_line(&ipc_agent_event_tool_use(&id, "m1"))
+        .unwrap();
+    let sv1 = u1
+        .iter()
+        .find_map(|u| match u {
+            VmUpdate::Session(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(sv1.changes.len(), 1, "tool run must trigger a git probe");
+    assert_eq!(sv1.changes[0].path, "hello.txt");
+    assert_eq!(sv1.changed_files, 1, "changed_files mirrors changes.len()");
+}

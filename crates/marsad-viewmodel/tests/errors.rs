@@ -42,6 +42,8 @@ fn single_session_snapshot(phase: Phase) -> AppSnapshot {
             tokens: 0,
             context_pct: 0.0,
             gate: None,
+            transcript: vec![],
+            changes: vec![],
         }],
         hosts: vec![Host {
             id: "local".to_string(),
@@ -186,6 +188,8 @@ fn rescope_unknown_workspace_returns_unchanged_snapshot() {
                 tokens: 0,
                 context_pct: 0.0,
                 gate: None,
+                transcript: vec![],
+                changes: vec![],
             },
             SessionView {
                 id: "s2".to_string(),
@@ -201,6 +205,8 @@ fn rescope_unknown_workspace_returns_unchanged_snapshot() {
                 tokens: 100,
                 context_pct: 20.0,
                 gate: None,
+                transcript: vec![],
+                changes: vec![],
             },
         ],
         hosts: vec![Host {
@@ -249,6 +255,8 @@ fn rescope_empty_workspace_session_ids_gives_no_sessions() {
             tokens: 0,
             context_pct: 0.0,
             gate: None,
+            transcript: vec![],
+            changes: vec![],
         }],
         hosts: vec![],
         workspaces: vec![Workspace {

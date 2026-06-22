@@ -91,6 +91,28 @@ export interface SessionView {
   tokens: number;
   context_pct: number;
   gate: Gate | null;
+  transcript: TranscriptEntry[];
+  changes: FileChange[];
+}
+
+// ---------------------------------------------------------------------------
+// TranscriptEntry — one rendered conversation line (matches Rust, role-tagged)
+// ---------------------------------------------------------------------------
+
+export type TranscriptEntry =
+  | { role: "assistant"; text: string }
+  | { role: "user"; text: string }
+  | { role: "tool"; name: string; input: string };
+
+// ---------------------------------------------------------------------------
+// FileChange — one changed file from the git probe
+// ---------------------------------------------------------------------------
+
+export interface FileChange {
+  path: string;
+  status: string;
+  added: number;
+  removed: number;
 }
 
 // ---------------------------------------------------------------------------

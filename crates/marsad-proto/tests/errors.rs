@@ -204,7 +204,7 @@ fn stream_schema_mismatch_carries_field_name() {
 #[test]
 fn ipc_schema_mismatch_wrong_field_type() {
     // "allow" should be a boolean, supplying a number should fail
-    let line = r#"{"type":"AnswerGate","request_id":"req-1","allow":42,"deny_reason":null}"#;
+    let line = r#"{"type":"AnswerGate","session_id":"s-1","request_id":"req-1","allow":42,"deny_reason":null}"#;
     let err = parse_ipc(line).expect_err("wrong field type in IPC must be an error");
     assert!(
         matches!(err, ProtoError::SchemaMismatch { .. }),

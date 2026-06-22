@@ -56,6 +56,8 @@ fn sv(id: &str, cost: f64, tokens: u64, state: Phase) -> SessionView {
         tokens,
         context_pct: 10.0,
         gate: None,
+        transcript: vec![],
+        changes: vec![],
     }
 }
 

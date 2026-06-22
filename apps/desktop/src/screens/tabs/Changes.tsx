@@ -34,37 +34,43 @@ const STATUS_COLOR: Record<FileStatus, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// Derive synthetic file list from what the snapshot exposes.
-// NOTE: Replace with sv.files[] feed when backend exposes it.
+// Build the changed-file list from the real git-probe feed (`sv.changes`),
+// enriched with the pending edit gate's diff rows when they match.
 // ---------------------------------------------------------------------------
 
+function mapStatus(code: string): FileStatus {
+  if (code === "D") return "D";
+  if (code === "A" || code === "??") return "A";
+  return "M";
+}
+
 function deriveFiles(
-  changedCount: number,
+  changes: import("../../bridge/types").FileChange[],
   gate: import("../../bridge/types").GateVM | null
 ): ChangedFile[] {
-  const files: ChangedFile[] = [];
+  const files: ChangedFile[] = changes.map((c) => ({
+    name: c.path,
+    status: mapStatus(c.status),
+    added: c.added,
+    removed: c.removed,
+    diffRows: [] as SideRow[],
+  }));
 
-  // If gate is an edit gate, use its file + diff rows
+  // Attach the pending edit gate's diff to its file (or add it if the probe
+  // hasn't listed it yet — e.g. a brand-new edit awaiting approval).
   if (gate && gate.is_edit) {
-    files.push({
-      name: gate.summary,
-      status: "M",
-      added: gate.diff_rows.filter((r) => r.r.sig === "+").length,
-      removed: gate.diff_rows.filter((r) => r.l.sig === "-").length,
-      diffRows: gate.diff_rows,
-    });
-  }
-
-  // Fill remaining count with stub entries
-  const remaining = Math.max(0, changedCount - files.length);
-  for (let i = 0; i < remaining; i++) {
-    files.push({
-      name: `changed-file-${i + 1}.ts`,
-      status: i === 0 ? "A" : i % 3 === 0 ? "D" : "M",
-      added: Math.floor(Math.random() * 30) + 1,
-      removed: Math.floor(Math.random() * 10),
-      diffRows: [],
-    });
+    const existing = files.find((f) => f.name === gate.summary);
+    if (existing) {
+      existing.diffRows = gate.diff_rows;
+    } else {
+      files.push({
+        name: gate.summary,
+        status: "M",
+        added: gate.diff_rows.filter((r) => r.r.sig === "+").length,
+        removed: gate.diff_rows.filter((r) => r.l.sig === "-").length,
+        diffRows: gate.diff_rows,
+      });
+    }
   }
 
   return files;
@@ -88,7 +94,7 @@ export function ChangesTab() {
     );
   }
 
-  const files = deriveFiles(selectedSession.changed_files, selectedGate);
+  const files = deriveFiles(selectedSession.changes, selectedGate);
 
   // Default all files to staged = true
   const effectiveStaged: Record<string, boolean> = {};

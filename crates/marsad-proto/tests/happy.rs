@@ -410,12 +410,16 @@ fn parse_ipc_send_prompt() {
 
 #[test]
 fn parse_ipc_answer_gate() {
-    let line = r#"{"type":"AnswerGate","request_id":"req-42","allow":true,"deny_reason":null}"#;
+    let line = r#"{"type":"AnswerGate","session_id":"sess-9","request_id":"req-42","allow":true,"deny_reason":null}"#;
     let msg = parse_ipc(line).expect("should parse AnswerGate");
     match msg {
         IpcMsg::AnswerGate {
-            request_id, allow, ..
+            session_id,
+            request_id,
+            allow,
+            ..
         } => {
+            assert_eq!(session_id, "sess-9");
             assert_eq!(request_id, "req-42");
             assert!(allow);
         }
@@ -475,6 +479,7 @@ fn encode_ipc_all_variants_produce_valid_json() {
             text: "prompt text".to_string(),
         },
         IpcMsg::AnswerGate {
+            session_id: "sid-5".to_string(),
             request_id: "req-1".to_string(),
             allow: true,
             deny_reason: None,
