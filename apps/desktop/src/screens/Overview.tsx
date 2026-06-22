@@ -102,7 +102,7 @@ function AttentionCard({ card, onReview, onOpen }: AttentionCardProps) {
             {/* Gate kind badge */}
             <span
               style={{
-                fontSize: 10,
+                fontSize: 11.5,
                 fontWeight: 700,
                 letterSpacing: 0.4,
                 padding: "2px 7px",
@@ -117,7 +117,7 @@ function AttentionCard({ card, onReview, onOpen }: AttentionCardProps) {
             <span
               className="mono"
               style={{
-                fontSize: 11,
+                fontSize: 12.5,
                 color: "var(--txt3)",
               }}
             >
@@ -127,7 +127,7 @@ function AttentionCard({ card, onReview, onOpen }: AttentionCardProps) {
           <div
             style={{
               fontWeight: 700,
-              fontSize: 16,
+              fontSize: 18,
               letterSpacing: -0.2,
             }}
           >
@@ -136,7 +136,7 @@ function AttentionCard({ card, onReview, onOpen }: AttentionCardProps) {
           <div
             className="mono"
             style={{
-              fontSize: 11.5,
+              fontSize: 13,
               color: "var(--txt3)",
               marginTop: 2,
             }}
@@ -158,7 +158,7 @@ function AttentionCard({ card, onReview, onOpen }: AttentionCardProps) {
       >
         <div
           style={{
-            fontSize: 11,
+            fontSize: 12.5,
             fontWeight: 700,
             letterSpacing: 0.4,
             textTransform: "uppercase",
@@ -171,7 +171,7 @@ function AttentionCard({ card, onReview, onOpen }: AttentionCardProps) {
         <div
           className="mono"
           style={{
-            fontSize: 13,
+            fontSize: 14.5,
             color: "var(--txt)",
             wordBreak: "break-word",
           }}
@@ -189,7 +189,7 @@ function AttentionCard({ card, onReview, onOpen }: AttentionCardProps) {
             flex: 1,
             fontFamily: "inherit",
             fontWeight: 700,
-            fontSize: 13.5,
+            fontSize: 15,
             padding: 9,
             borderRadius: 9,
             border: card.state === "Error" ? "1px solid var(--error)" : "none",
@@ -206,7 +206,7 @@ function AttentionCard({ card, onReview, onOpen }: AttentionCardProps) {
           style={{
             fontFamily: "inherit",
             fontWeight: 600,
-            fontSize: 13.5,
+            fontSize: 15,
             padding: "9px 13px",
             borderRadius: 9,
             border: "1px solid var(--border2)",
@@ -255,7 +255,7 @@ function ActiveRow({ card, onClick }: ActiveRowProps) {
         <div
           style={{
             fontWeight: 600,
-            fontSize: 14,
+            fontSize: 15.5,
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -274,7 +274,7 @@ function ActiveRow({ card, onClick }: ActiveRowProps) {
           <span
             className="mono"
             style={{
-              fontSize: 11,
+              fontSize: 12.5,
               color: "var(--txt3)",
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -287,7 +287,7 @@ function ActiveRow({ card, onClick }: ActiveRowProps) {
           {card.last_action?.startsWith("⊟") && (
             <span
               style={{
-                fontSize: 10,
+                fontSize: 11.5,
                 fontWeight: 700,
                 color: "var(--accent2)",
                 background: "var(--accent-bg)",
@@ -312,13 +312,13 @@ function ActiveRow({ card, onClick }: ActiveRowProps) {
           alignItems: "center",
           gap: 8,
           color: "var(--txt2)",
-          fontSize: 13,
+          fontSize: 14.5,
         }}
       >
         <span
           className="mono"
           style={{
-            fontSize: 12,
+            fontSize: 13.5,
             color: "var(--accent2)",
           }}
         >
@@ -353,7 +353,7 @@ function ActiveRow({ card, onClick }: ActiveRowProps) {
           style={{
             display: "flex",
             justifyContent: "space-between",
-            fontSize: 11,
+            fontSize: 12.5,
             color: "var(--txt3)",
             marginBottom: 3,
           }}
@@ -386,7 +386,7 @@ function ActiveRow({ card, onClick }: ActiveRowProps) {
       <span
         className="mono"
         style={{
-          fontSize: 12,
+          fontSize: 13.5,
           color: "var(--txt3)",
           width: 62,
           textAlign: "right",
@@ -442,7 +442,7 @@ function IdleCard({ card, onClick }: IdleCardProps) {
         <div
           style={{
             fontWeight: 600,
-            fontSize: 13.5,
+            fontSize: 15,
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -453,7 +453,7 @@ function IdleCard({ card, onClick }: IdleCardProps) {
         <div
           className="mono"
           style={{
-            fontSize: 11,
+            fontSize: 12.5,
             color: "var(--txt3)",
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -465,7 +465,7 @@ function IdleCard({ card, onClick }: IdleCardProps) {
       </div>
       <span
         style={{
-          fontSize: 10,
+          fontSize: 11.5,
           fontWeight: 700,
           padding: "2px 6px",
           borderRadius: 5,
@@ -519,7 +519,7 @@ export function Overview() {
       >
         <h1
           style={{
-            fontSize: 23,
+            fontSize: 26,
             fontWeight: 700,
             margin: 0,
             letterSpacing: -0.3,
@@ -527,13 +527,13 @@ export function Overview() {
         >
           Command center
         </h1>
-        <span style={{ fontSize: 13.5, color: "var(--txt2)" }}>
+        <span style={{ fontSize: 15, color: "var(--txt2)" }}>
           {counts.total} sessions across {counts.host_count} hosts
         </span>
       </div>
 
       {/* Clock / live subtitle */}
-      <p style={{ fontSize: 13.5, color: "var(--txt3)", margin: "0 0 18px" }}>
+      <p style={{ fontSize: 15, color: "var(--txt3)", margin: "0 0 18px" }}>
         {counts.working > 0
           ? `Live · ${counts.working} working · updated just now`
           : "Updated just now"}
@@ -568,7 +568,7 @@ export function Overview() {
         >
           <div
             style={{
-              fontSize: 12,
+              fontSize: 13.5,
               fontWeight: 700,
               letterSpacing: 0.4,
               textTransform: "uppercase",
@@ -579,7 +579,7 @@ export function Overview() {
           </div>
           <div
             style={{
-              fontSize: 33,
+              fontSize: 37,
               fontWeight: 800,
               color: "var(--txt)",
               lineHeight: 1.1,
@@ -588,7 +588,7 @@ export function Overview() {
           >
             {counts.errors}
           </div>
-          <div style={{ fontSize: 12, color: "var(--txt2)", marginTop: 2 }}>
+          <div style={{ fontSize: 13.5, color: "var(--txt2)", marginTop: 2 }}>
             need a look
           </div>
         </div>
@@ -603,7 +603,7 @@ export function Overview() {
         >
           <div
             style={{
-              fontSize: 12,
+              fontSize: 13.5,
               fontWeight: 700,
               letterSpacing: 0.4,
               textTransform: "uppercase",
@@ -614,7 +614,7 @@ export function Overview() {
           </div>
           <div
             style={{
-              fontSize: 33,
+              fontSize: 37,
               fontWeight: 800,
               color: "var(--txt)",
               lineHeight: 1.1,
@@ -623,7 +623,7 @@ export function Overview() {
           >
             {counts.working}
           </div>
-          <div style={{ fontSize: 12, color: "var(--txt2)", marginTop: 2 }}>
+          <div style={{ fontSize: 13.5, color: "var(--txt2)", marginTop: 2 }}>
             actively running
           </div>
         </div>
@@ -638,7 +638,7 @@ export function Overview() {
         >
           <div
             style={{
-              fontSize: 12,
+              fontSize: 13.5,
               fontWeight: 700,
               letterSpacing: 0.4,
               textTransform: "uppercase",
@@ -649,7 +649,7 @@ export function Overview() {
           </div>
           <div
             style={{
-              fontSize: 33,
+              fontSize: 37,
               fontWeight: 800,
               color: "var(--txt)",
               lineHeight: 1.1,
@@ -658,7 +658,7 @@ export function Overview() {
           >
             {counts.cost}
           </div>
-          <div style={{ fontSize: 12, color: "var(--txt2)", marginTop: 2 }}>
+          <div style={{ fontSize: 13.5, color: "var(--txt2)", marginTop: 2 }}>
             {counts.tokens} tokens
           </div>
         </div>
@@ -688,7 +688,7 @@ export function Overview() {
             />
             <h2
               style={{
-                fontSize: 14,
+                fontSize: 15.5,
                 fontWeight: 700,
                 letterSpacing: 0.4,
                 textTransform: "uppercase",
@@ -722,7 +722,7 @@ export function Overview() {
       {/* ── Active now ── */}
       <h2
         style={{
-          fontSize: 14,
+          fontSize: 15.5,
           fontWeight: 700,
           letterSpacing: 0.4,
           textTransform: "uppercase",
@@ -735,7 +735,7 @@ export function Overview() {
       {active.length === 0 ? (
         <p
           style={{
-            fontSize: 13.5,
+            fontSize: 15,
             color: "var(--txt3)",
             margin: "0 0 26px",
           }}
@@ -764,7 +764,7 @@ export function Overview() {
       {/* ── Idle & finished ── */}
       <h2
         style={{
-          fontSize: 14,
+          fontSize: 15.5,
           fontWeight: 700,
           letterSpacing: 0.4,
           textTransform: "uppercase",
@@ -775,7 +775,7 @@ export function Overview() {
         Idle &amp; finished
       </h2>
       {idle.length === 0 ? (
-        <p style={{ fontSize: 13.5, color: "var(--txt3)", margin: 0 }}>
+        <p style={{ fontSize: 15, color: "var(--txt3)", margin: 0 }}>
           No idle or finished sessions.
         </p>
       ) : (

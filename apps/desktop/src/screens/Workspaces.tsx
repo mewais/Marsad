@@ -71,7 +71,7 @@ function WsManagerRow({
             <span
               style={{
                 fontWeight: 700,
-                fontSize: 15,
+                fontSize: 17,
                 color: "var(--txt)",
               }}
             >
@@ -80,7 +80,7 @@ function WsManagerRow({
             {isActive && (
               <span
                 style={{
-                  fontSize: 10,
+                  fontSize: 11.5,
                   fontWeight: 700,
                   letterSpacing: 0.3,
                   textTransform: "uppercase",
@@ -97,7 +97,7 @@ function WsManagerRow({
           <div
             className="mono"
             style={{
-              fontSize: 11.5,
+              fontSize: 13,
               color: "var(--txt3)",
               marginTop: 3,
             }}
@@ -120,7 +120,7 @@ function WsManagerRow({
           <span
             key={sid}
             style={{
-              fontSize: 11.5,
+              fontSize: 13,
               padding: "3px 9px",
               borderRadius: 6,
               background: "var(--panel2)",
@@ -138,7 +138,7 @@ function WsManagerRow({
         {ws.session_ids.length > 3 && (
           <span
             style={{
-              fontSize: 11.5,
+              fontSize: 13,
               padding: "3px 9px",
               borderRadius: 6,
               color: "var(--txt3)",
@@ -158,7 +158,7 @@ function WsManagerRow({
           style={{
             fontFamily: "inherit",
             fontWeight: 700,
-            fontSize: 12.5,
+            fontSize: 14,
             padding: "7px 14px",
             borderRadius: 8,
             border: "none",
@@ -177,7 +177,7 @@ function WsManagerRow({
           style={{
             fontFamily: "inherit",
             fontWeight: 600,
-            fontSize: 12.5,
+            fontSize: 14,
             padding: "7px 12px",
             borderRadius: 8,
             border: "1px solid var(--border2)",
@@ -194,7 +194,7 @@ function WsManagerRow({
           style={{
             fontFamily: "inherit",
             fontWeight: 600,
-            fontSize: 12.5,
+            fontSize: 14,
             padding: "7px 12px",
             borderRadius: 8,
             border: "1px solid var(--border2)",
@@ -213,7 +213,7 @@ function WsManagerRow({
           style={{
             fontFamily: "inherit",
             fontWeight: 600,
-            fontSize: 12.5,
+            fontSize: 14,
             padding: "7px 12px",
             borderRadius: 8,
             border: "1px solid var(--border2)",
@@ -346,7 +346,7 @@ function WsManagerModal({ open, onClose }: WsManagerModalProps) {
             alignItems: "center",
             justifyContent: "center",
             color: "var(--accent2)",
-            fontSize: 17,
+            fontSize: 19,
             flexShrink: 0,
           }}
         >
@@ -357,7 +357,7 @@ function WsManagerModal({ open, onClose }: WsManagerModalProps) {
         <div style={{ flex: 1 }}>
           <h2
             style={{
-              fontSize: 17,
+              fontSize: 19,
               fontWeight: 700,
               margin: 0,
               letterSpacing: -0.2,
@@ -366,7 +366,7 @@ function WsManagerModal({ open, onClose }: WsManagerModalProps) {
           >
             Workspaces
           </h2>
-          <div style={{ fontSize: 12.5, color: "var(--txt3)", marginTop: 1 }}>
+          <div style={{ fontSize: 14, color: "var(--txt3)", marginTop: 1 }}>
             Saved snapshots of your sessions, history and state — switch any time
           </div>
         </div>
@@ -385,7 +385,7 @@ function WsManagerModal({ open, onClose }: WsManagerModalProps) {
           style={{
             fontFamily: "inherit",
             fontWeight: 600,
-            fontSize: 13,
+            fontSize: 14.5,
             padding: "8px 13px",
             borderRadius: 8,
             border: "1px solid var(--border2)",
@@ -408,7 +408,7 @@ function WsManagerModal({ open, onClose }: WsManagerModalProps) {
             background: "var(--panel2)",
             color: "var(--txt2)",
             cursor: "pointer",
-            fontSize: 15,
+            fontSize: 17,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -430,10 +430,10 @@ function WsManagerModal({ open, onClose }: WsManagerModalProps) {
         }}
       >
         <div>
-          <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--txt)" }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--txt)" }}>
             Auto-save workspace
           </div>
-          <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+          <div style={{ fontSize: 13, color: "var(--txt3)", marginTop: 1 }}>
             Automatically snapshot sessions on change
           </div>
         </div>
@@ -470,7 +470,7 @@ function WsManagerModal({ open, onClose }: WsManagerModalProps) {
               padding: "32px 0",
               textAlign: "center",
               color: "var(--txt3)",
-              fontSize: 14,
+              fontSize: 15.5,
             }}
           >
             No workspaces yet. Save the current state below.
@@ -507,7 +507,7 @@ function WsManagerModal({ open, onClose }: WsManagerModalProps) {
               border: "1px solid var(--border2)",
               borderRadius: 8,
               color: "var(--txt)",
-              fontSize: 13,
+              fontSize: 14.5,
               padding: "7px 10px",
               fontFamily: "inherit",
               outline: "none",
@@ -523,7 +523,7 @@ function WsManagerModal({ open, onClose }: WsManagerModalProps) {
             style={{
               fontFamily: "inherit",
               fontWeight: 700,
-              fontSize: 12.5,
+              fontSize: 14,
               padding: "7px 12px",
               borderRadius: 8,
               border: "none",
@@ -542,7 +542,7 @@ function WsManagerModal({ open, onClose }: WsManagerModalProps) {
         <div style={{ padding: "13px 22px" }}>
           <span
             className="mono"
-            style={{ fontSize: 11, color: "var(--txt3)" }}
+            style={{ fontSize: 12.5, color: "var(--txt3)" }}
           >
             Stored locally · export a workspace to a file to move or share it. Cloud sync is out of scope.
           </span>
@@ -602,7 +602,7 @@ function WsSummaryRow({ ws, isActive, onLoad }: WsSummaryRowProps) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
           style={{
-            fontSize: 13.5,
+            fontSize: 15,
             fontWeight: 600,
             color: isActive ? "var(--accent2)" : "var(--txt)",
             whiteSpace: "nowrap",
@@ -614,7 +614,7 @@ function WsSummaryRow({ ws, isActive, onLoad }: WsSummaryRowProps) {
         </div>
         <div
           className="mono"
-          style={{ fontSize: 10.5, color: "var(--txt3)", marginTop: 2 }}
+          style={{ fontSize: 12, color: "var(--txt3)", marginTop: 2 }}
         >
           {fmtSessions(ws.session_ids)} · saved {ws.saved_at}
         </div>
@@ -628,7 +628,7 @@ function WsSummaryRow({ ws, isActive, onLoad }: WsSummaryRowProps) {
         style={{
           fontFamily: "inherit",
           fontWeight: 700,
-          fontSize: 12.5,
+          fontSize: 14,
           padding: "6px 14px",
           borderRadius: 8,
           border: "none",
@@ -685,7 +685,7 @@ function WsSwitcher() {
               background: isActive ? "var(--accent-bg)" : "var(--panel2)",
               color: isActive ? "var(--accent2)" : "var(--txt2)",
               fontWeight: isActive ? 700 : 600,
-              fontSize: 13.5,
+              fontSize: 15,
               cursor: isActive ? "default" : "pointer",
               fontFamily: "inherit",
               transition: "all 0.15s",
@@ -730,7 +730,7 @@ function WsSwitcher() {
             <span
               className="mono"
               style={{
-                fontSize: 10.5,
+                fontSize: 12,
                 color: isActive ? "var(--accent)" : "var(--txt3)",
                 fontWeight: 500,
               }}
@@ -779,7 +779,7 @@ export function Workspaces() {
         <div>
           <h1
             style={{
-              fontSize: 23,
+              fontSize: 26,
               fontWeight: 700,
               margin: 0,
               letterSpacing: -0.3,
@@ -788,7 +788,7 @@ export function Workspaces() {
           >
             Workspaces
           </h1>
-          <div style={{ fontSize: 12.5, color: "var(--txt3)", marginTop: 3 }}>
+          <div style={{ fontSize: 14, color: "var(--txt3)", marginTop: 3 }}>
             Saved snapshots of your sessions, history and state
           </div>
         </div>
@@ -798,7 +798,7 @@ export function Workspaces() {
           style={{
             fontFamily: "inherit",
             fontWeight: 600,
-            fontSize: 13,
+            fontSize: 14.5,
             color: "var(--txt2)",
             background: "none",
             border: "none",
@@ -825,7 +825,7 @@ export function Workspaces() {
         >
           <div
             style={{
-              fontSize: 10.5,
+              fontSize: 12,
               fontWeight: 700,
               letterSpacing: 0.6,
               textTransform: "uppercase",
@@ -844,17 +844,17 @@ export function Workspaces() {
             }}
           >
             <span
-              style={{ fontWeight: 700, fontSize: 15, color: "var(--txt)" }}
+              style={{ fontWeight: 700, fontSize: 17, color: "var(--txt)" }}
             >
               {activeWs.name}
             </span>
-            <span style={{ fontSize: 11, color: "var(--done)" }}>
+            <span style={{ fontSize: 12.5, color: "var(--done)" }}>
               ● auto-saved
             </span>
           </div>
           <div
             style={{
-              fontSize: 11.5,
+              fontSize: 13,
               color: "var(--txt3)",
               lineHeight: 1.45,
             }}
@@ -868,7 +868,7 @@ export function Workspaces() {
       <div style={{ marginBottom: 24 }}>
         <div
           style={{
-            fontSize: 10.5,
+            fontSize: 12,
             fontWeight: 700,
             letterSpacing: 0.6,
             textTransform: "uppercase",
@@ -885,7 +885,7 @@ export function Workspaces() {
       <div>
         <div
           style={{
-            fontSize: 10.5,
+            fontSize: 12,
             fontWeight: 700,
             letterSpacing: 0.6,
             textTransform: "uppercase",
@@ -926,7 +926,7 @@ export function Workspaces() {
                 padding: "32px 20px",
                 textAlign: "center",
                 color: "var(--txt3)",
-                fontSize: 14,
+                fontSize: 15.5,
               }}
             >
               No workspaces yet.

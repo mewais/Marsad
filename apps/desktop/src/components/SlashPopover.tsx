@@ -23,7 +23,7 @@ export function SlashPopover({ entries, onSelect, empty }: SlashPopoverProps) {
       <div
         style={{
           padding: "8px 13px",
-          fontSize: 11,
+          fontSize: 12.5,
           fontWeight: 700,
           letterSpacing: 0.5,
           textTransform: "uppercase",
@@ -56,7 +56,7 @@ export function SlashPopover({ entries, onSelect, empty }: SlashPopoverProps) {
           <span
             className="mono"
             style={{
-              fontSize: 13,
+              fontSize: 14.5,
               fontWeight: 600,
               color: "var(--accent2)",
               minWidth: 92,
@@ -65,13 +65,13 @@ export function SlashPopover({ entries, onSelect, empty }: SlashPopoverProps) {
           >
             {entry.name}
           </span>
-          <span style={{ fontSize: 12.5, color: "var(--txt2)" }}>
+          <span style={{ fontSize: 14, color: "var(--txt2)" }}>
             {entry.desc}
           </span>
         </div>
       ))}
       {empty && (
-        <div style={{ padding: "11px 13px", fontSize: 12.5, color: "var(--txt3)" }}>
+        <div style={{ padding: "11px 13px", fontSize: 14, color: "var(--txt3)" }}>
           No matching command
         </div>
       )}

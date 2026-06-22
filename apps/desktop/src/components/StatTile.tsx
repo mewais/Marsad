@@ -27,7 +27,7 @@ export function StatTile({
     >
       <div
         style={{
-          fontSize: 12,
+          fontSize: 13.5,
           fontWeight: 700,
           letterSpacing: 0.4,
           textTransform: "uppercase",
@@ -38,7 +38,7 @@ export function StatTile({
       </div>
       <div
         style={{
-          fontSize: 33,
+          fontSize: 37,
           fontWeight: 800,
           color,
           lineHeight: 1.1,
@@ -48,7 +48,7 @@ export function StatTile({
         {value}
       </div>
       {sub && (
-        <div style={{ fontSize: 12, color: "var(--txt2)", marginTop: 2 }}>
+        <div style={{ fontSize: 13.5, color: "var(--txt2)", marginTop: 2 }}>
           {sub}
         </div>
       )}
