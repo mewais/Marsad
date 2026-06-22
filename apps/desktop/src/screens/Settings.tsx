@@ -82,10 +82,6 @@ const S: Record<string, React.CSSProperties> = {
     borderBottom: "1px solid var(--border)",
     flexShrink: 0,
   },
-  headerInner: {
-    maxWidth: 900,
-    margin: "0 auto",
-  },
   titleRow: {
     display: "flex",
     alignItems: "baseline",
@@ -121,10 +117,6 @@ const S: Record<string, React.CSSProperties> = {
     flex: 1,
     overflowY: "auto",
     padding: "24px 26px 48px",
-  },
-  bodyInner: {
-    maxWidth: 900,
-    margin: "0 auto",
   },
   sectionLabel: {
     fontSize: 11,
@@ -1232,32 +1224,28 @@ export function Settings() {
   return (
     <div style={S.root} data-testid="settings-screen">
       <div style={S.header}>
-        <div style={S.headerInner}>
-          <div style={S.titleRow}>
-            <h1 style={S.title}>Settings</h1>
-            <span style={S.titleTab}>{activeTab}</span>
-          </div>
-          <p style={S.subtitle}>{TAB_SUBTITLES[activeTab]}</p>
-          <div style={S.tabBar}>
-            {TABS.map((t) => (
-              <TabButton
-                key={t}
-                label={t}
-                active={activeTab === t}
-                onClick={() => setActiveTab(t)}
-              />
-            ))}
-          </div>
+        <div style={S.titleRow}>
+          <h1 style={S.title}>Settings</h1>
+          <span style={S.titleTab}>{activeTab}</span>
+        </div>
+        <p style={S.subtitle}>{TAB_SUBTITLES[activeTab]}</p>
+        <div style={S.tabBar}>
+          {TABS.map((t) => (
+            <TabButton
+              key={t}
+              label={t}
+              active={activeTab === t}
+              onClick={() => setActiveTab(t)}
+            />
+          ))}
         </div>
       </div>
 
       <div style={S.body}>
-        <div style={S.bodyInner}>
-          {activeTab === "Notifications" && <NotificationsTab />}
-          {activeTab === "Hosts" && <HostsTab />}
-          {activeTab === "Session defaults" && <SessionDefaultsTab />}
-          {activeTab === "General" && <GeneralTab />}
-        </div>
+        {activeTab === "Notifications" && <NotificationsTab />}
+        {activeTab === "Hosts" && <HostsTab />}
+        {activeTab === "Session defaults" && <SessionDefaultsTab />}
+        {activeTab === "General" && <GeneralTab />}
       </div>
     </div>
   );
