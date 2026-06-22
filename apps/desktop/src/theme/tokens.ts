@@ -61,8 +61,8 @@ export const darkTokens: Tokens = {
   shadowSm: "0 2px 10px rgba(0,0,0,0.3)",
   glassChrome: "rgba(18,22,29,0.55)",
   glassMain: "rgba(11,14,19,0.42)",
-  fontSans: "'Hanken Grotesk', system-ui, sans-serif",
-  fontMono: "'JetBrains Mono', monospace",
+  fontSans: "'Hanken Grotesk', 'Marsad Symbols', system-ui, sans-serif",
+  fontMono: "'JetBrains Mono', 'Marsad Symbols', monospace",
 };
 
 /** Light theme overrides. Colors adapted for readability on light backgrounds. */
@@ -91,8 +91,8 @@ export const lightTokens: Tokens = {
   shadowSm: "0 2px 10px rgba(0,0,0,0.08)",
   glassChrome: "rgba(240,242,245,0.70)",
   glassMain: "rgba(245,247,250,0.55)",
-  fontSans: "'Hanken Grotesk', system-ui, sans-serif",
-  fontMono: "'JetBrains Mono', monospace",
+  fontSans: "'Hanken Grotesk', 'Marsad Symbols', system-ui, sans-serif",
+  fontMono: "'JetBrains Mono', 'Marsad Symbols', monospace",
 };
 
 /** Wallpaper background CSS for glass dark mode (from .glass .wallpaper in .dc.html). */

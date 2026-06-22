@@ -6,7 +6,6 @@ import { useState, useEffect } from "react";
 import { useVm } from "../bridge/useVm";
 import { answerGate } from "../bridge/api";
 import { DiffView } from "../components/DiffView";
-import { Close } from "../components/Icon";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -249,7 +248,7 @@ export function GateOverlay() {
               lineHeight: 1,
             }}
           >
-            <Close size={14} />
+            ✕
           </button>
         </div>
 

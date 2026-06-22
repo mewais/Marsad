@@ -9,7 +9,6 @@
 import React, { useRef, useState } from "react";
 import { useVm } from "../../bridge/useVm";
 import { sendPrompt } from "../../bridge/api";
-import { Terminal as TerminalIcon, PromptCaret } from "../../components/Icon";
 
 interface TermLine {
   text: string;
@@ -110,9 +109,9 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
         }}
       >
         <span
-          style={{ fontSize: 11, fontWeight: 700, color: "var(--needs)", display: "inline-flex", alignItems: "center", gap: 5 }}
+          style={{ fontSize: 11, fontWeight: 700, color: "var(--needs)" }}
         >
-          <TerminalIcon size={13} /> Escape hatch
+          ⎈ Escape hatch
         </span>
         <span style={{ fontSize: 11.5, color: "var(--txt2)" }}>
           Full raw session — anything the purpose-built UI doesn't cover, do
@@ -159,9 +158,9 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
         >
           <span
             className="mono"
-            style={{ fontSize: 12.5, color: "var(--done)", display: "inline-flex", alignItems: "center" }}
+            style={{ fontSize: 12.5, color: "var(--done)" }}
           >
-            <PromptCaret size={14} />
+            ❯
           </span>
           <input
             ref={inputRef}

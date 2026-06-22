@@ -2,7 +2,6 @@ import React, { useRef, useState } from "react";
 import type { SlashEntry } from "../bridge/types";
 import { filterSlash } from "../bridge/api";
 import { SlashPopover } from "./SlashPopover";
-import { Escape } from "./Icon";
 
 interface ComposerProps {
   onSend: (text: string) => void;
@@ -152,7 +151,7 @@ export function Composer({
               fontSize: 12,
             }}
           >
-            <Escape size={14} />
+            ⎋
           </button>
           <button
             onClick={submit}

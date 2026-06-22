@@ -18,7 +18,6 @@ import {
   filterSlash,
 } from "../../bridge/api";
 import type { SlashEntry, SessionView, GateVM } from "../../bridge/types";
-import { Gear, Triangle, EditDiff } from "../../components/Icon";
 
 // ---------------------------------------------------------------------------
 // Transcript message types (internal to Activity tab)
@@ -223,7 +222,7 @@ function ToolCall({
         fontSize: 11.5,
       }}
     >
-      <Gear size={12} style={{ color: "var(--accent2)", flexShrink: 0 }} />
+      <span style={{ fontSize: 11, color: "var(--accent2)" }}>⚙</span>
       <span style={{ fontWeight: 700, color: "var(--txt)" }}>{tool}</span>
       <span
         className="mono"
@@ -344,7 +343,7 @@ function GateCard({
           marginBottom: 7,
         }}
       >
-        <Triangle size={12} style={{ color: "var(--needs)", flexShrink: 0 }} />
+        <span style={{ fontSize: 12 }}>▲</span>
         <span
           style={{
             fontWeight: 700,
@@ -405,7 +404,7 @@ function SubagentEntry({
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-        <EditDiff size={12} style={{ color: "var(--accent2)", flexShrink: 0 }} />
+        <span style={{ fontSize: 12, color: "var(--accent2)" }}>⊟</span>
         <span style={{ fontWeight: 700, fontSize: 12 }}>Subagent · {name}</span>
         {model && (
           <span

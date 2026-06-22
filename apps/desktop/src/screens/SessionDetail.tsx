@@ -11,7 +11,6 @@ import { ChangesTab } from "./tabs/Changes";
 import { ConfigTab } from "./tabs/Config";
 import { UsageTab } from "./tabs/Usage";
 import { TerminalTab } from "./tabs/Terminal";
-import { Branch, Pause, Restart } from "../components/Icon";
 
 // ---------------------------------------------------------------------------
 // Tab bar definition
@@ -128,7 +127,7 @@ export function SessionDetail() {
                 {host_label}
               </span>
               <span style={{ margin: "0 8px", opacity: 0.4 }}>·</span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Branch size={12} /> {branch}</span>
+              <span>⎇ {branch}</span>
               <span style={{ margin: "0 8px", opacity: 0.4 }}>·</span>
               <span>{selectedSession.project}</span>
               <span style={{ margin: "0 8px", opacity: 0.4 }}>·</span>
@@ -180,12 +179,9 @@ export function SessionDetail() {
                 background: "var(--panel2)",
                 color: "var(--txt2)",
                 cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
               }}
             >
-              <Pause size={13} /> Stop
+              ⏸ Stop
             </button>
 
             <button
@@ -201,12 +197,9 @@ export function SessionDetail() {
                 background: "var(--panel2)",
                 color: "var(--txt2)",
                 cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
               }}
             >
-              <Restart size={13} /> Restart
+              ↻ Restart
             </button>
           </div>
         </div>

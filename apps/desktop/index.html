@@ -12,8 +12,20 @@
     <title>Marsad — مرصد</title>
     <style>
       *{box-sizing:border-box}
-      html,body{margin:0;height:100%;font-family:'Hanken Grotesk',system-ui,sans-serif;background:#0e1116;color:#e8ecf1;-webkit-font-smoothing:antialiased}
-      .mono{font-family:'JetBrains Mono',monospace}
+      /* Self-hosted symbol fallback: makes the UI glyph-icons (▾ ⚙ ⛶ ⌕ ⏸ ↻ ⎇ ⎋ ⎈ …)
+         render even on systems whose default fonts lack them (e.g. WebKitGTK with no
+         symbol fallback). Subset to only the glyphs the app uses (~4KB total). */
+      @font-face{font-family:'Marsad Symbols';font-style:normal;font-weight:400;font-display:swap;
+        src:url('/fonts/marsad-symbols-geo.woff2') format('woff2');
+        unicode-range:U+2500,U+2192,U+25CF,U+26A0,U+2715,U+2699,U+2318,U+25CB,U+2713,U+229F,U+2212,U+2265,U+23CE,U+25A1,U+2387,U+21BB,U+21A7,U+21A5,U+276F,U+25B2,U+2600,U+263E,U+25BE,U+25A6,U+21E7,U+21B5}
+      @font-face{font-family:'Marsad Symbols';font-style:normal;font-weight:400;font-display:swap;
+        src:url('/fonts/marsad-symbols-tech.woff2') format('woff2');
+        unicode-range:U+24D8,U+26F6,U+26ED,U+2388,U+2315,U+238B}
+      @font-face{font-family:'Marsad Symbols';font-style:normal;font-weight:400;font-display:swap;
+        src:url('/fonts/marsad-symbols-misc.woff2') format('woff2');
+        unicode-range:U+23F8}
+      html,body{margin:0;height:100%;font-family:'Hanken Grotesk','Marsad Symbols',system-ui,sans-serif;background:#0e1116;color:#e8ecf1;-webkit-font-smoothing:antialiased}
+      .mono{font-family:'JetBrains Mono','Marsad Symbols',monospace}
       ::-webkit-scrollbar{width:9px;height:9px}
       ::-webkit-scrollbar-thumb{background:var(--border2,#313a48);border-radius:6px}
       ::-webkit-scrollbar-track{background:transparent}

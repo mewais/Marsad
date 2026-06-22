@@ -6,7 +6,6 @@ import { useVm } from "../bridge/useVm";
 import { launchSession } from "../bridge/api";
 import { MODELS, DEFAULT_MODEL } from "../bridge/models";
 import { Modal } from "../components/Modal";
-import { Plus, Close } from "../components/Icon";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -109,7 +108,7 @@ export function NewSession() {
             flexShrink: 0,
           }}
         >
-          <Plus size={18} />
+          +
         </div>
 
         <div style={{ flex: 1 }}>
@@ -149,7 +148,7 @@ export function NewSession() {
             lineHeight: 1,
           }}
         >
-          <Close size={13} />
+          ✕
         </button>
       </div>
 

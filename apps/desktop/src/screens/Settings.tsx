@@ -89,7 +89,7 @@ const S: Record<string, React.CSSProperties> = {
   titleRow: {
     display: "flex",
     alignItems: "baseline",
-    justifyContent: "center",
+    justifyContent: "flex-start",
     gap: 12,
     marginBottom: 4,
   },
@@ -109,13 +109,13 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: 12.5,
     color: "var(--txt3)",
     margin: "0 0 22px",
-    textAlign: "center" as const,
+    textAlign: "left" as const,
   },
   tabBar: {
     display: "flex",
     gap: 4,
     marginBottom: -1,
-    justifyContent: "center",
+    justifyContent: "flex-start",
   },
   body: {
     flex: 1,
