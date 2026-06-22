@@ -10,6 +10,7 @@ import { useTheme } from "../theme/ThemeProvider";
 import { Badge } from "./Badge";
 import { StateDot } from "./StateDot";
 import { Chip } from "./Chip";
+import { Sun, Moon, Layers, ChevronDown, Search, Gear, Plus, Grid } from "./Icon";
 
 // ---------------------------------------------------------------------------
 // Colour helpers
@@ -142,7 +143,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
   const { theme, toggleTheme } = useTheme();
   const searchRef = useRef<HTMLInputElement>(null);
 
-  const themeIcon = theme === "dark" ? "☀" : "☾";
+  const ThemeIcon = theme === "dark" ? Sun : Moon;
 
   const filters: { label: string; value: Filter; count?: number }[] = [
     { label: "All", value: "All", count: counts.total },
@@ -262,7 +263,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
               fontFamily: "inherit",
             }}
           >
-            <span style={{ fontSize: 12, color: "var(--txt3)" }}>⛶</span>
+            <Layers size={13} style={{ color: "var(--txt3)" }} />
             <span
               style={{
                 fontSize: 12.5,
@@ -284,7 +285,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
               }}
               title="Auto-saved"
             />
-            <span style={{ fontSize: 9, color: "var(--txt3)" }}>▾</span>
+            <ChevronDown size={10} style={{ color: "var(--txt3)" }} />
           </button>
 
           {state.wsMenuOpen && (
@@ -447,7 +448,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
             color: "var(--txt3)",
           }}
         >
-          <span style={{ fontSize: 13, flexShrink: 0 }}>⌕</span>
+          <Search size={14} style={{ flexShrink: 0 }} />
           <input
             ref={searchRef}
             value={state.search}
@@ -477,7 +478,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
               flexShrink: 0,
             }}
           >
-            ⌘K
+            Ctrl K
           </span>
         </div>
 
@@ -501,7 +502,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
             fontSize: 15,
           }}
         >
-          ⚙
+          <Gear size={15} />
         </button>
 
         {/* Theme toggle */}
@@ -519,7 +520,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
             fontSize: 14,
           }}
         >
-          {themeIcon}
+          <ThemeIcon size={14} />
         </button>
 
         {/* New session */}
@@ -540,7 +541,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
             fontFamily: "inherit",
           }}
         >
-          ＋ New session
+          <Plus size={13} /> New session
         </button>
       </header>
 
@@ -577,7 +578,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
             }}
             data-testid="overview-entry"
           >
-            <span style={{ fontSize: 14 }}>▦</span> Overview
+            <Grid size={14} /> Overview
             <span style={{ flex: 1 }} />
             <span style={{ fontSize: 11, color: "var(--txt3)" }}>
               {counts.total}

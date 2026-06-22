@@ -7,6 +7,7 @@ import type { SessionCard } from "../bridge/types";
 import { StatTile } from "../components/StatTile";
 import { StateDot } from "../components/StateDot";
 import { phaseColor, phaseBg, phaseLabel } from "../components/Badge";
+import { Gear } from "../components/Icon";
 
 // ---------------------------------------------------------------------------
 // Gate kind label helpers
@@ -315,15 +316,13 @@ function ActiveRow({ card, onClick }: ActiveRowProps) {
           fontSize: 12,
         }}
       >
-        <span
-          className="mono"
+        <Gear
+          size={12}
           style={{
-            fontSize: 11,
             color: "var(--accent2)",
+            flexShrink: 0,
           }}
-        >
-          ⚙
-        </span>
+        />
         <span
           style={{
             whiteSpace: "nowrap",
