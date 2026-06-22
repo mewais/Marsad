@@ -207,7 +207,7 @@ fn on_agent_line_non_json_returns_protocol_error() {
 #[test]
 fn on_agent_line_truncated_json_returns_protocol_error() {
     let (mut core, _peer) = make_core();
-    let err = core.on_agent_line(r#"{"type":"agent_event""#).unwrap_err();
+    let err = core.on_agent_line(r#"{"type":"AgentEvent""#).unwrap_err();
     assert!(
         matches!(err, CoreError::Protocol(_)),
         "expected Protocol for truncated JSON, got {err:?}"
@@ -232,7 +232,7 @@ fn on_agent_line_missing_session_id_field_returns_protocol_error() {
     let (mut core, _peer) = make_core();
     // agent_event without session_id is a schema mismatch
     let err = core
-        .on_agent_line(r#"{"type":"agent_event","event":{"type":"system","subtype":"init"}}"#)
+        .on_agent_line(r#"{"type":"AgentEvent","event":{"type":"system","subtype":"init"}}"#)
         .unwrap_err();
     assert!(
         matches!(err, CoreError::Protocol(_)),
@@ -245,7 +245,7 @@ fn on_agent_line_wrong_field_type_returns_protocol_error() {
     let (mut core, _peer) = make_core();
     // session_id should be a string, not a number
     let err = core
-        .on_agent_line(r#"{"type":"agent_event","session_id":42,"event":{}}"#)
+        .on_agent_line(r#"{"type":"AgentEvent","session_id":42,"event":{}}"#)
         .unwrap_err();
     assert!(
         matches!(err, CoreError::Protocol(_)),
@@ -272,7 +272,7 @@ fn on_agent_line_for_unregistered_session_returns_unknown_session() {
     let (mut core, _peer) = make_core();
     // A well-formed agent_event for a session_id that was never launched/registered.
     // Uses an assistant event (not system/init) so the impl cannot auto-register on first sight.
-    let line = r#"{"type":"agent_event","session_id":"never-launched-session","event":{"type":"assistant","message":{"id":"msg-x","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}"#;
+    let line = r#"{"type":"AgentEvent","session_id":"never-launched-session","event":{"type":"assistant","message":{"id":"msg-x","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}"#;
     match core.on_agent_line(line) {
         Err(CoreError::UnknownSession(_)) => {}
         other => panic!(

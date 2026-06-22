@@ -403,6 +403,16 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
                     continue;
                 }
 
+                // Only AgentEvent broadcasts carry session stream data. The agent
+                // also sends command acks (Subscribed, SessionLaunched, …) on this
+                // subscriber connection — skip those silently rather than feeding
+                // them to on_agent_line (which would log an "unknown IPC type").
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if v.get("type").and_then(|t| t.as_str()) != Some("AgentEvent") {
+                        continue;
+                    }
+                }
+
                 // Lock the shared Core to process the inbound line.
                 let updates = {
                     let state_ref = app.state::<ManagedState>();

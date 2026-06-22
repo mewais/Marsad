@@ -80,6 +80,7 @@ export function NewSession() {
   const [posture, setPosture] = useState<"ask" | "auto" | "full">("auto");
   const [firstPrompt, setFirstPrompt] = useState("");
   const [busy, setBusy] = useState(false);
+  const [launchError, setLaunchError] = useState<string | null>(null);
 
   // Resume state
   const [resume, setResume] = useState(false);
@@ -111,17 +112,24 @@ export function NewSession() {
         resumeArgs.resume_session_id = selectedResume;
       }
     }
-    const newId = await launchSession({
-      project: project.trim(),
-      host_id: hostId,
-      model,
-      posture,
-      first_prompt: firstPrompt.trim() || undefined,
-      ...resumeArgs,
-    });
-    setBusy(false);
-    // Navigate to the new session
-    dispatch({ type: "SELECT_SESSION", id: newId });
+    try {
+      const newId = await launchSession({
+        project: project.trim(),
+        host_id: hostId,
+        model,
+        posture,
+        first_prompt: firstPrompt.trim() || undefined,
+        ...resumeArgs,
+      });
+      // Navigate to the new session (closes this modal).
+      dispatch({ type: "SELECT_SESSION", id: newId });
+    } catch (err) {
+      // Don't leave the dialog stuck if the launch fails — surface it.
+      console.error("[NewSession] launch failed:", err);
+      setLaunchError(String(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -495,12 +503,14 @@ export function NewSession() {
           className="mono"
           style={{
             fontSize: 10.5,
-            color: "var(--txt3)",
+            color: launchError ? "var(--error)" : "var(--txt3)",
             flex: 1,
             fontFamily: "var(--font-mono, monospace)",
           }}
         >
-          Runs over your existing SSH config · nothing installed inbound
+          {launchError
+            ? `Launch failed: ${launchError}`
+            : "Runs over your existing SSH config · nothing installed inbound"}
         </div>
 
         {/* Cancel */}

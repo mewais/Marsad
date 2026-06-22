@@ -52,7 +52,7 @@ fn map_err(e: CoreError) -> String {
 // Commands
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn snapshot(state: State<'_, ManagedState>) -> Result<AppSnapshot, String> {
     let guard = state.lock().map_err(|e| e.to_string())?;
     Ok(guard.snapshot())
@@ -61,7 +61,7 @@ pub fn snapshot(state: State<'_, ManagedState>) -> Result<AppSnapshot, String> {
 // Flat parameters (one invoke-payload key each) — matches every other command
 // here and the JS `invoke("launch_session", { project, host_id, … })` call.
 // A Tauri command legitimately needs all of these, hence the clippy allow.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 #[allow(clippy::too_many_arguments)]
 pub fn launch_session(
     state: State<'_, ManagedState>,
@@ -104,7 +104,7 @@ pub fn launch_session(
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn list_sessions(project: String) -> Result<Vec<SessionSummary>, String> {
     let home = std::env::var("HOME").map_err(|e| e.to_string())?;
     let projects_root = std::path::PathBuf::from(format!("{home}/.claude/projects"));
@@ -112,7 +112,7 @@ pub fn list_sessions(project: String) -> Result<Vec<SessionSummary>, String> {
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn resume_session(state: State<'_, ManagedState>, id: String) -> Result<(), String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     match &mut *guard {
@@ -121,7 +121,7 @@ pub fn resume_session(state: State<'_, ManagedState>, id: String) -> Result<(), 
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn attach_session(state: State<'_, ManagedState>, id: String) -> Result<(), String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     match &mut *guard {
@@ -130,7 +130,7 @@ pub fn attach_session(state: State<'_, ManagedState>, id: String) -> Result<(), 
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn stop_session(state: State<'_, ManagedState>, id: String) -> Result<(), String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     match &mut *guard {
@@ -139,7 +139,7 @@ pub fn stop_session(state: State<'_, ManagedState>, id: String) -> Result<(), St
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn send_prompt(
     state: State<'_, ManagedState>,
     id: String,
@@ -152,7 +152,7 @@ pub fn send_prompt(
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn interrupt(state: State<'_, ManagedState>, id: String) -> Result<(), String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     match &mut *guard {
@@ -161,7 +161,7 @@ pub fn interrupt(state: State<'_, ManagedState>, id: String) -> Result<(), Strin
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn answer_gate(
     state: State<'_, ManagedState>,
     session_id: String,
@@ -188,7 +188,7 @@ pub fn answer_gate(
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn run_slash(
     state: State<'_, ManagedState>,
     id: String,
@@ -204,7 +204,7 @@ pub fn run_slash(
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn set_workspace(state: State<'_, ManagedState>, id: String) -> Result<(), String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     match &mut *guard {
@@ -221,14 +221,14 @@ pub fn set_workspace(state: State<'_, ManagedState>, id: String) -> Result<(), S
 // ---------------------------------------------------------------------------
 
 /// Return whether Marsad is configured to launch at login.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
     use tauri_plugin_autostart::ManagerExt;
     app.autolaunch().is_enabled().map_err(|e| e.to_string())
 }
 
 /// Enable or disable launch-at-login for Marsad.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     use tauri_plugin_autostart::ManagerExt;
     if enabled {

@@ -33,32 +33,32 @@ fn make_core() -> (Core, LoopbackFake) {
 
 fn agent_init(session_id: &str) -> String {
     format!(
-        r#"{{"type":"agent_event","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"{session_id}","model":"claude-opus-4-5","cwd":"/workspace","tools":["Read","Write","Bash"],"mcp_servers":[],"permissionMode":"default"}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"{session_id}","model":"claude-opus-4-5","cwd":"/workspace","tools":["Read","Write","Bash"],"mcp_servers":[],"permissionMode":"default"}}}}"#
     )
 }
 
 fn agent_assistant_text(session_id: &str, msg_id: &str, text: &str) -> String {
     let escaped = text.replace('"', "\\\"");
     format!(
-        r#"{{"type":"agent_event","session_id":"{session_id}","event":{{"type":"assistant","message":{{"id":"{msg_id}","content":[{{"type":"text","text":"{escaped}"}}],"usage":{{"input_tokens":200,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"assistant","message":{{"id":"{msg_id}","content":[{{"type":"text","text":"{escaped}"}}],"usage":{{"input_tokens":200,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}}}"#
     )
 }
 
 fn agent_control_request(session_id: &str, request_id: &str, tool: &str) -> String {
     format!(
-        r#"{{"type":"agent_event","session_id":"{session_id}","event":{{"type":"control_request","request_id":"{request_id}","request":{{"subtype":"can_use_tool","tool_name":"{tool}","input":{{"command":"ls /etc"}}}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"control_request","request_id":"{request_id}","request":{{"subtype":"can_use_tool","tool_name":"{tool}","input":{{"command":"ls /etc"}}}}}}}}"#
     )
 }
 
 fn agent_result_success(session_id: &str, cost: f64) -> String {
     format!(
-        r#"{{"type":"agent_event","session_id":"{session_id}","event":{{"type":"result","subtype":"success","is_error":false,"total_cost_usd":{cost},"usage":{{"input_tokens":200,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":2,"permission_denials":[]}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"result","subtype":"success","is_error":false,"total_cost_usd":{cost},"usage":{{"input_tokens":200,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":2,"permission_denials":[]}}}}"#
     )
 }
 
 fn agent_result_error(session_id: &str) -> String {
     format!(
-        r#"{{"type":"agent_event","session_id":"{session_id}","event":{{"type":"result","subtype":"error_during_execution","is_error":true,"total_cost_usd":0.01,"usage":{{"input_tokens":50,"output_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":1,"permission_denials":[]}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"result","subtype":"error_during_execution","is_error":true,"total_cost_usd":0.01,"usage":{{"input_tokens":50,"output_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":1,"permission_denials":[]}}}}"#
     )
 }
 

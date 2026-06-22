@@ -311,7 +311,7 @@ impl Core {
             serde_json::from_str(line).map_err(|e| CoreError::Protocol(e.to_string()))?;
 
         match env.r#type.as_str() {
-            "agent_event" => self.handle_agent_event(env),
+            "AgentEvent" => self.handle_agent_event(env),
             other => Err(CoreError::Protocol(format!("unknown IPC type: '{other}'"))),
         }
     }
