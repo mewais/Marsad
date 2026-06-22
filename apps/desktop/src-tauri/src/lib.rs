@@ -187,6 +187,7 @@ pub fn run() {
                 bridge::answer_gate,
                 bridge::run_slash,
                 bridge::set_workspace,
+                bridge::list_sessions,
             ])
             .run(tauri::generate_context!())
             .expect("error while running Tauri application");
@@ -257,6 +258,7 @@ pub fn run() {
             bridge::answer_gate,
             bridge::run_slash,
             bridge::set_workspace,
+            bridge::list_sessions,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

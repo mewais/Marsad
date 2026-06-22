@@ -1,11 +1,13 @@
 /**
  * NewSession modal — project dir, host, model, posture, first prompt, launch.
  */
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useVm } from "../bridge/useVm";
-import { launchSession } from "../bridge/api";
+import { launchSession, listSessions } from "../bridge/api";
+import type { SessionSummary } from "../bridge/types";
 import { MODELS, DEFAULT_MODEL } from "../bridge/models";
 import { Modal } from "../components/Modal";
+import { Toggle } from "../components/Toggle";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -24,6 +26,28 @@ const RECENT_DIRS = [
   "~/projects/worker-svc",
   "~/projects/ml-pipeline",
 ];
+
+// ---------------------------------------------------------------------------
+// Relative-time helper for session dropdown labels
+// ---------------------------------------------------------------------------
+
+function relativeTime(epochMs: number): string {
+  const diffMs = Date.now() - epochMs;
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) return "just now";
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  return `${diffDay}d ago`;
+}
+
+function sessionLabel(s: SessionSummary): string {
+  const time = relativeTime(s.modified);
+  const snippet = s.snippet.length > 50 ? s.snippet.slice(0, 50) + "…" : s.snippet;
+  return `${time} · ${snippet}`;
+}
 
 // ---------------------------------------------------------------------------
 // Section label style (shared across all field headings)
@@ -56,6 +80,17 @@ export function NewSession() {
   const [firstPrompt, setFirstPrompt] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Resume state
+  const [resume, setResume] = useState(false);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [selectedResume, setSelectedResume] = useState<string>("continue");
+
+  // Fetch sessions when project changes or resume toggle turns on
+  useEffect(() => {
+    if (!resume || !project.trim()) return;
+    listSessions(project.trim()).then(setSessions).catch(() => setSessions([]));
+  }, [resume, project]);
+
   function close() {
     dispatch({ type: "SET_SCREEN", screen: "overview" });
   }
@@ -67,12 +102,21 @@ export function NewSession() {
   async function handleLaunch() {
     if (!project.trim()) return;
     setBusy(true);
+    const resumeArgs: { resume_session_id?: string; continue_recent?: boolean } = {};
+    if (resume) {
+      if (selectedResume === "continue") {
+        resumeArgs.continue_recent = true;
+      } else {
+        resumeArgs.resume_session_id = selectedResume;
+      }
+    }
     const newId = await launchSession({
       project: project.trim(),
       host_id: hostId,
       model,
       posture,
       first_prompt: firstPrompt.trim() || undefined,
+      ...resumeArgs,
     });
     setBusy(false);
     // Navigate to the new session
@@ -283,6 +327,68 @@ export function NewSession() {
           >
             Manage hosts in Settings →
           </div>
+        </div>
+
+        {/* ---- Resume ---- */}
+        <div>
+          <div style={sectionLabel}>Resume</div>
+          {/* Toggle row */}
+          <div
+            data-testid="ns-resume-toggle"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+            }}
+          >
+            <Toggle checked={resume} onChange={setResume} />
+            <span style={{ fontSize: 12.5, color: "var(--txt2)", fontWeight: 500 }}>
+              Resume a previous session
+            </span>
+          </div>
+
+          {/* Dropdown — only visible when toggle is on */}
+          {resume && (
+            <div style={{ marginTop: 10 }}>
+              {sessions.length === 0 && (
+                <div
+                  style={{
+                    fontSize: 11.5,
+                    color: "var(--txt3)",
+                    marginBottom: 6,
+                    fontStyle: "italic",
+                  }}
+                >
+                  No previous sessions in this directory
+                </div>
+              )}
+              <select
+                data-testid="ns-resume-select"
+                value={selectedResume}
+                onChange={(e) => setSelectedResume(e.target.value)}
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  background: "var(--panel2)",
+                  border: "1px solid var(--border2)",
+                  borderRadius: 9,
+                  padding: "9px 11px",
+                  color: "var(--txt)",
+                  fontFamily: "inherit",
+                  fontSize: 12.5,
+                  cursor: "pointer",
+                  outline: "none",
+                }}
+              >
+                <option value="continue">Last (continue)</option>
+                {sessions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {sessionLabel(s)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         {/* ---- Model + Posture side-by-side ---- */}

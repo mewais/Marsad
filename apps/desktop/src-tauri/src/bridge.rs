@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 use tauri::State;
 
-use marsad_core::{Core, CoreError, LaunchMode, LaunchSpec, Posture};
+use marsad_core::{Core, CoreError, LaunchMode, LaunchSpec, Posture, SessionSummary};
 use marsad_gates::{Decision, DecisionId, GateDecision};
 use marsad_viewmodel::AppSnapshot;
 
@@ -58,7 +58,11 @@ pub fn snapshot(state: State<'_, ManagedState>) -> Result<AppSnapshot, String> {
     Ok(guard.snapshot())
 }
 
+// Flat parameters (one invoke-payload key each) — matches every other command
+// here and the JS `invoke("launch_session", { project, host_id, … })` call.
+// A Tauri command legitimately needs all of these, hence the clippy allow.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn launch_session(
     state: State<'_, ManagedState>,
     project: String,
@@ -66,6 +70,8 @@ pub fn launch_session(
     model: String,
     posture: String,
     first_prompt: Option<String>,
+    resume_session_id: Option<String>,
+    continue_recent: Option<bool>,
 ) -> Result<String, String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     match &mut *guard {
@@ -75,19 +81,35 @@ pub fn launch_session(
                 "full" => Posture::FullAutonomy,
                 _ => Posture::Ask,
             };
-            // Frontend resume/continue wiring is deferred; launch fresh for now.
+            // Non-empty resume id → resume that session; else continue-recent →
+            // --continue; else a fresh session.
+            let mode = if let Some(id) = resume_session_id.filter(|s| !s.is_empty()) {
+                LaunchMode::Resume(id)
+            } else if continue_recent == Some(true) {
+                LaunchMode::Continue
+            } else {
+                LaunchMode::Fresh
+            };
             let spec = LaunchSpec {
                 project,
                 host_id,
                 model,
                 posture: posture_val,
                 first_prompt,
-                mode: LaunchMode::Fresh,
+                mode,
             };
             core.launch_session(spec).map_err(map_err)
         }
         AppState::Mock(_) => Ok("mock-session-001".to_string()),
     }
+}
+
+#[tauri::command]
+pub fn list_sessions(project: String) -> Result<Vec<SessionSummary>, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let projects_root = std::path::PathBuf::from(format!("{home}/.claude/projects"));
+    marsad_core::discovery::list_sessions(&projects_root, &project)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

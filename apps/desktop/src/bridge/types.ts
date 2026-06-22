@@ -208,6 +208,16 @@ export interface SlashEntry {
 }
 
 // ---------------------------------------------------------------------------
+// SessionSummary — returned by list_sessions command
+// ---------------------------------------------------------------------------
+
+export interface SessionSummary {
+  id: string;
+  snippet: string;
+  modified: number; // epoch ms
+}
+
+// ---------------------------------------------------------------------------
 // VmUpdate event from Tauri
 // ---------------------------------------------------------------------------
 

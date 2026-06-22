@@ -16,10 +16,13 @@ use marsad_viewmodel::{AppSnapshot, Filter, SessionView, Tab};
 use serde_json::Value;
 use thiserror::Error;
 
+pub mod discovery;
+
 // ---------------------------------------------------------------------------
 // Public re-exports (spec requirement: callers use marsad_core::{LaunchSpec, Posture})
 // ---------------------------------------------------------------------------
 
+pub use discovery::SessionSummary;
 pub use marsad_proto::{LaunchMode, LaunchSpec, Posture};
 
 // ---------------------------------------------------------------------------

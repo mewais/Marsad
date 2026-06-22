@@ -5,7 +5,7 @@
  * mock fixture so Vitest + Playwright work without the Rust side.
  */
 
-import type { AppSnapshot } from "./types";
+import type { AppSnapshot, SessionSummary } from "./types";
 import { MOCK_SNAPSHOT } from "./mockFixture";
 
 // ---------------------------------------------------------------------------
@@ -58,12 +58,25 @@ export async function snapshot(): Promise<AppSnapshot> {
   return invoke("snapshot") as Promise<AppSnapshot>;
 }
 
+export async function listSessions(project: string): Promise<SessionSummary[]> {
+  if (!isTauri()) {
+    return [
+      { id: "sess-aaaa-1111", snippet: "Add a login endpoint to the API", modified: 1719000000000 },
+      { id: "sess-bbbb-2222", snippet: "Refactor the auth middleware", modified: 1718990000000 },
+    ];
+  }
+  const invoke = await getInvoke();
+  return invoke("list_sessions", { project }) as Promise<SessionSummary[]>;
+}
+
 export async function launchSession(args: {
   project: string;
   host_id: string;
   model: string;
   posture: "ask" | "auto" | "full";
   first_prompt?: string;
+  resume_session_id?: string;
+  continue_recent?: boolean;
 }): Promise<string> {
   if (!isTauri()) return "mock-session-new";
   const invoke = await getInvoke();
