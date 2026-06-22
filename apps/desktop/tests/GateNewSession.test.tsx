@@ -314,8 +314,8 @@ describe("NewSession — pickers render", () => {
   it("renders model picker buttons", () => {
     renderNewSession();
     expect(screen.getByTestId("ns-model-claude-haiku-4-5")).toBeTruthy();
-    expect(screen.getByTestId("ns-model-claude-sonnet-4-5")).toBeTruthy();
-    expect(screen.getByTestId("ns-model-claude-opus-4-5")).toBeTruthy();
+    expect(screen.getByTestId("ns-model-claude-sonnet-4-6")).toBeTruthy();
+    expect(screen.getByTestId("ns-model-claude-opus-4-8")).toBeTruthy();
   });
 
   it("renders posture picker buttons", () => {
@@ -372,7 +372,7 @@ describe("NewSession — launch behavior", () => {
     });
 
     // Pick Opus model
-    fireEvent.click(screen.getByTestId("ns-model-claude-opus-4-5"));
+    fireEvent.click(screen.getByTestId("ns-model-claude-opus-4-8"));
 
     // Pick 'ask' posture
     fireEvent.click(screen.getByTestId("ns-posture-ask"));
@@ -393,7 +393,7 @@ describe("NewSession — launch behavior", () => {
         expect.objectContaining({
           project: "~/projects/test",
           host_id: "hetzner",
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-8",
           posture: "ask",
           first_prompt: "Add unit tests",
         })

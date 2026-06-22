@@ -114,7 +114,7 @@ describe("Settings — tab bar", () => {
   it("switching to Session defaults tab shows model picker", () => {
     renderSettings();
     fireEvent.click(screen.getByTestId("settings-tab-session-defaults"));
-    expect(screen.getByTestId("defaults-model-claude-sonnet-4-5")).toBeTruthy();
+    expect(screen.getByTestId("defaults-model-claude-sonnet-4-6")).toBeTruthy();
   });
 
   it("switching to General tab shows theme/glass controls", () => {
@@ -259,8 +259,8 @@ describe("Settings — Session defaults tab", () => {
     renderSettings();
     fireEvent.click(screen.getByTestId("settings-tab-session-defaults"));
     expect(screen.getByTestId("defaults-model-claude-haiku-4-5")).toBeTruthy();
-    expect(screen.getByTestId("defaults-model-claude-sonnet-4-5")).toBeTruthy();
-    expect(screen.getByTestId("defaults-model-claude-opus-4-5")).toBeTruthy();
+    expect(screen.getByTestId("defaults-model-claude-sonnet-4-6")).toBeTruthy();
+    expect(screen.getByTestId("defaults-model-claude-opus-4-8")).toBeTruthy();
   });
 
   it("renders posture picker buttons: ask, auto, full", () => {
@@ -274,7 +274,7 @@ describe("Settings — Session defaults tab", () => {
   it("clicking a model button selects it (border changes)", () => {
     renderSettings();
     fireEvent.click(screen.getByTestId("settings-tab-session-defaults"));
-    const opusBtn = screen.getByTestId("defaults-model-claude-opus-4-5");
+    const opusBtn = screen.getByTestId("defaults-model-claude-opus-4-8");
     fireEvent.click(opusBtn);
     // After click, opus should be selected (accent border style applied)
     // We verify by checking it doesn't throw and the button exists

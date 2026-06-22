@@ -135,7 +135,7 @@ describe("SessionDetail — header", () => {
   it("renders model name in meta row", () => {
     renderWith({ selectedId: "s01" });
     // model appears in header meta row and possibly in activity system note
-    const matches = screen.getAllByText(/claude-sonnet-4-5/);
+    const matches = screen.getAllByText(/claude-sonnet-4-6/);
     expect(matches.length).toBeGreaterThan(0);
   });
 
@@ -342,8 +342,8 @@ describe("ConfigTab — model and posture", () => {
     fireEvent.click(screen.getByTestId("tab-Config"));
 
     expect(screen.getByTestId("model-btn-claude-haiku-4-5")).toBeTruthy();
-    expect(screen.getByTestId("model-btn-claude-sonnet-4-5")).toBeTruthy();
-    expect(screen.getByTestId("model-btn-claude-opus-4-5")).toBeTruthy();
+    expect(screen.getByTestId("model-btn-claude-sonnet-4-6")).toBeTruthy();
+    expect(screen.getByTestId("model-btn-claude-opus-4-8")).toBeTruthy();
   });
 
   it("renders all three posture options", () => {
@@ -359,7 +359,7 @@ describe("ConfigTab — model and posture", () => {
     renderWith({ selectedId: "s04" });
     fireEvent.click(screen.getByTestId("tab-Config"));
 
-    const opusBtn = screen.getByTestId("model-btn-claude-opus-4-5");
+    const opusBtn = screen.getByTestId("model-btn-claude-opus-4-8");
     fireEvent.click(opusBtn);
     // Visual change — border/bg change to active style; no api call expected yet
     expect(opusBtn.style.background).toBeTruthy();

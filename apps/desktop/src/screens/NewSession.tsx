@@ -4,17 +4,12 @@
 import React, { useState } from "react";
 import { useVm } from "../bridge/useVm";
 import { launchSession } from "../bridge/api";
+import { MODELS, DEFAULT_MODEL } from "../bridge/models";
 import { Modal } from "../components/Modal";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-const MODELS = [
-  { id: "claude-haiku-4-5", label: "Haiku", sublabel: "Fast · cheap" },
-  { id: "claude-sonnet-4-5", label: "Sonnet", sublabel: "Balanced" },
-  { id: "claude-opus-4-5", label: "Opus", sublabel: "Most capable" },
-] as const;
 
 const POSTURES: { value: "ask" | "auto" | "full"; label: string; desc: string }[] =
   [
@@ -56,7 +51,7 @@ export function NewSession() {
   const [hostId, setHostId] = useState(
     hosts.find((h) => h.is_local)?.id ?? hosts[0]?.id ?? "local"
   );
-  const [model, setModel] = useState<string>("claude-sonnet-4-5");
+  const [model, setModel] = useState<string>(DEFAULT_MODEL);
   const [posture, setPosture] = useState<"ask" | "auto" | "full">("auto");
   const [firstPrompt, setFirstPrompt] = useState("");
   const [busy, setBusy] = useState(false);

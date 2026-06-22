@@ -17,6 +17,7 @@ import React, { useState } from "react";
 import { useVm } from "../bridge/useVm";
 import { useTheme } from "../theme/ThemeProvider";
 import { Toggle } from "../components/Toggle";
+import { MODELS as MODEL_LIST, DEFAULT_MODEL } from "../bridge/models";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -827,11 +828,8 @@ function HostsTab() {
 // Session defaults tab
 // ---------------------------------------------------------------------------
 
-const MODELS = [
-  { key: "claude-haiku-4-5", label: "Claude Haiku 4" },
-  { key: "claude-sonnet-4-5", label: "Claude Sonnet 4.6" },
-  { key: "claude-opus-4-5", label: "Claude Opus 4.5" },
-];
+// Shared model catalogue, adapted to this tab's `key` field name.
+const MODELS = MODEL_LIST.map((m) => ({ key: m.id, label: m.label }));
 
 const POSTURES: Array<{ key: "ask" | "auto" | "full"; label: string; desc: string }> = [
   {
@@ -853,7 +851,7 @@ const POSTURES: Array<{ key: "ask" | "auto" | "full"; label: string; desc: strin
 
 function SessionDefaultsTab() {
   // NOTE: backend command pending for persisting session defaults
-  const [model, setModel] = useState("claude-sonnet-4-5");
+  const [model, setModel] = useState(DEFAULT_MODEL);
   const [posture, setPosture] = useState<"ask" | "auto" | "full">("ask");
 
   return (

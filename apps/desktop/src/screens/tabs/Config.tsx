@@ -4,17 +4,12 @@
  */
 import { useState } from "react";
 import { useVm } from "../../bridge/useVm";
+import { MODELS as MODEL_OPTIONS, DEFAULT_MODEL } from "../../bridge/models";
 
 // ---------------------------------------------------------------------------
 // Static options (mirroring design tokens; wired to local UI state only —
 // a real Apply would call a bridge command once the backend exposes one)
 // ---------------------------------------------------------------------------
-
-const MODEL_OPTIONS = [
-  { id: "claude-opus-4-5", label: "Claude Opus 4.6" },
-  { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.6" },
-  { id: "claude-haiku-4-5", label: "Claude Haiku 4" },
-] as const;
 
 type PostureId = "ask" | "auto" | "full";
 
@@ -60,7 +55,7 @@ export function ConfigTab() {
 
   // Local state mirrors current session values (read from session); Apply
   // would push them to the backend once the bridge exposes an apply command.
-  const initialModel = selectedSession?.model ?? "claude-sonnet-4-5";
+  const initialModel = selectedSession?.model ?? DEFAULT_MODEL;
   const [selectedModel, setSelectedModel] = useState(initialModel);
   const [posture, setPosture] = useState<PostureId>("ask");
   const [activeTools, setActiveTools] = useState<Set<ToolId>>(
