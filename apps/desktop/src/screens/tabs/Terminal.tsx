@@ -109,18 +109,18 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
         }}
       >
         <span
-          style={{ fontSize: 11, fontWeight: 700, color: "var(--needs)" }}
+          style={{ fontSize: 12, fontWeight: 700, color: "var(--needs)" }}
         >
           ⎈ Escape hatch
         </span>
-        <span style={{ fontSize: 11.5, color: "var(--txt2)" }}>
+        <span style={{ fontSize: 12.5, color: "var(--txt2)" }}>
           Full raw session — anything the purpose-built UI doesn't cover, do
           it here.
         </span>
         <span style={{ flex: 1 }} />
         <span
           className="mono"
-          style={{ fontSize: 10.5, color: "var(--txt3)" }}
+          style={{ fontSize: 11.5, color: "var(--txt3)" }}
         >
           {termTitle}
         </span>
@@ -137,7 +137,7 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
             key={i}
             className="mono"
             style={{
-              fontSize: 12,
+              fontSize: 13,
               lineHeight: 1.65,
               whiteSpace: "pre-wrap",
               color: line.color,
@@ -158,7 +158,7 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
         >
           <span
             className="mono"
-            style={{ fontSize: 12.5, color: "var(--done)" }}
+            style={{ fontSize: 13.5, color: "var(--done)" }}
           >
             ❯
           </span>
@@ -176,7 +176,7 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
               border: "none",
               outline: "none",
               color: "var(--txt)",
-              fontSize: 12,
+              fontSize: 13,
             }}
           />
         </div>

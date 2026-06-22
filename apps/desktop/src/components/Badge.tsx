@@ -39,7 +39,7 @@ export function Badge({ state, label }: BadgeProps) {
   return (
     <span
       style={{
-        fontSize: 10,
+        fontSize: 11,
         fontWeight: 700,
         letterSpacing: 0.4,
         padding: "3px 8px",

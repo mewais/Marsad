@@ -142,7 +142,7 @@ export function ChangesTab() {
         >
           <span
             style={{
-              fontSize: 11,
+              fontSize: 12,
               fontWeight: 700,
               letterSpacing: 0.5,
               textTransform: "uppercase" as const,
@@ -153,7 +153,7 @@ export function ChangesTab() {
           </span>
           <span
             className="mono"
-            style={{ fontSize: 10.5, color: "var(--txt3)" }}
+            style={{ fontSize: 11.5, color: "var(--txt3)" }}
           >
             {changeStats}
           </span>
@@ -164,7 +164,7 @@ export function ChangesTab() {
             style={{
               padding: "20px 10px",
               color: "var(--txt3)",
-              fontSize: 11.5,
+              fontSize: 12.5,
               textAlign: "center",
             }}
           >
@@ -206,7 +206,7 @@ export function ChangesTab() {
                 <span
                   className="mono"
                   style={{
-                    fontSize: 11,
+                    fontSize: 12,
                     width: 13,
                     textAlign: "center",
                     color: STATUS_COLOR[f.status],
@@ -218,7 +218,7 @@ export function ChangesTab() {
                 <span
                   className="mono"
                   style={{
-                    fontSize: 11,
+                    fontSize: 12,
                     flex: 1,
                     whiteSpace: "nowrap",
                     overflow: "hidden",
@@ -229,13 +229,13 @@ export function ChangesTab() {
                 </span>
                 <span
                   className="mono"
-                  style={{ fontSize: 9.5, color: "var(--done)" }}
+                  style={{ fontSize: 10.5, color: "var(--done)" }}
                 >
                   +{f.added}
                 </span>
                 <span
                   className="mono"
-                  style={{ fontSize: 9.5, color: "var(--error)" }}
+                  style={{ fontSize: 10.5, color: "var(--error)" }}
                 >
                   −{f.removed}
                 </span>
@@ -266,7 +266,7 @@ export function ChangesTab() {
               style={{
                 padding: 24,
                 color: "var(--txt3)",
-                fontSize: 12,
+                fontSize: 13,
               }}
             >
               Select a file to view its diff.
@@ -286,7 +286,7 @@ export function ChangesTab() {
             gap: 11,
           }}
         >
-          <span style={{ fontSize: 12, color: "var(--txt2)" }}>
+          <span style={{ fontSize: 13, color: "var(--txt2)" }}>
             {stagedCount} of {files.length} staged
           </span>
           <span style={{ flex: 1 }} />
@@ -294,7 +294,7 @@ export function ChangesTab() {
             style={{
               fontFamily: "inherit",
               fontWeight: 600,
-              fontSize: 12,
+              fontSize: 13,
               padding: "8px 13px",
               borderRadius: 8,
               border: "1px solid var(--border2)",
@@ -317,7 +317,7 @@ export function ChangesTab() {
               padding: "8px 11px",
               color: "var(--txt)",
               fontFamily: "inherit",
-              fontSize: 12,
+              fontSize: 13,
               outline: "none",
             }}
           />
@@ -326,7 +326,7 @@ export function ChangesTab() {
             style={{
               fontFamily: "inherit",
               fontWeight: 700,
-              fontSize: 12,
+              fontSize: 13,
               padding: "8px 16px",
               borderRadius: 8,
               border: "none",

@@ -11,7 +11,7 @@ export function Chip({ label, count, active = false, onClick }: ChipProps) {
       onClick={onClick}
       style={{
         fontFamily: "inherit",
-        fontSize: 11.5,
+        fontSize: 12.5,
         fontWeight: 600,
         padding: "5px 10px",
         borderRadius: 7,

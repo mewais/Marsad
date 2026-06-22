@@ -31,7 +31,7 @@ export function UsageTab() {
     <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
       <div
         style={{
-          maxWidth: 660,
+          maxWidth: 900,
           margin: "0 auto",
           display: "flex",
           flexDirection: "column",
@@ -51,7 +51,7 @@ export function UsageTab() {
               border: "1px solid var(--needs)",
               background: "var(--needs-bg)",
               color: "var(--needs)",
-              fontSize: 12.5,
+              fontSize: 13.5,
               fontWeight: 600,
             }}
           >
@@ -77,12 +77,12 @@ export function UsageTab() {
               marginBottom: 8,
             }}
           >
-            <span style={{ fontSize: 12, fontWeight: 700 }}>
+            <span style={{ fontSize: 13, fontWeight: 700 }}>
               Context window
             </span>
             <span
               className="mono"
-              style={{ fontSize: 12, color: "var(--txt2)" }}
+              style={{ fontSize: 13, color: "var(--txt2)" }}
               data-testid="ctx-pct-label"
             >
               {context_pct}% used
@@ -128,7 +128,7 @@ export function UsageTab() {
           >
             <div
               style={{
-                fontSize: 11,
+                fontSize: 12,
                 color: "var(--txt3)",
                 textTransform: "uppercase" as const,
                 letterSpacing: 0.4,
@@ -140,7 +140,7 @@ export function UsageTab() {
             <div
               data-testid="tokens-value"
               className="mono"
-              style={{ fontSize: 24, fontWeight: 800, marginTop: 5 }}
+              style={{ fontSize: 26, fontWeight: 800, marginTop: 5 }}
             >
               {tokens_label}
             </div>
@@ -157,7 +157,7 @@ export function UsageTab() {
           >
             <div
               style={{
-                fontSize: 11,
+                fontSize: 12,
                 color: "var(--txt3)",
                 textTransform: "uppercase" as const,
                 letterSpacing: 0.4,
@@ -169,7 +169,7 @@ export function UsageTab() {
             <div
               data-testid="cost-value"
               className="mono"
-              style={{ fontSize: 24, fontWeight: 800, marginTop: 5 }}
+              style={{ fontSize: 26, fontWeight: 800, marginTop: 5 }}
             >
               {cost_label}
             </div>
@@ -186,7 +186,7 @@ export function UsageTab() {
           >
             <div
               style={{
-                fontSize: 11,
+                fontSize: 12,
                 color: "var(--txt3)",
                 textTransform: "uppercase" as const,
                 letterSpacing: 0.4,
@@ -198,7 +198,7 @@ export function UsageTab() {
             <div
               data-testid="elapsed-value"
               className="mono"
-              style={{ fontSize: 24, fontWeight: 800, marginTop: 5 }}
+              style={{ fontSize: 26, fontWeight: 800, marginTop: 5 }}
             >
               {elapsed_label || "—"}
             </div>

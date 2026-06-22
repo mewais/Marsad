@@ -91,19 +91,19 @@ const S: Record<string, React.CSSProperties> = {
     marginBottom: 4,
   },
   title: {
-    fontSize: 21,
+    fontSize: 23,
     fontWeight: 700,
     margin: 0,
     letterSpacing: -0.3,
     color: "var(--txt)",
   },
   titleTab: {
-    fontSize: 12.5,
+    fontSize: 13.5,
     color: "var(--txt2)",
     fontWeight: 400,
   },
   subtitle: {
-    fontSize: 12.5,
+    fontSize: 13.5,
     color: "var(--txt3)",
     margin: "0 0 22px",
     textAlign: "left" as const,
@@ -122,11 +122,11 @@ const S: Record<string, React.CSSProperties> = {
   // Content sits in a centered column (like the session window's tab content);
   // only the header/tabs are full-width left-aligned.
   bodyInner: {
-    maxWidth: 900,
+    maxWidth: 1100,
     margin: "0 auto",
   },
   sectionLabel: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: 700,
     letterSpacing: 0.5,
     textTransform: "uppercase" as const,
@@ -134,7 +134,7 @@ const S: Record<string, React.CSSProperties> = {
     marginBottom: 10,
   },
   sectionLabelBold: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: 700,
     color: "var(--txt2)",
     marginBottom: 9,
@@ -167,7 +167,7 @@ function TabButton({
         borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
         color: active ? "var(--txt)" : "var(--txt3)",
         fontWeight: active ? 600 : 500,
-        fontSize: 12.5,
+        fontSize: 13.5,
         padding: "9px 13px",
         cursor: "pointer",
         fontFamily: "inherit",
@@ -286,16 +286,16 @@ function NotificationsTab() {
               }}
             >
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>
+                <div style={{ fontWeight: 600, fontSize: 14, color: "var(--txt)" }}>
                   {NOTIF_EVENT_LABELS[ev]}
                 </div>
-                <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+                <div style={{ fontSize: 12.5, color: "var(--txt3)", marginTop: 1 }}>
                   {NOTIF_EVENT_DESCS[ev]}
                 </div>
               </div>
               <span
                 style={{
-                  fontSize: 9,
+                  fontSize: 10,
                   fontWeight: 700,
                   letterSpacing: 0.3,
                   textTransform: "uppercase",
@@ -341,8 +341,8 @@ function NotificationsTab() {
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>Play a sound</div>
-            <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, color: "var(--txt)" }}>Play a sound</div>
+            <div style={{ fontSize: 12.5, color: "var(--txt3)", marginTop: 1 }}>
               Audible alerts only.
             </div>
           </div>
@@ -361,8 +361,8 @@ function NotificationsTab() {
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>Group similar alerts</div>
-            <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, color: "var(--txt)" }}>Group similar alerts</div>
+            <div style={{ fontSize: 12.5, color: "var(--txt3)", marginTop: 1 }}>
               Collapses repeated "session done" notifications.
             </div>
           </div>
@@ -381,8 +381,8 @@ function NotificationsTab() {
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>Do Not Disturb</div>
-            <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, color: "var(--txt)" }}>Do Not Disturb</div>
+            <div style={{ fontSize: 12.5, color: "var(--txt3)", marginTop: 1 }}>
               DND-off respects the dashboard-dnd-bypass tile.
             </div>
           </div>
@@ -392,7 +392,7 @@ function NotificationsTab() {
         <div
           className="mono"
           style={{
-            fontSize: 10.5,
+            fontSize: 11.5,
             color: "var(--txt3)",
             marginTop: 8,
             lineHeight: 1.5,
@@ -411,7 +411,7 @@ function NotificationsTab() {
             display: "flex",
             alignItems: "flex-start",
             gap: 7,
-            fontSize: 11,
+            fontSize: 12,
             color: "var(--txt3)",
             marginBottom: 13,
             lineHeight: 1.45,
@@ -452,7 +452,7 @@ function NotificationsTab() {
             />
             <span
               className="mono"
-              style={{ fontSize: 9.5, color: "var(--txt3)" }}
+              style={{ fontSize: 10.5, color: "var(--txt3)" }}
             >
               your desktop · top-right corner
             </span>
@@ -494,21 +494,21 @@ function NotificationsTab() {
                       justifyContent: "center",
                       color: "#fff",
                       fontWeight: 800,
-                      fontSize: 9.5,
+                      fontSize: 10.5,
                     }}
                   >
                     M
                   </div>
-                  <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--txt2)" }}>
+                  <span style={{ fontSize: 11.5, fontWeight: 700, color: "var(--txt2)" }}>
                     Marsad
                   </span>
-                  <span className="mono" style={{ fontSize: 9, color: "var(--txt3)" }}>
+                  <span className="mono" style={{ fontSize: 10, color: "var(--txt3)" }}>
                     {p.host}
                   </span>
                   <span style={{ flex: 1 }} />
                   <span
                     style={{
-                      fontSize: 8.5,
+                      fontSize: 9.5,
                       fontWeight: 700,
                       letterSpacing: 0.3,
                       textTransform: "uppercase",
@@ -520,7 +520,7 @@ function NotificationsTab() {
                   >
                     {p.priority}
                   </span>
-                  <span className="mono" style={{ fontSize: 9, color: "var(--txt3)" }}>
+                  <span className="mono" style={{ fontSize: 10, color: "var(--txt3)" }}>
                     now
                   </span>
                 </div>
@@ -535,7 +535,7 @@ function NotificationsTab() {
                   >
                     <span
                       style={{
-                        fontSize: 11,
+                        fontSize: 12,
                         color: p.color,
                         lineHeight: 1.5,
                         flexShrink: 0,
@@ -543,11 +543,11 @@ function NotificationsTab() {
                     >
                       {p.icon}
                     </span>
-                    <span style={{ fontWeight: 700, fontSize: 12.5, lineHeight: 1.35 }}>
+                    <span style={{ fontWeight: 700, fontSize: 13.5, lineHeight: 1.35 }}>
                       {p.title}
                     </span>
                   </div>
-                  <div style={{ fontSize: 11.5, color: "var(--txt2)", lineHeight: 1.45 }}>
+                  <div style={{ fontSize: 12.5, color: "var(--txt2)", lineHeight: 1.45 }}>
                     {p.body}
                   </div>
                   <div style={{ display: "flex", gap: 7, marginTop: 11 }}>
@@ -557,7 +557,7 @@ function NotificationsTab() {
                         style={{
                           fontFamily: "inherit",
                           fontWeight: 700,
-                          fontSize: 11,
+                          fontSize: 12,
                           padding: "6px 12px",
                           borderRadius: 7,
                           background: a.bg,
@@ -621,7 +621,7 @@ function HostsTab() {
   }
 
   return (
-    <div style={{ maxWidth: 640 }}>
+    <div style={{ maxWidth: 860 }}>
       {/* Registered hosts */}
       <div style={{ ...S.sectionLabel, marginBottom: 10 }}>Registered hosts</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 9, marginBottom: 26 }}>
@@ -642,13 +642,13 @@ function HostsTab() {
             <HostStatusDot status={h.status} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>
+                <span style={{ fontWeight: 600, fontSize: 14, color: "var(--txt)" }}>
                   {h.label}
                 </span>
                 {h.is_local && (
                   <span
                     style={{
-                      fontSize: 9,
+                      fontSize: 10,
                       fontWeight: 700,
                       padding: "1px 6px",
                       borderRadius: 5,
@@ -663,14 +663,14 @@ function HostsTab() {
               </div>
               <div
                 className="mono"
-                style={{ fontSize: 10.5, color: "var(--txt3)", marginTop: 2 }}
+                style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 2 }}
               >
                 {h.target} · {h.session_count} session{h.session_count !== 1 ? "s" : ""}
               </div>
             </div>
             <span
               style={{
-                fontSize: 11,
+                fontSize: 12,
                 color:
                   h.status === "Connected"
                     ? "var(--done)"
@@ -688,7 +688,7 @@ function HostsTab() {
                 onClick={() => {}}
                 style={{
                   fontFamily: "inherit",
-                  fontSize: 11,
+                  fontSize: 12,
                   fontWeight: 600,
                   padding: "6px 11px",
                   borderRadius: 8,
@@ -703,7 +703,7 @@ function HostsTab() {
             ) : (
               <span
                 style={{
-                  fontSize: 10,
+                  fontSize: 11,
                   fontWeight: 600,
                   padding: "3px 8px",
                   borderRadius: 6,
@@ -736,7 +736,7 @@ function HostsTab() {
           <div style={{ flex: 1 }}>
             <div
               style={{
-                fontSize: 10,
+                fontSize: 11,
                 fontWeight: 600,
                 color: "var(--txt3)",
                 marginBottom: 5,
@@ -757,7 +757,7 @@ function HostsTab() {
                 borderRadius: 8,
                 padding: "9px 11px",
                 color: "var(--txt)",
-                fontSize: 12,
+                fontSize: 13,
                 outline: "none",
                 boxSizing: "border-box",
                 fontFamily: "var(--font-mono)",
@@ -767,7 +767,7 @@ function HostsTab() {
           <div style={{ flex: 1.6 }}>
             <div
               style={{
-                fontSize: 10,
+                fontSize: 11,
                 fontWeight: 600,
                 color: "var(--txt3)",
                 marginBottom: 5,
@@ -788,7 +788,7 @@ function HostsTab() {
                 borderRadius: 8,
                 padding: "9px 11px",
                 color: "var(--txt)",
-                fontSize: 12,
+                fontSize: 13,
                 outline: "none",
                 boxSizing: "border-box",
                 fontFamily: "var(--font-mono)",
@@ -799,7 +799,7 @@ function HostsTab() {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span
             className="mono"
-            style={{ fontSize: 10, color: "var(--txt3)", flex: 1 }}
+            style={{ fontSize: 11, color: "var(--txt3)", flex: 1 }}
           >
             Honors your ~/.ssh/config · installs a small helper on first connect · no inbound ports
           </span>
@@ -810,7 +810,7 @@ function HostsTab() {
             style={{
               fontFamily: "inherit",
               fontWeight: 700,
-              fontSize: 12,
+              fontSize: 13,
               padding: "8px 15px",
               borderRadius: 8,
               border: "none",
@@ -823,7 +823,7 @@ function HostsTab() {
             Add &amp; connect
           </button>
           {added && (
-            <span style={{ fontSize: 11, color: "var(--done)" }}>
+            <span style={{ fontSize: 12, color: "var(--done)" }}>
               Queued (backend command pending)
             </span>
           )}
@@ -864,7 +864,7 @@ function SessionDefaultsTab() {
   const [posture, setPosture] = useState<"ask" | "auto" | "full">("ask");
 
   return (
-    <div style={{ maxWidth: 640, display: "flex", flexDirection: "column", gap: 22 }}>
+    <div style={{ maxWidth: 860, display: "flex", flexDirection: "column", gap: 22 }}>
       {/* Default model */}
       <div>
         <div style={S.sectionLabelBold}>Default model</div>
@@ -878,7 +878,7 @@ function SessionDefaultsTab() {
                 onClick={() => setModel(m.key)}
                 style={{
                   fontFamily: "inherit",
-                  fontSize: 12,
+                  fontSize: 13,
                   fontWeight: 600,
                   padding: "9px 14px",
                   borderRadius: 9,
@@ -941,10 +941,10 @@ function SessionDefaultsTab() {
                   />
                 </span>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: 12.5, color: "var(--txt)" }}>
+                  <div style={{ fontWeight: 600, fontSize: 13.5, color: "var(--txt)" }}>
                     {p.label}
                   </div>
-                  <div style={{ fontSize: 11, color: "var(--txt3)" }}>{p.desc}</div>
+                  <div style={{ fontSize: 12, color: "var(--txt3)" }}>{p.desc}</div>
                 </div>
               </div>
             );
@@ -954,7 +954,7 @@ function SessionDefaultsTab() {
 
       <div
         className="mono"
-        style={{ fontSize: 10.5, color: "var(--txt3)" }}
+        style={{ fontSize: 11.5, color: "var(--txt3)" }}
       >
         New Session can override any of these per launch.
       </div>
@@ -987,7 +987,7 @@ function GeneralTab() {
   }, []);
 
   return (
-    <div style={{ maxWidth: 640, display: "flex", flexDirection: "column", gap: 22 }}>
+    <div style={{ maxWidth: 860, display: "flex", flexDirection: "column", gap: 22 }}>
       {/* Appearance */}
       <div>
         <div style={S.sectionLabelBold}>Appearance</div>
@@ -1001,7 +1001,7 @@ function GeneralTab() {
                 onClick={() => toggleTheme()}
                 style={{
                   fontFamily: "inherit",
-                  fontSize: 12,
+                  fontSize: 13,
                   fontWeight: 600,
                   padding: "9px 18px",
                   borderRadius: 9,
@@ -1033,7 +1033,7 @@ function GeneralTab() {
                 onClick={() => setBackground(bg)}
                 style={{
                   fontFamily: "inherit",
-                  fontSize: 12,
+                  fontSize: 13,
                   fontWeight: 600,
                   padding: "9px 16px",
                   borderRadius: 9,
@@ -1073,14 +1073,14 @@ function GeneralTab() {
                 flexShrink: 0,
               }}
             />
-            <div style={{ flex: 1, fontSize: 11.5, color: "var(--txt3)" }}>
+            <div style={{ flex: 1, fontSize: 12.5, color: "var(--txt3)" }}>
               No image selected
             </div>
             <button
               style={{
                 fontFamily: "inherit",
                 fontWeight: 600,
-                fontSize: 11.5,
+                fontSize: 12.5,
                 padding: "7px 13px",
                 borderRadius: 8,
                 border: "1px solid var(--border2)",
@@ -1103,7 +1103,7 @@ function GeneralTab() {
               borderRadius: 10,
               background: "var(--panel2)",
               border: "1px solid var(--border)",
-              fontSize: 11,
+              fontSize: 12,
               color: "var(--txt3)",
               lineHeight: 1.45,
             }}
@@ -1115,7 +1115,7 @@ function GeneralTab() {
             </span>
           </div>
         )}
-        <div style={{ fontSize: 10.5, color: "var(--txt3)", marginTop: 8 }}>
+        <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 8 }}>
           Shows through translucent surfaces — enable "Translucent surfaces (glass)" below to see
           it.
         </div>
@@ -1137,10 +1137,10 @@ function GeneralTab() {
             }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>
+              <div style={{ fontWeight: 600, fontSize: 14, color: "var(--txt)" }}>
                 Start Marsad on login
               </div>
-              <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+              <div style={{ fontSize: 12.5, color: "var(--txt3)", marginTop: 1 }}>
                 Keep the app ready and reattach to running sessions.
               </div>
             </div>
@@ -1170,10 +1170,10 @@ function GeneralTab() {
             }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>
+              <div style={{ fontWeight: 600, fontSize: 14, color: "var(--txt)" }}>
                 Restore workspace on launch
               </div>
-              <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+              <div style={{ fontSize: 12.5, color: "var(--txt3)", marginTop: 1 }}>
                 Re-open the workspace and active filters from last time.
               </div>
             </div>
@@ -1194,10 +1194,10 @@ function GeneralTab() {
             }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>
+              <div style={{ fontWeight: 600, fontSize: 14, color: "var(--txt)" }}>
                 Confirm before stopping a session
               </div>
-              <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+              <div style={{ fontSize: 12.5, color: "var(--txt3)", marginTop: 1 }}>
                 Ask before you stop any session.
               </div>
             </div>
@@ -1218,10 +1218,10 @@ function GeneralTab() {
             }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, fontSize: 13, color: "var(--txt)" }}>
+              <div style={{ fontWeight: 600, fontSize: 14, color: "var(--txt)" }}>
                 Translucent surfaces (glass)
               </div>
-              <div style={{ fontSize: 11.5, color: "var(--txt3)", marginTop: 1 }}>
+              <div style={{ fontSize: 12.5, color: "var(--txt3)", marginTop: 1 }}>
                 Frosted, semi-transparent panels over a backdrop.
               </div>
             </div>

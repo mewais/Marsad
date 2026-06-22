@@ -76,7 +76,7 @@ function SidebarRow({
           <span
             style={{
               fontWeight: 600,
-              fontSize: 12.5,
+              fontSize: 13.5,
               whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis",
@@ -98,7 +98,7 @@ function SidebarRow({
           <span
             className="mono"
             style={{
-              fontSize: 9.5,
+              fontSize: 10.5,
               color: "var(--txt3)",
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -111,7 +111,7 @@ function SidebarRow({
         <div
           className="mono"
           style={{
-            fontSize: 9.5,
+            fontSize: 10.5,
             color: "var(--txt3)",
             marginTop: 3,
             whiteSpace: "nowrap",
@@ -166,7 +166,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
         background: "var(--bg)",
         color: "var(--txt)",
         overflow: "hidden",
-        fontSize: 13.5,
+        fontSize: 14.5,
         position: "relative",
         zIndex: 1,
       }}
@@ -208,7 +208,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
               justifyContent: "center",
               fontWeight: 800,
               color: "#fff",
-              fontSize: 15,
+              fontSize: 16,
             }}
           >
             M
@@ -223,7 +223,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
             <span
               style={{
                 fontWeight: 700,
-                fontSize: 15,
+                fontSize: 16,
                 letterSpacing: -0.2,
               }}
             >
@@ -233,7 +233,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
             </span>
             <span
               style={{
-                fontSize: 9.5,
+                fontSize: 10.5,
                 color: "var(--txt3)",
                 letterSpacing: 1.5,
                 textTransform: "uppercase",
@@ -262,10 +262,10 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
               fontFamily: "inherit",
             }}
           >
-            <span style={{ fontSize: 12, color: "var(--txt3)" }}>⛶</span>
+            <span style={{ fontSize: 13, color: "var(--txt3)" }}>⛶</span>
             <span
               style={{
-                fontSize: 12.5,
+                fontSize: 13.5,
                 fontWeight: 600,
                 maxWidth: 160,
                 whiteSpace: "nowrap",
@@ -284,7 +284,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
               }}
               title="Auto-saved"
             />
-            <span style={{ fontSize: 9, color: "var(--txt3)" }}>▾</span>
+            <span style={{ fontSize: 10, color: "var(--txt3)" }}>▾</span>
           </button>
 
           {state.wsMenuOpen && (
@@ -316,7 +316,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
                 >
                   <div
                     style={{
-                      fontSize: 9.5,
+                      fontSize: 10.5,
                       fontWeight: 700,
                       letterSpacing: 0.6,
                       textTransform: "uppercase",
@@ -333,10 +333,10 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
                       marginTop: 5,
                     }}
                   >
-                    <span style={{ fontWeight: 700, fontSize: 14 }}>
+                    <span style={{ fontWeight: 700, fontSize: 15 }}>
                       {activeWs?.name ?? "Default"}
                     </span>
-                    <span style={{ fontSize: 10, color: "var(--done)" }}>
+                    <span style={{ fontSize: 11, color: "var(--done)" }}>
                       ● auto-saved
                     </span>
                   </div>
@@ -344,7 +344,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
                 <div style={{ padding: "8px 8px 4px" }}>
                   <div
                     style={{
-                      fontSize: 9.5,
+                      fontSize: 10.5,
                       fontWeight: 700,
                       letterSpacing: 0.6,
                       textTransform: "uppercase",
@@ -374,7 +374,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div
                             style={{
-                              fontSize: 12.5,
+                              fontSize: 13.5,
                               fontWeight: 600,
                               whiteSpace: "nowrap",
                               overflow: "hidden",
@@ -385,7 +385,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
                           </div>
                           <div
                             className="mono"
-                            style={{ fontSize: 9.5, color: "var(--txt3)" }}
+                            style={{ fontSize: 10.5, color: "var(--txt3)" }}
                           >
                             {ws.session_ids.length} sessions · saved {ws.saved_at}
                           </div>
@@ -410,7 +410,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
                     style={{
                       textAlign: "left",
                       fontFamily: "inherit",
-                      fontSize: 12,
+                      fontSize: 13,
                       fontWeight: 600,
                       color: "var(--txt2)",
                       background: "none",
@@ -447,7 +447,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
             color: "var(--txt3)",
           }}
         >
-          <span style={{ fontSize: 13, flexShrink: 0 }}>⌕</span>
+          <span style={{ fontSize: 14, flexShrink: 0 }}>⌕</span>
           <input
             ref={searchRef}
             value={state.search}
@@ -463,13 +463,13 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
               outline: "none",
               color: "var(--txt)",
               fontFamily: "inherit",
-              fontSize: 12.5,
+              fontSize: 13.5,
             }}
           />
           <span
             className="mono"
             style={{
-              fontSize: 10,
+              fontSize: 11,
               padding: "2px 6px",
               border: "1px solid var(--border2)",
               borderRadius: 5,
@@ -498,7 +498,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
             color:
               state.screen === "settings" ? "var(--accent2)" : "var(--txt2)",
             cursor: "pointer",
-            fontSize: 15,
+            fontSize: 16,
           }}
         >
           ⚙
@@ -516,7 +516,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
             background: "var(--panel2)",
             color: "var(--txt2)",
             cursor: "pointer",
-            fontSize: 14,
+            fontSize: 15,
           }}
         >
           {themeIcon}
@@ -533,7 +533,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
             background: "var(--accent)",
             color: "#fff",
             fontWeight: 700,
-            fontSize: 12.5,
+            fontSize: 13.5,
             padding: "8px 14px",
             borderRadius: 9,
             cursor: "pointer",
@@ -577,9 +577,9 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
             }}
             data-testid="overview-entry"
           >
-            <span style={{ fontSize: 14 }}>▦</span> Overview
+            <span style={{ fontSize: 15 }}>▦</span> Overview
             <span style={{ flex: 1 }} />
-            <span style={{ fontSize: 11, color: "var(--txt3)" }}>
+            <span style={{ fontSize: 12, color: "var(--txt3)" }}>
               {counts.total}
             </span>
           </div>
@@ -641,7 +641,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
           >
             <span
               style={{
-                fontSize: 9.5,
+                fontSize: 10.5,
                 fontWeight: 700,
                 letterSpacing: 1,
                 textTransform: "uppercase",
@@ -669,13 +669,13 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
                 />
                 <span
                   className="mono"
-                  style={{ fontSize: 11, color: "var(--txt2)", flex: 1 }}
+                  style={{ fontSize: 12, color: "var(--txt2)", flex: 1 }}
                 >
                   {h.label}
                 </span>
                 <span
                   style={{
-                    fontSize: 10,
+                    fontSize: 11,
                     color: hostStatusColor(h.status),
                   }}
                 >

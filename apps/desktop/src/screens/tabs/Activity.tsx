@@ -148,7 +148,7 @@ function MAvatar() {
         justifyContent: "center",
         color: "#fff",
         fontWeight: 800,
-        fontSize: 11,
+        fontSize: 12,
       }}
     >
       M
@@ -166,7 +166,7 @@ function PromptBubble({ text }: { text: string }) {
         color: "#fff",
         padding: "11px 14px",
         borderRadius: "13px 13px 4px 13px",
-        fontSize: 13,
+        fontSize: 14,
         lineHeight: 1.5,
         boxShadow: "var(--shadow-sm)",
         whiteSpace: "pre-wrap",
@@ -184,7 +184,7 @@ function SystemNote({ text }: { text: string }) {
       className="mono"
       style={{
         alignSelf: "center",
-        fontSize: 10.5,
+        fontSize: 11.5,
         color: "var(--txt3)",
         background: "var(--panel2)",
         border: "1px solid var(--border)",
@@ -204,7 +204,7 @@ function ResponseMsg({ text }: { text: string }) {
       <div
         style={{
           flex: 1,
-          fontSize: 13,
+          fontSize: 14,
           lineHeight: 1.6,
           color: "var(--txt)",
           paddingTop: 3,
@@ -237,10 +237,10 @@ function ToolCall({
         borderRadius: 9,
         background: "var(--panel)",
         border: "1px solid var(--border)",
-        fontSize: 11.5,
+        fontSize: 12.5,
       }}
     >
-      <span style={{ fontSize: 11, color: "var(--accent2)" }}>⚙</span>
+      <span style={{ fontSize: 12, color: "var(--accent2)" }}>⚙</span>
       <span style={{ fontWeight: 700, color: "var(--txt)" }}>{tool}</span>
       <span
         className="mono"
@@ -255,7 +255,7 @@ function ToolCall({
         {args ?? ""}
       </span>
       {toolStatus && (
-        <span style={{ fontSize: 10, color: "var(--done)" }}>{toolStatus}</span>
+        <span style={{ fontSize: 11, color: "var(--done)" }}>{toolStatus}</span>
       )}
     </div>
   );
@@ -271,7 +271,7 @@ function ToolResult({ text }: { text: string }) {
         borderRadius: 9,
         background: "var(--panel2)",
         border: "1px solid var(--border)",
-        fontSize: 11,
+        fontSize: 12,
         lineHeight: 1.55,
         color: "var(--txt2)",
         whiteSpace: "pre-wrap",
@@ -293,7 +293,7 @@ function ErrorMsg({ text }: { text: string }) {
         borderRadius: 9,
         background: "var(--error-bg)",
         border: "1px solid var(--error)",
-        fontSize: 11.5,
+        fontSize: 12.5,
         color: "var(--error)",
         whiteSpace: "pre-wrap",
       }}
@@ -313,7 +313,7 @@ function WorkingSpinner({ text }: { text: string }) {
           alignItems: "center",
           gap: 9,
           color: "var(--txt2)",
-          fontSize: 12.5,
+          fontSize: 13.5,
         }}
       >
         <span
@@ -361,11 +361,11 @@ function GateCard({
           marginBottom: 7,
         }}
       >
-        <span style={{ fontSize: 12 }}>▲</span>
+        <span style={{ fontSize: 13 }}>▲</span>
         <span
           style={{
             fontWeight: 700,
-            fontSize: 12.5,
+            fontSize: 13.5,
             color: "var(--needs)",
           }}
         >
@@ -374,7 +374,7 @@ function GateCard({
       </div>
       <div
         className="mono"
-        style={{ fontSize: 12, color: "var(--txt)", marginBottom: 11 }}
+        style={{ fontSize: 13, color: "var(--txt)", marginBottom: 11 }}
       >
         {summary}
       </div>
@@ -383,7 +383,7 @@ function GateCard({
         style={{
           fontFamily: "inherit",
           fontWeight: 700,
-          fontSize: 12,
+          fontSize: 13,
           padding: "8px 15px",
           borderRadius: 8,
           border: "none",
@@ -422,12 +422,12 @@ function SubagentEntry({
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-        <span style={{ fontSize: 12, color: "var(--accent2)" }}>⊟</span>
-        <span style={{ fontWeight: 700, fontSize: 12 }}>Subagent · {name}</span>
+        <span style={{ fontSize: 13, color: "var(--accent2)" }}>⊟</span>
+        <span style={{ fontWeight: 700, fontSize: 13 }}>Subagent · {name}</span>
         {model && (
           <span
             className="mono"
-            style={{ fontSize: 10, color: "var(--txt3)" }}
+            style={{ fontSize: 11, color: "var(--txt3)" }}
           >
             {model}
           </span>
@@ -435,7 +435,7 @@ function SubagentEntry({
         {subStatus && (
           <span
             style={{
-              fontSize: 9,
+              fontSize: 10,
               fontWeight: 700,
               padding: "1px 7px",
               borderRadius: 5,
@@ -510,7 +510,7 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
       >
         <div
           style={{
-            maxWidth: 780,
+            maxWidth: 1040,
             margin: "0 auto",
             display: "flex",
             flexDirection: "column",
@@ -577,7 +577,7 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
           background: "var(--panel)",
         }}
       >
-        <div style={{ maxWidth: 780, margin: "0 auto" }}>
+        <div style={{ maxWidth: 1040, margin: "0 auto" }}>
           <Composer
             onSend={handleSend}
             onInterrupt={handleInterrupt}

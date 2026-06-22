@@ -13,7 +13,7 @@ export function DiffView({ rows, filename }: DiffViewProps) {
       <div
         className="mono"
         style={{
-          fontSize: 10,
+          fontSize: 11,
           padding: "9px 16px",
           color: "var(--txt2)",
           borderBottom: "1px solid var(--border)",
@@ -26,7 +26,7 @@ export function DiffView({ rows, filename }: DiffViewProps) {
         <span style={{ flex: 1 }}>{filename ?? ""}</span>
         <span
           style={{
-            fontSize: 9,
+            fontSize: 10,
             letterSpacing: 0.5,
             textTransform: "uppercase",
             color: "var(--txt3)",
@@ -42,7 +42,7 @@ export function DiffView({ rows, filename }: DiffViewProps) {
           display: "flex",
           background: "var(--panel)",
           borderBottom: "1px solid var(--border)",
-          fontSize: 9,
+          fontSize: 10,
           fontWeight: 700,
           letterSpacing: 0.5,
           textTransform: "uppercase",
@@ -71,7 +71,7 @@ export function DiffView({ rows, filename }: DiffViewProps) {
           style={{
             display: "flex",
             fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)",
-            fontSize: 11.5,
+            fontSize: 12.5,
             lineHeight: 1.7,
           }}
         >

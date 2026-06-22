@@ -84,7 +84,7 @@ export function ConfigTab() {
     <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
       <div
         style={{
-          maxWidth: 660,
+          maxWidth: 900,
           margin: "0 auto",
           display: "flex",
           flexDirection: "column",
@@ -95,7 +95,7 @@ export function ConfigTab() {
         <div>
           <div
             style={{
-              fontSize: 12,
+              fontSize: 13,
               fontWeight: 700,
               marginBottom: 9,
               color: "var(--txt2)",
@@ -113,7 +113,7 @@ export function ConfigTab() {
                   onClick={() => setSelectedModel(mo.id)}
                   style={{
                     fontFamily: "inherit",
-                    fontSize: 12,
+                    fontSize: 13,
                     fontWeight: 600,
                     padding: "9px 14px",
                     borderRadius: 9,
@@ -136,7 +136,7 @@ export function ConfigTab() {
         <div>
           <div
             style={{
-              fontSize: 12,
+              fontSize: 13,
               fontWeight: 700,
               marginBottom: 9,
               color: "var(--txt2)",
@@ -188,10 +188,10 @@ export function ConfigTab() {
                     />
                   </span>
                   <div>
-                    <div style={{ fontWeight: 600, fontSize: 12.5 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13.5 }}>
                       {p.label}
                     </div>
-                    <div style={{ fontSize: 11, color: "var(--txt3)" }}>
+                    <div style={{ fontSize: 12, color: "var(--txt3)" }}>
                       {p.desc}
                     </div>
                   </div>
@@ -205,7 +205,7 @@ export function ConfigTab() {
         <div>
           <div
             style={{
-              fontSize: 12,
+              fontSize: 13,
               fontWeight: 700,
               marginBottom: 9,
               color: "var(--txt2)",
@@ -223,7 +223,7 @@ export function ConfigTab() {
                   onClick={() => toggleTool(tc.id)}
                   style={{
                     fontFamily: "inherit",
-                    fontSize: 11.5,
+                    fontSize: 12.5,
                     fontWeight: 600,
                     padding: "6px 11px",
                     borderRadius: 7,
@@ -252,7 +252,7 @@ export function ConfigTab() {
             style={{
               fontFamily: "inherit",
               fontWeight: 700,
-              fontSize: 12.5,
+              fontSize: 13.5,
               padding: "9px 16px",
               borderRadius: 9,
               border: "none",
@@ -269,7 +269,7 @@ export function ConfigTab() {
             style={{
               fontFamily: "inherit",
               fontWeight: 600,
-              fontSize: 12.5,
+              fontSize: 13.5,
               padding: "9px 16px",
               borderRadius: 9,
               border: "1px solid var(--border2)",

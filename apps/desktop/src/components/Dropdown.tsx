@@ -52,7 +52,7 @@ export function Dropdown({
           cursor: disabled ? "default" : "pointer",
           color: "var(--txt)",
           fontFamily: "inherit",
-          fontSize: 12.5,
+          fontSize: 13.5,
           opacity: disabled ? 0.45 : 1,
           textAlign: "left",
         }}
@@ -68,7 +68,7 @@ export function Dropdown({
         >
           {selected?.label ?? ""}
         </span>
-        <span style={{ fontSize: 9, color: "var(--txt3)" }}>▾</span>
+        <span style={{ fontSize: 10, color: "var(--txt3)" }}>▾</span>
       </button>
 
       {open && !disabled && (
@@ -109,7 +109,7 @@ export function Dropdown({
                     padding: "8px 10px",
                     borderRadius: 8,
                     cursor: "pointer",
-                    fontSize: 12.5,
+                    fontSize: 13.5,
                     color: sel ? "var(--accent2)" : "var(--txt)",
                     background: sel ? "var(--accent-bg)" : "transparent",
                     whiteSpace: "nowrap",

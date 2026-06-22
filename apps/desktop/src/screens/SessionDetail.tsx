@@ -95,7 +95,7 @@ export function SessionDetail() {
               <h1
                 data-testid="session-name"
                 style={{
-                  fontSize: 18,
+                  fontSize: 20,
                   fontWeight: 700,
                   margin: 0,
                   letterSpacing: -0.2,
@@ -115,7 +115,7 @@ export function SessionDetail() {
                 gap: 0,
                 marginTop: 7,
                 color: "var(--txt3)",
-                fontSize: 11.5,
+                fontSize: 12.5,
                 flexWrap: "wrap",
                 rowGap: 4,
               }}
@@ -153,7 +153,7 @@ export function SessionDetail() {
                 style={{
                   fontFamily: "inherit",
                   fontWeight: 700,
-                  fontSize: 12,
+                  fontSize: 13,
                   padding: "7px 13px",
                   borderRadius: 8,
                   border: "1px solid var(--needs)",
@@ -172,7 +172,7 @@ export function SessionDetail() {
               style={{
                 fontFamily: "inherit",
                 fontWeight: 600,
-                fontSize: 12,
+                fontSize: 13,
                 padding: "7px 12px",
                 borderRadius: 8,
                 border: "1px solid var(--border2)",
@@ -190,7 +190,7 @@ export function SessionDetail() {
               style={{
                 fontFamily: "inherit",
                 fontWeight: 600,
-                fontSize: 12,
+                fontSize: 13,
                 padding: "7px 12px",
                 borderRadius: 8,
                 border: "1px solid var(--border2)",
@@ -217,7 +217,7 @@ export function SessionDetail() {
                 onClick={() => switchTab(t.id)}
                 style={{
                   fontFamily: "inherit",
-                  fontSize: 12.5,
+                  fontSize: 13.5,
                   fontWeight: 600,
                   padding: "9px 14px",
                   border: "none",
@@ -237,7 +237,7 @@ export function SessionDetail() {
                   <span
                     style={{
                       marginLeft: 5,
-                      fontSize: 10,
+                      fontSize: 11,
                       padding: "1px 5px",
                       borderRadius: 5,
                       background: "var(--panel2)",
