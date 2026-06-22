@@ -24,6 +24,8 @@ members = [
     "tests/integration/i08_workspace_export_import",
     "tests/integration/i09_gui_agent_live",
     "tests/integration/i10_core_e2e_live",
+    "crates/marsad-winshim",
+    "tests/integration/i11_windows_lifecycle",
 ]
 # apps/desktop/src-tauri is intentionally NOT a workspace member: Tauri apps build
 # with their own profile/runner. It depends on marsad-core by path. See its own Cargo.toml.

@@ -213,19 +213,34 @@ impl Agent {
         })
     }
 
-    /// Construct with real OS IO: `TmuxContainer`, `DbusNotifier`, `FsBackend`.
+    /// Construct with real OS IO: `TmuxContainer` (Unix) / `WindowsShimContainer`
+    /// (Windows), `DbusNotifier`, `FsBackend`.
     ///
     /// Gated `#[cfg(not(coverage))]` so the coverage build never sees these
     /// lines.  Called by `main` in production; integration tests call it
     /// directly.
     #[cfg(not(coverage))]
     pub fn with_real_io(cfg: AgentConfig) -> Result<Agent, AgentError> {
-        use marsad_lifecycle::TmuxContainer;
         use marsad_notify::DbusNotifier;
         use marsad_store::{FsBackend, Store};
 
         let data_root = std::path::PathBuf::from(&cfg.data_root);
-        let tmux = TmuxContainer::new(data_root.clone());
+
+        // Select the session container based on the current platform.
+        // On Unix we use tmux (proven, handles liveness + reconnect via FIFOs).
+        // On Windows we use the marsad-winshim process (Named Pipe shim, same
+        // liveness/reconnect contract — see docs/windows-conpty.md).
+        #[cfg(unix)]
+        let real_c: Box<dyn marsad_lifecycle::Container> = {
+            use marsad_lifecycle::TmuxContainer;
+            Box::new(TmuxContainer::new(data_root.clone()))
+        };
+        #[cfg(windows)]
+        let real_c: Box<dyn marsad_lifecycle::Container> = {
+            use marsad_lifecycle::WindowsShimContainer;
+            Box::new(WindowsShimContainer::new(data_root.clone()))
+        };
+
         let notifier = Box::new(DbusNotifier::new());
         let store = Box::new(Store::new(Box::new(FsBackend::new(data_root))));
 
@@ -235,11 +250,11 @@ impl Agent {
             next_id: 1,
             // Fake container slot: unused in real-io mode but kept to satisfy the
             // type (container_calls() is a no-op here; integration tests assert
-            // tmux session existence directly, not via container_calls()).
+            // session existence directly, not via container_calls()).
             container: ContainerWrap(Box::new(FakeContainer::new())),
             notifier: NotifierWrap(notifier),
             store: StoreWrap(store),
-            real_container: RealContainerWrap(Some(Box::new(tmux))),
+            real_container: RealContainerWrap(Some(real_c)),
             session_writers: SessionWritersWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
@@ -294,29 +309,61 @@ impl Agent {
     #[cfg(not(coverage))]
     fn build_spawn_cmd(&self, container_name: &str, project: &str, argv: &[String]) -> String {
         if self.real_container.0.is_some() {
-            // Build the FIFO-wired shell invocation.
-            // The session dir is <data_root>/sessions/<container_name>.
-            let session_dir = std::path::PathBuf::from(&self.config.data_root)
-                .join("sessions")
-                .join(container_name);
-            let in_fifo = session_dir.join("in.fifo");
-            let out_fifo = session_dir.join("out.fifo");
-            let err_log = session_dir.join("err.log");
-            // argv[0] is "claude"; the rest are its arguments.
-            // We build: cd <project> && claude <args> < in.fifo > out.fifo 2>err.log
-            let claude_args = &argv[1..];
-            format!(
-                "cd {} && claude {} < {} > {} 2>{}",
-                shell_quote(project),
-                claude_args
-                    .iter()
-                    .map(|a| shell_quote(a))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                in_fifo.display(),
-                out_fifo.display(),
-                err_log.display(),
-            )
+            // Platform-specific command construction.
+            //
+            // On Unix: build a FIFO-wired shell invocation.  The session dir
+            // contains in.fifo and out.fifo; the tmux shell does the redirection.
+            //
+            // On Windows: the marsad-winshim.exe process receives the claude
+            // command via `--cmd` and handles stdin/stdout redirection itself via
+            // STARTUPINFO handles.  We pass only the raw claude invocation — no
+            // shell, no FIFO paths.  The shim wraps it in `cmd.exe /C <cmd>`.
+            #[cfg(unix)]
+            {
+                let session_dir = std::path::PathBuf::from(&self.config.data_root)
+                    .join("sessions")
+                    .join(container_name);
+                let in_fifo = session_dir.join("in.fifo");
+                let out_fifo = session_dir.join("out.fifo");
+                let err_log = session_dir.join("err.log");
+                // argv[0] is "claude"; the rest are its arguments.
+                // We build: cd <project> && claude <args> < in.fifo > out.fifo 2>err.log
+                let claude_args = &argv[1..];
+                format!(
+                    "cd {} && claude {} < {} > {} 2>{}",
+                    shell_quote(project),
+                    claude_args
+                        .iter()
+                        .map(|a| shell_quote(a))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    in_fifo.display(),
+                    out_fifo.display(),
+                    err_log.display(),
+                )
+            }
+
+            #[cfg(windows)]
+            {
+                // The shim handles I/O redirection.  We pass the raw claude
+                // invocation so the shim can exec it via `cmd.exe /C <cmd>`.
+                // argv[0] is "claude"; the rest are its arguments.
+                // We build: cd /d "<project>" && claude <args>
+                // (/d switches the drive on Windows cmd.exe).
+                //
+                // QUOTING: Windows paths must NOT use Rust's {:?} Debug format —
+                // that escapes backslashes (e.g. "C:\foo" becomes "C:\\foo"),
+                // which cmd.exe interprets as literal double-backslashes.
+                // Windows paths never contain double-quote characters, so wrapping
+                // in double quotes is always safe and produces correct cmd.exe syntax.
+                let _ = container_name; // suppress unused-variable on Windows
+                let claude_args = &argv[1..];
+                format!(
+                    "cd /d \"{}\" && claude {}",
+                    project,
+                    claude_args.join(" ")
+                )
+            }
         } else {
             argv.join(" ")
         }
@@ -930,40 +977,78 @@ impl Agent {
                                             let pending_fifo = Arc::clone(&pending_for_fifo);
 
                                             std::thread::spawn(move || {
-                                                use marsad_transport::ClaudeFifoTransport;
-                                                let mut fifo =
-                                                    match ClaudeFifoTransport::open(&session_dir) {
-                                                        Ok(f) => f,
-                                                        Err(e) => {
+                                                // ── Open and connect the transport ─────────────
+                                                // On Unix: ClaudeFifoTransport (tmux + FIFOs).
+                                                // On Windows: ClaudeNamedPipeTransport (shim + Named Pipes).
+                                                // Both expose the same into_split() -> (File, BufReader<File>)
+                                                // API, so all subsequent code is platform-agnostic.
+                                                //
+                                                // The container_name for the Named Pipe transport is
+                                                // "marsad-<session_id>" (matching WindowsShimContainer's
+                                                // pipe naming convention).
+
+                                                #[cfg(unix)]
+                                                let (mut writer, mut reader) = {
+                                                    use marsad_transport::ClaudeFifoTransport;
+                                                    let mut fifo =
+                                                        match ClaudeFifoTransport::open(&session_dir) {
+                                                            Ok(f) => f,
+                                                            Err(e) => {
+                                                                eprintln!(
+                                                                    "marsad-agent: fifo open {sid}: {e}"
+                                                                );
+                                                                return;
+                                                            }
+                                                        };
+                                                    if let Err(e) = fifo.connect() {
+                                                        eprintln!(
+                                                            "marsad-agent: fifo connect {sid}: {e}"
+                                                        );
+                                                        return;
+                                                    }
+                                                    match fifo.into_split() {
+                                                        Some(pair) => pair,
+                                                        None => {
                                                             eprintln!(
-                                                                "marsad-agent: fifo open {sid}: {e}"
+                                                                "marsad-agent: fifo not connected after connect {sid}"
                                                             );
                                                             return;
                                                         }
-                                                    };
-                                                if let Err(e) = fifo.connect() {
-                                                    eprintln!(
-                                                        "marsad-agent: fifo connect {sid}: {e}"
-                                                    );
-                                                    return;
-                                                }
-
-                                                // Split into writer (for prompts) and reader
-                                                // (for claude's NDJSON output).  The split is
-                                                // safe because in.fifo and out.fifo are distinct
-                                                // kernel objects — writing to one while reading
-                                                // the other causes no deadlock.
-                                                let (mut writer, mut reader) = match fifo
-                                                    .into_split()
-                                                {
-                                                    Some(pair) => pair,
-                                                    None => {
-                                                        eprintln!(
-                                                                "marsad-agent: fifo not connected after connect {sid}"
-                                                            );
-                                                        return;
                                                     }
                                                 };
+
+                                                #[cfg(windows)]
+                                                let (mut writer, mut reader) = {
+                                                    use marsad_transport::ClaudeNamedPipeTransport;
+                                                    // The container name is "marsad-<session_id>".
+                                                    let container_name = format!("marsad-{sid}");
+                                                    let mut transport =
+                                                        ClaudeNamedPipeTransport::for_session(
+                                                            &container_name,
+                                                        );
+                                                    if let Err(e) = transport.connect() {
+                                                        eprintln!(
+                                                            "marsad-agent: pipe connect {sid}: {e}"
+                                                        );
+                                                        return;
+                                                    }
+                                                    match transport.into_split() {
+                                                        Some(pair) => pair,
+                                                        None => {
+                                                            eprintln!(
+                                                                "marsad-agent: pipe not connected after connect {sid}"
+                                                            );
+                                                            return;
+                                                        }
+                                                    }
+                                                };
+
+                                                // writer and reader are now in scope (from the
+                                                // platform-specific blocks above).  Suppress the
+                                                // unused-variable warning for session_dir on
+                                                // Windows (it is only used in the Unix block).
+                                                #[cfg(windows)]
+                                                let _ = &session_dir;
 
                                                 // Send the control-protocol `initialize`
                                                 // handshake first. This is required before claude

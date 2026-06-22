@@ -840,3 +840,223 @@ impl Transport for ClaudeFifoTransport {
         Ok(())
     }
 }
+
+// ── ClaudeNamedPipeTransport ──────────────────────────────────────────────────
+//
+// Windows-only counterpart to `ClaudeFifoTransport`.  Talks to a claude process
+// running inside a `marsad-winshim.exe` via two Windows Named Pipes:
+//
+//   \\.\pipe\marsad-<session_name>-in   — agent writes prompts (claude's stdin)
+//   \\.\pipe\marsad-<session_name>-out  — agent reads NDJSON (claude's stdout)
+//
+// See `docs/windows-conpty.md` for the full design rationale.
+//
+// COMPILATION: gated `#[cfg(all(windows, not(coverage)))]` — absent on Linux/macOS
+// and absent from coverage builds so coverage stays 100%.
+//
+// DEADLOCK ANALYSIS
+// ─────────────────
+// Named Pipes on Windows have the opposite ownership model from Unix FIFOs:
+//   - The SERVER creates both pipe ends (CreateNamedPipe); this is the shim.
+//   - The CLIENT (the agent) opens them with CreateFile / ConnectNamedPipe.
+//
+// Because the shim creates BOTH pipes before spawning claude, there is no
+// circular-wait deadlock.  The agent simply calls CreateFile on each pipe in
+// any order — both will succeed as soon as the shim's server ends exist.
+//
+// `close` drops file handles; it does NOT kill the shim or claude (liveness).
+
+/// Windows-only `Transport` implementation that talks to a `claude` process
+/// running inside a `marsad-winshim.exe` via Windows Named Pipes.
+#[cfg(all(windows, not(coverage)))]
+pub struct ClaudeNamedPipeTransport {
+    /// `\\.\pipe\marsad-<name>-in`
+    in_pipe_name: String,
+    /// `\\.\pipe\marsad-<name>-out`
+    out_pipe_name: String,
+    /// Write handle to the `-in` pipe (agent → claude).
+    writer: Option<std::fs::File>,
+    /// Buffered reader over the `-out` pipe (claude → agent).
+    reader: Option<std::io::BufReader<std::fs::File>>,
+    /// Line framer for NDJSON reassembly (reuses the unit-tested `LineFramer`).
+    framer: LineFramer,
+}
+
+#[cfg(all(windows, not(coverage)))]
+impl ClaudeNamedPipeTransport {
+    /// Create a transport for the named session.
+    ///
+    /// `name` must match the session name used by `WindowsShimContainer`
+    /// (i.e. the container name, e.g. `"marsad-session-1"`).
+    ///
+    /// Calling this does NOT open the pipes — call `connect()` to do that.
+    pub fn for_session(name: &str) -> Self {
+        Self {
+            in_pipe_name: format!(r"\\.\pipe\marsad-{name}-in"),
+            out_pipe_name: format!(r"\\.\pipe\marsad-{name}-out"),
+            writer: None,
+            reader: None,
+            framer: LineFramer::new(),
+        }
+    }
+
+    /// Consume this transport and return the split writer + buffered-reader handles.
+    ///
+    /// Returns `Some((writer, reader))` after a successful `connect()`; `None`
+    /// otherwise.  Mirrors `ClaudeFifoTransport::into_split`.
+    pub fn into_split(mut self) -> Option<(std::fs::File, std::io::BufReader<std::fs::File>)> {
+        match (self.writer.take(), self.reader.take()) {
+            (Some(w), Some(r)) => Some((w, r)),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(all(windows, not(coverage)))]
+impl Transport for ClaudeNamedPipeTransport {
+    /// Open both named pipe client ends.
+    ///
+    /// Windows named-pipe client open uses `CreateFile` (wrapped by
+    /// `std::fs::OpenOptions`) with the `\\.\pipe\...` path.
+    ///
+    /// If the server (shim) has not yet finished creating its pipe ends,
+    /// `CreateFile` returns `ERROR_PIPE_BUSY` (231) or `ERROR_FILE_NOT_FOUND`
+    /// (2) while the shim is still initialising.  We retry with a 50 ms sleep
+    /// for up to 15 seconds, matching the FIFO connect timeout.
+    ///
+    /// The open order does NOT matter for Named Pipes (no FIFO deadlock risk):
+    /// both pipe server ends exist before the agent calls `connect()`.
+    fn connect(&mut self) -> Result<(), TransportError> {
+        use std::time::{Duration, Instant};
+
+        // ERROR_PIPE_BUSY: the pipe exists but all instances are in use.
+        // On Windows, `std::io::Error::raw_os_error()` returns the raw Win32
+        // error code as a signed i32.
+        const ERROR_PIPE_BUSY: i32 = 231;
+        // ERROR_FILE_NOT_FOUND: the pipe server has not created its end yet.
+        const ERROR_FILE_NOT_FOUND: i32 = 2;
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+
+        // ── Open the writer (agent → claude stdin via -in pipe) ───────────────
+        let writer = loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .open(&self.in_pipe_name)
+            {
+                Ok(f) => break f,
+                Err(ref e)
+                    if e.raw_os_error() == Some(ERROR_PIPE_BUSY)
+                        || e.raw_os_error() == Some(ERROR_FILE_NOT_FOUND) =>
+                {
+                    if Instant::now() > deadline {
+                        return Err(TransportError::ConnectFailed(format!(
+                            "timeout waiting for pipe {} after 15s",
+                            self.in_pipe_name
+                        )));
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => {
+                    return Err(TransportError::ConnectFailed(format!(
+                        "open -in pipe {}: {e}",
+                        self.in_pipe_name
+                    )));
+                }
+            }
+        };
+
+        // ── Open the reader (claude stdout via -out pipe → agent) ─────────────
+        let reader = loop {
+            match std::fs::OpenOptions::new()
+                .read(true)
+                .open(&self.out_pipe_name)
+            {
+                Ok(f) => break f,
+                Err(ref e)
+                    if e.raw_os_error() == Some(ERROR_PIPE_BUSY)
+                        || e.raw_os_error() == Some(ERROR_FILE_NOT_FOUND) =>
+                {
+                    if Instant::now() > deadline {
+                        return Err(TransportError::ConnectFailed(format!(
+                            "timeout waiting for pipe {} after 15s",
+                            self.out_pipe_name
+                        )));
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => {
+                    return Err(TransportError::ConnectFailed(format!(
+                        "open -out pipe {}: {e}",
+                        self.out_pipe_name
+                    )));
+                }
+            }
+        };
+
+        self.writer = Some(writer);
+        self.reader = Some(std::io::BufReader::new(reader));
+        Ok(())
+    }
+
+    /// Write `line` followed by `'\n'` to the `-in` pipe.
+    fn send_line(&mut self, line: &str) -> Result<(), TransportError> {
+        use std::io::Write;
+        match self.writer {
+            Some(ref mut w) => {
+                let msg = format!("{line}\n");
+                w.write_all(msg.as_bytes())
+                    .map_err(|_| TransportError::BrokenPipe)
+            }
+            None => Err(TransportError::ConnectFailed("not connected".to_string())),
+        }
+    }
+
+    /// Read the next complete NDJSON line from the `-out` pipe using `LineFramer`.
+    ///
+    /// Identical framing logic to `ClaudeFifoTransport::recv_line`.
+    fn recv_line(&mut self) -> Result<Option<String>, TransportError> {
+        use std::io::Read;
+
+        let reader = match self.reader {
+            Some(ref mut r) => r,
+            None => {
+                return Err(TransportError::ConnectFailed("not connected".to_string()));
+            }
+        };
+
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => {
+                    if self.framer.pending().is_empty() {
+                        return Ok(None);
+                    } else {
+                        return Err(TransportError::ClosedMidStream);
+                    }
+                }
+                Ok(n) => {
+                    let mut lines = self.framer.push(&buf[..n]);
+                    if !lines.is_empty() {
+                        let first = lines.remove(0);
+                        for extra in lines {
+                            let _ = self.framer.push(format!("{extra}\n").as_bytes());
+                        }
+                        return Ok(Some(first));
+                    }
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => {
+                    return Err(TransportError::Io(e.to_string()));
+                }
+            }
+        }
+    }
+
+    /// Close the pipe handles.  Does NOT kill the shim or claude (liveness).
+    fn close(&mut self) -> Result<(), TransportError> {
+        self.writer = None;
+        self.reader = None;
+        Ok(())
+    }
+}

@@ -378,6 +378,266 @@ impl Container for TmuxContainer {
     }
 }
 
+// ── WindowsShimContainer ─────────────────────────────────────────────────────
+//
+// Windows-only production Container.  Uses a lightweight "shim" process
+// (marsad-winshim.exe) that owns the claude child process and a pair of Windows
+// Named Pipes, and survives independently of the GUI/agent.  This mirrors the
+// role tmux plays on Linux/macOS (session liveness).
+//
+// See `docs/windows-conpty.md` for the full design rationale and the step-by-step
+// to finish and test this on a real Windows machine.
+//
+// COMPILATION NOTE
+// ────────────────
+// This module is gated `#[cfg(all(windows, not(coverage)))]`.  It will never
+// compile on Linux/macOS and is therefore entirely absent from the Linux CI
+// build.  The implementation follows the Windows API documentation and has been
+// compiled but not runtime-verified (see docs/windows-conpty.md §8).
+//
+// APPROACH CHOSEN: Windows Shim Process (option c in the design doc)
+// ──────────────────────────────────────────────────────────────────
+// We launch a small helper binary (`marsad-winshim.exe`) that:
+//   1. Creates two named pipes:
+//        \\.\pipe\marsad-<session_name>-in   (claude reads stdin from this)
+//        \\.\pipe\marsad-<session_name>-out  (claude's stdout goes here)
+//   2. Launches the claude child with its stdin/stdout redirected to those pipes.
+//   3. Lives independently of the GUI/agent as a DETACHED_PROCESS.
+//
+// On agent restart the agent calls `exists()` (checks if the pipe server is
+// reachable) and `attach()` (opens the pipe client ends).  The shim keeps the
+// named-pipe server ends alive for the lifetime of the claude child, providing
+// exactly the same reconnect semantics as tmux on Unix.
+//
+// We do NOT use ConPTY because claude runs in `--print --input-format stream-json
+// --output-format stream-json` mode — plain stdin/stdout, no terminal emulation
+// required.
+
+/// Windows-only production `Container` that uses a detached shim process +
+/// Windows Named Pipes.
+///
+/// Each managed session is backed by a `marsad-winshim.exe` process that owns
+/// the claude child and two named pipes:
+///   `\\.\pipe\marsad-<name>-in`   — agent writes prompts here
+///   `\\.\pipe\marsad-<name>-out`  — agent reads claude's NDJSON here
+///
+/// The `runtime_dir` is the parent for per-session subdirectories
+/// (`<runtime_dir>/sessions/<name>/`) that hold `err.log` and a PID file
+/// (`shim.pid`) used by `exists()` to verify the shim is still alive.
+#[cfg(all(windows, not(coverage)))]
+pub struct WindowsShimContainer {
+    runtime_dir: std::path::PathBuf,
+}
+
+#[cfg(all(windows, not(coverage)))]
+impl WindowsShimContainer {
+    /// Create a new `WindowsShimContainer` rooted at `runtime_dir`.
+    pub fn new(runtime_dir: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            runtime_dir: runtime_dir.into(),
+        }
+    }
+
+    /// Return the per-session directory path for `name`.
+    fn session_dir(&self, name: &str) -> std::path::PathBuf {
+        self.runtime_dir.join("sessions").join(name)
+    }
+
+    /// Named-pipe path for the session's stdin channel (agent → claude).
+    fn in_pipe_name(name: &str) -> String {
+        format!(r"\\.\pipe\marsad-{name}-in")
+    }
+
+    /// Named-pipe path for the session's stdout channel (claude → agent).
+    fn out_pipe_name(name: &str) -> String {
+        format!(r"\\.\pipe\marsad-{name}-out")
+    }
+
+    /// Return the path to the `marsad-winshim.exe` helper binary.
+    ///
+    /// Looks next to the agent binary first; falls back to PATH.
+    /// TODO(windows): refine the discovery logic on a real Windows machine.
+    fn shim_binary() -> std::path::PathBuf {
+        if let Ok(exe) = std::env::current_exe() {
+            let candidate = exe.with_file_name("marsad-winshim.exe");
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+        std::path::PathBuf::from("marsad-winshim.exe")
+    }
+}
+
+#[cfg(all(windows, not(coverage)))]
+impl Container for WindowsShimContainer {
+    /// Returns `true` iff the shim process for `name` is still alive.
+    ///
+    /// Strategy: read the PID from `<session_dir>/shim.pid` and probe it with
+    /// `OpenProcess` + `GetExitCodeProcess`.  Returns `false` on any error
+    /// (missing file, dead PID, OS error) — "fail closed" is the safe default.
+    fn exists(&self, name: &str) -> bool {
+        use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, STILL_ACTIVE,
+        };
+
+        // 1. Read the PID from shim.pid.
+        let pid_path = self.session_dir(name).join("shim.pid");
+        let pid: u32 = match std::fs::read_to_string(&pid_path)
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+        {
+            Some(p) => p,
+            None => return false,
+        };
+
+        // 2. Open a handle to the process.  If the PID does not exist (or we have
+        //    no permission) OpenProcess returns NULL (0 on windows-sys).
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
+        if handle == 0 {
+            return false;
+        }
+
+        // 3. Query exit code.  STILL_ACTIVE (259) means the process is alive.
+        let mut code: u32 = 0;
+        let ok = unsafe { GetExitCodeProcess(handle, &mut code) };
+        unsafe { CloseHandle(handle) };
+
+        ok != 0 && code == STILL_ACTIVE
+    }
+
+    /// Verify the shim is still alive.
+    ///
+    /// Re-checks `exists(name)` and returns `Err(AttachRace)` when the shim
+    /// disappeared between the caller's probe and this call.
+    fn attach(&mut self, name: &str) -> Result<(), LifecycleError> {
+        if self.exists(name) {
+            Ok(())
+        } else {
+            Err(LifecycleError::AttachRace(name.to_string()))
+        }
+    }
+
+    /// Create the per-session directory and launch the shim process.
+    ///
+    /// The shim owns the Named Pipe server ends and the claude child.  The agent
+    /// passes pipe names, err.log path, pid-file path, and the full claude
+    /// command as arguments.
+    ///
+    /// **Idempotent**: if `exists(name)` is true the shim is already running —
+    /// returns `Ok` immediately (adopt semantics), same as `TmuxContainer::spawn`.
+    fn spawn(&mut self, name: &str, cmd: &str) -> Result<(), LifecycleError> {
+        use std::os::windows::process::CommandExt;
+
+        // DETACHED_PROCESS: the shim runs independently of the agent's console
+        // (no console window) and is not killed when the agent exits.
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        // CREATE_NEW_PROCESS_GROUP: the shim gets its own Ctrl+C / Ctrl+Break
+        // group so the agent's ^C does not propagate to it.
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+        // Idempotency guard: if the shim is already alive, adopt without spawning.
+        let already_running = self.exists(name);
+
+        let dir = self.session_dir(name);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| LifecycleError::Spawn(format!("mkdir {dir:?}: {e}")))?;
+
+        // Named pipes are created inside the shim process — no mkfifo equivalent
+        // is needed here.
+
+        if already_running {
+            return Ok(());
+        }
+
+        let err_log = dir.join("err.log");
+        let pid_file = dir.join("shim.pid");
+        let in_pipe = Self::in_pipe_name(name);
+        let out_pipe = Self::out_pipe_name(name);
+        let shim = Self::shim_binary();
+
+        // Launch marsad-winshim.exe as DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP.
+        // All three stdio handles are redirected to null — the shim sets up its
+        // own handles internally via CreateNamedPipe + STARTUPINFO.
+        std::process::Command::new(&shim)
+            .args([
+                "--in-pipe",
+                &in_pipe,
+                "--out-pipe",
+                &out_pipe,
+                "--err-log",
+                err_log.to_str().unwrap_or("err.log"),
+                "--pid-file",
+                pid_file.to_str().unwrap_or("shim.pid"),
+                "--cmd",
+                cmd,
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+            .spawn()
+            .map_err(|e| LifecycleError::Spawn(format!("shim spawn {:?}: {e}", shim)))?;
+
+        // Give the shim time to create the Named Pipe server ends and write
+        // shim.pid before the agent tries to open the client ends.
+        // 200 ms is sufficient for a local spawn; the transport has a 15 s
+        // timeout for the pipe client open, providing belt-and-suspenders.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        Ok(())
+    }
+
+    /// Kill the shim process (and transitively the claude child) for `name`.
+    ///
+    /// Reads `shim.pid` and calls `TerminateProcess` on the shim PID.  The OS
+    /// propagates the kill to any children (claude) that have not detached.
+    /// Removes the session directory on success (best-effort).
+    fn kill(&mut self, name: &str) -> Result<(), LifecycleError> {
+        use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+        };
+
+        let dir = self.session_dir(name);
+        let pid_path = dir.join("shim.pid");
+
+        // 1. Read the PID.
+        let pid: u32 = std::fs::read_to_string(&pid_path)
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .ok_or_else(|| {
+                LifecycleError::Container(format!(
+                    "kill {name}: could not read shim.pid at {pid_path:?}"
+                ))
+            })?;
+
+        // 2. Open the process with PROCESS_TERMINATE rights.
+        let handle = unsafe { OpenProcess(PROCESS_TERMINATE, FALSE, pid) };
+        if handle == 0 {
+            // PID may already be dead — treat as success so kill is idempotent.
+            let _ = std::fs::remove_dir_all(&dir);
+            return Ok(());
+        }
+
+        // 3. Terminate the shim.  Exit code 1 is conventional for a forced kill.
+        let ok = unsafe { TerminateProcess(handle, 1) };
+        unsafe { CloseHandle(handle) };
+
+        if ok == 0 {
+            return Err(LifecycleError::Container(format!(
+                "TerminateProcess({pid}) failed: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+
+        // 4. Best-effort cleanup of the session directory.
+        let _ = std::fs::remove_dir_all(&dir);
+
+        Ok(())
+    }
+}
+
 // ── reconcile ────────────────────────────────────────────────────────────────
 
 /// Probe the container and execute the appropriate action, returning a
