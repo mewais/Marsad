@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 use tauri::State;
 
-use marsad_core::{Core, CoreError, LaunchSpec, Posture};
+use marsad_core::{Core, CoreError, LaunchMode, LaunchSpec, Posture};
 use marsad_gates::{Decision, DecisionId, GateDecision};
 use marsad_viewmodel::AppSnapshot;
 
@@ -75,7 +75,15 @@ pub fn launch_session(
                 "full" => Posture::FullAutonomy,
                 _ => Posture::Ask,
             };
-            let spec = LaunchSpec { project, host_id, model, posture: posture_val, first_prompt };
+            // Frontend resume/continue wiring is deferred; launch fresh for now.
+            let spec = LaunchSpec {
+                project,
+                host_id,
+                model,
+                posture: posture_val,
+                first_prompt,
+                mode: LaunchMode::Fresh,
+            };
             core.launch_session(spec).map_err(map_err)
         }
         AppState::Mock(_) => Ok("mock-session-001".to_string()),

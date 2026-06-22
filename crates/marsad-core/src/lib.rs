@@ -20,7 +20,7 @@ use thiserror::Error;
 // Public re-exports (spec requirement: callers use marsad_core::{LaunchSpec, Posture})
 // ---------------------------------------------------------------------------
 
-pub use marsad_proto::{LaunchSpec, Posture};
+pub use marsad_proto::{LaunchMode, LaunchSpec, Posture};
 
 // ---------------------------------------------------------------------------
 // CoreError
@@ -165,11 +165,28 @@ impl Core {
         let obj = val.as_object_mut().unwrap();
         obj.insert("session_id".to_string(), Value::String(id.clone()));
         obj.insert("project".to_string(), Value::String(spec.project.clone()));
+        // The agent decodes posture from `posture` (the enum variant name);
+        // `permission_mode` above is kept for back-compat.
+        obj.insert(
+            "posture".to_string(),
+            serde_json::to_value(&spec.posture).unwrap(),
+        );
         let fp_val = spec
             .first_prompt
             .as_deref()
             .map_or(Value::Null, |s| Value::String(s.to_string()));
         obj.insert("first_prompt".to_string(), fp_val);
+        // Forward the start mode so the agent can resume/continue an existing
+        // conversation (claude --resume <id> / --continue). Fresh adds nothing.
+        match &spec.mode {
+            LaunchMode::Continue => {
+                obj.insert("continue".to_string(), Value::Bool(true));
+            }
+            LaunchMode::Resume(sid) => {
+                obj.insert("resume_session_id".to_string(), Value::String(sid.clone()));
+            }
+            LaunchMode::Fresh => {}
+        }
         let line = serde_json::to_string(&val).unwrap();
 
         self.send_raw_line(&line)?;

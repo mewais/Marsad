@@ -152,6 +152,7 @@ fn launch_session_transport_failure_returns_transport_error() {
         model: "claude-opus-4-5".to_string(),
         posture: Posture::Ask,
         first_prompt: None,
+        mode: Default::default(),
     };
     let result = core.launch_session(spec);
     // Either the launch succeeds (transport failure deferred) or returns Transport error
@@ -173,6 +174,7 @@ fn send_prompt_transport_failure_returns_transport_error() {
         model: "claude-opus-4-5".to_string(),
         posture: Posture::Ask,
         first_prompt: None,
+        mode: Default::default(),
     };
     // try launch (may succeed or fail)
     let id_result = core.launch_session(spec);

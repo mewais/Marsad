@@ -400,20 +400,64 @@ impl Agent {
             model: msg.model,
             posture,
             first_prompt: msg.first_prompt,
+            // Fresh / continue / resume-by-id, from optional IPC fields.
+            mode: parse_launch_mode_value(value),
         };
         let session_id = self.launch(spec)?;
         let event = serde_json::json!({"type": "SessionLaunched", "session_id": session_id});
         Ok(vec![event.to_string()])
     }
 
+    /// Resume a Marsad-tracked session by its Marsad id.
+    ///
+    /// Looks the session up in the persistence store, then launches a fresh
+    /// container that reattaches to the underlying claude conversation:
+    /// `claude --resume <claude_session_id>` when that id is known, else
+    /// `claude --continue` (most recent conversation in the project dir).
+    /// An optional `first_prompt` is delivered after reconnect.
     fn handle_resume_session(
         &mut self,
         value: &serde_json::Value,
     ) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
-            "ResumeSession missing session_id".to_string(),
-        ))?;
-        let event = serde_json::json!({"type": "SessionResumed", "session_id": session_id});
+        let session_id = value["session_id"]
+            .as_str()
+            .ok_or(AgentError::Protocol(
+                "ResumeSession missing session_id".to_string(),
+            ))?
+            .to_string();
+
+        // Look the session up in the store to recover its project + model.
+        let restored = self
+            .store
+            .0
+            .restore()
+            .map_err(|e| AgentError::Lifecycle(format!("restore for resume: {e:?}")))?;
+        let persisted = restored
+            .sessions
+            .into_iter()
+            .find(|s| s.id == session_id)
+            .ok_or_else(|| {
+                AgentError::Protocol(format!("ResumeSession: unknown session {session_id}"))
+            })?;
+
+        // Resume by claude session id when we have one; otherwise continue the
+        // most recent conversation in the project directory.
+        let mode = match persisted.session_id.as_deref() {
+            Some(uuid) if !uuid.is_empty() => marsad_proto::LaunchMode::Resume(uuid.to_string()),
+            _ => marsad_proto::LaunchMode::Continue,
+        };
+
+        let spec = marsad_proto::LaunchSpec {
+            project: persisted.project,
+            host_id: persisted.host_id,
+            model: persisted.model,
+            // The store does not persist posture; default to Ask so gates surface.
+            posture: marsad_proto::Posture::Ask,
+            first_prompt: value["first_prompt"].as_str().map(|s| s.to_string()),
+            mode,
+        };
+        let new_id = self.launch(spec)?;
+        let event = serde_json::json!({"type": "SessionResumed", "session_id": new_id});
         Ok(vec![event.to_string()])
     }
 
@@ -1032,9 +1076,10 @@ impl Agent {
             let is_launch = cmd.line.contains("\"LaunchSession\"");
             let is_resume = cmd.line.contains("\"ResumeSession\"");
 
-            // For a launch, capture the first_prompt BEFORE handle_ipc consumes
-            // the JSON — we need it to pass to the FIFO thread via AgentReply.
-            let launch_first_prompt: Option<String> = if is_launch {
+            // For a launch OR resume, capture the first_prompt BEFORE handle_ipc
+            // consumes the JSON — we pass it to the FIFO thread via AgentReply so
+            // a resumed/continued session can be handed a new prompt on reconnect.
+            let launch_first_prompt: Option<String> = if is_launch || is_resume {
                 serde_json::from_str::<serde_json::Value>(&cmd.line)
                     .ok()
                     .and_then(|v| v["first_prompt"].as_str().map(|s| s.to_string()))
@@ -1109,11 +1154,20 @@ fn posture_to_mode(posture: &marsad_proto::Posture) -> &'static str {
     }
 }
 
-/// Build the exact `claude` invocation for a fresh session launch.
+/// Build the exact `claude` invocation for a session launch.
 ///
 /// `first_prompt` is intentionally NOT included here — in `--input-format
 /// stream-json` mode the prompt must be delivered via `in.fifo` as a
 /// stream-json user message, not as a positional CLI argument.
+///
+/// The trailing argument depends on `spec.mode`:
+/// - `Fresh`    → the project path positional (a new conversation in that dir);
+/// - `Continue` → `--continue` (resume the most recent conversation in the cwd);
+/// - `Resume(id)` → `--resume <id>` (resume that specific conversation).
+///
+/// The session's `cwd` is set by the FIFO-wired `cd <project> && claude …`
+/// command (see `build_spawn_cmd`), so `--continue`/`--resume` resolve against
+/// the right project directory.
 pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
     let mut argv = vec![
         "claude".to_string(),
@@ -1140,8 +1194,37 @@ pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
         argv.push("stdio".to_string());
     }
 
-    argv.push(spec.project.clone());
+    match &spec.mode {
+        marsad_proto::LaunchMode::Fresh => argv.push(spec.project.clone()),
+        marsad_proto::LaunchMode::Continue => argv.push("--continue".to_string()),
+        marsad_proto::LaunchMode::Resume(id) => {
+            argv.push("--resume".to_string());
+            argv.push(id.clone());
+        }
+    }
+
     argv
+}
+
+// ── parse_launch_mode_value ─────────────────────────────────────────────────────
+
+/// Decode the optional start-mode fields of a LaunchSession IPC message.
+///
+/// - `"resume_session_id": "<id>"` (non-empty) → `Resume(id)`
+/// - `"continue": true`                        → `Continue`
+/// - neither                                   → `Fresh`
+///
+/// `resume_session_id` takes precedence over `continue` if both are present.
+fn parse_launch_mode_value(v: &serde_json::Value) -> marsad_proto::LaunchMode {
+    if let Some(id) = v["resume_session_id"].as_str() {
+        if !id.is_empty() {
+            return marsad_proto::LaunchMode::Resume(id.to_string());
+        }
+    }
+    if v["continue"].as_bool() == Some(true) {
+        return marsad_proto::LaunchMode::Continue;
+    }
+    marsad_proto::LaunchMode::Fresh
 }
 
 // ── parse_posture_value ───────────────────────────────────────────────────────

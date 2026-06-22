@@ -10,7 +10,7 @@
 //! These tests WILL fail to compile until the code-agent implements `marsad_core`.
 //! That is the expected tests-first compile-failure signal.
 
-use marsad_core::{Core, CoreConfig, LaunchSpec, Posture, VmUpdate};
+use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, Posture, VmUpdate};
 use marsad_gates::{approve, Gate};
 use marsad_transport::LoopbackFake;
 use marsad_viewmodel::SlashCmd;
@@ -96,6 +96,7 @@ fn launch_session_returns_id_and_sends_ipc() {
         model: "claude-opus-4-5".to_string(),
         posture: Posture::Ask,
         first_prompt: None,
+        mode: Default::default(),
     };
     let id = core
         .launch_session(spec)
@@ -119,6 +120,52 @@ fn launch_session_returns_id_and_sends_ipc() {
 }
 
 #[test]
+fn launch_session_forwards_mode_and_posture() {
+    let (mut core, mut peer) = make_core();
+    // Continue mode → `"continue":true` plus the posture in the outbound IPC.
+    core.launch_session(LaunchSpec {
+        project: "p".to_string(),
+        host_id: "local".to_string(),
+        model: "m".to_string(),
+        posture: Posture::Ask,
+        first_prompt: None,
+        mode: LaunchMode::Continue,
+    })
+    .expect("launch continue");
+    let out = peer.drain_outbound();
+    let line = out.last().expect("continue ipc");
+    assert!(
+        line.contains("\"continue\":true"),
+        "continue mode must be forwarded; got {line}"
+    );
+    assert!(
+        line.contains("\"posture\":\"Ask\""),
+        "posture must be forwarded; got {line}"
+    );
+
+    // Resume mode → `"resume_session_id":"<id>"`.
+    core.launch_session(LaunchSpec {
+        project: "p".to_string(),
+        host_id: "local".to_string(),
+        model: "m".to_string(),
+        posture: Posture::FullAutonomy,
+        first_prompt: None,
+        mode: LaunchMode::Resume("uuid-7".to_string()),
+    })
+    .expect("launch resume");
+    let out2 = peer.drain_outbound();
+    let line2 = out2.last().expect("resume ipc");
+    assert!(
+        line2.contains("\"resume_session_id\":\"uuid-7\""),
+        "resume id must be forwarded; got {line2}"
+    );
+    assert!(
+        line2.contains("\"posture\":\"FullAutonomy\""),
+        "posture must be forwarded; got {line2}"
+    );
+}
+
+#[test]
 fn launch_session_with_first_prompt_includes_prompt_in_ipc() {
     let (mut core, mut peer) = make_core();
     let spec = LaunchSpec {
@@ -127,6 +174,7 @@ fn launch_session_with_first_prompt_includes_prompt_in_ipc() {
         model: "claude-sonnet-4-5".to_string(),
         posture: Posture::AutoApproveSafe,
         first_prompt: Some("Hello agent".to_string()),
+        mode: Default::default(),
     };
     let _id = core.launch_session(spec).expect("launch");
     let outbound = peer.drain_outbound();
@@ -158,6 +206,7 @@ fn resume_session_sends_ipc() {
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
+            mode: Default::default(),
         })
         .expect("launch");
     let _ = peer.drain_outbound(); // consume launch IPC
@@ -190,6 +239,7 @@ fn attach_session_sends_ipc() {
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
+            mode: Default::default(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -222,6 +272,7 @@ fn stop_session_sends_ipc() {
             model: "claude-opus-4-5".to_string(),
             posture: Posture::FullAutonomy,
             first_prompt: None,
+            mode: Default::default(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -254,6 +305,7 @@ fn send_prompt_sends_ipc() {
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
+            mode: Default::default(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -286,6 +338,7 @@ fn interrupt_sends_ipc() {
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
+            mode: Default::default(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -317,6 +370,7 @@ fn answer_gate_sends_ipc_and_routes_to_one_session() {
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
+            mode: Default::default(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -360,6 +414,7 @@ fn run_slash_sends_ipc() {
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
+            mode: Default::default(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -395,6 +450,7 @@ fn set_workspace_sends_ipc() {
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
+            mode: Default::default(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -421,6 +477,7 @@ fn on_agent_line_init_yields_session_vm_update() {
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
+            mode: Default::default(),
         })
         .expect("launch");
 
@@ -450,6 +507,7 @@ fn on_agent_line_assistant_yields_session_vm_update() {
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
+            mode: Default::default(),
         })
         .expect("launch");
 
@@ -477,6 +535,7 @@ fn on_agent_line_control_request_yields_session_needs_update() {
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
+            mode: Default::default(),
         })
         .expect("launch");
 
@@ -503,6 +562,7 @@ fn on_agent_line_result_success_yields_done_update() {
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
+            mode: Default::default(),
         })
         .expect("launch");
 
@@ -530,6 +590,7 @@ fn on_agent_line_full_lifecycle_produces_overview_updates() {
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
+            mode: Default::default(),
         })
         .expect("launch");
 
@@ -624,6 +685,7 @@ fn launch_spec_fields_all_postures() {
             model: "m".to_string(),
             posture,
             first_prompt: Some("hi".to_string()),
+            mode: Default::default(),
         };
         let _ = spec;
     }

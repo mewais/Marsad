@@ -42,6 +42,7 @@ fn spec(project: &str, posture: Posture) -> LaunchSpec {
         model: "claude-opus-4-5".to_string(),
         posture,
         first_prompt: None,
+        mode: Default::default(),
     }
 }
 

@@ -184,6 +184,23 @@ pub enum Posture {
     FullAutonomy,
 }
 
+/// How a session is started:
+/// - `Fresh`: a brand-new conversation in the project dir.
+/// - `Continue`: resume the most recent conversation in the project dir
+///   (`claude --continue`).
+/// - `Resume(id)`: resume a specific prior conversation by its claude
+///   session id (`claude --resume <id>`).
+///
+/// `Continue`/`Resume` let the user pick up existing Claude Code sessions —
+/// including ones started outside Marsad — by running in the right `cwd`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub enum LaunchMode {
+    #[default]
+    Fresh,
+    Continue,
+    Resume(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LaunchSpec {
     pub project: String,
@@ -191,6 +208,10 @@ pub struct LaunchSpec {
     pub model: String,
     pub posture: Posture,
     pub first_prompt: Option<String>,
+    /// Start mode (fresh / continue / resume-by-id). Defaults to `Fresh` so
+    /// older callers and serialized specs without this field keep working.
+    #[serde(default)]
+    pub mode: LaunchMode,
 }
 
 // ---------------------------------------------------------------------------

@@ -87,6 +87,147 @@ fn ipc_command_resume_session() {
     );
 }
 
+/// LaunchSession with `"continue": true` → spawns `claude --continue`.
+#[test]
+fn launch_session_continue_mode_spawns_continue() {
+    let mut agent = make_agent();
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-8","posture":"Ask","continue":true}"#;
+    agent.handle_ipc(line).expect("launch continue");
+    let last = agent
+        .container_calls()
+        .last()
+        .expect("a spawn call")
+        .clone();
+    assert!(
+        last.contains("--continue"),
+        "continue mode must spawn --continue; got {last}"
+    );
+}
+
+/// LaunchSession with `"resume_session_id"` → spawns `claude --resume <id>`.
+#[test]
+fn launch_session_resume_id_mode_spawns_resume() {
+    let mut agent = make_agent();
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-8","posture":"Ask","resume_session_id":"uuid-xyz"}"#;
+    agent.handle_ipc(line).expect("launch resume");
+    let last = agent.container_calls().last().expect("spawn").clone();
+    assert!(
+        last.contains("--resume uuid-xyz"),
+        "resume_session_id must spawn --resume uuid-xyz; got {last}"
+    );
+}
+
+/// LaunchSession with an EMPTY `resume_session_id` falls back to a fresh launch.
+#[test]
+fn launch_session_empty_resume_id_is_fresh() {
+    let mut agent = make_agent();
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-8","posture":"Ask","resume_session_id":""}"#;
+    agent.handle_ipc(line).expect("launch fresh");
+    let last = agent.container_calls().last().expect("spawn").clone();
+    assert!(
+        last.contains("/home/user/proj"),
+        "empty resume id → fresh (project positional); got {last}"
+    );
+    assert!(
+        !last.contains("--resume") && !last.contains("--continue"),
+        "empty resume id must not add --resume/--continue; got {last}"
+    );
+}
+
+/// Resuming a tracked session WITHOUT a known claude session id → `--continue`.
+#[test]
+fn resume_session_tracked_without_claude_id_continues() {
+    let mut agent = make_agent();
+    let (_, sid) = do_launch(&mut agent); // persisted with session_id = None
+    let resume = format!(r#"{{"type":"ResumeSession","session_id":"{sid}"}}"#);
+    agent.handle_ipc(&resume).expect("resume");
+    let last = agent.container_calls().last().expect("spawn").clone();
+    assert!(
+        last.contains("--continue"),
+        "tracked session without claude id → --continue; got {last}"
+    );
+}
+
+/// Resuming a tracked session WITH a known claude session id → `--resume <id>`,
+/// and a supplied first_prompt is accepted.
+#[test]
+fn resume_session_tracked_with_claude_id_resumes() {
+    let mut store = marsad_store::Store::new(Box::new(MemoryBackend::new()));
+    store
+        .upsert_session(&marsad_store::PersistedSession {
+            id: "tracked-1".to_string(),
+            session_id: Some("claude-uuid-9".to_string()),
+            name: "t".to_string(),
+            host_id: "local".to_string(),
+            project: "/home/user/p".to_string(),
+            branch: "main".to_string(),
+            model: "claude-opus-4-8".to_string(),
+            last_phase: "Done".to_string(),
+        })
+        .expect("upsert");
+    let mut agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(FakeContainer::new()),
+        Box::new(CaptureNotifier::new()),
+        Box::new(store),
+    )
+    .expect("with_fakes");
+
+    let resume = r#"{"type":"ResumeSession","session_id":"tracked-1","first_prompt":"keep going"}"#;
+    agent.handle_ipc(resume).expect("resume");
+    let last = agent.container_calls().last().expect("spawn").clone();
+    assert!(
+        last.contains("--resume claude-uuid-9"),
+        "tracked session with claude id → --resume <uuid>; got {last}"
+    );
+}
+
+/// Resuming a tracked session whose claude id is an EMPTY string → `--continue`
+/// (covers the non-empty guard's false arm).
+#[test]
+fn resume_session_empty_claude_id_continues() {
+    let mut store = marsad_store::Store::new(Box::new(MemoryBackend::new()));
+    store
+        .upsert_session(&marsad_store::PersistedSession {
+            id: "tracked-empty".to_string(),
+            session_id: Some(String::new()),
+            name: "t".to_string(),
+            host_id: "local".to_string(),
+            project: "/home/user/p".to_string(),
+            branch: "main".to_string(),
+            model: "claude-opus-4-8".to_string(),
+            last_phase: "Done".to_string(),
+        })
+        .expect("upsert");
+    let mut agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(FakeContainer::new()),
+        Box::new(CaptureNotifier::new()),
+        Box::new(store),
+    )
+    .expect("with_fakes");
+
+    agent
+        .handle_ipc(r#"{"type":"ResumeSession","session_id":"tracked-empty"}"#)
+        .expect("resume");
+    let last = agent.container_calls().last().expect("spawn").clone();
+    assert!(
+        last.contains("--continue"),
+        "empty claude id → --continue; got {last}"
+    );
+}
+
+/// Resuming an UNKNOWN session id → Protocol error.
+#[test]
+fn resume_session_unknown_returns_error() {
+    let mut agent = make_agent();
+    let result = agent.handle_ipc(r#"{"type":"ResumeSession","session_id":"does-not-exist"}"#);
+    assert!(
+        matches!(result, Err(AgentError::Protocol(_))),
+        "unknown session → Protocol error; got {result:?}"
+    );
+}
+
 /// AttachSession → attaches an already-running session.
 #[test]
 fn ipc_command_attach_session() {

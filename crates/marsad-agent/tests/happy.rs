@@ -41,6 +41,7 @@ fn basic_launch_spec() -> LaunchSpec {
         model: "claude-opus-4-5".to_string(),
         posture: marsad_proto::Posture::Ask,
         first_prompt: None,
+        mode: Default::default(),
     }
 }
 
@@ -51,6 +52,7 @@ fn launch_spec_with_prompt(prompt: &str) -> LaunchSpec {
         model: "claude-opus-4-5".to_string(),
         posture: marsad_proto::Posture::Ask,
         first_prompt: Some(prompt.to_string()),
+        mode: Default::default(),
     }
 }
 
@@ -175,6 +177,44 @@ fn claude_argv_ask_adds_permission_prompt_tool_stdio() {
     );
 }
 
+/// `Continue` mode appends `--continue` (not the project positional, not --resume).
+#[test]
+fn claude_argv_continue_mode_uses_continue_flag() {
+    let mut spec = basic_launch_spec();
+    spec.mode = marsad_proto::LaunchMode::Continue;
+    let argv = claude_argv(&spec);
+    assert!(
+        argv.iter().any(|a| a == "--continue"),
+        "Continue mode must add --continue; got {argv:?}"
+    );
+    assert!(
+        !argv.iter().any(|a| a == "--resume"),
+        "Continue must not add --resume; got {argv:?}"
+    );
+    assert!(
+        !argv.iter().any(|a| a == &spec.project),
+        "Continue must not append the project positional; got {argv:?}"
+    );
+}
+
+/// `Resume(id)` mode appends `--resume <id>`.
+#[test]
+fn claude_argv_resume_mode_uses_resume_id() {
+    let mut spec = basic_launch_spec();
+    spec.mode = marsad_proto::LaunchMode::Resume("sess-uuid-123".to_string());
+    let argv = claude_argv(&spec);
+    let idx = argv
+        .iter()
+        .position(|a| a == "--resume")
+        .expect("Resume mode must add --resume");
+    assert_eq!(
+        argv.get(idx + 1).map(String::as_str),
+        Some("sess-uuid-123"),
+        "--resume must be followed by the session id; got {argv:?}"
+    );
+    assert!(!argv.iter().any(|a| a == "--continue"));
+}
+
 /// Non-Ask postures must NOT add `--permission-prompt-tool` — the CLI's own
 /// permission mode handles approvals (acceptEdits / bypassPermissions).
 #[test]
@@ -189,6 +229,7 @@ fn claude_argv_non_ask_omits_permission_prompt_tool() {
             model: "claude-opus-4-5".to_string(),
             posture,
             first_prompt: None,
+            mode: Default::default(),
         };
         let argv = claude_argv(&spec);
         assert!(
@@ -207,6 +248,7 @@ fn claude_argv_permission_mode_auto_approve_safe() {
         model: "claude-opus-4-5".to_string(),
         posture: marsad_proto::Posture::AutoApproveSafe,
         first_prompt: None,
+        mode: Default::default(),
     };
     let argv = claude_argv(&spec);
     let idx = argv
@@ -229,6 +271,7 @@ fn claude_argv_permission_mode_full_autonomy() {
         model: "claude-opus-4-5".to_string(),
         posture: marsad_proto::Posture::FullAutonomy,
         first_prompt: None,
+        mode: Default::default(),
     };
     let argv = claude_argv(&spec);
     let idx = argv

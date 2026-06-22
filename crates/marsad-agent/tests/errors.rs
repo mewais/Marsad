@@ -161,6 +161,7 @@ fn launch_spawn_failure_returns_spawn_error() {
         model: "claude-opus-4-5".to_string(),
         posture: marsad_proto::Posture::Ask,
         first_prompt: None,
+        mode: Default::default(),
     };
 
     // NOTE(test-agent): We need a FakeContainer configured to fail spawns.
@@ -530,6 +531,7 @@ fn launch_spawn_failure_deterministic_container_name() {
         model: "m".to_string(),
         posture: marsad_proto::Posture::Ask,
         first_prompt: None,
+        mode: Default::default(),
     };
     match agent.launch(spec) {
         Err(AgentError::Spawn(_)) => {}
@@ -569,10 +571,74 @@ fn launch_upsert_failure_returns_lifecycle_error() {
         model: "m".to_string(),
         posture: marsad_proto::Posture::Ask,
         first_prompt: None,
+        mode: Default::default(),
     };
     match agent.launch(spec) {
         Err(AgentError::Lifecycle(_)) => {}
         other => panic!("expected AgentError::Lifecycle, got {other:?}"),
+    }
+}
+
+// ── handle_resume_session: error arms ─────────────────────────────────────────
+
+/// `handle_resume_session` calls `store.restore()?`.  Arming the next read to
+/// fail makes restore error, exercising the `map_err(... Lifecycle ...)` arm.
+#[test]
+fn resume_session_restore_failure_returns_lifecycle_error() {
+    use marsad_store::BackendOp;
+
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::List); // restore() lists keys first
+
+    let mut agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(FakeContainer::new()),
+        Box::new(CaptureNotifier::new()),
+        Box::new(marsad_store::Store::new(Box::new(backend))),
+    )
+    .expect("with_fakes");
+
+    let result = agent.handle_ipc(r#"{"type":"ResumeSession","session_id":"whatever"}"#);
+    match result {
+        Err(AgentError::Lifecycle(_)) => {}
+        other => panic!("expected AgentError::Lifecycle from failed restore, got {other:?}"),
+    }
+}
+
+/// `handle_resume_session` ends with `self.launch(spec)?`.  Arming the resumed
+/// session's container name to fail spawn exercises that `?` error branch.
+#[test]
+fn resume_session_launch_spawn_failure_propagates() {
+    let mut container = FakeContainer::new();
+    // The resumed session is launched as the first session → "marsad-session-1".
+    container.fail_spawn("marsad-session-1");
+
+    let mut store = marsad_store::Store::new(Box::new(MemoryBackend::new()));
+    store
+        .upsert_session(&marsad_store::PersistedSession {
+            id: "r1".to_string(),
+            session_id: Some("claude-uuid".to_string()),
+            name: "r".to_string(),
+            host_id: "local".to_string(),
+            project: "/p".to_string(),
+            branch: "main".to_string(),
+            model: "m".to_string(),
+            last_phase: "Done".to_string(),
+        })
+        .expect("upsert");
+
+    let mut agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(container),
+        Box::new(CaptureNotifier::new()),
+        Box::new(store),
+    )
+    .expect("with_fakes");
+
+    let result = agent.handle_ipc(r#"{"type":"ResumeSession","session_id":"r1"}"#);
+    match result {
+        Err(AgentError::Spawn(_)) => {}
+        other => panic!("expected AgentError::Spawn from failed launch, got {other:?}"),
     }
 }
 

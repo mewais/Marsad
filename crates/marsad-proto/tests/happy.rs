@@ -299,6 +299,38 @@ fn encode_control_response_deny_without_reason_defaults_to_empty_message() {
 }
 
 #[test]
+fn launch_mode_default_serde_and_spec_default() {
+    use marsad_proto::{LaunchMode, LaunchSpec};
+    // Default is Fresh.
+    assert_eq!(LaunchMode::default(), LaunchMode::Fresh);
+    // Each variant round-trips, and Clone/Debug are exercised.
+    for m in [
+        LaunchMode::Fresh,
+        LaunchMode::Continue,
+        LaunchMode::Resume("sess-1".to_string()),
+    ] {
+        let cloned = m.clone();
+        let _ = format!("{cloned:?}");
+        let s = serde_json::to_string(&m).expect("serialize LaunchMode");
+        let back: LaunchMode = serde_json::from_str(&s).expect("deserialize LaunchMode");
+        assert_eq!(m, back);
+    }
+    // A LaunchSpec serialized WITHOUT a `mode` field deserializes to Fresh
+    // (the #[serde(default)] keeps older payloads working).
+    let spec: LaunchSpec = serde_json::from_str(
+        r#"{"project":"/p","host_id":"local","model":"m","posture":"Ask","first_prompt":null}"#,
+    )
+    .expect("LaunchSpec without mode must parse");
+    assert_eq!(spec.mode, LaunchMode::Fresh);
+    // And with an explicit resume mode.
+    let resumed: LaunchSpec = serde_json::from_str(
+        r#"{"project":"/p","host_id":"local","model":"m","posture":"Ask","first_prompt":null,"mode":{"Resume":"abc"}}"#,
+    )
+    .expect("LaunchSpec with resume mode must parse");
+    assert_eq!(resumed.mode, LaunchMode::Resume("abc".to_string()));
+}
+
+#[test]
 fn encode_initialize_handshake_shape() {
     let encoded = marsad_proto::encode_control_request_initialize("req_1_init");
     let raw: serde_json::Value =
