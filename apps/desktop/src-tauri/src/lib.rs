@@ -6,6 +6,7 @@
 
 pub mod bridge;
 pub mod events;
+pub mod git;
 pub mod mock;
 
 use std::sync::Mutex;
@@ -295,16 +296,20 @@ pub fn run() {
 
     // Build the primary Core transport — use real LocalIpc if connected,
     // otherwise fall back to LoopbackFake so the app still launches.
+    // Use BackgroundGit so the per-event git-changes probe never blocks the Core
+    // mutex on a subprocess (which would freeze the whole UI intermittently).
     let core = match primary_transport {
-        Some(ipc) => {
-            marsad_core::Core::new(cfg, Box::new(ipc))
-                .expect("Core::new should not fail")
-        }
+        Some(ipc) => marsad_core::Core::with_git(
+            cfg,
+            Box::new(ipc),
+            Box::new(git::BackgroundGit::new()),
+        )
+        .expect("Core::with_git should not fail"),
         None => {
             eprintln!("marsad-desktop: WARNING — running with LoopbackFake (no agent)");
             let (transport, _peer) = marsad_transport::LoopbackFake::pair();
-            marsad_core::Core::new(cfg, Box::new(transport))
-                .expect("Core::new should not fail with a loopback transport")
+            marsad_core::Core::with_git(cfg, Box::new(transport), Box::new(git::BackgroundGit::new()))
+                .expect("Core::with_git should not fail with a loopback transport")
         }
     };
 

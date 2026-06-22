@@ -14,8 +14,13 @@ use marsad_viewmodel::{OverviewGroups, SessionView};
 // ---------------------------------------------------------------------------
 
 /// JSON-serializable envelope matching the TS VmUpdateEvent union.
+///
+/// `Session` is the large, common variant (full `SessionView`). These envelopes
+/// are built and immediately emitted to the webview, never stored in bulk, so
+/// boxing the hot-path variant would add an allocation per event for no benefit.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum VmUpdateEnvelope {
     Overview { groups: OverviewGroups },
     Session { session: SessionView },
