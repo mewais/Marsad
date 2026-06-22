@@ -498,6 +498,42 @@ fn on_agent_line_init_yields_session_vm_update() {
 }
 
 #[test]
+fn session_name_derives_from_project_basename_with_id_fallback() {
+    fn name_for(project: &str) -> (String, String) {
+        let (mut core, _peer) = make_core();
+        let id = core
+            .launch_session(LaunchSpec {
+                project: project.to_string(),
+                host_id: "local".to_string(),
+                model: "m".to_string(),
+                posture: Posture::Ask,
+                first_prompt: None,
+                mode: Default::default(),
+            })
+            .expect("launch");
+        let updates = core
+            .on_agent_line(&ipc_agent_event_system_init(&id))
+            .expect("init");
+        let sv = updates
+            .iter()
+            .find_map(|u| match u {
+                VmUpdate::Session(s) => Some(s.clone()),
+                _ => None,
+            })
+            .expect("a session view");
+        (sv.name, id)
+    }
+
+    // A real project path → name is the last path component.
+    let (name, _) = name_for("/work/mewais/Marsad");
+    assert_eq!(name, "Marsad", "name should be the project basename");
+
+    // Empty project → falls back to the session id.
+    let (name, id) = name_for("");
+    assert_eq!(name, id, "empty project must fall back to the id");
+}
+
+#[test]
 fn on_agent_line_assistant_yields_session_vm_update() {
     let (mut core, _peer) = make_core();
     let id = core

@@ -376,7 +376,7 @@ impl Core {
         let s = &record.state;
         SessionView {
             id: id.to_string(),
-            name: id.to_string(),
+            name: session_display_name(&record.project, id),
             host_id: "local".to_string(),
             project: record.project.clone(),
             branch: String::new(),
@@ -422,6 +422,16 @@ fn new_session_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("session-{n:016x}")
+}
+
+/// Human-friendly session name: the project directory's last path component
+/// (e.g. "/work/mewais/Marsad" -> "Marsad"). Falls back to the session id when
+/// the project is empty or has no usable basename.
+fn session_display_name(project: &str, id: &str) -> String {
+    match project.trim_end_matches('/').rsplit('/').next() {
+        Some(base) if !base.is_empty() => base.to_string(),
+        _ => id.to_string(),
+    }
 }
 
 fn posture_to_permission_mode(posture: &Posture) -> &'static str {

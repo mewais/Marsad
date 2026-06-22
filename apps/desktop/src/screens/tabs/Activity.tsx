@@ -80,12 +80,15 @@ function deriveTranscript(
     });
   }
 
-  // If session is Working, show a working spinner entry
-  if (sv.state === "Working" || sv.state === "Starting") {
+  // Show a working spinner only while Claude is actually working. A freshly
+  // launched session sits idle (claude emits nothing until prompted), so we
+  // don't show a perpetual "Starting up…" spinner — the composer below is ready
+  // for the first prompt.
+  if (sv.state === "Working") {
     msgs.push({
       id: "working-0",
       kind: "working",
-      text: sv.state === "Starting" ? "Starting up…" : "Working…",
+      text: "Working…",
     });
   }
 
@@ -564,7 +567,6 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
             onSend={handleSend}
             onInterrupt={handleInterrupt}
             onSlashSelect={handleSlashSelect}
-            disabled={sv.state === "Starting"}
           />
         </div>
       </div>
