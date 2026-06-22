@@ -130,6 +130,18 @@ export async function runSlash(id: string, cmd: string): Promise<void> {
   await invoke("run_slash", { id, cmd });
 }
 
+export async function getAutostart(): Promise<boolean> {
+  if (!isTauri()) return false;
+  const invoke = await getInvoke();
+  return invoke("get_autostart") as Promise<boolean>;
+}
+
+export async function setAutostart(enabled: boolean): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("set_autostart", { enabled });
+}
+
 export async function setWorkspace(id: string): Promise<void> {
   if (!isTauri()) {
     _mockSnapshot = { ..._mockSnapshot, active_ws: id };

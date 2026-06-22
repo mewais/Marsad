@@ -215,3 +215,25 @@ pub fn set_workspace(state: State<'_, ManagedState>, id: String) -> Result<(), S
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Autostart commands
+// ---------------------------------------------------------------------------
+
+/// Return whether Marsad is configured to launch at login.
+#[tauri::command]
+pub fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+/// Enable or disable launch-at-login for Marsad.
+#[tauri::command]
+pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    if enabled {
+        app.autolaunch().enable().map_err(|e| e.to_string())
+    } else {
+        app.autolaunch().disable().map_err(|e| e.to_string())
+    }
+}

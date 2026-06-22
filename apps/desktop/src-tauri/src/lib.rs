@@ -164,6 +164,98 @@ fn adopt_or_spawn_agent(socket_path: &str) -> Option<marsad_transport::LocalIpc>
 }
 
 // ---------------------------------------------------------------------------
+// Common builder configuration (plugins, tray, window events, commands)
+// ---------------------------------------------------------------------------
+
+/// Apply plugins, the tray icon, close-to-tray behaviour, and command
+/// registration to a `Builder`.  Both the mock and live paths call this so
+/// the two builder chains stay in sync.
+fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    builder
+        // ── Plugins ────────────────────────────────────────────────────────
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
+        .plugin(tauri_plugin_notification::init())
+        // ── Close-to-tray: hide the window instead of quitting ─────────────
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        // ── Invoke handler — both mock and live commands ────────────────────
+        .invoke_handler(tauri::generate_handler![
+            bridge::snapshot,
+            bridge::launch_session,
+            bridge::resume_session,
+            bridge::attach_session,
+            bridge::stop_session,
+            bridge::send_prompt,
+            bridge::interrupt,
+            bridge::answer_gate,
+            bridge::run_slash,
+            bridge::set_workspace,
+            bridge::list_sessions,
+            bridge::get_autostart,
+            bridge::set_autostart,
+        ])
+}
+
+// ---------------------------------------------------------------------------
+// Tray icon setup (called inside .setup() for both modes)
+// ---------------------------------------------------------------------------
+
+/// Build and register the system-tray icon.
+///
+/// Menu:
+///   • "Show Marsad" — shows and focuses the main window.
+///   • "Quit"        — exits the application.
+///
+/// Left-clicking the tray icon also shows/focuses the main window.
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::TrayIconBuilder;
+    use tauri::Manager;
+
+    let show_item = MenuItem::with_id(app, "show", "Show Marsad", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+    TrayIconBuilder::new()
+        .icon(app.default_window_icon().cloned().expect("app icon not found"))
+        .menu(&menu)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "quit" => app.exit(0),
+            "show" => {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let tauri::tray::TrayIconEvent::Click {
+                button: tauri::tray::MouseButton::Left,
+                button_state: tauri::tray::MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle();
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+            }
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // run()
 // ---------------------------------------------------------------------------
 
@@ -174,21 +266,12 @@ pub fn run() {
     if is_mock {
         // ── Mock mode ──────────────────────────────────────────────────────
         let managed: ManagedState = Mutex::new(AppState::Mock(mock::seeded_mock()));
-        tauri::Builder::default()
+        configure(tauri::Builder::default())
             .manage(managed)
-            .invoke_handler(tauri::generate_handler![
-                bridge::snapshot,
-                bridge::launch_session,
-                bridge::resume_session,
-                bridge::attach_session,
-                bridge::stop_session,
-                bridge::send_prompt,
-                bridge::interrupt,
-                bridge::answer_gate,
-                bridge::run_slash,
-                bridge::set_workspace,
-                bridge::list_sessions,
-            ])
+            .setup(|app| {
+                setup_tray(app)?;
+                Ok(())
+            })
             .run(tauri::generate_context!())
             .expect("error while running Tauri application");
         return;
@@ -245,24 +328,12 @@ pub fn run() {
 
     let socket_path_for_reader = socket_path.clone();
 
-    tauri::Builder::default()
+    configure(tauri::Builder::default())
         .manage(managed)
-        .invoke_handler(tauri::generate_handler![
-            bridge::snapshot,
-            bridge::launch_session,
-            bridge::resume_session,
-            bridge::attach_session,
-            bridge::stop_session,
-            bridge::send_prompt,
-            bridge::interrupt,
-            bridge::answer_gate,
-            bridge::run_slash,
-            bridge::set_workspace,
-            bridge::list_sessions,
-        ])
         .setup(move |app| {
-            let app_handle = app.handle().clone();
+            setup_tray(app)?;
 
+            let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 run_reader_thread(app_handle, &socket_path_for_reader);
             });
@@ -283,11 +354,18 @@ pub fn run() {
 /// reading agent event lines and forwarding them to the webview via
 /// `emit_updates`.
 ///
+/// Keeps track of the last-seen `Phase` for each session so OS notifications
+/// are only fired when a session *transitions* into `Needs` or `Error`.
+///
 /// A recv error (agent gone, socket closed) causes the loop to exit
 /// silently — the app continues running.
 fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
+    use marsad_core::VmUpdate;
+    use marsad_events::Phase;
     use marsad_transport::Transport;
+    use std::collections::HashMap;
     use tauri::Manager;
+    use tauri_plugin_notification::NotificationExt;
 
     // Try to open a 2nd connection for receiving broadcasts.
     let mut reader_ipc = marsad_transport::LocalIpc::new(socket_path);
@@ -311,6 +389,10 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
     }
 
     eprintln!("marsad-desktop: reader thread: subscribed to agent at {socket_path}");
+
+    // Track the last-seen phase per session to detect transitions.
+    // `None` means we haven't observed this session yet.
+    let mut last_phase: HashMap<String, Phase> = HashMap::new();
 
     // Read agent lines and forward them.
     loop {
@@ -346,6 +428,51 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
                         AppState::Mock(_) => vec![],
                     }
                 }; // lock released here
+
+                // Fire OS notifications for sessions that transition to Needs/Error.
+                for update in &updates {
+                    if let VmUpdate::Session(sv) = update {
+                        let new_phase = &sv.state;
+                        let session_id = sv.id.clone();
+                        let session_name = sv.name.clone();
+
+                        let prev = last_phase.get(&session_id);
+
+                        let should_notify = match new_phase {
+                            Phase::Needs | Phase::Error => {
+                                // Only notify on a genuine TRANSITION into a
+                                // needs-attention state (seen before in a
+                                // different phase). The first time we observe a
+                                // session we just record its baseline — avoids a
+                                // burst of notifications every time the app
+                                // (re)connects to already-pending sessions.
+                                prev.is_some() && prev != Some(new_phase)
+                            }
+                            _ => false,
+                        };
+
+                        // Update the tracked phase unconditionally.
+                        last_phase.insert(session_id.clone(), new_phase.clone());
+
+                        if should_notify {
+                            let body = match new_phase {
+                                Phase::Needs => {
+                                    format!("{session_name} needs your input")
+                                }
+                                Phase::Error => {
+                                    format!("{session_name} encountered an error")
+                                }
+                                _ => unreachable!(),
+                            };
+                            let _ = app
+                                .notification()
+                                .builder()
+                                .title("Marsad")
+                                .body(&body)
+                                .show();
+                        }
+                    }
+                }
 
                 events::emit_updates(&app, updates);
             }

@@ -13,11 +13,12 @@
  * NOTE: backend command pending for persisting session defaults.
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useVm } from "../bridge/useVm";
 import { useTheme } from "../theme/ThemeProvider";
 import { Toggle } from "../components/Toggle";
 import { MODELS as MODEL_LIST, DEFAULT_MODEL } from "../bridge/models";
+import { getAutostart, setAutostart } from "../bridge/api";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -976,7 +977,14 @@ function GeneralTab() {
   // NOTE: behavior toggles local state — backend command pending
   const [restoreOnLaunch, setRestoreOnLaunch] = useState(true);
   const [confirmBeforeStop, setConfirmBeforeStop] = useState(true);
-  const [startMarsad, setStartMarsad] = useState(true);
+  const [startMarsad, setStartMarsad] = useState(false);
+
+  // Initialize autostart toggle from backend on mount
+  useEffect(() => {
+    getAutostart()
+      .then((enabled) => setStartMarsad(enabled))
+      .catch((err) => console.error("[Settings] getAutostart failed:", err));
+  }, []);
 
   return (
     <div style={{ maxWidth: 640, display: "flex", flexDirection: "column", gap: 22 }}>
@@ -1136,8 +1144,17 @@ function GeneralTab() {
                 Keep the app ready and reattach to running sessions.
               </div>
             </div>
-            <div>
-              <Toggle checked={startMarsad} onChange={setStartMarsad} />
+            <div data-testid="general-autostart-toggle">
+              <Toggle
+                checked={startMarsad}
+                onChange={(next) => {
+                  setStartMarsad(next);
+                  setAutostart(next).catch((err) => {
+                    console.error("[Settings] setAutostart failed:", err);
+                    setStartMarsad(!next);
+                  });
+                }}
+              />
             </div>
           </div>
 
