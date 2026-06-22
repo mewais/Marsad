@@ -9,6 +9,7 @@
 import { useRef, useEffect } from "react";
 import { useVm } from "../../bridge/useVm";
 import { Composer } from "../../components/Composer";
+import { Markdown } from "../../components/Markdown";
 import {
   sendPrompt,
   interrupt,
@@ -168,6 +169,8 @@ function PromptBubble({ text }: { text: string }) {
         fontSize: 13,
         lineHeight: 1.5,
         boxShadow: "var(--shadow-sm)",
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
       }}
     >
       {text}
@@ -205,9 +208,10 @@ function ResponseMsg({ text }: { text: string }) {
           lineHeight: 1.6,
           color: "var(--txt)",
           paddingTop: 3,
+          minWidth: 0,
         }}
       >
-        {text}
+        <Markdown text={text} />
       </div>
     </div>
   );
