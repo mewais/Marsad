@@ -8,6 +8,7 @@ import type { SessionSummary } from "../bridge/types";
 import { MODELS, DEFAULT_MODEL } from "../bridge/models";
 import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
+import { Dropdown } from "../components/Dropdown";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -332,61 +333,43 @@ export function NewSession() {
         {/* ---- Resume ---- */}
         <div>
           <div style={sectionLabel}>Resume</div>
-          {/* Toggle row */}
-          <div
-            data-testid="ns-resume-toggle"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-            }}
-          >
-            <Toggle checked={resume} onChange={setResume} />
-            <span style={{ fontSize: 12.5, color: "var(--txt2)", fontWeight: 500 }}>
-              Resume a previous session
-            </span>
-          </div>
-
-          {/* Dropdown — only visible when toggle is on */}
-          {resume && (
-            <div style={{ marginTop: 10 }}>
-              {sessions.length === 0 && (
-                <div
-                  style={{
-                    fontSize: 11.5,
-                    color: "var(--txt3)",
-                    marginBottom: 6,
-                    fontStyle: "italic",
-                  }}
-                >
-                  No previous sessions in this directory
-                </div>
-              )}
-              <select
-                data-testid="ns-resume-select"
+          {/* Toggle + session picker on one row; the picker is greyed until the
+              toggle is on. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div
+              data-testid="ns-resume-toggle"
+              style={{ display: "flex", alignItems: "center", gap: 10 }}
+            >
+              <Toggle checked={resume} onChange={setResume} />
+              <span style={{ fontSize: 12.5, color: "var(--txt2)", fontWeight: 500 }}>
+                Resume a previous session
+              </span>
+            </div>
+            <div style={{ marginLeft: "auto" }}>
+              <Dropdown
+                testId="ns-resume-select"
                 value={selectedResume}
-                onChange={(e) => setSelectedResume(e.target.value)}
-                style={{
-                  width: "100%",
-                  boxSizing: "border-box",
-                  background: "var(--panel2)",
-                  border: "1px solid var(--border2)",
-                  borderRadius: 9,
-                  padding: "9px 11px",
-                  color: "var(--txt)",
-                  fontFamily: "inherit",
-                  fontSize: 12.5,
-                  cursor: "pointer",
-                  outline: "none",
-                }}
-              >
-                <option value="continue">Last (continue)</option>
-                {sessions.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {sessionLabel(s)}
-                  </option>
-                ))}
-              </select>
+                onChange={setSelectedResume}
+                disabled={!resume}
+                width={260}
+                align="right"
+                options={[
+                  { value: "continue", label: "Last (continue)" },
+                  ...sessions.map((s) => ({ value: s.id, label: sessionLabel(s) })),
+                ]}
+              />
+            </div>
+          </div>
+          {resume && sessions.length === 0 && (
+            <div
+              style={{
+                fontSize: 11.5,
+                color: "var(--txt3)",
+                marginTop: 8,
+                fontStyle: "italic",
+              }}
+            >
+              No previous sessions in this directory
             </div>
           )}
         </div>

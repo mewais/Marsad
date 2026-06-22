@@ -118,6 +118,12 @@ const S: Record<string, React.CSSProperties> = {
     overflowY: "auto",
     padding: "24px 26px 48px",
   },
+  // Content sits in a centered column (like the session window's tab content);
+  // only the header/tabs are full-width left-aligned.
+  bodyInner: {
+    maxWidth: 900,
+    margin: "0 auto",
+  },
   sectionLabel: {
     fontSize: 11,
     fontWeight: 700,
@@ -1242,10 +1248,12 @@ export function Settings() {
       </div>
 
       <div style={S.body}>
-        {activeTab === "Notifications" && <NotificationsTab />}
-        {activeTab === "Hosts" && <HostsTab />}
-        {activeTab === "Session defaults" && <SessionDefaultsTab />}
-        {activeTab === "General" && <GeneralTab />}
+        <div style={S.bodyInner}>
+          {activeTab === "Notifications" && <NotificationsTab />}
+          {activeTab === "Hosts" && <HostsTab />}
+          {activeTab === "Session defaults" && <SessionDefaultsTab />}
+          {activeTab === "General" && <GeneralTab />}
+        </div>
       </div>
     </div>
   );
