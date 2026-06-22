@@ -168,6 +168,81 @@ impl GitProbe for RealGit {
 }
 
 // ---------------------------------------------------------------------------
+// TranscriptReader — seam for reading a session's full conversation
+// ---------------------------------------------------------------------------
+
+/// Loads **prior history** for a resumed conversation from claude's authoritative
+/// session JSONL. Used only at launch (for `Resume`/`Continue`); live turns are
+/// built from the stream + injected prompts, so this never races claude's writes.
+/// Injected so tests can supply a fake.
+pub trait TranscriptReader {
+    /// History of a specific claude session (resume-by-id).
+    fn session(
+        &self,
+        project: &str,
+        claude_session_id: &str,
+    ) -> Vec<marsad_events::TranscriptEntry>;
+    /// History of the most-recent session in `project` (continue-most-recent).
+    fn most_recent(&self, project: &str) -> Vec<marsad_events::TranscriptEntry>;
+}
+
+/// Production `TranscriptReader`: reads `<claude config>/projects/<enc>/<id>.jsonl`.
+pub struct RealTranscript;
+
+impl RealTranscript {
+    /// claude's projects root: `$CLAUDE_CONFIG_DIR/projects` if set, else
+    /// `$HOME/.claude/projects`.
+    #[cfg(not(coverage))]
+    fn projects_root() -> Option<std::path::PathBuf> {
+        if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+            if !dir.is_empty() {
+                return Some(std::path::PathBuf::from(dir).join("projects"));
+            }
+        }
+        std::env::var("HOME")
+            .ok()
+            .filter(|h| !h.is_empty())
+            .map(|h| std::path::PathBuf::from(h).join(".claude").join("projects"))
+    }
+}
+
+// The real paths depend on the user's environment ($HOME / $CLAUDE_CONFIG_DIR) so
+// they are excluded from coverage; the parsing they delegate to
+// (`discovery::session_transcript`/`parse_transcript`/`list_sessions`) is
+// unit-tested directly, and the end-to-end read is exercised by the live i10 test.
+impl TranscriptReader for RealTranscript {
+    #[cfg(coverage)]
+    fn session(&self, _project: &str, _id: &str) -> Vec<marsad_events::TranscriptEntry> {
+        Vec::new()
+    }
+
+    #[cfg(not(coverage))]
+    fn session(&self, project: &str, id: &str) -> Vec<marsad_events::TranscriptEntry> {
+        let Some(root) = Self::projects_root() else {
+            return Vec::new();
+        };
+        discovery::session_transcript(&root, project, id).unwrap_or_default()
+    }
+
+    #[cfg(coverage)]
+    fn most_recent(&self, _project: &str) -> Vec<marsad_events::TranscriptEntry> {
+        Vec::new()
+    }
+
+    #[cfg(not(coverage))]
+    fn most_recent(&self, project: &str) -> Vec<marsad_events::TranscriptEntry> {
+        let Some(root) = Self::projects_root() else {
+            return Vec::new();
+        };
+        let sessions = discovery::list_sessions(&root, project).unwrap_or_default();
+        match sessions.first() {
+            Some(s) => discovery::session_transcript(&root, project, &s.id).unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Per-session record
 // ---------------------------------------------------------------------------
 
@@ -176,6 +251,11 @@ struct SessionRecord {
     state: SessionState,
     /// Last-probed working-tree changes for this session's project dir.
     changes: Vec<FileChange>,
+    /// Conversation transcript: resume history (loaded once at launch) + live
+    /// assistant/tool entries (from the stream) + user prompts (injected on send).
+    transcript: Vec<marsad_events::TranscriptEntry>,
+    /// Assistant message ids already appended to the transcript (dedup).
+    seen_msg_ids: std::collections::HashSet<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +266,7 @@ pub struct Core {
     _cfg: CoreConfig,
     transport: Box<dyn Transport>,
     git: Box<dyn GitProbe>,
+    transcript: Box<dyn TranscriptReader>,
     session_order: Vec<String>,
     sessions: HashMap<String, SessionRecord>,
     ledger: DecisionLedger,
@@ -198,15 +279,26 @@ impl Core {
     /// silently ignored here — the first send will surface a BrokenPipe instead.
     /// This keeps `Core::new` infallible in all committed test scenarios.
     pub fn new(cfg: CoreConfig, transport: Box<dyn Transport>) -> Result<Core, CoreError> {
-        Core::with_git(cfg, transport, Box::new(RealGit))
+        Core::with_probes(cfg, transport, Box::new(RealGit), Box::new(RealTranscript))
     }
 
-    /// Like [`Core::new`] but with an injected [`GitProbe`] (used by tests to
-    /// supply a fake instead of shelling out to `git`).
+    /// Like [`Core::new`] but with an injected [`GitProbe`] (real transcript
+    /// reader). Retained for tests that only need to fake git.
     pub fn with_git(
+        cfg: CoreConfig,
+        transport: Box<dyn Transport>,
+        git: Box<dyn GitProbe>,
+    ) -> Result<Core, CoreError> {
+        Core::with_probes(cfg, transport, git, Box::new(RealTranscript))
+    }
+
+    /// Like [`Core::new`] but with both side-effect seams injected (used by tests
+    /// to supply fakes instead of shelling out to `git` / reading the home dir).
+    pub fn with_probes(
         cfg: CoreConfig,
         mut transport: Box<dyn Transport>,
         git: Box<dyn GitProbe>,
+        transcript: Box<dyn TranscriptReader>,
     ) -> Result<Core, CoreError> {
         // Best-effort connect; ignore errors (send_line will detect them).
         let _ = transport.connect();
@@ -214,6 +306,7 @@ impl Core {
             _cfg: cfg,
             transport,
             git,
+            transcript,
             session_order: Vec::new(),
             sessions: HashMap::new(),
             ledger: DecisionLedger::new(),
@@ -289,6 +382,22 @@ impl Core {
 
         self.send_raw_line(&line)?;
 
+        // Seed the transcript with prior history when resuming (loaded once — old,
+        // fully-flushed JSONL, so no race), then the first prompt as a user turn.
+        let mut transcript = match &spec.mode {
+            LaunchMode::Resume(sid) => self.transcript.session(&spec.project, sid),
+            LaunchMode::Continue => self.transcript.most_recent(&spec.project),
+            LaunchMode::Fresh => Vec::new(),
+        };
+        if let Some(fp) = spec.first_prompt.as_deref() {
+            let fp = fp.trim();
+            if !fp.is_empty() {
+                transcript.push(marsad_events::TranscriptEntry::User {
+                    text: fp.to_string(),
+                });
+            }
+        }
+
         self.session_order.push(id.clone());
         self.sessions.insert(
             id.clone(),
@@ -296,6 +405,8 @@ impl Core {
                 project: spec.project,
                 state: SessionState::initial(),
                 changes: Vec::new(),
+                transcript,
+                seen_msg_ids: std::collections::HashSet::new(),
             },
         );
 
@@ -325,6 +436,18 @@ impl Core {
 
     pub fn send_prompt(&mut self, id: &str, text: &str) -> Result<(), CoreError> {
         self.require_session(id)?;
+        // Record the user's prompt immediately — claude does not echo it on the
+        // stream, so this is the only place it can enter the transcript. It surfaces
+        // on the next agent event (claude's reply) which re-emits the SessionView.
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            // Safe: require_session above guarantees the entry exists.
+            self.sessions.get_mut(id).unwrap().transcript.push(
+                marsad_events::TranscriptEntry::User {
+                    text: trimmed.to_string(),
+                },
+            );
+        }
         self.send_ipc(&IpcMsg::SendPrompt {
             session_id: id.to_string(),
             text: text.to_string(),
@@ -438,6 +561,37 @@ impl Core {
         let stream_msg = marsad_proto::parse_stream_line(&event_json)
             .unwrap_or(marsad_proto::StreamMsg::Unknown(env.event));
 
+        // Extract assistant prose + tool invocations for the transcript (from the
+        // live stream — immediate, no JSONL flush race). claude does not echo user
+        // prompts here; those are injected by launch/send_prompt. Deduped below by
+        // message id.
+        let assistant: Option<(String, Vec<marsad_events::TranscriptEntry>)> =
+            if let marsad_proto::StreamMsg::Assistant(am) = &stream_msg {
+                let mut entries = Vec::new();
+                for block in &am.message.content {
+                    match block {
+                        marsad_proto::ContentBlock::Text { text } => {
+                            let t = text.trim();
+                            if !t.is_empty() {
+                                entries.push(marsad_events::TranscriptEntry::Assistant {
+                                    text: t.to_string(),
+                                });
+                            }
+                        }
+                        marsad_proto::ContentBlock::ToolUse { name, input, .. } => {
+                            entries.push(marsad_events::TranscriptEntry::Tool {
+                                name: name.clone(),
+                                input: serde_json::to_string(input).unwrap_or_default(),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                Some((am.message.id.clone(), entries))
+            } else {
+                None
+            };
+
         // Reduce the event, then decide whether the working tree may have changed.
         // Safe: require_session above guarantees the entry exists.
         let (project, should_probe) = {
@@ -458,6 +612,14 @@ impl Core {
             let changes = self.git.changes(&project);
             // Safe: entry still exists (single-threaded, no removal in between).
             self.sessions.get_mut(&session_id).unwrap().changes = changes;
+        }
+
+        // Append this assistant message's entries once (dedup by message id).
+        if let Some((msg_id, entries)) = assistant {
+            let record = self.sessions.get_mut(&session_id).unwrap();
+            if record.seen_msg_ids.insert(msg_id) {
+                record.transcript.extend(entries);
+            }
         }
 
         let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
@@ -502,7 +664,7 @@ impl Core {
             tokens: s.tokens,
             context_pct: s.context_pct,
             gate: s.gate.clone(),
-            transcript: s.transcript.clone(),
+            transcript: record.transcript.clone(),
             changes: record.changes.clone(),
         }
     }

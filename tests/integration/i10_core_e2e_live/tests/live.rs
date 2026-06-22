@@ -240,6 +240,15 @@ fn assistant_says(sv: &SessionView, needle: &str) -> bool {
     })
 }
 
+/// True if any user transcript entry contains `needle` (case-insensitive).
+fn user_says(sv: &SessionView, needle: &str) -> bool {
+    let needle = needle.to_lowercase();
+    sv.transcript.iter().any(|e| {
+        matches!(e, marsad_events::TranscriptEntry::User { text }
+            if text.to_lowercase().contains(&needle))
+    })
+}
+
 fn spec(project: &str, first_prompt: &str, posture: Posture, mode: LaunchMode) -> LaunchSpec {
     LaunchSpec {
         project: project.to_string(),
@@ -353,6 +362,11 @@ fn full_loop() {
     assert!(
         assistant_says(&sv, "ready"),
         "S1: transcript must contain claude's 'READY' reply; got {:?}",
+        sv.transcript
+    );
+    assert!(
+        user_says(&sv, "reply with exactly"),
+        "S1: transcript must contain the user's own prompt; got {:?}",
         sv.transcript
     );
     eprintln!(
@@ -497,7 +511,15 @@ fn full_loop() {
         "S4: continued session must recall BANANA; transcript={:?}",
         sv.transcript
     );
-    eprintln!("[i10/S4] PASS — continue recalled the codeword");
+    assert!(
+        user_says(&sv, "remember this codeword"),
+        "S4: resumed transcript must include the prior (history) turn; got {:?}",
+        sv.transcript
+    );
+    eprintln!(
+        "[i10/S4] PASS — continue recalled the codeword AND loaded prior history ({} entries)",
+        sv.transcript.len()
+    );
 
     eprintln!("\n[i10] ALL SCENARIOS PASSED — full GUI<->agent<->claude loop verified.");
 }

@@ -11,6 +11,7 @@
 
 use std::path::Path;
 
+use marsad_events::TranscriptEntry;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -73,6 +74,9 @@ struct JsonlContent {
     #[serde(rename = "type")]
     content_type: Option<String>,
     text: Option<String>,
+    // Present on assistant `tool_use` blocks.
+    name: Option<String>,
+    input: Option<serde_json::Value>,
 }
 
 /// Parse NDJSON from a `.jsonl` file and return the first `"user"` message's
@@ -126,6 +130,98 @@ fn truncate_snippet(s: String) -> String {
         // 100 chars or fewer — return as-is.
         s
     }
+}
+
+// ---------------------------------------------------------------------------
+// transcript parsing
+// ---------------------------------------------------------------------------
+
+/// Parse a full session `.jsonl` into ordered transcript entries.
+///
+/// - `"user"` lines → `TranscriptEntry::User` for each non-empty text block
+///   (tool_result and other non-text blocks are machine noise — skipped).
+/// - `"assistant"` lines → `TranscriptEntry::Assistant` for each text block and
+///   `TranscriptEntry::Tool` for each `tool_use` block.
+/// - Every other line type, blank line, or unparseable line is skipped.
+pub fn parse_transcript(jsonl: &str) -> Vec<TranscriptEntry> {
+    let mut out = Vec::new();
+    for line in jsonl.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(parsed) = serde_json::from_str::<JsonlLine>(trimmed) else {
+            continue;
+        };
+        let role = parsed.line_type.as_deref();
+        let Some(message) = parsed.message else {
+            continue;
+        };
+        let Some(contents) = message.content else {
+            continue;
+        };
+        match role {
+            Some("user") => {
+                for block in contents {
+                    if block.content_type.as_deref() == Some("text") {
+                        if let Some(text) = block.text {
+                            let text = text.trim();
+                            if !text.is_empty() {
+                                out.push(TranscriptEntry::User {
+                                    text: text.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            Some("assistant") => {
+                for block in contents {
+                    match block.content_type.as_deref() {
+                        Some("text") => {
+                            if let Some(text) = block.text {
+                                let text = text.trim();
+                                if !text.is_empty() {
+                                    out.push(TranscriptEntry::Assistant {
+                                        text: text.to_string(),
+                                    });
+                                }
+                            }
+                        }
+                        Some("tool_use") => {
+                            out.push(TranscriptEntry::Tool {
+                                name: block.name.unwrap_or_default(),
+                                input: block.input.map(|v| v.to_string()).unwrap_or_default(),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Read the transcript for one Claude session.
+///
+/// Reads `<projects_root>/<encode_project_dir(cwd)>/<session_id>.jsonl` and
+/// returns its parsed [`TranscriptEntry`] list. Returns an empty `Vec` (not an
+/// error) when the file does not exist yet (e.g. claude has not written it).
+pub fn session_transcript(
+    projects_root: &Path,
+    cwd: &str,
+    session_id: &str,
+) -> std::io::Result<Vec<TranscriptEntry>> {
+    let path = projects_root
+        .join(encode_project_dir(cwd))
+        .join(format!("{session_id}.jsonl"));
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let contents = std::fs::read_to_string(&path)?;
+    Ok(parse_transcript(&contents))
 }
 
 // ---------------------------------------------------------------------------
@@ -628,6 +724,164 @@ mod tests {
             result.is_err(),
             "expected I/O error for dangling symlink .jsonl"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_transcript
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn transcript_user_text_becomes_user_entry() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi there"}]}}"#;
+        assert_eq!(
+            parse_transcript(jsonl),
+            vec![TranscriptEntry::User {
+                text: "hi there".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn transcript_assistant_text_and_tool_use() {
+        let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"on it"},{"type":"tool_use","id":"t1","name":"Write","input":{"path":"a.txt"}}]}}"#;
+        let t = parse_transcript(jsonl);
+        assert_eq!(
+            t,
+            vec![
+                TranscriptEntry::Assistant {
+                    text: "on it".to_string()
+                },
+                // serde_json renders the single-key object deterministically.
+                TranscriptEntry::Tool {
+                    name: "Write".to_string(),
+                    input: r#"{"path":"a.txt"}"#.to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn transcript_tool_use_defaults_when_name_input_absent() {
+        let jsonl = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use"}]}}"#;
+        assert_eq!(
+            parse_transcript(jsonl),
+            vec![TranscriptEntry::Tool {
+                name: String::new(),
+                input: String::new()
+            }]
+        );
+    }
+
+    #[test]
+    fn transcript_skips_user_tool_result_and_empty_and_missing_text() {
+        let jsonl = concat!(
+            // tool_result (non-text user block) → skipped
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":"ok"}]}}"#,
+            "\n",
+            // whitespace-only user text → skipped
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"   "}]}}"#,
+            "\n",
+            // user text block with no text field → skipped
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text"}]}}"#,
+        );
+        assert_eq!(parse_transcript(jsonl), vec![]);
+    }
+
+    #[test]
+    fn transcript_skips_assistant_empty_text_missing_text_and_other_blocks() {
+        let jsonl = concat!(
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"  "}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"image","url":"x"}]}}"#,
+        );
+        assert_eq!(parse_transcript(jsonl), vec![]);
+    }
+
+    #[test]
+    fn transcript_skips_blank_invalid_other_roles_and_missing_fields() {
+        let jsonl = concat!(
+            "   \n",                               // blank
+            "not json\n",                          // unparseable
+            r#"{"type":"summary","summary":"x"}"#, // other role, no message
+            "\n",
+            r#"{"type":"user"}"#, // no message
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":null}}"#, // null content
+            "\n",
+            r#"{"type":"file-history-snapshot","message":{"content":[{"type":"text","text":"ignored"}]}}"#, // unknown role
+        );
+        assert_eq!(parse_transcript(jsonl), vec![]);
+    }
+
+    #[test]
+    fn transcript_full_conversation_in_order() {
+        let jsonl = concat!(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"q1"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"a1"}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"q2"}]}}"#,
+        );
+        assert_eq!(
+            parse_transcript(jsonl),
+            vec![
+                TranscriptEntry::User { text: "q1".into() },
+                TranscriptEntry::Assistant { text: "a1".into() },
+                TranscriptEntry::User { text: "q2".into() },
+            ]
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // session_transcript
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn session_transcript_reads_and_parses() {
+        let tmp = tempdir();
+        let encoded = encode_project_dir("/my/proj");
+        let dir = tmp.path().join(&encoded);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jsonl = concat!(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"world"}]}}"#,
+        );
+        write_jsonl(&dir, "uuid-1.jsonl", jsonl);
+
+        let t = session_transcript(tmp.path(), "/my/proj", "uuid-1").unwrap();
+        assert_eq!(
+            t,
+            vec![
+                TranscriptEntry::User {
+                    text: "hello".into()
+                },
+                TranscriptEntry::Assistant {
+                    text: "world".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn session_transcript_empty_when_file_missing() {
+        let tmp = tempdir();
+        let t = session_transcript(tmp.path(), "/my/proj", "nope").unwrap();
+        assert!(t.is_empty());
+    }
+
+    #[test]
+    fn session_transcript_io_error_when_path_is_dir() {
+        let tmp = tempdir();
+        let encoded = encode_project_dir("/my/proj");
+        let dir = tmp.path().join(&encoded);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Create a DIRECTORY where the .jsonl file is expected → read fails.
+        std::fs::create_dir_all(dir.join("uuid-2.jsonl")).unwrap();
+        let result = session_transcript(tmp.path(), "/my/proj", "uuid-2");
+        assert!(result.is_err(), "reading a directory as a file must error");
     }
 
     // -------------------------------------------------------------------------

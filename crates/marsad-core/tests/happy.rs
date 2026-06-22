@@ -807,3 +807,210 @@ fn git_changes_flow_into_session_view_after_tool_runs() {
     assert_eq!(sv1.changes[0].path, "hello.txt");
     assert_eq!(sv1.changed_files, 1, "changed_files mirrors changes.len()");
 }
+
+// ---------------------------------------------------------------------------
+// Transcript — resume history (loaded once at launch), injected user prompts,
+// and live assistant entries from the stream (deduped). No JSONL-flush race.
+// ---------------------------------------------------------------------------
+
+struct FakeTranscript {
+    session: Vec<marsad_events::TranscriptEntry>,
+    recent: Vec<marsad_events::TranscriptEntry>,
+}
+
+impl marsad_core::TranscriptReader for FakeTranscript {
+    fn session(&self, _project: &str, _id: &str) -> Vec<marsad_events::TranscriptEntry> {
+        self.session.clone()
+    }
+    fn most_recent(&self, _project: &str) -> Vec<marsad_events::TranscriptEntry> {
+        self.recent.clone()
+    }
+}
+
+fn core_with_history(
+    session: Vec<marsad_events::TranscriptEntry>,
+    recent: Vec<marsad_events::TranscriptEntry>,
+) -> Core {
+    let (a, _b) = LoopbackFake::pair();
+    let cfg = CoreConfig {
+        agent_endpoint: "loopback://test".to_string(),
+        data_root: "/tmp/marsad-test".to_string(),
+    };
+    Core::with_probes(
+        cfg,
+        Box::new(a),
+        Box::new(marsad_core::RealGit),
+        Box::new(FakeTranscript { session, recent }),
+    )
+    .expect("with_probes")
+}
+
+fn launch_t(core: &mut Core, first_prompt: Option<&str>, mode: LaunchMode) -> String {
+    core.launch_session(LaunchSpec {
+        project: "/tmp/proj".to_string(),
+        host_id: "local".to_string(),
+        model: "m".to_string(),
+        posture: Posture::Ask,
+        first_prompt: first_prompt.map(|s| s.to_string()),
+        mode,
+    })
+    .expect("launch")
+}
+
+fn last_sv(updates: &[VmUpdate]) -> marsad_viewmodel::SessionView {
+    updates
+        .iter()
+        .rev()
+        .find_map(|u| match u {
+            VmUpdate::Session(s) => Some(s.clone()),
+            _ => None,
+        })
+        .expect("a SessionView")
+}
+
+#[test]
+fn transcript_resume_loads_session_history() {
+    use marsad_events::TranscriptEntry;
+    let hist = vec![TranscriptEntry::User {
+        text: "h1".to_string(),
+    }];
+    let mut core = core_with_history(hist.clone(), vec![]);
+    let id = launch_t(&mut core, None, LaunchMode::Resume("uuid-x".to_string()));
+    let u = core
+        .on_agent_line(&ipc_agent_event_system_init(&id))
+        .unwrap();
+    assert_eq!(last_sv(&u).transcript, hist);
+}
+
+#[test]
+fn transcript_continue_loads_most_recent_history() {
+    use marsad_events::TranscriptEntry;
+    let recent = vec![TranscriptEntry::Assistant {
+        text: "r1".to_string(),
+    }];
+    let mut core = core_with_history(vec![], recent.clone());
+    let id = launch_t(&mut core, None, LaunchMode::Continue);
+    let u = core
+        .on_agent_line(&ipc_agent_event_system_init(&id))
+        .unwrap();
+    assert_eq!(last_sv(&u).transcript, recent);
+}
+
+#[test]
+fn transcript_fresh_has_no_history() {
+    let mut core = core_with_history(vec![], vec![]);
+    let id = launch_t(&mut core, None, LaunchMode::Fresh);
+    let u = core
+        .on_agent_line(&ipc_agent_event_system_init(&id))
+        .unwrap();
+    assert!(last_sv(&u).transcript.is_empty());
+}
+
+#[test]
+fn transcript_first_prompt_is_injected() {
+    use marsad_events::TranscriptEntry;
+    let mut core = core_with_history(vec![], vec![]);
+    let id = launch_t(&mut core, Some("hello there"), LaunchMode::Fresh);
+    let u = core
+        .on_agent_line(&ipc_agent_event_system_init(&id))
+        .unwrap();
+    assert_eq!(
+        last_sv(&u).transcript,
+        vec![TranscriptEntry::User {
+            text: "hello there".to_string()
+        }]
+    );
+}
+
+#[test]
+fn transcript_blank_first_prompt_not_injected() {
+    let mut core = core_with_history(vec![], vec![]);
+    let id = launch_t(&mut core, Some("   "), LaunchMode::Fresh);
+    let u = core
+        .on_agent_line(&ipc_agent_event_system_init(&id))
+        .unwrap();
+    assert!(last_sv(&u).transcript.is_empty());
+}
+
+#[test]
+fn transcript_assistant_text_appended_and_deduped() {
+    use marsad_events::TranscriptEntry;
+    let mut core = core_with_history(vec![], vec![]);
+    let id = launch_t(&mut core, None, LaunchMode::Fresh);
+    core.on_agent_line(&ipc_agent_event_system_init(&id))
+        .unwrap();
+    // ipc_agent_event_assistant uses text "Thinking..." with the given message id.
+    core.on_agent_line(&ipc_agent_event_assistant(&id, "m1"))
+        .unwrap();
+    let u = core
+        .on_agent_line(&ipc_agent_event_assistant(&id, "m1"))
+        .unwrap();
+    assert_eq!(
+        last_sv(&u).transcript,
+        vec![TranscriptEntry::Assistant {
+            text: "Thinking...".to_string()
+        }],
+        "same message id must append exactly once"
+    );
+}
+
+#[test]
+fn transcript_tool_use_appended_from_stream() {
+    let mut core = core_with_history(vec![], vec![]);
+    let id = launch_t(&mut core, None, LaunchMode::Fresh);
+    core.on_agent_line(&ipc_agent_event_system_init(&id))
+        .unwrap();
+    let u = core
+        .on_agent_line(&ipc_agent_event_tool_use(&id, "m2"))
+        .unwrap();
+    let t = last_sv(&u).transcript;
+    assert_eq!(t.len(), 1);
+    assert!(
+        matches!(&t[0], marsad_events::TranscriptEntry::Tool { name, .. } if name == "Write"),
+        "expected a Tool(Write) entry, got {t:?}"
+    );
+}
+
+#[test]
+fn transcript_assistant_empty_text_and_non_text_blocks_skipped() {
+    let mut core = core_with_history(vec![], vec![]);
+    let id = launch_t(&mut core, None, LaunchMode::Fresh);
+    core.on_agent_line(&ipc_agent_event_system_init(&id))
+        .unwrap();
+    // Whitespace-only text block (m3) and a tool_result block (m4) → no entries.
+    let empty_text = format!(
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"assistant","message":{{"id":"m3","content":[{{"type":"text","text":"   "}}],"usage":{{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}}}"#
+    );
+    let tool_result = format!(
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"assistant","message":{{"id":"m4","content":[{{"type":"tool_result","tool_use_id":"x","content":"ok"}}],"usage":{{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}}}"#
+    );
+    core.on_agent_line(&empty_text).unwrap();
+    let u = core.on_agent_line(&tool_result).unwrap();
+    assert!(last_sv(&u).transcript.is_empty());
+}
+
+#[test]
+fn transcript_send_prompt_is_injected() {
+    use marsad_events::TranscriptEntry;
+    let mut core = core_with_history(vec![], vec![]);
+    let id = launch_t(&mut core, None, LaunchMode::Fresh);
+    core.on_agent_line(&ipc_agent_event_system_init(&id))
+        .unwrap();
+    core.send_prompt(&id, "  please do X  ")
+        .expect("send_prompt");
+    core.send_prompt(&id, "   ").expect("blank send_prompt"); // not injected
+    let u = core
+        .on_agent_line(&ipc_agent_event_assistant(&id, "m9"))
+        .unwrap();
+    assert_eq!(
+        last_sv(&u).transcript,
+        vec![
+            TranscriptEntry::User {
+                text: "please do X".to_string()
+            },
+            TranscriptEntry::Assistant {
+                text: "Thinking...".to_string()
+            },
+        ]
+    );
+}
