@@ -670,6 +670,27 @@ fn handle_ipc_launch_session_spawn_failure_via_handle_ipc() {
     }
 }
 
+/// Same as above but with a caller-supplied `session_id` — exercises the `?`
+/// error branch on the provided-id launch path (launch_with_id).
+#[test]
+fn handle_ipc_launch_session_provided_id_spawn_failure() {
+    let mut container = FakeContainer::new();
+    container.fail_spawn("marsad-ext-fail");
+    let mut agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(container),
+        Box::new(CaptureNotifier::new()),
+        Box::new(marsad_store::Store::new(Box::new(MemoryBackend::new()))),
+    )
+    .expect("with_fakes");
+
+    let line = r#"{"type":"LaunchSession","session_id":"ext-fail","project":"/p","host_id":"local","model":"m","posture":"Ask"}"#;
+    match agent.handle_ipc(line) {
+        Err(AgentError::Spawn(_)) => {}
+        other => panic!("expected AgentError::Spawn for provided-id launch, got {other:?}"),
+    }
+}
+
 // ── handle_send_prompt: missing text field (line 295 col 80) ─────────────────
 
 /// `handle_send_prompt` calls `value["text"].as_str().ok_or(...)?.` on line 295.

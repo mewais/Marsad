@@ -92,9 +92,14 @@ function reducer(state: VmState, action: Action): VmState {
       if (!state.snapshot) return state;
       const ev = action.payload;
       if (ev.kind === "session") {
-        const sessions = state.snapshot.sessions.map((s) =>
-          s.id === ev.session.id ? ev.session : s
-        );
+        // Upsert: update an existing session, or append a newly-launched one
+        // (its id won't be in the snapshot that was fetched before launch).
+        const exists = state.snapshot.sessions.some((s) => s.id === ev.session.id);
+        const sessions = exists
+          ? state.snapshot.sessions.map((s) =>
+              s.id === ev.session.id ? ev.session : s
+            )
+          : [...state.snapshot.sessions, ev.session];
         return { ...state, snapshot: { ...state.snapshot, sessions } };
       }
       if (ev.kind === "overview") {

@@ -67,6 +67,27 @@ fn ipc_command_launch_session() {
     assert!(!lines.is_empty(), "LaunchSession must emit events");
 }
 
+/// LaunchSession with a caller-supplied `session_id` must REUSE that id (Core and
+/// the agent have to agree on the id, or the broadcast AgentEvents get dropped as
+/// an unknown session and nothing shows up in the UI).
+#[test]
+fn launch_session_honors_provided_session_id() {
+    let mut agent = make_agent();
+    let line = r#"{"type":"LaunchSession","session_id":"ext-abc","project":"/p","host_id":"local","model":"claude-opus-4-8","posture":"Ask"}"#;
+    let lines = agent.handle_ipc(line).expect("launch");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("\"session_id\":\"ext-abc\"")),
+        "SessionLaunched must echo the provided id; got {lines:?}"
+    );
+    let last = agent.container_calls().last().expect("spawn").clone();
+    assert!(
+        last.contains("marsad-ext-abc"),
+        "the container must use the provided id; got {last}"
+    );
+}
+
 /// ResumeSession → resumes a previously stopped session.
 #[test]
 fn ipc_command_resume_session() {

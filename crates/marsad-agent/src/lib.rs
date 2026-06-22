@@ -325,6 +325,22 @@ impl Agent {
     /// Launch a new session via the injected container.
     pub fn launch(&mut self, spec: marsad_proto::LaunchSpec) -> Result<String, AgentError> {
         let session_id = self.next_session_id();
+        self.launch_with_id(session_id, spec)
+    }
+
+    /// Launch using a caller-supplied session id.
+    ///
+    /// The GUI/Core generates the session id up front (so it can navigate to the
+    /// session immediately) and passes it in the LaunchSession message; the agent
+    /// MUST reuse that id so the `AgentEvent`s it broadcasts are tagged with the
+    /// id Core registered — otherwise Core drops them as an unknown session and
+    /// nothing shows up in the UI. `launch` (above) is the no-id variant that
+    /// generates one (used by tests and resume).
+    pub fn launch_with_id(
+        &mut self,
+        session_id: String,
+        spec: marsad_proto::LaunchSpec,
+    ) -> Result<String, AgentError> {
         let container_name = format!("marsad-{session_id}");
         let argv = claude_argv(&spec);
         let cmd = self.build_spawn_cmd(&container_name, &spec.project, &argv);
@@ -403,7 +419,13 @@ impl Agent {
             // Fresh / continue / resume-by-id, from optional IPC fields.
             mode: parse_launch_mode_value(value),
         };
-        let session_id = self.launch(spec)?;
+        // Reuse the caller's session id when supplied (Core generates it so it can
+        // navigate immediately and recognise the session's events); otherwise
+        // generate one (e.g. a raw client that omits it).
+        let session_id = match value["session_id"].as_str().filter(|s| !s.is_empty()) {
+            Some(id) => self.launch_with_id(id.to_string(), spec)?,
+            None => self.launch(spec)?,
+        };
         let event = serde_json::json!({"type": "SessionLaunched", "session_id": session_id});
         Ok(vec![event.to_string()])
     }
