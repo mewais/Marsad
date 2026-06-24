@@ -337,6 +337,7 @@ fn core_error_agent_debug() {
 fn answer_gate_unknown_session_returns_unknown_session_error() {
     let (mut core, _peer) = make_core();
     let gate = Gate::Permission {
+        request_id: "req-test".to_string(),
         command: "rm -rf".to_string(),
         cwd: "/".to_string(),
         risk: "high".to_string(),

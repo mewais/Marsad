@@ -15,6 +15,7 @@ use marsad_gates::{
 
 fn make_permission_gate() -> Gate {
     Gate::Permission {
+        request_id: "req-test".to_string(),
         command: "ls /".to_string(),
         cwd: "/".to_string(),
         risk: "low".to_string(),

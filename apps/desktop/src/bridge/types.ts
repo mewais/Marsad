@@ -35,7 +35,15 @@ export interface PlanStep {
 }
 
 export type Gate =
-  | { Permission: { command: string; cwd: string; risk: string; explanation: string } }
+  | {
+      Permission: {
+        request_id: string;
+        command: string;
+        cwd: string;
+        risk: string;
+        explanation: string;
+      };
+    }
   | { Plan: { summary: string; steps: PlanStep[] } }
   | { Edit: { file: string; diff: DiffLine[] } };
 
@@ -214,6 +222,10 @@ export interface GateVM {
   icon: string;
   lead: string;
   summary: string;
+  /** Unique id for THIS gate occurrence — the control-request id for a
+   *  permission gate. Used as the decision id so distinct gates in one session
+   *  aren't collapsed by idempotency dedup. */
+  decision_id: string;
   is_permission: boolean;
   is_plan: boolean;
   is_edit: boolean;

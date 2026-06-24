@@ -20,6 +20,10 @@ pub use marsad_diff::{DiffLine, Sig};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Gate {
     Permission {
+        /// The control-request id this gate answers. Unique per gate occurrence —
+        /// the UI uses it as the decision id so distinct gates within one session
+        /// are not collapsed by idempotency dedup.
+        request_id: String,
         command: String,
         cwd: String,
         risk: String,

@@ -161,6 +161,7 @@ fn scripted_full_happy_path_session() {
 
     // ── Step 4: GUI approves the gate ────────────────────────────────────────
     let gate = Gate::Permission {
+        request_id: "req-test".to_string(),
         command: "ls /etc".to_string(),
         cwd: "/workspace".to_string(),
         risk: "low".to_string(),
@@ -256,6 +257,7 @@ fn scripted_gate_rejection_sends_deny_ipc() {
         .expect("ctrl");
 
     let gate = Gate::Permission {
+        request_id: "req-test".to_string(),
         command: "DROP TABLE users".to_string(),
         cwd: "/db".to_string(),
         risk: "critical".to_string(),
@@ -527,6 +529,7 @@ fn scripted_idempotent_answer_gate_end_to_end() {
         .expect("ctrl");
 
     let gate = Gate::Permission {
+        request_id: "req-test".to_string(),
         command: "make build".to_string(),
         cwd: "/project".to_string(),
         risk: "low".to_string(),

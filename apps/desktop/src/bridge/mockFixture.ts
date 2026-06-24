@@ -25,6 +25,7 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       context_pct: 38.0,
       gate: {
         Permission: {
+          request_id: "req-mock-s01",
           command: "prisma migrate deploy",
           cwd: "/app",
           risk: "medium",

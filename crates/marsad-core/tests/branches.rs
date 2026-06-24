@@ -275,6 +275,7 @@ fn answer_gate_idempotent_second_call_is_noop() {
     let _ = peer.drain_outbound(); // consume launch IPC
 
     let gate = Gate::Permission {
+        request_id: "req-test".to_string(),
         command: "cat /etc/passwd".to_string(),
         cwd: "/".to_string(),
         risk: "low".to_string(),
@@ -537,6 +538,7 @@ fn answer_gate_permission_gate_outbound_references_gate() {
     let _ = peer.drain_outbound();
 
     let gate = Gate::Permission {
+        request_id: "req-test".to_string(),
         command: "docker run alpine".to_string(),
         cwd: "/app".to_string(),
         risk: "medium".to_string(),

@@ -314,6 +314,7 @@ fn reduce_control_request(
 ) -> SessionState {
     // Build a Permission gate from the control request.
     let gate = marsad_gates::Gate::Permission {
+        request_id: req.request_id.clone(),
         command: req.tool_name.clone(),
         cwd: state.cwd.clone().unwrap_or_default(),
         risk: String::new(),

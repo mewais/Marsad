@@ -376,6 +376,7 @@ fn answer_gate_sends_ipc_and_routes_to_one_session() {
     let _ = peer.drain_outbound();
 
     let gate = Gate::Permission {
+        request_id: "req-test".to_string(),
         command: "ls /".to_string(),
         cwd: "/".to_string(),
         risk: "low".to_string(),
@@ -1180,7 +1181,10 @@ fn save_workspace_appears_in_list_and_snapshot() {
         .save_workspace("my-ws", vec!["s1".to_string()])
         .expect("save_workspace");
     let wss = workspaces_from(&u);
-    assert!(wss.iter().any(|w| w.name == "my-ws"), "saved ws must appear");
+    assert!(
+        wss.iter().any(|w| w.name == "my-ws"),
+        "saved ws must appear"
+    );
     assert!(
         core.snapshot().workspaces.iter().any(|w| w.name == "my-ws"),
         "snapshot must include saved ws"
@@ -1230,11 +1234,7 @@ fn duplicate_workspace_store_write_failure_errors() {
     let backend = MemoryBackend::new();
     let mut core = core_with_backend(backend.clone());
     let u = core.save_workspace("orig", vec![]).expect("save");
-    let id = workspaces_from(&u)
-        .into_iter()
-        .next()
-        .expect("ws")
-        .id;
+    let id = workspaces_from(&u).into_iter().next().expect("ws").id;
     backend.fail_next(BackendOp::Write);
     assert!(core.duplicate_workspace(&id).is_err());
 }
@@ -1242,9 +1242,7 @@ fn duplicate_workspace_store_write_failure_errors() {
 #[test]
 fn delete_workspace_removes_from_list_and_snapshot() {
     let mut core = core_with_backend(MemoryBackend::new());
-    let u = core
-        .save_workspace("to-delete", vec![])
-        .expect("save");
+    let u = core.save_workspace("to-delete", vec![]).expect("save");
     let id = workspaces_from(&u)
         .into_iter()
         .find(|w| w.name == "to-delete")
@@ -1299,7 +1297,10 @@ fn export_workspace_returns_json() {
         .expect("ws")
         .id;
     let json = core.export_workspace(&id).expect("export");
-    assert!(json.contains("marsadWorkspace"), "must contain envelope key");
+    assert!(
+        json.contains("marsadWorkspace"),
+        "must contain envelope key"
+    );
 }
 
 #[test]
@@ -1342,8 +1343,15 @@ fn import_workspace_bad_json_errors() {
 fn import_workspace_twice_overwrites_not_duplicates() {
     let mut core = core_with_backend(MemoryBackend::new());
     // Export a workspace with a known name
-    core.save_workspace("reimport", vec!["s1".to_string()]).expect("save");
-    let id = core.snapshot().workspaces.into_iter().find(|w| w.name == "reimport").expect("ws").id;
+    core.save_workspace("reimport", vec!["s1".to_string()])
+        .expect("save");
+    let id = core
+        .snapshot()
+        .workspaces
+        .into_iter()
+        .find(|w| w.name == "reimport")
+        .expect("ws")
+        .id;
     let json = core.export_workspace(&id).expect("export");
 
     // Import twice — the store derives id "imported-reimport" from the name.
@@ -1388,7 +1396,8 @@ fn load_workspaces_restores_persisted_workspaces() {
     let u = core.load_workspaces().expect("load_workspaces");
     let wss = workspaces_from(&u);
     assert!(
-        wss.iter().any(|w| w.id == "ws-seeded" && w.name == "seeded"),
+        wss.iter()
+            .any(|w| w.id == "ws-seeded" && w.name == "seeded"),
         "seeded workspace must be restored"
     );
 }
@@ -1429,9 +1438,12 @@ fn load_workspaces_restores_active_ws() {
 fn save_workspace_overwrites_same_id() {
     let mut core = core_with_backend(MemoryBackend::new());
     // First save
-    core.save_workspace("same", vec!["s1".to_string()]).expect("first save");
+    core.save_workspace("same", vec!["s1".to_string()])
+        .expect("first save");
     // Second save with the same derived id — should overwrite
-    let u2 = core.save_workspace("same", vec!["s2".to_string()]).expect("second save");
+    let u2 = core
+        .save_workspace("same", vec!["s2".to_string()])
+        .expect("second save");
     let wss = workspaces_from(&u2);
     // Still only one workspace with that name
     let count = wss.iter().filter(|w| w.name == "same").count();

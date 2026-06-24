@@ -177,6 +177,7 @@ fn state_meta_detached() {
 #[test]
 fn gate_meta_permission() {
     let gate = Gate::Permission {
+        request_id: "req-test".to_string(),
         command: String::from("git push"),
         cwd: String::from("/repo"),
         risk: String::from("medium"),

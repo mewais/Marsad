@@ -19,6 +19,7 @@ use marsad_gates::{
 
 fn permission_gate(command: &str) -> Gate {
     Gate::Permission {
+        request_id: "req-test".to_string(),
         command: command.to_string(),
         cwd: "/tmp".to_string(),
         risk: "low".to_string(),

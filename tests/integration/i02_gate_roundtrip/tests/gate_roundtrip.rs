@@ -26,6 +26,7 @@ use marsad_transport::{LoopbackFake, Transport};
 
 fn permission_gate() -> Gate {
     Gate::Permission {
+        request_id: "req-test".to_string(),
         command: "ls /tmp".to_string(),
         cwd: "/tmp".to_string(),
         risk: "low".to_string(),
@@ -218,12 +219,14 @@ fn decision_id_differs_by_gate_variant() {
 fn decision_id_differs_by_gate_content() {
     let sid = "session-content";
     let gate_a = Gate::Permission {
+        request_id: "req-test".to_string(),
         command: "ls /tmp".to_string(),
         cwd: "/tmp".to_string(),
         risk: "low".to_string(),
         explanation: "".to_string(),
     };
     let gate_b = Gate::Permission {
+        request_id: "req-test".to_string(),
         command: "rm /etc/passwd".to_string(),
         cwd: "/etc".to_string(),
         risk: "high".to_string(),

@@ -457,7 +457,11 @@ impl Core {
             .store
             .restore()
             .map_err(|e| CoreError::Agent(format!("restore workspaces: {e:?}")))?;
-        self.workspaces = restored.workspaces.iter().map(Self::store_ws_to_vm).collect();
+        self.workspaces = restored
+            .workspaces
+            .iter()
+            .map(Self::store_ws_to_vm)
+            .collect();
         if let Some(id) = restored.active_ws {
             self.active_ws = Some(id);
         }

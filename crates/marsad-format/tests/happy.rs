@@ -114,6 +114,7 @@ fn ctx_color_at_90_is_error() {
 #[test]
 fn gate_meta_permission_fields() {
     let gate = Gate::Permission {
+        request_id: "req-test".to_string(),
         command: String::from("ls -la"),
         cwd: String::from("/tmp"),
         risk: String::from("low"),

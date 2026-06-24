@@ -318,6 +318,7 @@ fn session_detail_ctx_warn_true_at_75() {
 #[test]
 fn gate_vm_returns_some_for_permission_gate() {
     let gate = Gate::Permission {
+        request_id: "req-test".to_string(),
         command: "npx prisma migrate deploy".to_string(),
         cwd: "/work".to_string(),
         risk: "medium".to_string(),
@@ -336,6 +337,7 @@ fn gate_vm_returns_some_for_permission_gate() {
 #[test]
 fn gate_vm_permission_kind_and_icon() {
     let gate = Gate::Permission {
+        request_id: "req-test".to_string(),
         command: "ls /".to_string(),
         cwd: "/".to_string(),
         risk: "low".to_string(),

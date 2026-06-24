@@ -62,7 +62,7 @@ export function GateOverlay() {
     setBusy(true);
     await answerGate({
       session_id: selectedSession.id,
-      decision_id: selectedSession.id, // gate decision_id mirrors session id in mock
+      decision_id: selectedGate?.decision_id ?? selectedSession.id,
       allow: true,
     });
     setBusy(false);
@@ -74,7 +74,7 @@ export function GateOverlay() {
     setBusy(true);
     await answerGate({
       session_id: selectedSession.id,
-      decision_id: selectedSession.id,
+      decision_id: selectedGate?.decision_id ?? selectedSession.id,
       allow: false,
       deny_reason: reason.trim() || undefined,
     });

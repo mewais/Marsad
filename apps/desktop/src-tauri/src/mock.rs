@@ -66,6 +66,7 @@ pub fn seeded_mock() -> MockState {
 
     // Gate variants mirroring the .dc.html prototype
     let permission_gate = Gate::Permission {
+        request_id: "req-mock-s01".to_string(),
         command: "prisma migrate deploy".to_string(),
         cwd: "/app".to_string(),
         risk: "medium".to_string(),
