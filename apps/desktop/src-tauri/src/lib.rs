@@ -39,6 +39,15 @@ fn resolve_data_root() -> String {
             return dr;
         }
     }
+    // Windows: %LOCALAPPDATA%\Marsad (HOME is usually unset on Windows).
+    #[cfg(windows)]
+    {
+        if let Ok(la) = std::env::var("LOCALAPPDATA") {
+            if !la.is_empty() {
+                return format!("{la}\\Marsad");
+            }
+        }
+    }
     std::env::var("HOME")
         .map(|h| format!("{h}/.local/share/marsad"))
         .unwrap_or_else(|_| "/var/lib/marsad".to_string())
