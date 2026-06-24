@@ -10,8 +10,8 @@
 //!   Restored, StoreError
 
 use marsad_store::{
-    MemoryBackend, NotifPref, PersistedHost, PersistedSession, PersistedSettings, Restored, Store,
-    StoreError, TranscriptEntry, Workspace,
+    MemoryBackend, NotifPref, PersistedHost, PersistedSession, PersistedSettings, PersistedTemplate,
+    Restored, Store, StoreError, TranscriptEntry, Workspace,
 };
 
 // ---------------------------------------------------------------------------
@@ -328,6 +328,7 @@ fn restored_derives_clone_eq_debug() {
         active_ws: None,
         transcripts: std::collections::HashMap::new(),
         settings: None,
+        templates: vec![],
     };
     let r2 = r.clone();
     assert_eq!(r, r2);
@@ -487,4 +488,79 @@ fn notif_pref_derives_clone_eq_debug() {
     let p2 = p.clone();
     assert_eq!(p, p2);
     let _ = format!("{p:?}");
+}
+
+// ---------------------------------------------------------------------------
+// upsert_template / restore round-trip
+// ---------------------------------------------------------------------------
+
+fn make_template(name: &str) -> PersistedTemplate {
+    PersistedTemplate {
+        name: name.to_string(),
+        model: "claude-sonnet-4-6".to_string(),
+        posture: "ask".to_string(),
+    }
+}
+
+#[test]
+fn upsert_template_then_restore_returns_template() {
+    let mut store = fresh_store();
+    let t = make_template("fast");
+    store.upsert_template(&t).expect("upsert_template must succeed");
+    let restored = store.restore().expect("restore must succeed");
+    assert!(
+        restored.templates.iter().any(|tmpl| tmpl.name == "fast"),
+        "restored templates must include 'fast'"
+    );
+}
+
+#[test]
+fn upsert_template_preserves_all_fields() {
+    let mut store = fresh_store();
+    let t = PersistedTemplate {
+        name: "careful".to_string(),
+        model: "claude-opus-4-8".to_string(),
+        posture: "full".to_string(),
+    };
+    store.upsert_template(&t).expect("upsert_template");
+    let restored = store.restore().expect("restore");
+    let found = restored
+        .templates
+        .into_iter()
+        .find(|tmpl| tmpl.name == "careful")
+        .expect("template must exist");
+    assert_eq!(found.model, "claude-opus-4-8");
+    assert_eq!(found.posture, "full");
+}
+
+#[test]
+fn upsert_template_overwrites_same_name() {
+    let mut store = fresh_store();
+    let t1 = make_template("my-tmpl");
+    store.upsert_template(&t1).expect("first upsert");
+    let t2 = PersistedTemplate {
+        name: "my-tmpl".to_string(),
+        model: "claude-haiku-4-5".to_string(),
+        posture: "auto".to_string(),
+    };
+    store.upsert_template(&t2).expect("second upsert");
+    let restored = store.restore().expect("restore");
+    let matches: Vec<_> = restored.templates.iter().filter(|tmpl| tmpl.name == "my-tmpl").collect();
+    assert_eq!(matches.len(), 1, "upsert must overwrite, not duplicate");
+    assert_eq!(matches[0].model, "claude-haiku-4-5");
+}
+
+#[test]
+fn restore_empty_store_has_no_templates() {
+    let store = fresh_store();
+    let restored = store.restore().expect("restore");
+    assert!(restored.templates.is_empty(), "no templates in empty store");
+}
+
+#[test]
+fn persisted_template_derives_clone_eq_debug() {
+    let t = make_template("deriv");
+    let t2 = t.clone();
+    assert_eq!(t, t2);
+    let _ = format!("{t:?}");
 }

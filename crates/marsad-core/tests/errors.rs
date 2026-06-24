@@ -11,10 +11,54 @@
 //!
 //! These tests WILL fail to compile until the code-agent implements `marsad_core`.
 
-use marsad_core::{Core, CoreConfig, CoreError, LaunchSpec, Posture};
+use marsad_core::{Core, CoreConfig, CoreError, LaunchMode, LaunchSpec, Posture};
 use marsad_gates::{approve, Gate};
-use marsad_transport::{LoopbackFake, Transport};
+use marsad_store::{BackendOp, MemoryBackend};
+use marsad_transport::{LoopbackFake, Transport, TransportError};
 use marsad_viewmodel::SlashCmd;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+// ---------------------------------------------------------------------------
+// CountingTransport — succeeds on the first `ok_count` sends, then fails
+// ---------------------------------------------------------------------------
+
+struct CountingTransport {
+    ok_count: usize,
+    sends: Arc<AtomicUsize>,
+}
+
+impl CountingTransport {
+    fn new(ok_count: usize) -> Self {
+        Self {
+            ok_count,
+            sends: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+impl Transport for CountingTransport {
+    fn connect(&mut self) -> Result<(), TransportError> {
+        Ok(())
+    }
+
+    fn send_line(&mut self, _line: &str) -> Result<(), TransportError> {
+        let n = self.sends.fetch_add(1, Ordering::Relaxed);
+        if n < self.ok_count {
+            Ok(())
+        } else {
+            Err(TransportError::BrokenPipe)
+        }
+    }
+
+    fn recv_line(&mut self) -> Result<Option<String>, TransportError> {
+        Ok(None)
+    }
+
+    fn close(&mut self) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Minimal helper
@@ -348,5 +392,118 @@ fn answer_gate_unknown_session_returns_unknown_session_error() {
     assert!(
         matches!(err, CoreError::UnknownSession(_)),
         "expected UnknownSession for gate on unknown session, got {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// restart_session error paths
+// ---------------------------------------------------------------------------
+
+#[test]
+fn restart_session_unknown_id_returns_unknown_session_error() {
+    let (mut core, _peer) = make_core();
+    let err = core
+        .restart_session("no-such-session", "model", Posture::Ask)
+        .unwrap_err();
+    assert!(
+        matches!(err, CoreError::UnknownSession(_)),
+        "expected UnknownSession, got {err:?}"
+    );
+}
+
+#[test]
+fn restart_session_transport_failure_on_stop_returns_transport_error() {
+    // Break the transport AFTER the session is launched so the initial launch
+    // succeeds but the StopSession in restart fails.
+    let (mut a, mut b) = LoopbackFake::pair();
+    a.connect().ok();
+    b.connect().ok();
+
+    let cfg = CoreConfig {
+        agent_endpoint: "loopback://test".to_string(),
+        data_root: "/tmp/marsad-err-test".to_string(),
+    };
+    let mut core = Core::new(cfg, Box::new(a)).expect("Core::new");
+
+    // Launch so the session is registered.
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "p".to_string(),
+            host_id: "h".to_string(),
+            model: "m".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: LaunchMode::Fresh,
+        })
+        .expect("launch");
+
+    // Now close the peer — the next IPC send (StopSession in restart) will fail.
+    b.close().ok();
+
+    let err = core
+        .restart_session(&id, "new-model", Posture::FullAutonomy)
+        .unwrap_err();
+    assert!(
+        matches!(err, CoreError::Transport(_)),
+        "expected Transport error on broken transport, got {err:?}"
+    );
+}
+
+#[test]
+fn restart_session_transport_failure_on_relaunch_returns_transport_error() {
+    // Transport that: succeeds on send #1 (launch) + send #2 (stop), then fails on send #3 (relaunch).
+    // ok_count=2 → sends 0 and 1 succeed, send 2 fails.
+    let transport = CountingTransport::new(2);
+    let cfg = CoreConfig {
+        agent_endpoint: "loopback://test".to_string(),
+        data_root: "/tmp/marsad-err-test".to_string(),
+    };
+    let mut core = Core::new(cfg, Box::new(transport)).expect("Core::new");
+
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "p".to_string(),
+            host_id: "h".to_string(),
+            model: "m".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: LaunchMode::Fresh,
+        })
+        .expect("send #1 must succeed");
+
+    let err = core
+        .restart_session(&id, "new-model", Posture::Ask)
+        .unwrap_err();
+    assert!(
+        matches!(err, CoreError::Transport(_)),
+        "expected Transport error when relaunch send fails, got {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// list_templates error path — restore failure
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_templates_restore_failure_returns_agent_error() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::List);
+    let (a, _b) = LoopbackFake::pair();
+    let cfg = CoreConfig {
+        agent_endpoint: "loopback://test".to_string(),
+        data_root: "/tmp/marsad-err-test".to_string(),
+    };
+    let core = Core::with_deps(
+        cfg,
+        Box::new(a),
+        Box::new(marsad_core::RealGit),
+        Box::new(marsad_core::RealTranscript),
+        Box::new(backend),
+    )
+    .expect("with_deps");
+    let err = core.list_templates().unwrap_err();
+    assert!(
+        matches!(err, CoreError::Agent(_)),
+        "expected Agent error from restore failure, got {err:?}"
     );
 }

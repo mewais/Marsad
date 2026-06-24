@@ -211,6 +211,9 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::export_workspace,
             bridge::import_workspace,
             bridge::commit,
+            bridge::restart_session,
+            bridge::save_template,
+            bridge::list_templates,
         ])
 }
 

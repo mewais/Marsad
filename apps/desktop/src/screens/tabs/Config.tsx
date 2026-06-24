@@ -2,9 +2,11 @@
  * Config tab — model selector buttons, permission posture radios,
  * tools/connectors chips, Apply / Save-as-template actions.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useVm } from "../../bridge/useVm";
 import { MODELS as MODEL_OPTIONS, DEFAULT_MODEL } from "../../bridge/models";
+import { restartSession, saveTemplate, listTemplates } from "../../bridge/api";
+import type { PersistedTemplate } from "../../bridge/types";
 
 // ---------------------------------------------------------------------------
 // Static options (mirroring design tokens; wired to local UI state only —
@@ -54,13 +56,26 @@ export function ConfigTab() {
   const { selectedSession } = useVm();
 
   // Local state mirrors current session values (read from session); Apply
-  // would push them to the backend once the bridge exposes an apply command.
+  // restarts the session with the chosen model/posture.
   const initialModel = selectedSession?.model ?? DEFAULT_MODEL;
   const [selectedModel, setSelectedModel] = useState(initialModel);
   const [posture, setPosture] = useState<PostureId>("ask");
   const [activeTools, setActiveTools] = useState<Set<ToolId>>(
     new Set(["bash", "edit", "read", "git"])
   );
+
+  // Apply / Save-template busy + error state.
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Persisted templates loaded on mount.
+  const [templates, setTemplates] = useState<PersistedTemplate[]>([]);
+
+  useEffect(() => {
+    listTemplates().then(setTemplates).catch(() => {});
+  }, []);
 
   function toggleTool(tool: ToolId) {
     setActiveTools((prev) => {
@@ -71,13 +86,42 @@ export function ConfigTab() {
     });
   }
 
-  function handleApply() {
-    // NOTE: Wire to a bridge command (e.g. applySessionConfig) once the
-    // backend exposes per-session config mutation.
+  async function handleApply() {
+    if (!selectedSession) return;
+    setApplyBusy(true);
+    setApplyError(null);
+    try {
+      await restartSession({
+        id: selectedSession.id,
+        model: selectedModel,
+        posture,
+      });
+    } catch (e) {
+      setApplyError(String(e));
+    } finally {
+      setApplyBusy(false);
+    }
   }
 
-  function handleSaveTemplate() {
-    // NOTE: Wire to saveTemplate bridge command.
+  async function handleSaveTemplate() {
+    const name = window.prompt("Template name:");
+    if (!name || !name.trim()) return;
+    setSaveBusy(true);
+    setSaveError(null);
+    try {
+      await saveTemplate({ name: name.trim(), model: selectedModel, posture });
+      const updated = await listTemplates();
+      setTemplates(updated);
+    } catch (e) {
+      setSaveError(String(e));
+    } finally {
+      setSaveBusy(false);
+    }
+  }
+
+  function applyTemplate(t: PersistedTemplate) {
+    setSelectedModel(t.model);
+    setPosture(t.posture as PostureId);
   }
 
   return (
@@ -244,42 +288,102 @@ export function ConfigTab() {
           </div>
         </div>
 
+        {/* Saved templates — quick-apply chips */}
+        {templates.length > 0 && (
+          <div>
+            <div
+              style={{
+                fontSize: 14.5,
+                fontWeight: 700,
+                marginBottom: 9,
+                color: "var(--txt2)",
+              }}
+            >
+              Saved templates
+            </div>
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+              {templates.map((t) => (
+                <span
+                  key={t.name}
+                  data-testid={`template-chip-${t.name}`}
+                  onClick={() => applyTemplate(t)}
+                  style={{
+                    fontFamily: "inherit",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    padding: "6px 11px",
+                    borderRadius: 7,
+                    cursor: "pointer",
+                    border: "1px solid var(--border)",
+                    background: "var(--panel2)",
+                    color: "var(--txt2)",
+                    userSelect: "none" as const,
+                  }}
+                  title={`${t.model} · ${t.posture}`}
+                >
+                  {t.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Action buttons */}
-        <div style={{ display: "flex", gap: 9, paddingTop: 4 }}>
-          <button
-            data-testid="config-apply"
-            onClick={handleApply}
-            style={{
-              fontFamily: "inherit",
-              fontWeight: 700,
-              fontSize: 15,
-              padding: "9px 16px",
-              borderRadius: 9,
-              border: "none",
-              background: "var(--accent)",
-              color: "#fff",
-              cursor: "pointer",
-            }}
-          >
-            Apply to running session
-          </button>
-          <button
-            data-testid="config-save-template"
-            onClick={handleSaveTemplate}
-            style={{
-              fontFamily: "inherit",
-              fontWeight: 600,
-              fontSize: 15,
-              padding: "9px 16px",
-              borderRadius: 9,
-              border: "1px solid var(--border2)",
-              background: "var(--panel2)",
-              color: "var(--txt2)",
-              cursor: "pointer",
-            }}
-          >
-            Save as template…
-          </button>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 4 }}>
+          <div style={{ display: "flex", gap: 9 }}>
+            <button
+              data-testid="config-apply"
+              onClick={handleApply}
+              disabled={applyBusy || !selectedSession}
+              style={{
+                fontFamily: "inherit",
+                fontWeight: 700,
+                fontSize: 15,
+                padding: "9px 16px",
+                borderRadius: 9,
+                border: "none",
+                background: applyBusy || !selectedSession ? "var(--border2)" : "var(--accent)",
+                color: applyBusy || !selectedSession ? "var(--txt3)" : "#fff",
+                cursor: applyBusy || !selectedSession ? "not-allowed" : "pointer",
+              }}
+            >
+              {applyBusy ? "Restarting…" : "Apply to running session"}
+            </button>
+            <button
+              data-testid="config-save-template"
+              onClick={handleSaveTemplate}
+              disabled={saveBusy}
+              style={{
+                fontFamily: "inherit",
+                fontWeight: 600,
+                fontSize: 15,
+                padding: "9px 16px",
+                borderRadius: 9,
+                border: "1px solid var(--border2)",
+                background: "var(--panel2)",
+                color: saveBusy ? "var(--txt3)" : "var(--txt2)",
+                cursor: saveBusy ? "not-allowed" : "pointer",
+              }}
+            >
+              {saveBusy ? "Saving…" : "Save as template…"}
+            </button>
+          </div>
+          {applyError && (
+            <div
+              data-testid="config-apply-error"
+              style={{ fontSize: 13, color: "var(--error, #e53)", paddingLeft: 2 }}
+            >
+              {applyError}
+            </div>
+          )}
+          {saveError && (
+            <div
+              data-testid="config-save-error"
+              style={{ fontSize: 13, color: "var(--error, #e53)", paddingLeft: 2 }}
+            >
+              {saveError}
+            </div>
+          )}
         </div>
       </div>
     </div>

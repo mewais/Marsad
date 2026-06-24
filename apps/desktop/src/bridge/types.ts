@@ -277,6 +277,16 @@ export interface SessionSummary {
 }
 
 // ---------------------------------------------------------------------------
+// PersistedTemplate — named config template (model + posture)
+// ---------------------------------------------------------------------------
+
+export interface PersistedTemplate {
+  name: string;
+  model: string;
+  posture: "ask" | "auto" | "full";
+}
+
+// ---------------------------------------------------------------------------
 // VmUpdate event from Tauri
 // ---------------------------------------------------------------------------
 

@@ -10,7 +10,7 @@
 //! These tests WILL fail to compile until the code-agent implements `marsad_core`.
 //! That is the expected tests-first compile-failure signal.
 
-use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, NotifPref, PersistedSettings, Posture, VmUpdate};
+use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, NotifPref, PersistedSettings, PersistedTemplate, Posture, VmUpdate};
 use marsad_gates::{approve, Gate};
 use marsad_transport::LoopbackFake;
 use marsad_viewmodel::SlashCmd;
@@ -1585,4 +1585,203 @@ fn set_settings_overwrite_updates_model() {
     core.set_settings(&s).expect("second set");
     let got = core.get_settings();
     assert_eq!(got.default_model, "claude-opus-4-8");
+}
+
+// ---------------------------------------------------------------------------
+// restart_session — stops then relaunches with same session id
+// ---------------------------------------------------------------------------
+
+/// Feed a system/init event so the session record gets a claude UUID in
+/// `state.session_id` (simulating what the real agent would send after launch).
+fn ipc_init_with_uuid(session_id: &str, claude_uuid: &str) -> String {
+    format!(
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"{claude_uuid}","model":"claude-opus-4-5","cwd":"/tmp","tools":[],"mcp_servers":[],"permissionMode":"default"}}}}"#
+    )
+}
+
+#[test]
+fn restart_session_emits_stop_then_launch_with_same_id() {
+    let (mut core, mut peer) = make_core();
+
+    // Launch a session and get its marsad id.
+    let spec = LaunchSpec {
+        project: "/tmp/proj-restart".to_string(),
+        host_id: "local".to_string(),
+        model: "claude-sonnet-4-6".to_string(),
+        posture: Posture::Ask,
+        first_prompt: None,
+        mode: LaunchMode::Fresh,
+    };
+    let id = core.launch_session(spec).expect("launch");
+    let _ = peer.drain_outbound(); // consume the initial LaunchSession IPC
+
+    // Simulate the agent sending system/init with a claude UUID.
+    let claude_uuid = "claude-uuid-abcde";
+    core.on_agent_line(&ipc_init_with_uuid(&id, claude_uuid))
+        .expect("init");
+
+    // Restart with a new model and posture.
+    let updates = core
+        .restart_session(&id, "claude-opus-4-8", Posture::FullAutonomy)
+        .expect("restart_session should succeed");
+
+    // Must emit a VmUpdate::Session for the same id.
+    let has_session = updates.iter().any(|u| matches!(u, VmUpdate::Session(sv) if sv.id == id));
+    assert!(has_session, "restart must produce a Session update for the same id");
+
+    // Outbound IPC: StopSession then LaunchSession.
+    let outbound = peer.drain_outbound();
+    assert!(outbound.len() >= 2, "restart must emit at least 2 IPC lines, got {}", outbound.len());
+
+    // First line must be StopSession.
+    let stop_line = &outbound[0];
+    assert!(
+        stop_line.contains("stop") || stop_line.contains("Stop"),
+        "first outbound must be StopSession, got: {stop_line}"
+    );
+    assert!(
+        stop_line.contains(&id),
+        "StopSession must reference the session id, got: {stop_line}"
+    );
+
+    // Second line must be LaunchSession with the SAME session_id.
+    let launch_line = &outbound[1];
+    assert!(
+        launch_line.contains("launch") || launch_line.contains("Launch"),
+        "second outbound must be LaunchSession, got: {launch_line}"
+    );
+    assert!(
+        launch_line.contains(&id),
+        "LaunchSession must carry the SAME session_id, got: {launch_line}"
+    );
+    // Must include resume_session_id = the claude UUID.
+    assert!(
+        launch_line.contains(claude_uuid),
+        "LaunchSession must include resume_session_id={claude_uuid}, got: {launch_line}"
+    );
+    // Must include the new model.
+    assert!(
+        launch_line.contains("claude-opus-4-8"),
+        "LaunchSession must carry the new model, got: {launch_line}"
+    );
+}
+
+#[test]
+fn restart_session_without_uuid_uses_continue_mode() {
+    let (mut core, mut peer) = make_core();
+
+    // Launch but do NOT feed system/init — so claude UUID remains None.
+    let spec = LaunchSpec {
+        project: "/tmp/proj-no-uuid".to_string(),
+        host_id: "local".to_string(),
+        model: "claude-sonnet-4-6".to_string(),
+        posture: Posture::Ask,
+        first_prompt: None,
+        mode: LaunchMode::Fresh,
+    };
+    let id = core.launch_session(spec).expect("launch");
+    let _ = peer.drain_outbound();
+
+    // Restart — no UUID known → should use Continue mode.
+    let updates = core
+        .restart_session(&id, "claude-haiku-4-5", Posture::AutoApproveSafe)
+        .expect("restart without uuid");
+
+    let has_session = updates.iter().any(|u| matches!(u, VmUpdate::Session(sv) if sv.id == id));
+    assert!(has_session, "restart must produce a Session update");
+
+    let outbound = peer.drain_outbound();
+    assert!(outbound.len() >= 2, "restart must emit at least 2 lines");
+
+    let launch_line = &outbound[1];
+    // Should include continue:true (not resume_session_id) since no UUID.
+    assert!(
+        launch_line.contains("\"continue\":true"),
+        "no-uuid restart must use continue mode, got: {launch_line}"
+    );
+    // Must still carry the new model.
+    assert!(
+        launch_line.contains("claude-haiku-4-5"),
+        "LaunchSession must carry the new model, got: {launch_line}"
+    );
+}
+
+#[test]
+fn restart_session_unknown_id_returns_unknown_session_error() {
+    use marsad_core::CoreError;
+    let (mut core, _peer) = make_core();
+    let err = core
+        .restart_session("no-such-session", "model", Posture::Ask)
+        .unwrap_err();
+    assert!(
+        matches!(err, CoreError::UnknownSession(_)),
+        "expected UnknownSession, got {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// save_template + list_templates — persist and retrieve named configs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn save_template_then_list_returns_template() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    core.save_template("fast", "claude-haiku-4-5", "auto")
+        .expect("save_template");
+    let templates = core.list_templates().expect("list_templates");
+    assert!(
+        templates.iter().any(|t| t.name == "fast"),
+        "saved template must be listed"
+    );
+}
+
+#[test]
+fn save_template_preserves_model_and_posture() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    core.save_template("careful", "claude-opus-4-8", "full")
+        .expect("save_template");
+    let templates = core.list_templates().expect("list_templates");
+    let t = templates.into_iter().find(|t| t.name == "careful").expect("template");
+    assert_eq!(t.model, "claude-opus-4-8");
+    assert_eq!(t.posture, "full");
+}
+
+#[test]
+fn list_templates_empty_on_fresh_core() {
+    let core = core_with_backend(MemoryBackend::new());
+    let templates = core.list_templates().expect("list_templates");
+    assert!(templates.is_empty(), "fresh core has no templates");
+}
+
+#[test]
+fn save_template_write_failure_errors() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::Write);
+    let mut core = core_with_backend(backend);
+    assert!(
+        core.save_template("fail", "m", "ask").is_err(),
+        "write failure must surface"
+    );
+}
+
+#[test]
+fn save_template_overwrite_updates_model() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    core.save_template("tmpl", "claude-sonnet-4-6", "ask").expect("first");
+    core.save_template("tmpl", "claude-opus-4-8", "full").expect("second");
+    let templates = core.list_templates().expect("list");
+    let matches: Vec<_> = templates.iter().filter(|t| t.name == "tmpl").collect();
+    assert_eq!(matches.len(), 1, "upsert must overwrite, not duplicate");
+    assert_eq!(matches[0].model, "claude-opus-4-8");
+}
+
+#[test]
+fn persisted_template_is_accessible_via_core_reexport() {
+    // Verify that PersistedTemplate is re-exported from marsad_core.
+    let t = PersistedTemplate {
+        name: "test".to_string(),
+        model: "claude-sonnet-4-6".to_string(),
+        posture: "ask".to_string(),
+    };
+    assert_eq!(t.name, "test");
 }

@@ -337,6 +337,17 @@ pub struct PersistedSettings {
     pub default_posture: String, // "ask" | "auto" | "full"
 }
 
+/// A named config template (model + posture) for quick session configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PersistedTemplate {
+    /// Human-readable name (used as the unique key).
+    pub name: String,
+    /// Model id string (e.g. "claude-sonnet-4-6").
+    pub model: String,
+    /// Posture string: "ask" | "auto" | "full".
+    pub posture: String,
+}
+
 /// Everything reconstructed from the backend on launch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Restored {
@@ -346,6 +357,7 @@ pub struct Restored {
     pub active_ws: Option<String>,
     pub transcripts: HashMap<String, Vec<TranscriptEntry>>,
     pub settings: Option<PersistedSettings>,
+    pub templates: Vec<PersistedTemplate>,
 }
 
 // ── Versioned blob wrappers ────────────────────────────────────────────────────
@@ -395,6 +407,7 @@ const PREFIX_SESSION: &str = "session:";
 const PREFIX_HOST: &str = "host:";
 const PREFIX_WORKSPACE: &str = "workspace:";
 const PREFIX_TRANSCRIPT: &str = "transcript:";
+const PREFIX_TEMPLATE: &str = "template:";
 const KEY_ACTIVE_WS: &str = "meta:active_ws";
 const KEY_SETTINGS: &str = "meta:settings";
 
@@ -437,6 +450,17 @@ impl Store {
     pub fn upsert_settings(&mut self, s: &PersistedSettings) -> Result<(), StoreError> {
         let bytes = encode(s);
         self.backend.write(KEY_SETTINGS, &bytes)?;
+        Ok(())
+    }
+
+    /// Insert or overwrite a named config template (model + posture).
+    ///
+    /// The template name is used as the unique key (slugified).
+    pub fn upsert_template(&mut self, t: &PersistedTemplate) -> Result<(), StoreError> {
+        let slug = t.name.to_lowercase().replace(' ', "-");
+        let key = format!("{}{}", PREFIX_TEMPLATE, slug);
+        let bytes = encode(t);
+        self.backend.write(&key, &bytes)?;
         Ok(())
     }
 
@@ -531,6 +555,7 @@ impl Store {
         let mut transcript_map: HashMap<String, Vec<(u64, TranscriptEntry)>> = HashMap::new();
         let mut active_ws: Option<String> = None;
         let mut settings: Option<PersistedSettings> = None;
+        let mut templates: Vec<PersistedTemplate> = Vec::new();
 
         // ONE version-check per versioned blob — Err branch covered by VersionMismatch tests
         // (fires on the session key in those tests; the same code covers all versioned prefixes).
@@ -566,6 +591,9 @@ impl Store {
             if key.starts_with(PREFIX_WORKSPACE) {
                 workspaces.push(decode_payload(bytes));
             }
+            if key.starts_with(PREFIX_TEMPLATE) {
+                templates.push(decode_payload(bytes));
+            }
             if let Some(rest) = key.strip_prefix(PREFIX_TRANSCRIPT) {
                 // rest = "{session_id}:{seq}"
                 let (sid, seq) = rest.rfind(':').map_or((rest, 0u64), |p| {
@@ -595,6 +623,7 @@ impl Store {
             active_ws,
             transcripts,
             settings,
+            templates,
         })
     }
 

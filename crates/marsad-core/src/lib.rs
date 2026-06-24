@@ -27,7 +27,7 @@ pub mod discovery;
 pub use discovery::SessionSummary;
 pub use marsad_hosts::{Host, HostStatus};
 pub use marsad_proto::{LaunchMode, LaunchSpec, Posture};
-pub use marsad_store::{NotifPref, PersistedSettings};
+pub use marsad_store::{NotifPref, PersistedSettings, PersistedTemplate};
 
 // ---------------------------------------------------------------------------
 // CoreError
@@ -683,7 +683,19 @@ impl Core {
 
     pub fn launch_session(&mut self, spec: LaunchSpec) -> Result<String, CoreError> {
         let id = new_session_id();
+        self.launch_session_with_id(id, spec)
+    }
 
+    /// Send the LaunchSession IPC for the given `id` and `spec`, seed the
+    /// transcript, and register the session record.
+    ///
+    /// This is the shared implementation used by both `launch_session` (which
+    /// generates a fresh id) and `restart_session` (which reuses the existing id).
+    fn launch_session_with_id(
+        &mut self,
+        id: String,
+        spec: LaunchSpec,
+    ) -> Result<String, CoreError> {
         let permission_mode = posture_to_permission_mode(&spec.posture);
         let msg = IpcMsg::LaunchSession {
             cwd: spec.project.clone(),
@@ -738,7 +750,11 @@ impl Core {
             }
         }
 
-        self.session_order.push(id.clone());
+        // Upsert: if the id already exists (restart path), reset the record;
+        // if new, push onto the order list first.
+        if !self.sessions.contains_key(&id) {
+            self.session_order.push(id.clone());
+        }
         self.sessions.insert(
             id.clone(),
             SessionRecord {
@@ -751,6 +767,85 @@ impl Core {
         );
 
         Ok(id)
+    }
+
+    /// Restart a session with a new model and posture.
+    ///
+    /// Sends `StopSession` to kill the running claude process, then re-launches
+    /// the session with the **same `id`** so the UI row stays in place.  If a
+    /// claude session-UUID is known (from a prior `system/init` event), the
+    /// relaunch uses `Resume(<uuid>)` so the conversation history is preserved;
+    /// otherwise it falls back to `Continue` (most-recent session in that project).
+    ///
+    /// Returns `UnknownSession` for an unrecognised `id`.
+    pub fn restart_session(
+        &mut self,
+        id: &str,
+        model: &str,
+        posture: Posture,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        self.require_session(id)?;
+
+        // Snapshot what we need before mutating state.
+        let project = self.sessions[id].project.clone();
+        let claude_uuid = self.sessions[id].state.session_id.clone();
+
+        // 1. Stop the running claude process.
+        self.send_ipc(&IpcMsg::StopSession {
+            session_id: id.to_string(),
+        })?;
+
+        // 2. Choose the launch mode: Resume if we have the claude UUID, else Continue.
+        let mode = if let Some(uuid) = claude_uuid.filter(|u| !u.is_empty()) {
+            LaunchMode::Resume(uuid)
+        } else {
+            LaunchMode::Continue
+        };
+
+        // 3. Relaunch with the SAME marsad session id.
+        let spec = LaunchSpec {
+            project,
+            host_id: "local".to_string(),
+            model: model.to_string(),
+            posture,
+            first_prompt: None,
+            mode,
+        };
+        self.launch_session_with_id(id.to_string(), spec)?;
+
+        // 4. Return a session view so the UI can update immediately.
+        let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
+        let snap = self.snapshot();
+        let groups = marsad_viewmodel::group_overview(&snap);
+        Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
+    }
+
+    /// Persist a named config template (model + posture).
+    ///
+    /// Overwrites any existing template with the same name.
+    pub fn save_template(
+        &mut self,
+        name: &str,
+        model: &str,
+        posture: &str,
+    ) -> Result<(), CoreError> {
+        let tmpl = marsad_store::PersistedTemplate {
+            name: name.to_string(),
+            model: model.to_string(),
+            posture: posture.to_string(),
+        };
+        self.store
+            .upsert_template(&tmpl)
+            .map_err(|e| CoreError::Agent(format!("{e:?}")))
+    }
+
+    /// Return all persisted config templates.
+    pub fn list_templates(&self) -> Result<Vec<marsad_store::PersistedTemplate>, CoreError> {
+        let restored = self
+            .store
+            .restore()
+            .map_err(|e| CoreError::Agent(format!("restore templates: {e:?}")))?;
+        Ok(restored.templates)
     }
 
     pub fn resume_session(&mut self, id: &str) -> Result<(), CoreError> {

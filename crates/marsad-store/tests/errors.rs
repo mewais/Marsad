@@ -12,7 +12,7 @@
 
 use marsad_store::{
     Backend, BackendOp, MemoryBackend, NotifPref, PersistedHost, PersistedSession,
-    PersistedSettings, Store, StoreError, Workspace,
+    PersistedSettings, PersistedTemplate, Store, StoreError, Workspace,
 };
 
 // ---------------------------------------------------------------------------
@@ -478,6 +478,22 @@ fn backend_write_failure_propagates_from_upsert_settings() {
         default_posture: "ask".to_string(),
     };
     match store.upsert_settings(&settings) {
+        Err(StoreError::Backend(_)) => {}
+        other => panic!("expected Backend error from write failure, got: {other:?}"),
+    }
+}
+
+#[test]
+fn backend_write_failure_propagates_from_upsert_template() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::Write);
+    let mut store = Store::new(Box::new(backend));
+    let t = PersistedTemplate {
+        name: "fail-tmpl".to_string(),
+        model: "claude-sonnet-4-6".to_string(),
+        posture: "ask".to_string(),
+    };
+    match store.upsert_template(&t) {
         Err(StoreError::Backend(_)) => {}
         other => panic!("expected Backend error from write failure, got: {other:?}"),
     }

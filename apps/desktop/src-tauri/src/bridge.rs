@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 use tauri::State;
 
-use marsad_core::{Core, CoreError, GitProbe, LaunchMode, LaunchSpec, PersistedSettings, Posture, SessionSummary};
+use marsad_core::{Core, CoreError, GitProbe, LaunchMode, LaunchSpec, PersistedSettings, PersistedTemplate, Posture, SessionSummary};
 use marsad_gates::{Decision, DecisionId, GateDecision};
 use marsad_viewmodel::AppSnapshot;
 
@@ -513,4 +513,63 @@ pub fn commit(
 
     crate::events::emit_updates(&app, updates);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Session config commands
+// ---------------------------------------------------------------------------
+
+/// Restart a session with a new model and posture.
+///
+/// Sends `StopSession` to kill the current claude process, then relaunches it
+/// with the SAME marsad session id (so the UI row is preserved) and resumes
+/// the conversation via `--resume <claude-uuid>` (or `--continue` if no UUID
+/// is known yet).
+#[tauri::command(rename_all = "snake_case")]
+pub fn restart_session(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+    model: String,
+    posture: String,
+) -> Result<(), String> {
+    let posture_val = match posture.as_str() {
+        "auto" => Posture::AutoApproveSafe,
+        "full" => Posture::FullAutonomy,
+        _ => Posture::Ask,
+    };
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.restart_session(&id, &model, posture_val).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Persist a named config template (model + posture).
+#[tauri::command(rename_all = "snake_case")]
+pub fn save_template(
+    state: State<'_, ManagedState>,
+    name: String,
+    model: String,
+    posture: String,
+) -> Result<(), String> {
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    match &mut *guard {
+        AppState::Live(core) => core.save_template(&name, &model, &posture).map_err(map_err),
+        AppState::Mock(_) => Ok(()),
+    }
+}
+
+/// Return all persisted config templates.
+#[tauri::command(rename_all = "snake_case")]
+pub fn list_templates(state: State<'_, ManagedState>) -> Result<Vec<PersistedTemplate>, String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    match &*guard {
+        AppState::Live(core) => core.list_templates().map_err(map_err),
+        AppState::Mock(_) => Ok(vec![]),
+    }
 }

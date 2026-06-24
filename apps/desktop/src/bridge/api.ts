@@ -5,7 +5,7 @@
  * mock fixture so Vitest + Playwright work without the Rust side.
  */
 
-import type { AppSnapshot, SessionSummary, Settings } from "./types";
+import type { AppSnapshot, PersistedTemplate, SessionSummary, Settings } from "./types";
 import { MOCK_SNAPSHOT } from "./mockFixture";
 
 // ---------------------------------------------------------------------------
@@ -254,6 +254,45 @@ export async function commit(
   if (!isTauri()) return;
   const invoke = await getInvoke();
   await invoke("commit", { session_id: sessionId, message, files });
+}
+
+// ---------------------------------------------------------------------------
+// Session config commands
+// ---------------------------------------------------------------------------
+
+/**
+ * Restart a session with a new model and posture.
+ *
+ * Sends StopSession + LaunchSession (Resume or Continue) with the SAME
+ * marsad session id so the UI row is preserved. The backend emits a
+ * Session vm-update after the relaunch is initiated.
+ */
+export async function restartSession(args: {
+  id: string;
+  model: string;
+  posture: "ask" | "auto" | "full";
+}): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("restart_session", args);
+}
+
+/** Persist a named config template (model + posture). */
+export async function saveTemplate(args: {
+  name: string;
+  model: string;
+  posture: "ask" | "auto" | "full";
+}): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("save_template", args);
+}
+
+/** Return all persisted config templates. */
+export async function listTemplates(): Promise<PersistedTemplate[]> {
+  if (!isTauri()) return [];
+  const invoke = await getInvoke();
+  return invoke("list_templates") as Promise<PersistedTemplate[]>;
 }
 
 // ---------------------------------------------------------------------------
