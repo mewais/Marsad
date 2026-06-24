@@ -71,7 +71,6 @@ pub fn launch_session(
     state: State<'_, ManagedState>,
     project: String,
     host_id: String,
-    host_target: None,
     model: String,
     posture: String,
     first_prompt: Option<String>,
@@ -98,6 +97,8 @@ pub fn launch_session(
             let spec = LaunchSpec {
                 project,
                 host_id,
+                // Core resolves the remote target from host_id via its registry.
+                host_target: None,
                 model,
                 posture: posture_val,
                 first_prompt,
