@@ -1438,9 +1438,15 @@ pub fn exec_prefix_for(host_target: Option<&str>) -> Option<Vec<String>> {
     argv.extend(opt("ServerAliveInterval=30"));
     argv.extend(opt("ServerAliveCountMax=3"));
     argv.extend(opt("TCPKeepAlive=yes"));
-    argv.extend(opt("ControlMaster=auto"));
-    argv.extend(opt("ControlPath=~/.ssh/marsad-cm-%r@%h:%p"));
-    argv.extend(opt("ControlPersist=600"));
+    // ControlMaster multiplexing (reuse an interactive login's master socket) needs
+    // Unix-domain sockets, which Windows OpenSSH lacks — there it errors `getsockname
+    // failed: Not a socket`. Enable only when the agent runs on a Unix host.
+    #[cfg(unix)]
+    {
+        argv.extend(opt("ControlMaster=auto"));
+        argv.extend(opt("ControlPath=~/.ssh/marsad-cm-%r@%h:%p"));
+        argv.extend(opt("ControlPersist=600"));
+    }
     argv.push(t.to_string());
     Some(argv)
 }

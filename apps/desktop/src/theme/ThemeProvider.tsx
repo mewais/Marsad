@@ -10,13 +10,7 @@ import React, {
   useEffect,
   useState,
 } from "react";
-import {
-  darkTokens,
-  glassDarkWallpaper,
-  glassLightWallpaper,
-  lightTokens,
-  tokensToCssVars,
-} from "./tokens";
+import { darkTokens, lightTokens, tokensToCssVars } from "./tokens";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,11 +54,20 @@ export function ThemeProvider({
   initialTheme = "dark",
   initialGlass = false,
 }: ThemeProviderProps) {
-  const [theme, setThemeState] = useState<Theme>(initialTheme);
-  const [glass, setGlassState] = useState(initialGlass);
+  // Persist theme + translucency per machine so they survive relaunch.
+  const [theme, setThemeState] = useState<Theme>(() => {
+    const v = localStorage.getItem("marsad.theme");
+    return v === "dark" || v === "light" ? v : initialTheme;
+  });
+  const [glass, setGlassState] = useState<boolean>(() => {
+    const v = localStorage.getItem("marsad.glass");
+    return v === null ? initialGlass : v === "true";
+  });
 
   // Inject CSS vars on :root whenever theme/glass changes.
   useEffect(() => {
+    localStorage.setItem("marsad.theme", theme);
+    localStorage.setItem("marsad.glass", String(glass));
     const tokens = theme === "dark" ? darkTokens : lightTokens;
     const vars = tokensToCssVars(tokens);
     const root = document.documentElement;
@@ -72,16 +75,20 @@ export function ThemeProvider({
       root.style.setProperty(key, val);
     }
 
-    // Glass class on <body> triggers glass-mode CSS (blur/backdrop-filter).
+    // Translucency toggle. ON → make the surface tokens translucent so the OS window
+    // material (mica on Windows / desktop on a compositing Linux-macOS) shows through
+    // the canvas AND the panels/sidebar/buttons (not just the empty background). OFF →
+    // keep the opaque defaults (already set above) for a solid look.
     if (glass) {
       document.body.classList.add("glass");
-      if (theme === "light") {
-        document.body.classList.add("lightwp");
-      } else {
-        document.body.classList.remove("lightwp");
-      }
+      root.style.setProperty("--bg", "transparent");
+      root.style.setProperty("--panel", tokens.glassChrome);
+      root.style.setProperty("--panel2", tokens.glassMain);
+      root.style.setProperty("--elev", tokens.glassChrome);
+      document.body.style.background = "transparent";
     } else {
-      document.body.classList.remove("glass", "lightwp");
+      document.body.classList.remove("glass");
+      document.body.style.background = tokens.bg;
     }
 
     // Theme class for any non-var CSS.
@@ -100,18 +107,6 @@ export function ThemeProvider({
     <ThemeContext.Provider
       value={{ theme, glass, toggleTheme, toggleGlass, setTheme, setGlass }}
     >
-      {/* Wallpaper layer — only visible in glass mode (display toggled via CSS class) */}
-      <div
-        className="wallpaper"
-        style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: 0,
-          background:
-            theme === "dark" ? glassDarkWallpaper : glassLightWallpaper,
-          display: glass ? "block" : "none",
-        }}
-      />
       {children}
     </ThemeContext.Provider>
   );

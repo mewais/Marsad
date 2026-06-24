@@ -587,7 +587,7 @@ fn run_host_health_worker(app: tauri::AppHandle) {
     std::thread::sleep(std::time::Duration::from_secs(2));
     loop {
         for (id, target) in remote_hosts(&app) {
-            let status = ssh_health(&target); // subprocess — NO lock held here
+            let status = host_health(&target); // subprocess — NO lock held here
             let updates = match app.state::<ManagedState>().lock() {
                 Ok(mut guard) => match &mut *guard {
                     AppState::Live(core) => core.set_host_status(&id, status),
@@ -639,5 +639,32 @@ fn ssh_health(target: &str) -> marsad_core::HostStatus {
         Ok(s) if s.success() => HostStatus::Connected,
         Ok(_) => HostStatus::Unreachable,
         Err(_) => HostStatus::Reconnecting,
+    }
+}
+
+/// One WSL reachability probe: `wsl.exe -d <distro> -- true`. WSL hosts are NOT ssh
+/// targets, so they must be probed via `wsl.exe`, not `ssh` (otherwise they always
+/// read Unreachable). Off Windows `wsl.exe` is absent → Reconnecting/Unreachable.
+fn wsl_health(distro: &str) -> marsad_core::HostStatus {
+    use marsad_core::HostStatus;
+    let mut cmd = std::process::Command::new("wsl.exe");
+    cmd.args(["-d", distro, "--", "true"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    hide_console(&mut cmd);
+    match cmd.status() {
+        Ok(s) if s.success() => HostStatus::Connected,
+        Ok(_) => HostStatus::Unreachable,
+        Err(_) => HostStatus::Reconnecting,
+    }
+}
+
+/// Probe a host's reachability, dispatching by target type: `wsl:<distro>` → WSL,
+/// everything else (`user@host`, bare alias) → SSH.
+fn host_health(target: &str) -> marsad_core::HostStatus {
+    match target.strip_prefix("wsl:") {
+        Some(distro) => wsl_health(distro),
+        None => ssh_health(target),
     }
 }

@@ -484,18 +484,29 @@ pub fn connect_host_interactive(target: String) -> Result<(), String> {
 /// `ControlPath` MUST match docs/remote-hosts.md exactly so automated
 /// connections reuse the master socket.
 fn interactive_ssh_args(target: &str) -> Vec<String> {
-    vec![
-        "ssh".to_string(),
-        "-o".to_string(),
-        "ControlMaster=auto".to_string(),
-        "-o".to_string(),
-        "ControlPath=~/.ssh/marsad-cm-%r@%h:%p".to_string(),
-        "-o".to_string(),
-        "ControlPersist=600".to_string(),
+    let mut args = vec!["ssh".to_string()];
+    // SSH connection multiplexing (ControlMaster/ControlPath/ControlPersist) lets an
+    // interactive login's master socket be reused by later headless connections — but
+    // it relies on Unix-domain sockets that **Windows OpenSSH does not support**, where
+    // it errors `getsockname failed: Not a socket`. So enable it only on Unix; on
+    // Windows the interactive login is a plain `ssh <target>`.
+    #[cfg(unix)]
+    {
+        args.extend([
+            "-o".to_string(),
+            "ControlMaster=auto".to_string(),
+            "-o".to_string(),
+            "ControlPath=~/.ssh/marsad-cm-%r@%h:%p".to_string(),
+            "-o".to_string(),
+            "ControlPersist=600".to_string(),
+        ]);
+    }
+    args.extend([
         "-o".to_string(),
         "ServerAliveInterval=30".to_string(),
         target.to_string(),
-    ]
+    ]);
+    args
 }
 
 /// Spawn a visible OS terminal emulator running the interactive ssh login.

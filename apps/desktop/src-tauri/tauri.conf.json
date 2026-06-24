@@ -19,7 +19,7 @@
         "minHeight": 640,
         "transparent": true,
         "windowEffects": {
-          "effects": ["acrylic", "blur"]
+          "effects": ["mica", "blur"]
         }
       }
     ],
