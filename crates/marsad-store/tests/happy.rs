@@ -386,6 +386,20 @@ fn delete_host_removes_it_from_restore() {
     );
 }
 
+#[test]
+fn delete_session_removes_it_from_restore() {
+    let mut store = fresh_store();
+    store
+        .upsert_session(&make_session("session-9"))
+        .expect("upsert_session");
+    store.delete_session("session-9").expect("delete_session");
+    let restored = store.restore().expect("restore");
+    assert!(
+        !restored.sessions.iter().any(|s| s.id == "session-9"),
+        "deleted session must not be restored"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // delete_workspace round-trip
 // ---------------------------------------------------------------------------

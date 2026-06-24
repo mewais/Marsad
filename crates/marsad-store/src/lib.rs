@@ -504,6 +504,14 @@ impl Store {
         Ok(())
     }
 
+    /// Delete a persisted session by id (no-op if absent). Called when a session is
+    /// stopped so it doesn't reappear on the next restart's reconcile.
+    pub fn delete_session(&mut self, id: &str) -> Result<(), StoreError> {
+        let key = format!("{}{}", PREFIX_SESSION, id);
+        self.backend.delete(&key)?;
+        Ok(())
+    }
+
     /// Delete a persisted workspace by id (no-op if absent).
     pub fn delete_workspace(&mut self, id: &str) -> Result<(), StoreError> {
         let key = format!("{}{}", PREFIX_WORKSPACE, id);

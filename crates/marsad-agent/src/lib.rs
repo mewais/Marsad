@@ -642,17 +642,21 @@ impl Agent {
         &mut self,
         value: &serde_json::Value,
     ) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
-            "StopSession missing session_id".to_string(),
-        ))?;
-        if !self.sessions.contains_key(session_id) {
-            return Err(AgentError::Protocol(format!(
-                "StopSession: unknown session {session_id}"
-            )));
-        }
+        let session_id = value["session_id"]
+            .as_str()
+            .ok_or(AgentError::Protocol(
+                "StopSession missing session_id".to_string(),
+            ))?
+            .to_string();
+        // Kill the container and drop the live tracking entry. We do NOT require the
+        // session to be in the live map: after an agent restart a session is persisted
+        // but not yet re-tracked (the real cause of "stop did nothing" — the old code
+        // returned an error and killed nothing). `kill_container` resolves the remote
+        // host from the store, so the kill works either way. The persisted record is
+        // KEPT so the session remains resumable.
         let container_name = format!("marsad-{session_id}");
-        self.kill_container(session_id, &container_name);
-        self.sessions.remove(session_id);
+        self.kill_container(&session_id, &container_name);
+        self.sessions.remove(&session_id);
         let event = serde_json::json!({"type": "SessionStopped", "session_id": session_id});
         Ok(vec![event.to_string()])
     }

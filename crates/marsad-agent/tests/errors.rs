@@ -368,16 +368,18 @@ fn reconcile_all_lifecycle_error_folds_into_stale() {
 
 // ── StopSession for unknown session id ───────────────────────────────────────
 
-/// Stopping a session that does not exist must return an appropriate error.
-/// The spec does not pin the exact variant for this case, but it must be an Err.
+/// Stopping a session that isn't live-tracked must be an idempotent no-op (Ok),
+/// NOT an error: after an agent restart a persisted session isn't in the live map
+/// yet, and the user must still be able to stop it (kill resolves the host from the
+/// store). A truly-unknown id is then a harmless no-op.
 #[test]
-fn handle_ipc_stop_unknown_session_returns_error() {
+fn handle_ipc_stop_unknown_session_is_idempotent_ok() {
     let mut agent = make_agent_with_container(FakeContainer::new());
 
     let result = agent.handle_ipc(r#"{"type":"StopSession","session_id":"no-such-session"}"#);
     assert!(
-        result.is_err(),
-        "StopSession for unknown session must return Err; got {result:?}"
+        result.is_ok(),
+        "StopSession for an unknown session must be a no-op Ok; got {result:?}"
     );
 }
 
