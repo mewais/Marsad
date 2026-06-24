@@ -117,6 +117,12 @@ function reducer(state: VmState, action: Action): VmState {
       if (ev.kind === "hosts") {
         return { ...state, snapshot: { ...state.snapshot, hosts: ev.hosts } };
       }
+      if (ev.kind === "workspaces") {
+        return {
+          ...state,
+          snapshot: { ...state.snapshot, workspaces: ev.workspaces },
+        };
+      }
       return state;
     }
 

@@ -7,7 +7,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use marsad_core::VmUpdate;
-use marsad_viewmodel::{Host, OverviewGroups, SessionView};
+use marsad_viewmodel::{Host, OverviewGroups, SessionView, Workspace};
 
 // ---------------------------------------------------------------------------
 // Wire-format envelope emitted as "vm-update"
@@ -27,6 +27,7 @@ pub enum VmUpdateEnvelope {
     Toast { icon: String, text: String },
     HostHealth { host_id: String, status: String },
     Hosts { hosts: Vec<Host> },
+    Workspaces { workspaces: Vec<Workspace> },
 }
 
 impl From<VmUpdate> for VmUpdateEnvelope {
@@ -45,6 +46,7 @@ impl From<VmUpdate> for VmUpdateEnvelope {
                 VmUpdateEnvelope::HostHealth { host_id: payload.host_id, status }
             }
             VmUpdate::Hosts(hosts) => VmUpdateEnvelope::Hosts { hosts },
+            VmUpdate::Workspaces(workspaces) => VmUpdateEnvelope::Workspaces { workspaces },
         }
     }
 }

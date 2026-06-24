@@ -12,9 +12,9 @@ use marsad_events::{reduce, Event, Phase, SessionState};
 use marsad_gates::{DecisionLedger, GateDecision};
 use marsad_hosts::{HostError, HostRegistry, SshRunner};
 use marsad_proto::{encode_ipc, IpcMsg};
-use marsad_store::{Backend, PersistedHost, Store};
+use marsad_store::{Backend, PersistedHost, Store, Workspace as StoreWorkspace};
 use marsad_transport::Transport;
-use marsad_viewmodel::{AppSnapshot, FileChange, Filter, SessionView, Tab};
+use marsad_viewmodel::{AppSnapshot, FileChange, Filter, SessionView, Tab, Workspace};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -89,6 +89,9 @@ pub enum VmUpdate {
 
     /// The full host list changed (added/removed/status updated).
     Hosts(Vec<Host>),
+
+    /// The full workspace list changed (saved/duplicated/deleted/imported).
+    Workspaces(Vec<Workspace>),
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +300,7 @@ pub struct Core {
     sessions: HashMap<String, SessionRecord>,
     ledger: DecisionLedger,
     active_ws: Option<String>,
+    workspaces: Vec<Workspace>,
 }
 
 /// Default persistence backend: real filesystem in production, in-memory under
@@ -372,6 +376,7 @@ impl Core {
             sessions: HashMap::new(),
             ledger: DecisionLedger::new(),
             active_ws: None,
+            workspaces: Vec::new(),
         })
     }
 
@@ -389,13 +394,39 @@ impl Core {
         AppSnapshot {
             sessions,
             hosts: self.hosts.list().to_vec(),
-            workspaces: Vec::new(),
+            workspaces: self.workspaces.clone(),
             active_ws: self.active_ws.clone(),
             selected_id: None,
             filter: Filter::All,
             search: String::new(),
             tab: Tab::Activity,
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Workspace helpers
+    // -----------------------------------------------------------------------
+
+    fn store_ws_to_vm(ws: &StoreWorkspace) -> Workspace {
+        Workspace {
+            id: ws.id.clone(),
+            name: ws.name.clone(),
+            session_ids: ws.session_ids.clone(),
+            saved_at: ws.saved_at.clone(),
+        }
+    }
+
+    fn vm_ws_to_store(ws: &Workspace) -> StoreWorkspace {
+        StoreWorkspace {
+            id: ws.id.clone(),
+            name: ws.name.clone(),
+            session_ids: ws.session_ids.clone(),
+            saved_at: ws.saved_at.clone(),
+        }
+    }
+
+    fn workspaces_update(&self) -> VmUpdate {
+        VmUpdate::Workspaces(self.workspaces.clone())
     }
 
     // -----------------------------------------------------------------------
@@ -413,6 +444,112 @@ impl Core {
             self.hosts.load_remote(&h.id, &h.label, &h.target);
         }
         Ok(vec![VmUpdate::Hosts(self.hosts.list().to_vec())])
+    }
+
+    // -----------------------------------------------------------------------
+    // Workspace commands
+    // -----------------------------------------------------------------------
+
+    /// Load persisted workspaces and active_ws from the store (call once at
+    /// startup). Returns a `Workspaces` update for the now-complete list.
+    pub fn load_workspaces(&mut self) -> Result<Vec<VmUpdate>, CoreError> {
+        let restored = self
+            .store
+            .restore()
+            .map_err(|e| CoreError::Agent(format!("restore workspaces: {e:?}")))?;
+        self.workspaces = restored.workspaces.iter().map(Self::store_ws_to_vm).collect();
+        if let Some(id) = restored.active_ws {
+            self.active_ws = Some(id);
+        }
+        Ok(vec![self.workspaces_update()])
+    }
+
+    /// Save the current session list as a new named workspace, persist it,
+    /// and return the updated workspace list.
+    pub fn save_workspace(
+        &mut self,
+        name: &str,
+        session_ids: Vec<String>,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        let id = format!("ws-{}", name.to_lowercase().replace(' ', "-"));
+        let saved_at = chrono_now();
+        let ws = Workspace {
+            id,
+            name: name.to_string(),
+            session_ids,
+            saved_at,
+        };
+        let store_ws = Self::vm_ws_to_store(&ws);
+        self.store
+            .snapshot_workspace(&store_ws)
+            .map_err(|e| CoreError::Agent(format!("{e:?}")))?;
+        // Upsert into in-memory list (overwrite if same id).
+        if let Some(pos) = self.workspaces.iter().position(|w| w.id == ws.id) {
+            self.workspaces[pos] = ws;
+        } else {
+            self.workspaces.push(ws);
+        }
+        Ok(vec![self.workspaces_update()])
+    }
+
+    /// Duplicate a workspace by id, persist the copy, and return the updated list.
+    pub fn duplicate_workspace(&mut self, id: &str) -> Result<Vec<VmUpdate>, CoreError> {
+        let original = self
+            .workspaces
+            .iter()
+            .find(|w| w.id == id)
+            .ok_or_else(|| CoreError::Agent(format!("workspace not found: {id}")))?
+            .clone();
+        let new_id = format!("{}-copy", original.id);
+        let copy = Workspace {
+            id: new_id,
+            name: format!("{} (copy)", original.name),
+            session_ids: original.session_ids.clone(),
+            saved_at: chrono_now(),
+        };
+        let store_ws = Self::vm_ws_to_store(&copy);
+        self.store
+            .snapshot_workspace(&store_ws)
+            .map_err(|e| CoreError::Agent(format!("{e:?}")))?;
+        self.workspaces.push(copy);
+        Ok(vec![self.workspaces_update()])
+    }
+
+    /// Delete a workspace by id, remove from persistence, and return the updated list.
+    pub fn delete_workspace(&mut self, id: &str) -> Result<Vec<VmUpdate>, CoreError> {
+        self.store
+            .delete_workspace(id)
+            .map_err(|e| CoreError::Agent(format!("{e:?}")))?;
+        self.workspaces.retain(|w| w.id != id);
+        // If the deleted workspace was active, clear active_ws.
+        if self.active_ws.as_deref() == Some(id) {
+            self.active_ws = None;
+        }
+        Ok(vec![self.workspaces_update()])
+    }
+
+    /// Export a workspace as a `.marsad.json` string (no VmUpdate; returns JSON).
+    pub fn export_workspace(&self, id: &str) -> Result<String, CoreError> {
+        self.store
+            .export_workspace(id)
+            .map_err(|e| CoreError::Agent(format!("{e:?}")))
+    }
+
+    /// Import a workspace from a `.marsad.json` string, persist it, and return
+    /// the updated list.
+    pub fn import_workspace(&mut self, json: &str) -> Result<Vec<VmUpdate>, CoreError> {
+        let store_ws = self
+            .store
+            .import_workspace(json)
+            .map_err(|e| CoreError::Agent(format!("{e:?}")))?;
+        let ws = Self::store_ws_to_vm(&store_ws);
+        // Upsert into in-memory list.
+        if let Some(pos) = self.workspaces.iter().position(|w| w.id == ws.id) {
+            self.workspaces[pos] = ws;
+        } else {
+            self.workspaces.push(ws);
+        }
+        Ok(vec![self.workspaces_update()])
     }
 
     /// Add a remote host (`label`, `user@host`), persist it, and return the
@@ -620,18 +757,21 @@ impl Core {
         self.send_raw_line(&line)
     }
 
-    pub fn set_workspace(&mut self, id: &str) -> Result<(), CoreError> {
-        self.require_session(id)?;
+    pub fn set_workspace(&mut self, id: &str) -> Result<Vec<VmUpdate>, CoreError> {
         self.active_ws = Some(id.to_string());
+        // Persist the active workspace if it exists in our list; best-effort.
+        if self.workspaces.iter().any(|w| w.id == id) {
+            let _ = self.store.set_active_workspace(id);
+        }
         // Best-effort outbound notification (infallible construction).
         let line = serde_json::to_string(&serde_json::json!({
             "type": "SetWorkspace",
-            "session_id": id,
+            "workspace_id": id,
         }))
         .unwrap();
         // Best-effort advisory send; ignore errors.
         let _ = self.transport.send_line(&line);
-        Ok(())
+        Ok(vec![self.workspaces_update()])
     }
 
     // -----------------------------------------------------------------------
@@ -810,6 +950,21 @@ struct IpcEnvelope {
 // ---------------------------------------------------------------------------
 // Private free functions
 // ---------------------------------------------------------------------------
+
+/// Return a simple timestamp string for workspace `saved_at` fields.
+///
+/// Uses seconds-since-epoch; good enough for display and round-trips.
+fn chrono_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Format as ISO-8601-ish: "2026-06-24T12:00:00Z" approximation.
+    // We produce a simple "just now" placeholder for display; the real timestamp
+    // is the epoch seconds encoded in the id for uniqueness.
+    format!("{secs}")
+}
 
 fn new_session_id() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};

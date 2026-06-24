@@ -166,6 +166,44 @@ export async function setWorkspace(id: string): Promise<void> {
   await invoke("set_workspace", { id });
 }
 
+/** Save the current session list as a named workspace. */
+export async function saveWorkspace(
+  name: string,
+  sessionIds: string[]
+): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("save_workspace", { name, session_ids: sessionIds });
+}
+
+/** Duplicate an existing workspace by id. */
+export async function duplicateWorkspace(id: string): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("duplicate_workspace", { id });
+}
+
+/** Delete a workspace by id. */
+export async function deleteWorkspace(id: string): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("delete_workspace", { id });
+}
+
+/** Export a workspace as a `.marsad.json` string (backend-produced). */
+export async function exportWorkspace(id: string): Promise<string> {
+  if (!isTauri()) return "{}";
+  const invoke = await getInvoke();
+  return invoke("export_workspace", { id }) as Promise<string>;
+}
+
+/** Import a workspace from a `.marsad.json` string. */
+export async function importWorkspace(json: string): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("import_workspace", { json });
+}
+
 // ---------------------------------------------------------------------------
 // Event listener for vm-update (Tauri) / no-op in browser
 // ---------------------------------------------------------------------------

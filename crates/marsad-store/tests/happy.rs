@@ -382,3 +382,29 @@ fn delete_host_removes_it_from_restore() {
         "deleted host must not be restored"
     );
 }
+
+// ---------------------------------------------------------------------------
+// delete_workspace round-trip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn delete_workspace_removes_it_from_restore() {
+    let mut store = fresh_store();
+    let ws = make_workspace("ws-del", vec![]);
+    store.snapshot_workspace(&ws).expect("snapshot_workspace");
+    store.delete_workspace("ws-del").expect("delete_workspace");
+    let restored = store.restore().expect("restore");
+    assert!(
+        !restored.workspaces.iter().any(|w| w.id == "ws-del"),
+        "deleted workspace must not be restored"
+    );
+}
+
+#[test]
+fn delete_workspace_noop_when_absent() {
+    let mut store = fresh_store();
+    // Deleting a non-existent workspace must succeed (no-op).
+    store
+        .delete_workspace("does-not-exist")
+        .expect("delete_workspace on absent id must succeed");
+}

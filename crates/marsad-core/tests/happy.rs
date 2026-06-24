@@ -1155,3 +1155,290 @@ fn load_hosts_restore_failure_errors() {
     let mut core = core_with_backend(backend);
     assert!(core.load_hosts().is_err());
 }
+
+// ---------------------------------------------------------------------------
+// Workspace commands — save/duplicate/delete/export/import/set/load
+// ---------------------------------------------------------------------------
+
+use marsad_viewmodel::Workspace;
+
+fn workspaces_from(updates: &[VmUpdate]) -> Vec<Workspace> {
+    updates
+        .iter()
+        .rev()
+        .find_map(|u| match u {
+            VmUpdate::Workspaces(w) => Some(w.clone()),
+            _ => None,
+        })
+        .expect("a Workspaces update")
+}
+
+#[test]
+fn save_workspace_appears_in_list_and_snapshot() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let u = core
+        .save_workspace("my-ws", vec!["s1".to_string()])
+        .expect("save_workspace");
+    let wss = workspaces_from(&u);
+    assert!(wss.iter().any(|w| w.name == "my-ws"), "saved ws must appear");
+    assert!(
+        core.snapshot().workspaces.iter().any(|w| w.name == "my-ws"),
+        "snapshot must include saved ws"
+    );
+}
+
+#[test]
+fn save_workspace_store_write_failure_errors() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::Write);
+    let mut core = core_with_backend(backend);
+    assert!(
+        core.save_workspace("fail", vec![]).is_err(),
+        "write failure must surface"
+    );
+}
+
+#[test]
+fn duplicate_workspace_creates_copy() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let u = core
+        .save_workspace("original", vec!["s1".to_string()])
+        .expect("save");
+    let orig_id = workspaces_from(&u)
+        .into_iter()
+        .find(|w| w.name == "original")
+        .expect("original ws")
+        .id;
+
+    let u2 = core.duplicate_workspace(&orig_id).expect("duplicate");
+    let wss = workspaces_from(&u2);
+    assert!(
+        wss.iter().any(|w| w.name.contains("copy")),
+        "copy must exist"
+    );
+    assert_eq!(wss.len(), 2, "original + copy");
+}
+
+#[test]
+fn duplicate_workspace_unknown_id_errors() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    assert!(core.duplicate_workspace("not-there").is_err());
+}
+
+#[test]
+fn duplicate_workspace_store_write_failure_errors() {
+    let backend = MemoryBackend::new();
+    let mut core = core_with_backend(backend.clone());
+    let u = core.save_workspace("orig", vec![]).expect("save");
+    let id = workspaces_from(&u)
+        .into_iter()
+        .next()
+        .expect("ws")
+        .id;
+    backend.fail_next(BackendOp::Write);
+    assert!(core.duplicate_workspace(&id).is_err());
+}
+
+#[test]
+fn delete_workspace_removes_from_list_and_snapshot() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let u = core
+        .save_workspace("to-delete", vec![])
+        .expect("save");
+    let id = workspaces_from(&u)
+        .into_iter()
+        .find(|w| w.name == "to-delete")
+        .expect("ws")
+        .id;
+
+    let u2 = core.delete_workspace(&id).expect("delete");
+    let wss = workspaces_from(&u2);
+    assert!(!wss.iter().any(|w| w.id == id), "deleted ws must be gone");
+    assert!(
+        !core.snapshot().workspaces.iter().any(|w| w.id == id),
+        "snapshot must not include deleted ws"
+    );
+}
+
+#[test]
+fn delete_workspace_clears_active_ws_if_it_was_active() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let u = core.save_workspace("active-del", vec![]).expect("save");
+    let id = workspaces_from(&u).into_iter().next().expect("ws").id;
+    core.set_workspace(&id).expect("set active");
+    assert_eq!(core.snapshot().active_ws, Some(id.clone()));
+
+    core.delete_workspace(&id).expect("delete");
+    assert_eq!(
+        core.snapshot().active_ws,
+        None,
+        "active_ws must clear when active ws is deleted"
+    );
+}
+
+#[test]
+fn delete_workspace_store_delete_failure_errors() {
+    let backend = MemoryBackend::new();
+    let mut core = core_with_backend(backend.clone());
+    let u = core.save_workspace("del-fail", vec![]).expect("save");
+    let id = workspaces_from(&u).into_iter().next().expect("ws").id;
+    backend.fail_next(BackendOp::Delete);
+    assert!(core.delete_workspace(&id).is_err());
+}
+
+#[test]
+fn export_workspace_returns_json() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    core.save_workspace("exportable", vec![]).expect("save");
+    // The store key for this workspace
+    let id = core
+        .snapshot()
+        .workspaces
+        .into_iter()
+        .find(|w| w.name == "exportable")
+        .expect("ws")
+        .id;
+    let json = core.export_workspace(&id).expect("export");
+    assert!(json.contains("marsadWorkspace"), "must contain envelope key");
+}
+
+#[test]
+fn export_workspace_unknown_id_errors() {
+    let core = core_with_backend(MemoryBackend::new());
+    assert!(core.export_workspace("ghost").is_err());
+}
+
+#[test]
+fn import_workspace_adds_to_list() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    // Create a valid export JSON
+    core.save_workspace("to-export", vec![]).expect("save");
+    let id = core
+        .snapshot()
+        .workspaces
+        .into_iter()
+        .find(|w| w.name == "to-export")
+        .expect("ws")
+        .id;
+    let json = core.export_workspace(&id).expect("export");
+
+    // Fresh core, import into it
+    let mut core2 = core_with_backend(MemoryBackend::new());
+    let u = core2.import_workspace(&json).expect("import");
+    let wss = workspaces_from(&u);
+    assert!(
+        wss.iter().any(|w| w.name == "to-export"),
+        "imported ws must appear"
+    );
+}
+
+#[test]
+fn import_workspace_bad_json_errors() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    assert!(core.import_workspace("not json").is_err());
+}
+
+#[test]
+fn import_workspace_twice_overwrites_not_duplicates() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    // Export a workspace with a known name
+    core.save_workspace("reimport", vec!["s1".to_string()]).expect("save");
+    let id = core.snapshot().workspaces.into_iter().find(|w| w.name == "reimport").expect("ws").id;
+    let json = core.export_workspace(&id).expect("export");
+
+    // Import twice — the store derives id "imported-reimport" from the name.
+    // The second import must overwrite, not add a second entry with that id.
+    core.import_workspace(&json).expect("first import");
+    let u2 = core.import_workspace(&json).expect("second import");
+    let wss = workspaces_from(&u2);
+    // Exactly one workspace with the derived imported id.
+    let imported_id = "imported-reimport";
+    let count = wss.iter().filter(|w| w.id == imported_id).count();
+    assert_eq!(count, 1, "double import must overwrite, not duplicate");
+}
+
+#[test]
+fn set_workspace_persists_active_and_emits_workspaces() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let u = core.save_workspace("ws-active", vec![]).expect("save");
+    let id = workspaces_from(&u).into_iter().next().expect("ws").id;
+
+    let u2 = core.set_workspace(&id).expect("set_workspace");
+    assert!(
+        u2.iter().any(|u| matches!(u, VmUpdate::Workspaces(_))),
+        "set_workspace must emit Workspaces update"
+    );
+    assert_eq!(core.snapshot().active_ws, Some(id.clone()));
+}
+
+#[test]
+fn load_workspaces_restores_persisted_workspaces() {
+    let backend = MemoryBackend::new();
+    // Seed a persisted workspace via a clone that shares the same backing state.
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed.snapshot_workspace(&marsad_store::Workspace {
+        id: "ws-seeded".to_string(),
+        name: "seeded".to_string(),
+        session_ids: vec![],
+        saved_at: "2026-06-24".to_string(),
+    })
+    .expect("seed");
+
+    let mut core = core_with_backend(backend);
+    let u = core.load_workspaces().expect("load_workspaces");
+    let wss = workspaces_from(&u);
+    assert!(
+        wss.iter().any(|w| w.id == "ws-seeded" && w.name == "seeded"),
+        "seeded workspace must be restored"
+    );
+}
+
+#[test]
+fn load_workspaces_restore_failure_errors() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::List);
+    let mut core = core_with_backend(backend);
+    assert!(core.load_workspaces().is_err());
+}
+
+#[test]
+fn load_workspaces_restores_active_ws() {
+    let backend = MemoryBackend::new();
+    // Seed a workspace AND set it active via the store directly.
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed.snapshot_workspace(&marsad_store::Workspace {
+        id: "ws-active".to_string(),
+        name: "active".to_string(),
+        session_ids: vec![],
+        saved_at: "2026-06-24".to_string(),
+    })
+    .expect("seed workspace");
+    seed.set_active_workspace("ws-active")
+        .expect("seed active_ws");
+
+    let mut core = core_with_backend(backend);
+    core.load_workspaces().expect("load_workspaces");
+    assert_eq!(
+        core.snapshot().active_ws,
+        Some("ws-active".to_string()),
+        "active_ws must be restored from the store"
+    );
+}
+
+#[test]
+fn save_workspace_overwrites_same_id() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    // First save
+    core.save_workspace("same", vec!["s1".to_string()]).expect("first save");
+    // Second save with the same derived id — should overwrite
+    let u2 = core.save_workspace("same", vec!["s2".to_string()]).expect("second save");
+    let wss = workspaces_from(&u2);
+    // Still only one workspace with that name
+    let count = wss.iter().filter(|w| w.name == "same").count();
+    assert_eq!(count, 1, "upsert must overwrite, not duplicate");
+    assert_eq!(
+        wss.iter().find(|w| w.name == "same").unwrap().session_ids,
+        vec!["s2"],
+        "session_ids must be from the second save"
+    );
+}

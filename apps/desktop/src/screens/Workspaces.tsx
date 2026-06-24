@@ -1,23 +1,21 @@
 /**
  * Workspaces screen — switcher pill + manager.
  *
- * Workspace switcher: shows all workspaces; active highlighted; Load calls
- * setWorkspace (api) + dispatches SET_WORKSPACE to the store.
- *
- * Manager modal: per-workspace row with Load / Duplicate / Export /  Delete.
- *   - Load → setWorkspace (api) + dispatch SET_WORKSPACE
- *   - Duplicate → local state only. NOTE: backend command pending.
- *   - Export → triggers JSON download (client-side only). NOTE: backend pending.
- *   - Delete → local state only. NOTE: backend command for deleteWorkspace pending.
- *   - "Save current as" → local state only. NOTE: backend saveWorkspace pending.
- *
- * Import: reads a .marsad.json file client-side. NOTE: backend import command pending.
- * Auto-save toggle: local state. NOTE: backend command pending.
+ * All mutations (save / duplicate / delete / export / import / set-active) are
+ * wired to real backend commands.  The screen is fully live: the vm-update
+ * "workspaces" event replaces the list whenever the backend changes it.
  */
 
 import React, { useRef, useState } from "react";
 import { useVm } from "../bridge/useVm";
-import { setWorkspace } from "../bridge/api";
+import {
+  setWorkspace,
+  saveWorkspace,
+  duplicateWorkspace,
+  deleteWorkspace,
+  exportWorkspace,
+  importWorkspace,
+} from "../bridge/api";
 import type { Workspace } from "../bridge/types";
 import { Toggle } from "../components/Toggle";
 import { Modal } from "../components/Modal";
@@ -39,8 +37,8 @@ interface WsRowProps {
   ws: Workspace;
   isActive: boolean;
   onLoad: (id: string) => void;
-  onDuplicate: (ws: Workspace) => void;
-  onExport: (ws: Workspace) => void;
+  onDuplicate: (id: string) => void;
+  onExport: (id: string) => void;
   onDelete: (id: string) => void;
 }
 
@@ -173,7 +171,7 @@ function WsManagerRow({
         </button>
         <button
           data-testid={`ws-duplicate-${ws.id}`}
-          onClick={() => onDuplicate(ws)}
+          onClick={() => onDuplicate(ws.id)}
           style={{
             fontFamily: "inherit",
             fontWeight: 600,
@@ -190,7 +188,7 @@ function WsManagerRow({
         </button>
         <button
           data-testid={`ws-export-${ws.id}`}
-          onClick={() => onExport(ws)}
+          onClick={() => onExport(ws.id)}
           style={{
             fontFamily: "inherit",
             fontWeight: 600,
@@ -241,82 +239,68 @@ interface WsManagerModalProps {
 }
 
 function WsManagerModal({ open, onClose }: WsManagerModalProps) {
-  const { workspaces, activeWs, dispatch } = useVm();
-  // NOTE: autoSave local state — backend command pending
+  const { workspaces, activeWs, dispatch, state } = useVm();
   const [autoSave, setAutoSave] = useState(false);
-  // NOTE: saveAsName local state — backend saveWorkspace command pending
   const [saveAsName, setSaveAsName] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
-
-  // Local copy of workspaces for client-side duplicate/delete
-  // NOTE: all mutations (duplicate, delete) are local only — backend commands pending
-  const [localWs, setLocalWs] = useState<Workspace[]>([]);
-  // We use the store workspaces + any local additions
-  const allWs = [...workspaces, ...localWs];
 
   function handleLoad(id: string) {
     setWorkspace(id);
     dispatch({ type: "SET_WORKSPACE", id });
   }
 
-  function handleDuplicate(ws: Workspace) {
-    // NOTE: backend duplicateWorkspace command pending
-    const dup: Workspace = {
-      id: `ws-dup-${Date.now()}`,
-      name: `${ws.name} (copy)`,
-      session_ids: [...ws.session_ids],
-      saved_at: "just now",
-    };
-    setLocalWs((prev) => [...prev, dup]);
+  function handleDuplicate(id: string) {
+    setError(null);
+    void Promise.resolve(duplicateWorkspace(id)).catch((e: unknown) =>
+      setError(typeof e === "string" ? e : String(e))
+    );
   }
 
-  function handleExport(ws: Workspace) {
-    // NOTE: backend exportWorkspace command pending — client-side download only
-    const blob = new Blob([JSON.stringify(ws, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${ws.name.replace(/\s+/g, "_")}.marsad.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  function handleExport(id: string) {
+    setError(null);
+    void Promise.resolve(exportWorkspace(id))
+      .then((json) => {
+        const ws = workspaces.find((w) => w.id === id);
+        const filename = `${(ws?.name ?? id).replace(/\s+/g, "_")}.marsad.json`;
+        const blob = new Blob([json ?? "{}"], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch((e: unknown) => setError(typeof e === "string" ? e : String(e)));
   }
 
   function handleDelete(id: string) {
-    // NOTE: backend deleteWorkspace command pending
-    setLocalWs((prev) => prev.filter((w) => w.id !== id));
-    // Can't delete store workspaces without backend — show no-op
+    setError(null);
+    void Promise.resolve(deleteWorkspace(id)).catch((e: unknown) =>
+      setError(typeof e === "string" ? e : String(e))
+    );
   }
 
   function handleSaveAs() {
     if (!saveAsName.trim()) return;
-    // NOTE: backend saveWorkspace command pending
-    const newWs: Workspace = {
-      id: `ws-saved-${Date.now()}`,
-      name: saveAsName.trim(),
-      session_ids: activeWs?.session_ids ?? [],
-      saved_at: "just now",
-    };
-    setLocalWs((prev) => [...prev, newWs]);
-    setSaveAsName("");
+    setError(null);
+    const currentSessionIds =
+      state.snapshot?.sessions.map((s) => s.id) ?? [];
+    void Promise.resolve(saveWorkspace(saveAsName.trim(), currentSessionIds))
+      .then(() => setSaveAsName(""))
+      .catch((e: unknown) => setError(typeof e === "string" ? e : String(e)));
   }
 
   function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
-    // NOTE: backend importWorkspace command pending — client-side JSON parse only
     const file = e.target.files?.[0];
     if (!file) return;
+    setError(null);
     const reader = new FileReader();
     reader.onload = (ev) => {
-      try {
-        const ws = JSON.parse(ev.target?.result as string) as Workspace;
-        setLocalWs((prev) => [
-          ...prev,
-          { ...ws, id: `ws-import-${Date.now()}`, saved_at: "just now" },
-        ]);
-      } catch {
-        // ignore parse errors
-      }
+      const text = ev.target?.result as string;
+      void Promise.resolve(importWorkspace(text)).catch((err: unknown) =>
+        setError(typeof err === "string" ? err : String(err))
+      );
     };
     reader.readAsText(file);
     e.target.value = "";
@@ -418,6 +402,21 @@ function WsManagerModal({ open, onClose }: WsManagerModalProps) {
         </button>
       </div>
 
+      {/* Error banner */}
+      {error && (
+        <div
+          style={{
+            padding: "8px 22px",
+            background: "var(--error-bg, rgba(224,89,74,0.12))",
+            borderBottom: "1px solid var(--border)",
+            color: "var(--error)",
+            fontSize: 13,
+          }}
+        >
+          {error}
+        </div>
+      )}
+
       {/* Auto-save toggle */}
       <div
         style={{
@@ -453,7 +452,7 @@ function WsManagerModal({ open, onClose }: WsManagerModalProps) {
           gap: 11,
         }}
       >
-        {allWs.map((ws) => (
+        {workspaces.map((ws) => (
           <WsManagerRow
             key={ws.id}
             ws={ws}
@@ -464,7 +463,7 @@ function WsManagerModal({ open, onClose }: WsManagerModalProps) {
             onDelete={handleDelete}
           />
         ))}
-        {allWs.length === 0 && (
+        {workspaces.length === 0 && (
           <div
             style={{
               padding: "32px 0",

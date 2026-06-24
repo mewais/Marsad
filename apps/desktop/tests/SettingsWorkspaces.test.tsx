@@ -24,6 +24,11 @@ vi.mock("../src/bridge/api", async (importOriginal) => {
   return {
     ...original,
     setWorkspace: vi.fn().mockResolvedValue(undefined),
+    saveWorkspace: vi.fn().mockResolvedValue(undefined),
+    duplicateWorkspace: vi.fn().mockResolvedValue(undefined),
+    deleteWorkspace: vi.fn().mockResolvedValue(undefined),
+    exportWorkspace: vi.fn().mockResolvedValue("{}"),
+    importWorkspace: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -545,14 +550,15 @@ describe("Workspaces — Manager modal", () => {
     });
   });
 
-  it("Duplicate button adds a copy row to the manager", () => {
+  it("Duplicate button calls the duplicateWorkspace API command", async () => {
     renderWorkspaces();
     fireEvent.click(screen.getByTestId("ws-open-manager"));
-    // Count rows before
-    const before = document.querySelectorAll("[data-testid^='ws-row-']").length;
     fireEvent.click(screen.getByTestId("ws-duplicate-ws-backend"));
-    const after = document.querySelectorAll("[data-testid^='ws-row-']").length;
-    expect(after).toBe(before + 1);
+    await vi.waitFor(() => {
+      expect(api.duplicateWorkspace as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+        "ws-backend"
+      );
+    });
   });
 
   it("Save current as button is disabled when input is empty", () => {
@@ -562,7 +568,7 @@ describe("Workspaces — Manager modal", () => {
     expect(btn.disabled).toBe(true);
   });
 
-  it("Save current as button is enabled and saves a new workspace", () => {
+  it("Save current as button is enabled and calls saveWorkspace API", async () => {
     renderWorkspaces();
     fireEvent.click(screen.getByTestId("ws-open-manager"));
     const input = screen.getByTestId("ws-save-as-input");
@@ -570,8 +576,17 @@ describe("Workspaces — Manager modal", () => {
     const btn = screen.getByTestId("ws-save-as-btn") as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
     fireEvent.click(btn);
-    // Input cleared after save
-    expect((input as HTMLInputElement).value).toBe("");
+    // Verify the backend command was called with the right name
+    await vi.waitFor(() => {
+      expect(api.saveWorkspace as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+        "My saved snapshot",
+        expect.any(Array)
+      );
+    });
+    // Input clears after the async save resolves
+    await vi.waitFor(() => {
+      expect((input as HTMLInputElement).value).toBe("");
+    });
   });
 
   it("auto-save toggle exists in modal and can be toggled", () => {

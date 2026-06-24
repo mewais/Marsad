@@ -417,6 +417,14 @@ impl Store {
         Ok(())
     }
 
+    /// Delete a persisted workspace by id (no-op if absent).
+    pub fn delete_workspace(&mut self, id: &str) -> Result<(), StoreError> {
+        let key = format!("{}{}", PREFIX_WORKSPACE, id);
+        self.backend.delete(&key)?;
+        self.workspace_ids.remove(id);
+        Ok(())
+    }
+
     /// Append a transcript entry for `session_id`.
     ///
     /// Each entry is stored as an independent key using a monotonically

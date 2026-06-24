@@ -209,15 +209,116 @@ pub fn run_slash(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn set_workspace(state: State<'_, ManagedState>, id: String) -> Result<(), String> {
-    let mut guard = state.lock().map_err(|e| e.to_string())?;
-    match &mut *guard {
-        AppState::Live(core) => core.set_workspace(&id).map_err(map_err),
-        AppState::Mock(mock) => {
-            mock.set_active_ws(id);
-            Ok(())
+pub fn set_workspace(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.set_workspace(&id).map_err(map_err)?,
+            AppState::Mock(mock) => {
+                mock.set_active_ws(id);
+                vec![]
+            }
         }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Workspace commands
+// ---------------------------------------------------------------------------
+
+/// Save the current session list as a named workspace, persist, and push the
+/// updated workspace list to the webview.
+#[tauri::command(rename_all = "snake_case")]
+pub fn save_workspace(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    name: String,
+    session_ids: Vec<String>,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.save_workspace(&name, session_ids).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Duplicate a workspace by id, persist the copy, and push the updated list.
+#[tauri::command(rename_all = "snake_case")]
+pub fn duplicate_workspace(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.duplicate_workspace(&id).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Delete a workspace by id, remove from persistence, and push the updated list.
+#[tauri::command(rename_all = "snake_case")]
+pub fn delete_workspace(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.delete_workspace(&id).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Export a workspace as a `.marsad.json` string. Returns the JSON directly
+/// (no vm-update; the frontend triggers the file download).
+#[tauri::command(rename_all = "snake_case")]
+pub fn export_workspace(
+    state: State<'_, ManagedState>,
+    id: String,
+) -> Result<String, String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    match &*guard {
+        AppState::Live(core) => core.export_workspace(&id).map_err(map_err),
+        AppState::Mock(_) => Ok("{}".to_string()),
     }
+}
+
+/// Import a workspace from a `.marsad.json` string, persist it, and push the
+/// updated workspace list.
+#[tauri::command(rename_all = "snake_case")]
+pub fn import_workspace(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    json: String,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.import_workspace(&json).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

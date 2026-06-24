@@ -111,14 +111,15 @@ fn run_slash_unknown_session_returns_unknown_session_error() {
     );
 }
 
+/// `set_workspace` no longer validates the id against the session list —
+/// it accepts any workspace id (it stores `active_ws` as a plain String).
+/// This test documents that it succeeds even for an unknown id.
 #[test]
-fn set_workspace_unknown_session_returns_unknown_session_error() {
+fn set_workspace_with_any_id_succeeds() {
     let (mut core, _peer) = make_core();
-    let err = core.set_workspace(UNKNOWN).unwrap_err();
-    assert!(
-        matches!(err, CoreError::UnknownSession(_)),
-        "expected UnknownSession, got {err:?}"
-    );
+    // Must succeed — set_workspace now takes a workspace id, not a session id.
+    core.set_workspace(UNKNOWN)
+        .expect("set_workspace must succeed for any id");
 }
 
 #[test]

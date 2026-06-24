@@ -248,4 +248,5 @@ export type VmUpdateEvent =
   | { kind: "session"; session: SessionView }
   | { kind: "toast"; icon: string; text: string }
   | { kind: "host_health"; host_id: string; status: string }
-  | { kind: "hosts"; hosts: Host[] };
+  | { kind: "hosts"; hosts: Host[] }
+  | { kind: "workspaces"; workspaces: Workspace[] };

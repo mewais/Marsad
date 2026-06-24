@@ -449,3 +449,14 @@ fn backend_delete_failure_propagates_from_delete_host() {
         other => panic!("expected Backend error from delete failure, got: {other:?}"),
     }
 }
+
+#[test]
+fn backend_delete_failure_propagates_from_delete_workspace() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::Delete);
+    let mut store = Store::new(Box::new(backend));
+    match store.delete_workspace("ws-x") {
+        Err(StoreError::Backend(_)) => {}
+        other => panic!("expected Backend error from delete failure, got: {other:?}"),
+    }
+}

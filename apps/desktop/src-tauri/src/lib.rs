@@ -203,6 +203,11 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::set_autostart,
             bridge::add_host,
             bridge::remove_host,
+            bridge::save_workspace,
+            bridge::duplicate_workspace,
+            bridge::delete_workspace,
+            bridge::export_workspace,
+            bridge::import_workspace,
         ])
 }
 
@@ -340,18 +345,22 @@ pub fn run() {
         .setup(move |app| {
             setup_tray(app)?;
 
-            // Load persisted hosts into the registry so the dashboard shows them
+            // Load persisted hosts and workspaces so the dashboard shows them
             // immediately (the initial `snapshot` call then includes them).
             {
                 use tauri::Manager;
-                let updates = match app.state::<ManagedState>().lock() {
+                let (host_updates, ws_updates) = match app.state::<ManagedState>().lock() {
                     Ok(mut guard) => match &mut *guard {
-                        AppState::Live(core) => core.load_hosts().unwrap_or_default(),
-                        AppState::Mock(_) => vec![],
+                        AppState::Live(core) => (
+                            core.load_hosts().unwrap_or_default(),
+                            core.load_workspaces().unwrap_or_default(),
+                        ),
+                        AppState::Mock(_) => (vec![], vec![]),
                     },
-                    Err(_) => vec![],
+                    Err(_) => (vec![], vec![]),
                 };
-                events::emit_updates(&app.handle().clone(), updates);
+                events::emit_updates(&app.handle().clone(), host_updates);
+                events::emit_updates(&app.handle().clone(), ws_updates);
             }
 
             let app_handle = app.handle().clone();
