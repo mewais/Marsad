@@ -906,7 +906,7 @@ impl Agent {
     ///  - No lock is held while blocking on socket or FIFO reads.
     #[cfg(not(coverage))]
     pub fn serve(mut self) -> Result<(), AgentError> {
-        use marsad_transport::{LocalIpcListener, Transport};
+        use marsad_transport::LocalIpcListener;
         use std::sync::{mpsc, Arc, Mutex};
 
         // ── Bind ──────────────────────────────────────────────────────────────
@@ -923,9 +923,6 @@ impl Agent {
             .map_err(|e| AgentError::Listen(format!("bind {socket_path}: {e}")))?;
 
         eprintln!("marsad-agent: listening on {socket_path}");
-
-        // ── Reconcile existing tmux sessions on startup ────────────────────
-        self.reconcile_all();
 
         // ── Command channel ────────────────────────────────────────────────
         // Each `AgentCmd` carries one inbound IPC line plus a one-shot reply
@@ -976,11 +973,54 @@ impl Agent {
         // FIFO threads (which insert when claude emits a `can_use_tool`).
         let pending_gates_for_fifo = Arc::clone(&self.pending_gates.0);
 
+        let data_root = self.config.data_root.clone();
+
+        // ── Reconnect sessions that survived an agent restart ──────────────────
+        // The agent is a detached daemon; if it died (e.g. killed on reinstall) but
+        // the remote tmux is still alive, re-attach a reader to each live session and
+        // re-track it so prompt/stop work and the conversation CONTINUES rather than
+        // starting over. Dead-container sessions are left for explicit resume.
+        // `first_prompt: None` and `send_init: false` — the remote claude is already
+        // running and initialized; we only re-attach to its stream.
+        {
+            use marsad_lifecycle::Action;
+            let restored = self.store.0.restore().map(|r| r.sessions).unwrap_or_default();
+            for s in restored {
+                let known = Persisted {
+                    session_id: s.session_id.clone(),
+                    container_name: format!("marsad-{}", s.id),
+                    project: s.project.clone(),
+                    model: s.model.clone(),
+                };
+                if matches!(
+                    self.reconcile_one(&known, s.host_target.as_deref()).action,
+                    Action::Adopt
+                ) {
+                    self.sessions.insert(
+                        s.id.clone(),
+                        SessionRecord {
+                            marsad_id: s.id.clone(),
+                        },
+                    );
+                    spawn_session_reader(
+                        s.id.clone(),
+                        s.host_target.clone(),
+                        None,
+                        false,
+                        data_root.clone(),
+                        Arc::clone(&subscribers),
+                        Arc::clone(&self.session_writers.0),
+                        Arc::clone(&self.pending_gates.0),
+                    );
+                    eprintln!("marsad-agent: reconnected live session {}", s.id);
+                }
+            }
+        }
+
         // ── Accept thread ──────────────────────────────────────────────────
         // We spin off the accept loop in a separate thread so that the current
         // thread can run the agent command loop below.  The accept thread
         // never touches the `Agent`.
-        let data_root = self.config.data_root.clone();
         let subs_accept = Arc::clone(&subscribers);
         let cmd_tx_accept = cmd_tx.clone();
 
@@ -1099,219 +1139,16 @@ impl Agent {
                                         // If a new session was launched, start a
                                         // FIFO reader thread for it.
                                         if let Some(session_id) = reply.new_session_id {
-                                            let session_dir =
-                                                std::path::PathBuf::from(&data_root_client)
-                                                    .join("sessions")
-                                                    .join(format!("marsad-{session_id}"));
-                                            let subs_fifo = Arc::clone(&subs_for_fifo);
-                                            let sid = session_id.clone();
-                                            let first_prompt = reply.first_prompt;
-                                            let host_target = reply.host_target;
-                                            // Clone the writers registry so the FIFO thread
-                                            // can register the writer and the serve thread
-                                            // can look it up via self.session_writers.0.
-                                            let writers_fifo = Arc::clone(&writers_for_fifo);
-                                            let pending_fifo = Arc::clone(&pending_for_fifo);
-
-                                            std::thread::spawn(move || {
-                                                // ── Open and connect the transport ─────────────
-                                                // Local session → platform FIFO/pipe transport
-                                                // (tmux+FIFO on Unix, named pipe on Windows). Remote
-                                                // session (host_target resolves to an exec prefix) →
-                                                // RemoteFifoTransport bridging the remote FIFOs over
-                                                // ssh/wsl. All three yield the same `SplitIo`
-                                                // (boxed writer + buffered boxed reader), so the rest
-                                                // of this thread is transport-agnostic.
-                                                let (writer, mut reader): marsad_transport::SplitIo =
-                                                    match exec_prefix_for(host_target.as_deref()) {
-                                                        Some(prefix) => {
-                                                            let dir = format!(
-                                                                "{}/sessions/marsad-{}",
-                                                                REMOTE_RUNTIME_DIR, sid
-                                                            );
-                                                            let mut t =
-                                                                marsad_transport::RemoteFifoTransport::new(
-                                                                    prefix,
-                                                                    format!("{dir}/in.fifo"),
-                                                                    format!("{dir}/out.fifo"),
-                                                                );
-                                                            if let Err(e) = t.connect() {
-                                                                eprintln!("marsad-agent: remote connect {sid}: {e}");
-                                                                return;
-                                                            }
-                                                            match t.into_split() {
-                                                                Some(pair) => pair,
-                                                                None => {
-                                                                    eprintln!("marsad-agent: remote not connected {sid}");
-                                                                    return;
-                                                                }
-                                                            }
-                                                        }
-                                                        None => {
-                                                            #[cfg(unix)]
-                                                            {
-                                                                use marsad_transport::ClaudeFifoTransport;
-                                                                let mut fifo = match ClaudeFifoTransport::open(&session_dir) {
-                                                                    Ok(f) => f,
-                                                                    Err(e) => {
-                                                                        eprintln!("marsad-agent: fifo open {sid}: {e}");
-                                                                        return;
-                                                                    }
-                                                                };
-                                                                if let Err(e) = fifo.connect() {
-                                                                    eprintln!("marsad-agent: fifo connect {sid}: {e}");
-                                                                    return;
-                                                                }
-                                                                match fifo.into_split() {
-                                                                    Some(pair) => pair,
-                                                                    None => {
-                                                                        eprintln!("marsad-agent: fifo not connected after connect {sid}");
-                                                                        return;
-                                                                    }
-                                                                }
-                                                            }
-                                                            #[cfg(windows)]
-                                                            {
-                                                                let _ = &session_dir;
-                                                                use marsad_transport::ClaudeNamedPipeTransport;
-                                                                let container_name = format!("marsad-{sid}");
-                                                                let mut transport = ClaudeNamedPipeTransport::for_session(&container_name);
-                                                                if let Err(e) = transport.connect() {
-                                                                    eprintln!("marsad-agent: pipe connect {sid}: {e}");
-                                                                    return;
-                                                                }
-                                                                match transport.into_split() {
-                                                                    Some(pair) => pair,
-                                                                    None => {
-                                                                        eprintln!("marsad-agent: pipe not connected after connect {sid}");
-                                                                        return;
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    };
-
-                                                // The writer is shared (Arc<Mutex>) between this
-                                                // thread (initialize handshake + first prompt) and
-                                                // the serve thread (handle_send_prompt / answer_gate)
-                                                // — boxed writers can't be try_clone'd like a File.
-                                                let writer: SharedWriter =
-                                                    std::sync::Arc::new(std::sync::Mutex::new(writer));
-
-                                                // Send the control-protocol `initialize`
-                                                // handshake first. This is required before claude
-                                                // will route tool-permission prompts back to us as
-                                                // `can_use_tool` control_requests (it pairs with
-                                                // `--permission-prompt-tool stdio` in claude_argv).
-                                                // Fire-and-forget: the CLI's ack is ignored.
-                                                {
-                                                    use std::io::Write;
-                                                    let init =
-                                                        marsad_proto::encode_control_request_initialize(
-                                                            "req_1_init",
-                                                        );
-                                                    let mut w = writer.lock().unwrap();
-                                                    let _ = w.write_all(init.as_bytes());
-                                                    let _ = w.write_all(b"\n");
-                                                    let _ = w.flush();
-                                                }
-
-                                                // Deliver the first_prompt (if any) immediately
-                                                // so claude receives its initial task.  claude in
-                                                // --input-format stream-json mode emits nothing
-                                                // until it sees a user message on stdin.
-                                                if let Some(prompt) = first_prompt {
-                                                    use marsad_proto::{
-                                                        encode_user_input, ContentBlock, UserInput,
-                                                    };
-                                                    use std::io::Write;
-                                                    let encoded = encode_user_input(&UserInput {
-                                                        content: vec![ContentBlock::Text {
-                                                            text: prompt,
-                                                        }],
-                                                    });
-                                                    let mut w = writer.lock().unwrap();
-                                                    let _ = w.write_all(encoded.as_bytes());
-                                                    let _ = w.write_all(b"\n");
-                                                    let _ = w.flush();
-                                                }
-
-                                                // Register the shared writer so handle_send_prompt
-                                                // / handle_answer_gate can deliver future prompts and
-                                                // gate responses to this session's stdin. Both sides
-                                                // hold an Arc to the same Mutex<Box<dyn Write>>.
-                                                {
-                                                    let mut registry = writers_fifo.lock().unwrap();
-                                                    registry.insert(
-                                                        sid.clone(),
-                                                        std::sync::Arc::clone(&writer),
-                                                    );
-                                                }
-
-                                                // Read out.fifo lines and broadcast to all
-                                                // subscribers.  The reader blocks here; the
-                                                // writer clone is in the session_writers registry
-                                                // for handle_send_prompt — no lock contention.
-                                                use std::io::BufRead;
-                                                loop {
-                                                    let mut raw = String::new();
-                                                    match reader.read_line(&mut raw) {
-                                                        Ok(0) | Err(_) => break,
-                                                        Ok(_) => {
-                                                            let raw = raw.trim_end_matches('\n');
-
-                                                            // Capture a `can_use_tool` control
-                                                            // request as a pending gate so a later
-                                                            // AnswerGate can write the matching
-                                                            // control_response. The event is still
-                                                            // broadcast (below) so the GUI can
-                                                            // render the gate and answer it.
-                                                            if let Ok(
-                                                                marsad_proto::StreamMsg::ControlRequest(
-                                                                    cr,
-                                                                ),
-                                                            ) = marsad_proto::parse_stream_line(raw)
-                                                            {
-                                                                let mut gates =
-                                                                    pending_fifo.lock().unwrap();
-                                                                gates.insert(
-                                                                    sid.clone(),
-                                                                    PendingGate {
-                                                                        request_id: cr.request_id,
-                                                                        input: cr.input,
-                                                                    },
-                                                                );
-                                                            }
-
-                                                            let event: serde_json::Value =
-                                                                serde_json::from_str(raw)
-                                                                    .unwrap_or_else(|_| {
-                                                                        serde_json::json!({"raw": raw})
-                                                                    });
-                                                            let ipc_msg =
-                                                                marsad_proto::IpcMsg::AgentEvent {
-                                                                    session_id: sid.clone(),
-                                                                    event,
-                                                                };
-                                                            let encoded =
-                                                                marsad_proto::encode_ipc(&ipc_msg);
-                                                            // Broadcast to all subscribers.
-                                                            let subs = subs_fifo.lock().unwrap();
-                                                            subs.iter().for_each(|s| {
-                                                                let _ = s.send(encoded.clone());
-                                                            });
-                                                        }
-                                                    }
-                                                }
-
-                                                // Clean up: remove writer from registry when
-                                                // claude exits (FIFO closed).
-                                                {
-                                                    let mut registry = writers_fifo.lock().unwrap();
-                                                    registry.remove(&sid);
-                                                }
-                                                drop(writer);
-                                            });
+                                            spawn_session_reader(
+                                                session_id,
+                                                reply.host_target,
+                                                reply.first_prompt,
+                                                true, // launch: send the initialize handshake
+                                                data_root_client.clone(),
+                                                Arc::clone(&subs_for_fifo),
+                                                Arc::clone(&writers_for_fifo),
+                                                Arc::clone(&pending_for_fifo),
+                                            );
                                         }
                                     }
                                 }
@@ -1652,4 +1489,225 @@ struct LaunchSessionMsg {
     host_target: Option<String>,
     model: String,
     first_prompt: Option<String>,
+}
+
+/// Spawn the per-session reader thread: connect the transport (local FIFO/pipe, or a
+/// remote ssh/wsl/plink bridge), send the control `initialize` handshake + an optional
+/// first prompt, register the writer, then stream claude's stdout to every subscriber
+/// until the session ends. Used both when a session is launched AND when reconnecting
+/// a session that survived an agent restart (pass `first_prompt: None` for reconnect).
+#[cfg(not(coverage))]
+#[allow(clippy::too_many_arguments)]
+fn spawn_session_reader(
+    sid: String,
+    host_target: Option<String>,
+    first_prompt: Option<String>,
+    send_init: bool,
+    data_root: String,
+    subs_fifo: std::sync::Arc<std::sync::Mutex<Vec<std::sync::mpsc::Sender<String>>>>,
+    writers_fifo: std::sync::Arc<std::sync::Mutex<HashMap<String, SharedWriter>>>,
+    pending_fifo: std::sync::Arc<std::sync::Mutex<HashMap<String, PendingGate>>>,
+) {
+    let session_dir = std::path::PathBuf::from(&data_root)
+        .join("sessions")
+        .join(format!("marsad-{sid}"));
+    std::thread::spawn(move || {
+        use marsad_transport::Transport;
+        // ── Open and connect the transport ─────────────
+        // Local session → platform FIFO/pipe transport
+        // (tmux+FIFO on Unix, named pipe on Windows). Remote
+        // session (host_target resolves to an exec prefix) →
+        // RemoteFifoTransport bridging the remote FIFOs over
+        // ssh/wsl. All three yield the same `SplitIo`
+        // (boxed writer + buffered boxed reader), so the rest
+        // of this thread is transport-agnostic.
+        let (writer, mut reader): marsad_transport::SplitIo =
+            match exec_prefix_for(host_target.as_deref()) {
+                Some(prefix) => {
+                    let dir = format!(
+                        "{}/sessions/marsad-{}",
+                        REMOTE_RUNTIME_DIR, sid
+                    );
+                    let mut t =
+                        marsad_transport::RemoteFifoTransport::new(
+                            prefix,
+                            format!("{dir}/in.fifo"),
+                            format!("{dir}/out.fifo"),
+                        );
+                    if let Err(e) = t.connect() {
+                        eprintln!("marsad-agent: remote connect {sid}: {e}");
+                        return;
+                    }
+                    match t.into_split() {
+                        Some(pair) => pair,
+                        None => {
+                            eprintln!("marsad-agent: remote not connected {sid}");
+                            return;
+                        }
+                    }
+                }
+                None => {
+                    #[cfg(unix)]
+                    {
+                        use marsad_transport::ClaudeFifoTransport;
+                        let mut fifo = match ClaudeFifoTransport::open(&session_dir) {
+                            Ok(f) => f,
+                            Err(e) => {
+                                eprintln!("marsad-agent: fifo open {sid}: {e}");
+                                return;
+                            }
+                        };
+                        if let Err(e) = fifo.connect() {
+                            eprintln!("marsad-agent: fifo connect {sid}: {e}");
+                            return;
+                        }
+                        match fifo.into_split() {
+                            Some(pair) => pair,
+                            None => {
+                                eprintln!("marsad-agent: fifo not connected after connect {sid}");
+                                return;
+                            }
+                        }
+                    }
+                    #[cfg(windows)]
+                    {
+                        let _ = &session_dir;
+                        use marsad_transport::ClaudeNamedPipeTransport;
+                        let container_name = format!("marsad-{sid}");
+                        let mut transport = ClaudeNamedPipeTransport::for_session(&container_name);
+                        if let Err(e) = transport.connect() {
+                            eprintln!("marsad-agent: pipe connect {sid}: {e}");
+                            return;
+                        }
+                        match transport.into_split() {
+                            Some(pair) => pair,
+                            None => {
+                                eprintln!("marsad-agent: pipe not connected after connect {sid}");
+                                return;
+                            }
+                        }
+                    }
+                }
+            };
+
+        // The writer is shared (Arc<Mutex>) between this
+        // thread (initialize handshake + first prompt) and
+        // the serve thread (handle_send_prompt / answer_gate)
+        // — boxed writers can't be try_clone'd like a File.
+        let writer: SharedWriter =
+            std::sync::Arc::new(std::sync::Mutex::new(writer));
+
+        // Send the control-protocol `initialize` handshake first (LAUNCH only). It
+        // pairs with `--permission-prompt-tool stdio` so claude routes tool-permission
+        // prompts back as `can_use_tool` control_requests. On RECONNECT the remote
+        // claude is already running + initialized, so re-sending it would be wrong —
+        // hence `send_init`. Fire-and-forget: the CLI's ack is ignored.
+        if send_init {
+            use std::io::Write;
+            let init =
+                marsad_proto::encode_control_request_initialize(
+                    "req_1_init",
+                );
+            let mut w = writer.lock().unwrap();
+            let _ = w.write_all(init.as_bytes());
+            let _ = w.write_all(b"\n");
+            let _ = w.flush();
+        }
+
+        // Deliver the first_prompt (if any) immediately
+        // so claude receives its initial task.  claude in
+        // --input-format stream-json mode emits nothing
+        // until it sees a user message on stdin.
+        if let Some(prompt) = first_prompt {
+            use marsad_proto::{
+                encode_user_input, ContentBlock, UserInput,
+            };
+            use std::io::Write;
+            let encoded = encode_user_input(&UserInput {
+                content: vec![ContentBlock::Text {
+                    text: prompt,
+                }],
+            });
+            let mut w = writer.lock().unwrap();
+            let _ = w.write_all(encoded.as_bytes());
+            let _ = w.write_all(b"\n");
+            let _ = w.flush();
+        }
+
+        // Register the shared writer so handle_send_prompt
+        // / handle_answer_gate can deliver future prompts and
+        // gate responses to this session's stdin. Both sides
+        // hold an Arc to the same Mutex<Box<dyn Write>>.
+        {
+            let mut registry = writers_fifo.lock().unwrap();
+            registry.insert(
+                sid.clone(),
+                std::sync::Arc::clone(&writer),
+            );
+        }
+
+        // Read out.fifo lines and broadcast to all
+        // subscribers.  The reader blocks here; the
+        // writer clone is in the session_writers registry
+        // for handle_send_prompt — no lock contention.
+        use std::io::BufRead;
+        loop {
+            let mut raw = String::new();
+            match reader.read_line(&mut raw) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let raw = raw.trim_end_matches('\n');
+
+                    // Capture a `can_use_tool` control
+                    // request as a pending gate so a later
+                    // AnswerGate can write the matching
+                    // control_response. The event is still
+                    // broadcast (below) so the GUI can
+                    // render the gate and answer it.
+                    if let Ok(
+                        marsad_proto::StreamMsg::ControlRequest(
+                            cr,
+                        ),
+                    ) = marsad_proto::parse_stream_line(raw)
+                    {
+                        let mut gates =
+                            pending_fifo.lock().unwrap();
+                        gates.insert(
+                            sid.clone(),
+                            PendingGate {
+                                request_id: cr.request_id,
+                                input: cr.input,
+                            },
+                        );
+                    }
+
+                    let event: serde_json::Value =
+                        serde_json::from_str(raw)
+                            .unwrap_or_else(|_| {
+                                serde_json::json!({"raw": raw})
+                            });
+                    let ipc_msg =
+                        marsad_proto::IpcMsg::AgentEvent {
+                            session_id: sid.clone(),
+                            event,
+                        };
+                    let encoded =
+                        marsad_proto::encode_ipc(&ipc_msg);
+                    // Broadcast to all subscribers.
+                    let subs = subs_fifo.lock().unwrap();
+                    subs.iter().for_each(|s| {
+                        let _ = s.send(encoded.clone());
+                    });
+                }
+            }
+        }
+
+        // Clean up: remove writer from registry when
+        // claude exits (FIFO closed).
+        {
+            let mut registry = writers_fifo.lock().unwrap();
+            registry.remove(&sid);
+        }
+        drop(writer);
+    });
 }
