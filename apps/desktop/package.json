@@ -12,7 +12,9 @@
     "test": "node --disable-wasm-trap-handler node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "test:watch": "node --disable-wasm-trap-handler node_modules/vitest/vitest.mjs --config vitest.config.ts",
     "test:e2e": "playwright test",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "stage-sidecars": "node scripts/stage-sidecars.mjs",
+    "bundle": "node scripts/stage-sidecars.mjs && tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

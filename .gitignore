@@ -55,3 +55,6 @@ _extracted/
 
 # Design reference PNGs — local only, never commit
 design_samples/
+
+# Tauri sidecar staging (built locally by stage-sidecars)
+apps/desktop/src-tauri/binaries/
