@@ -14,7 +14,8 @@
     "test:e2e": "playwright test",
     "tauri": "tauri",
     "stage-sidecars": "node scripts/stage-sidecars.mjs",
-    "bundle": "node scripts/stage-sidecars.mjs && tauri build"
+    "bundle": "node scripts/stage-sidecars.mjs && tauri build",
+    "bundle:win": "node scripts/stage-sidecars.mjs --target x86_64-pc-windows-msvc && tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
