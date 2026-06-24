@@ -114,6 +114,9 @@ function reducer(state: VmState, action: Action): VmState {
         );
         return { ...state, snapshot: { ...state.snapshot, hosts } };
       }
+      if (ev.kind === "hosts") {
+        return { ...state, snapshot: { ...state.snapshot, hosts: ev.hosts } };
+      }
       return state;
     }
 

@@ -201,6 +201,8 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::list_sessions,
             bridge::get_autostart,
             bridge::set_autostart,
+            bridge::add_host,
+            bridge::remove_host,
         ])
 }
 
@@ -338,9 +340,30 @@ pub fn run() {
         .setup(move |app| {
             setup_tray(app)?;
 
+            // Load persisted hosts into the registry so the dashboard shows them
+            // immediately (the initial `snapshot` call then includes them).
+            {
+                use tauri::Manager;
+                let updates = match app.state::<ManagedState>().lock() {
+                    Ok(mut guard) => match &mut *guard {
+                        AppState::Live(core) => core.load_hosts().unwrap_or_default(),
+                        AppState::Mock(_) => vec![],
+                    },
+                    Err(_) => vec![],
+                };
+                events::emit_updates(&app.handle().clone(), updates);
+            }
+
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 run_reader_thread(app_handle, &socket_path_for_reader);
+            });
+
+            // Background SSH health-check worker — runs `ssh … echo ping` OFF the
+            // Core lock so the UI never blocks on it (same discipline as git).
+            let health_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                run_host_health_worker(health_handle);
             });
 
             Ok(())
@@ -504,4 +527,73 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
     }
 
     eprintln!("marsad-desktop: reader thread: exiting");
+}
+
+// ---------------------------------------------------------------------------
+// Host health-check worker — runs `ssh` OFF the Core lock
+// ---------------------------------------------------------------------------
+
+/// Periodically probes each non-local host over SSH and reports the result back
+/// to Core. The `ssh` subprocess runs WITHOUT holding the Core mutex (only the
+/// brief snapshot read + status write are locked), so checks never freeze the UI.
+fn run_host_health_worker(app: tauri::AppHandle) {
+    use tauri::Manager;
+
+    // Snapshot the (id, target) of every remote host, locking only briefly.
+    let remote_hosts = |app: &tauri::AppHandle| -> Vec<(String, String)> {
+        match app.state::<ManagedState>().lock() {
+            Ok(guard) => match &*guard {
+                AppState::Live(core) => core
+                    .snapshot()
+                    .hosts
+                    .into_iter()
+                    .filter(|h| !h.is_local)
+                    .map(|h| (h.id, h.target))
+                    .collect(),
+                AppState::Mock(_) => Vec::new(),
+            },
+            Err(_) => Vec::new(),
+        }
+    };
+
+    // Give startup a moment (load_hosts + window) before the first sweep.
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    loop {
+        for (id, target) in remote_hosts(&app) {
+            let status = ssh_health(&target); // subprocess — NO lock held here
+            let updates = match app.state::<ManagedState>().lock() {
+                Ok(mut guard) => match &mut *guard {
+                    AppState::Live(core) => core.set_host_status(&id, status),
+                    AppState::Mock(_) => vec![],
+                },
+                Err(_) => vec![],
+            };
+            events::emit_updates(&app, updates);
+        }
+        std::thread::sleep(std::time::Duration::from_secs(15));
+    }
+}
+
+/// One SSH reachability probe. `ssh exit 0` → Connected; ssh ran but failed
+/// (host down / auth / timeout) → Unreachable; couldn't spawn ssh → Reconnecting.
+fn ssh_health(target: &str) -> marsad_core::HostStatus {
+    use marsad_core::HostStatus;
+    match std::process::Command::new("ssh")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            target,
+            "echo ping",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        Ok(s) if s.success() => HostStatus::Connected,
+        Ok(_) => HostStatus::Unreachable,
+        Err(_) => HostStatus::Reconnecting,
+    }
 }

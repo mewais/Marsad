@@ -1014,3 +1014,144 @@ fn transcript_send_prompt_is_injected() {
         ]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Host commands — add/remove/set_status/load + persistence (MemoryBackend)
+// ---------------------------------------------------------------------------
+
+use marsad_core::HostStatus;
+use marsad_store::{BackendOp, MemoryBackend, PersistedHost, Store};
+
+fn core_with_backend(backend: MemoryBackend) -> Core {
+    let (a, _b) = LoopbackFake::pair();
+    let cfg = CoreConfig {
+        agent_endpoint: "loopback://test".to_string(),
+        data_root: "/tmp/marsad-test".to_string(),
+    };
+    Core::with_deps(
+        cfg,
+        Box::new(a),
+        Box::new(marsad_core::RealGit),
+        Box::new(marsad_core::RealTranscript),
+        Box::new(backend),
+    )
+    .expect("with_deps")
+}
+
+fn hosts_from(updates: &[VmUpdate]) -> Vec<marsad_core::Host> {
+    updates
+        .iter()
+        .rev()
+        .find_map(|u| match u {
+            VmUpdate::Hosts(h) => Some(h.clone()),
+            _ => None,
+        })
+        .expect("a Hosts update")
+}
+
+fn remote_id(updates: &[VmUpdate]) -> String {
+    hosts_from(updates)
+        .into_iter()
+        .find(|h| !h.is_local)
+        .expect("a remote host")
+        .id
+}
+
+#[test]
+fn add_host_appears_in_list_and_snapshot() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let u = core
+        .add_host("srv", "alice@srv.example.com")
+        .expect("add_host");
+    let hosts = hosts_from(&u);
+    assert!(hosts.iter().any(|h| h.label == "srv" && !h.is_local));
+    assert!(hosts.iter().any(|h| h.is_local), "localhost must remain");
+    assert!(core.snapshot().hosts.iter().any(|h| h.label == "srv"));
+}
+
+#[test]
+fn add_host_duplicate_label_errors() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    core.add_host("srv", "a@h1").expect("first add");
+    assert!(
+        core.add_host("srv", "b@h2").is_err(),
+        "dup label must error"
+    );
+}
+
+#[test]
+fn add_host_malformed_target_errors() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    assert!(core.add_host("x", "no-at-sign").is_err());
+}
+
+#[test]
+fn add_host_store_write_failure_errors() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::Write);
+    let mut core = core_with_backend(backend);
+    assert!(
+        core.add_host("srv", "a@h").is_err(),
+        "persist failure surfaces"
+    );
+}
+
+#[test]
+fn remove_host_success_and_localhost_protected() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let u = core.add_host("srv", "a@h").expect("add");
+    let id = remote_id(&u);
+    let u2 = core.remove_host(&id).expect("remove");
+    assert!(!hosts_from(&u2).iter().any(|h| h.id == id));
+    assert!(
+        core.remove_host("localhost").is_err(),
+        "localhost protected"
+    );
+}
+
+#[test]
+fn remove_host_store_delete_failure_errors() {
+    let backend = MemoryBackend::new();
+    let mut core = core_with_backend(backend.clone());
+    let u = core.add_host("srv", "a@h").expect("add");
+    let id = remote_id(&u);
+    backend.fail_next(BackendOp::Delete);
+    assert!(core.remove_host(&id).is_err(), "delete failure surfaces");
+}
+
+#[test]
+fn set_host_status_updates_the_list() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let u = core.add_host("srv", "a@h").expect("add");
+    let id = remote_id(&u);
+    let u2 = core.set_host_status(&id, HostStatus::Connected);
+    let h = hosts_from(&u2).into_iter().find(|h| h.id == id).unwrap();
+    assert_eq!(h.status, HostStatus::Connected);
+}
+
+#[test]
+fn load_hosts_restores_persisted_hosts() {
+    let backend = MemoryBackend::new();
+    // Seed a persisted host via a clone that shares the same backing state.
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed.upsert_host(&PersistedHost {
+        id: "host-9".to_string(),
+        label: "saved".to_string(),
+        target: "u@saved".to_string(),
+        is_local: false,
+    })
+    .expect("seed");
+    let mut core = core_with_backend(backend);
+    let u = core.load_hosts().expect("load_hosts");
+    let hosts = hosts_from(&u);
+    assert!(hosts.iter().any(|h| h.id == "host-9" && h.label == "saved"));
+    assert!(hosts.iter().any(|h| h.is_local), "localhost still seeded");
+}
+
+#[test]
+fn load_hosts_restore_failure_errors() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::List);
+    let mut core = core_with_backend(backend);
+    assert!(core.load_hosts().is_err());
+}

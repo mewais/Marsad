@@ -10,7 +10,8 @@
 //!   Restored, StoreError
 
 use marsad_store::{
-    MemoryBackend, PersistedSession, Restored, Store, StoreError, TranscriptEntry, Workspace,
+    MemoryBackend, PersistedHost, PersistedSession, Restored, Store, StoreError, TranscriptEntry,
+    Workspace,
 };
 
 // ---------------------------------------------------------------------------
@@ -322,6 +323,7 @@ fn transcript_entry_derives_clone_eq_debug() {
 fn restored_derives_clone_eq_debug() {
     let r = Restored {
         sessions: vec![],
+        hosts: vec![],
         workspaces: vec![],
         active_ws: None,
         transcripts: std::collections::HashMap::new(),
@@ -335,4 +337,48 @@ fn restored_derives_clone_eq_debug() {
 fn store_error_derives_debug() {
     let e = StoreError::NotFound("x".to_string());
     let _ = format!("{e:?}");
+}
+
+// ---------------------------------------------------------------------------
+// upsert_host / delete_host / restore round-trip
+// ---------------------------------------------------------------------------
+
+fn make_host(id: &str) -> PersistedHost {
+    PersistedHost {
+        id: id.to_string(),
+        label: format!("lbl-{id}"),
+        target: "u@h".to_string(),
+        is_local: false,
+    }
+}
+
+#[test]
+fn upsert_host_then_restore_returns_host_with_all_fields() {
+    let mut store = fresh_store();
+    store
+        .upsert_host(&make_host("host-1"))
+        .expect("upsert_host");
+    let restored: Restored = store.restore().expect("restore");
+    let h = restored
+        .hosts
+        .iter()
+        .find(|h| h.id == "host-1")
+        .expect("host-1 must be restored");
+    assert_eq!(h.label, "lbl-host-1");
+    assert_eq!(h.target, "u@h");
+    assert!(!h.is_local);
+}
+
+#[test]
+fn delete_host_removes_it_from_restore() {
+    let mut store = fresh_store();
+    store
+        .upsert_host(&make_host("host-2"))
+        .expect("upsert_host");
+    store.delete_host("host-2").expect("delete_host");
+    let restored = store.restore().expect("restore");
+    assert!(
+        !restored.hosts.iter().any(|h| h.id == "host-2"),
+        "deleted host must not be restored"
+    );
 }

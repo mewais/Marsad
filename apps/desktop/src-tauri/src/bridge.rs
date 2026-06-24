@@ -16,6 +16,10 @@ use marsad_viewmodel::AppSnapshot;
 // AppState — unified managed state for live + mock modes
 // ---------------------------------------------------------------------------
 
+/// `Live(Core)` is much larger than `Mock` (Core owns the session map, host
+/// registry, store, etc.). There is exactly one `AppState` for the whole app,
+/// held in a `Mutex` — boxing the variant would buy nothing, so accept the size.
+#[allow(clippy::large_enum_variant)]
 pub enum AppState {
     Live(Core),
     Mock(crate::mock::MockState),
@@ -236,4 +240,46 @@ pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String>
     } else {
         app.autolaunch().disable().map_err(|e| e.to_string())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Host commands
+// ---------------------------------------------------------------------------
+
+/// Add a remote host (`label`, `user@host`), persist it, and push the updated
+/// host list to the webview. A background worker health-checks it shortly after.
+#[tauri::command(rename_all = "snake_case")]
+pub fn add_host(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    label: String,
+    target: String,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.add_host(&label, &target).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Remove a host by id, delete it from persistence, and push the updated list.
+#[tauri::command(rename_all = "snake_case")]
+pub fn remove_host(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.remove_host(&id).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
 }

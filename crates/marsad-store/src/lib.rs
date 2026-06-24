@@ -108,7 +108,10 @@ impl MemoryState {
 
 /// In-crate fake `Backend` backed by an in-memory `HashMap`.
 ///
-/// Used by tests to exercise all `Store` logic without filesystem IO.
+/// Used by tests to exercise all `Store` logic without filesystem IO. `Clone`
+/// shares the same underlying state (it holds an `Arc`), so a clone can seed data
+/// that another holder then reads — handy for simulating a persistence reload.
+#[derive(Clone)]
 pub struct MemoryBackend {
     state: Arc<Mutex<MemoryState>>,
 }
@@ -177,9 +180,9 @@ impl Backend for MemoryBackend {
 
     fn delete(&self, key: &str) -> Result<(), StoreError> {
         let mut state = self.state.lock().unwrap();
-        // No Store method ever calls backend.delete(), so no fail_next injection
-        // is wired here.  BackendOp::Delete exists in the public enum for
-        // API completeness only.  The delete is always a no-error operation.
+        if state.take_fail(&BackendOp::Delete) {
+            return Err(StoreError::Backend("injected delete failure".to_string()));
+        }
         state.data.remove(key);
         Ok(())
     }
@@ -287,6 +290,15 @@ pub struct TranscriptEntry {
     pub payload: String,
 }
 
+/// A stored remote host (durable fields only; status/session_count are runtime).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PersistedHost {
+    pub id: String,
+    pub label: String,
+    pub target: String,
+    pub is_local: bool,
+}
+
 /// A named group of sessions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
@@ -301,6 +313,7 @@ pub struct Workspace {
 pub struct Restored {
     pub sessions: Vec<PersistedSession>,
     pub workspaces: Vec<Workspace>,
+    pub hosts: Vec<PersistedHost>,
     pub active_ws: Option<String>,
     pub transcripts: HashMap<String, Vec<TranscriptEntry>>,
 }
@@ -349,6 +362,7 @@ fn decode_payload<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> T {
 
 /// Key prefixes used in the backend.
 const PREFIX_SESSION: &str = "session:";
+const PREFIX_HOST: &str = "host:";
 const PREFIX_WORKSPACE: &str = "workspace:";
 const PREFIX_TRANSCRIPT: &str = "transcript:";
 const KEY_ACTIVE_WS: &str = "meta:active_ws";
@@ -385,6 +399,21 @@ impl Store {
         let key = format!("{}{}", PREFIX_SESSION, s.id);
         let bytes = encode(s);
         self.backend.write(&key, &bytes)?;
+        Ok(())
+    }
+
+    /// Insert or update a persisted host.
+    pub fn upsert_host(&mut self, h: &PersistedHost) -> Result<(), StoreError> {
+        let key = format!("{}{}", PREFIX_HOST, h.id);
+        let bytes = encode(h);
+        self.backend.write(&key, &bytes)?;
+        Ok(())
+    }
+
+    /// Delete a persisted host by id (no-op if absent).
+    pub fn delete_host(&mut self, id: &str) -> Result<(), StoreError> {
+        let key = format!("{}{}", PREFIX_HOST, id);
+        self.backend.delete(&key)?;
         Ok(())
     }
 
@@ -451,6 +480,7 @@ impl Store {
             .collect();
 
         let mut sessions: Vec<PersistedSession> = Vec::new();
+        let mut hosts: Vec<PersistedHost> = Vec::new();
         let mut workspaces: Vec<Workspace> = Vec::new();
         let mut transcript_map: HashMap<String, Vec<(u64, TranscriptEntry)>> = HashMap::new();
         let mut active_ws: Option<String> = None;
@@ -479,6 +509,9 @@ impl Store {
             if key.starts_with(PREFIX_SESSION) {
                 sessions.push(decode_payload(bytes));
             }
+            if key.starts_with(PREFIX_HOST) {
+                hosts.push(decode_payload(bytes));
+            }
             if key.starts_with(PREFIX_WORKSPACE) {
                 workspaces.push(decode_payload(bytes));
             }
@@ -506,6 +539,7 @@ impl Store {
 
         Ok(Restored {
             sessions,
+            hosts,
             workspaces,
             active_ws,
             transcripts,

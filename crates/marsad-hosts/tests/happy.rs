@@ -203,3 +203,50 @@ fn host_derives_debug_clone_partialeq() {
     assert_eq!(*h, cloned);
     let _ = format!("{:?}", h);
 }
+
+// ---------------------------------------------------------------------------
+// HostRegistry::set_status — apply an external health result; unknown id no-op
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_status_updates_existing_host() {
+    let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
+    let id = reg.add("s", "u@h").unwrap().id.clone();
+    reg.set_status(&id, HostStatus::Connected);
+    let h = reg.list().iter().find(|h| h.id == id).unwrap();
+    assert_eq!(h.status, HostStatus::Connected);
+}
+
+#[test]
+fn set_status_unknown_id_is_noop() {
+    let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
+    let before = reg.list().len();
+    reg.set_status("host-999", HostStatus::Unreachable); // no panic, no change
+    assert_eq!(reg.list().len(), before);
+}
+
+// ---------------------------------------------------------------------------
+// HostRegistry::load_remote — re-insert persisted host, preserve id, bump next_id
+// ---------------------------------------------------------------------------
+
+#[test]
+fn load_remote_preserves_id_and_starts_reconnecting() {
+    let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
+    reg.load_remote("host-7", "saved", "u@saved.example.com");
+    let h = reg.list().iter().find(|h| h.id == "host-7").unwrap();
+    assert_eq!(h.label, "saved");
+    assert!(!h.is_local && h.removable);
+    assert_eq!(h.status, HostStatus::Reconnecting);
+    // next_id must advance past 7 so a fresh add does not collide.
+    let added = reg.add("fresh", "u@fresh").unwrap();
+    assert_eq!(added.id, "host-8");
+}
+
+#[test]
+fn load_remote_non_numeric_id_leaves_next_id() {
+    let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
+    reg.load_remote("custom-id", "x", "u@x"); // unparseable suffix
+    reg.load_remote("host-0", "y", "u@y"); // n (0) < next_id (1)
+    let added = reg.add("z", "u@z").unwrap();
+    assert_eq!(added.id, "host-1"); // next_id untouched by either load
+}

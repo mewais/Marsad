@@ -294,6 +294,34 @@ impl HostRegistry {
         &self.hosts
     }
 
+    /// Re-insert a previously-persisted remote host (no `user@host` validation;
+    /// the id is preserved). Starts `Reconnecting` until the next health check.
+    /// Keeps `next_id` ahead of any `host-N` id so fresh `add`s never collide.
+    pub fn load_remote(&mut self, id: &str, label: &str, target: &str) {
+        if let Some(n) = id.strip_prefix("host-").and_then(|s| s.parse::<u64>().ok()) {
+            if n >= self.next_id {
+                self.next_id = n + 1;
+            }
+        }
+        self.hosts.push(Host {
+            id: id.to_string(),
+            label: label.to_string(),
+            target: target.to_string(),
+            status: HostStatus::Reconnecting,
+            session_count: 0,
+            is_local: false,
+            removable: true,
+        });
+    }
+
+    /// Set a host's status directly (used to apply an externally-computed health
+    /// result). Unknown ids are a no-op.
+    pub fn set_status(&mut self, id: &str, status: HostStatus) {
+        if let Some(h) = self.hosts.iter_mut().find(|h| h.id == id) {
+            h.status = status;
+        }
+    }
+
     /// Run a health probe for the host with the given `id` and update its status.
     ///
     /// Returns the new [`HostStatus`] (never a `Result`):

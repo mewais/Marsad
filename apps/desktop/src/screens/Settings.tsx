@@ -18,7 +18,7 @@ import { useVm } from "../bridge/useVm";
 import { useTheme } from "../theme/ThemeProvider";
 import { Toggle } from "../components/Toggle";
 import { MODELS as MODEL_LIST, DEFAULT_MODEL } from "../bridge/models";
-import { getAutostart, setAutostart } from "../bridge/api";
+import { getAutostart, setAutostart, addHost, removeHost } from "../bridge/api";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -606,18 +606,33 @@ function HostStatusDot({ status }: { status: string }) {
 
 function HostsTab() {
   const { hosts } = useVm();
-  // NOTE: backend command pending for addHost / removeHost
   const [label, setLabel] = useState("");
   const [target, setTarget] = useState("");
-  const [added, setAdded] = useState<boolean>(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function handleAdd() {
-    if (!label.trim() || !target.trim()) return;
-    // NOTE: no addHost api command exists yet — local ack only
-    setAdded(true);
-    setLabel("");
-    setTarget("");
-    setTimeout(() => setAdded(false), 2500);
+  async function handleAdd() {
+    if (!label.trim() || !target.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await addHost(label.trim(), target.trim());
+      // The host list refreshes via the "hosts" vm-update; clear the form.
+      setLabel("");
+      setTarget("");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRemove(id: string) {
+    try {
+      await removeHost(id);
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   return (
@@ -684,8 +699,8 @@ function HostsTab() {
             </span>
             {h.removable ? (
               <button
-                // NOTE: removeHost backend command pending
-                onClick={() => {}}
+                data-testid={`host-remove-${h.id}`}
+                onClick={() => handleRemove(h.id)}
                 style={{
                   fontFamily: "inherit",
                   fontSize: 13.5,
@@ -805,7 +820,7 @@ function HostsTab() {
           </span>
           <button
             data-testid="host-add-btn"
-            disabled={!label.trim() || !target.trim()}
+            disabled={!label.trim() || !target.trim() || busy}
             onClick={handleAdd}
             style={{
               fontFamily: "inherit",
@@ -814,20 +829,21 @@ function HostsTab() {
               padding: "8px 15px",
               borderRadius: 8,
               border: "none",
-              background: !label.trim() || !target.trim() ? "var(--border2)" : "var(--accent)",
+              background:
+                !label.trim() || !target.trim() || busy ? "var(--border2)" : "var(--accent)",
               color: "#fff",
-              cursor: !label.trim() || !target.trim() ? "default" : "pointer",
-              opacity: !label.trim() || !target.trim() ? 0.55 : 1,
+              cursor: !label.trim() || !target.trim() || busy ? "default" : "pointer",
+              opacity: !label.trim() || !target.trim() || busy ? 0.55 : 1,
             }}
           >
-            Add &amp; connect
+            {busy ? "Adding…" : "Add & connect"}
           </button>
-          {added && (
-            <span style={{ fontSize: 13.5, color: "var(--done)" }}>
-              Queued (backend command pending)
-            </span>
-          )}
         </div>
+        {error && (
+          <span data-testid="host-add-error" style={{ fontSize: 13.5, color: "var(--error)" }}>
+            {error}
+          </span>
+        )}
       </div>
     </div>
   );

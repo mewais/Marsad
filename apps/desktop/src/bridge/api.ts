@@ -113,6 +113,21 @@ export async function interrupt(id: string): Promise<void> {
   await invoke("interrupt", { id });
 }
 
+/** Add a remote host (`label`, `user@host`). Rejects with the backend error
+ *  string (e.g. duplicate label / malformed target) on failure. */
+export async function addHost(label: string, target: string): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("add_host", { label, target });
+}
+
+/** Remove a host by id. */
+export async function removeHost(id: string): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("remove_host", { id });
+}
+
 export async function answerGate(args: {
   session_id: string;
   decision_id: string;

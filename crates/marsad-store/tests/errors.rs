@@ -11,7 +11,8 @@
 //! - All StoreError variants implement Debug (spec: derive Debug)
 
 use marsad_store::{
-    Backend, BackendOp, MemoryBackend, PersistedSession, Store, StoreError, Workspace,
+    Backend, BackendOp, MemoryBackend, PersistedHost, PersistedSession, Store, StoreError,
+    Workspace,
 };
 
 // ---------------------------------------------------------------------------
@@ -418,5 +419,33 @@ fn store_error_backend_carries_message() {
     match e {
         StoreError::Backend(msg) => assert_eq!(msg, "disk full"),
         _ => panic!("expected Backend"),
+    }
+}
+
+#[test]
+fn backend_write_failure_propagates_from_upsert_host() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::Write);
+    let mut store = Store::new(Box::new(backend));
+    let host = PersistedHost {
+        id: "h".to_string(),
+        label: "l".to_string(),
+        target: "u@h".to_string(),
+        is_local: false,
+    };
+    match store.upsert_host(&host) {
+        Err(StoreError::Backend(_)) => {}
+        other => panic!("expected Backend error from write failure, got: {other:?}"),
+    }
+}
+
+#[test]
+fn backend_delete_failure_propagates_from_delete_host() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::Delete);
+    let mut store = Store::new(Box::new(backend));
+    match store.delete_host("h") {
+        Err(StoreError::Backend(_)) => {}
+        other => panic!("expected Backend error from delete failure, got: {other:?}"),
     }
 }

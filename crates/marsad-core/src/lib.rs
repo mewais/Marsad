@@ -10,7 +10,9 @@ use std::collections::HashMap;
 
 use marsad_events::{reduce, Event, Phase, SessionState};
 use marsad_gates::{DecisionLedger, GateDecision};
+use marsad_hosts::{HostError, HostRegistry, SshRunner};
 use marsad_proto::{encode_ipc, IpcMsg};
+use marsad_store::{Backend, PersistedHost, Store};
 use marsad_transport::Transport;
 use marsad_viewmodel::{AppSnapshot, FileChange, Filter, SessionView, Tab};
 use serde_json::Value;
@@ -23,6 +25,7 @@ pub mod discovery;
 // ---------------------------------------------------------------------------
 
 pub use discovery::SessionSummary;
+pub use marsad_hosts::{Host, HostStatus};
 pub use marsad_proto::{LaunchMode, LaunchSpec, Posture};
 
 // ---------------------------------------------------------------------------
@@ -42,6 +45,9 @@ pub enum CoreError {
 
     #[error("agent error: {0}")]
     Agent(String),
+
+    #[error("host error: {0}")]
+    Host(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +86,24 @@ pub enum VmUpdate {
 
     /// Host health changed.
     HostHealth(HostHealthPayload),
+
+    /// The full host list changed (added/removed/status updated).
+    Hosts(Vec<Host>),
+}
+
+// ---------------------------------------------------------------------------
+// NoopSsh — placeholder SshRunner for Core's HostRegistry
+// ---------------------------------------------------------------------------
+
+/// Core never runs SSH on its (locked) event path — health checks are performed
+/// off the lock by the desktop and reported back via [`Core::set_host_status`].
+/// The registry still requires a runner, so Core supplies this inert one.
+struct NoopSsh;
+
+impl SshRunner for NoopSsh {
+    fn run(&self, _target: &str, _cmd: &str) -> Result<String, HostError> {
+        Ok(String::new())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -267,10 +291,23 @@ pub struct Core {
     transport: Box<dyn Transport>,
     git: Box<dyn GitProbe>,
     transcript: Box<dyn TranscriptReader>,
+    hosts: HostRegistry,
+    store: Store,
     session_order: Vec<String>,
     sessions: HashMap<String, SessionRecord>,
     ledger: DecisionLedger,
     active_ws: Option<String>,
+}
+
+/// Default persistence backend: real filesystem in production, in-memory under
+/// the coverage build (where `FsBackend` is compiled out).
+#[cfg(not(coverage))]
+fn default_backend(data_root: &str) -> Box<dyn Backend> {
+    Box::new(marsad_store::FsBackend::new(data_root))
+}
+#[cfg(coverage)]
+fn default_backend(_data_root: &str) -> Box<dyn Backend> {
+    Box::new(marsad_store::MemoryBackend::new())
 }
 
 impl Core {
@@ -279,26 +316,47 @@ impl Core {
     /// silently ignored here — the first send will surface a BrokenPipe instead.
     /// This keeps `Core::new` infallible in all committed test scenarios.
     pub fn new(cfg: CoreConfig, transport: Box<dyn Transport>) -> Result<Core, CoreError> {
-        Core::with_probes(cfg, transport, Box::new(RealGit), Box::new(RealTranscript))
+        let backend = default_backend(&cfg.data_root);
+        Core::with_deps(
+            cfg,
+            transport,
+            Box::new(RealGit),
+            Box::new(RealTranscript),
+            backend,
+        )
     }
 
     /// Like [`Core::new`] but with an injected [`GitProbe`] (real transcript
-    /// reader). Retained for tests that only need to fake git.
+    /// reader + default backend). Retained for tests that only need to fake git.
     pub fn with_git(
         cfg: CoreConfig,
         transport: Box<dyn Transport>,
         git: Box<dyn GitProbe>,
     ) -> Result<Core, CoreError> {
-        Core::with_probes(cfg, transport, git, Box::new(RealTranscript))
+        let backend = default_backend(&cfg.data_root);
+        Core::with_deps(cfg, transport, git, Box::new(RealTranscript), backend)
     }
 
-    /// Like [`Core::new`] but with both side-effect seams injected (used by tests
-    /// to supply fakes instead of shelling out to `git` / reading the home dir).
+    /// Like [`Core::new`] but with the git + transcript seams injected and the
+    /// default persistence backend.
     pub fn with_probes(
+        cfg: CoreConfig,
+        transport: Box<dyn Transport>,
+        git: Box<dyn GitProbe>,
+        transcript: Box<dyn TranscriptReader>,
+    ) -> Result<Core, CoreError> {
+        let backend = default_backend(&cfg.data_root);
+        Core::with_deps(cfg, transport, git, transcript, backend)
+    }
+
+    /// Full-injection constructor (git + transcript + persistence backend). Tests
+    /// pass a `MemoryBackend` to exercise host persistence without filesystem IO.
+    pub fn with_deps(
         cfg: CoreConfig,
         mut transport: Box<dyn Transport>,
         git: Box<dyn GitProbe>,
         transcript: Box<dyn TranscriptReader>,
+        backend: Box<dyn Backend>,
     ) -> Result<Core, CoreError> {
         // Best-effort connect; ignore errors (send_line will detect them).
         let _ = transport.connect();
@@ -307,6 +365,9 @@ impl Core {
             transport,
             git,
             transcript,
+            // Health checks run off the Core lock (desktop) → inert runner here.
+            hosts: HostRegistry::new(Box::new(NoopSsh)),
+            store: Store::new(backend),
             session_order: Vec::new(),
             sessions: HashMap::new(),
             ledger: DecisionLedger::new(),
@@ -327,7 +388,7 @@ impl Core {
 
         AppSnapshot {
             sessions,
-            hosts: Vec::new(),
+            hosts: self.hosts.list().to_vec(),
             workspaces: Vec::new(),
             active_ws: self.active_ws.clone(),
             selected_id: None,
@@ -335,6 +396,61 @@ impl Core {
             search: String::new(),
             tab: Tab::Activity,
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Host commands
+    // -----------------------------------------------------------------------
+
+    /// Load persisted hosts from the store into the registry (call once at
+    /// startup). Returns a `Hosts` update for the now-complete list.
+    pub fn load_hosts(&mut self) -> Result<Vec<VmUpdate>, CoreError> {
+        let restored = self
+            .store
+            .restore()
+            .map_err(|e| CoreError::Host(format!("restore hosts: {e:?}")))?;
+        for h in restored.hosts {
+            self.hosts.load_remote(&h.id, &h.label, &h.target);
+        }
+        Ok(vec![VmUpdate::Hosts(self.hosts.list().to_vec())])
+    }
+
+    /// Add a remote host (`label`, `user@host`), persist it, and return the
+    /// updated host list. The host starts `Reconnecting` until a health check.
+    pub fn add_host(&mut self, label: &str, target: &str) -> Result<Vec<VmUpdate>, CoreError> {
+        let host = self
+            .hosts
+            .add(label, target)
+            .map_err(|e| CoreError::Host(e.to_string()))?
+            .clone();
+        let persisted = PersistedHost {
+            id: host.id,
+            label: host.label,
+            target: host.target,
+            is_local: host.is_local,
+        };
+        self.store
+            .upsert_host(&persisted)
+            .map_err(|e| CoreError::Host(format!("{e:?}")))?;
+        Ok(vec![VmUpdate::Hosts(self.hosts.list().to_vec())])
+    }
+
+    /// Remove a host by id, delete it from the store, and return the updated list.
+    pub fn remove_host(&mut self, id: &str) -> Result<Vec<VmUpdate>, CoreError> {
+        self.hosts
+            .remove(id)
+            .map_err(|e| CoreError::Host(e.to_string()))?;
+        self.store
+            .delete_host(id)
+            .map_err(|e| CoreError::Host(format!("{e:?}")))?;
+        Ok(vec![VmUpdate::Hosts(self.hosts.list().to_vec())])
+    }
+
+    /// Apply an externally-computed health result for a host (runtime status, not
+    /// persisted). Returns the updated host list.
+    pub fn set_host_status(&mut self, id: &str, status: HostStatus) -> Vec<VmUpdate> {
+        self.hosts.set_status(id, status);
+        vec![VmUpdate::Hosts(self.hosts.list().to_vec())]
     }
 
     // -----------------------------------------------------------------------
@@ -735,5 +851,17 @@ fn slash_cmd_name(cmd: &marsad_viewmodel::SlashCmd) -> &str {
         SlashCmd::Terminal => "terminal",
         SlashCmd::Help => "help",
         SlashCmd::Unknown(s) => s.as_str(),
+    }
+}
+
+#[cfg(test)]
+mod noop_ssh_tests {
+    use super::{NoopSsh, SshRunner};
+
+    #[test]
+    fn noop_ssh_run_is_inert() {
+        // Core never invokes the registry's runner (health checks are external),
+        // but the placeholder must remain a safe no-op.
+        assert_eq!(NoopSsh.run("user@host", "echo ping").unwrap(), "");
     }
 }
