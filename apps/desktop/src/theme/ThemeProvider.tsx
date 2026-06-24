@@ -92,10 +92,12 @@ export function ThemeProvider({
       document.body.classList.add("glass");
       // SURFACE_ALPHA is the single knob for how see-through the panels/sidebar/top
       // bar are (lower = more transparent). Buttons (--elev) sit a touch more solid
-      // for legibility. The canvas gets a faint neutral-GREY veil (not fully
-      // transparent) so the acrylic reads less saturated and a bit calmer.
+      // for legibility. The canvas gets a faint veil (not fully transparent) so the
+      // acrylic reads calmer: a neutral GREY in dark mode, a soft WHITE in light mode.
       const SURFACE_ALPHA = 0.26;
-      root.style.setProperty("--bg", "rgba(64, 66, 70, 0.16)");
+      const canvasVeil =
+        theme === "dark" ? "rgba(64, 66, 70, 0.16)" : "rgba(255, 255, 255, 0.22)";
+      root.style.setProperty("--bg", canvasVeil);
       root.style.setProperty("--panel", withAlpha(tokens.panel, SURFACE_ALPHA));
       root.style.setProperty("--panel2", withAlpha(tokens.panel2, SURFACE_ALPHA * 0.8));
       root.style.setProperty("--elev", withAlpha(tokens.elev, SURFACE_ALPHA + 0.22));

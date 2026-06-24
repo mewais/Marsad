@@ -442,27 +442,16 @@ impl RemoteTmuxContainer {
         format!("{}/out.fifo", self.remote_session_dir(name))
     }
 
-    /// Argv for the `tmux has-session` existence probe (without the prefix):
-    /// `["tmux", "has-session", "-t", <name>]`.  The prefix is prepended by the
-    /// caller / `run_status`.
-    pub fn exists_argv(name: &str) -> Vec<String> {
-        vec![
-            "tmux".to_string(),
-            "has-session".to_string(),
-            "-t".to_string(),
-            name.to_string(),
-        ]
+    /// Remote shell script for the `tmux has-session` existence probe. Run through a
+    /// (login) shell by `run_status`/`remote_shell_argv` so tmux is on PATH. `name` is
+    /// always a safe `marsad-…` id, so it needs no quoting.
+    pub fn exists_script(name: &str) -> String {
+        format!("tmux has-session -t {name}")
     }
 
-    /// Argv for `tmux kill-session` (without the prefix):
-    /// `["tmux", "kill-session", "-t", <name>]`.
-    pub fn kill_argv(name: &str) -> Vec<String> {
-        vec![
-            "tmux".to_string(),
-            "kill-session".to_string(),
-            "-t".to_string(),
-            name.to_string(),
-        ]
+    /// Remote shell script for `tmux kill-session`.
+    pub fn kill_script(name: &str) -> String {
+        format!("tmux kill-session -t {name}")
     }
 
     /// Build the single remote `sh -c` script run by `spawn`.
@@ -508,8 +497,15 @@ impl RemoteTmuxContainer {
 pub fn remote_shell_argv(prefix: &[String], script: &str) -> Vec<String> {
     let mut argv = prefix.to_vec();
     if prefix.first().map(String::as_str) == Some("ssh") {
-        argv.push(script.to_string());
+        // Run via a LOGIN shell (`bash -lc`) so the remote profile is sourced — PATH,
+        // and on HPC clusters the module environment that provides `tmux`. ssh's plain
+        // command shell is non-login, so tools available interactively (tmux) are
+        // otherwise "command not found". Passed as ONE token: ssh joins its trailing
+        // args with spaces and re-parses them through the login shell.
+        argv.push(format!("bash -lc {}", sh_single_quote(script)));
     } else {
+        // wsl.exe (and other argv-preserving launchers): a standard distro has tmux on
+        // the default PATH, so a plain `sh -c` is enough (and avoids login-shell noise).
         argv.push("sh".to_string());
         argv.push("-c".to_string());
         argv.push(script.to_string());
@@ -525,15 +521,15 @@ fn sh_single_quote(s: &str) -> String {
 
 #[cfg(not(coverage))]
 impl RemoteTmuxContainer {
-    /// Spawn the prefix program with the given trailing args, returning the exit
-    /// status.  `Command::new(prefix[0]).args(prefix[1..]).args(args)`.
+    /// Run a remote shell `script` (via `remote_shell_argv`, i.e. a login shell over
+    /// ssh so `tmux` is on PATH), returning the exit status with output discarded.
     ///
     /// On Windows the console window is suppressed (`CREATE_NO_WINDOW`) so an
     /// `ssh`/`wsl.exe` prefix does not flash a console.
-    fn run_status(&self, args: &[String]) -> std::io::Result<std::process::ExitStatus> {
-        let mut cmd = std::process::Command::new(&self.exec_prefix[0]);
-        cmd.args(&self.exec_prefix[1..])
-            .args(args)
+    fn run_status(&self, script: &str) -> std::io::Result<std::process::ExitStatus> {
+        let argv = remote_shell_argv(&self.exec_prefix, script);
+        let mut cmd = std::process::Command::new(&argv[0]);
+        cmd.args(&argv[1..])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         #[cfg(windows)]
@@ -565,7 +561,7 @@ impl Container for RemoteTmuxContainer {
     /// Returns `true` iff `<prefix> tmux has-session -t <name>` exits 0.
     /// Never errors: any failure (ssh down, tmux absent) → `false`.
     fn exists(&self, name: &str) -> bool {
-        self.run_status(&Self::exists_argv(name))
+        self.run_status(&Self::exists_script(name))
             .map(|s| s.success())
             .unwrap_or(false)
     }
@@ -603,7 +599,7 @@ impl Container for RemoteTmuxContainer {
     /// Kill the remote tmux session: `<prefix> tmux kill-session -t <name>`.
     fn kill(&mut self, name: &str) -> Result<(), LifecycleError> {
         let st = self
-            .run_status(&Self::kill_argv(name))
+            .run_status(&Self::kill_script(name))
             .map_err(|e| LifecycleError::Container(format!("remote kill {name}: {e}")))?;
         if st.success() {
             Ok(())

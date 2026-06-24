@@ -67,30 +67,20 @@ fn runtime_dir_with_trailing_segment_is_preserved_verbatim() {
 // ── exists argv ────────────────────────────────────────────────────────────────
 
 #[test]
-fn exists_argv_is_has_session() {
+fn exists_script_is_has_session() {
     assert_eq!(
-        RemoteTmuxContainer::exists_argv("marsad-7"),
-        vec![
-            "tmux".to_string(),
-            "has-session".to_string(),
-            "-t".to_string(),
-            "marsad-7".to_string(),
-        ]
+        RemoteTmuxContainer::exists_script("marsad-7"),
+        "tmux has-session -t marsad-7"
     );
 }
 
 // ── kill argv ──────────────────────────────────────────────────────────────────
 
 #[test]
-fn kill_argv_is_kill_session() {
+fn kill_script_is_kill_session() {
     assert_eq!(
-        RemoteTmuxContainer::kill_argv("marsad-7"),
-        vec![
-            "tmux".to_string(),
-            "kill-session".to_string(),
-            "-t".to_string(),
-            "marsad-7".to_string(),
-        ]
+        RemoteTmuxContainer::kill_script("marsad-7"),
+        "tmux kill-session -t marsad-7"
     );
 }
 
@@ -152,13 +142,14 @@ fn spawn_script_escapes_single_quotes_in_cmd() {
 // ── remote_shell_argv: ssh re-parses (single token), wsl preserves (sh -c) ──────
 
 #[test]
-fn remote_shell_argv_ssh_passes_script_as_single_token() {
-    // ssh joins trailing args with spaces + re-runs via the login shell, so the
-    // whole script must be ONE token (no `sh -c`, which the join would split).
-    let argv = remote_shell_argv(&ssh_prefix(), "mkdir -p $HOME/x && echo hi");
+fn remote_shell_argv_ssh_uses_login_shell_single_token() {
+    // ssh joins trailing args with spaces + re-runs via the remote shell, so the whole
+    // command must be ONE token. It's wrapped in `bash -lc '<script>'` so a LOGIN shell
+    // sources the profile/modules (→ tmux on PATH).
+    let argv = remote_shell_argv(&ssh_prefix(), "tmux has-session -t s");
     assert_eq!(argv[0], "ssh");
-    assert_eq!(argv.last().unwrap(), "mkdir -p $HOME/x && echo hi");
-    assert!(!argv.contains(&"sh".to_string()), "ssh must not wrap in sh -c: {argv:?}");
+    assert_eq!(argv.last().unwrap(), "bash -lc 'tmux has-session -t s'");
+    assert!(!argv.contains(&"sh".to_string()), "ssh must not use a bare sh -c: {argv:?}");
 }
 
 #[test]
