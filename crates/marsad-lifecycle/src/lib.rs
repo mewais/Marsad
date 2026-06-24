@@ -476,7 +476,11 @@ impl RemoteTmuxContainer {
         let dir = self.remote_session_dir(name);
         let in_fifo = self.in_fifo_path(name);
         let out_fifo = self.out_fifo_path(name);
-        let q_cmd = sh_single_quote(cmd);
+        // tmux runs the session command in its default (NON-login) shell, so `claude`
+        // — which on HPC hosts is provided by a module/login profile, like tmux — would
+        // be "command not found". Wrap the command in a LOGIN shell so the remote
+        // profile/modules are sourced inside the tmux session too.
+        let q_cmd = sh_single_quote(&format!("bash -lc {}", sh_single_quote(cmd)));
         format!(
             "mkdir -p {dir} && \
              {{ [ -p {in_fifo} ] || mkfifo {in_fifo}; }} && \

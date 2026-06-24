@@ -992,10 +992,12 @@ impl Agent {
                     project: s.project.clone(),
                     model: s.model.clone(),
                 };
-                if matches!(
-                    self.reconcile_one(&known, s.host_target.as_deref()).action,
-                    Action::Adopt
-                ) {
+                let action = self.reconcile_one(&known, s.host_target.as_deref()).action;
+                eprintln!(
+                    "marsad-agent: reconcile {} on {:?} -> {action:?}",
+                    s.id, s.host_target
+                );
+                if matches!(action, Action::Adopt) {
                     self.sessions.insert(
                         s.id.clone(),
                         SessionRecord {
@@ -1650,12 +1652,15 @@ fn spawn_session_reader(
         // subscribers.  The reader blocks here; the
         // writer clone is in the session_writers registry
         // for handle_send_prompt — no lock contention.
+        eprintln!("marsad-agent: session {sid} stream connected");
         use std::io::BufRead;
+        let mut lines_seen = 0u64;
         loop {
             let mut raw = String::new();
             match reader.read_line(&mut raw) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
+                    lines_seen += 1;
                     let raw = raw.trim_end_matches('\n');
 
                     // Capture a `can_use_tool` control
@@ -1702,6 +1707,24 @@ fn spawn_session_reader(
             }
         }
 
+        eprintln!("marsad-agent: session {sid} stream ended after {lines_seen} line(s)");
+        // If claude produced NO output, it almost certainly failed to start on the
+        // remote (claude not installed / not authed / project dir missing). Surface the
+        // remote err.log so the cause is visible instead of a silent dead session.
+        if lines_seen == 0 {
+            if let Some(prefix) = exec_prefix_for(host_target.as_deref()) {
+                let err_path = format!("{}/sessions/marsad-{}/err.log", REMOTE_RUNTIME_DIR, sid);
+                let argv = remote_diag_argv(&prefix, &format!("cat {err_path} 2>/dev/null | tail -20"));
+                if let Ok(out) = std::process::Command::new(&argv[0]).args(&argv[1..]).output() {
+                    let log = String::from_utf8_lossy(&out.stdout);
+                    eprintln!(
+                        "marsad-agent: session {sid} remote err.log:\n{}",
+                        log.trim()
+                    );
+                }
+            }
+        }
+
         // Clean up: remove writer from registry when
         // claude exits (FIFO closed).
         {
@@ -1710,4 +1733,19 @@ fn spawn_session_reader(
         }
         drop(writer);
     });
+}
+
+/// Build argv to run a diagnostic shell command on the remote (ssh/plink login shell
+/// or wsl `sh -c`). Reuses the same ssh-vs-wsl convention as the lifecycle helper.
+#[cfg(not(coverage))]
+fn remote_diag_argv(prefix: &[String], script: &str) -> Vec<String> {
+    let mut argv = prefix.to_vec();
+    if matches!(prefix.first().map(String::as_str), Some("ssh") | Some("plink")) {
+        argv.push(format!("bash -lc '{}'", script.replace('\'', r"'\''")));
+    } else {
+        argv.push("sh".to_string());
+        argv.push("-c".to_string());
+        argv.push(script.to_string());
+    }
+    argv
 }

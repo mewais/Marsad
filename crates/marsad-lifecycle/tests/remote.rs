@@ -105,10 +105,11 @@ fn spawn_script_ssh_contains_all_stages() {
         s.contains("[ -p $HOME/.marsad/sessions/marsad-a/out.fifo ] || mkfifo $HOME/.marsad/sessions/marsad-a/out.fifo"),
         "missing out.fifo mkfifo guard: {s}"
     );
-    // idempotency guard before new-session; name unquoted (safe), cmd single-quoted.
+    // idempotency guard before new-session; the command runs via a LOGIN shell
+    // (`bash -lc '<cmd>'`) so tmux's non-login session shell still finds claude.
     assert!(
-        s.contains("tmux has-session -t marsad-a 2>/dev/null || tmux new-session -d -s marsad-a 'claude --resume id1'"),
-        "missing idempotency guard + new-session: {s}"
+        s.contains(r#"tmux has-session -t marsad-a 2>/dev/null || tmux new-session -d -s marsad-a 'bash -lc '\''claude --resume id1'\'''"#),
+        "missing idempotency guard + login-shell new-session: {s}"
     );
 }
 
@@ -133,9 +134,10 @@ fn spawn_script_escapes_single_quotes_in_cmd() {
     // A cmd containing a single quote must be escaped via the '\'' idiom so the
     // remote shell parses it as one argument.
     let s = c.spawn_script("n", "echo 'hi'");
+    assert!(s.contains("bash -lc"), "cmd must run via a login shell: {s}");
     assert!(
-        s.contains(r#"'echo '\''hi'\'''"#),
-        "single quotes in cmd must be escaped: {s}"
+        s.contains(r"'\''"),
+        "single quotes in cmd must be escaped via the '\\'' idiom: {s}"
     );
 }
 
