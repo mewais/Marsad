@@ -210,6 +210,7 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::delete_workspace,
             bridge::export_workspace,
             bridge::import_workspace,
+            bridge::commit,
         ])
 }
 

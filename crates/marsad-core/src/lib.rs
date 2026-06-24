@@ -653,6 +653,31 @@ impl Core {
     }
 
     // -----------------------------------------------------------------------
+    // Changes commands
+    // -----------------------------------------------------------------------
+
+    /// Overwrite the working-tree change list for a session (e.g. after a
+    /// commit that cleared some of the files) and return the usual pair of
+    /// `[VmUpdate::Session, VmUpdate::Overview]`.
+    ///
+    /// Returns an empty vec (no-op) for an unknown session id so that callers
+    /// never need to guard against the session having been removed concurrently.
+    pub fn set_session_changes(
+        &mut self,
+        id: &str,
+        changes: Vec<FileChange>,
+    ) -> Vec<VmUpdate> {
+        let Some(record) = self.sessions.get_mut(id) else {
+            return vec![];
+        };
+        record.changes = changes;
+        let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
+        let snap = self.snapshot();
+        let groups = marsad_viewmodel::group_overview(&snap);
+        vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)]
+    }
+
+    // -----------------------------------------------------------------------
     // Session commands
     // -----------------------------------------------------------------------
 

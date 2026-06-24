@@ -396,7 +396,7 @@ describe("ChangesTab", () => {
   it("renders commit bar with Commit button", () => {
     renderWith({ selectedId: "s04" });
     fireEvent.click(screen.getByTestId("tab-Changes"));
-    expect(screen.getByText(/Commit ✓/)).toBeTruthy();
+    expect(screen.getByText(/^Commit$/)).toBeTruthy();
   });
 });
 

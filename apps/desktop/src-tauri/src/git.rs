@@ -64,3 +64,50 @@ impl GitProbe for BackgroundGit {
             .unwrap_or_default()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Off-lock git commit helper
+// ---------------------------------------------------------------------------
+
+/// Stage the given files and create a commit in `project` with `message`.
+///
+/// Run entirely without holding the Core mutex — just like `ssh_health` and the
+/// `BackgroundGit` worker. Callers must release the lock before calling this.
+///
+/// Returns `Err(stderr)` when git exits non-zero or cannot be spawned.
+/// Returns `Err("nothing staged")` when `files` is empty.
+pub fn commit(project: &str, message: &str, files: &[String]) -> Result<(), String> {
+    if files.is_empty() {
+        return Err("nothing staged".to_string());
+    }
+
+    // Stage only the selected files.
+    let add_out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project)
+        .arg("add")
+        .arg("--")
+        .args(files)
+        .output()
+        .map_err(|e| format!("git add: {e}"))?;
+
+    if !add_out.status.success() {
+        return Err(String::from_utf8_lossy(&add_out.stderr).into_owned());
+    }
+
+    // Create the commit.
+    let commit_out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project)
+        .arg("commit")
+        .arg("-m")
+        .arg(message)
+        .output()
+        .map_err(|e| format!("git commit: {e}"))?;
+
+    if !commit_out.status.success() {
+        return Err(String::from_utf8_lossy(&commit_out.stderr).into_owned());
+    }
+
+    Ok(())
+}

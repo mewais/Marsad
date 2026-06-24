@@ -11,6 +11,7 @@
 import { useState } from "react";
 import { useVm } from "../../bridge/useVm";
 import { DiffView } from "../../components/DiffView";
+import { commit as apiCommit } from "../../bridge/api";
 import type { SideRow } from "../../bridge/types";
 
 // ---------------------------------------------------------------------------
@@ -85,6 +86,8 @@ export function ChangesTab() {
   const [staged, setStaged] = useState<Record<string, boolean>>({});
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [commitMsg, setCommitMsg] = useState("");
+  const [committing, setCommitting] = useState(false);
+  const [commitError, setCommitError] = useState<string | null>(null);
 
   if (!selectedSession) {
     return (
@@ -109,10 +112,23 @@ export function ChangesTab() {
     setStaged((prev) => ({ ...prev, [name]: !effectiveStaged[name] }));
   }
 
-  function handleCommit() {
-    // NOTE: commit() bridge command will be wired here once the backend
-    // exposes it. For now this is a no-op placeholder.
-    setCommitMsg("");
+  async function handleCommit() {
+    if (!selectedSession) return;
+    const stagedFiles = files
+      .filter((f) => effectiveStaged[f.name])
+      .map((f) => f.name);
+
+    setCommitting(true);
+    setCommitError(null);
+    try {
+      await apiCommit(selectedSession.id, commitMsg, stagedFiles);
+      setCommitMsg("");
+      setStaged({});
+    } catch (err) {
+      setCommitError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCommitting(false);
+    }
   }
 
   const totalAdded = files.reduce((sum, f) => sum + f.added, 0);
@@ -282,61 +298,88 @@ export function ChangesTab() {
             padding: "12px 16px",
             background: "var(--panel)",
             display: "flex",
-            alignItems: "center",
-            gap: 11,
+            flexDirection: "column",
+            gap: 8,
           }}
         >
-          <span style={{ fontSize: 14.5, color: "var(--txt2)" }}>
-            {stagedCount} of {files.length} staged
-          </span>
-          <span style={{ flex: 1 }} />
-          <button
-            style={{
-              fontFamily: "inherit",
-              fontWeight: 600,
-              fontSize: 14.5,
-              padding: "8px 13px",
-              borderRadius: 8,
-              border: "1px solid var(--border2)",
-              background: "var(--panel2)",
-              color: "var(--txt2)",
-              cursor: "pointer",
-            }}
-          >
-            Discard
-          </button>
-          <input
-            value={commitMsg}
-            onChange={(e) => setCommitMsg(e.target.value)}
-            placeholder="Commit message…"
-            style={{
-              width: 260,
-              background: "var(--panel2)",
-              border: "1px solid var(--border2)",
-              borderRadius: 8,
-              padding: "8px 11px",
-              color: "var(--txt)",
-              fontFamily: "inherit",
-              fontSize: 14.5,
-              outline: "none",
-            }}
-          />
-          <button
-            onClick={handleCommit}
-            style={{
-              fontFamily: "inherit",
-              fontWeight: 700,
-              fontSize: 14.5,
-              padding: "8px 16px",
-              borderRadius: 8,
-              border: "none",
-              background: "var(--done)",
-              color: "#0e1116",
-              cursor: "pointer",
-            }}
-          >
-            Commit ✓
-          </button>
+          {commitError && (
+            <div
+              style={{
+                fontSize: 13,
+                color: "var(--error)",
+                padding: "6px 10px",
+                borderRadius: 6,
+                background: "var(--panel2)",
+                border: "1px solid var(--error)",
+                wordBreak: "break-all",
+              }}
+            >
+              {commitError}
+            </div>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+            <span style={{ fontSize: 14.5, color: "var(--txt2)" }}>
+              {stagedCount} of {files.length} staged
+            </span>
+            <span style={{ flex: 1 }} />
+            <button
+              style={{
+                fontFamily: "inherit",
+                fontWeight: 600,
+                fontSize: 14.5,
+                padding: "8px 13px",
+                borderRadius: 8,
+                border: "1px solid var(--border2)",
+                background: "var(--panel2)",
+                color: "var(--txt2)",
+                cursor: "pointer",
+              }}
+            >
+              Discard
+            </button>
+            <input
+              value={commitMsg}
+              onChange={(e) => setCommitMsg(e.target.value)}
+              placeholder="Commit message…"
+              disabled={committing}
+              style={{
+                width: 260,
+                background: "var(--panel2)",
+                border: "1px solid var(--border2)",
+                borderRadius: 8,
+                padding: "8px 11px",
+                color: "var(--txt)",
+                fontFamily: "inherit",
+                fontSize: 14.5,
+                outline: "none",
+                opacity: committing ? 0.6 : 1,
+              }}
+            />
+            <button
+              onClick={handleCommit}
+              disabled={committing || stagedCount === 0 || commitMsg.trim() === ""}
+              style={{
+                fontFamily: "inherit",
+                fontWeight: 700,
+                fontSize: 14.5,
+                padding: "8px 16px",
+                borderRadius: 8,
+                border: "none",
+                background: "var(--done)",
+                color: "#0e1116",
+                cursor:
+                  committing || stagedCount === 0 || commitMsg.trim() === ""
+                    ? "not-allowed"
+                    : "pointer",
+                opacity:
+                  committing || stagedCount === 0 || commitMsg.trim() === ""
+                    ? 0.5
+                    : 1,
+              }}
+            >
+              {committing ? "Committing…" : "Commit"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

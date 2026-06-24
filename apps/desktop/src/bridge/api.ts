@@ -240,6 +240,22 @@ export async function importWorkspace(json: string): Promise<void> {
   await invoke("import_workspace", { json });
 }
 
+/**
+ * Stage `files` and create a git commit in the session's project directory.
+ *
+ * Rejects with the backend error string (e.g. "nothing staged", git stderr)
+ * on failure. In browser/test mode this is a no-op.
+ */
+export async function commit(
+  sessionId: string,
+  message: string,
+  files: string[]
+): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("commit", { session_id: sessionId, message, files });
+}
+
 // ---------------------------------------------------------------------------
 // Event listener for vm-update (Tauri) / no-op in browser
 // ---------------------------------------------------------------------------

@@ -1456,6 +1456,61 @@ fn save_workspace_overwrites_same_id() {
 }
 
 // ---------------------------------------------------------------------------
+// set_session_changes — overwrite file list, returns Session+Overview updates
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_session_changes_updates_session_view() {
+    use marsad_viewmodel::FileChange;
+
+    let (mut core, _peer) = make_core();
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/tmp/proj-changes".to_string(),
+            host_id: "local".to_string(),
+            model: "m".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: LaunchMode::Fresh,
+        })
+        .expect("launch");
+
+    // Initially the session has no changes.
+    let snap = core.snapshot();
+    let sv = snap.sessions.iter().find(|s| s.id == id).expect("session");
+    assert!(sv.changes.is_empty(), "should start empty");
+
+    // Inject two changes (simulating a post-commit re-probe with remaining files).
+    let new_changes = vec![
+        FileChange { path: "remaining.txt".to_string(), status: "M".to_string(), added: 1, removed: 0 },
+    ];
+    let updates = core.set_session_changes(&id, new_changes.clone());
+
+    // Must produce exactly Session + Overview.
+    assert_eq!(updates.len(), 2, "should return Session + Overview");
+    let has_session = updates.iter().any(|u| matches!(u, VmUpdate::Session(_)));
+    let has_overview = updates.iter().any(|u| matches!(u, VmUpdate::Overview(_)));
+    assert!(has_session, "must include Session update");
+    assert!(has_overview, "must include Overview update");
+
+    // The returned SessionView must carry the new file list.
+    let sv2 = updates.iter().find_map(|u| match u {
+        VmUpdate::Session(s) => Some(s.clone()),
+        _ => None,
+    }).expect("session view");
+    assert_eq!(sv2.changes, new_changes, "session view must reflect the new changes");
+    assert_eq!(sv2.changed_files, 1);
+}
+
+#[test]
+fn set_session_changes_unknown_id_is_noop() {
+    let (mut core, _peer) = make_core();
+    // No session launched — any id is unknown.
+    let updates = core.set_session_changes("nonexistent-id", vec![]);
+    assert!(updates.is_empty(), "unknown id must return empty vec");
+}
+
+// ---------------------------------------------------------------------------
 // Settings commands — get_settings / set_settings
 // ---------------------------------------------------------------------------
 

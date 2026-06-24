@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 use tauri::State;
 
-use marsad_core::{Core, CoreError, LaunchMode, LaunchSpec, PersistedSettings, Posture, SessionSummary};
+use marsad_core::{Core, CoreError, GitProbe, LaunchMode, LaunchSpec, PersistedSettings, Posture, SessionSummary};
 use marsad_gates::{Decision, DecisionId, GateDecision};
 use marsad_viewmodel::AppSnapshot;
 
@@ -451,6 +451,66 @@ pub fn remove_host(
             AppState::Mock(_) => vec![],
         }
     };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Commit command
+// ---------------------------------------------------------------------------
+
+/// Stage `files` and create a git commit in the session's project directory.
+///
+/// The git subprocess runs WITHOUT holding the Core mutex — only the brief
+/// project-dir lookup and the post-commit changes update lock it.
+#[tauri::command(rename_all = "snake_case")]
+pub fn commit(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    session_id: String,
+    message: String,
+    files: Vec<String>,
+) -> Result<(), String> {
+    // Mock mode: no filesystem to touch.
+    let is_mock = {
+        let guard = state.lock().map_err(|e| e.to_string())?;
+        matches!(&*guard, AppState::Mock(_))
+    };
+    if is_mock {
+        return Ok(());
+    }
+
+    // 1. Briefly lock to resolve the project directory from the snapshot.
+    let project = {
+        let guard = state.lock().map_err(|e| e.to_string())?;
+        match &*guard {
+            AppState::Live(core) => {
+                let snap = core.snapshot();
+                snap.sessions
+                    .iter()
+                    .find(|s| s.id == session_id)
+                    .map(|s| s.project.clone())
+                    .ok_or_else(|| format!("unknown session: {session_id}"))?
+            }
+            AppState::Mock(_) => unreachable!("checked above"),
+        }
+    }; // lock released
+
+    // 2. Run git add + commit OFF the lock.
+    crate::git::commit(&project, &message, &files)?;
+
+    // 3. Re-probe the working tree OFF the lock.
+    let fresh = marsad_core::RealGit.changes(&project);
+
+    // 4. Briefly lock again to update the session's change list.
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.set_session_changes(&session_id, fresh),
+            AppState::Mock(_) => vec![],
+        }
+    }; // lock released
+
     crate::events::emit_updates(&app, updates);
     Ok(())
 }
