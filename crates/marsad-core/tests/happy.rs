@@ -93,6 +93,7 @@ fn launch_session_returns_id_and_sends_ipc() {
     let spec = LaunchSpec {
         project: "my-project".to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "claude-opus-4-5".to_string(),
         posture: Posture::Ask,
         first_prompt: None,
@@ -119,6 +120,40 @@ fn launch_session_returns_id_and_sends_ipc() {
     );
 }
 
+// Launching on a registered remote host resolves and forwards `host_target` so
+// the agent runs the session on that host.
+#[test]
+fn launch_session_on_remote_host_forwards_host_target() {
+    let (mut core, mut peer) = make_core();
+    core.add_host("box", "user@box.example.com")
+        .expect("add remote host");
+    let host_id = core
+        .snapshot()
+        .hosts
+        .into_iter()
+        .find(|h| !h.is_local)
+        .expect("remote host present")
+        .id;
+
+    core.launch_session(LaunchSpec {
+        project: "p".to_string(),
+        host_id,
+        host_target: None,
+        model: "claude-haiku-4-5-20251001".to_string(),
+        posture: Posture::Ask,
+        first_prompt: None,
+        mode: Default::default(),
+    })
+    .expect("launch on remote host");
+
+    let outbound = peer.drain_outbound();
+    let line = &outbound[0];
+    assert!(
+        line.contains("host_target") && line.contains("user@box.example.com"),
+        "outbound IPC must carry the resolved host_target, got: {line}"
+    );
+}
+
 #[test]
 fn launch_session_forwards_mode_and_posture() {
     let (mut core, mut peer) = make_core();
@@ -126,6 +161,7 @@ fn launch_session_forwards_mode_and_posture() {
     core.launch_session(LaunchSpec {
         project: "p".to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "m".to_string(),
         posture: Posture::Ask,
         first_prompt: None,
@@ -147,6 +183,7 @@ fn launch_session_forwards_mode_and_posture() {
     core.launch_session(LaunchSpec {
         project: "p".to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "m".to_string(),
         posture: Posture::FullAutonomy,
         first_prompt: None,
@@ -171,6 +208,7 @@ fn launch_session_with_first_prompt_includes_prompt_in_ipc() {
     let spec = LaunchSpec {
         project: "proj-a".to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "claude-sonnet-4-5".to_string(),
         posture: Posture::AutoApproveSafe,
         first_prompt: Some("Hello agent".to_string()),
@@ -203,6 +241,7 @@ fn resume_session_sends_ipc() {
         .launch_session(LaunchSpec {
             project: "proj-r".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -236,6 +275,7 @@ fn attach_session_sends_ipc() {
         .launch_session(LaunchSpec {
             project: "proj-a".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -269,6 +309,7 @@ fn stop_session_sends_ipc() {
         .launch_session(LaunchSpec {
             project: "proj-s".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::FullAutonomy,
             first_prompt: None,
@@ -302,6 +343,7 @@ fn send_prompt_sends_ipc() {
         .launch_session(LaunchSpec {
             project: "proj-p".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -335,6 +377,7 @@ fn interrupt_sends_ipc() {
         .launch_session(LaunchSpec {
             project: "proj-i".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -367,6 +410,7 @@ fn answer_gate_sends_ipc_and_routes_to_one_session() {
         .launch_session(LaunchSpec {
             project: "proj-gate".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -412,6 +456,7 @@ fn run_slash_sends_ipc() {
         .launch_session(LaunchSpec {
             project: "proj-slash".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -448,6 +493,7 @@ fn set_workspace_sends_ipc() {
         .launch_session(LaunchSpec {
             project: "proj-ws".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -475,6 +521,7 @@ fn on_agent_line_init_yields_session_vm_update() {
         .launch_session(LaunchSpec {
             project: "proj-events".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -506,6 +553,7 @@ fn session_name_derives_from_project_basename_with_id_fallback() {
             .launch_session(LaunchSpec {
                 project: project.to_string(),
                 host_id: "local".to_string(),
+                host_target: None,
                 model: "m".to_string(),
                 posture: Posture::Ask,
                 first_prompt: None,
@@ -541,6 +589,7 @@ fn on_agent_line_assistant_yields_session_vm_update() {
         .launch_session(LaunchSpec {
             project: "proj-asst".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -569,6 +618,7 @@ fn on_agent_line_control_request_yields_session_needs_update() {
         .launch_session(LaunchSpec {
             project: "proj-ctrl".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -596,6 +646,7 @@ fn on_agent_line_result_success_yields_done_update() {
         .launch_session(LaunchSpec {
             project: "proj-done".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -624,6 +675,7 @@ fn on_agent_line_full_lifecycle_produces_overview_updates() {
         .launch_session(LaunchSpec {
             project: "proj-lifecycle".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -719,6 +771,7 @@ fn launch_spec_fields_all_postures() {
         let spec = LaunchSpec {
             project: "p".to_string(),
             host_id: "h".to_string(),
+            host_target: None,
             model: "m".to_string(),
             posture,
             first_prompt: Some("hi".to_string()),
@@ -773,6 +826,7 @@ fn git_changes_flow_into_session_view_after_tool_runs() {
         .launch_session(LaunchSpec {
             project: "/tmp/proj".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "m".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -850,6 +904,7 @@ fn launch_t(core: &mut Core, first_prompt: Option<&str>, mode: LaunchMode) -> St
     core.launch_session(LaunchSpec {
         project: "/tmp/proj".to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "m".to_string(),
         posture: Posture::Ask,
         first_prompt: first_prompt.map(|s| s.to_string()),
@@ -1469,6 +1524,7 @@ fn set_session_changes_updates_session_view() {
         .launch_session(LaunchSpec {
             project: "/tmp/proj-changes".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "m".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -1608,6 +1664,7 @@ fn restart_session_emits_stop_then_launch_with_same_id() {
     let spec = LaunchSpec {
         project: "/tmp/proj-restart".to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "claude-sonnet-4-6".to_string(),
         posture: Posture::Ask,
         first_prompt: None,
@@ -1675,6 +1732,7 @@ fn restart_session_without_uuid_uses_continue_mode() {
     let spec = LaunchSpec {
         project: "/tmp/proj-no-uuid".to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "claude-sonnet-4-6".to_string(),
         posture: Posture::Ask,
         first_prompt: None,

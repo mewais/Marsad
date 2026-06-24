@@ -277,6 +277,11 @@ pub struct PersistedSession {
     pub session_id: Option<String>,
     pub name: String,
     pub host_id: String,
+    /// Resolved remote execution target (`user@host` / `wsl:<distro>`), or `None`
+    /// for local. Persisted so the agent can reconnect/resume a remote session's
+    /// container after a restart. `#[serde(default)]` keeps older records loading.
+    #[serde(default)]
+    pub host_target: Option<String>,
     pub project: String,
     pub branch: String,
     pub model: String,
@@ -656,6 +661,7 @@ impl Store {
                         session_id: sess.session_id,
                         name: sess.name,
                         host_id: sess.host_id,
+                        host_target: sess.host_target,
                         project: sess.project,
                         branch: sess.branch,
                         model: sess.model,
@@ -714,6 +720,7 @@ impl Store {
                 session_id: es.session_id.clone(),
                 name: es.name.clone(),
                 host_id: es.host_id.clone(),
+                host_target: es.host_target.clone(),
                 project: es.project.clone(),
                 branch: es.branch.clone(),
                 model: es.model.clone(),
@@ -748,6 +755,8 @@ struct ExportSession {
     session_id: Option<String>,
     name: String,
     host_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    host_target: Option<String>,
     project: String,
     branch: String,
     model: String,

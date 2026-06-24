@@ -215,6 +215,7 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::set_autostart,
             bridge::add_host,
             bridge::remove_host,
+            bridge::connect_host_interactive,
             bridge::save_workspace,
             bridge::duplicate_workspace,
             bridge::delete_workspace,

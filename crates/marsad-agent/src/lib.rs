@@ -365,6 +365,87 @@ impl Agent {
         }
     }
 
+    /// Spawn the session container — locally, or on the session's remote host.
+    ///
+    /// Coverage/test build: always the injected fake (host_target ignored), so the
+    /// existing container-call assertions hold and the measured surface is stable.
+    #[cfg(coverage)]
+    fn spawn_container(
+        &mut self,
+        container_name: &str,
+        spec: &marsad_proto::LaunchSpec,
+    ) -> Result<(), AgentError> {
+        let argv = claude_argv(spec);
+        let cmd = self.build_spawn_cmd(container_name, &spec.project, &argv);
+        self.active_container()
+            .spawn(container_name, &cmd)
+            .map_err(|e| AgentError::Spawn(format!("{e}")))
+    }
+
+    /// Real-IO build: local hosts use the platform container; remote hosts
+    /// (`exec_prefix_for` → `Some`) run the same tmux+FIFO container on the remote
+    /// via `RemoteTmuxContainer`.
+    #[cfg(not(coverage))]
+    fn spawn_container(
+        &mut self,
+        container_name: &str,
+        spec: &marsad_proto::LaunchSpec,
+    ) -> Result<(), AgentError> {
+        let argv = claude_argv(spec);
+        match exec_prefix_for(spec.host_target.as_deref()) {
+            None => {
+                let cmd = self.build_spawn_cmd(container_name, &spec.project, &argv);
+                self.active_container()
+                    .spawn(container_name, &cmd)
+                    .map_err(|e| AgentError::Spawn(format!("{e}")))
+            }
+            Some(prefix) => {
+                use marsad_lifecycle::Container as _;
+                let cmd =
+                    build_remote_spawn_cmd(REMOTE_RUNTIME_DIR, container_name, &spec.project, &argv);
+                let mut c =
+                    marsad_lifecycle::RemoteTmuxContainer::new(prefix, REMOTE_RUNTIME_DIR.to_string());
+                c.spawn(container_name, &cmd)
+                    .map_err(|e| AgentError::Spawn(format!("{e}")))
+            }
+        }
+    }
+
+    /// Look up a stored session's resolved remote target (for reconcile/kill of
+    /// remote containers). Real-IO build only.
+    #[cfg(not(coverage))]
+    fn session_host_target(&mut self, session_id: &str) -> Option<String> {
+        self.store
+            .0
+            .restore()
+            .ok()?
+            .sessions
+            .into_iter()
+            .find(|s| s.id == session_id)
+            .and_then(|s| s.host_target)
+    }
+
+    /// Kill a session's container — locally or on its remote host.
+    #[cfg(coverage)]
+    fn kill_container(&mut self, _session_id: &str, container_name: &str) {
+        let _ = self.active_container().kill(container_name);
+    }
+
+    #[cfg(not(coverage))]
+    fn kill_container(&mut self, session_id: &str, container_name: &str) {
+        match exec_prefix_for(self.session_host_target(session_id).as_deref()) {
+            None => {
+                let _ = self.active_container().kill(container_name);
+            }
+            Some(prefix) => {
+                use marsad_lifecycle::Container as _;
+                let mut c =
+                    marsad_lifecycle::RemoteTmuxContainer::new(prefix, REMOTE_RUNTIME_DIR.to_string());
+                let _ = c.kill(container_name);
+            }
+        }
+    }
+
     /// Launch a new session via the injected container.
     pub fn launch(&mut self, spec: marsad_proto::LaunchSpec) -> Result<String, AgentError> {
         let session_id = self.next_session_id();
@@ -385,18 +466,14 @@ impl Agent {
         spec: marsad_proto::LaunchSpec,
     ) -> Result<String, AgentError> {
         let container_name = format!("marsad-{session_id}");
-        let argv = claude_argv(&spec);
-        let cmd = self.build_spawn_cmd(&container_name, &spec.project, &argv);
-
-        self.active_container()
-            .spawn(&container_name, &cmd)
-            .map_err(|e| AgentError::Spawn(format!("{e}")))?;
+        self.spawn_container(&container_name, &spec)?;
 
         let persisted = marsad_store::PersistedSession {
             id: session_id.clone(),
             session_id: None,
             name: session_id.clone(),
             host_id: spec.host_id.clone(),
+            host_target: spec.host_target.clone(),
             project: spec.project.clone(),
             branch: "main".to_string(),
             model: spec.model.clone(),
@@ -461,6 +538,7 @@ impl Agent {
             first_prompt: msg.first_prompt,
             // Fresh / continue / resume-by-id, from optional IPC fields.
             mode: parse_launch_mode_value(value),
+            host_target: msg.host_target,
         };
         // Reuse the caller's session id when supplied (Core generates it so it can
         // navigate immediately and recognise the session's events); otherwise
@@ -520,6 +598,7 @@ impl Agent {
             posture: marsad_proto::Posture::Ask,
             first_prompt: value["first_prompt"].as_str().map(|s| s.to_string()),
             mode,
+            host_target: persisted.host_target,
         };
         let new_id = self.launch(spec)?;
         let event = serde_json::json!({"type": "SessionResumed", "session_id": new_id});
@@ -555,7 +634,7 @@ impl Agent {
             )));
         }
         let container_name = format!("marsad-{session_id}");
-        let _ = self.active_container().kill(&container_name);
+        self.kill_container(session_id, &container_name);
         self.sessions.remove(session_id);
         let event = serde_json::json!({"type": "SessionStopped", "session_id": session_id});
         Ok(vec![event.to_string()])
@@ -720,21 +799,56 @@ impl Agent {
                 model: session.model.clone(),
             };
 
-            use marsad_lifecycle::{Action, RuntimePhase, SessionRuntime};
-
-            // Delegate to lifecycle::reconcile; fold any error (AttachRace transient,
-            // ResumeFailed spawn failure) into a MarkStale runtime.
-            let runtime = marsad_lifecycle::reconcile(&known, self.active_container()).unwrap_or(
-                SessionRuntime {
-                    action: Action::MarkStale,
-                    phase: Some(RuntimePhase::Stale),
-                },
-            );
+            // Reconcile against the right container — local, or the session's
+            // remote host (so a remote tmux that outlived the app is adopted).
+            let runtime = self.reconcile_one(&known, session.host_target.as_deref());
 
             runtimes.push(runtime);
         }
 
         runtimes
+    }
+
+    /// Reconcile a single known session against the appropriate container.
+    ///
+    /// Coverage/test build: always the injected fake (host_target ignored).
+    #[cfg(coverage)]
+    fn reconcile_one(
+        &mut self,
+        known: &Persisted,
+        _host_target: Option<&str>,
+    ) -> marsad_lifecycle::SessionRuntime {
+        use marsad_lifecycle::{Action, RuntimePhase, SessionRuntime};
+        marsad_lifecycle::reconcile(known, self.active_container()).unwrap_or(SessionRuntime {
+            action: Action::MarkStale,
+            phase: Some(RuntimePhase::Stale),
+        })
+    }
+
+    /// Real-IO build: local sessions use the platform container; remote sessions
+    /// reconcile against `RemoteTmuxContainer` so a remote tmux that survived the
+    /// app restart is adopted rather than re-spawned.
+    #[cfg(not(coverage))]
+    fn reconcile_one(
+        &mut self,
+        known: &Persisted,
+        host_target: Option<&str>,
+    ) -> marsad_lifecycle::SessionRuntime {
+        use marsad_lifecycle::{Action, RuntimePhase, SessionRuntime};
+        let fallback = SessionRuntime {
+            action: Action::MarkStale,
+            phase: Some(RuntimePhase::Stale),
+        };
+        match exec_prefix_for(host_target) {
+            None => marsad_lifecycle::reconcile(known, self.active_container()).unwrap_or(fallback),
+            Some(prefix) => {
+                let mut c = marsad_lifecycle::RemoteTmuxContainer::new(
+                    prefix,
+                    REMOTE_RUNTIME_DIR.to_string(),
+                );
+                marsad_lifecycle::reconcile(known, &mut c).unwrap_or(fallback)
+            }
+        }
     }
 
     /// Blocking event loop — real socket/pipe IO, excluded from the coverage
@@ -1247,6 +1361,76 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+// ── remote-host execution helpers ───────────────────────────────────────────────
+
+/// Remote home-relative runtime dir where a remote host keeps Marsad session
+/// state (the FIFOs). The remote POSIX shell expands `~`. Only the real-IO path
+/// builds remote containers, so this is absent from the coverage build.
+#[cfg(not(coverage))]
+const REMOTE_RUNTIME_DIR: &str = "~/.marsad";
+
+/// POSIX single-quote for remote shell commands (the remote is always a POSIX
+/// `sh`, regardless of the local platform — so this is not `cfg(unix)`-gated).
+fn remote_shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// Resolve a host's execution target into the argv prefix every remote command is
+/// run through (see docs/remote-hosts.md). Returns:
+/// - `None` for the local machine (`None` / `"local"` / `"localhost"` / empty),
+/// - an `ssh` prefix (with the standard option set) for `user@host` or a bare alias,
+/// - a `wsl.exe` prefix for `wsl:<distro>`.
+pub fn exec_prefix_for(host_target: Option<&str>) -> Option<Vec<String>> {
+    let t = host_target.map(str::trim).filter(|s| !s.is_empty())?;
+    if t == "local" || t == "localhost" {
+        return None;
+    }
+    if let Some(distro) = t.strip_prefix("wsl:") {
+        if distro.is_empty() {
+            return None;
+        }
+        return Some(vec!["wsl.exe".to_string(), "-d".to_string(), distro.to_string()]);
+    }
+    // SSH host. BatchMode for the automated connection; ControlMaster multiplexing
+    // lets it reuse an interactive login's master socket (MFA hosts); keepalive
+    // stops idle drops. Mirrors the SSH option set in docs/remote-hosts.md.
+    let opt = |k: &str| ["-o".to_string(), k.to_string()];
+    let mut argv = vec!["ssh".to_string()];
+    argv.extend(opt("BatchMode=yes"));
+    argv.extend(opt("ConnectTimeout=10"));
+    argv.extend(opt("ServerAliveInterval=30"));
+    argv.extend(opt("ServerAliveCountMax=3"));
+    argv.extend(opt("TCPKeepAlive=yes"));
+    argv.extend(opt("ControlMaster=auto"));
+    argv.extend(opt("ControlPath=~/.ssh/marsad-cm-%r@%h:%p"));
+    argv.extend(opt("ControlPersist=600"));
+    argv.push(t.to_string());
+    Some(argv)
+}
+
+/// Build the FIFO-wired `claude` invocation that runs inside the remote tmux
+/// session. Mirrors the local unix command but with remote paths under
+/// `remote_runtime_dir` — `<root>/sessions/<name>/{in,out}.fifo` — matching the
+/// paths `RemoteTmuxContainer` creates.
+pub fn build_remote_spawn_cmd(
+    remote_runtime_dir: &str,
+    container_name: &str,
+    project: &str,
+    argv: &[String],
+) -> String {
+    let dir = format!("{remote_runtime_dir}/sessions/{container_name}");
+    let claude_args = argv.get(1..).unwrap_or(&[]);
+    format!(
+        "cd {} && claude {} < {dir}/in.fifo > {dir}/out.fifo 2>{dir}/err.log",
+        remote_shell_quote(project),
+        claude_args
+            .iter()
+            .map(|a| remote_shell_quote(a))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
 // ── claude_argv ───────────────────────────────────────────────────────────────
 
 /// Map a `Posture` to the `--permission-mode` value passed to `claude`.
@@ -1387,6 +1571,8 @@ fn parse_hook_event(
 struct LaunchSessionMsg {
     project: String,
     host_id: Option<String>,
+    #[serde(default)]
+    host_target: Option<String>,
     model: String,
     first_prompt: Option<String>,
 }

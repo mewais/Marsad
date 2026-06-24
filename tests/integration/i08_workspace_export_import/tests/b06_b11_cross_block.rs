@@ -24,6 +24,7 @@ fn make_session(id: &str, name: &str) -> PersistedSession {
         session_id: Some(format!("claude-{id}")),
         name: name.to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         project: "/projects/test".to_string(),
         branch: "main".to_string(),
         model: "claude-opus-4-5".to_string(),

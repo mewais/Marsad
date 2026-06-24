@@ -140,3 +140,85 @@ fn drain_outbound_accumulates_and_clears() {
         "drain should clear after first call"
     );
 }
+
+// ---------------------------------------------------------------------------
+// RemoteFifoTransport pure argv builders — verify the reader/writer command
+// lines for both an ssh-style prefix and a wsl-style prefix.  These are pure
+// functions (no spawning) so they are fully covered without a live remote.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remote_fifo_reader_argv_ssh_prefix() {
+    use marsad_transport::remote_fifo_reader_argv;
+    let prefix = vec!["ssh".to_string(), "user@host".to_string()];
+    let argv = remote_fifo_reader_argv(&prefix, "~/.marsad/sessions/s1/out.fifo");
+    assert_eq!(
+        argv,
+        vec![
+            "ssh",
+            "user@host",
+            "cat",
+            "~/.marsad/sessions/s1/out.fifo",
+        ]
+    );
+}
+
+#[test]
+fn remote_fifo_writer_argv_ssh_prefix() {
+    use marsad_transport::remote_fifo_writer_argv;
+    let prefix = vec!["ssh".to_string(), "user@host".to_string()];
+    let argv = remote_fifo_writer_argv(&prefix, "~/.marsad/sessions/s1/in.fifo");
+    assert_eq!(
+        argv,
+        vec![
+            "ssh",
+            "user@host",
+            "sh",
+            "-c",
+            "cat > ~/.marsad/sessions/s1/in.fifo",
+        ]
+    );
+}
+
+#[test]
+fn remote_fifo_reader_argv_wsl_prefix() {
+    use marsad_transport::remote_fifo_reader_argv;
+    let prefix = vec![
+        "wsl.exe".to_string(),
+        "-d".to_string(),
+        "Ubuntu".to_string(),
+    ];
+    let argv = remote_fifo_reader_argv(&prefix, "~/.marsad/sessions/s2/out.fifo");
+    assert_eq!(
+        argv,
+        vec![
+            "wsl.exe",
+            "-d",
+            "Ubuntu",
+            "cat",
+            "~/.marsad/sessions/s2/out.fifo",
+        ]
+    );
+}
+
+#[test]
+fn remote_fifo_writer_argv_wsl_prefix() {
+    use marsad_transport::remote_fifo_writer_argv;
+    let prefix = vec![
+        "wsl.exe".to_string(),
+        "-d".to_string(),
+        "Ubuntu".to_string(),
+    ];
+    let argv = remote_fifo_writer_argv(&prefix, "~/.marsad/sessions/s2/in.fifo");
+    assert_eq!(
+        argv,
+        vec![
+            "wsl.exe",
+            "-d",
+            "Ubuntu",
+            "sh",
+            "-c",
+            "cat > ~/.marsad/sessions/s2/in.fifo",
+        ]
+    );
+}

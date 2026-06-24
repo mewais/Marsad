@@ -570,6 +570,12 @@ impl Transport for SshStdio {
             .arg("ServerAliveCountMax=3")
             .arg("-o")
             .arg("TCPKeepAlive=yes")
+            // NB: no ControlMaster here. SshStdio runs a single long-lived command
+            // and uses a 150 ms post-spawn liveness probe; with a persistent master
+            // a fast command would reuse the socket, skip the handshake and exit
+            // before the probe — a false ConnectFailed. Connection multiplexing for
+            // MFA reuse lives in `exec_prefix_for` (remote container/transport) and
+            // the health probe / interactive login instead.
             .arg(&self.target)
             .arg(&self.remote_cmd)
             .stdin(Stdio::piped())
@@ -652,6 +658,244 @@ impl Transport for SshStdio {
             let _ = child.wait();
         }
         self.child = None;
+        Ok(())
+    }
+}
+
+// ── RemoteFifoTransport ──────────────────────────────────────────────────────
+//
+// Bridges a remote session's FIFOs over an opaque `exec_prefix` (e.g. an ssh or
+// wsl.exe argv).  The remote container (a `RemoteTmuxContainer` in
+// marsad-lifecycle) runs claude inside tmux on the remote box with its stdin/
+// stdout wired to `in.fifo`/`out.fifo`.  This transport reaches those FIFOs by
+// running `cat`/`sh -c 'cat > …'` *through the prefix* on the remote:
+//
+//   reader: `<prefix> cat <out_fifo>`            — claude stdout (NDJSON)
+//   writer: `<prefix> sh -c 'cat > <in_fifo>'`   — claude stdin
+//
+// The fifo arguments are remote POSIX path strings (e.g.
+// `~/.marsad/sessions/<id>/out.fifo`); they are kept as plain Strings and the
+// remote shell expands `~` — they are never run through std::path locally.
+//
+// Modelled on `SshStdio` (which already spawns a remote process over ssh and
+// pumps its stdio).  The differences are: the remote command is cat/sh instead
+// of the claude invocation, and the prefix is opaque — spawn `prefix[0]` with
+// `prefix[1..]` then the command.  Same two-mode coverage pattern: pure argv
+// builders are directly unit-tested; only the spawning `connect()` is gated out
+// of coverage with a stub that mirrors `SshStdio`.
+
+/// Build the argv for the reader process: `<prefix> cat <out_fifo>`.
+///
+/// `prefix` is the opaque exec prefix (e.g. `["ssh", "host"]` or
+/// `["wsl.exe", "-d", "Ubuntu"]`).  The returned vector is ready to splat into a
+/// `Command` (`argv[0]` is the program, the rest are args).
+pub fn remote_fifo_reader_argv(prefix: &[String], out_fifo: &str) -> Vec<String> {
+    let mut argv = prefix.to_vec();
+    argv.push("cat".to_string());
+    argv.push(out_fifo.to_string());
+    argv
+}
+
+/// Build the argv for the writer process: `<prefix> sh -c 'cat > <in_fifo>'`.
+///
+/// The shell script redirects `cat`'s stdout into the remote FIFO so that lines
+/// written to the spawned process's stdin land on claude's stdin.
+pub fn remote_fifo_writer_argv(prefix: &[String], in_fifo: &str) -> Vec<String> {
+    let mut argv = prefix.to_vec();
+    argv.push("sh".to_string());
+    argv.push("-c".to_string());
+    argv.push(format!("cat > {in_fifo}"));
+    argv
+}
+
+/// Transport that bridges a remote session's FIFOs over an opaque `exec_prefix`.
+pub struct RemoteFifoTransport {
+    /// Opaque argv prepended to every remote command (ssh/wsl.exe + opts/target).
+    exec_prefix: Vec<String>,
+    /// Remote POSIX path of the FIFO carrying claude's stdin (agent writes).
+    remote_in_fifo: String,
+    /// Remote POSIX path of the FIFO carrying claude's stdout (agent reads).
+    remote_out_fifo: String,
+    #[cfg(not(coverage))]
+    writer_child: Option<std::process::Child>,
+    #[cfg(not(coverage))]
+    reader_child: Option<std::process::Child>,
+    #[cfg(not(coverage))]
+    stdin: Option<std::process::ChildStdin>,
+    #[cfg(not(coverage))]
+    reader: Option<std::io::BufReader<std::process::ChildStdout>>,
+}
+
+impl RemoteFifoTransport {
+    /// Create a `RemoteFifoTransport`.
+    ///
+    /// `exec_prefix` is the opaque argv to reach the remote host; the fifo paths
+    /// are remote POSIX path strings (the remote shell expands `~`).  Calling
+    /// this does NOT spawn anything — call `connect()`.
+    pub fn new(
+        exec_prefix: Vec<String>,
+        remote_in_fifo: String,
+        remote_out_fifo: String,
+    ) -> Self {
+        Self {
+            exec_prefix,
+            remote_in_fifo,
+            remote_out_fifo,
+            #[cfg(not(coverage))]
+            writer_child: None,
+            #[cfg(not(coverage))]
+            reader_child: None,
+            #[cfg(not(coverage))]
+            stdin: None,
+            #[cfg(not(coverage))]
+            reader: None,
+        }
+    }
+
+    /// Connect stub for the coverage build.
+    ///
+    /// Mirrors `SshStdio`'s coverage stub: an empty prefix has no program to
+    /// spawn, so it returns `ConnectFailed` without touching the OS.  The pure
+    /// argv builders are covered directly by the unit tests; only the real spawn
+    /// is excluded from coverage.  Exercised by `errors.rs`.
+    #[cfg(coverage)]
+    pub fn connect(&mut self) -> Result<(), TransportError> {
+        // Build both argvs so the pure path is exercised even in the stub.
+        let _ = remote_fifo_reader_argv(&self.exec_prefix, &self.remote_out_fifo);
+        let _ = remote_fifo_writer_argv(&self.exec_prefix, &self.remote_in_fifo);
+        Err(TransportError::ConnectFailed(format!(
+            "remote fifo transport unavailable (prefix {:?})",
+            self.exec_prefix
+        )))
+    }
+}
+
+/// Full `Transport` impl — production builds only (excluded from coverage).
+#[cfg(not(coverage))]
+impl Transport for RemoteFifoTransport {
+    #[allow(clippy::similar_names)]
+    fn connect(&mut self) -> Result<(), TransportError> {
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+
+        let prefix = self
+            .exec_prefix
+            .split_first()
+            .ok_or_else(|| TransportError::ConnectFailed("empty exec prefix".to_string()))?;
+        let (program, rest) = prefix;
+
+        // Helper: spawn `<program> <rest…> <cmd args…>` with the requested stdio.
+        let spawn = |args: &[String], stdin: Stdio, stdout: Stdio| -> std::io::Result<_> {
+            let mut cmd = Command::new(program);
+            cmd.args(rest)
+                .args(args)
+                .stdin(stdin)
+                .stdout(stdout)
+                .stderr(Stdio::null());
+            // No console-window flash on Windows (e.g. spawning wsl.exe).
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+            }
+            cmd.spawn()
+        };
+
+        // Reader: `<prefix> cat <out_fifo>` — claude's NDJSON stdout.
+        let reader_argv = remote_fifo_reader_argv(&self.exec_prefix, &self.remote_out_fifo);
+        let mut reader_child = spawn(&reader_argv[1..], Stdio::null(), Stdio::piped())
+            .map_err(|e| TransportError::ConnectFailed(e.to_string()))?;
+
+        // Writer: `<prefix> sh -c 'cat > <in_fifo>'` — claude's stdin.
+        let writer_argv = remote_fifo_writer_argv(&self.exec_prefix, &self.remote_in_fifo);
+        let mut writer_child = match spawn(&writer_argv[1..], Stdio::piped(), Stdio::null()) {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = reader_child.kill();
+                let _ = reader_child.wait();
+                return Err(TransportError::ConnectFailed(e.to_string()));
+            }
+        };
+
+        // Brief liveness probe: a bad prefix/target makes the child exit within
+        // milliseconds; a real connection is still in handshake/blocked on the
+        // FIFO open.
+        std::thread::sleep(Duration::from_millis(150));
+        match reader_child.try_wait() {
+            Ok(Some(status)) => {
+                let _ = writer_child.kill();
+                let _ = writer_child.wait();
+                return Err(TransportError::ConnectFailed(format!(
+                    "remote reader exited immediately: {status}"
+                )));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = writer_child.kill();
+                let _ = writer_child.wait();
+                return Err(TransportError::Io(e.to_string()));
+            }
+        }
+
+        let stdin = writer_child
+            .stdin
+            .take()
+            .ok_or_else(|| TransportError::ConnectFailed("no stdin handle".to_string()))?;
+        let stdout = reader_child
+            .stdout
+            .take()
+            .ok_or_else(|| TransportError::ConnectFailed("no stdout handle".to_string()))?;
+        self.reader = Some(std::io::BufReader::new(stdout));
+        self.stdin = Some(stdin);
+        self.reader_child = Some(reader_child);
+        self.writer_child = Some(writer_child);
+        Ok(())
+    }
+
+    fn send_line(&mut self, line: &str) -> Result<(), TransportError> {
+        use std::io::Write;
+        match self.stdin {
+            Some(ref mut s) => {
+                let msg = format!("{line}\n");
+                s.write_all(msg.as_bytes())
+                    .map_err(|_| TransportError::BrokenPipe)
+            }
+            None => Err(TransportError::ConnectFailed("not connected".to_string())),
+        }
+    }
+
+    fn recv_line(&mut self) -> Result<Option<String>, TransportError> {
+        use std::io::BufRead;
+        match self.reader {
+            Some(ref mut r) => {
+                let mut line = String::new();
+                match r.read_line(&mut line) {
+                    Ok(0) => Ok(None),
+                    Ok(_) => {
+                        if line.ends_with('\n') {
+                            line.pop();
+                        }
+                        Ok(Some(line))
+                    }
+                    Err(e) => Err(TransportError::Io(e.to_string())),
+                }
+            }
+            None => Err(TransportError::ConnectFailed("not connected".to_string())),
+        }
+    }
+
+    fn close(&mut self) -> Result<(), TransportError> {
+        self.reader = None;
+        self.stdin = None;
+        for child in [self.writer_child.as_mut(), self.reader_child.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.writer_child = None;
+        self.reader_child = None;
         Ok(())
     }
 }

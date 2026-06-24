@@ -378,6 +378,214 @@ impl Container for TmuxContainer {
     }
 }
 
+// ── RemoteTmuxContainer ──────────────────────────────────────────────────────
+//
+// Remote sibling of `TmuxContainer`: runs the *same* tmux/mkfifo operations, but
+// on a remote machine by prefixing every command with an opaque
+// `exec_prefix: Vec<String>` (see `docs/remote-hosts.md`).  The prefix may be an
+// `ssh …` invocation, a `wsl.exe -d <distro> --` invocation, etc. — the type
+// treats it as fully opaque and only ever spawns `prefix[0]` with the rest as
+// args.
+//
+// Following the same discipline as `TmuxContainer`, the *pure* argv/script
+// builders are always compiled and unit-tested to 100 %; only the actual
+// `Command::spawn()`/`status()` calls live in the `#[cfg(not(coverage))]`
+// `Container` impl.
+
+/// Production `Container` that runs `tmux` sessions on a **remote** host.
+///
+/// Every command is prefixed with `exec_prefix` (e.g. `["ssh", "user@h", "--"]`
+/// or `["wsl.exe", "-d", "Ubuntu", "--"]`).  The remote session dir lives under
+/// `remote_runtime_dir` (a remote POSIX path string such as `~/.marsad`, kept as
+/// a `String` and joined with `/` — never `std::path`, which would mangle it on a
+/// Windows host).
+///
+/// Mirrors `TmuxContainer`'s `exists`/`attach`/`spawn`/`kill` semantics; the
+/// `spawn` mkfifo + `tmux new-session` are combined into a single remote
+/// `sh -c` script so spawning a session is one round-trip.
+pub struct RemoteTmuxContainer {
+    /// Opaque argv prepended to every remote command (`prefix[0]` is the program).
+    ///
+    /// Only read by the `#[cfg(not(coverage))]` `run_status`; under the coverage
+    /// build the real spawning is gated out, so the field is intentionally unused
+    /// there (the pure path builders never touch it).
+    #[cfg_attr(coverage, allow(dead_code))]
+    exec_prefix: Vec<String>,
+    /// Remote runtime dir (POSIX path string, e.g. `~/.marsad`).
+    remote_runtime_dir: String,
+}
+
+impl RemoteTmuxContainer {
+    /// Create a `RemoteTmuxContainer` that runs commands through `exec_prefix`
+    /// against `remote_runtime_dir` on the remote host.
+    pub fn new(exec_prefix: Vec<String>, remote_runtime_dir: impl Into<String>) -> Self {
+        Self {
+            exec_prefix,
+            remote_runtime_dir: remote_runtime_dir.into(),
+        }
+    }
+
+    /// Remote per-session directory: `<remote_runtime_dir>/sessions/<name>`.
+    ///
+    /// Joined with `/` (remote POSIX path), never `std::path`.
+    pub fn remote_session_dir(&self, name: &str) -> String {
+        format!("{}/sessions/{name}", self.remote_runtime_dir)
+    }
+
+    /// Remote `in.fifo` path for `name`.
+    pub fn in_fifo_path(&self, name: &str) -> String {
+        format!("{}/in.fifo", self.remote_session_dir(name))
+    }
+
+    /// Remote `out.fifo` path for `name`.
+    pub fn out_fifo_path(&self, name: &str) -> String {
+        format!("{}/out.fifo", self.remote_session_dir(name))
+    }
+
+    /// Argv for the `tmux has-session` existence probe (without the prefix):
+    /// `["tmux", "has-session", "-t", <name>]`.  The prefix is prepended by the
+    /// caller / `run_status`.
+    pub fn exists_argv(name: &str) -> Vec<String> {
+        vec![
+            "tmux".to_string(),
+            "has-session".to_string(),
+            "-t".to_string(),
+            name.to_string(),
+        ]
+    }
+
+    /// Argv for `tmux kill-session` (without the prefix):
+    /// `["tmux", "kill-session", "-t", <name>]`.
+    pub fn kill_argv(name: &str) -> Vec<String> {
+        vec![
+            "tmux".to_string(),
+            "kill-session".to_string(),
+            "-t".to_string(),
+            name.to_string(),
+        ]
+    }
+
+    /// Build the single remote `sh -c` script run by `spawn`.
+    ///
+    /// It (idempotently) ensures the session dir + both FIFOs exist, then — only
+    /// if no tmux session named `name` is already running — launches
+    /// `tmux new-session -d -s <name> '<cmd>'`.  Mirrors `TmuxContainer::spawn`'s
+    /// structure but in one remote round-trip:
+    ///
+    /// - `mkdir -p <dir>`
+    /// - `[ -p <fifo> ] || mkfifo <fifo>` for each FIFO (no-op if present)
+    /// - idempotency guard: `tmux has-session -t <name> 2>/dev/null || tmux new-session …`
+    ///
+    /// `name` and `cmd` are single-quoted for the remote shell (any embedded
+    /// single quotes are escaped via the `'\''` idiom).
+    pub fn spawn_script(&self, name: &str, cmd: &str) -> String {
+        let dir = self.remote_session_dir(name);
+        let in_fifo = self.in_fifo_path(name);
+        let out_fifo = self.out_fifo_path(name);
+        let q_dir = sh_single_quote(&dir);
+        let q_in = sh_single_quote(&in_fifo);
+        let q_out = sh_single_quote(&out_fifo);
+        let q_name = sh_single_quote(name);
+        let q_cmd = sh_single_quote(cmd);
+        format!(
+            "mkdir -p {q_dir} && \
+             {{ [ -p {q_in} ] || mkfifo {q_in}; }} && \
+             {{ [ -p {q_out} ] || mkfifo {q_out}; }} && \
+             {{ tmux has-session -t {q_name} 2>/dev/null || \
+             tmux new-session -d -s {q_name} {q_cmd}; }}"
+        )
+    }
+}
+
+/// Single-quote `s` for a POSIX shell, escaping embedded single quotes via the
+/// `'\''` idiom (close-quote, escaped quote, re-open-quote).
+fn sh_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+#[cfg(not(coverage))]
+impl RemoteTmuxContainer {
+    /// Spawn the prefix program with the given trailing args, returning the exit
+    /// status.  `Command::new(prefix[0]).args(prefix[1..]).args(args)`.
+    ///
+    /// On Windows the console window is suppressed (`CREATE_NO_WINDOW`) so an
+    /// `ssh`/`wsl.exe` prefix does not flash a console.
+    fn run_status(&self, args: &[String]) -> std::io::Result<std::process::ExitStatus> {
+        let mut cmd = std::process::Command::new(&self.exec_prefix[0]);
+        cmd.args(&self.exec_prefix[1..])
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        cmd.status()
+    }
+
+    /// Run a remote shell script via `<prefix> sh -c <script>`.
+    fn run_script(&self, script: &str) -> std::io::Result<std::process::ExitStatus> {
+        self.run_status(&[
+            "sh".to_string(),
+            "-c".to_string(),
+            script.to_string(),
+        ])
+    }
+}
+
+#[cfg(not(coverage))]
+impl Container for RemoteTmuxContainer {
+    /// Returns `true` iff `<prefix> tmux has-session -t <name>` exits 0.
+    /// Never errors: any failure (ssh down, tmux absent) → `false`.
+    fn exists(&self, name: &str) -> bool {
+        self.run_status(&Self::exists_argv(name))
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    /// Verify the remote session is still live, mirroring `TmuxContainer::attach`.
+    /// Returns `Err(AttachRace)` if it vanished since the caller's probe.
+    fn attach(&mut self, name: &str) -> Result<(), LifecycleError> {
+        if self.exists(name) {
+            Ok(())
+        } else {
+            Err(LifecycleError::AttachRace(name.to_string()))
+        }
+    }
+
+    /// Create the remote FIFOs and launch the remote tmux session in a single
+    /// `sh -c` round-trip.  Idempotent: the script's `has-session` guard adopts
+    /// an already-running session without spawning a duplicate.
+    fn spawn(&mut self, name: &str, cmd: &str) -> Result<(), LifecycleError> {
+        let script = self.spawn_script(name, cmd);
+        let st = self
+            .run_script(&script)
+            .map_err(|e| LifecycleError::Spawn(format!("remote spawn {name}: {e}")))?;
+        if st.success() {
+            Ok(())
+        } else {
+            Err(LifecycleError::Spawn(format!(
+                "remote spawn {name} failed: {st}"
+            )))
+        }
+    }
+
+    /// Kill the remote tmux session: `<prefix> tmux kill-session -t <name>`.
+    fn kill(&mut self, name: &str) -> Result<(), LifecycleError> {
+        let st = self
+            .run_status(&Self::kill_argv(name))
+            .map_err(|e| LifecycleError::Container(format!("remote kill {name}: {e}")))?;
+        if st.success() {
+            Ok(())
+        } else {
+            Err(LifecycleError::Container(format!(
+                "remote kill-session -t {name} failed: {st}"
+            )))
+        }
+    }
+}
+
 // ── WindowsShimContainer ─────────────────────────────────────────────────────
 //
 // Windows-only production Container.  Uses a lightweight "shim" process

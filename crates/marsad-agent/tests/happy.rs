@@ -38,6 +38,7 @@ fn basic_launch_spec() -> LaunchSpec {
     LaunchSpec {
         project: "/home/user/myproject".to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "claude-opus-4-5".to_string(),
         posture: marsad_proto::Posture::Ask,
         first_prompt: None,
@@ -49,6 +50,7 @@ fn launch_spec_with_prompt(prompt: &str) -> LaunchSpec {
     LaunchSpec {
         project: "/home/user/myproject".to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "claude-opus-4-5".to_string(),
         posture: marsad_proto::Posture::Ask,
         first_prompt: Some(prompt.to_string()),
@@ -226,6 +228,7 @@ fn claude_argv_non_ask_omits_permission_prompt_tool() {
         let spec = LaunchSpec {
             project: "/home/user/myproject".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture,
             first_prompt: None,
@@ -245,6 +248,7 @@ fn claude_argv_permission_mode_auto_approve_safe() {
     let spec = LaunchSpec {
         project: "/home/user/myproject".to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "claude-opus-4-5".to_string(),
         posture: marsad_proto::Posture::AutoApproveSafe,
         first_prompt: None,
@@ -268,6 +272,7 @@ fn claude_argv_permission_mode_full_autonomy() {
     let spec = LaunchSpec {
         project: "/home/user/myproject".to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "claude-opus-4-5".to_string(),
         posture: marsad_proto::Posture::FullAutonomy,
         first_prompt: None,
@@ -586,6 +591,7 @@ fn reconcile_all_adopt_does_not_spawn() {
             session_id: Some("claude-sid-abc".to_string()),
             name: "test".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             project: "/home/user/proj".to_string(),
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),

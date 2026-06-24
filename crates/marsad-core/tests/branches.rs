@@ -39,6 +39,7 @@ fn spec(project: &str, posture: Posture) -> LaunchSpec {
     LaunchSpec {
         project: project.to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "claude-opus-4-5".to_string(),
         posture,
         first_prompt: None,

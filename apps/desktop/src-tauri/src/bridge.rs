@@ -71,6 +71,7 @@ pub fn launch_session(
     state: State<'_, ManagedState>,
     project: String,
     host_id: String,
+    host_target: None,
     model: String,
     posture: String,
     first_prompt: Option<String>,
@@ -453,6 +454,117 @@ pub fn remove_host(
     };
     crate::events::emit_updates(&app, updates);
     Ok(())
+}
+
+/// Open a real OS terminal window running an INTERACTIVE `ssh` login for
+/// `target`, using the SAME ControlPath as the automated connections (see
+/// docs/remote-hosts.md) so the resulting master socket is reused headlessly.
+///
+/// This is the MFA / keyboard-interactive escape hatch: the user completes the
+/// login once in a visible terminal (NO `BatchMode`), the master persists
+/// (`ControlPersist=600`), and every later automated `ssh` rides it.
+#[tauri::command(rename_all = "snake_case")]
+pub fn connect_host_interactive(target: String) -> Result<(), String> {
+    launch_interactive_ssh(&target)
+}
+
+/// Build the interactive `ssh` argv used by `connect_host_interactive`.
+///
+/// Deliberately NO `BatchMode` (this is the interactive login). The
+/// `ControlPath` MUST match docs/remote-hosts.md exactly so automated
+/// connections reuse the master socket.
+fn interactive_ssh_args(target: &str) -> Vec<String> {
+    vec![
+        "ssh".to_string(),
+        "-o".to_string(),
+        "ControlMaster=auto".to_string(),
+        "-o".to_string(),
+        "ControlPath=~/.ssh/marsad-cm-%r@%h:%p".to_string(),
+        "-o".to_string(),
+        "ControlPersist=600".to_string(),
+        "-o".to_string(),
+        "ServerAliveInterval=30".to_string(),
+        target.to_string(),
+    ]
+}
+
+/// Spawn a visible OS terminal emulator running the interactive ssh login.
+/// Factored per-OS so each branch only compiles on its target.
+#[cfg(target_os = "windows")]
+fn launch_interactive_ssh(target: &str) -> Result<(), String> {
+    use std::process::Command;
+    // `cmd.exe /C start "" ssh …` opens a new, VISIBLE console window. We
+    // intentionally do NOT set CREATE_NO_WINDOW — the user must see/interact.
+    let mut cmd = Command::new("cmd.exe");
+    cmd.arg("/C").arg("start").arg("");
+    for a in interactive_ssh_args(target) {
+        cmd.arg(a);
+    }
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("failed to open terminal: {e}"))
+}
+
+/// macOS: drive Terminal.app via `osascript` so the ssh command runs in a real
+/// terminal window the user can type into.
+#[cfg(target_os = "macos")]
+fn launch_interactive_ssh(target: &str) -> Result<(), String> {
+    use std::process::Command;
+    // Quote each arg for the AppleScript `do script` shell string.
+    let cmdline = interactive_ssh_args(target)
+        .iter()
+        .map(|a| format!("'{}'", a.replace('\'', "'\\''")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let script = format!(
+        "tell application \"Terminal\"\nactivate\ndo script \"{}\"\nend tell",
+        cmdline.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+    Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("failed to open Terminal: {e}"))
+}
+
+/// Linux: try common terminal emulators in order, using the first that exists.
+#[cfg(target_os = "linux")]
+fn launch_interactive_ssh(target: &str) -> Result<(), String> {
+    use std::process::Command;
+    let ssh = interactive_ssh_args(target);
+    // (binary, flag-that-precedes-the-command-argv)
+    let candidates: [(&str, &str); 4] = [
+        ("x-terminal-emulator", "-e"),
+        ("gnome-terminal", "--"),
+        ("konsole", "-e"),
+        ("xterm", "-e"),
+    ];
+    for (bin, flag) in candidates {
+        // Probe existence via PATH lookup.
+        let found = Command::new("sh")
+            .arg("-c")
+            .arg(format!("command -v {bin} >/dev/null 2>&1"))
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !found {
+            continue;
+        }
+        let mut cmd = Command::new(bin);
+        cmd.arg(flag);
+        for a in &ssh {
+            cmd.arg(a);
+        }
+        return cmd
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("failed to launch {bin}: {e}"));
+    }
+    Err(
+        "no terminal emulator found (tried x-terminal-emulator, gnome-terminal, konsole, xterm)"
+            .to_string(),
+    )
 }
 
 // ---------------------------------------------------------------------------

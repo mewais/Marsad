@@ -212,6 +212,12 @@ pub struct LaunchSpec {
     /// older callers and serialized specs without this field keep working.
     #[serde(default)]
     pub mode: LaunchMode,
+    /// Resolved remote execution target for the session's host, or `None`/`local`
+    /// for the local machine. `user@host` (or a bare ssh alias) selects SSH;
+    /// `wsl:<distro>` selects WSL. Drives which container/transport the agent uses.
+    /// `#[serde(default)]` keeps older serialized specs (no field) working.
+    #[serde(default)]
+    pub host_target: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

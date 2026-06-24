@@ -708,6 +708,21 @@ impl Core {
         let obj = val.as_object_mut().unwrap();
         obj.insert("session_id".to_string(), Value::String(id.clone()));
         obj.insert("project".to_string(), Value::String(spec.project.clone()));
+        // Forward the host so the agent runs the session on the right machine.
+        // Resolve the remote execution target from the host id via the registry
+        // (local/unknown hosts → None → the agent runs locally). An explicit
+        // `spec.host_target` wins if a caller already set one.
+        obj.insert("host_id".to_string(), Value::String(spec.host_id.clone()));
+        let host_target = spec.host_target.clone().or_else(|| {
+            self.hosts
+                .list()
+                .iter()
+                .find(|h| h.id == spec.host_id && !h.is_local)
+                .map(|h| h.target.clone())
+        });
+        if let Some(target) = host_target {
+            obj.insert("host_target".to_string(), Value::String(target));
+        }
         // The agent decodes posture from `posture` (the enum variant name);
         // `permission_mode` above is kept for back-compat.
         obj.insert(
@@ -810,6 +825,7 @@ impl Core {
             posture,
             first_prompt: None,
             mode,
+            host_target: None,
         };
         self.launch_session_with_id(id.to_string(), spec)?;
 

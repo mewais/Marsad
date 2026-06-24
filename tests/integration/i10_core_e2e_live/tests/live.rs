@@ -253,6 +253,7 @@ fn spec(project: &str, first_prompt: &str, posture: Posture, mode: LaunchMode) -
     LaunchSpec {
         project: project.to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "haiku".to_string(),
         posture,
         first_prompt: Some(first_prompt.to_string()),

@@ -14,7 +14,7 @@ import { useTheme } from "../theme/ThemeProvider";
 import { getUiScale, applyUiScale } from "../theme/uiScale";
 import { Toggle } from "../components/Toggle";
 import { MODELS as MODEL_LIST } from "../bridge/models";
-import { getAutostart, setAutostart, addHost, removeHost, getSettings, setSettings, DEFAULT_SETTINGS } from "../bridge/api";
+import { getAutostart, setAutostart, addHost, removeHost, connectHostInteractive, getSettings, setSettings, DEFAULT_SETTINGS } from "../bridge/api";
 import type { Settings, NotifPref } from "../bridge/types";
 
 // ---------------------------------------------------------------------------
@@ -607,6 +607,7 @@ function HostsTab() {
   const [target, setTarget] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
 
   async function handleAdd() {
     if (!label.trim() || !target.trim() || busy) return;
@@ -627,6 +628,17 @@ function HostsTab() {
   async function handleRemove(id: string) {
     try {
       await removeHost(id);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleConnect(target: string) {
+    setError(null);
+    try {
+      await connectHostInteractive(target);
+      setHint(`Login window opened for ${target} — complete the prompts there.`);
+      window.setTimeout(() => setHint(null), 6000);
     } catch (e) {
       setError(String(e));
     }
@@ -694,6 +706,26 @@ function HostsTab() {
             >
               {h.status}
             </span>
+            {!h.is_local && (
+              <button
+                data-testid={`host-connect-${h.id}`}
+                onClick={() => handleConnect(h.target)}
+                title="Open an interactive SSH login (for MFA / keyboard-interactive hosts)"
+                style={{
+                  fontFamily: "inherit",
+                  fontSize: "calc(13.5px * var(--fs,1))",
+                  fontWeight: 600,
+                  padding: "6px 11px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border2)",
+                  background: "transparent",
+                  color: "var(--txt2)",
+                  cursor: "pointer",
+                }}
+              >
+                Connect
+              </button>
+            )}
             {h.removable ? (
               <button
                 data-testid={`host-remove-${h.id}`}
@@ -730,6 +762,23 @@ function HostsTab() {
           </div>
         ))}
       </div>
+
+      {hint && (
+        <div
+          data-testid="host-connect-hint"
+          style={{
+            marginBottom: 22,
+            padding: "10px 14px",
+            borderRadius: 9,
+            background: "var(--panel)",
+            border: "1px solid var(--border)",
+            color: "var(--txt2)",
+            fontSize: "calc(13.5px * var(--fs,1))",
+          }}
+        >
+          {hint}
+        </div>
+      )}
 
       {/* Add a remote host */}
       <div style={{ ...S.sectionLabel, marginBottom: 10 }}>Add a host</div>

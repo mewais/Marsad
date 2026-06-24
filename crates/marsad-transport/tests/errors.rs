@@ -54,11 +54,26 @@ fn ssh_stdio_connect_failed_bad_target() {
         "invalid-host-that-does-not-exist-xyz.invalid",
         "marsad-agent",
     );
-    let err = ssh.connect().expect_err("should fail to connect");
-    assert!(
-        is_connect_failed(&err) || matches!(err, TransportError::Io(_)),
-        "expected ConnectFailed or Io, got {err:?}"
-    );
+    let res = ssh.connect();
+
+    // Coverage build: SshStdio is a stub whose connect() deterministically fails.
+    #[cfg(coverage)]
+    assert!(res.is_err(), "coverage stub connect must fail, got {res:?}");
+
+    // Real-IO build: a bad target either fails to connect outright, or — when ssh
+    // hasn't exited within connect()'s brief liveness probe (a timing race on DNS
+    // failure) — connects and then immediately dies. Both are correct; what must
+    // NEVER happen is a usable output line. Asserting the end state rather than the
+    // probe result makes this deterministic instead of flaky.
+    #[cfg(not(coverage))]
+    {
+        use marsad_transport::Transport;
+        let outcome = res.and_then(|()| ssh.recv_line());
+        assert!(
+            matches!(outcome, Err(_) | Ok(None)),
+            "bad target must not yield a usable line, got {outcome:?}"
+        );
+    }
 }
 
 #[test]
@@ -69,6 +84,24 @@ fn wsl_stdio_connect_failed_no_distro() {
     use marsad_transport::WslStdio;
     let mut wsl = WslStdio::new("NoSuchDistro", "marsad-agent");
     let err = wsl.connect().expect_err("should fail to connect");
+    assert!(
+        is_connect_failed(&err) || matches!(err, TransportError::Io(_)),
+        "expected ConnectFailed or Io, got {err:?}"
+    );
+}
+
+#[test]
+fn remote_fifo_connect_failed_empty_prefix() {
+    // RemoteFifoTransport::new takes an opaque exec prefix + remote fifo paths.
+    // Under coverage (and for an empty prefix in production) connect() returns
+    // ConnectFailed without reaching a live remote, mirroring SshStdio's stub.
+    use marsad_transport::{RemoteFifoTransport, Transport};
+    let mut t = RemoteFifoTransport::new(
+        Vec::new(),
+        "~/.marsad/sessions/x/in.fifo".to_string(),
+        "~/.marsad/sessions/x/out.fifo".to_string(),
+    );
+    let err = t.connect().expect_err("should fail to connect");
     assert!(
         is_connect_failed(&err) || matches!(err, TransportError::Io(_)),
         "expected ConnectFailed or Io, got {err:?}"

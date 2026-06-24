@@ -179,11 +179,11 @@ fn part_a_add_and_remove_remote_host() {
         assert_eq!(host.target, "ci@ci-runner.example.com");
         assert!(!host.is_local);
         assert!(host.removable);
-        // New hosts start Reconnecting until a successful health_check.
+        // New hosts start Connecting until a successful health_check.
         assert_eq!(
             host.status,
-            HostStatus::Reconnecting,
-            "new remote must start in Reconnecting"
+            HostStatus::Connecting,
+            "new remote must start in Connecting"
         );
         host.id.clone()
     };
@@ -295,15 +295,15 @@ fn part_a_duplicate_label_error() {
     }
 }
 
-/// add with a malformed target (no @, empty user, empty host) → MalformedTarget.
+/// add with a malformed target (empty, half-formed `user@`/`@host`) →
+/// MalformedTarget. (A bare alias with no `@` is a valid ssh target, not an error.)
 #[test]
 fn part_a_malformed_target_errors() {
     let cases: &[&str] = &[
-        "",              // empty
-        "nousernoslash", // no @
-        "@host",         // missing user
-        "user@",         // missing host
-        "@",             // both missing
+        "",      // empty
+        "@host", // missing user
+        "user@", // missing host
+        "@",     // both missing
     ];
 
     for &bad in cases {

@@ -78,6 +78,7 @@ fn scripted_full_happy_path_session() {
         .launch_session(LaunchSpec {
             project: "my-api".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: Some("Add a health check endpoint".to_string()),
@@ -243,6 +244,7 @@ fn scripted_gate_rejection_sends_deny_ipc() {
         .launch_session(LaunchSpec {
             project: "db-migration".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -294,6 +296,7 @@ fn scripted_agent_error_result_sets_error_phase() {
         .launch_session(LaunchSpec {
             project: "failing-proj".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -338,6 +341,7 @@ fn scripted_send_prompt_during_live_session() {
         .launch_session(LaunchSpec {
             project: "interactive".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -373,6 +377,7 @@ fn scripted_interrupt_session() {
         .launch_session(LaunchSpec {
             project: "long-running".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -408,6 +413,7 @@ fn scripted_two_concurrent_sessions_no_cross_routing() {
         .launch_session(LaunchSpec {
             project: "alpha".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -419,6 +425,7 @@ fn scripted_two_concurrent_sessions_no_cross_routing() {
         .launch_session(LaunchSpec {
             project: "beta".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-sonnet-4-5".to_string(),
             posture: Posture::AutoApproveSafe,
             first_prompt: None,
@@ -483,6 +490,7 @@ fn scripted_slash_compact_dispatches_ipc() {
         .launch_session(LaunchSpec {
             project: "slash-test".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -515,6 +523,7 @@ fn scripted_idempotent_answer_gate_end_to_end() {
         .launch_session(LaunchSpec {
             project: "idem-gate-e2e".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -581,6 +590,7 @@ fn scripted_stop_session_after_launch() {
         .launch_session(LaunchSpec {
             project: "stoppable".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -615,6 +625,7 @@ fn scripted_resume_then_attach() {
         .launch_session(LaunchSpec {
             project: "re-attach".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,

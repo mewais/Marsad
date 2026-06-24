@@ -150,6 +150,18 @@ export async function removeHost(id: string): Promise<void> {
   await invoke("remove_host", { id });
 }
 
+/**
+ * Open a real OS terminal running an interactive `ssh` login for `target`
+ * (an MFA / keyboard-interactive host). Uses the same ControlPath as the
+ * automated connections, so once the user completes the login the master
+ * socket persists and later headless connections reuse it.
+ */
+export async function connectHostInteractive(target: string): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("connect_host_interactive", { target });
+}
+
 export async function answerGate(args: {
   session_id: string;
   decision_id: string;

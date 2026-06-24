@@ -158,6 +158,7 @@ fn launch_spawn_failure_returns_spawn_error() {
     let spec = marsad_proto::LaunchSpec {
         project: "/home/user/proj".to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "claude-opus-4-5".to_string(),
         posture: marsad_proto::Posture::Ask,
         first_prompt: None,
@@ -338,6 +339,7 @@ fn reconcile_all_lifecycle_error_folds_into_stale() {
             session_id: None, // no session_id → MarkStale after race
             name: "err-test".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             project: "/home/user/proj".to_string(),
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
@@ -528,6 +530,7 @@ fn launch_spawn_failure_deterministic_container_name() {
     let spec = marsad_proto::LaunchSpec {
         project: "/p".to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "m".to_string(),
         posture: marsad_proto::Posture::Ask,
         first_prompt: None,
@@ -568,6 +571,7 @@ fn launch_upsert_failure_returns_lifecycle_error() {
     let spec = marsad_proto::LaunchSpec {
         project: "/p".to_string(),
         host_id: "local".to_string(),
+        host_target: None,
         model: "m".to_string(),
         posture: marsad_proto::Posture::Ask,
         first_prompt: None,
@@ -620,6 +624,7 @@ fn resume_session_launch_spawn_failure_propagates() {
             session_id: Some("claude-uuid".to_string()),
             name: "r".to_string(),
             host_id: "local".to_string(),
+            host_target: None,
             project: "/p".to_string(),
             branch: "main".to_string(),
             model: "m".to_string(),

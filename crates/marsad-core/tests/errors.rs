@@ -194,6 +194,7 @@ fn launch_session_transport_failure_returns_transport_error() {
     let spec = LaunchSpec {
         project: "p".to_string(),
         host_id: "h".to_string(),
+        host_target: None,
         model: "claude-opus-4-5".to_string(),
         posture: Posture::Ask,
         first_prompt: None,
@@ -216,6 +217,7 @@ fn send_prompt_transport_failure_returns_transport_error() {
     let spec = LaunchSpec {
         project: "p".to_string(),
         host_id: "h".to_string(),
+        host_target: None,
         model: "claude-opus-4-5".to_string(),
         posture: Posture::Ask,
         first_prompt: None,
@@ -430,6 +432,7 @@ fn restart_session_transport_failure_on_stop_returns_transport_error() {
         .launch_session(LaunchSpec {
             project: "p".to_string(),
             host_id: "h".to_string(),
+            host_target: None,
             model: "m".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -464,6 +467,7 @@ fn restart_session_transport_failure_on_relaunch_returns_transport_error() {
         .launch_session(LaunchSpec {
             project: "p".to_string(),
             host_id: "h".to_string(),
+            host_target: None,
             model: "m".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
