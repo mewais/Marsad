@@ -70,10 +70,10 @@ fn find_agent_bin() -> Option<std::path::PathBuf> {
             eprintln!("marsad-desktop: MARSAD_AGENT_BIN={bin} not found; trying fallbacks");
         }
     }
-    // Sibling binary next to the current exe.
+    // Sibling binary next to the current exe (".exe" on Windows, "" elsewhere).
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let candidate = dir.join("marsad-agent");
+            let candidate = dir.join(format!("marsad-agent{}", std::env::consts::EXE_SUFFIX));
             if candidate.is_file() {
                 return Some(candidate);
             }

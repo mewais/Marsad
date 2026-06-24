@@ -291,13 +291,21 @@ impl Transport for LoopbackFake {
 // cfg(not(coverage)) — full production implementation using UnixStream.
 //                  Exercised by the i03 integration test (live socket).
 
-/// Transport over a Unix domain socket (Linux/macOS) or named pipe (Windows).
+// The GUI<->agent channel is an AF_UNIX socket. Windows 10+ supports AF_UNIX,
+// but Rust std only exposes it on unix, so on Windows we use `uds_windows`, which
+// provides the same `UnixStream`/`UnixListener` API over the same socket path.
+#[cfg(all(unix, not(coverage)))]
+use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(all(windows, not(coverage)))]
+use uds_windows::{UnixListener, UnixStream};
+
+/// Transport over an AF_UNIX socket (Linux/macOS via std, Windows via uds_windows).
 pub struct LocalIpc {
     endpoint: String,
     #[cfg(not(coverage))]
-    stream: Option<std::os::unix::net::UnixStream>,
+    stream: Option<UnixStream>,
     #[cfg(not(coverage))]
-    reader: Option<std::io::BufReader<std::os::unix::net::UnixStream>>,
+    reader: Option<std::io::BufReader<UnixStream>>,
 }
 
 impl LocalIpc {
@@ -330,7 +338,6 @@ impl LocalIpc {
 #[cfg(not(coverage))]
 impl Transport for LocalIpc {
     fn connect(&mut self) -> Result<(), TransportError> {
-        use std::os::unix::net::UnixStream;
         match UnixStream::connect(&self.endpoint) {
             Ok(stream) => {
                 let stream2 = stream
@@ -396,7 +403,7 @@ impl Transport for LocalIpc {
 /// `connect()`.
 #[cfg(not(coverage))]
 pub struct LocalIpcListener {
-    inner: std::os::unix::net::UnixListener,
+    inner: UnixListener,
 }
 
 #[cfg(not(coverage))]
@@ -407,7 +414,6 @@ impl LocalIpcListener {
     /// crash does not prevent re-binding.  Parent directories are created
     /// automatically if they do not exist.
     pub fn bind(endpoint: &str) -> Result<Self, TransportError> {
-        use std::os::unix::net::UnixListener;
 
         // Remove stale socket file if present (best-effort; ignore error).
         std::fs::remove_file(endpoint).ok();
@@ -451,8 +457,8 @@ impl LocalIpc {
     pub fn into_split(
         self,
     ) -> Option<(
-        std::os::unix::net::UnixStream,
-        std::io::BufReader<std::os::unix::net::UnixStream>,
+        UnixStream,
+        std::io::BufReader<UnixStream>,
     )> {
         match (self.stream, self.reader) {
             (Some(w), Some(r)) => Some((w, r)),
@@ -463,7 +469,7 @@ impl LocalIpc {
     /// Wrap an already-accepted (or already-connected) `UnixStream` into a
     /// ready-to-use `LocalIpc`.  Both the write end (`stream`) and the read end
     /// (`BufReader` over a `try_clone`) are populated.
-    pub fn from_stream(stream: std::os::unix::net::UnixStream) -> Result<Self, TransportError> {
+    pub fn from_stream(stream: UnixStream) -> Result<Self, TransportError> {
         let stream2 = stream
             .try_clone()
             .map_err(|e| TransportError::Io(e.to_string()))?;

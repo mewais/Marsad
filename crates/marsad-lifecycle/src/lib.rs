@@ -476,9 +476,9 @@ impl Container for WindowsShimContainer {
     /// `OpenProcess` + `GetExitCodeProcess`.  Returns `false` on any error
     /// (missing file, dead PID, OS error) — "fail closed" is the safe default.
     fn exists(&self, name: &str) -> bool {
-        use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
+        use windows_sys::Win32::Foundation::{CloseHandle, FALSE, STILL_ACTIVE};
         use windows_sys::Win32::System::Threading::{
-            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, STILL_ACTIVE,
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
         };
 
         // 1. Read the PID from shim.pid.
@@ -494,7 +494,7 @@ impl Container for WindowsShimContainer {
         // 2. Open a handle to the process.  If the PID does not exist (or we have
         //    no permission) OpenProcess returns NULL (0 on windows-sys).
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
-        if handle == 0 {
+        if handle.is_null() {
             return false;
         }
 
@@ -503,7 +503,7 @@ impl Container for WindowsShimContainer {
         let ok = unsafe { GetExitCodeProcess(handle, &mut code) };
         unsafe { CloseHandle(handle) };
 
-        ok != 0 && code == STILL_ACTIVE
+        ok != 0 && code == STILL_ACTIVE as u32
     }
 
     /// Verify the shim is still alive.
@@ -614,7 +614,7 @@ impl Container for WindowsShimContainer {
 
         // 2. Open the process with PROCESS_TERMINATE rights.
         let handle = unsafe { OpenProcess(PROCESS_TERMINATE, FALSE, pid) };
-        if handle == 0 {
+        if handle.is_null() {
             // PID may already be dead — treat as success so kill is idempotent.
             let _ = std::fs::remove_dir_all(&dir);
             return Ok(());

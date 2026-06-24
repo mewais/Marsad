@@ -67,14 +67,19 @@ fn windows_main() {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{
-        CloseHandle, BOOL, FALSE, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, TRUE,
+        CloseHandle, BOOL, FALSE, GENERIC_WRITE, HANDLE, HANDLE_FLAG_INHERIT,
+        INVALID_HANDLE_VALUE, TRUE,
     };
+    // windows-sys 0.59: the named-pipe ACCESS constants + ConnectNamedPipe live
+    // under Storage::FileSystem; CreateNamedPipeW + the type/mode/wait flags are
+    // under System::Pipes.
     use windows_sys::Win32::Storage::FileSystem::{
-        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GENERIC_WRITE,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, PIPE_ACCESS_INBOUND,
+        PIPE_ACCESS_OUTBOUND,
     };
     use windows_sys::Win32::System::Pipes::{
-        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_ACCESS_INBOUND,
-        PIPE_ACCESS_OUTBOUND, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
+        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE,
+        PIPE_TYPE_BYTE, PIPE_WAIT,
     };
     use windows_sys::Win32::System::Threading::{
         CreateProcessW, WaitForSingleObject, INFINITE, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
@@ -300,7 +305,7 @@ fn windows_main() {
             std::ptr::null(), // non-inheritable by default
             CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL,
-            0, // no template file
+            std::ptr::null_mut(), // hTemplateFile: HANDLE (no template)
         )
     };
 

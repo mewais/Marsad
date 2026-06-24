@@ -2089,6 +2089,7 @@ version = "0.1.0"
 dependencies = [
  "marsad-proto",
  "thiserror 1.0.69",
+ "uds_windows",
 ]
 
 [[package]]

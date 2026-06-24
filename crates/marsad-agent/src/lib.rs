@@ -1241,8 +1241,8 @@ impl Agent {
 
 /// Single-quote a string for POSIX shell.  Replaces `'` with `'\''`.
 /// Gated out of the coverage build (only used by `build_spawn_cmd` in the
-/// real-io path).
-#[cfg(not(coverage))]
+/// real-io path) and Windows-only builds (where the shim uses cmd.exe quoting).
+#[cfg(all(unix, not(coverage)))]
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
