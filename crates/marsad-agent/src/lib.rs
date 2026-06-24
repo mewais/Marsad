@@ -410,10 +410,20 @@ impl Agent {
                 use marsad_lifecycle::Container as _;
                 let cmd =
                     build_remote_spawn_cmd(REMOTE_RUNTIME_DIR, container_name, &spec.project, &argv);
+                eprintln!(
+                    "marsad-agent: remote spawn {container_name} on {:?} via {prefix:?}",
+                    spec.host_target
+                );
                 let mut c =
                     marsad_lifecycle::RemoteTmuxContainer::new(prefix, REMOTE_RUNTIME_DIR.to_string());
-                c.spawn(container_name, &cmd)
-                    .map_err(|e| AgentError::Spawn(format!("{e}")))
+                let result = c
+                    .spawn(container_name, &cmd)
+                    .map_err(|e| AgentError::Spawn(format!("{e}")));
+                match &result {
+                    Ok(()) => eprintln!("marsad-agent: remote spawn {container_name} OK"),
+                    Err(e) => eprintln!("marsad-agent: remote spawn {container_name} FAILED: {e:?}"),
+                }
+                result
             }
         }
     }

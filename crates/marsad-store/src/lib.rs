@@ -258,9 +258,20 @@ impl Backend for FsBackend {
             Ok(())
         }
 
+        // Only return keys that belong to THIS store. `data_root` can contain foreign
+        // files — on Windows the per-user install dir IS the data root, so the app
+        // binaries, `agent.sock`, `agent.log`, the uninstaller, and stray dirs sit
+        // alongside our key tree. Reading a socket file (`agent.sock`) errors and would
+        // abort restore (→ hosts/sessions silently fail to load). Filter to our own
+        // top-level categories so foreign files are never enumerated or read.
+        const STORE_CATEGORIES: [&str; 6] =
+            ["session", "host", "workspace", "transcript", "template", "meta"];
         let mut keys = Vec::new();
         walk(&self.root, &self.root, &mut keys)?;
-        keys.retain(|k| k.starts_with(prefix));
+        keys.retain(|k| {
+            let category = k.split(':').next().unwrap_or("");
+            STORE_CATEGORIES.contains(&category) && k.starts_with(prefix)
+        });
         Ok(keys)
     }
 

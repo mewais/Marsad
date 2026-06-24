@@ -524,13 +524,22 @@ impl RemoteTmuxContainer {
         cmd.status()
     }
 
-    /// Run a remote shell script via `<prefix> sh -c <script>`.
-    fn run_script(&self, script: &str) -> std::io::Result<std::process::ExitStatus> {
-        self.run_status(&[
-            "sh".to_string(),
-            "-c".to_string(),
-            script.to_string(),
-        ])
+    /// Run a remote shell script via `<prefix> sh -c <script>`, CAPTURING stderr so a
+    /// failed spawn can surface the remote diagnostic (e.g. `tmux: command not found`,
+    /// an ssh auth/Duo failure) instead of a bare exit code. Used by `spawn`.
+    fn run_script_output(&self, script: &str) -> std::io::Result<std::process::Output> {
+        let mut cmd = std::process::Command::new(&self.exec_prefix[0]);
+        cmd.args(&self.exec_prefix[1..])
+            .arg("sh")
+            .arg("-c")
+            .arg(script)
+            .stdin(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        cmd.output()
     }
 }
 
@@ -559,14 +568,17 @@ impl Container for RemoteTmuxContainer {
     /// an already-running session without spawning a duplicate.
     fn spawn(&mut self, name: &str, cmd: &str) -> Result<(), LifecycleError> {
         let script = self.spawn_script(name, cmd);
-        let st = self
-            .run_script(&script)
+        let out = self
+            .run_script_output(&script)
             .map_err(|e| LifecycleError::Spawn(format!("remote spawn {name}: {e}")))?;
-        if st.success() {
+        if out.status.success() {
             Ok(())
         } else {
+            let stderr = String::from_utf8_lossy(&out.stderr);
             Err(LifecycleError::Spawn(format!(
-                "remote spawn {name} failed: {st}"
+                "remote spawn {name} failed ({}): {}",
+                out.status,
+                stderr.trim()
             )))
         }
     }

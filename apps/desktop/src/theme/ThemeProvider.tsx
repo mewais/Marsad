@@ -93,7 +93,7 @@ export function ThemeProvider({
       // SURFACE_ALPHA is the single knob for how see-through the panels/sidebar/top
       // bar are (lower = more transparent). Buttons (--elev) sit a touch more solid
       // for legibility. --bg is fully transparent so the canvas is pure OS material.
-      const SURFACE_ALPHA = 0.3;
+      const SURFACE_ALPHA = 0.18;
       root.style.setProperty("--bg", "transparent");
       root.style.setProperty("--panel", withAlpha(tokens.panel, SURFACE_ALPHA));
       root.style.setProperty("--panel2", withAlpha(tokens.panel2, SURFACE_ALPHA * 0.8));

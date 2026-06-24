@@ -59,6 +59,14 @@ fn host_session_workspace_round_trip_across_restart() {
             .expect("persist workspace");
     }
 
+    // Foreign files in data_root (on Windows the install dir IS the data root: app
+    // binaries, agent.sock, agent.log, a stray `~` tree all land here). Restore must
+    // ignore them, NOT abort — earlier, reading agent.sock errored and dropped every
+    // host/session. Simulate the worst offenders.
+    std::fs::write(root.join("marsad-agent.exe"), b"MZ\x00\x00binary").unwrap();
+    std::fs::write(root.join("agent.log"), b"listening\n").unwrap();
+    std::fs::create_dir_all(root.join("~/.marsad/sessions/marsad-session-1")).unwrap();
+
     // ── Restore through a fresh Store (the "second run") ───────────────────────
     let store2 = Store::new(Box::new(FsBackend::new(&root)));
     let restored = store2.restore().expect("restore from disk");
