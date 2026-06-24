@@ -72,6 +72,16 @@ pub trait Transport {
     fn close(&mut self) -> Result<(), TransportError>;
 }
 
+/// Unified split handles for a connected session transport: a boxed writer (to
+/// claude's stdin) and a buffered boxed reader (claude's stdout). Boxing lets the
+/// agent treat local FIFO `File`s, Windows named-pipe `File`s, and remote ssh/wsl
+/// child pipes uniformly. For child-backed transports the boxed handles own their
+/// child process and kill it on drop, keeping it alive for the session's lifetime.
+pub type SplitIo = (
+    Box<dyn std::io::Write + Send>,
+    std::io::BufReader<Box<dyn std::io::Read + Send>>,
+);
+
 // ── LineFramer ─────────────────────────────────────────────────────────────────
 
 /// Pure newline-framing helper.
@@ -900,6 +910,80 @@ impl Transport for RemoteFifoTransport {
     }
 }
 
+/// A boxed writer that owns the remote `sh -c 'cat > in.fifo'` child and kills it
+/// on drop — so handing the writer to the agent keeps the remote pipe open for the
+/// session's lifetime (the child must outlive the transport struct).
+#[cfg(not(coverage))]
+struct RemoteChildWriter {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+}
+
+#[cfg(not(coverage))]
+impl std::io::Write for RemoteChildWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.stdin.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stdin.flush()
+    }
+}
+
+#[cfg(not(coverage))]
+impl Drop for RemoteChildWriter {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// A boxed reader that owns the remote `cat out.fifo` child and kills it on drop.
+#[cfg(not(coverage))]
+struct RemoteChildReader {
+    child: std::process::Child,
+    stdout: std::process::ChildStdout,
+}
+
+#[cfg(not(coverage))]
+impl std::io::Read for RemoteChildReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.stdout.read(buf)
+    }
+}
+
+#[cfg(not(coverage))]
+impl Drop for RemoteChildReader {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[cfg(not(coverage))]
+impl RemoteFifoTransport {
+    /// Consume this transport and return boxed split handles that each own their
+    /// remote child process (so the `ssh`/`wsl` `cat` pipes stay alive). Mirrors
+    /// `ClaudeFifoTransport::into_split`; returns `None` if not connected.
+    pub fn into_split(mut self) -> Option<SplitIo> {
+        let stdin = self.stdin.take()?;
+        let reader = self.reader.take()?;
+        let writer_child = self.writer_child.take()?;
+        let reader_child = self.reader_child.take()?;
+        let w = RemoteChildWriter {
+            child: writer_child,
+            stdin,
+        };
+        let r = RemoteChildReader {
+            child: reader_child,
+            stdout: reader.into_inner(),
+        };
+        Some((
+            Box::new(w) as Box<dyn std::io::Write + Send>,
+            std::io::BufReader::new(Box::new(r) as Box<dyn std::io::Read + Send>),
+        ))
+    }
+}
+
 // ── WslStdio ─────────────────────────────────────────────────────────────────
 //
 // Same two-mode pattern as SshStdio, but the child is `claude` running inside a
@@ -1112,9 +1196,12 @@ impl ClaudeFifoTransport {
     /// NDJSON output from `out.fifo`).  The two handles are independent:
     /// writing to the writer while the reader blocks on a read is safe
     /// because they refer to different kernel FIFO objects.
-    pub fn into_split(mut self) -> Option<(std::fs::File, std::io::BufReader<std::fs::File>)> {
+    pub fn into_split(mut self) -> Option<SplitIo> {
         match (self.writer.take(), self.reader.take()) {
-            (Some(w), Some(r)) => Some((w, r)),
+            (Some(w), Some(r)) => Some((
+                Box::new(w) as Box<dyn std::io::Write + Send>,
+                std::io::BufReader::new(Box::new(r.into_inner()) as Box<dyn std::io::Read + Send>),
+            )),
             _ => None,
         }
     }
@@ -1323,9 +1410,12 @@ impl ClaudeNamedPipeTransport {
     ///
     /// Returns `Some((writer, reader))` after a successful `connect()`; `None`
     /// otherwise.  Mirrors `ClaudeFifoTransport::into_split`.
-    pub fn into_split(mut self) -> Option<(std::fs::File, std::io::BufReader<std::fs::File>)> {
+    pub fn into_split(mut self) -> Option<SplitIo> {
         match (self.writer.take(), self.reader.take()) {
-            (Some(w), Some(r)) => Some((w, r)),
+            (Some(w), Some(r)) => Some((
+                Box::new(w) as Box<dyn std::io::Write + Send>,
+                std::io::BufReader::new(Box::new(r.into_inner()) as Box<dyn std::io::Read + Send>),
+            )),
             _ => None,
         }
     }
