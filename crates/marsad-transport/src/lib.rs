@@ -695,28 +695,38 @@ impl Transport for SshStdio {
 // builders are directly unit-tested; only the spawning `connect()` is gated out
 // of coverage with a stub that mirrors `SshStdio`.
 
-/// Build the argv for the reader process: `<prefix> cat <out_fifo>`.
+/// Build the argv to run a shell `script` on the remote via `prefix`.
+///
+/// `ssh` joins its trailing command args with spaces and re-runs them through the
+/// remote LOGIN shell, so the script must be ONE token (a `sh -c <script>` would be
+/// split by the join). `wsl.exe` (and anything preserving argv) needs an explicit
+/// `sh -c <script>`. Either way the chosen shell expands `$HOME` in the fifo paths.
+fn remote_shell_argv(prefix: &[String], script: &str) -> Vec<String> {
+    let mut argv = prefix.to_vec();
+    if prefix.first().map(String::as_str) == Some("ssh") {
+        argv.push(script.to_string());
+    } else {
+        argv.push("sh".to_string());
+        argv.push("-c".to_string());
+        argv.push(script.to_string());
+    }
+    argv
+}
+
+/// Build the argv for the reader process — streams claude's stdout from the remote
+/// FIFO via `cat <out_fifo>` (paths use `$HOME`, expanded by the remote shell).
 ///
 /// `prefix` is the opaque exec prefix (e.g. `["ssh", "host"]` or
 /// `["wsl.exe", "-d", "Ubuntu"]`).  The returned vector is ready to splat into a
 /// `Command` (`argv[0]` is the program, the rest are args).
 pub fn remote_fifo_reader_argv(prefix: &[String], out_fifo: &str) -> Vec<String> {
-    let mut argv = prefix.to_vec();
-    argv.push("cat".to_string());
-    argv.push(out_fifo.to_string());
-    argv
+    remote_shell_argv(prefix, &format!("cat {out_fifo}"))
 }
 
-/// Build the argv for the writer process: `<prefix> sh -c 'cat > <in_fifo>'`.
-///
-/// The shell script redirects `cat`'s stdout into the remote FIFO so that lines
-/// written to the spawned process's stdin land on claude's stdin.
+/// Build the argv for the writer process: `cat > <in_fifo>` through the remote
+/// shell, so lines written to the spawned process's stdin land on claude's stdin.
 pub fn remote_fifo_writer_argv(prefix: &[String], in_fifo: &str) -> Vec<String> {
-    let mut argv = prefix.to_vec();
-    argv.push("sh".to_string());
-    argv.push("-c".to_string());
-    argv.push(format!("cat > {in_fifo}"));
-    argv
+    remote_shell_argv(prefix, &format!("cat > {in_fifo}"))
 }
 
 /// Transport that bridges a remote session's FIFOs over an opaque `exec_prefix`.

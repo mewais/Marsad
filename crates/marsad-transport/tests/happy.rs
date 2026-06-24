@@ -151,15 +151,11 @@ fn drain_outbound_accumulates_and_clears() {
 fn remote_fifo_reader_argv_ssh_prefix() {
     use marsad_transport::remote_fifo_reader_argv;
     let prefix = vec!["ssh".to_string(), "user@host".to_string()];
-    let argv = remote_fifo_reader_argv(&prefix, "~/.marsad/sessions/s1/out.fifo");
+    let argv = remote_fifo_reader_argv(&prefix, "$HOME/.marsad/sessions/s1/out.fifo");
+    // ssh: single token (login shell re-parses + expands $HOME).
     assert_eq!(
         argv,
-        vec![
-            "ssh",
-            "user@host",
-            "cat",
-            "~/.marsad/sessions/s1/out.fifo",
-        ]
+        vec!["ssh", "user@host", "cat $HOME/.marsad/sessions/s1/out.fifo"]
     );
 }
 
@@ -167,16 +163,11 @@ fn remote_fifo_reader_argv_ssh_prefix() {
 fn remote_fifo_writer_argv_ssh_prefix() {
     use marsad_transport::remote_fifo_writer_argv;
     let prefix = vec!["ssh".to_string(), "user@host".to_string()];
-    let argv = remote_fifo_writer_argv(&prefix, "~/.marsad/sessions/s1/in.fifo");
+    let argv = remote_fifo_writer_argv(&prefix, "$HOME/.marsad/sessions/s1/in.fifo");
+    // ssh: single token carrying the redirect; login shell runs it.
     assert_eq!(
         argv,
-        vec![
-            "ssh",
-            "user@host",
-            "sh",
-            "-c",
-            "cat > ~/.marsad/sessions/s1/in.fifo",
-        ]
+        vec!["ssh", "user@host", "cat > $HOME/.marsad/sessions/s1/in.fifo"]
     );
 }
 
@@ -188,15 +179,17 @@ fn remote_fifo_reader_argv_wsl_prefix() {
         "-d".to_string(),
         "Ubuntu".to_string(),
     ];
-    let argv = remote_fifo_reader_argv(&prefix, "~/.marsad/sessions/s2/out.fifo");
+    let argv = remote_fifo_reader_argv(&prefix, "$HOME/.marsad/sessions/s2/out.fifo");
+    // wsl: explicit `sh -c` (argv preserved, no login-shell re-parse).
     assert_eq!(
         argv,
         vec![
             "wsl.exe",
             "-d",
             "Ubuntu",
-            "cat",
-            "~/.marsad/sessions/s2/out.fifo",
+            "sh",
+            "-c",
+            "cat $HOME/.marsad/sessions/s2/out.fifo",
         ]
     );
 }
@@ -209,7 +202,7 @@ fn remote_fifo_writer_argv_wsl_prefix() {
         "-d".to_string(),
         "Ubuntu".to_string(),
     ];
-    let argv = remote_fifo_writer_argv(&prefix, "~/.marsad/sessions/s2/in.fifo");
+    let argv = remote_fifo_writer_argv(&prefix, "$HOME/.marsad/sessions/s2/in.fifo");
     assert_eq!(
         argv,
         vec![
@@ -218,7 +211,7 @@ fn remote_fifo_writer_argv_wsl_prefix() {
             "Ubuntu",
             "sh",
             "-c",
-            "cat > ~/.marsad/sessions/s2/in.fifo",
+            "cat > $HOME/.marsad/sessions/s2/in.fifo",
         ]
     );
 }

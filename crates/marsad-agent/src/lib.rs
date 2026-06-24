@@ -1410,7 +1410,7 @@ fn shell_quote(s: &str) -> String {
 /// state (the FIFOs). The remote POSIX shell expands `~`. Only the real-IO path
 /// builds remote containers, so this is absent from the coverage build.
 #[cfg(not(coverage))]
-const REMOTE_RUNTIME_DIR: &str = "~/.marsad";
+const REMOTE_RUNTIME_DIR: &str = "$HOME/.marsad";
 
 /// POSIX single-quote for remote shell commands (the remote is always a POSIX
 /// `sh`, regardless of the local platform — so this is not `cfg(unix)`-gated).

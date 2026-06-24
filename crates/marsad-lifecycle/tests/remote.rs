@@ -6,7 +6,7 @@
 //! prefixes.  The real `Command::spawn()` is gated `#[cfg(not(coverage))]`, so
 //! these tests reach 100 % of the pure surface without an ssh/tmux/wsl.
 
-use marsad_lifecycle::RemoteTmuxContainer;
+use marsad_lifecycle::{remote_shell_argv, RemoteTmuxContainer};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -98,26 +98,26 @@ fn kill_argv_is_kill_session() {
 
 #[test]
 fn spawn_script_ssh_contains_all_stages() {
-    let c = RemoteTmuxContainer::new(ssh_prefix(), "~/.marsad");
+    let c = RemoteTmuxContainer::new(ssh_prefix(), "$HOME/.marsad");
     let s = c.spawn_script("marsad-a", "claude --resume id1");
 
-    // mkdir of the remote session dir
+    // mkdir of the remote session dir — UNQUOTED so $HOME expands remotely.
     assert!(
-        s.contains("mkdir -p '~/.marsad/sessions/marsad-a'"),
+        s.contains("mkdir -p $HOME/.marsad/sessions/marsad-a"),
         "missing mkdir stage: {s}"
     );
     // mkfifo (guarded) for both FIFOs
     assert!(
-        s.contains("[ -p '~/.marsad/sessions/marsad-a/in.fifo' ] || mkfifo '~/.marsad/sessions/marsad-a/in.fifo'"),
+        s.contains("[ -p $HOME/.marsad/sessions/marsad-a/in.fifo ] || mkfifo $HOME/.marsad/sessions/marsad-a/in.fifo"),
         "missing in.fifo mkfifo guard: {s}"
     );
     assert!(
-        s.contains("[ -p '~/.marsad/sessions/marsad-a/out.fifo' ] || mkfifo '~/.marsad/sessions/marsad-a/out.fifo'"),
+        s.contains("[ -p $HOME/.marsad/sessions/marsad-a/out.fifo ] || mkfifo $HOME/.marsad/sessions/marsad-a/out.fifo"),
         "missing out.fifo mkfifo guard: {s}"
     );
-    // idempotency guard before new-session
+    // idempotency guard before new-session; name unquoted (safe), cmd single-quoted.
     assert!(
-        s.contains("tmux has-session -t 'marsad-a' 2>/dev/null || tmux new-session -d -s 'marsad-a' 'claude --resume id1'"),
+        s.contains("tmux has-session -t marsad-a 2>/dev/null || tmux new-session -d -s marsad-a 'claude --resume id1'"),
         "missing idempotency guard + new-session: {s}"
     );
 }
@@ -149,15 +149,25 @@ fn spawn_script_escapes_single_quotes_in_cmd() {
     );
 }
 
+// ── remote_shell_argv: ssh re-parses (single token), wsl preserves (sh -c) ──────
+
 #[test]
-fn spawn_script_escapes_single_quotes_in_name() {
-    let c = RemoteTmuxContainer::new(ssh_prefix(), "~/.marsad");
-    let s = c.spawn_script("a'b", "cmd");
-    // The name appears (escaped) in both the dir path and the tmux args.
-    assert!(
-        s.contains(r#"-s 'a'\''b'"#),
-        "single quotes in name must be escaped: {s}"
-    );
+fn remote_shell_argv_ssh_passes_script_as_single_token() {
+    // ssh joins trailing args with spaces + re-runs via the login shell, so the
+    // whole script must be ONE token (no `sh -c`, which the join would split).
+    let argv = remote_shell_argv(&ssh_prefix(), "mkdir -p $HOME/x && echo hi");
+    assert_eq!(argv[0], "ssh");
+    assert_eq!(argv.last().unwrap(), "mkdir -p $HOME/x && echo hi");
+    assert!(!argv.contains(&"sh".to_string()), "ssh must not wrap in sh -c: {argv:?}");
+}
+
+#[test]
+fn remote_shell_argv_wsl_wraps_in_sh_c() {
+    // wsl.exe preserves argv (no re-parse), so the script needs an explicit shell.
+    let argv = remote_shell_argv(&wsl_prefix(), "mkdir -p $HOME/x");
+    assert_eq!(argv[argv.len() - 3], "sh");
+    assert_eq!(argv[argv.len() - 2], "-c");
+    assert_eq!(argv.last().unwrap(), "mkdir -p $HOME/x");
 }
 
 // ── edge prefixes / construction ───────────────────────────────────────────────

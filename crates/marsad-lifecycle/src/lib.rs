@@ -479,22 +479,42 @@ impl RemoteTmuxContainer {
     /// `name` and `cmd` are single-quoted for the remote shell (any embedded
     /// single quotes are escaped via the `'\''` idiom).
     pub fn spawn_script(&self, name: &str, cmd: &str) -> String {
+        // Paths are `$HOME/.marsad/...` + a safe `marsad-…` name — left UNQUOTED so the
+        // remote shell expands `$HOME` (single-quoting it, as before, created a literal
+        // `~`/`$HOME` dir on the local DrvFs mount → mkfifo "Operation not supported").
+        // Only the user command is single-quoted (it may contain spaces); tmux runs it
+        // through a shell that expands the `$HOME` redirections inside it.
         let dir = self.remote_session_dir(name);
         let in_fifo = self.in_fifo_path(name);
         let out_fifo = self.out_fifo_path(name);
-        let q_dir = sh_single_quote(&dir);
-        let q_in = sh_single_quote(&in_fifo);
-        let q_out = sh_single_quote(&out_fifo);
-        let q_name = sh_single_quote(name);
         let q_cmd = sh_single_quote(cmd);
         format!(
-            "mkdir -p {q_dir} && \
-             {{ [ -p {q_in} ] || mkfifo {q_in}; }} && \
-             {{ [ -p {q_out} ] || mkfifo {q_out}; }} && \
-             {{ tmux has-session -t {q_name} 2>/dev/null || \
-             tmux new-session -d -s {q_name} {q_cmd}; }}"
+            "mkdir -p {dir} && \
+             {{ [ -p {in_fifo} ] || mkfifo {in_fifo}; }} && \
+             {{ [ -p {out_fifo} ] || mkfifo {out_fifo}; }} && \
+             {{ tmux has-session -t {name} 2>/dev/null || \
+             tmux new-session -d -s {name} {q_cmd}; }}"
         )
     }
+}
+
+/// Build the argv to run a shell `script` on the remote via `exec_prefix`.
+///
+/// `ssh` joins its trailing command args with spaces and re-runs them through the
+/// remote LOGIN shell — so `sh -c '<script>'` gets split (the login shell re-parses
+/// it and only `sh -c <firstword>` survives). Pass the script as a SINGLE token
+/// instead; the login shell runs it (and expands `$HOME`). `wsl.exe` (and anything
+/// that preserves argv) needs an explicit `sh -c <script>`.
+pub fn remote_shell_argv(prefix: &[String], script: &str) -> Vec<String> {
+    let mut argv = prefix.to_vec();
+    if prefix.first().map(String::as_str) == Some("ssh") {
+        argv.push(script.to_string());
+    } else {
+        argv.push("sh".to_string());
+        argv.push("-c".to_string());
+        argv.push(script.to_string());
+    }
+    argv
 }
 
 /// Single-quote `s` for a POSIX shell, escaping embedded single quotes via the
@@ -528,12 +548,9 @@ impl RemoteTmuxContainer {
     /// failed spawn can surface the remote diagnostic (e.g. `tmux: command not found`,
     /// an ssh auth/Duo failure) instead of a bare exit code. Used by `spawn`.
     fn run_script_output(&self, script: &str) -> std::io::Result<std::process::Output> {
-        let mut cmd = std::process::Command::new(&self.exec_prefix[0]);
-        cmd.args(&self.exec_prefix[1..])
-            .arg("sh")
-            .arg("-c")
-            .arg(script)
-            .stdin(std::process::Stdio::null());
+        let argv = remote_shell_argv(&self.exec_prefix, script);
+        let mut cmd = std::process::Command::new(&argv[0]);
+        cmd.args(&argv[1..]).stdin(std::process::Stdio::null());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
