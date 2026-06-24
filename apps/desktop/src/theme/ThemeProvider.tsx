@@ -31,6 +31,15 @@ export interface ThemeContextValue {
 // Context
 // ---------------------------------------------------------------------------
 
+/** Convert a `#rrggbb` token to an `rgba()` string at the given alpha. */
+function withAlpha(hex: string, a: number): string {
+  const m = hex.replace("#", "");
+  const r = parseInt(m.slice(0, 2), 16);
+  const g = parseInt(m.slice(2, 4), 16);
+  const b = parseInt(m.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function useTheme(): ThemeContextValue {
@@ -81,10 +90,14 @@ export function ThemeProvider({
     // keep the opaque defaults (already set above) for a solid look.
     if (glass) {
       document.body.classList.add("glass");
+      // SURFACE_ALPHA is the single knob for how see-through the panels/sidebar/top
+      // bar are (lower = more transparent). Buttons (--elev) sit a touch more solid
+      // for legibility. --bg is fully transparent so the canvas is pure OS material.
+      const SURFACE_ALPHA = 0.3;
       root.style.setProperty("--bg", "transparent");
-      root.style.setProperty("--panel", tokens.glassChrome);
-      root.style.setProperty("--panel2", tokens.glassMain);
-      root.style.setProperty("--elev", tokens.glassChrome);
+      root.style.setProperty("--panel", withAlpha(tokens.panel, SURFACE_ALPHA));
+      root.style.setProperty("--panel2", withAlpha(tokens.panel2, SURFACE_ALPHA * 0.8));
+      root.style.setProperty("--elev", withAlpha(tokens.elev, SURFACE_ALPHA + 0.22));
       document.body.style.background = "transparent";
     } else {
       document.body.classList.remove("glass");

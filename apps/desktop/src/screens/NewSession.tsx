@@ -21,13 +21,6 @@ const POSTURES: { value: "ask" | "auto" | "full"; label: string; desc: string }[
     { value: "full", label: "Full autonomy", desc: "No gates" },
   ];
 
-const RECENT_DIRS = [
-  "~/projects/api",
-  "~/projects/dashboard",
-  "~/projects/worker-svc",
-  "~/projects/ml-pipeline",
-];
-
 // ---------------------------------------------------------------------------
 // Relative-time helper for session dropdown labels
 // ---------------------------------------------------------------------------
@@ -92,6 +85,21 @@ export function NewSession() {
   const [firstPrompt, setFirstPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
+
+  // Recent project dirs for the SELECTED host, derived from real session history
+  // (distinct projects, most-recent first). Empty when this host has no sessions.
+  const recentDirs = React.useMemo(() => {
+    const sessions = state.snapshot?.sessions ?? [];
+    const seen = new Set<string>();
+    const dirs: string[] = [];
+    for (const s of sessions) {
+      if (s.host_id === hostId && s.project && !seen.has(s.project)) {
+        seen.add(s.project);
+        dirs.push(s.project);
+      }
+    }
+    return dirs.slice(0, 6);
+  }, [state.snapshot, hostId]);
 
   // Resume state
   const [resume, setResume] = useState(false);
@@ -251,7 +259,8 @@ export function NewSession() {
               outline: "none",
             }}
           />
-          {/* Recent dir chips */}
+          {/* Recent dir chips — real per-host history, hidden when empty */}
+          {recentDirs.length > 0 && (
           <div
             style={{
               display: "flex",
@@ -260,7 +269,7 @@ export function NewSession() {
               marginTop: 8,
             }}
           >
-            {RECENT_DIRS.map((dir) => (
+            {recentDirs.map((dir) => (
               <span
                 key={dir}
                 className="mono"
@@ -282,6 +291,7 @@ export function NewSession() {
               </span>
             ))}
           </div>
+          )}
         </div>
 
         {/* ---- Host picker ---- */}

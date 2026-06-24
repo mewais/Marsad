@@ -725,7 +725,7 @@ function HostsTab() {
             >
               {h.status}
             </span>
-            {!h.is_local && (
+            {!h.is_local && h.status !== "Connected" && (
               <button
                 data-testid={`host-connect-${h.id}`}
                 onClick={() => handleConnect(h.target)}
@@ -828,6 +828,7 @@ function HostsTab() {
               data-testid="host-add-label"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
               placeholder="gpu-box-2"
               className="mono"
               style={{
@@ -859,6 +860,7 @@ function HostsTab() {
               data-testid="host-add-target"
               value={target}
               onChange={(e) => setTarget(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
               placeholder="user@10.0.0.5  ·  etx  ·  wsl:Ubuntu"
               className="mono"
               style={{

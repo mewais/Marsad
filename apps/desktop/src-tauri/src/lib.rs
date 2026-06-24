@@ -117,13 +117,26 @@ fn spawn_agent(socket_path: &str, data_root: &str) {
 
     eprintln!("marsad-desktop: spawning agent: {}", bin.display());
 
+    // Route the detached agent's stdout+stderr to <data_root>/agent.log so remote
+    // launch/spawn failures (ssh/wsl/tmux errors) are visible for diagnosis instead
+    // of vanishing into /dev/null. Falls back to null if the file can't be opened.
+    let _ = std::fs::create_dir_all(data_root);
+    let log_path = std::path::Path::new(data_root).join("agent.log");
+    let open_log = || {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .map(std::process::Stdio::from)
+            .unwrap_or_else(|_| std::process::Stdio::null())
+    };
+
     let mut cmd = std::process::Command::new(&bin);
     cmd.env("MARSAD_AGENT_ENDPOINT", socket_path)
         .env("MARSAD_DATA_ROOT", data_root)
-        // Detach from the app's stdio so agent output doesn't pollute the desktop.
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stdout(open_log())
+        .stderr(open_log());
     hide_console(&mut cmd); // no console flash on Windows
     let result = cmd.spawn();
 

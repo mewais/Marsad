@@ -513,27 +513,22 @@ fn interactive_ssh_args(target: &str) -> Vec<String> {
 /// Factored per-OS so each branch only compiles on its target.
 #[cfg(target_os = "windows")]
 fn launch_interactive_ssh(target: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
-    // Open a new VISIBLE console that STAYS open and shows ssh's output/prompts.
-    //   cmd /C start "Marsad login" cmd /K ssh <args…>
-    // - `start "title"` opens a separate window (the first quoted token is the
-    //   window title, not a program — required so the real program isn't mistaken
-    //   for a title).
-    // - `cmd /K` keeps that window open after ssh exits, so a failed/again-prompting
-    //   Duo login is visible instead of the window flashing shut (the "shows
-    //   nothing" bug). It also gives ssh a real console → a PTY for the prompt.
-    // We deliberately do NOT set CREATE_NO_WINDOW here — this window is intentional.
+    // Open a NEW visible console running `cmd /K ssh <args…>`:
+    // - CREATE_NEW_CONSOLE (0x10) guarantees a fresh, visible console window from a
+    //   GUI (windowless) process — more reliable than `cmd /C start`, which depended
+    //   on a parent console and was the "no terminal appears" bug.
+    // - `cmd /K` keeps the window open after ssh exits so a failed/re-prompting Duo
+    //   login stays visible, and gives ssh a real console (PTY) for the prompt.
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
     let mut cmd = Command::new("cmd.exe");
-    cmd.arg("/C")
-        .arg("start")
-        .arg("Marsad login")
-        .arg("cmd")
-        .arg("/K")
-        .arg("ssh");
+    cmd.arg("/K").arg("ssh");
     // interactive_ssh_args[0] is "ssh"; pass the rest as ssh's arguments.
     for a in interactive_ssh_args(target).into_iter().skip(1) {
         cmd.arg(a);
     }
+    cmd.creation_flags(CREATE_NEW_CONSOLE);
     cmd.spawn()
         .map(|_| ())
         .map_err(|e| format!("failed to open terminal: {e}"))
