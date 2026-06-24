@@ -245,7 +245,9 @@ fn windows_all_scenarios() {
     // ─────────────────────────────────────────────────────────────────────────
     eprintln!("\n[i11/s3] === Scenario 3: transport connect() ===");
     let mut transport = ClaudeNamedPipeTransport::for_session(&session_name);
-    transport.connect().expect("[s3] transport.connect() must succeed");
+    transport
+        .connect()
+        .expect("[s3] transport.connect() must succeed");
     eprintln!("[i11/s3] PASS — Named Pipe client ends opened.");
 
     // ─────────────────────────────────────────────────────────────────────────

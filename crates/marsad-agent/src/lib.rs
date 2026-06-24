@@ -358,11 +358,7 @@ impl Agent {
                 // in double quotes is always safe and produces correct cmd.exe syntax.
                 let _ = container_name; // suppress unused-variable on Windows
                 let claude_args = &argv[1..];
-                format!(
-                    "cd /d \"{}\" && claude {}",
-                    project,
-                    claude_args.join(" ")
-                )
+                format!("cd /d \"{}\" && claude {}", project, claude_args.join(" "))
             }
         } else {
             argv.join(" ")
@@ -990,16 +986,17 @@ impl Agent {
                                                 #[cfg(unix)]
                                                 let (mut writer, mut reader) = {
                                                     use marsad_transport::ClaudeFifoTransport;
-                                                    let mut fifo =
-                                                        match ClaudeFifoTransport::open(&session_dir) {
-                                                            Ok(f) => f,
-                                                            Err(e) => {
-                                                                eprintln!(
+                                                    let mut fifo = match ClaudeFifoTransport::open(
+                                                        &session_dir,
+                                                    ) {
+                                                        Ok(f) => f,
+                                                        Err(e) => {
+                                                            eprintln!(
                                                                     "marsad-agent: fifo open {sid}: {e}"
                                                                 );
-                                                                return;
-                                                            }
-                                                        };
+                                                            return;
+                                                        }
+                                                    };
                                                     if let Err(e) = fifo.connect() {
                                                         eprintln!(
                                                             "marsad-agent: fifo connect {sid}: {e}"
