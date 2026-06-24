@@ -29,6 +29,8 @@ vi.mock("../src/bridge/api", async (importOriginal) => {
     deleteWorkspace: vi.fn().mockResolvedValue(undefined),
     exportWorkspace: vi.fn().mockResolvedValue("{}"),
     importWorkspace: vi.fn().mockResolvedValue(undefined),
+    getSettings: vi.fn().mockResolvedValue({ ...original.DEFAULT_SETTINGS }),
+    setSettings: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -36,6 +38,15 @@ import * as api from "../src/bridge/api";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Re-set implementations that clearAllMocks wipes out.
+  (api.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ ...api.DEFAULT_SETTINGS });
+  (api.setSettings as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  (api.setWorkspace as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  (api.saveWorkspace as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  (api.duplicateWorkspace as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  (api.deleteWorkspace as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  (api.exportWorkspace as ReturnType<typeof vi.fn>).mockResolvedValue("{}");
+  (api.importWorkspace as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 });
 
 afterEach(() => {

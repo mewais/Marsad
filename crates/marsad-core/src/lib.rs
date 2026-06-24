@@ -27,6 +27,7 @@ pub mod discovery;
 pub use discovery::SessionSummary;
 pub use marsad_hosts::{Host, HostStatus};
 pub use marsad_proto::{LaunchMode, LaunchSpec, Posture};
+pub use marsad_store::{NotifPref, PersistedSettings};
 
 // ---------------------------------------------------------------------------
 // CoreError
@@ -592,6 +593,63 @@ impl Core {
     pub fn set_host_status(&mut self, id: &str, status: HostStatus) -> Vec<VmUpdate> {
         self.hosts.set_status(id, status);
         vec![VmUpdate::Hosts(self.hosts.list().to_vec())]
+    }
+
+    // -----------------------------------------------------------------------
+    // Settings commands
+    // -----------------------------------------------------------------------
+
+    /// Default sensible settings returned when nothing has been persisted yet.
+    fn default_settings() -> PersistedSettings {
+        use std::collections::HashMap;
+        use marsad_store::NotifPref;
+
+        let mut notif_prefs: HashMap<String, NotifPref> = HashMap::new();
+        for (ev, enabled, priority, sound, group, dnd) in [
+            ("gate_needs_you", true, "urgent", true, false, false),
+            ("gate_error", true, "urgent", true, false, false),
+            ("session_done", true, "normal", false, true, true),
+            ("session_started", false, "low", false, true, true),
+            ("host_unreachable", true, "urgent", true, false, false),
+        ] {
+            notif_prefs.insert(
+                ev.to_string(),
+                NotifPref {
+                    enabled,
+                    priority: priority.to_string(),
+                    sound,
+                    group,
+                    dnd,
+                },
+            );
+        }
+        PersistedSettings {
+            notif_prefs,
+            play_sound: true,
+            group_alerts: true,
+            do_not_disturb: false,
+            background: "Gradient".to_string(),
+            restore_on_launch: true,
+            confirm_before_stop: true,
+            default_model: "claude-sonnet-4-6".to_string(),
+            default_posture: "ask".to_string(),
+        }
+    }
+
+    /// Return the stored settings, or sensible defaults if nothing has been persisted yet.
+    pub fn get_settings(&self) -> PersistedSettings {
+        self.store
+            .restore()
+            .ok()
+            .and_then(|r| r.settings)
+            .unwrap_or_else(Self::default_settings)
+    }
+
+    /// Persist the app settings blob.
+    pub fn set_settings(&mut self, s: &PersistedSettings) -> Result<(), CoreError> {
+        self.store
+            .upsert_settings(s)
+            .map_err(|e| CoreError::Agent(format!("{e:?}")))
     }
 
     // -----------------------------------------------------------------------

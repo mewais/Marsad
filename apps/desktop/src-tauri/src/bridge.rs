@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 use tauri::State;
 
-use marsad_core::{Core, CoreError, LaunchMode, LaunchSpec, Posture, SessionSummary};
+use marsad_core::{Core, CoreError, LaunchMode, LaunchSpec, PersistedSettings, Posture, SessionSummary};
 use marsad_gates::{Decision, DecisionId, GateDecision};
 use marsad_viewmodel::AppSnapshot;
 
@@ -319,6 +319,76 @@ pub fn import_workspace(
     };
     crate::events::emit_updates(&app, updates);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Settings helpers
+// ---------------------------------------------------------------------------
+
+/// Build the sensible default `PersistedSettings` used by mock mode and when
+/// no settings have been persisted yet. Mirrors `Core::default_settings()` so
+/// mock and live modes return identical shapes.
+fn default_settings_for_mock() -> PersistedSettings {
+    use marsad_core::NotifPref;
+    use std::collections::HashMap;
+
+    let mut notif_prefs: HashMap<String, NotifPref> = HashMap::new();
+    for (ev, enabled, priority, sound, group, dnd) in [
+        ("gate_needs_you", true, "urgent", true, false, false),
+        ("gate_error", true, "urgent", true, false, false),
+        ("session_done", true, "normal", false, true, true),
+        ("session_started", false, "low", false, true, true),
+        ("host_unreachable", true, "urgent", true, false, false),
+    ] {
+        notif_prefs.insert(
+            ev.to_string(),
+            NotifPref {
+                enabled,
+                priority: priority.to_string(),
+                sound,
+                group,
+                dnd,
+            },
+        );
+    }
+    PersistedSettings {
+        notif_prefs,
+        play_sound: true,
+        group_alerts: true,
+        do_not_disturb: false,
+        background: "Gradient".to_string(),
+        restore_on_launch: true,
+        confirm_before_stop: true,
+        default_model: "claude-sonnet-4-6".to_string(),
+        default_posture: "ask".to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Settings commands
+// ---------------------------------------------------------------------------
+
+/// Return the current persisted app settings (or sensible defaults if none saved yet).
+#[tauri::command(rename_all = "snake_case")]
+pub fn get_settings(state: State<'_, ManagedState>) -> Result<PersistedSettings, String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    match &*guard {
+        AppState::Live(core) => Ok(core.get_settings()),
+        AppState::Mock(_) => Ok(default_settings_for_mock()),
+    }
+}
+
+/// Persist the app settings blob.
+#[tauri::command(rename_all = "snake_case")]
+pub fn set_settings(
+    state: State<'_, ManagedState>,
+    settings: PersistedSettings,
+) -> Result<(), String> {
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    match &mut *guard {
+        AppState::Live(core) => core.set_settings(&settings).map_err(map_err),
+        AppState::Mock(_) => Ok(()),
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -10,8 +10,8 @@
 //!   Restored, StoreError
 
 use marsad_store::{
-    MemoryBackend, PersistedHost, PersistedSession, Restored, Store, StoreError, TranscriptEntry,
-    Workspace,
+    MemoryBackend, NotifPref, PersistedHost, PersistedSession, PersistedSettings, Restored, Store,
+    StoreError, TranscriptEntry, Workspace,
 };
 
 // ---------------------------------------------------------------------------
@@ -327,6 +327,7 @@ fn restored_derives_clone_eq_debug() {
         workspaces: vec![],
         active_ws: None,
         transcripts: std::collections::HashMap::new(),
+        settings: None,
     };
     let r2 = r.clone();
     assert_eq!(r, r2);
@@ -407,4 +408,83 @@ fn delete_workspace_noop_when_absent() {
     store
         .delete_workspace("does-not-exist")
         .expect("delete_workspace on absent id must succeed");
+}
+
+// ---------------------------------------------------------------------------
+// upsert_settings / restore round-trip
+// ---------------------------------------------------------------------------
+
+fn make_notif_pref(enabled: bool, priority: &str) -> NotifPref {
+    NotifPref {
+        enabled,
+        priority: priority.to_string(),
+        sound: true,
+        group: false,
+        dnd: false,
+    }
+}
+
+fn make_settings() -> PersistedSettings {
+    let mut notif_prefs = std::collections::HashMap::new();
+    notif_prefs.insert("gate_needs_you".to_string(), make_notif_pref(true, "urgent"));
+    notif_prefs.insert("session_done".to_string(), make_notif_pref(false, "normal"));
+    PersistedSettings {
+        notif_prefs,
+        play_sound: true,
+        group_alerts: false,
+        do_not_disturb: true,
+        background: "Gradient".to_string(),
+        restore_on_launch: true,
+        confirm_before_stop: false,
+        default_model: "claude-sonnet-4-6".to_string(),
+        default_posture: "ask".to_string(),
+    }
+}
+
+#[test]
+fn upsert_settings_then_restore_returns_settings() {
+    let mut store = fresh_store();
+    let s = make_settings();
+    store.upsert_settings(&s).expect("upsert_settings must succeed");
+    let restored = store.restore().expect("restore must succeed");
+    let got = restored.settings.expect("settings must be present after upsert");
+    assert_eq!(got, s);
+}
+
+#[test]
+fn upsert_settings_overwrite_updates_fields() {
+    let mut store = fresh_store();
+    let s1 = make_settings();
+    store.upsert_settings(&s1).expect("first upsert");
+    let mut s2 = make_settings();
+    s2.default_model = "claude-opus-4-8".to_string();
+    s2.do_not_disturb = false;
+    store.upsert_settings(&s2).expect("second upsert");
+    let restored = store.restore().expect("restore");
+    let got = restored.settings.expect("settings present");
+    assert_eq!(got.default_model, "claude-opus-4-8");
+    assert!(!got.do_not_disturb);
+}
+
+#[test]
+fn restore_empty_store_has_no_settings() {
+    let store = fresh_store();
+    let restored = store.restore().expect("restore");
+    assert!(restored.settings.is_none(), "no settings in empty store");
+}
+
+#[test]
+fn persisted_settings_derives_clone_eq_debug() {
+    let s = make_settings();
+    let s2 = s.clone();
+    assert_eq!(s, s2);
+    let _ = format!("{s:?}");
+}
+
+#[test]
+fn notif_pref_derives_clone_eq_debug() {
+    let p = make_notif_pref(true, "urgent");
+    let p2 = p.clone();
+    assert_eq!(p, p2);
+    let _ = format!("{p:?}");
 }

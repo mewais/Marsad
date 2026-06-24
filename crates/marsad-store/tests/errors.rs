@@ -11,8 +11,8 @@
 //! - All StoreError variants implement Debug (spec: derive Debug)
 
 use marsad_store::{
-    Backend, BackendOp, MemoryBackend, PersistedHost, PersistedSession, Store, StoreError,
-    Workspace,
+    Backend, BackendOp, MemoryBackend, NotifPref, PersistedHost, PersistedSession,
+    PersistedSettings, Store, StoreError, Workspace,
 };
 
 // ---------------------------------------------------------------------------
@@ -459,4 +459,53 @@ fn backend_delete_failure_propagates_from_delete_workspace() {
         Err(StoreError::Backend(_)) => {}
         other => panic!("expected Backend error from delete failure, got: {other:?}"),
     }
+}
+
+#[test]
+fn backend_write_failure_propagates_from_upsert_settings() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::Write);
+    let mut store = Store::new(Box::new(backend));
+    let settings = PersistedSettings {
+        notif_prefs: std::collections::HashMap::new(),
+        play_sound: true,
+        group_alerts: false,
+        do_not_disturb: false,
+        background: "Gradient".to_string(),
+        restore_on_launch: true,
+        confirm_before_stop: true,
+        default_model: "claude-sonnet-4-6".to_string(),
+        default_posture: "ask".to_string(),
+    };
+    match store.upsert_settings(&settings) {
+        Err(StoreError::Backend(_)) => {}
+        other => panic!("expected Backend error from write failure, got: {other:?}"),
+    }
+}
+
+// Cover NotifPref and PersistedSettings in error module (derive coverage)
+#[test]
+fn notif_pref_and_persisted_settings_are_debug() {
+    let p = NotifPref {
+        enabled: true,
+        priority: "urgent".to_string(),
+        sound: true,
+        group: false,
+        dnd: false,
+    };
+    let _ = format!("{p:?}");
+    let mut notif_prefs = std::collections::HashMap::new();
+    notif_prefs.insert("gate_needs_you".to_string(), p);
+    let s = PersistedSettings {
+        notif_prefs,
+        play_sound: true,
+        group_alerts: true,
+        do_not_disturb: false,
+        background: "Desktop".to_string(),
+        restore_on_launch: false,
+        confirm_before_stop: true,
+        default_model: "claude-opus-4-8".to_string(),
+        default_posture: "full".to_string(),
+    };
+    let _ = format!("{s:?}");
 }

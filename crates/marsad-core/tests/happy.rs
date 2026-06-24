@@ -10,7 +10,7 @@
 //! These tests WILL fail to compile until the code-agent implements `marsad_core`.
 //! That is the expected tests-first compile-failure signal.
 
-use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, Posture, VmUpdate};
+use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, NotifPref, PersistedSettings, Posture, VmUpdate};
 use marsad_gates::{approve, Gate};
 use marsad_transport::LoopbackFake;
 use marsad_viewmodel::SlashCmd;
@@ -1453,4 +1453,81 @@ fn save_workspace_overwrites_same_id() {
         vec!["s2"],
         "session_ids must be from the second save"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Settings commands — get_settings / set_settings
+// ---------------------------------------------------------------------------
+
+fn make_settings() -> PersistedSettings {
+    let mut notif_prefs = std::collections::HashMap::new();
+    notif_prefs.insert(
+        "gate_needs_you".to_string(),
+        NotifPref {
+            enabled: true,
+            priority: "urgent".to_string(),
+            sound: true,
+            group: false,
+            dnd: false,
+        },
+    );
+    PersistedSettings {
+        notif_prefs,
+        play_sound: true,
+        group_alerts: false,
+        do_not_disturb: false,
+        background: "Gradient".to_string(),
+        restore_on_launch: true,
+        confirm_before_stop: true,
+        default_model: "claude-sonnet-4-6".to_string(),
+        default_posture: "ask".to_string(),
+    }
+}
+
+#[test]
+fn get_settings_returns_defaults_when_empty() {
+    let core = core_with_backend(MemoryBackend::new());
+    let s = core.get_settings();
+    // Defaults: sonnet model, ask posture, restore_on_launch true
+    assert_eq!(s.default_model, "claude-sonnet-4-6");
+    assert_eq!(s.default_posture, "ask");
+    assert!(s.restore_on_launch);
+    // All five events must have a default pref
+    assert!(s.notif_prefs.contains_key("gate_needs_you"));
+    assert!(s.notif_prefs.contains_key("gate_error"));
+    assert!(s.notif_prefs.contains_key("session_done"));
+    assert!(s.notif_prefs.contains_key("session_started"));
+    assert!(s.notif_prefs.contains_key("host_unreachable"));
+}
+
+#[test]
+fn set_settings_then_get_settings_round_trips() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let s = make_settings();
+    core.set_settings(&s).expect("set_settings must succeed");
+    let got = core.get_settings();
+    assert_eq!(got, s);
+}
+
+#[test]
+fn set_settings_store_write_failure_errors() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::Write);
+    let mut core = core_with_backend(backend);
+    let s = make_settings();
+    assert!(
+        core.set_settings(&s).is_err(),
+        "write failure must surface as Err"
+    );
+}
+
+#[test]
+fn set_settings_overwrite_updates_model() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let mut s = make_settings();
+    core.set_settings(&s).expect("first set");
+    s.default_model = "claude-opus-4-8".to_string();
+    core.set_settings(&s).expect("second set");
+    let got = core.get_settings();
+    assert_eq!(got.default_model, "claude-opus-4-8");
 }

@@ -5,7 +5,7 @@
  * mock fixture so Vitest + Playwright work without the Rust side.
  */
 
-import type { AppSnapshot, SessionSummary } from "./types";
+import type { AppSnapshot, SessionSummary, Settings } from "./types";
 import { MOCK_SNAPSHOT } from "./mockFixture";
 
 // ---------------------------------------------------------------------------
@@ -37,6 +37,28 @@ async function getInvoke(): Promise<InvokeFn> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke as InvokeFn;
 }
+
+// ---------------------------------------------------------------------------
+// Default settings (browser/test mode — mirrors Core::default_settings())
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_SETTINGS: Settings = {
+  notif_prefs: {
+    gate_needs_you: { enabled: true,  priority: "urgent", sound: true,  group: false, dnd: false },
+    gate_error:     { enabled: true,  priority: "urgent", sound: true,  group: false, dnd: false },
+    session_done:   { enabled: true,  priority: "normal", sound: false, group: true,  dnd: true  },
+    session_started:{ enabled: false, priority: "low",    sound: false, group: true,  dnd: true  },
+    host_unreachable:{ enabled: true, priority: "urgent", sound: true,  group: false, dnd: false },
+  },
+  play_sound: true,
+  group_alerts: true,
+  do_not_disturb: false,
+  background: "Gradient",
+  restore_on_launch: true,
+  confirm_before_stop: true,
+  default_model: "claude-sonnet-4-6",
+  default_posture: "ask",
+};
 
 // ---------------------------------------------------------------------------
 // Mock state (for browser/test mode — mirrors Rust MockState mutations)
@@ -143,6 +165,20 @@ export async function runSlash(id: string, cmd: string): Promise<void> {
   if (!isTauri()) return;
   const invoke = await getInvoke();
   await invoke("run_slash", { id, cmd });
+}
+
+/** Return the current persisted app settings, or defaults if not yet saved. */
+export async function getSettings(): Promise<Settings> {
+  if (!isTauri()) return { ...DEFAULT_SETTINGS };
+  const invoke = await getInvoke();
+  return invoke("get_settings") as Promise<Settings>;
+}
+
+/** Persist the app settings blob. */
+export async function setSettings(settings: Settings): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("set_settings", { settings });
 }
 
 export async function getAutostart(): Promise<boolean> {

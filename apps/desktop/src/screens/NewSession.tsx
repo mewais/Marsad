@@ -3,7 +3,7 @@
  */
 import React, { useState, useEffect } from "react";
 import { useVm } from "../bridge/useVm";
-import { launchSession, listSessions } from "../bridge/api";
+import { launchSession, listSessions, getSettings } from "../bridge/api";
 import type { SessionSummary } from "../bridge/types";
 import { MODELS, DEFAULT_MODEL } from "../bridge/models";
 import { Modal } from "../components/Modal";
@@ -78,6 +78,17 @@ export function NewSession() {
   );
   const [model, setModel] = useState<string>(DEFAULT_MODEL);
   const [posture, setPosture] = useState<"ask" | "auto" | "full">("auto");
+
+  // Initialize model + posture from persisted session defaults (once on mount).
+  useEffect(() => {
+    getSettings()
+      .then((s) => {
+        setModel(s.default_model);
+        const p = s.default_posture as "ask" | "auto" | "full";
+        if (p === "ask" || p === "auto" || p === "full") setPosture(p);
+      })
+      .catch(() => {/* keep defaults on error */});
+  }, []);
   const [firstPrompt, setFirstPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);

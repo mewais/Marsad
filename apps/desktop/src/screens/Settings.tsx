@@ -3,22 +3,18 @@
  *
  * Tab nav is local component state (no store field for active settings tab).
  * Theme and glass are wired to ThemeProvider via useTheme().
- * Host add/remove: add-remote form uses local state + dispatch SET_SCREEN
- * (no dedicated backend command yet — NOTE: backend pending for addHost/removeHost).
- * Notification preferences: all local state, NOTE: backend command pending.
- * Background picker: local state only, NOTE: backend command pending.
- * Behavior toggles (restore-on-launch, confirm-before-stop): local state,
- * NOTE: backend command pending.
- * Session defaults (model + posture): local state,
- * NOTE: backend command pending for persisting session defaults.
+ * Host add/remove: add-remote form uses real addHost/removeHost commands.
+ * All other settings are persisted via get_settings / set_settings on mount
+ * and on every change.
  */
 
 import React, { useState, useEffect } from "react";
 import { useVm } from "../bridge/useVm";
 import { useTheme } from "../theme/ThemeProvider";
 import { Toggle } from "../components/Toggle";
-import { MODELS as MODEL_LIST, DEFAULT_MODEL } from "../bridge/models";
-import { getAutostart, setAutostart, addHost, removeHost } from "../bridge/api";
+import { MODELS as MODEL_LIST } from "../bridge/models";
+import { getAutostart, setAutostart, addHost, removeHost, getSettings, setSettings, DEFAULT_SETTINGS } from "../bridge/api";
+import type { Settings, NotifPref } from "../bridge/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,13 +30,8 @@ type NotifEvent =
   | "session_started"
   | "host_unreachable";
 
-interface NotifPref {
-  enabled: boolean;
-  priority: "urgent" | "normal" | "low";
-  sound: boolean;
-  group: boolean;
-  dnd: boolean;
-}
+// Re-export NotifPref type alias to avoid TS shadowing (imported above)
+type LocalNotifPref = NotifPref;
 
 const NOTIF_EVENT_LABELS: Record<NotifEvent, string> = {
   gate_needs_you: "Gate needs you",
@@ -58,13 +49,7 @@ const NOTIF_EVENT_DESCS: Record<NotifEvent, string> = {
   host_unreachable: "A host stops responding",
 };
 
-const DEFAULT_NOTIF_PREFS: Record<NotifEvent, NotifPref> = {
-  gate_needs_you: { enabled: true, priority: "urgent", sound: true, group: false, dnd: false },
-  gate_error: { enabled: true, priority: "urgent", sound: true, group: false, dnd: false },
-  session_done: { enabled: true, priority: "normal", sound: false, group: true, dnd: true },
-  session_started: { enabled: false, priority: "low", sound: false, group: true, dnd: true },
-  host_unreachable: { enabled: true, priority: "urgent", sound: true, group: false, dnd: false },
-};
+const DEFAULT_NOTIF_PREFS: Record<NotifEvent, LocalNotifPref> = DEFAULT_SETTINGS.notif_prefs as Record<NotifEvent, LocalNotifPref>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -244,22 +229,33 @@ const POPUP_SPECS = [
   },
 ];
 
-function NotificationsTab() {
-  // NOTE: backend command pending — notif prefs are local state only
-  const [prefs, setPrefs] = useState<Record<NotifEvent, NotifPref>>(
-    DEFAULT_NOTIF_PREFS
-  );
-  // Delivery globals (sound, group, dnd) — local state
-  const [playSound, setPlaySound] = useState(true);
-  const [groupAlerts, setGroupAlerts] = useState(true);
-  const [doNotDisturb, setDoNotDisturb] = useState(false);
+interface NotificationsTabProps {
+  prefs: Record<NotifEvent, LocalNotifPref>;
+  onPrefsChange: (prefs: Record<NotifEvent, LocalNotifPref>) => void;
+  playSound: boolean;
+  onPlaySoundChange: (v: boolean) => void;
+  groupAlerts: boolean;
+  onGroupAlertsChange: (v: boolean) => void;
+  doNotDisturb: boolean;
+  onDoNotDisturbChange: (v: boolean) => void;
+}
 
-  function setPref<K extends keyof NotifPref>(
+function NotificationsTab({
+  prefs,
+  onPrefsChange,
+  playSound,
+  onPlaySoundChange,
+  groupAlerts,
+  onGroupAlertsChange,
+  doNotDisturb,
+  onDoNotDisturbChange,
+}: NotificationsTabProps) {
+  function setPref<K extends keyof LocalNotifPref>(
     ev: NotifEvent,
     key: K,
-    val: NotifPref[K]
+    val: LocalNotifPref[K]
   ) {
-    setPrefs((p) => ({ ...p, [ev]: { ...p[ev], [key]: val } }));
+    onPrefsChange({ ...prefs, [ev]: { ...prefs[ev], [key]: val } });
   }
 
   return (
@@ -346,7 +342,7 @@ function NotificationsTab() {
               Audible alerts only.
             </div>
           </div>
-          <Toggle checked={playSound} onChange={setPlaySound} />
+          <Toggle checked={playSound} onChange={onPlaySoundChange} />
         </div>
 
         <div
@@ -366,7 +362,7 @@ function NotificationsTab() {
               Collapses repeated "session done" notifications.
             </div>
           </div>
-          <Toggle checked={groupAlerts} onChange={setGroupAlerts} />
+          <Toggle checked={groupAlerts} onChange={onGroupAlertsChange} />
         </div>
 
         <div
@@ -386,7 +382,7 @@ function NotificationsTab() {
               DND-off respects the dashboard-dnd-bypass tile.
             </div>
           </div>
-          <Toggle checked={doNotDisturb} onChange={setDoNotDisturb} />
+          <Toggle checked={doNotDisturb} onChange={onDoNotDisturbChange} />
         </div>
 
         <div
@@ -874,11 +870,14 @@ const POSTURES: Array<{ key: "ask" | "auto" | "full"; label: string; desc: strin
   },
 ];
 
-function SessionDefaultsTab() {
-  // NOTE: backend command pending for persisting session defaults
-  const [model, setModel] = useState(DEFAULT_MODEL);
-  const [posture, setPosture] = useState<"ask" | "auto" | "full">("ask");
+interface SessionDefaultsTabProps {
+  model: string;
+  onModelChange: (m: string) => void;
+  posture: "ask" | "auto" | "full";
+  onPostureChange: (p: "ask" | "auto" | "full") => void;
+}
 
+function SessionDefaultsTab({ model, onModelChange, posture, onPostureChange }: SessionDefaultsTabProps) {
   return (
     <div style={{ maxWidth: 860, display: "flex", flexDirection: "column", gap: 22 }}>
       {/* Default model */}
@@ -891,7 +890,7 @@ function SessionDefaultsTab() {
               <button
                 key={m.key}
                 data-testid={`defaults-model-${m.key}`}
-                onClick={() => setModel(m.key)}
+                onClick={() => onModelChange(m.key)}
                 style={{
                   fontFamily: "inherit",
                   fontSize: 14.5,
@@ -922,7 +921,7 @@ function SessionDefaultsTab() {
               <div
                 key={p.key}
                 data-testid={`defaults-posture-${p.key}`}
-                onClick={() => setPosture(p.key)}
+                onClick={() => onPostureChange(p.key)}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -986,13 +985,24 @@ type Background = "Gradient" | "Custom image" | "Desktop";
 
 const BG_OPTIONS: Background[] = ["Gradient", "Custom image", "Desktop"];
 
-function GeneralTab() {
+interface GeneralTabProps {
+  background: string;
+  onBackgroundChange: (bg: string) => void;
+  restoreOnLaunch: boolean;
+  onRestoreOnLaunchChange: (v: boolean) => void;
+  confirmBeforeStop: boolean;
+  onConfirmBeforeStopChange: (v: boolean) => void;
+}
+
+function GeneralTab({
+  background,
+  onBackgroundChange,
+  restoreOnLaunch,
+  onRestoreOnLaunchChange,
+  confirmBeforeStop,
+  onConfirmBeforeStopChange,
+}: GeneralTabProps) {
   const { theme, glass, toggleTheme, toggleGlass } = useTheme();
-  // NOTE: background picker local state — backend command pending
-  const [background, setBackground] = useState<Background>("Gradient");
-  // NOTE: behavior toggles local state — backend command pending
-  const [restoreOnLaunch, setRestoreOnLaunch] = useState(true);
-  const [confirmBeforeStop, setConfirmBeforeStop] = useState(true);
   const [startMarsad, setStartMarsad] = useState(false);
 
   // Initialize autostart toggle from backend on mount
@@ -1046,7 +1056,7 @@ function GeneralTab() {
               <button
                 key={bg}
                 data-testid={`general-bg-${bg.toLowerCase().replace(/\s+/g, "-")}`}
-                onClick={() => setBackground(bg)}
+                onClick={() => onBackgroundChange(bg)}
                 style={{
                   fontFamily: "inherit",
                   fontSize: 14.5,
@@ -1194,7 +1204,7 @@ function GeneralTab() {
               </div>
             </div>
             <div data-testid="general-restore-toggle-wrap">
-              <Toggle checked={restoreOnLaunch} onChange={setRestoreOnLaunch} />
+              <Toggle checked={restoreOnLaunch} onChange={onRestoreOnLaunchChange} />
             </div>
           </div>
 
@@ -1218,7 +1228,7 @@ function GeneralTab() {
               </div>
             </div>
             <div data-testid="general-confirm-toggle-wrap">
-              <Toggle checked={confirmBeforeStop} onChange={setConfirmBeforeStop} />
+              <Toggle checked={confirmBeforeStop} onChange={onConfirmBeforeStopChange} />
             </div>
           </div>
 
@@ -1252,13 +1262,97 @@ function GeneralTab() {
 }
 
 // ---------------------------------------------------------------------------
-// Settings root
+// Settings root — owns all persisted settings state + persistence
 // ---------------------------------------------------------------------------
 
 const TABS: SettingsTab[] = ["Notifications", "Hosts", "Session defaults", "General"];
 
 export function Settings() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("Notifications");
+
+  // All persisted settings state lifted here so we can load once and save on change.
+  const [prefs, setPrefs] = useState<Record<NotifEvent, LocalNotifPref>>(DEFAULT_NOTIF_PREFS);
+  const [playSound, setPlaySound] = useState(DEFAULT_SETTINGS.play_sound);
+  const [groupAlerts, setGroupAlerts] = useState(DEFAULT_SETTINGS.group_alerts);
+  const [doNotDisturb, setDoNotDisturb] = useState(DEFAULT_SETTINGS.do_not_disturb);
+  const [background, setBackground] = useState(DEFAULT_SETTINGS.background);
+  const [restoreOnLaunch, setRestoreOnLaunch] = useState(DEFAULT_SETTINGS.restore_on_launch);
+  const [confirmBeforeStop, setConfirmBeforeStop] = useState(DEFAULT_SETTINGS.confirm_before_stop);
+  const [defaultModel, setDefaultModel] = useState(DEFAULT_SETTINGS.default_model);
+  const [defaultPosture, setDefaultPosture] = useState<"ask" | "auto" | "full">(DEFAULT_SETTINGS.default_posture as "ask" | "auto" | "full");
+
+  // Load settings from the backend once on mount.
+  useEffect(() => {
+    getSettings()
+      .then((s) => {
+        const p = s.notif_prefs as Record<NotifEvent, LocalNotifPref>;
+        setPrefs({ ...DEFAULT_NOTIF_PREFS, ...p });
+        setPlaySound(s.play_sound);
+        setGroupAlerts(s.group_alerts);
+        setDoNotDisturb(s.do_not_disturb);
+        setBackground(s.background);
+        setRestoreOnLaunch(s.restore_on_launch);
+        setConfirmBeforeStop(s.confirm_before_stop);
+        setDefaultModel(s.default_model);
+        setDefaultPosture(s.default_posture as "ask" | "auto" | "full");
+      })
+      .catch((err) => console.error("[Settings] getSettings failed:", err));
+  }, []);
+
+  // Helper: persist current state.
+  function persist(patch: Partial<Settings>) {
+    const next: Settings = {
+      notif_prefs: prefs,
+      play_sound: playSound,
+      group_alerts: groupAlerts,
+      do_not_disturb: doNotDisturb,
+      background,
+      restore_on_launch: restoreOnLaunch,
+      confirm_before_stop: confirmBeforeStop,
+      default_model: defaultModel,
+      default_posture: defaultPosture,
+      ...patch,
+    };
+    setSettings(next).catch((err) => console.error("[Settings] setSettings failed:", err));
+  }
+
+  // Setters that also persist.
+  function handlePrefsChange(p: Record<NotifEvent, LocalNotifPref>) {
+    setPrefs(p);
+    persist({ notif_prefs: p });
+  }
+  function handlePlaySoundChange(v: boolean) {
+    setPlaySound(v);
+    persist({ play_sound: v });
+  }
+  function handleGroupAlertsChange(v: boolean) {
+    setGroupAlerts(v);
+    persist({ group_alerts: v });
+  }
+  function handleDoNotDisturbChange(v: boolean) {
+    setDoNotDisturb(v);
+    persist({ do_not_disturb: v });
+  }
+  function handleBackgroundChange(bg: string) {
+    setBackground(bg);
+    persist({ background: bg });
+  }
+  function handleRestoreOnLaunchChange(v: boolean) {
+    setRestoreOnLaunch(v);
+    persist({ restore_on_launch: v });
+  }
+  function handleConfirmBeforeStopChange(v: boolean) {
+    setConfirmBeforeStop(v);
+    persist({ confirm_before_stop: v });
+  }
+  function handleDefaultModelChange(m: string) {
+    setDefaultModel(m);
+    persist({ default_model: m });
+  }
+  function handleDefaultPostureChange(p: "ask" | "auto" | "full") {
+    setDefaultPosture(p);
+    persist({ default_posture: p });
+  }
 
   return (
     <div style={S.root} data-testid="settings-screen">
@@ -1282,10 +1376,37 @@ export function Settings() {
 
       <div style={S.body}>
         <div style={S.bodyInner}>
-          {activeTab === "Notifications" && <NotificationsTab />}
+          {activeTab === "Notifications" && (
+            <NotificationsTab
+              prefs={prefs}
+              onPrefsChange={handlePrefsChange}
+              playSound={playSound}
+              onPlaySoundChange={handlePlaySoundChange}
+              groupAlerts={groupAlerts}
+              onGroupAlertsChange={handleGroupAlertsChange}
+              doNotDisturb={doNotDisturb}
+              onDoNotDisturbChange={handleDoNotDisturbChange}
+            />
+          )}
           {activeTab === "Hosts" && <HostsTab />}
-          {activeTab === "Session defaults" && <SessionDefaultsTab />}
-          {activeTab === "General" && <GeneralTab />}
+          {activeTab === "Session defaults" && (
+            <SessionDefaultsTab
+              model={defaultModel}
+              onModelChange={handleDefaultModelChange}
+              posture={defaultPosture}
+              onPostureChange={handleDefaultPostureChange}
+            />
+          )}
+          {activeTab === "General" && (
+            <GeneralTab
+              background={background}
+              onBackgroundChange={handleBackgroundChange}
+              restoreOnLaunch={restoreOnLaunch}
+              onRestoreOnLaunchChange={handleRestoreOnLaunchChange}
+              confirmBeforeStop={confirmBeforeStop}
+              onConfirmBeforeStopChange={handleConfirmBeforeStopChange}
+            />
+          )}
         </div>
       </div>
     </div>

@@ -199,6 +199,8 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::run_slash,
             bridge::set_workspace,
             bridge::list_sessions,
+            bridge::get_settings,
+            bridge::set_settings,
             bridge::get_autostart,
             bridge::set_autostart,
             bridge::add_host,

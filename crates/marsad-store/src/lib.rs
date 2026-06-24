@@ -308,6 +308,35 @@ pub struct Workspace {
     pub saved_at: String,
 }
 
+/// Per-event notification preferences.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NotifPref {
+    pub enabled: bool,
+    pub priority: String, // "urgent" | "normal" | "low"
+    pub sound: bool,
+    pub group: bool,
+    pub dnd: bool,
+}
+
+/// The full app settings blob persisted under a single key.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PersistedSettings {
+    // Notification per-event prefs (keyed by event name).
+    pub notif_prefs: HashMap<String, NotifPref>,
+    // Delivery globals.
+    pub play_sound: bool,
+    pub group_alerts: bool,
+    pub do_not_disturb: bool,
+    // General.
+    pub background: String,
+    // Behavior.
+    pub restore_on_launch: bool,
+    pub confirm_before_stop: bool,
+    // Session defaults.
+    pub default_model: String,
+    pub default_posture: String, // "ask" | "auto" | "full"
+}
+
 /// Everything reconstructed from the backend on launch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Restored {
@@ -316,6 +345,7 @@ pub struct Restored {
     pub hosts: Vec<PersistedHost>,
     pub active_ws: Option<String>,
     pub transcripts: HashMap<String, Vec<TranscriptEntry>>,
+    pub settings: Option<PersistedSettings>,
 }
 
 // ── Versioned blob wrappers ────────────────────────────────────────────────────
@@ -366,6 +396,7 @@ const PREFIX_HOST: &str = "host:";
 const PREFIX_WORKSPACE: &str = "workspace:";
 const PREFIX_TRANSCRIPT: &str = "transcript:";
 const KEY_ACTIVE_WS: &str = "meta:active_ws";
+const KEY_SETTINGS: &str = "meta:settings";
 
 /// The local-first persistence store.
 pub struct Store {
@@ -399,6 +430,13 @@ impl Store {
         let key = format!("{}{}", PREFIX_SESSION, s.id);
         let bytes = encode(s);
         self.backend.write(&key, &bytes)?;
+        Ok(())
+    }
+
+    /// Insert or overwrite the app settings blob (single key, versioned).
+    pub fn upsert_settings(&mut self, s: &PersistedSettings) -> Result<(), StoreError> {
+        let bytes = encode(s);
+        self.backend.write(KEY_SETTINGS, &bytes)?;
         Ok(())
     }
 
@@ -492,10 +530,12 @@ impl Store {
         let mut workspaces: Vec<Workspace> = Vec::new();
         let mut transcript_map: HashMap<String, Vec<(u64, TranscriptEntry)>> = HashMap::new();
         let mut active_ws: Option<String> = None;
+        let mut settings: Option<PersistedSettings> = None;
 
         // ONE version-check per versioned blob — Err branch covered by VersionMismatch tests
         // (fires on the session key in those tests; the same code covers all versioned prefixes).
         // The meta:active_ws key is raw UTF-8, not a versioned blob, and is handled first.
+        // The meta:settings key IS a versioned blob and is dispatched after the version check.
         //
         // Dispatch uses separate `if let` arms (not an else-if chain) so that every
         // arm's implicit-else region is covered by keys of the other prefixes, rather
@@ -514,6 +554,9 @@ impl Store {
                 });
             }
 
+            if key == KEY_SETTINGS {
+                settings = Some(decode_payload(bytes));
+            }
             if key.starts_with(PREFIX_SESSION) {
                 sessions.push(decode_payload(bytes));
             }
@@ -551,6 +594,7 @@ impl Store {
             workspaces,
             active_ws,
             transcripts,
+            settings,
         })
     }
 

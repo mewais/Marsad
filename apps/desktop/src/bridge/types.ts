@@ -233,6 +233,31 @@ export interface GateVM {
 }
 
 // ---------------------------------------------------------------------------
+// Settings — mirrors PersistedSettings / NotifPref in marsad-store
+// ---------------------------------------------------------------------------
+
+export interface NotifPref {
+  enabled: boolean;
+  priority: "urgent" | "normal" | "low";
+  sound: boolean;
+  group: boolean;
+  dnd: boolean;
+}
+
+export interface Settings {
+  /** Per-event notification prefs, keyed by NotifEvent name. */
+  notif_prefs: Record<string, NotifPref>;
+  play_sound: boolean;
+  group_alerts: boolean;
+  do_not_disturb: boolean;
+  background: string;
+  restore_on_launch: boolean;
+  confirm_before_stop: boolean;
+  default_model: string;
+  default_posture: "ask" | "auto" | "full";
+}
+
+// ---------------------------------------------------------------------------
 // SlashEntry
 // ---------------------------------------------------------------------------
 
