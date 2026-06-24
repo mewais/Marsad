@@ -67,18 +67,24 @@ fn add_empty_target_returns_malformed_target() {
 }
 
 #[test]
-fn add_target_without_at_sign_returns_malformed_target() {
+fn add_bare_ssh_alias_is_accepted() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    // A bare hostname with no user@ is not a valid user@host target.
-    // NOTE(test-agent): The spec says target must look like "user@host" or a known ssh alias.
-    // We test the user@host path here; the "known ssh alias" branch is tested in branches.rs.
-    let err = reg
-        .add("badhost2", "notauserathostformat")
-        .expect_err("no-@ target must fail");
-    match err {
-        HostError::MalformedTarget(_) => {}
-        other => panic!("expected MalformedTarget, got {:?}", other),
+    // A bare host / ~/.ssh/config alias (e.g. "etx") is valid — `ssh etx` resolves it.
+    let host = reg.add("box", "etx").expect("bare alias must be accepted");
+    assert_eq!(host.target, "etx");
+}
+
+#[test]
+fn add_half_formed_or_spaced_target_returns_malformed_target() {
+    let runner = Box::new(FakeSshRunner::new());
+    let mut reg = HostRegistry::new(runner);
+    // "user@" / "@host" (half of user@host) and whitespace are still rejected.
+    for (i, bad) in ["user@", "@host", "a b", "  "].iter().enumerate() {
+        match reg.add(&format!("bad{i}"), bad) {
+            Err(HostError::MalformedTarget(_)) => {}
+            other => panic!("expected MalformedTarget for {bad:?}, got {other:?}"),
+        }
     }
 }
 

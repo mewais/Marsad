@@ -11,6 +11,7 @@
 import React, { useState, useEffect } from "react";
 import { useVm } from "../bridge/useVm";
 import { useTheme } from "../theme/ThemeProvider";
+import { getUiScale, applyUiScale } from "../theme/uiScale";
 import { Toggle } from "../components/Toggle";
 import { MODELS as MODEL_LIST } from "../bridge/models";
 import { getAutostart, setAutostart, addHost, removeHost, getSettings, setSettings, DEFAULT_SETTINGS } from "../bridge/api";
@@ -1004,6 +1005,7 @@ function GeneralTab({
 }: GeneralTabProps) {
   const { theme, glass, toggleTheme, toggleGlass } = useTheme();
   const [startMarsad, setStartMarsad] = useState(false);
+  const [uiScale, setUiScaleState] = useState(getUiScale());
 
   // Initialize autostart toggle from backend on mount
   useEffect(() => {
@@ -1012,8 +1014,51 @@ function GeneralTab({
       .catch((err) => console.error("[Settings] getAutostart failed:", err));
   }, []);
 
+  function changeScale(v: number) {
+    setUiScaleState(v);
+    applyUiScale(v); // live + persisted (localStorage, per machine)
+  }
+
   return (
     <div style={{ maxWidth: 860, display: "flex", flexDirection: "column", gap: 22 }}>
+      {/* Interface scale (per-machine; fixes cross-system font sizing) */}
+      <div>
+        <div style={S.sectionLabelBold}>Interface scale</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 6 }}>
+          <input
+            data-testid="general-ui-scale"
+            type="range"
+            min={0.6}
+            max={1.8}
+            step={0.05}
+            value={uiScale}
+            onChange={(e) => changeScale(parseFloat(e.target.value))}
+            style={{ flex: 1, maxWidth: 320 }}
+          />
+          <span className="mono" style={{ fontSize: 13.5, color: "var(--txt2)", width: 48 }}>
+            {Math.round(uiScale * 100)}%
+          </span>
+          <button
+            onClick={() => changeScale(1.0)}
+            style={{
+              fontFamily: "inherit",
+              fontSize: 13.5,
+              padding: "5px 11px",
+              borderRadius: 8,
+              border: "1px solid var(--border2)",
+              background: "var(--panel2)",
+              color: "var(--txt2)",
+              cursor: "pointer",
+            }}
+          >
+            Reset
+          </button>
+        </div>
+        <div style={{ fontSize: 12.5, color: "var(--txt3)", marginTop: 5 }}>
+          Scales all text + icons. Set per machine (display DPI varies).
+        </div>
+      </div>
+
       {/* Appearance */}
       <div>
         <div style={S.sectionLabelBold}>Appearance</div>

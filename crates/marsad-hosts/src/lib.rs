@@ -239,13 +239,15 @@ impl HostRegistry {
     /// - [`HostError::MalformedTarget`] — `target` is not valid `user@host`.
     /// - [`HostError::DuplicateLabel`] — a host with that label already exists.
     pub fn add(&mut self, label: &str, target: &str) -> Result<&Host, HostError> {
-        // Validate: non-empty, must contain '@', user and host parts both non-empty.
-        if target.is_empty() {
+        // A valid SSH target is either `user@host` OR a bare host / `~/.ssh/config`
+        // alias (e.g. `etx`), which `ssh <alias>` resolves. Reject only empty,
+        // whitespace-containing, or half-formed `user@`/`@host` values.
+        let t = target.trim();
+        let half_at = target
+            .split_once('@')
+            .is_some_and(|(u, h)| u.is_empty() || h.is_empty());
+        if t.is_empty() || target.split_whitespace().count() != 1 || half_at {
             return Err(HostError::MalformedTarget(target.to_string()));
-        }
-        match target.split_once('@') {
-            Some((user, host)) if !user.is_empty() && !host.is_empty() => {}
-            _ => return Err(HostError::MalformedTarget(target.to_string())),
         }
 
         // Reject duplicate labels.
