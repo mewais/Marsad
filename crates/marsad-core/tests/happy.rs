@@ -1083,7 +1083,8 @@ fn add_host_duplicate_label_errors() {
 #[test]
 fn add_host_malformed_target_errors() {
     let mut core = core_with_backend(MemoryBackend::new());
-    assert!(core.add_host("x", "no-at-sign").is_err());
+    // Bare aliases are accepted now; a target with whitespace is still malformed.
+    assert!(core.add_host("x", "has a space").is_err());
 }
 
 #[test]

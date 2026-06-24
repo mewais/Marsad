@@ -6,7 +6,9 @@
 ///   - HostError::MalformedTarget    — add with a target that doesn't look like user@host or alias
 ///   - HostError::NotFound           — remove or health_check with an unknown id
 ///   - HostError::Unreachable        — health_check when SshRunner signals a hard failure
-use marsad_hosts::{FakeSshRunner, HostError, HostRegistry, HostStatus};
+use marsad_hosts::{
+    list_wsl_distros, FakeSshRunner, FakeWslRunner, HostError, HostRegistry, HostStatus,
+};
 
 // ---------------------------------------------------------------------------
 // DuplicateLabel
@@ -122,6 +124,34 @@ fn add_target_missing_host_returns_malformed_target() {
     match err {
         HostError::MalformedTarget(_) => {}
         other => panic!("expected MalformedTarget, got {:?}", other),
+    }
+}
+
+#[test]
+fn add_empty_wsl_distro_returns_malformed_target() {
+    let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
+    // `wsl:` with no distro name is malformed (the distro is required).
+    let err = reg
+        .add("nodist", "wsl:")
+        .expect_err("empty wsl distro must fail");
+    match err {
+        HostError::MalformedTarget(t) => assert_eq!(t, "wsl:"),
+        other => panic!("expected MalformedTarget, got {:?}", other),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WSL discovery — runner error propagates
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_wsl_distros_propagates_runner_error() {
+    let mut fake = FakeWslRunner::new();
+    fake.respond(Err(HostError::Unreachable("wsl.exe missing".to_string())));
+    let err = list_wsl_distros(&fake).expect_err("runner error must propagate");
+    match err {
+        HostError::Unreachable(m) => assert!(m.contains("wsl.exe")),
+        other => panic!("expected Unreachable, got {:?}", other),
     }
 }
 

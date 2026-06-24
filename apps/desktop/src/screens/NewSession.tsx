@@ -55,7 +55,7 @@ function sessionLabel(s: SessionSummary): string {
 // ---------------------------------------------------------------------------
 
 const sectionLabel: React.CSSProperties = {
-  fontSize: 13.5,
+  fontSize: "calc(13.5px * var(--fs,1))",
   fontWeight: 700,
   textTransform: "uppercase",
   letterSpacing: 0.4,
@@ -168,7 +168,7 @@ export function NewSession() {
             justifyContent: "center",
             color: "#fff",
             fontWeight: 800,
-            fontSize: 19,
+            fontSize: "calc(19px * var(--fs,1))",
             flexShrink: 0,
           }}
         >
@@ -178,7 +178,7 @@ export function NewSession() {
         <div style={{ flex: 1 }}>
           <h2
             style={{
-              fontSize: 19,
+              fontSize: "calc(19px * var(--fs,1))",
               fontWeight: 700,
               margin: 0,
               letterSpacing: -0.2,
@@ -187,7 +187,7 @@ export function NewSession() {
           >
             Launch a new session
           </h2>
-          <div style={{ fontSize: 14, color: "var(--txt3)", marginTop: 2 }}>
+          <div style={{ fontSize: "calc(14px * var(--fs,1))", color: "var(--txt3)", marginTop: 2 }}>
             Pick a directory and host — no terminal needed
           </div>
         </div>
@@ -204,7 +204,7 @@ export function NewSession() {
             background: "var(--panel2)",
             color: "var(--txt2)",
             cursor: "pointer",
-            fontSize: 17,
+            fontSize: "calc(17px * var(--fs,1))",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -247,7 +247,7 @@ export function NewSession() {
               padding: "11px 13px",
               color: "var(--txt)",
               fontFamily: "var(--font-mono, monospace)",
-              fontSize: 15,
+              fontSize: "calc(15px * var(--fs,1))",
               outline: "none",
             }}
           />
@@ -266,7 +266,7 @@ export function NewSession() {
                 className="mono"
                 onClick={() => handleRecentDir(dir)}
                 style={{
-                  fontSize: 13,
+                  fontSize: "calc(13px * var(--fs,1))",
                   padding: "5px 9px",
                   borderRadius: 7,
                   border: project === dir
@@ -298,7 +298,7 @@ export function NewSession() {
                   style={{
                     fontFamily: "inherit",
                     flex: "1 1 110px",
-                    fontSize: 14.5,
+                    fontSize: "calc(14.5px * var(--fs,1))",
                     fontWeight: 600,
                     padding: 10,
                     borderRadius: 9,
@@ -339,7 +339,7 @@ export function NewSession() {
             onClick={() => dispatch({ type: "SET_SCREEN", screen: "settings" })}
             style={{
               marginTop: 8,
-              fontSize: 13.5,
+              fontSize: "calc(13.5px * var(--fs,1))",
               color: "var(--accent2)",
               cursor: "pointer",
               fontWeight: 600,
@@ -360,7 +360,7 @@ export function NewSession() {
               style={{ display: "flex", alignItems: "center", gap: 10 }}
             >
               <Toggle checked={resume} onChange={setResume} />
-              <span style={{ fontSize: 15, color: "var(--txt2)", fontWeight: 500 }}>
+              <span style={{ fontSize: "calc(15px * var(--fs,1))", color: "var(--txt2)", fontWeight: 500 }}>
                 Resume a previous session
               </span>
             </div>
@@ -382,7 +382,7 @@ export function NewSession() {
           {resume && sessions.length === 0 && (
             <div
               style={{
-                fontSize: 14,
+                fontSize: "calc(14px * var(--fs,1))",
                 color: "var(--txt3)",
                 marginTop: 8,
                 fontStyle: "italic",
@@ -408,7 +408,7 @@ export function NewSession() {
                     onClick={() => setModel(m.id)}
                     style={{
                       fontFamily: "inherit",
-                      fontSize: 14.5,
+                      fontSize: "calc(14.5px * var(--fs,1))",
                       fontWeight: 600,
                       padding: "9px 11px",
                       borderRadius: 8,
@@ -441,7 +441,7 @@ export function NewSession() {
                     onClick={() => setPosture(p.value)}
                     style={{
                       fontFamily: "inherit",
-                      fontSize: 14.5,
+                      fontSize: "calc(14.5px * var(--fs,1))",
                       fontWeight: 600,
                       padding: "9px 11px",
                       borderRadius: 8,
@@ -489,7 +489,7 @@ export function NewSession() {
               padding: "11px 13px",
               color: "var(--txt)",
               fontFamily: "inherit",
-              fontSize: 15,
+              fontSize: "calc(15px * var(--fs,1))",
               resize: "vertical",
               outline: "none",
             }}
@@ -513,7 +513,7 @@ export function NewSession() {
         <div
           className="mono"
           style={{
-            fontSize: 13,
+            fontSize: "calc(13px * var(--fs,1))",
             color: launchError ? "var(--error)" : "var(--txt3)",
             flex: 1,
             fontFamily: "var(--font-mono, monospace)",
@@ -531,7 +531,7 @@ export function NewSession() {
           style={{
             fontFamily: "inherit",
             fontWeight: 600,
-            fontSize: 15,
+            fontSize: "calc(15px * var(--fs,1))",
             padding: "9px 16px",
             borderRadius: 9,
             border: "1px solid var(--border2)",
@@ -552,7 +552,7 @@ export function NewSession() {
           style={{
             fontFamily: "inherit",
             fontWeight: 700,
-            fontSize: 15,
+            fontSize: "calc(15px * var(--fs,1))",
             padding: "9px 20px",
             borderRadius: 9,
             border: "none",

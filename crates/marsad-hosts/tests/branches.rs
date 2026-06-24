@@ -115,11 +115,31 @@ fn parse_only_comments_returns_empty_vec() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn new_remote_host_starts_reconnecting() {
+fn new_remote_host_starts_connecting() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
     let host = reg.add("newhost", "user@newhost.example.com").unwrap();
-    assert_eq!(host.status, HostStatus::Reconnecting);
+    assert_eq!(host.status, HostStatus::Connecting);
+}
+
+#[test]
+fn set_status_never_connected_keeps_connecting_on_transient() {
+    let runner = Box::new(FakeSshRunner::new());
+    let mut reg = HostRegistry::new(runner);
+    let id = reg.add("nc", "user@nc.example.com").unwrap().id.clone();
+
+    // A transient failure before the first successful connect stays Connecting.
+    reg.set_status(&id, HostStatus::Reconnecting);
+    assert_eq!(reg.list().iter().find(|h| h.id == id).unwrap().status, HostStatus::Connecting);
+
+    // A hard failure still flips it (the host is clearly down).
+    reg.set_status(&id, HostStatus::Unreachable);
+    assert_eq!(reg.list().iter().find(|h| h.id == id).unwrap().status, HostStatus::Unreachable);
+
+    // Once connected, later transient failures become Reconnecting as usual.
+    reg.set_status(&id, HostStatus::Connected);
+    reg.set_status(&id, HostStatus::Reconnecting);
+    assert_eq!(reg.list().iter().find(|h| h.id == id).unwrap().status, HostStatus::Reconnecting);
 }
 
 #[test]
@@ -132,8 +152,8 @@ fn health_check_transitions_reconnecting_to_connected() {
         let h = reg.add("ok", "user@ok.example.com").unwrap();
         assert_eq!(
             h.status,
-            HostStatus::Reconnecting,
-            "must start Reconnecting"
+            HostStatus::Connecting,
+            "must start Connecting"
         );
         h.id.clone()
     };

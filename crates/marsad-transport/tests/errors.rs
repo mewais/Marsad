@@ -61,6 +61,20 @@ fn ssh_stdio_connect_failed_bad_target() {
     );
 }
 
+#[test]
+fn wsl_stdio_connect_failed_no_distro() {
+    // WslStdio::new takes a distro name + remote command.  Under coverage (and on
+    // any non-Windows host) connect() is a stub that returns ConnectFailed
+    // without spawning wsl.exe, since WSL is Windows-only.
+    use marsad_transport::WslStdio;
+    let mut wsl = WslStdio::new("NoSuchDistro", "marsad-agent");
+    let err = wsl.connect().expect_err("should fail to connect");
+    assert!(
+        is_connect_failed(&err) || matches!(err, TransportError::Io(_)),
+        "expected ConnectFailed or Io, got {err:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // BrokenPipe — writing to a closed transport should return BrokenPipe.
 // We simulate this with LoopbackFake: close the receiver end so the sender

@@ -164,7 +164,7 @@ export function GateOverlay() {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              fontSize: 22,
+              fontSize: "calc(22px * var(--fs,1))",
               color: "var(--needs)",
               flexShrink: 0,
             }}
@@ -185,7 +185,7 @@ export function GateOverlay() {
             >
               <span
                 style={{
-                  fontSize: 12.5,
+                  fontSize: "calc(12.5px * var(--fs,1))",
                   fontWeight: 700,
                   letterSpacing: 0.4,
                   padding: "2px 7px",
@@ -200,7 +200,7 @@ export function GateOverlay() {
               </span>
               <span
                 className="mono"
-                style={{ fontSize: 13, color: "var(--txt3)" }}
+                style={{ fontSize: "calc(13px * var(--fs,1))", color: "var(--txt3)" }}
               >
                 {selectedSession.host_id}
               </span>
@@ -209,7 +209,7 @@ export function GateOverlay() {
             {/* Gate title */}
             <h2
               style={{
-                fontSize: 19,
+                fontSize: "calc(19px * var(--fs,1))",
                 fontWeight: 700,
                 margin: "0 0 1px",
                 letterSpacing: -0.2,
@@ -222,7 +222,7 @@ export function GateOverlay() {
             {/* Session · project */}
             <div
               className="mono"
-              style={{ fontSize: 13.5, color: "var(--txt3)" }}
+              style={{ fontSize: "calc(13.5px * var(--fs,1))", color: "var(--txt3)" }}
             >
               {selectedSession.name} · {selectedSession.project}
             </div>
@@ -240,7 +240,7 @@ export function GateOverlay() {
               background: "var(--panel2)",
               color: "var(--txt2)",
               cursor: "pointer",
-              fontSize: 17,
+              fontSize: "calc(17px * var(--fs,1))",
               flexShrink: 0,
               display: "flex",
               alignItems: "center",
@@ -266,7 +266,7 @@ export function GateOverlay() {
               {/* Explanation */}
               <div
                 style={{
-                  fontSize: 15,
+                  fontSize: "calc(15px * var(--fs,1))",
                   color: "var(--txt2)",
                   marginBottom: 11,
                   lineHeight: 1.55,
@@ -290,7 +290,7 @@ export function GateOverlay() {
                     padding: "8px 13px",
                     background: "var(--panel2)",
                     borderBottom: "1px solid var(--border)",
-                    fontSize: 13,
+                    fontSize: "calc(13px * var(--fs,1))",
                     fontWeight: 700,
                     letterSpacing: 0.5,
                     textTransform: "uppercase",
@@ -307,7 +307,7 @@ export function GateOverlay() {
                   style={{
                     margin: 0,
                     padding: 14,
-                    fontSize: 15.5,
+                    fontSize: "calc(15.5px * var(--fs,1))",
                     color: "var(--accent2)",
                     background: "var(--bg)",
                     whiteSpace: "pre-wrap",
@@ -323,7 +323,7 @@ export function GateOverlay() {
                   data-testid="gate-cwd"
                   style={{
                     padding: "8px 14px",
-                    fontSize: 13,
+                    fontSize: "calc(13px * var(--fs,1))",
                     color: "var(--txt3)",
                     borderTop: "1px solid var(--border)",
                   }}
@@ -343,7 +343,7 @@ export function GateOverlay() {
                   borderRadius: 9,
                   background: "var(--needs-bg)",
                   border: "1px solid var(--needs)",
-                  fontSize: 14.5,
+                  fontSize: "calc(14.5px * var(--fs,1))",
                   color: "var(--needs)",
                 }}
               >
@@ -358,7 +358,7 @@ export function GateOverlay() {
               {/* Summary */}
               <div
                 style={{
-                  fontSize: 15.5,
+                  fontSize: "calc(15.5px * var(--fs,1))",
                   color: "var(--txt)",
                   lineHeight: 1.6,
                   marginBottom: 16,
@@ -393,7 +393,7 @@ export function GateOverlay() {
                         background: "var(--accent-bg)",
                         color: "var(--accent2)",
                         fontWeight: 800,
-                        fontSize: 14,
+                        fontSize: "calc(14px * var(--fs,1))",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
@@ -407,7 +407,7 @@ export function GateOverlay() {
                       <div
                         style={{
                           fontWeight: 600,
-                          fontSize: 15.5,
+                          fontSize: "calc(15.5px * var(--fs,1))",
                           marginBottom: 2,
                           color: "var(--txt)",
                         }}
@@ -416,7 +416,7 @@ export function GateOverlay() {
                       </div>
                       <div
                         style={{
-                          fontSize: 14,
+                          fontSize: "calc(14px * var(--fs,1))",
                           color: "var(--txt3)",
                           lineHeight: 1.5,
                         }}
@@ -436,7 +436,7 @@ export function GateOverlay() {
               {/* Summary */}
               <div
                 style={{
-                  fontSize: 15,
+                  fontSize: "calc(15px * var(--fs,1))",
                   color: "var(--txt2)",
                   marginBottom: 13,
                   lineHeight: 1.55,
@@ -464,7 +464,7 @@ export function GateOverlay() {
             <div style={{ marginTop: 15 }}>
               <div
                 style={{
-                  fontSize: 13.5,
+                  fontSize: "calc(13.5px * var(--fs,1))",
                   fontWeight: 700,
                   color: "var(--error)",
                   marginBottom: 7,
@@ -489,7 +489,7 @@ export function GateOverlay() {
                   padding: 11,
                   color: "var(--txt)",
                   fontFamily: "inherit",
-                  fontSize: 15,
+                  fontSize: "calc(15px * var(--fs,1))",
                   outline: "none",
                   resize: "vertical",
                 }}
@@ -513,7 +513,7 @@ export function GateOverlay() {
           {/* Route info */}
           <div
             className="mono"
-            style={{ fontSize: 13, color: "var(--txt3)", flex: 1 }}
+            style={{ fontSize: "calc(13px * var(--fs,1))", color: "var(--txt3)", flex: 1 }}
           >
             Decision routes only to this session · {routeId}
           </div>
@@ -527,7 +527,7 @@ export function GateOverlay() {
                 style={{
                   fontFamily: "inherit",
                   fontWeight: 600,
-                  fontSize: 15,
+                  fontSize: "calc(15px * var(--fs,1))",
                   padding: "9px 15px",
                   borderRadius: 9,
                   border: "1px solid var(--border2)",
@@ -546,7 +546,7 @@ export function GateOverlay() {
                 style={{
                   fontFamily: "inherit",
                   fontWeight: 700,
-                  fontSize: 15,
+                  fontSize: "calc(15px * var(--fs,1))",
                   padding: "9px 18px",
                   borderRadius: 9,
                   border: "none",
@@ -569,7 +569,7 @@ export function GateOverlay() {
                 style={{
                   fontFamily: "inherit",
                   fontWeight: 600,
-                  fontSize: 15,
+                  fontSize: "calc(15px * var(--fs,1))",
                   padding: "9px 15px",
                   borderRadius: 9,
                   border: "1px solid var(--border2)",
@@ -588,7 +588,7 @@ export function GateOverlay() {
                 style={{
                   fontFamily: "inherit",
                   fontWeight: 700,
-                  fontSize: 15,
+                  fontSize: "calc(15px * var(--fs,1))",
                   padding: "9px 20px",
                   borderRadius: 9,
                   border: "none",

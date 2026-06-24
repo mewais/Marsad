@@ -117,14 +117,15 @@ fn spawn_agent(socket_path: &str, data_root: &str) {
 
     eprintln!("marsad-desktop: spawning agent: {}", bin.display());
 
-    let result = std::process::Command::new(&bin)
-        .env("MARSAD_AGENT_ENDPOINT", socket_path)
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.env("MARSAD_AGENT_ENDPOINT", socket_path)
         .env("MARSAD_DATA_ROOT", data_root)
         // Detach from the app's stdio so agent output doesn't pollute the desktop.
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+        .stderr(std::process::Stdio::null());
+    hide_console(&mut cmd); // no console flash on Windows
+    let result = cmd.spawn();
 
     match result {
         Ok(_child) => {
@@ -600,22 +601,35 @@ fn run_host_health_worker(app: tauri::AppHandle) {
 
 /// One SSH reachability probe. `ssh exit 0` → Connected; ssh ran but failed
 /// (host down / auth / timeout) → Unreachable; couldn't spawn ssh → Reconnecting.
+/// Suppress the console window that a spawned subprocess would otherwise flash on
+/// Windows (e.g. the recurring `ssh` health probes). No-op on other platforms.
+fn hide_console(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
 fn ssh_health(target: &str) -> marsad_core::HostStatus {
     use marsad_core::HostStatus;
-    match std::process::Command::new("ssh")
-        .args([
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=5",
-            target,
-            "echo ping",
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-    {
+    let mut cmd = std::process::Command::new("ssh");
+    cmd.args([
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=5",
+        target,
+        "echo ping",
+    ])
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null());
+    hide_console(&mut cmd);
+    match cmd.status() {
         Ok(s) if s.success() => HostStatus::Connected,
         Ok(_) => HostStatus::Unreachable,
         Err(_) => HostStatus::Reconnecting,

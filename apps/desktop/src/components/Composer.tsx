@@ -103,7 +103,7 @@ export function Composer({
             background: "var(--panel)",
             color: slashOpen ? "var(--accent2)" : "var(--txt2)",
             cursor: "pointer",
-            fontSize: 18,
+            fontSize: "calc(18px * var(--fs,1))",
             fontWeight: 700,
             flexShrink: 0,
             lineHeight: 1,
@@ -128,7 +128,7 @@ export function Composer({
             outline: "none",
             color: "var(--txt)",
             fontFamily: "inherit",
-            fontSize: 15.5,
+            fontSize: "calc(15.5px * var(--fs,1))",
             resize: "none",
             lineHeight: 1.5,
             maxHeight: 120,
@@ -148,7 +148,7 @@ export function Composer({
               background: "var(--panel)",
               color: "var(--txt2)",
               cursor: "pointer",
-              fontSize: 14.5,
+              fontSize: "calc(14.5px * var(--fs,1))",
             }}
           >
             ⎋
@@ -159,7 +159,7 @@ export function Composer({
             style={{
               fontFamily: "inherit",
               fontWeight: 700,
-              fontSize: 15,
+              fontSize: "calc(15px * var(--fs,1))",
               padding: "8px 16px",
               borderRadius: 8,
               border: "none",

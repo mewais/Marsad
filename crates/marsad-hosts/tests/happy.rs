@@ -9,7 +9,8 @@
 ///   - HostRegistry::health_check -> Connected when SshRunner returns Ok
 ///   - HostRegistry::helper_install_descriptor: returns a valid HelperDescriptor
 use marsad_hosts::{
-    parse_ssh_config, FakeSshRunner, HelperDescriptor, HostEntry, HostRegistry, HostStatus,
+    list_wsl_distros, parse_ssh_config, FakeSshRunner, FakeWslRunner, HelperDescriptor, HostEntry,
+    HostRegistry, HostStatus, RealWslRunner, WslRunner,
 };
 
 // ---------------------------------------------------------------------------
@@ -91,8 +92,8 @@ fn add_remote_host_returns_host_ref() {
     assert_eq!(host.target, "alice@myserver.example.com");
     assert!(!host.is_local);
     assert!(host.removable);
-    // New hosts start in Reconnecting until health_check
-    assert_eq!(host.status, HostStatus::Reconnecting);
+    // New hosts start in Connecting until health_check
+    assert_eq!(host.status, HostStatus::Connecting);
 }
 
 // ---------------------------------------------------------------------------
@@ -236,10 +237,69 @@ fn load_remote_preserves_id_and_starts_reconnecting() {
     let h = reg.list().iter().find(|h| h.id == "host-7").unwrap();
     assert_eq!(h.label, "saved");
     assert!(!h.is_local && h.removable);
-    assert_eq!(h.status, HostStatus::Reconnecting);
+    assert_eq!(h.status, HostStatus::Connecting);
     // next_id must advance past 7 so a fresh add does not collide.
     let added = reg.add("fresh", "u@fresh").unwrap();
     assert_eq!(added.id, "host-8");
+}
+
+// ---------------------------------------------------------------------------
+// WSL host targets — add, is_wsl(), wsl_distro()
+// ---------------------------------------------------------------------------
+
+#[test]
+fn add_wsl_target_is_accepted_and_flagged() {
+    let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
+    let host = reg
+        .add("ubuntu", "wsl:Ubuntu")
+        .expect("wsl target must be accepted");
+    assert_eq!(host.target, "wsl:Ubuntu");
+    assert!(host.is_wsl(), "wsl:<distro> host must report is_wsl()");
+    assert_eq!(host.wsl_distro(), Some("Ubuntu"));
+}
+
+#[test]
+fn non_wsl_hosts_are_not_flagged_wsl() {
+    let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
+    let ssh = reg.add("box", "user@box.example.com").unwrap();
+    assert!(!ssh.is_wsl());
+    assert_eq!(ssh.wsl_distro(), None);
+    // The seeded localhost ("this machine") is also not WSL.
+    let local = reg.list().iter().find(|h| h.is_local).unwrap();
+    assert!(!local.is_wsl());
+    assert_eq!(local.wsl_distro(), None);
+}
+
+// ---------------------------------------------------------------------------
+// WSL distro discovery — list_wsl_distros via FakeWslRunner
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_wsl_distros_parses_distro_lines() {
+    let mut fake = FakeWslRunner::new();
+    // `wsl.exe -l -q` emits one distro per line, CRLF-terminated; a trailing
+    // blank line is common.
+    fake.respond(Ok("Ubuntu\r\nDebian\r\n\r\n".to_string()));
+    let targets = list_wsl_distros(&fake).expect("discovery must succeed");
+    assert_eq!(targets, vec!["wsl:Ubuntu", "wsl:Debian"]);
+}
+
+#[test]
+fn list_wsl_distros_empty_when_none_installed() {
+    let mut fake = FakeWslRunner::new();
+    fake.respond(Ok(String::new()));
+    let targets = list_wsl_distros(&fake).expect("discovery must succeed");
+    assert!(targets.is_empty());
+}
+
+#[test]
+fn fake_wsl_runner_implements_trait_and_real_runner_constructs() {
+    let fake = FakeWslRunner::new();
+    let _boxed: Box<dyn WslRunner> = Box::new(fake);
+    // RealWslRunner::list() is a no-op stub off-Windows / under coverage.
+    let real = RealWslRunner;
+    let out = real.list().expect("stub list must succeed");
+    assert!(out.is_empty());
 }
 
 #[test]

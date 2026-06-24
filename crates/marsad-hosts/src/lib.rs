@@ -88,6 +88,9 @@ pub fn parse_ssh_config(text: &str) -> Vec<HostEntry> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum HostStatus {
     Connected,
+    /// First-time connection attempt (never connected yet).
+    Connecting,
+    /// Re-establishing after having been connected.
     Reconnecting,
     Unreachable,
 }
@@ -109,6 +112,33 @@ pub struct Host {
     pub is_local: bool,
     /// `false` for the localhost entry; `true` for all remote hosts.
     pub removable: bool,
+}
+
+impl Host {
+    /// `true` when this host runs sessions inside a WSL (Windows Subsystem for
+    /// Linux) distro, i.e. its [`Host::target`] is of the form `wsl:<distro>`.
+    ///
+    /// The distro encoding lives entirely in the target string, so this is a
+    /// small derived helper rather than a stored field.
+    pub fn is_wsl(&self) -> bool {
+        wsl_distro(&self.target).is_some()
+    }
+
+    /// Returns the WSL distro name for a `wsl:<distro>` host, or `None` for any
+    /// other target (`user@host`, a bare alias, or `this machine`).
+    pub fn wsl_distro(&self) -> Option<&str> {
+        wsl_distro(&self.target)
+    }
+}
+
+/// Extract the distro name from a `wsl:<distro>` target string.
+///
+/// Returns `None` when `target` does not start with the `wsl:` prefix or when
+/// the distro part is empty (`wsl:`).
+fn wsl_distro(target: &str) -> Option<&str> {
+    target
+        .strip_prefix("wsl:")
+        .filter(|distro| !distro.is_empty())
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +215,120 @@ impl SshRunner for FakeSshRunner {
 }
 
 // ---------------------------------------------------------------------------
+// WslRunner trait — distro discovery seam
+// ---------------------------------------------------------------------------
+
+/// Abstraction over listing the WSL distros installed on a Windows machine.
+///
+/// Mirrors [`SshRunner`]: the real implementation shells out to `wsl.exe`
+/// (Windows only), while tests inject a [`FakeWslRunner`] so the discovery
+/// logic stays fully covered without a live WSL host.
+pub trait WslRunner {
+    /// Return the raw stdout of `wsl.exe -l -q` (one distro name per line).
+    fn list(&self) -> Result<String, HostError>;
+}
+
+/// Production [`WslRunner`] backed by the `wsl.exe` CLI.
+///
+/// WSL is a Windows-only concept, so the real implementation is
+/// `#[cfg(windows)]`. Under coverage (and on non-Windows targets) it is a stub
+/// that reports no distros, keeping the crate buildable and 100%-covered on
+/// Linux CI; the live behaviour is verified on Windows.
+pub struct RealWslRunner;
+
+impl WslRunner for RealWslRunner {
+    #[cfg(all(windows, not(coverage)))]
+    fn list(&self) -> Result<String, HostError> {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+        // CREATE_NO_WINDOW: never flash a console window when probing distros.
+        let output = Command::new("wsl.exe")
+            .args(["-l", "-q"])
+            .creation_flags(0x0800_0000)
+            .output()
+            .map_err(|e| HostError::Unreachable(format!("wsl.exe: {e}")))?;
+        if !output.status.success() {
+            return Err(HostError::Unreachable(format!(
+                "wsl.exe -l -q exited: {}",
+                output.status
+            )));
+        }
+        // `wsl.exe` emits UTF-16LE; decode lossily into UTF-8.
+        let wide: Vec<u16> = output
+            .stdout
+            .chunks_exact(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        Ok(String::from_utf16_lossy(&wide))
+    }
+
+    #[cfg(not(all(windows, not(coverage))))]
+    fn list(&self) -> Result<String, HostError> {
+        // Non-Windows / coverage builds: no WSL host is available.
+        Ok(String::new())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FakeWslRunner — in-crate scripted fake for tests
+// ---------------------------------------------------------------------------
+
+/// A scripted fake [`WslRunner`] for unit tests.
+///
+/// Call [`FakeWslRunner::respond`] to set the result returned by the next
+/// [`WslRunner::list`] call; responses are consumed in FIFO order.
+pub struct FakeWslRunner {
+    responses: RefCell<VecDeque<Result<String, HostError>>>,
+}
+
+#[allow(clippy::new_without_default)]
+impl FakeWslRunner {
+    /// Create a new, empty [`FakeWslRunner`].
+    pub fn new() -> Self {
+        Self {
+            responses: RefCell::new(VecDeque::new()),
+        }
+    }
+
+    /// Enqueue a scripted response for the next [`WslRunner::list`] call.
+    pub fn respond(&mut self, out: Result<String, HostError>) {
+        self.responses.borrow_mut().push_back(out);
+    }
+}
+
+impl WslRunner for FakeWslRunner {
+    /// Return the next scripted result.
+    ///
+    /// Panics if no response was scripted — callers must always call `respond`
+    /// before `list` in tests.
+    fn list(&self) -> Result<String, HostError> {
+        self.responses
+            .borrow_mut()
+            .pop_front()
+            .expect("FakeWslRunner: no scripted response")
+    }
+}
+
+/// List the WSL distros installed on this machine as host targets.
+///
+/// Runs the injected [`WslRunner`] (which wraps `wsl.exe -l -q` in production),
+/// then parses each non-empty line into a `wsl:<distro>` target string ready to
+/// pass to [`HostRegistry::add`]. Blank lines and surrounding whitespace
+/// (including the stray `\r` left by `wsl.exe`'s CRLF output) are stripped.
+///
+/// # Errors
+/// Propagates any [`HostError`] returned by the runner.
+pub fn list_wsl_distros(runner: &dyn WslRunner) -> Result<Vec<String>, HostError> {
+    let raw = runner.list()?;
+    Ok(raw
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|distro| format!("wsl:{distro}"))
+        .collect())
+}
+
+// ---------------------------------------------------------------------------
 // HelperDescriptor
 // ---------------------------------------------------------------------------
 
@@ -239,14 +383,19 @@ impl HostRegistry {
     /// - [`HostError::MalformedTarget`] — `target` is not valid `user@host`.
     /// - [`HostError::DuplicateLabel`] — a host with that label already exists.
     pub fn add(&mut self, label: &str, target: &str) -> Result<&Host, HostError> {
-        // A valid SSH target is either `user@host` OR a bare host / `~/.ssh/config`
-        // alias (e.g. `etx`), which `ssh <alias>` resolves. Reject only empty,
-        // whitespace-containing, or half-formed `user@`/`@host` values.
+        // A valid target is one of:
+        //   - `wsl:<distro>`  — a WSL distro (distro must be non-empty),
+        //   - `user@host`     — an SSH destination,
+        //   - a bare host / `~/.ssh/config` alias (e.g. `etx`), resolved by `ssh`.
+        // Reject empty, whitespace-containing, half-formed `user@`/`@host`, and
+        // the distro-less `wsl:` prefix.
         let t = target.trim();
         let half_at = target
             .split_once('@')
             .is_some_and(|(u, h)| u.is_empty() || h.is_empty());
-        if t.is_empty() || target.split_whitespace().count() != 1 || half_at {
+        // `wsl:` with no distro is malformed; `wsl:<distro>` is always accepted.
+        let empty_wsl = t == "wsl:";
+        if t.is_empty() || target.split_whitespace().count() != 1 || half_at || empty_wsl {
             return Err(HostError::MalformedTarget(target.to_string()));
         }
 
@@ -262,7 +411,7 @@ impl HostRegistry {
             id,
             label: label.to_string(),
             target: target.to_string(),
-            status: HostStatus::Reconnecting,
+            status: HostStatus::Connecting,
             session_count: 0,
             is_local: false,
             removable: true,
@@ -309,7 +458,7 @@ impl HostRegistry {
             id: id.to_string(),
             label: label.to_string(),
             target: target.to_string(),
-            status: HostStatus::Reconnecting,
+            status: HostStatus::Connecting,
             session_count: 0,
             is_local: false,
             removable: true,
@@ -320,7 +469,14 @@ impl HostRegistry {
     /// result). Unknown ids are a no-op.
     pub fn set_status(&mut self, id: &str, status: HostStatus) {
         if let Some(h) = self.hosts.iter_mut().find(|h| h.id == id) {
-            h.status = status;
+            // A host that has never connected stays in `Connecting`, not
+            // `Reconnecting`, while its first attempt keeps failing transiently —
+            // "Reconnecting" only makes sense once it has connected at least once.
+            let keep_connecting =
+                h.status == HostStatus::Connecting && status == HostStatus::Reconnecting;
+            if !keep_connecting {
+                h.status = status;
+            }
         }
     }
 

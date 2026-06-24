@@ -51,7 +51,11 @@ export type Gate =
 // Host (marsad-hosts)
 // ---------------------------------------------------------------------------
 
-export type HostStatus = "Connected" | "Reconnecting" | "Unreachable";
+export type HostStatus =
+  | "Connected"
+  | "Connecting"
+  | "Reconnecting"
+  | "Unreachable";
 
 export interface Host {
   id: string;

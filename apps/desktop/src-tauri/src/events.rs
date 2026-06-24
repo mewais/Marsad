@@ -39,6 +39,7 @@ impl From<VmUpdate> for VmUpdateEnvelope {
             VmUpdate::HostHealth(payload) => {
                 let status = match payload.status {
                     Some(marsad_hosts::HostStatus::Connected) => "connected".to_string(),
+                    Some(marsad_hosts::HostStatus::Connecting) => "connecting".to_string(),
                     Some(marsad_hosts::HostStatus::Reconnecting) => "reconnecting".to_string(),
                     Some(marsad_hosts::HostStatus::Unreachable) => "unreachable".to_string(),
                     None => "unknown".to_string(),

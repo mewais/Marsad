@@ -28,7 +28,7 @@ function ToastItem({ toast, onDismiss }: ToastItemProps) {
         border: "1px solid var(--border2)",
         borderRadius: 12,
         boxShadow: "var(--shadow)",
-        fontSize: 15.5,
+        fontSize: "calc(15.5px * var(--fs,1))",
         color: "var(--txt)",
         animation: "slideup 0.2s ease",
         minWidth: 260,
@@ -37,7 +37,7 @@ function ToastItem({ toast, onDismiss }: ToastItemProps) {
       }}
       onClick={() => onDismiss(toast.id)}
     >
-      <span style={{ fontSize: 19 }}>{toast.icon}</span>
+      <span style={{ fontSize: "calc(19px * var(--fs,1))" }}>{toast.icon}</span>
       <span style={{ flex: 1 }}>{toast.text}</span>
     </div>
   );

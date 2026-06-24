@@ -7,16 +7,19 @@
 //! The fully-testable surface is: `Transport` trait, `LineFramer`, `LoopbackFake`,
 //! and `TransportError`.
 //!
-//! `LocalIpc` and `SshStdio` perform real OS IO that the unit/integration test
-//! suite cannot exercise (no live Unix socket or SSH endpoint is available).
-//! Their IO-heavy internals are excluded from the llvm-cov build via
-//! `#[cfg(not(coverage))]`; `cargo llvm-cov` sets `cfg(coverage)` automatically.
+//! `LocalIpc`, `SshStdio`, and `WslStdio` perform real OS IO that the unit/
+//! integration test suite cannot exercise (no live Unix socket, SSH endpoint, or
+//! WSL distro is available).  Their IO-heavy internals are excluded from the
+//! llvm-cov build via `#[cfg(not(coverage))]`; `cargo llvm-cov` sets
+//! `cfg(coverage)` automatically.
 //!
 //! Under `cfg(coverage)`:
-//! - `LocalIpc` and `SshStdio` are thin stubs (struct + new() + inherent connect()).
-//!   The inherent `connect()` is covered by the `errors.rs` integration tests.
-//!   No `Transport` trait impl exists for them in this build, so there are no
-//!   uncoverable send_line/recv_line/close stubs.
+//! - `LocalIpc`, `SshStdio`, and `WslStdio` are thin stubs (struct + new() +
+//!   inherent connect()).  The inherent `connect()` is covered by the `errors.rs`
+//!   integration tests.  No `Transport` trait impl exists for them in this build,
+//!   so there are no uncoverable send_line/recv_line/close stubs.  (`WslStdio`
+//!   is additionally `#[cfg(windows)]`-gated for its real impl since WSL is
+//!   Windows-only; the stub also serves non-Windows production builds.)
 //!
 //! Under `cfg(not(coverage))` (normal build / plain `cargo test`):
 //! - Full production implementations compile.  Integration tests exercise the
@@ -552,16 +555,33 @@ impl Transport for SshStdio {
         use std::process::{Command, Stdio};
         use std::time::Duration;
 
-        let mut child = Command::new("ssh")
-            .arg("-o")
+        let mut cmd = Command::new("ssh");
+        cmd.arg("-o")
             .arg("BatchMode=yes")
             .arg("-o")
             .arg("ConnectTimeout=10")
+            // Keep an otherwise-idle session alive: send a keepalive probe every
+            // 30s and only give up after 3 unanswered ones (~90s). Without this,
+            // NAT/firewall idle timeouts silently drop long-lived claude sessions
+            // that go quiet between turns. TCPKeepAlive also nudges the OS layer.
+            .arg("-o")
+            .arg("ServerAliveInterval=30")
+            .arg("-o")
+            .arg("ServerAliveCountMax=3")
+            .arg("-o")
+            .arg("TCPKeepAlive=yes")
             .arg(&self.target)
             .arg(&self.remote_cmd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::null());
+        // No console-window flash on Windows.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let mut child = cmd
             .spawn()
             .map_err(|e| TransportError::ConnectFailed(e.to_string()))?;
 
@@ -572,6 +592,155 @@ impl Transport for SshStdio {
             Ok(Some(status)) => {
                 return Err(TransportError::ConnectFailed(format!(
                     "ssh exited immediately: {status}"
+                )));
+            }
+            Ok(None) => {}
+            Err(e) => return Err(TransportError::Io(e.to_string())),
+        }
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| TransportError::ConnectFailed("no stdin handle".to_string()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| TransportError::ConnectFailed("no stdout handle".to_string()))?;
+        self.reader = Some(std::io::BufReader::new(stdout));
+        self.stdin = Some(stdin);
+        self.child = Some(child);
+        Ok(())
+    }
+
+    fn send_line(&mut self, line: &str) -> Result<(), TransportError> {
+        use std::io::Write;
+        match self.stdin {
+            Some(ref mut s) => {
+                let msg = format!("{line}\n");
+                s.write_all(msg.as_bytes())
+                    .map_err(|_| TransportError::BrokenPipe)
+            }
+            None => Err(TransportError::ConnectFailed("not connected".to_string())),
+        }
+    }
+
+    fn recv_line(&mut self) -> Result<Option<String>, TransportError> {
+        use std::io::BufRead;
+        match self.reader {
+            Some(ref mut r) => {
+                let mut line = String::new();
+                match r.read_line(&mut line) {
+                    Ok(0) => Ok(None),
+                    Ok(_) => {
+                        if line.ends_with('\n') {
+                            line.pop();
+                        }
+                        Ok(Some(line))
+                    }
+                    Err(e) => Err(TransportError::Io(e.to_string())),
+                }
+            }
+            None => Err(TransportError::ConnectFailed("not connected".to_string())),
+        }
+    }
+
+    fn close(&mut self) -> Result<(), TransportError> {
+        self.reader = None;
+        self.stdin = None;
+        if let Some(ref mut child) = self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.child = None;
+        Ok(())
+    }
+}
+
+// ── WslStdio ─────────────────────────────────────────────────────────────────
+//
+// Same two-mode pattern as SshStdio, but the child is `claude` running inside a
+// WSL distro, launched via `wsl.exe -d <distro> -- <remote_cmd>` instead of
+// `ssh <target> -- <remote_cmd>`.  WSL is a Windows-only concept, so the real
+// spawn is `#[cfg(windows)]`; under coverage (and on non-Windows hosts) a thin
+// stub provides an inherent connect() that returns ConnectFailed without
+// touching the OS, exactly like LocalIpc's coverage stub.
+
+/// Transport over the stdio of a `claude`/`marsad-agent` process running inside
+/// a WSL distro via `wsl.exe`.
+pub struct WslStdio {
+    /// WSL distro name (e.g. `Ubuntu`), passed to `wsl.exe -d <distro>`.
+    distro: String,
+    /// Command run inside the distro (e.g. `marsad-agent`).
+    remote_cmd: String,
+    #[cfg(all(windows, not(coverage)))]
+    child: Option<std::process::Child>,
+    #[cfg(all(windows, not(coverage)))]
+    stdin: Option<std::process::ChildStdin>,
+    #[cfg(all(windows, not(coverage)))]
+    reader: Option<std::io::BufReader<std::process::ChildStdout>>,
+}
+
+impl WslStdio {
+    /// Create a new `WslStdio` targeting WSL distro `distro`, running `remote_cmd`.
+    pub fn new(distro: impl Into<String>, remote_cmd: impl Into<String>) -> Self {
+        Self {
+            distro: distro.into(),
+            remote_cmd: remote_cmd.into(),
+            #[cfg(all(windows, not(coverage)))]
+            child: None,
+            #[cfg(all(windows, not(coverage)))]
+            stdin: None,
+            #[cfg(all(windows, not(coverage)))]
+            reader: None,
+        }
+    }
+
+    /// Connect stub for coverage / non-Windows builds.
+    ///
+    /// WSL only exists on Windows, so off-Windows (and under the llvm-cov build)
+    /// this returns `ConnectFailed` without spawning anything — mirroring
+    /// `LocalIpc`'s coverage stub.  Exercised by `errors.rs`.
+    #[cfg(not(all(windows, not(coverage))))]
+    pub fn connect(&mut self) -> Result<(), TransportError> {
+        Err(TransportError::ConnectFailed(format!(
+            "WSL unavailable for distro '{}' (cmd '{}')",
+            self.distro, self.remote_cmd
+        )))
+    }
+}
+
+/// Full `Transport` impl — Windows production builds only (excluded from coverage).
+#[cfg(all(windows, not(coverage)))]
+impl Transport for WslStdio {
+    #[allow(clippy::similar_names)]
+    fn connect(&mut self) -> Result<(), TransportError> {
+        use std::os::windows::process::CommandExt;
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+
+        let mut cmd = Command::new("wsl.exe");
+        cmd.arg("-d")
+            .arg(&self.distro)
+            .arg("--")
+            .arg("sh")
+            .arg("-c")
+            .arg(&self.remote_cmd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            // No console-window flash on Windows.
+            .creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| TransportError::ConnectFailed(e.to_string()))?;
+
+        // Brief liveness probe: a missing distro causes wsl.exe to exit within
+        // milliseconds; a real session stays running.
+        std::thread::sleep(Duration::from_millis(150));
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return Err(TransportError::ConnectFailed(format!(
+                    "wsl.exe exited immediately: {status}"
                 )));
             }
             Ok(None) => {}
