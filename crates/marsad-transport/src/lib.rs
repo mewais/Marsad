@@ -703,7 +703,9 @@ impl Transport for SshStdio {
 /// `sh -c <script>`. Either way the chosen shell expands `$HOME` in the fifo paths.
 fn remote_shell_argv(prefix: &[String], script: &str) -> Vec<String> {
     let mut argv = prefix.to_vec();
-    if prefix.first().map(String::as_str) == Some("ssh") {
+    // ssh AND plink both re-parse their trailing command through the remote shell, so
+    // the script must be a single token; wsl.exe preserves argv and needs `sh -c`.
+    if matches!(prefix.first().map(String::as_str), Some("ssh") | Some("plink")) {
         argv.push(script.to_string());
     } else {
         argv.push("sh".to_string());

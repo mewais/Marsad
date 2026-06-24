@@ -1426,7 +1426,8 @@ fn remote_shell_quote(s: &str) -> String {
 /// run through (see docs/remote-hosts.md). Returns:
 /// - `None` for the local machine (`None` / `"local"` / `"localhost"` / empty),
 /// - an `ssh` prefix (with the standard option set) for `user@host` or a bare alias,
-/// - a `wsl.exe` prefix for `wsl:<distro>`.
+/// - a `wsl.exe` prefix for `wsl:<distro>`,
+/// - a `plink` prefix (PuTTY connection sharing) for `plink:<ssh-target>`.
 pub fn exec_prefix_for(host_target: Option<&str>) -> Option<Vec<String>> {
     let t = host_target.map(str::trim).filter(|s| !s.is_empty())?;
     if t == "local" || t == "localhost" {
@@ -1437,6 +1438,25 @@ pub fn exec_prefix_for(host_target: Option<&str>) -> Option<Vec<String>> {
             return None;
         }
         return Some(vec!["wsl.exe".to_string(), "-d".to_string(), distro.to_string()]);
+    }
+    // PuTTY plink with SSH connection sharing — the Windows alternative to
+    // ControlMaster (which `ssh.exe` can't do: `getsockname failed: Not a socket`).
+    // The interactive login (bridge.rs) runs `plink -share <inner>` and becomes the
+    // sharing "upstream"; these automated connections add `-batch` (disable
+    // interactive prompts) and `-share` (downstream onto that upstream) so a Duo/MFA
+    // host authenticates once then is reused. Flags per the PuTTY manual: `-share`
+    // enable connection sharing, `-batch` disable interactive prompts. ControlMaster
+    // ssh options do NOT apply to plink and are intentionally omitted.
+    if let Some(inner) = t.strip_prefix("plink:") {
+        if inner.is_empty() {
+            return None;
+        }
+        return Some(vec![
+            "plink".to_string(),
+            "-share".to_string(),
+            "-batch".to_string(),
+            inner.to_string(),
+        ]);
     }
     // SSH host. BatchMode for the automated connection; ControlMaster multiplexing
     // lets it reuse an interactive login's master socket (MFA hosts); keepalive

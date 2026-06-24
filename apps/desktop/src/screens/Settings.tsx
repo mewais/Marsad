@@ -854,14 +854,14 @@ function HostsTab() {
                 marginBottom: 5,
               }}
             >
-              SSH target or wsl:&lt;distro&gt;
+              SSH target · wsl:&lt;distro&gt; · plink:&lt;target&gt;
             </div>
             <input
               data-testid="host-add-target"
               value={target}
               onChange={(e) => setTarget(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
-              placeholder="user@10.0.0.5  ·  etx  ·  wsl:Ubuntu"
+              placeholder="user@10.0.0.5  ·  etx  ·  wsl:Ubuntu  ·  plink:user@host"
               className="mono"
               style={{
                 width: "100%",
@@ -883,7 +883,7 @@ function HostsTab() {
             className="mono"
             style={{ fontSize: "calc(12.5px * var(--fs,1))", color: "var(--txt3)", flex: 1 }}
           >
-            SSH: honors ~/.ssh/config, no inbound ports · WSL: use wsl:&lt;distro&gt;
+            SSH: honors ~/.ssh/config · WSL: wsl:&lt;distro&gt; · MFA on Windows w/o WSL: plink:&lt;target&gt; (PuTTY plink on PATH)
           </span>
           <button
             data-testid="host-add-btn"

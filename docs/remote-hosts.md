@@ -25,6 +25,7 @@ treat it as **opaque**:
 The agent builds the prefix from the host:
 - SSH host (`user@host` / bare alias `etx`): `["ssh", <opts…>, "<target>"]`
 - WSL host (`wsl:<distro>`): `["wsl.exe", "-d", "<distro>"]`
+- plink host (`plink:<ssh-target>`): `["plink", "-share", "-batch", "<inner>"]`
 
 ### SSH option set (built by the agent / desktop, not by lifecycle/transport)
 Always pass, in this order, before the target:
@@ -41,6 +42,26 @@ master socket; every later `ssh` (health probe, container, FIFO transport) rides
 no re-auth. An MFA / keyboard-interactive host is handled by opening **one** interactive
 login in a real OS terminal (NO `BatchMode`, SAME `ControlPath`) — once it succeeds the
 master persists and all automated connections reuse it. No in-app PTY needed.
+
+### PuTTY plink (`plink:<target>`) — the Windows-without-WSL alternative
+Windows `ssh.exe` does **not** support `ControlMaster` connection multiplexing (it needs
+Unix-domain sockets — `getsockname failed: Not a socket`), so a Duo/MFA host re-prompts on
+every connection. WSL users get multiplexing via WSL's Linux `ssh`; users without WSL use
+PuTTY's `plink`, which **does** support SSH connection sharing on Windows. Add such a host
+with the `plink:` prefix on its SSH target (e.g. `plink:user@host`, `plink:etx`); `plink`
+(PuTTY) must be installed and on `PATH`.
+
+- Interactive login (desktop `connect_host_interactive`): opens a visible console running
+  `plink -share <inner>` (NO `-batch`). This first connection becomes the connection-sharing
+  **upstream** (the Duo prompt is answered here once).
+- Automated connections (agent `exec_prefix_for`): `["plink", "-share", "-batch", "<inner>"]`.
+  `-share` makes them **downstreams** that ride the upstream; `-batch` disables interactive
+  prompts so headless connections fail cleanly instead of hanging.
+- Health probe: `plink -share -batch <inner> true` — reads Connected once the upstream
+  exists, Unreachable/Reconnecting otherwise (e.g. plink missing → Reconnecting).
+
+plink flags (PuTTY manual): `-share` = enable SSH connection sharing; `-batch` = disable
+interactive prompts. ControlMaster ssh options do **not** apply to plink and are omitted.
 
 ### Remote layout
 Remote session dir: `~/.marsad/sessions/<id>/` containing `in.fifo`, `out.fifo`,

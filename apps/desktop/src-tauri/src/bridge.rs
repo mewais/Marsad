@@ -466,24 +466,41 @@ pub fn list_wsl_distros() -> Result<Vec<String>, String> {
     marsad_hosts::list_wsl_distros(&marsad_hosts::RealWslRunner).map_err(|e| e.to_string())
 }
 
-/// Open a real OS terminal window running an INTERACTIVE `ssh` login for
-/// `target`, using the SAME ControlPath as the automated connections (see
-/// docs/remote-hosts.md) so the resulting master socket is reused headlessly.
+/// Open a real OS terminal window running an INTERACTIVE login for `target` so
+/// the user completes MFA / keyboard-interactive auth once, after which automated
+/// connections reuse it (see docs/remote-hosts.md).
 ///
-/// This is the MFA / keyboard-interactive escape hatch: the user completes the
-/// login once in a visible terminal (NO `BatchMode`), the master persists
-/// (`ControlPersist=600`), and every later automated `ssh` rides it.
+/// Two transports, selected by the target string:
+/// - `ssh` (default): completes the login with NO `BatchMode`, the same
+///   `ControlPath` master socket as the automated connections, which persists
+///   (`ControlPersist=600`) and every later automated `ssh` rides it.
+/// - `plink:<inner>` (PuTTY): runs `plink -share <inner>` (NO `-batch`). That
+///   first connection becomes the connection-sharing **upstream**; later
+///   automated `plink -share -batch <inner>` connections share it. This is the
+///   Windows path that works without WSL, since `ssh.exe` lacks ControlMaster.
 #[tauri::command(rename_all = "snake_case")]
 pub fn connect_host_interactive(target: String) -> Result<(), String> {
     launch_interactive_ssh(&target)
 }
 
-/// Build the interactive `ssh` argv used by `connect_host_interactive`.
+/// Build the interactive login argv used by `connect_host_interactive`.
 ///
-/// Deliberately NO `BatchMode` (this is the interactive login). The
-/// `ControlPath` MUST match docs/remote-hosts.md exactly so automated
-/// connections reuse the master socket.
+/// `args[0]` is the binary (`ssh` or `plink`); callers pass the rest as its args.
+///
+/// - `plink:<inner>` → `["plink", "-share", "<inner>"]`. Deliberately NO `-batch`
+///   (this is the interactive Duo login that establishes the shared upstream);
+///   `-share` enables connection sharing so automated downstreams can reuse it.
+/// - otherwise → an `ssh` login. Deliberately NO `BatchMode` (interactive); the
+///   `ControlPath` MUST match docs/remote-hosts.md exactly so automated
+///   connections reuse the master socket.
 fn interactive_ssh_args(target: &str) -> Vec<String> {
+    if let Some(inner) = target.strip_prefix("plink:") {
+        return vec![
+            "plink".to_string(),
+            "-share".to_string(),
+            inner.to_string(),
+        ];
+    }
     let mut args = vec!["ssh".to_string()];
     // SSH connection multiplexing (ControlMaster/ControlPath/ControlPersist) lets an
     // interactive login's master socket be reused by later headless connections — but
@@ -522,10 +539,11 @@ fn launch_interactive_ssh(target: &str) -> Result<(), String> {
     // - `cmd /K` keeps the window open after ssh exits so a failed/re-prompting Duo
     //   login stays visible, and gives ssh a real console (PTY) for the prompt.
     const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+    // args[0] is the binary (`ssh` or `plink`); the rest are its arguments.
+    let args = interactive_ssh_args(target);
     let mut cmd = Command::new("cmd.exe");
-    cmd.arg("/K").arg("ssh");
-    // interactive_ssh_args[0] is "ssh"; pass the rest as ssh's arguments.
-    for a in interactive_ssh_args(target).into_iter().skip(1) {
+    cmd.arg("/K");
+    for a in &args {
         cmd.arg(a);
     }
     cmd.creation_flags(CREATE_NEW_CONSOLE);

@@ -673,11 +673,39 @@ fn wsl_health(distro: &str) -> marsad_core::HostStatus {
     }
 }
 
-/// Probe a host's reachability, dispatching by target type: `wsl:<distro>` → WSL,
-/// everything else (`user@host`, bare alias) → SSH.
-fn host_health(target: &str) -> marsad_core::HostStatus {
-    match target.strip_prefix("wsl:") {
-        Some(distro) => wsl_health(distro),
-        None => ssh_health(target),
+/// One plink reachability probe: `plink -share -batch <inner> true`. PuTTY hosts
+/// reach the SSH box via connection sharing — once the user has done the
+/// interactive `plink -share <inner>` login (the sharing upstream), this `-share
+/// -batch` downstream rides that upstream with no re-auth and reads Connected.
+/// `-batch` disables interactive prompts so the probe fails cleanly (rather than
+/// hanging) when no upstream exists yet. Probing plink hosts with `ssh.exe` would
+/// always read Unreachable, so they must go through `plink`.
+fn plink_health(inner: &str) -> marsad_core::HostStatus {
+    use marsad_core::HostStatus;
+    let mut cmd = std::process::Command::new("plink");
+    cmd.args(["-share", "-batch", inner, "true"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    hide_console(&mut cmd);
+    match cmd.status() {
+        Ok(s) if s.success() => HostStatus::Connected,
+        Ok(_) => HostStatus::Unreachable,
+        // plink not installed / not on PATH → surface as Reconnecting (same as a
+        // missing ssh/wsl binary), so the UI shows the host isn't reachable yet.
+        Err(_) => HostStatus::Reconnecting,
     }
+}
+
+/// Probe a host's reachability, dispatching by target type: `wsl:<distro>` → WSL,
+/// `plink:<inner>` → PuTTY plink connection sharing, everything else
+/// (`user@host`, bare alias) → SSH.
+fn host_health(target: &str) -> marsad_core::HostStatus {
+    if let Some(distro) = target.strip_prefix("wsl:") {
+        return wsl_health(distro);
+    }
+    if let Some(inner) = target.strip_prefix("plink:") {
+        return plink_health(inner);
+    }
+    ssh_health(target)
 }

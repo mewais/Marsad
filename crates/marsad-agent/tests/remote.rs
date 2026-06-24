@@ -47,6 +47,41 @@ fn bare_alias_is_treated_as_ssh() {
     assert_eq!(p.last().unwrap(), "etx");
 }
 
+#[test]
+fn plink_target_builds_sharing_prefix() {
+    // `plink:user@host` → PuTTY connection sharing for the automated connection:
+    // `-share` (enable sharing/downstream) + `-batch` (no interactive prompts).
+    assert_eq!(
+        exec_prefix_for(Some("plink:user@host")),
+        Some(vec![
+            "plink".to_string(),
+            "-share".to_string(),
+            "-batch".to_string(),
+            "user@host".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn plink_target_with_bare_alias() {
+    // `plink:<bare-alias>` strips the prefix and keeps the inner saved-session name.
+    assert_eq!(
+        exec_prefix_for(Some("plink:etx")),
+        Some(vec![
+            "plink".to_string(),
+            "-share".to_string(),
+            "-batch".to_string(),
+            "etx".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn plink_without_inner_is_local() {
+    // `plink:` with no inner target is not usable → treated as local.
+    assert_eq!(exec_prefix_for(Some("plink:")), None);
+}
+
 // ── build_remote_spawn_cmd ──────────────────────────────────────────────────────
 
 #[test]

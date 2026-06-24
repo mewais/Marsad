@@ -153,6 +153,15 @@ fn remote_shell_argv_ssh_uses_login_shell_single_token() {
 }
 
 #[test]
+fn remote_shell_argv_plink_uses_login_shell_like_ssh() {
+    // plink re-parses its trailing command like ssh → same login-shell single token.
+    let prefix = vec!["plink".to_string(), "-share".to_string(), "user@h".to_string()];
+    let argv = remote_shell_argv(&prefix, "tmux has-session -t s");
+    assert_eq!(argv[0], "plink");
+    assert_eq!(argv.last().unwrap(), "bash -lc 'tmux has-session -t s'");
+}
+
+#[test]
 fn remote_shell_argv_wsl_wraps_in_sh_c() {
     // wsl.exe preserves argv (no re-parse), so the script needs an explicit shell.
     let argv = remote_shell_argv(&wsl_prefix(), "mkdir -p $HOME/x");

@@ -496,7 +496,9 @@ impl RemoteTmuxContainer {
 /// that preserves argv) needs an explicit `sh -c <script>`.
 pub fn remote_shell_argv(prefix: &[String], script: &str) -> Vec<String> {
     let mut argv = prefix.to_vec();
-    if prefix.first().map(String::as_str) == Some("ssh") {
+    // ssh AND plink both join their trailing command args with spaces and re-run them
+    // through the remote shell — so both take the login-shell single-token form.
+    if matches!(prefix.first().map(String::as_str), Some("ssh") | Some("plink")) {
         // Run via a LOGIN shell (`bash -lc`) so the remote profile is sourced — PATH,
         // and on HPC clusters the module environment that provides `tmux`. ssh's plain
         // command shell is non-login, so tools available interactively (tmux) are
