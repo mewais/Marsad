@@ -14,7 +14,7 @@ import { useTheme } from "../theme/ThemeProvider";
 import { getUiScale, applyUiScale } from "../theme/uiScale";
 import { Toggle } from "../components/Toggle";
 import { MODELS as MODEL_LIST } from "../bridge/models";
-import { getAutostart, setAutostart, addHost, removeHost, connectHostInteractive, getSettings, setSettings, DEFAULT_SETTINGS } from "../bridge/api";
+import { getAutostart, setAutostart, addHost, removeHost, connectHostInteractive, listWslDistros, getSettings, setSettings, DEFAULT_SETTINGS } from "../bridge/api";
 import type { Settings, NotifPref } from "../bridge/types";
 
 // ---------------------------------------------------------------------------
@@ -608,6 +608,25 @@ function HostsTab() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
+  const [wslDistros, setWslDistros] = useState<string[]>([]);
+
+  // Detect installed WSL distros once (empty off Windows) so they can be added
+  // with one click instead of the user needing to know the `wsl:<distro>` syntax.
+  useEffect(() => {
+    listWslDistros()
+      .then(setWslDistros)
+      .catch(() => setWslDistros([]));
+  }, []);
+
+  async function handleAddWsl(wslTarget: string) {
+    const distro = wslTarget.replace(/^wsl:/, "");
+    setError(null);
+    try {
+      await addHost(`WSL · ${distro}`, wslTarget);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   async function handleAdd() {
     if (!label.trim() || !target.trim() || busy) return;
@@ -834,13 +853,13 @@ function HostsTab() {
                 marginBottom: 5,
               }}
             >
-              SSH target
+              SSH target or wsl:&lt;distro&gt;
             </div>
             <input
               data-testid="host-add-target"
               value={target}
               onChange={(e) => setTarget(e.target.value)}
-              placeholder="user@10.0.0.5"
+              placeholder="user@10.0.0.5  ·  etx  ·  wsl:Ubuntu"
               className="mono"
               style={{
                 width: "100%",
@@ -862,7 +881,7 @@ function HostsTab() {
             className="mono"
             style={{ fontSize: "calc(12.5px * var(--fs,1))", color: "var(--txt3)", flex: 1 }}
           >
-            Honors your ~/.ssh/config · installs a small helper on first connect · no inbound ports
+            SSH: honors ~/.ssh/config, no inbound ports · WSL: use wsl:&lt;distro&gt;
           </span>
           <button
             data-testid="host-add-btn"
@@ -882,7 +901,7 @@ function HostsTab() {
               opacity: !label.trim() || !target.trim() || busy ? 0.55 : 1,
             }}
           >
-            {busy ? "Adding…" : "Add & connect"}
+            {busy ? "Adding…" : "Add host"}
           </button>
         </div>
         {error && (
@@ -891,6 +910,41 @@ function HostsTab() {
           </span>
         )}
       </div>
+
+      {/* WSL distros (Windows) — one-click add */}
+      {wslDistros.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <div style={{ ...S.sectionLabel, marginBottom: 10 }}>WSL distros</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 9 }}>
+            {wslDistros.map((d) => {
+              const distro = d.replace(/^wsl:/, "");
+              const already = hosts.some((h) => h.target === d);
+              return (
+                <button
+                  key={d}
+                  data-testid={`wsl-add-${distro}`}
+                  disabled={already}
+                  onClick={() => handleAddWsl(d)}
+                  className="mono"
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "calc(13.5px * var(--fs,1))",
+                    fontWeight: 600,
+                    padding: "8px 13px",
+                    borderRadius: 9,
+                    border: "1px solid var(--border2)",
+                    background: already ? "var(--panel2)" : "var(--panel)",
+                    color: already ? "var(--txt3)" : "var(--txt)",
+                    cursor: already ? "default" : "pointer",
+                  }}
+                >
+                  {already ? `✓ ${distro}` : `+ ${distro}`}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

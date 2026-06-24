@@ -227,31 +227,40 @@ impl Backend for FsBackend {
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<String>, StoreError> {
-        let rel = prefix.replace(':', "/");
-        let dir = self.root.join(&rel);
-        let dir = if dir.to_string_lossy().ends_with('/') {
-            dir.parent().unwrap_or(&dir).to_path_buf()
-        } else {
-            dir
-        };
-        let mut keys = Vec::new();
-        let walker = match std::fs::read_dir(&dir) {
-            Ok(rd) => rd,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(keys),
-            Err(e) => return Err(StoreError::Backend(e.to_string())),
-        };
-        for entry in walker {
-            let entry = entry.map_err(|e| StoreError::Backend(e.to_string()))?;
-            let path = entry.path();
-            if path.is_file() {
-                if let Ok(rel_path) = path.strip_prefix(&self.root) {
-                    let key = rel_path.to_string_lossy().replace('/', ":");
-                    if key.starts_with(prefix) {
+        // Keys map to paths by replacing ':' with the path separator (e.g.
+        // `host:host-1` → `<root>/host/host-1`), so enumerating keys means walking
+        // the tree RECURSIVELY — a flat read_dir only sees the top-level `host/`,
+        // `session/`, … directories and would restore nothing. We also normalise
+        // BOTH '/' and '\\' back to ':' so the reconstructed key matches on Windows
+        // (where strip_prefix yields backslash separators).
+        fn walk(
+            dir: &std::path::Path,
+            root: &std::path::Path,
+            keys: &mut Vec<String>,
+        ) -> Result<(), StoreError> {
+            let rd = match std::fs::read_dir(dir) {
+                Ok(rd) => rd,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(e) => return Err(StoreError::Backend(e.to_string())),
+            };
+            for entry in rd {
+                let entry = entry.map_err(|e| StoreError::Backend(e.to_string()))?;
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, root, keys)?;
+                } else if path.is_file() {
+                    if let Ok(rel_path) = path.strip_prefix(root) {
+                        let key = rel_path.to_string_lossy().replace(['/', '\\'], ":");
                         keys.push(key);
                     }
                 }
             }
+            Ok(())
         }
+
+        let mut keys = Vec::new();
+        walk(&self.root, &self.root, &mut keys)?;
+        keys.retain(|k| k.starts_with(prefix));
         Ok(keys)
     }
 

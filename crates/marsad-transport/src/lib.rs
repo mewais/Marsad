@@ -566,7 +566,8 @@ impl Transport for SshStdio {
         use std::time::Duration;
 
         let mut cmd = Command::new("ssh");
-        cmd.arg("-o")
+        cmd.arg("-T") // no PTY — avoids a ConPTY/console-window flash on Windows
+            .arg("-o")
             .arg("BatchMode=yes")
             .arg("-o")
             .arg("ConnectTimeout=10")

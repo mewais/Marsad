@@ -25,12 +25,14 @@
         src:url('/fonts/marsad-symbols-misc.woff2') format('woff2');
         unicode-range:U+23F8}
       html{margin:0;height:100%;background:transparent}
-      /* Translucent app surface on ALL platforms: the window itself is transparent
-         (tauri `transparent:true`), and this semi-opaque tint + backdrop blur frosts
-         whatever is behind it (the desktop). On Windows the mica/acrylic windowEffect
-         stacks on top; on Linux/macOS the backdrop-filter carries it. Lower the alpha
-         for more see-through, raise it for more opacity. */
-      body{margin:0;height:100%;font-family:'Hanken Grotesk','Marsad Symbols',system-ui,sans-serif;background:rgba(14,17,22,0.62);backdrop-filter:blur(34px) saturate(120%);-webkit-backdrop-filter:blur(34px) saturate(120%);color:#e8ecf1;-webkit-font-smoothing:antialiased}
+      /* Translucent app surface. The window is transparent (tauri `transparent:true`)
+         and the OS provides the blur material (Windows `acrylic` windowEffect; on a
+         compositing Linux/macOS the transparency shows through directly). The body is
+         only a light TINT so that material/desktop shows through — NO `backdrop-filter`
+         here: over a transparent WebView2 window it renders opaque (black) and was what
+         defeated translucency on Windows. Raise the alpha for more opacity, lower it
+         for more see-through. */
+      body{margin:0;height:100%;font-family:'Hanken Grotesk','Marsad Symbols',system-ui,sans-serif;background:rgba(14,17,22,0.55);color:#e8ecf1;-webkit-font-smoothing:antialiased}
       .mono{font-family:'JetBrains Mono','Marsad Symbols',monospace}
       ::-webkit-scrollbar{width:9px;height:9px}
       ::-webkit-scrollbar-thumb{background:var(--border2,#313a48);border-radius:6px}

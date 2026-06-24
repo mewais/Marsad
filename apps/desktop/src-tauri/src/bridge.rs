@@ -457,6 +457,15 @@ pub fn remove_host(
     Ok(())
 }
 
+/// List installed WSL distros as ready-to-add `wsl:<distro>` host targets.
+/// Empty on non-Windows (and if WSL isn't installed). Lets the Hosts UI offer
+/// one-click WSL hosts instead of the user having to know the `wsl:<distro>`
+/// convention.
+#[tauri::command]
+pub fn list_wsl_distros() -> Result<Vec<String>, String> {
+    marsad_hosts::list_wsl_distros(&marsad_hosts::RealWslRunner).map_err(|e| e.to_string())
+}
+
 /// Open a real OS terminal window running an INTERACTIVE `ssh` login for
 /// `target`, using the SAME ControlPath as the automated connections (see
 /// docs/remote-hosts.md) so the resulting master socket is reused headlessly.
@@ -494,11 +503,24 @@ fn interactive_ssh_args(target: &str) -> Vec<String> {
 #[cfg(target_os = "windows")]
 fn launch_interactive_ssh(target: &str) -> Result<(), String> {
     use std::process::Command;
-    // `cmd.exe /C start "" ssh …` opens a new, VISIBLE console window. We
-    // intentionally do NOT set CREATE_NO_WINDOW — the user must see/interact.
+    // Open a new VISIBLE console that STAYS open and shows ssh's output/prompts.
+    //   cmd /C start "Marsad login" cmd /K ssh <args…>
+    // - `start "title"` opens a separate window (the first quoted token is the
+    //   window title, not a program — required so the real program isn't mistaken
+    //   for a title).
+    // - `cmd /K` keeps that window open after ssh exits, so a failed/again-prompting
+    //   Duo login is visible instead of the window flashing shut (the "shows
+    //   nothing" bug). It also gives ssh a real console → a PTY for the prompt.
+    // We deliberately do NOT set CREATE_NO_WINDOW here — this window is intentional.
     let mut cmd = Command::new("cmd.exe");
-    cmd.arg("/C").arg("start").arg("");
-    for a in interactive_ssh_args(target) {
+    cmd.arg("/C")
+        .arg("start")
+        .arg("Marsad login")
+        .arg("cmd")
+        .arg("/K")
+        .arg("ssh");
+    // interactive_ssh_args[0] is "ssh"; pass the rest as ssh's arguments.
+    for a in interactive_ssh_args(target).into_iter().skip(1) {
         cmd.arg(a);
     }
     cmd.spawn()

@@ -1429,6 +1429,10 @@ pub fn exec_prefix_for(host_target: Option<&str>) -> Option<Vec<String>> {
     // stops idle drops. Mirrors the SSH option set in docs/remote-hosts.md.
     let opt = |k: &str| ["-o".to_string(), k.to_string()];
     let mut argv = vec!["ssh".to_string()];
+    // `-T`: no PTY. On Windows `ssh.exe` otherwise allocates a ConPTY that flashes a
+    // console window; our remote commands (tmux control, `cat` FIFO bridging) never
+    // need a TTY, so disable it everywhere.
+    argv.push("-T".to_string());
     argv.extend(opt("BatchMode=yes"));
     argv.extend(opt("ConnectTimeout=10"));
     argv.extend(opt("ServerAliveInterval=30"));

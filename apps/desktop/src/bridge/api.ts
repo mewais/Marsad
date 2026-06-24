@@ -162,6 +162,16 @@ export async function connectHostInteractive(target: string): Promise<void> {
   await invoke("connect_host_interactive", { target });
 }
 
+/**
+ * List installed WSL distros as ready-to-add `wsl:<distro>` host targets.
+ * Returns [] outside Tauri or when WSL isn't available.
+ */
+export async function listWslDistros(): Promise<string[]> {
+  if (!isTauri()) return [];
+  const invoke = await getInvoke();
+  return (await invoke("list_wsl_distros")) as string[];
+}
+
 export async function answerGate(args: {
   session_id: string;
   decision_id: string;

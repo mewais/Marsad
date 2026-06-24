@@ -216,6 +216,7 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::add_host,
             bridge::remove_host,
             bridge::connect_host_interactive,
+            bridge::list_wsl_distros,
             bridge::save_workspace,
             bridge::duplicate_workspace,
             bridge::delete_workspace,
@@ -619,6 +620,10 @@ fn ssh_health(target: &str) -> marsad_core::HostStatus {
     use marsad_core::HostStatus;
     let mut cmd = std::process::Command::new("ssh");
     cmd.args([
+        // `-T` disables PTY allocation. On Windows `ssh.exe` otherwise spins up a
+        // ConPTY/conhost which flashes a console window every probe — CREATE_NO_WINDOW
+        // alone does NOT suppress that. `-T` keeps the recurring health probe silent.
+        "-T",
         "-o",
         "BatchMode=yes",
         "-o",
