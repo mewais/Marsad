@@ -110,6 +110,20 @@ fn remote_spawn_cmd_with_bin_setup_and_env() {
 }
 
 #[test]
+fn remote_spawn_cmd_expands_tilde_project() {
+    let argv = vec!["claude".to_string()];
+    // "~/" → cd "$HOME/" (double-quoted so $HOME expands; `cd '~/'` would fail).
+    let home = build_remote_spawn_cmd("~/", &argv, None, &[]);
+    assert!(home.contains("cd \"$HOME/\" && exec"), "tilde-slash → $HOME: {home}");
+    // bare "~" → cd "$HOME"
+    let bare = build_remote_spawn_cmd("~", &argv, None, &[]);
+    assert!(bare.contains("cd \"$HOME\" && exec"), "bare tilde → $HOME: {bare}");
+    // "~/proj" → cd "$HOME/proj"
+    let sub = build_remote_spawn_cmd("~/proj", &argv, None, &[]);
+    assert!(sub.contains("cd \"$HOME/proj\" && exec"), "tilde subdir: {sub}");
+}
+
+#[test]
 fn remote_spawn_cmd_empty_setup_is_skipped() {
     // An empty setup string adds no leading line.
     let argv = vec!["claude".to_string()];

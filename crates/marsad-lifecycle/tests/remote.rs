@@ -169,12 +169,13 @@ fn remote_shell_argv_plink_uses_login_shell_like_ssh() {
 }
 
 #[test]
-fn remote_shell_argv_wsl_wraps_in_sh_c() {
-    // wsl.exe preserves argv (no re-parse), so the script needs an explicit shell.
-    let argv = remote_shell_argv(&wsl_prefix(), "mkdir -p $HOME/x");
-    assert_eq!(argv[argv.len() - 3], "sh");
-    assert_eq!(argv[argv.len() - 2], "-c");
-    assert_eq!(argv.last().unwrap(), "mkdir -p $HOME/x");
+fn remote_shell_argv_wsl_uses_login_bash() {
+    // wsl.exe preserves argv (no re-parse), but the script still needs a LOGIN shell
+    // so ~/.local/bin (claude) is on PATH — `bash -lc <script>` as explicit args.
+    let argv = remote_shell_argv(&wsl_prefix(), "command -v claude");
+    assert_eq!(argv[argv.len() - 3], "bash");
+    assert_eq!(argv[argv.len() - 2], "-lc");
+    assert_eq!(argv.last().unwrap(), "command -v claude");
 }
 
 // ── edge prefixes / construction ───────────────────────────────────────────────

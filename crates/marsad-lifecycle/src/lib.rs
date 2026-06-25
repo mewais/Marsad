@@ -513,10 +513,12 @@ pub fn remote_shell_argv(prefix: &[String], script: &str) -> Vec<String> {
         // args with spaces and re-parses them through the login shell.
         argv.push(format!("bash -lc {}", sh_single_quote(script)));
     } else {
-        // wsl.exe (and other argv-preserving launchers): a standard distro has tmux on
-        // the default PATH, so a plain `sh -c` is enough (and avoids login-shell noise).
-        argv.push("sh".to_string());
-        argv.push("-c".to_string());
+        // wsl.exe preserves argv (no re-parse), so the script is one explicit arg — but
+        // it STILL needs a LOGIN shell: tools like `claude` live in `~/.local/bin`,
+        // which is only on PATH after the login profile runs. A non-login `sh -c` can't
+        // find them (confirmed: `wsl.exe … sh -c 'command -v claude'` → not found).
+        argv.push("bash".to_string());
+        argv.push("-lc".to_string());
         argv.push(script.to_string());
     }
     argv

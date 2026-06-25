@@ -1527,7 +1527,7 @@ pub fn build_remote_spawn_cmd(
     }
     body.push_str(&format!(
         "cd {} && exec {} {}",
-        remote_shell_quote(project),
+        cd_target(project),
         remote_shell_quote(bin),
         claude_args
             .iter()
@@ -1536,6 +1536,21 @@ pub fn build_remote_spawn_cmd(
             .join(" "),
     ));
     body
+}
+
+/// Shell-quote a project path for `cd`, expanding a leading `~`. Single-quoting a
+/// path like `~/` (as `remote_shell_quote` would) makes `cd '~/'` look for a literal
+/// `~` directory → "No such file or directory". Map a leading `~`/`~/…` to `$HOME`
+/// inside DOUBLE quotes so it expands; quote everything else literally.
+fn cd_target(project: &str) -> String {
+    if project == "~" {
+        "\"$HOME\"".to_string()
+    } else if let Some(rest) = project.strip_prefix("~/") {
+        // "$HOME/<rest>" — double-quoted so $HOME expands and spaces are safe.
+        format!("\"$HOME/{rest}\"")
+    } else {
+        remote_shell_quote(project)
+    }
 }
 
 // ── claude_argv ───────────────────────────────────────────────────────────────
