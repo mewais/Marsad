@@ -115,6 +115,41 @@ impl fmt::Debug for SessionWritersWrap {
     }
 }
 
+// Per-session remote child registry wrapper — production builds only.
+// A single-connection remote session is one `ssh/plink/wsl` child process whose
+// stdin/stdout are piped to the agent; the `Child` must be kept alive for the
+// session's duration AND be killable on stop (killing it closes the pipes, so the
+// remote claude dies when the connection drops). Local sessions never populate
+// this map (they use tmux/shim containers). Gated out of the coverage build so no
+// uncovered lines appear, exactly like `SessionWritersWrap`.
+#[cfg(not(coverage))]
+struct SessionChildrenWrap(
+    std::sync::Arc<std::sync::Mutex<HashMap<String, std::process::Child>>>,
+);
+
+#[cfg(not(coverage))]
+impl fmt::Debug for SessionChildrenWrap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SessionChildrenWrap")
+    }
+}
+
+// Per-session remote run-command stash — production builds only.
+// A remote launch computes its single-connection run command (setup + env +
+// `cd … && exec <claude> <args>`) from the full LaunchSpec inside
+// `launch_with_id` (the only place the posture + mode are known). The serve loop
+// pops it by session_id after `handle_ipc` and hands it to the reader thread via
+// `AgentReply.run_command`. Local launches insert nothing. Gated out of coverage.
+#[cfg(not(coverage))]
+struct SessionRunCmdsWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>);
+
+#[cfg(not(coverage))]
+impl fmt::Debug for SessionRunCmdsWrap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SessionRunCmdsWrap")
+    }
+}
+
 /// A `can_use_tool` permission request claude is blocked on, awaiting an answer.
 /// Keyed by session_id (claude asks one tool at a time per session and blocks
 /// until the control_response arrives).
@@ -173,6 +208,16 @@ pub struct Agent {
     /// Production builds only — gated out of the coverage build.
     #[cfg(not(coverage))]
     pending_gates: PendingGatesWrap,
+    /// Per-session remote child processes (single-connection ssh/plink/wsl
+    /// sessions): keyed by session_id, holds the live `Child` so `kill_container`
+    /// can terminate it on stop. Local sessions never populate this map.
+    /// Production builds only — gated out of the coverage build.
+    #[cfg(not(coverage))]
+    session_children: SessionChildrenWrap,
+    /// Per-session run command for remote single-connection sessions, computed at
+    /// launch and consumed by the serve loop. Production builds only.
+    #[cfg(not(coverage))]
+    session_run_cmds: SessionRunCmdsWrap,
 }
 
 impl Agent {
@@ -215,6 +260,14 @@ impl Agent {
             ))),
             #[cfg(not(coverage))]
             pending_gates: PendingGatesWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
+            #[cfg(not(coverage))]
+            session_children: SessionChildrenWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
+            #[cfg(not(coverage))]
+            session_run_cmds: SessionRunCmdsWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
         })
@@ -266,6 +319,12 @@ impl Agent {
                 HashMap::new(),
             ))),
             pending_gates: PendingGatesWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
+            session_children: SessionChildrenWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
+            session_run_cmds: SessionRunCmdsWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
         })
@@ -438,44 +497,32 @@ impl Agent {
     }
 
     /// Real-IO build: local hosts use the platform container; remote hosts
-    /// (`exec_prefix_for` → `Some`) run the same tmux+FIFO container on the remote
-    /// via `RemoteTmuxContainer`.
+    /// (`exec_prefix_for` → `Some`) are a NO-OP here — the remote session is a
+    /// SINGLE piped `ssh/plink/wsl` child spawned by the per-session reader thread
+    /// (`spawn_session_reader`), not a separate detached container. The reader
+    /// thread holds the child's stdin/stdout, so there is nothing to spawn up
+    /// front. (See docs/remote-hosts.md: the single-connection model replaced the
+    /// old tmux+FIFO multi-connection container.)
     #[cfg(not(coverage))]
     fn spawn_container(
         &mut self,
         container_name: &str,
         spec: &marsad_proto::LaunchSpec,
     ) -> Result<(), AgentError> {
-        let argv = claude_argv(spec);
         match exec_prefix_for(spec.host_target.as_deref()) {
             None => {
+                let argv = claude_argv(spec);
                 let cmd = self.build_spawn_cmd(container_name, &spec.project, &argv, spec.setup.as_deref(), &spec.env);
                 self.active_container()
                     .spawn(container_name, &cmd)
                     .map_err(|e| AgentError::Spawn(format!("{e}")))
             }
-            Some(prefix) => {
-                use marsad_lifecycle::Container as _;
-                let cmd = build_remote_spawn_cmd(
-                    &spec.project,
-                    &argv,
-                    spec.setup.as_deref(),
-                    &spec.env,
-                );
+            Some(_) => {
                 eprintln!(
-                    "marsad-agent: remote spawn {container_name} on {:?} via {prefix:?}",
+                    "marsad-agent: remote session {container_name} on {:?} — single-connection model, child spawned by reader thread",
                     spec.host_target
                 );
-                let mut c =
-                    marsad_lifecycle::RemoteTmuxContainer::new(prefix, REMOTE_RUNTIME_DIR.to_string());
-                let result = c
-                    .spawn(container_name, &cmd)
-                    .map_err(|e| AgentError::Spawn(format!("{e}")));
-                match &result {
-                    Ok(()) => eprintln!("marsad-agent: remote spawn {container_name} OK"),
-                    Err(e) => eprintln!("marsad-agent: remote spawn {container_name} FAILED: {e:?}"),
-                }
-                result
+                Ok(())
             }
         }
     }
@@ -506,11 +553,19 @@ impl Agent {
             None => {
                 let _ = self.active_container().kill(container_name);
             }
-            Some(prefix) => {
-                use marsad_lifecycle::Container as _;
-                let mut c =
-                    marsad_lifecycle::RemoteTmuxContainer::new(prefix, REMOTE_RUNTIME_DIR.to_string());
-                let _ = c.kill(container_name);
+            Some(_) => {
+                // Single-connection remote session: killing it = killing the
+                // agent-side child whose stdin/stdout are piped to the remote
+                // claude. Dropping the pipes (via kill) drops the ssh/wsl
+                // connection, so the remote claude dies with it.
+                let child = {
+                    let mut children = self.session_children.0.lock().unwrap();
+                    children.remove(session_id)
+                };
+                if let Some(mut child) = child {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
             }
         }
     }
@@ -536,6 +591,27 @@ impl Agent {
     ) -> Result<String, AgentError> {
         let container_name = format!("marsad-{session_id}");
         self.spawn_container(&container_name, &spec)?;
+
+        // For a REMOTE session, compute the single-connection run command now —
+        // this is the only point with the full LaunchSpec (posture + mode) in
+        // hand. The serve loop pops it by session_id and hands it to the reader
+        // thread, which spawns it as one piped child. Local sessions stash nothing.
+        #[cfg(not(coverage))]
+        {
+            if exec_prefix_for(spec.host_target.as_deref()).is_some() {
+                let run_cmd = build_remote_spawn_cmd(
+                    &spec.project,
+                    &claude_argv(&spec),
+                    spec.setup.as_deref(),
+                    &spec.env,
+                );
+                self.session_run_cmds
+                    .0
+                    .lock()
+                    .unwrap()
+                    .insert(session_id.clone(), run_cmd);
+            }
+        }
 
         let persisted = marsad_store::PersistedSession {
             id: session_id.clone(),
@@ -1009,6 +1085,10 @@ impl Agent {
             /// The session's resolved remote target (`None` = local). Tells the
             /// reader thread whether to open local FIFOs or a remote transport.
             host_target: Option<String>,
+            /// For a REMOTE session: the run-command body (setup + env + `cd …
+            /// && exec <claude> <args>`) to run as the single piped child. `None`
+            /// for local sessions (which use the platform container).
+            run_command: Option<String>,
         }
 
         // The command sender is cloned into each client thread.
@@ -1029,6 +1109,11 @@ impl Agent {
         // insert via `session_writers_for_fifo`.
         let session_writers_for_fifo = Arc::clone(&self.session_writers.0);
 
+        // ── Session children registry ──────────────────────────────────────
+        // Shared across the serve thread (kill_container via self) and the
+        // reader threads (which insert the spawned remote child after spawn).
+        let session_children_for_reader = Arc::clone(&self.session_children.0);
+
         // ── Pending-gate registry ──────────────────────────────────────────
         // Shared across the serve thread (handle_answer_gate via self) and the
         // FIFO threads (which insert when claude emits a `can_use_tool`).
@@ -1036,17 +1121,29 @@ impl Agent {
 
         let data_root = self.config.data_root.clone();
 
-        // ── Reconnect sessions that survived an agent restart ──────────────────
+        // ── Reconnect LOCAL sessions that survived an agent restart ────────────
         // The agent is a detached daemon; if it died (e.g. killed on reinstall) but
-        // the remote tmux is still alive, re-attach a reader to each live session and
-        // re-track it so prompt/stop work and the conversation CONTINUES rather than
-        // starting over. Dead-container sessions are left for explicit resume.
-        // `first_prompt: None` and `send_init: false` — the remote claude is already
+        // a LOCAL tmux/shim container is still alive, re-attach a reader to each live
+        // session and re-track it so prompt/stop work and the conversation CONTINUES.
+        // `first_prompt: None` and `send_init: false` — the local claude is already
         // running and initialized; we only re-attach to its stream.
+        //
+        // REMOTE sessions are SKIPPED: a single-connection remote session is one
+        // piped ssh/wsl child of THIS agent process. When the agent dies the child
+        // (and its remote claude) die with it — there is no detached container to
+        // adopt. Such sessions are left for explicit resume (see docs/remote-hosts.md
+        // "liveness tradeoff").
         {
             use marsad_lifecycle::Action;
             let restored = self.store.0.restore().map(|r| r.sessions).unwrap_or_default();
             for s in restored {
+                if exec_prefix_for(s.host_target.as_deref()).is_some() {
+                    eprintln!(
+                        "marsad-agent: skip reconnect of remote session {} (single-connection; not adoptable)",
+                        s.id
+                    );
+                    continue;
+                }
                 let known = Persisted {
                     session_id: s.session_id.clone(),
                     container_name: format!("marsad-{}", s.id),
@@ -1070,10 +1167,12 @@ impl Agent {
                         s.host_target.clone(),
                         None,
                         false,
+                        None,
                         data_root.clone(),
                         Arc::clone(&subscribers),
                         Arc::clone(&self.session_writers.0),
                         Arc::clone(&self.pending_gates.0),
+                        Arc::clone(&self.session_children.0),
                     );
                     eprintln!("marsad-agent: reconnected live session {}", s.id);
                 }
@@ -1117,6 +1216,7 @@ impl Agent {
                 let subs_for_fifo = Arc::clone(&subs_accept);
                 let writers_for_fifo = Arc::clone(&session_writers_for_fifo);
                 let pending_for_fifo = Arc::clone(&pending_gates_for_fifo);
+                let children_for_reader = Arc::clone(&session_children_for_reader);
 
                 // Split the client into independent write and read halves so
                 // each thread has exclusive ownership — no Mutex required.
@@ -1207,10 +1307,12 @@ impl Agent {
                                                 reply.host_target,
                                                 reply.first_prompt,
                                                 true, // launch: send the initialize handshake
+                                                reply.run_command,
                                                 data_root_client.clone(),
                                                 Arc::clone(&subs_for_fifo),
                                                 Arc::clone(&writers_for_fifo),
                                                 Arc::clone(&pending_for_fifo),
+                                                Arc::clone(&children_for_reader),
                                             );
                                         }
                                     }
@@ -1285,12 +1387,20 @@ impl Agent {
                 .as_deref()
                 .and_then(|s| self.session_host_target(s));
 
+            // Pop the remote run command stashed by launch_with_id (None for a
+            // local session). The reader thread spawns it as the single piped
+            // child. Serve processes commands sequentially, so this never races.
+            let run_command = new_session_id
+                .as_deref()
+                .and_then(|s| self.session_run_cmds.0.lock().unwrap().remove(s));
+
             // Send reply; if the client thread is gone, ignore the error.
             let _ = cmd.reply_tx.send(AgentReply {
                 out_lines,
                 new_session_id,
                 first_prompt,
                 host_target,
+                run_command,
             });
         }
 
@@ -1597,10 +1707,12 @@ fn spawn_session_reader(
     host_target: Option<String>,
     first_prompt: Option<String>,
     send_init: bool,
+    run_command: Option<String>,
     data_root: String,
     subs_fifo: std::sync::Arc<std::sync::Mutex<Vec<std::sync::mpsc::Sender<String>>>>,
     writers_fifo: std::sync::Arc<std::sync::Mutex<HashMap<String, SharedWriter>>>,
     pending_fifo: std::sync::Arc<std::sync::Mutex<HashMap<String, PendingGate>>>,
+    children: std::sync::Arc<std::sync::Mutex<HashMap<String, std::process::Child>>>,
 ) {
     let session_dir = std::path::PathBuf::from(&data_root)
         .join("sessions")
@@ -1609,36 +1721,70 @@ fn spawn_session_reader(
         use marsad_transport::Transport;
         // ── Open and connect the transport ─────────────
         // Local session → platform FIFO/pipe transport
-        // (tmux+FIFO on Unix, named pipe on Windows). Remote
-        // session (host_target resolves to an exec prefix) →
-        // RemoteFifoTransport bridging the remote FIFOs over
-        // ssh/wsl. All three yield the same `SplitIo`
-        // (boxed writer + buffered boxed reader), so the rest
-        // of this thread is transport-agnostic.
+        // (tmux+FIFO on Unix, named pipe on Windows), yielding
+        // a `SplitIo` (boxed writer + buffered boxed reader).
+        //
+        // Remote session (host_target resolves to an exec
+        // prefix) → SINGLE piped child: one `ssh/plink/wsl`
+        // process running the session's run command, with
+        // claude's stdin+stdout piped to this agent. We write
+        // the initialize + user messages to the child's stdin
+        // and read stream-json events from its stdout. The
+        // child is kept in the `children` registry so a stop
+        // can kill it (closing the pipes drops the connection
+        // → the remote claude exits). The rest of this thread
+        // is transport-agnostic.
         let (writer, mut reader): marsad_transport::SplitIo =
             match exec_prefix_for(host_target.as_deref()) {
                 Some(prefix) => {
-                    let dir = format!(
-                        "{}/sessions/marsad-{}",
-                        REMOTE_RUNTIME_DIR, sid
+                    use std::process::{Command, Stdio};
+                    let argv = marsad_lifecycle::remote_shell_argv(
+                        &prefix,
+                        run_command.as_deref().unwrap_or(""),
                     );
-                    let mut t =
-                        marsad_transport::RemoteFifoTransport::new(
-                            prefix,
-                            format!("{dir}/in.fifo"),
-                            format!("{dir}/out.fifo"),
-                        );
-                    if let Err(e) = t.connect() {
-                        eprintln!("marsad-agent: remote connect {sid}: {e}");
-                        return;
+                    let mut command = Command::new(&argv[0]);
+                    command
+                        .args(&argv[1..])
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::null());
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
                     }
-                    match t.into_split() {
-                        Some(pair) => pair,
-                        None => {
-                            eprintln!("marsad-agent: remote not connected {sid}");
+                    let mut child = match command.spawn() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("marsad-agent: remote spawn {sid}: {e}");
                             return;
                         }
-                    }
+                    };
+                    // Take the pipe ends BEFORE storing the child in the registry
+                    // (the registry keeps the Child alive + killable; we own the IO).
+                    let child_stdin = match child.stdin.take() {
+                        Some(s) => s,
+                        None => {
+                            eprintln!("marsad-agent: remote child {sid} has no stdin");
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            return;
+                        }
+                    };
+                    let child_stdout = match child.stdout.take() {
+                        Some(s) => s,
+                        None => {
+                            eprintln!("marsad-agent: remote child {sid} has no stdout");
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            return;
+                        }
+                    };
+                    children.lock().unwrap().insert(sid.clone(), child);
+                    let w: Box<dyn std::io::Write + Send> = Box::new(child_stdin);
+                    let r: std::io::BufReader<Box<dyn std::io::Read + Send>> =
+                        std::io::BufReader::new(Box::new(child_stdout));
+                    (w, r)
                 }
                 None => {
                     #[cfg(unix)]
@@ -1807,18 +1953,15 @@ fn spawn_session_reader(
         }
 
         eprintln!("marsad-agent: session {sid} stream ended after {lines_seen} line(s)");
-        // If claude produced NO output it failed to start on the remote. The cause is
-        // usually claude not installed / not authed / project dir missing — and for a
-        // "command not found" the message goes to the tmux PANE, not err.log. Probe all
-        // three: err.log, whether claude is on the (login-shell) PATH, and the pane.
+        // If claude produced NO output it failed to start on the remote. With the
+        // single-connection model the child's stderr is discarded, so probe the
+        // login shell directly: is `claude` on PATH (not installed / module not
+        // sourced is the usual cause)? This is a fresh, independent connection.
         if lines_seen == 0 {
             if let Some(prefix) = exec_prefix_for(host_target.as_deref()) {
-                let dir = format!("{}/sessions/marsad-{}", REMOTE_RUNTIME_DIR, sid);
-                let script = format!(
-                    "echo '== err.log =='; cat {dir}/err.log 2>/dev/null | tail -20; \
-                     echo '== claude =='; command -v claude || echo 'claude NOT on PATH'; \
-                     echo '== pane =='; tmux capture-pane -t marsad-{sid} -p 2>/dev/null | tail -20"
-                );
+                let script =
+                    "echo '== claude =='; command -v claude || echo 'claude NOT on PATH'"
+                        .to_string();
                 let argv = remote_diag_argv(&prefix, &script);
                 if let Ok(out) = std::process::Command::new(&argv[0])
                     .args(&argv[1..])
@@ -1838,12 +1981,18 @@ fn spawn_session_reader(
         }
 
         // Clean up: remove writer from registry when
-        // claude exits (FIFO closed).
+        // claude exits (FIFO/pipe closed).
         {
             let mut registry = writers_fifo.lock().unwrap();
             registry.remove(&sid);
         }
         drop(writer);
+        // For a remote session, remove + reap the piped child (if a stop hasn't
+        // already removed it). Dropping the writer above closes the child's stdin,
+        // so it exits; `wait()` reaps the zombie. Local sessions never inserted one.
+        if let Some(mut child) = children.lock().unwrap().remove(&sid) {
+            let _ = child.wait();
+        }
     });
 }
 

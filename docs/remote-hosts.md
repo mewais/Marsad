@@ -5,15 +5,36 @@ same liveness / reconnect / resume guarantees as local sessions.
 
 ## Core idea
 
-Reuse the local tmux+FIFO container model, but run it **on the remote box** by
-prefixing every command with an opaque *exec prefix*:
+**Local** sessions use the tmux+FIFO container model (unix) or the named-pipe shim
+(windows): a detached container holds the claude process so it survives the app closing,
+and the agent reads/writes its FIFOs/pipes.
 
-- Local:  `tmux new-session …`,                     FIFOs opened as local files.
-- SSH:    `ssh <target> -- tmux new-session …`,      FIFOs read/written via `ssh <target> -- cat …`.
-- WSL:    `wsl.exe -d <distro> -- tmux new-session …`, FIFOs via `wsl.exe -d <distro> -- cat …`.
+**Remote** sessions use a different, simpler model: a **single piped connection**. The
+agent spawns ONE child process
 
-This keeps the kernel-FIFO/tmux liveness semantics intact (tmux on the remote means the
-session survives the ssh link dropping and the app closing).
+```
+ssh <opts> <target> bash -lc '<setup>; cd <proj>; exec <claudebin> --print --input-format stream-json --output-format stream-json --verbose --model <M> …'
+```
+
+(or the `wsl.exe -d <distro> sh -c …` / `plink -share -batch <inner> bash -lc …` variant)
+with claude's **stdin and stdout piped directly to the agent**. The agent writes the
+`initialize` handshake + user messages to the child's stdin and reads stream-json events
+from its stdout. The child is kept alive for the session and is killed on stop (killing it
+closes the pipes, so the remote claude dies when the connection drops).
+
+This replaced the earlier remote tmux+FIFO model, which opened THREE connections per
+session (one to spawn `tmux` + `mkfifo`, a separate `cat out.fifo` reader, and a separate
+`cat > in.fifo` writer). On Windows that model was broken: claude answered the `initialize`
+handshake then its stdin closed and it exited ("reader EOF after 2 lines"). The
+single-connection model holds one stdin open for the session's lifetime and is proven to
+work end-to-end against a real host.
+
+### Liveness tradeoff
+A single-connection remote session is one child of the agent process — there is **no
+detached remote container**. So unlike local sessions, a remote session does **not**
+survive an agent restart: when the agent dies, the child (and its remote claude) die with
+it. On relaunch the agent SKIPS reconnecting remote sessions; they must be explicitly
+resumed (`claude --resume`/`--continue`). Local sessions still reconnect transparently.
 
 ## The contract (shared by all slices)
 
@@ -27,6 +48,11 @@ The agent builds the prefix from the host:
 - WSL host (`wsl:<distro>`): `["wsl.exe", "-d", "<distro>"]`
 - plink host (`plink:<ssh-target>`): `["plink", "-share", "-batch", "<inner>"]`
 
+The run command is appended to the prefix via `remote_shell_argv`: for ssh/plink it is
+passed as a single token to a remote LOGIN shell (`bash -lc '<run command>'`) so the
+profile/modules are sourced and `<claudebin>` is on `PATH`; for wsl it is `sh -c '<run
+command>'`.
+
 ### SSH option set (built by the agent / desktop, not by lifecycle/transport)
 Always pass, in this order, before the target:
 ```
@@ -38,7 +64,7 @@ Always pass, in this order, before the target:
 -o ControlPersist=600
 ```
 `ControlMaster`/`ControlPath`/`ControlPersist` mean: the **first** connection opens a
-master socket; every later `ssh` (health probe, container, FIFO transport) rides it with
+master socket; every later `ssh` (health probe, the session connection) rides it with
 no re-auth. An MFA / keyboard-interactive host is handled by opening **one** interactive
 login in a real OS terminal (NO `BatchMode`, SAME `ControlPath`) — once it succeeds the
 master persists and all automated connections reuse it. No in-app PTY needed.
@@ -64,8 +90,10 @@ plink flags (PuTTY manual): `-share` = enable SSH connection sharing; `-batch` =
 interactive prompts. ControlMaster ssh options do **not** apply to plink and are omitted.
 
 ### Remote layout
-Remote session dir: `~/.marsad/sessions/<id>/` containing `in.fifo`, `out.fifo`,
-`err.log` (the remote shell expands `~`).
+The single-connection model writes **no** remote session files — claude's stdin/stdout
+are piped over the connection, so there are no remote FIFOs, `run.sh`, or `err.log`. (The
+remote `~/.marsad` dir is only touched by the legacy `RemoteTmuxContainer`, which the agent
+no longer drives.)
 
 ### Per-host launch configuration
 Each host (local, WSL, and SSH/plink alike) carries three OPTIONAL launch settings,
@@ -88,9 +116,9 @@ card (saved via `update_host("localhost", …)`, whose target stays `this machin
 the same three fields in the **Add a host** form. The environment textarea is one
 `KEY=VALUE` per line (blank/invalid lines ignored).
 
-**Remote `run.sh` body** (`build_remote_spawn_cmd`) — with the FIFO wiring added later
-by `spawn_script`. Example for `claude_bin=genie`, `setup="module load x"`,
-`env=[("A","b")]`:
+**Remote run command** (`build_remote_spawn_cmd`) — the body passed to the remote login
+shell as the single piped child (NO redirections, NO FIFO wiring). Example for
+`claude_bin=genie`, `setup="module load x"`, `env=[("A","b")]`:
 
 ```
 module load x
@@ -100,21 +128,22 @@ cd '/proj' && exec 'genie' '--model' 'haiku'
 
 Setup (when present) is the first line; one `export 'K'='V'` line per env pair follows
 (key and value POSIX single-quoted via `remote_shell_quote`); then `cd '<project>' &&
-exec '<bin>' '<args>'`. The local spawn command prepends the same setup + `export` lines
-before `cd … && '<bin>' … < in.fifo > out.fifo 2>err.log`.
+exec '<bin>' '<args>'`. The local (non-remote) spawn command prepends the same setup +
+`export` lines before `cd … && '<bin>' … < in.fifo > out.fifo 2>err.log` (tmux+FIFO).
 
-## Slices
+## Implementation
 
-1. **marsad-lifecycle** — `RemoteTmuxContainer` (`Container` impl) parameterized by an
-   `exec_prefix`. Mirrors `TmuxContainer` (exists/attach/spawn/kill) but runs tmux/mkfifo
-   through the prefix on the remote. Pure argv/command-string building must be unit-tested
-   to 100%; real spawning gated `#[cfg(not(coverage))]`.
-2. **marsad-transport** — `RemoteFifoTransport` (`Transport` impl): reader streams
-   `<prefix> cat <out.fifo>`, writer pipes into `<prefix> sh -c 'cat > <in.fifo>'`. Plus add
-   the ControlMaster/keepalive options to `SshStdio`. 100% coverage like `SshStdio`.
-3. **desktop** — an `connect_host_interactive` command that opens a real OS terminal
-   running `ssh <target>` with the SAME ControlPath (no BatchMode) so the user completes
-   MFA once; cross-platform terminal launch.
-
-Integration (agent dispatch: choose local vs remote container+transport by host, plumb
-the host target/prefix + remote paths through LaunchSpec) is done after the slices land.
+- **marsad-agent** — drives the model. `build_remote_spawn_cmd` builds the pure run-command
+  body (unit-tested to 100%). For a remote launch the per-session reader thread
+  (`spawn_session_reader`) spawns ONE child via `remote_shell_argv(prefix, run_command)`
+  with stdin/stdout piped; the child is stored in a `session_children` registry so
+  `kill_container` can terminate it on stop, and reaped when the reader loop ends.
+  `spawn_container` is a no-op for remote hosts (the child is owned by the reader thread),
+  and the agent-restart reconnect loop SKIPS remote sessions (see liveness tradeoff above).
+- **marsad-lifecycle** — `remote_shell_argv` (ssh/plink → `bash -lc '<token>'`; wsl →
+  `sh -c <script>`) builds the argv. `RemoteTmuxContainer` and
+  `marsad-transport::RemoteFifoTransport` remain in their crates (pub + tested) but are no
+  longer driven by the agent — they are the legacy multi-connection types.
+- **desktop** — `connect_host_interactive` opens a real OS terminal running `ssh <target>`
+  (or `plink -share <inner>`) with the SAME ControlPath/sharing so the user completes MFA
+  once; cross-platform terminal launch.
