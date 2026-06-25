@@ -4,7 +4,7 @@
  */
 import { useVm } from "../bridge/useVm";
 import type { Tab } from "../bridge/types";
-import { stopSession, resumeSession } from "../bridge/api";
+import { stopSession, resumeSession, removeSession } from "../bridge/api";
 import { Badge } from "../components/Badge";
 import { ActivityTab } from "./tabs/Activity";
 import { ChangesTab } from "./tabs/Changes";
@@ -60,6 +60,18 @@ export function SessionDetail() {
   function handleRestart() {
     resumeSession(sessionId);
   }
+
+  function handleResume() {
+    resumeSession(sessionId);
+  }
+
+  function handleRemove() {
+    removeSession(sessionId);
+  }
+
+  // A not-live session (user-stopped, restored on relaunch, or process gone) is
+  // surfaced as "Stopped" — it offers Resume + Remove instead of Stop + Restart.
+  const isStopped = sessionState === "Stale" || sessionState === "Detached";
 
   return (
     <div
@@ -166,41 +178,83 @@ export function SessionDetail() {
               </button>
             )}
 
-            <button
-              data-testid="stop-btn"
-              onClick={handleStop}
-              style={{
-                fontFamily: "inherit",
-                fontWeight: 600,
-                fontSize: "calc(14.5px * var(--fs,1))",
-                padding: "7px 12px",
-                borderRadius: 8,
-                border: "1px solid var(--border2)",
-                background: "var(--panel2)",
-                color: "var(--txt2)",
-                cursor: "pointer",
-              }}
-            >
-              ⏸ Stop
-            </button>
+            {isStopped ? (
+              <>
+                <button
+                  data-testid="resume-btn"
+                  onClick={handleResume}
+                  style={{
+                    fontFamily: "inherit",
+                    fontWeight: 600,
+                    fontSize: "calc(14.5px * var(--fs,1))",
+                    padding: "7px 12px",
+                    borderRadius: 8,
+                    border: "1px solid var(--border2)",
+                    background: "var(--panel2)",
+                    color: "var(--txt2)",
+                    cursor: "pointer",
+                  }}
+                >
+                  ▶ Resume
+                </button>
 
-            <button
-              data-testid="restart-btn"
-              onClick={handleRestart}
-              style={{
-                fontFamily: "inherit",
-                fontWeight: 600,
-                fontSize: "calc(14.5px * var(--fs,1))",
-                padding: "7px 12px",
-                borderRadius: 8,
-                border: "1px solid var(--border2)",
-                background: "var(--panel2)",
-                color: "var(--txt2)",
-                cursor: "pointer",
-              }}
-            >
-              ↻ Restart
-            </button>
+                <button
+                  data-testid="remove-btn"
+                  onClick={handleRemove}
+                  style={{
+                    fontFamily: "inherit",
+                    fontWeight: 600,
+                    fontSize: "calc(14.5px * var(--fs,1))",
+                    padding: "7px 12px",
+                    borderRadius: 8,
+                    border: "1px solid var(--error)",
+                    background: "var(--error-bg)",
+                    color: "var(--error)",
+                    cursor: "pointer",
+                  }}
+                >
+                  ✕ Remove
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  data-testid="stop-btn"
+                  onClick={handleStop}
+                  style={{
+                    fontFamily: "inherit",
+                    fontWeight: 600,
+                    fontSize: "calc(14.5px * var(--fs,1))",
+                    padding: "7px 12px",
+                    borderRadius: 8,
+                    border: "1px solid var(--border2)",
+                    background: "var(--panel2)",
+                    color: "var(--txt2)",
+                    cursor: "pointer",
+                  }}
+                >
+                  ⏸ Stop
+                </button>
+
+                <button
+                  data-testid="restart-btn"
+                  onClick={handleRestart}
+                  style={{
+                    fontFamily: "inherit",
+                    fontWeight: 600,
+                    fontSize: "calc(14.5px * var(--fs,1))",
+                    padding: "7px 12px",
+                    borderRadius: 8,
+                    border: "1px solid var(--border2)",
+                    background: "var(--panel2)",
+                    color: "var(--txt2)",
+                    cursor: "pointer",
+                  }}
+                >
+                  ↻ Restart
+                </button>
+              </>
+            )}
           </div>
         </div>
 

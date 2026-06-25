@@ -231,7 +231,7 @@ pub struct OverviewGroups {
     pub attention: Vec<SessionCard>,
     /// working + starting sessions
     pub active: Vec<SessionCard>,
-    /// done sessions
+    /// done / stopped sessions (Done, Stale, Detached)
     pub idle: Vec<SessionCard>,
 }
 
@@ -255,7 +255,13 @@ pub fn group_overview(s: &AppSnapshot) -> OverviewGroups {
     {
         active.push(session_card(sv, &s.hosts));
     }
-    for sv in s.sessions.iter().filter(|sv| sv.state == Phase::Done) {
+    // Done plus the not-live phases (Stale = stopped, Detached) so a stopped
+    // session still appears in the overview instead of vanishing from it.
+    for sv in s
+        .sessions
+        .iter()
+        .filter(|sv| matches!(sv.state, Phase::Done | Phase::Stale | Phase::Detached))
+    {
         idle.push(session_card(sv, &s.hosts));
     }
 

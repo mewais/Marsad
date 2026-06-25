@@ -24,6 +24,7 @@ use marsad_viewmodel::{Host, OverviewGroups, SessionView, Workspace};
 pub enum VmUpdateEnvelope {
     Overview { groups: OverviewGroups },
     Session { session: SessionView },
+    SessionRemoved { id: String },
     Toast { icon: String, text: String },
     HostHealth { host_id: String, status: String },
     Hosts { hosts: Vec<Host> },
@@ -35,6 +36,7 @@ impl From<VmUpdate> for VmUpdateEnvelope {
         match u {
             VmUpdate::Overview(groups) => VmUpdateEnvelope::Overview { groups },
             VmUpdate::Session(sv) => VmUpdateEnvelope::Session { session: sv },
+            VmUpdate::SessionRemoved { id } => VmUpdateEnvelope::SessionRemoved { id },
             VmUpdate::Toast { icon, text } => VmUpdateEnvelope::Toast { icon, text },
             VmUpdate::HostHealth(payload) => {
                 let status = match payload.status {

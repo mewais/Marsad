@@ -303,6 +303,7 @@ export interface PersistedTemplate {
 export type VmUpdateEvent =
   | { kind: "overview"; groups: OverviewGroups }
   | { kind: "session"; session: SessionView }
+  | { kind: "session_removed"; id: string }
   | { kind: "toast"; icon: string; text: string }
   | { kind: "host_health"; host_id: string; status: string }
   | { kind: "hosts"; hosts: Host[] }

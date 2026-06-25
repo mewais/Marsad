@@ -102,6 +102,18 @@ function reducer(state: VmState, action: Action): VmState {
           : [...state.snapshot.sessions, ev.session];
         return { ...state, snapshot: { ...state.snapshot, sessions } };
       }
+      if (ev.kind === "session_removed") {
+        // Drop the removed session's row. If it was the open one, fall back to
+        // the overview so we don't strand the user on a deleted session.
+        const sessions = state.snapshot.sessions.filter((s) => s.id !== ev.id);
+        const wasSelected = state.selectedId === ev.id;
+        return {
+          ...state,
+          snapshot: { ...state.snapshot, sessions },
+          selectedId: wasSelected ? null : state.selectedId,
+          screen: wasSelected && state.screen === "session" ? "overview" : state.screen,
+        };
+      }
       if (ev.kind === "overview") {
         // Overview groups are derived; no stored state change needed.
         return state;

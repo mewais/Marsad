@@ -1142,7 +1142,7 @@ fn transcript_send_prompt_is_injected() {
 // ---------------------------------------------------------------------------
 
 use marsad_core::HostStatus;
-use marsad_store::{BackendOp, MemoryBackend, PersistedHost, Store};
+use marsad_store::{BackendOp, MemoryBackend, PersistedHost, PersistedSession, Store};
 
 fn core_with_backend(backend: MemoryBackend) -> Core {
     let (a, _b) = LoopbackFake::pair();
@@ -2111,4 +2111,136 @@ fn persisted_template_is_accessible_via_core_reexport() {
         posture: "ask".to_string(),
     };
     assert_eq!(t.name, "test");
+}
+
+// ---------------------------------------------------------------------------
+// load_sessions — restore persisted sessions on startup (relaunch)
+// ---------------------------------------------------------------------------
+
+fn seed_session(seed: &mut Store, id: &str, host_id: &str, claude_uuid: Option<&str>) {
+    seed.upsert_session(&PersistedSession {
+        id: id.to_string(),
+        session_id: claude_uuid.map(|s| s.to_string()),
+        name: id.to_string(),
+        host_id: host_id.to_string(),
+        host_target: Some("wsl:Ubuntu".to_string()),
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
+        project: "/work/proj".to_string(),
+        branch: "main".to_string(),
+        model: "claude-opus-4-8".to_string(),
+        last_phase: "Working".to_string(),
+    })
+    .expect("seed session");
+}
+
+/// A persisted session is restored into the snapshot, marked Stale (resumable),
+/// on its real host — covering both the known-uuid (session) and unknown-uuid
+/// (most_recent) transcript-load branches — and the restore is idempotent.
+#[test]
+fn load_sessions_restores_persisted_sessions() {
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed_session(&mut seed, "session-restore-1", "host-5", Some("uuid-1"));
+    seed_session(&mut seed, "session-restore-2", "host-6", None);
+
+    let mut core = core_with_backend(backend);
+    let updates = core.load_sessions().expect("load_sessions");
+    assert!(!updates.is_empty(), "load_sessions must emit updates");
+
+    let snap = core.snapshot();
+    let sv = snap
+        .sessions
+        .iter()
+        .find(|s| s.id == "session-restore-1")
+        .expect("restored session present");
+    assert_eq!(sv.host_id, "host-5", "restored session keeps its host");
+    assert_eq!(
+        sv.state,
+        marsad_events::Phase::Stale,
+        "restored session is Stale (resumable), not a fake-live phase"
+    );
+    assert!(
+        snap.sessions.iter().any(|s| s.id == "session-restore-2"),
+        "both restored sessions present"
+    );
+
+    // Idempotent: a second load does not duplicate already-tracked sessions.
+    let _ = core.load_sessions().expect("load_sessions again");
+    let snap2 = core.snapshot();
+    assert_eq!(
+        snap2
+            .sessions
+            .iter()
+            .filter(|s| s.id == "session-restore-1")
+            .count(),
+        1,
+        "second load must not duplicate the session"
+    );
+}
+
+#[test]
+fn load_sessions_restore_failure_errors() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::List);
+    let mut core = core_with_backend(backend);
+    assert!(
+        core.load_sessions().is_err(),
+        "a failing store restore must surface as an error"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// remove_session — delete a session from the list + store (declutter)
+// ---------------------------------------------------------------------------
+
+/// Removing a session drops it from the in-memory list and emits a
+/// `SessionRemoved` update so the UI deletes the row.
+#[test]
+fn remove_session_deletes_from_list_and_store() {
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed_session(&mut seed, "session-rm-1", "host-5", Some("uuid"));
+    let mut core = core_with_backend(backend);
+    core.load_sessions().expect("load_sessions");
+    assert!(
+        core.snapshot().sessions.iter().any(|s| s.id == "session-rm-1"),
+        "precondition: session is tracked"
+    );
+
+    let updates = core.remove_session("session-rm-1").expect("remove_session");
+    assert!(
+        updates
+            .iter()
+            .any(|u| matches!(u, VmUpdate::SessionRemoved { id } if id == "session-rm-1")),
+        "remove_session must emit SessionRemoved, got: {updates:?}"
+    );
+    assert!(
+        !core.snapshot().sessions.iter().any(|s| s.id == "session-rm-1"),
+        "removed session must be gone from the list"
+    );
+}
+
+#[test]
+fn remove_session_unknown_id_errors() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    assert!(
+        core.remove_session("does-not-exist").is_err(),
+        "removing an unknown session must error"
+    );
+}
+
+#[test]
+fn remove_session_store_delete_failure_errors() {
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed_session(&mut seed, "session-rm-2", "host-5", Some("uuid"));
+    let mut core = core_with_backend(backend.clone());
+    core.load_sessions().expect("load_sessions");
+    backend.fail_next(BackendOp::Delete);
+    assert!(
+        core.remove_session("session-rm-2").is_err(),
+        "a failing store delete must surface as an error"
+    );
 }

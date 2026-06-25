@@ -31,8 +31,10 @@ const phaseLabel: Record<Phase, string> = {
   Error: "Error",
   Done: "Done",
   Starting: "Starting",
-  Stale: "Stale",
-  Detached: "Detached",
+  // `Stale` is the internal phase for a not-live session (user-stopped, restored
+  // on relaunch, or process gone). Surface it to users as the plainer "Stopped".
+  Stale: "Stopped",
+  Detached: "Stopped",
 };
 
 export function Badge({ state, label }: BadgeProps) {

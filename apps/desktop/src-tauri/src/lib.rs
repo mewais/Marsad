@@ -216,6 +216,7 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::resume_session,
             bridge::attach_session,
             bridge::stop_session,
+            bridge::remove_session,
             bridge::send_prompt,
             bridge::interrupt,
             bridge::answer_gate,
@@ -377,22 +378,28 @@ pub fn run() {
         .setup(move |app| {
             setup_tray(app)?;
 
-            // Load persisted hosts and workspaces so the dashboard shows them
-            // immediately (the initial `snapshot` call then includes them).
+            // Load persisted hosts, workspaces, and sessions so the dashboard
+            // shows them immediately (the initial `snapshot` call then includes
+            // them). Sessions load LAST so host labels resolve, and so a full
+            // app exit + relaunch restores the session list instead of coming
+            // up empty.
             {
                 use tauri::Manager;
-                let (host_updates, ws_updates) = match app.state::<ManagedState>().lock() {
-                    Ok(mut guard) => match &mut *guard {
-                        AppState::Live(core) => (
-                            core.load_hosts().unwrap_or_default(),
-                            core.load_workspaces().unwrap_or_default(),
-                        ),
-                        AppState::Mock(_) => (vec![], vec![]),
-                    },
-                    Err(_) => (vec![], vec![]),
-                };
+                let (host_updates, ws_updates, session_updates) =
+                    match app.state::<ManagedState>().lock() {
+                        Ok(mut guard) => match &mut *guard {
+                            AppState::Live(core) => (
+                                core.load_hosts().unwrap_or_default(),
+                                core.load_workspaces().unwrap_or_default(),
+                                core.load_sessions().unwrap_or_default(),
+                            ),
+                            AppState::Mock(_) => (vec![], vec![], vec![]),
+                        },
+                        Err(_) => (vec![], vec![], vec![]),
+                    };
                 events::emit_updates(&app.handle().clone(), host_updates);
                 events::emit_updates(&app.handle().clone(), ws_updates);
+                events::emit_updates(&app.handle().clone(), session_updates);
             }
 
             let app_handle = app.handle().clone();

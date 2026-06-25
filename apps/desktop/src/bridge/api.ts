@@ -123,6 +123,12 @@ export async function stopSession(id: string): Promise<void> {
   await invoke("stop_session", { id });
 }
 
+export async function removeSession(id: string): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("remove_session", { id });
+}
+
 export async function sendPrompt(id: string, text: string): Promise<void> {
   if (!isTauri()) return;
   const invoke = await getInvoke();

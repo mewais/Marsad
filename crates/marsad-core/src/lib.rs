@@ -82,6 +82,10 @@ pub enum VmUpdate {
     /// One session's view-model changed.
     Session(SessionView),
 
+    /// A session was removed entirely (deleted by the user) — the UI should drop
+    /// its row. Distinct from `Session`, which only ever adds/updates.
+    SessionRemoved { id: String },
+
     /// A toast notification.
     Toast { icon: String, text: String },
 
@@ -480,6 +484,58 @@ impl Core {
             self.active_ws = Some(id);
         }
         Ok(vec![self.workspaces_update()])
+    }
+
+    /// Load persisted sessions from the store into the in-memory list (call once
+    /// at startup, AFTER `load_hosts` so host labels resolve). Without this the
+    /// dashboard comes up empty after a full app exit even though the sessions
+    /// were persisted — the user perceives them as "lost". Call order matters:
+    /// already-tracked ids (a live session this Core launched) are left untouched.
+    ///
+    /// Each restored session is marked `Stale` (not live): its claude process
+    /// may or may not have survived the exit, so we present it as resumable
+    /// (via `restart_session`) rather than claim a liveness we cannot verify. If
+    /// the agent re-attaches a still-live local session, its next stream event
+    /// flips the phase. Transcript history is loaded from the on-disk JSONL for
+    /// local sessions; remote transcripts live on the remote host and are not
+    /// fetched here, so a restored remote session shows an empty transcript until
+    /// it streams again.
+    pub fn load_sessions(&mut self) -> Result<Vec<VmUpdate>, CoreError> {
+        let restored = self
+            .store
+            .restore()
+            .map_err(|e| CoreError::Agent(format!("restore sessions: {e:?}")))?;
+        let mut updates = Vec::new();
+        for s in restored.sessions {
+            if self.sessions.contains_key(&s.id) {
+                continue;
+            }
+            let transcript = match &s.session_id {
+                Some(sid) if !sid.is_empty() => self.transcript.session(&s.project, sid),
+                _ => self.transcript.most_recent(&s.project),
+            };
+            let mut state = SessionState::initial();
+            state.phase = Phase::Stale;
+            state.model = Some(s.model.clone());
+            state.session_id = s.session_id.clone();
+            self.session_order.push(s.id.clone());
+            self.sessions.insert(
+                s.id.clone(),
+                SessionRecord {
+                    project: s.project.clone(),
+                    host_id: s.host_id.clone(),
+                    state,
+                    changes: Vec::new(),
+                    transcript,
+                    seen_msg_ids: std::collections::HashSet::new(),
+                },
+            );
+            let sv = self.make_session_view(&s.id, self.sessions.get(&s.id).unwrap());
+            updates.push(VmUpdate::Session(sv));
+        }
+        let snap = self.snapshot();
+        updates.push(VmUpdate::Overview(marsad_viewmodel::group_overview(&snap)));
+        Ok(updates)
     }
 
     /// Save the current session list as a new named workspace, persist it,
@@ -995,6 +1051,33 @@ impl Core {
         let snap = self.snapshot();
         let groups = marsad_viewmodel::group_overview(&snap);
         Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
+    }
+
+    /// Remove a session entirely (the user's explicit declutter action). Stops
+    /// the process best-effort, drops the session from the in-memory list AND the
+    /// persisted store (so it does NOT reappear on relaunch), and tells the UI to
+    /// delete the row. Unlike `stop_session` (which keeps it resumable), this is
+    /// permanent — the conversation is still re-creatable as a fresh resume if the
+    /// claude JSONL survives.
+    pub fn remove_session(&mut self, id: &str) -> Result<Vec<VmUpdate>, CoreError> {
+        self.require_session(id)?;
+        // Best-effort stop so we don't orphan a running process. The session is
+        // going away regardless, so a transport error here is non-fatal.
+        let _ = self.send_ipc(&IpcMsg::StopSession {
+            session_id: id.to_string(),
+        });
+        // Delete from the store FIRST so an error leaves in-memory state intact.
+        self.store
+            .delete_session(id)
+            .map_err(|e| CoreError::Agent(format!("delete session: {e:?}")))?;
+        self.sessions.remove(id);
+        self.session_order.retain(|s| s != id);
+        let snap = self.snapshot();
+        let groups = marsad_viewmodel::group_overview(&snap);
+        Ok(vec![
+            VmUpdate::SessionRemoved { id: id.to_string() },
+            VmUpdate::Overview(groups),
+        ])
     }
 
     pub fn send_prompt(&mut self, id: &str, text: &str) -> Result<(), CoreError> {
