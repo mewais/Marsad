@@ -1544,15 +1544,19 @@ fn resolve_remote_bin(argv0: &str) -> String {
 /// The script therefore resolves the cwd ON THE REMOTE (`cd <target> && pwd`)
 /// and encodes it there with `sed`, matching `encode_project_dir` exactly. With
 /// a known claude uuid it cats that file; for `--continue` (no uuid) it cats the
-/// most-recently-modified `.jsonl`. `remote_diag_argv` wraps this in `bash -lc`,
+/// most-recently-modified `.jsonl`. Run via `run_remote_script` (`bash -l -s`),
 /// so `$HOME`/`~` resolve via the login shell. Real-IO build only.
 #[cfg(not(coverage))]
 fn remote_transcript_script(project: &str, uuid: Option<&str>) -> String {
     let cd = cd_target(project);
+    // Honor CLAUDE_CONFIG_DIR (wrappers like `genie` relocate Claude's config +
+    // transcripts off ~/.claude), falling back to ~/.claude. The login shell
+    // (`bash -l -s`) has the wrapper's env, so $CLAUDE_CONFIG_DIR is set there.
     let resolve = format!(
-        "cwd=$(cd {cd} 2>/dev/null && pwd) || exit 0; \
+        "base=${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}; \
+         cwd=$(cd {cd} 2>/dev/null && pwd) || exit 0; \
          enc=$(printf '%s' \"$cwd\" | sed 's/[^a-zA-Z0-9]/-/g'); \
-         dir=\"$HOME/.claude/projects/$enc\"; "
+         dir=\"$base/projects/$enc\"; "
     );
     match uuid {
         Some(u) if !u.is_empty() => {
@@ -1563,6 +1567,46 @@ fn remote_transcript_script(project: &str, uuid: Option<&str>) -> String {
              [ -n \"$f\" ] && cat \"$f\""
         ),
     }
+}
+
+/// Run a shell `script` on a remote host and capture its stdout.
+///
+/// The script is fed via the child's STDIN to `bash -l -s` (login shell reading
+/// from stdin), NOT embedded in argv — `wsl.exe` and `ssh` both re-parse their
+/// command tail, which mangles a script full of quotes/`$()`/backslashes (the
+/// cause of the empty remote listing). Piping via stdin sidesteps all argv
+/// quoting. `CREATE_NO_WINDOW` stops `ssh.exe` from flashing a console on
+/// Windows. stdin is closed after writing so the remote `bash -s` sees EOF and
+/// runs (otherwise it hangs waiting for more input). `None` for a local/unknown
+/// host or a spawn failure. Real-IO build only.
+#[cfg(not(coverage))]
+fn run_remote_script(host_target: &str, script: &str) -> Option<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let prefix = exec_prefix_for(Some(host_target))?;
+    let bin = resolve_remote_bin(&prefix[0]);
+    let mut command = Command::new(&bin);
+    command
+        .args(&prefix[1..])
+        .arg("bash")
+        .arg("-l")
+        .arg("-s")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = command.spawn().ok()?;
+    {
+        // Write the script then drop stdin → EOF so `bash -s` executes and exits.
+        let mut stdin = child.stdin.take()?;
+        stdin.write_all(script.as_bytes()).ok()?;
+    }
+    let out = child.wait_with_output().ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// List a remote host's resumable Claude sessions for `project`.
@@ -1578,12 +1622,12 @@ fn remote_transcript_script(project: &str, uuid: Option<&str>) -> String {
 /// `None` for a local/unknown host or a failed connection. Real-IO build only.
 #[cfg(not(coverage))]
 pub fn fetch_remote_session_list(host_target: &str, project: &str) -> Option<String> {
-    let prefix = exec_prefix_for(Some(host_target))?;
     let cd = cd_target(project);
     let script = format!(
-        "cwd=$(cd {cd} 2>/dev/null && pwd) || exit 0; \
-         enc=$(printf '%s' \"$cwd\" | sed 's/[^a-zA-Z0-9]/-/g'); \
-         dir=\"$HOME/.claude/projects/$enc\"; \
+        "base=${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}\n\
+         cwd=$(cd {cd} 2>/dev/null && pwd) || exit 0\n\
+         enc=$(printf '%s' \"$cwd\" | sed 's/[^a-zA-Z0-9]/-/g')\n\
+         dir=\"$base/projects/$enc\"\n\
          for f in $(ls -t \"$dir\"/*.jsonl 2>/dev/null); do \
            u=$(basename \"$f\" .jsonl); \
            m=$(stat -c %Y \"$f\" 2>/dev/null || echo 0); \
@@ -1591,13 +1635,7 @@ pub fn fetch_remote_session_list(host_target: &str, project: &str) -> Option<Str
            printf '%s000\\t%s\\t%s\\n' \"$m\" \"$u\" \"$l\"; \
          done"
     );
-    let argv = marsad_lifecycle::remote_shell_argv(&prefix, &script);
-    let bin = resolve_remote_bin(&argv[0]);
-    let out = std::process::Command::new(&bin)
-        .args(&argv[1..])
-        .output()
-        .ok()?;
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    run_remote_script(host_target, &script)
 }
 
 /// Resolve a host's execution target into the argv prefix every remote command is
@@ -2105,15 +2143,12 @@ fn spawn_session_reader(
         // way a resumed WSL/SSH session shows its past turns. Done before the read
         // loop so the backfill precedes any live events.
         if let Some((project, uuid)) = &transcript_hint {
-            if let Some(prefix) = exec_prefix_for(host_target.as_deref()) {
+            if let Some(target) = host_target.as_deref() {
                 let script = remote_transcript_script(project, uuid.as_deref());
-                // Use the LOGIN-shell form (same as the session run command): a
-                // nested `wsl.exe` drops $HOME unless `bash -lc` sources the
-                // profile, and the script's `cd "$HOME"` / `~/.claude` depend on it.
-                let argv = marsad_lifecycle::remote_shell_argv(&prefix, &script);
-                let bin = resolve_remote_bin(&argv[0]);
-                if let Ok(out) = std::process::Command::new(&bin).args(&argv[1..]).output() {
-                    let jsonl = String::from_utf8_lossy(&out.stdout);
+                // run_remote_script pipes the script via stdin to `bash -l -s` —
+                // login shell (nested wsl.exe keeps $HOME), no argv quoting, and
+                // CREATE_NO_WINDOW so ssh.exe doesn't flash a console.
+                if let Some(jsonl) = run_remote_script(target, &script) {
                     if !jsonl.trim().is_empty() {
                         let line = serde_json::json!({
                             "type": "TranscriptBackfill",
