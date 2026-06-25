@@ -116,12 +116,15 @@ impl fmt::Debug for SessionWritersWrap {
 }
 
 // Per-session remote child registry wrapper — production builds only.
-// A single-connection remote session is one `ssh/plink/wsl` child process whose
-// stdin/stdout are piped to the agent; the `Child` must be kept alive for the
-// session's duration AND be killable on stop (killing it closes the pipes, so the
-// remote claude dies when the connection drops). Local sessions never populate
-// this map (they use tmux/shim containers). Gated out of the coverage build so no
-// uncovered lines appear, exactly like `SessionWritersWrap`.
+// Durable remote sessions spawn TWO ssh/wsl children per connection:
+//   • a WRITER child (`cat >> in.fifo`) whose stdin is the agent's pipe, used to
+//     forward prompts and gate responses to the detached remote claude;
+//   • a READER child (`tail -n0 -f out.log`) whose stdout is the agent's pipe,
+//     streaming new claude events to subscribers.
+// Local sessions never populate this map (they use tmux/shim containers).
+// On stop, a kill script is run over ssh instead of killing the child; the
+// map still holds writer children so they can be reaped on agent shutdown.
+// Gated out of the coverage build so no uncovered lines appear.
 #[cfg(not(coverage))]
 struct SessionChildrenWrap(
     std::sync::Arc<std::sync::Mutex<HashMap<String, std::process::Child>>>,
@@ -135,7 +138,7 @@ impl fmt::Debug for SessionChildrenWrap {
 }
 
 // Per-session remote run-command stash — production builds only.
-// A remote launch computes its single-connection run command (setup + env +
+// A remote launch computes the claude run command (setup + env +
 // `cd … && exec <claude> <args>`) from the full LaunchSpec inside
 // `launch_with_id` (the only place the posture + mode are known). The serve loop
 // pops it by session_id after `handle_ipc` and hands it to the reader thread via
@@ -497,12 +500,12 @@ impl Agent {
     }
 
     /// Real-IO build: local hosts use the platform container; remote hosts
-    /// (`exec_prefix_for` → `Some`) are a NO-OP here — the remote session is a
-    /// SINGLE piped `ssh/plink/wsl` child spawned by the per-session reader thread
-    /// (`spawn_session_reader`), not a separate detached container. The reader
-    /// thread holds the child's stdin/stdout, so there is nothing to spawn up
-    /// front. (See docs/remote-hosts.md: the single-connection model replaced the
-    /// old tmux+FIFO multi-connection container.)
+    /// (`exec_prefix_for` → `Some`) launch a DURABLE detached session on the
+    /// remote: `mkfifo in.fifo`, keepalive holder (keeps write end open), and
+    /// `setsid` + `nohup` claude reading from the FIFO and appending to `out.log`.
+    /// The FIFO + log survive agent restarts — the reader thread connects by
+    /// spawning a `cat >> in.fifo` writer child and a `tail -n0 -f out.log` reader
+    /// child over a fresh ssh/wsl connection.
     #[cfg(not(coverage))]
     fn spawn_container(
         &mut self,
@@ -518,10 +521,29 @@ impl Agent {
                     .map_err(|e| AgentError::Spawn(format!("{e}")))
             }
             Some(_) => {
+                // Extract the session_id from the container name ("marsad-<sid>").
+                let sid = container_name
+                    .strip_prefix("marsad-")
+                    .unwrap_or(container_name);
+                let run_cmd = self
+                    .session_run_cmds
+                    .0
+                    .lock()
+                    .unwrap()
+                    .get(sid)
+                    .cloned()
+                    .unwrap_or_default();
+                let script = remote_durable_launch_script(sid, &run_cmd);
+                let host = spec.host_target.as_deref().unwrap_or("");
                 eprintln!(
-                    "marsad-agent: remote session {container_name} on {:?} — single-connection model, child spawned by reader thread",
-                    spec.host_target
+                    "marsad-agent: remote session {container_name} on {host:?} — launching durable session (FIFO + setsid)"
                 );
+                // run_remote_script returns None on connection failure (spawn error).
+                run_remote_script(host, &script).ok_or_else(|| {
+                    AgentError::Spawn(format!(
+                        "remote durable launch failed for {container_name} on {host:?}"
+                    ))
+                })?;
                 Ok(())
             }
         }
@@ -573,10 +595,27 @@ impl Agent {
                 let _ = self.active_container().kill(container_name);
             }
             Some(_) => {
-                // Single-connection remote session: killing it = killing the
-                // agent-side child whose stdin/stdout are piped to the remote
-                // claude. Dropping the pipes (via kill) drops the ssh/wsl
-                // connection, so the remote claude dies with it.
+                // Durable remote session: the detached claude + keepalive holder
+                // live independently of this agent process. Killing them requires
+                // running a kill script on the remote host (reads the stored PID
+                // files and sends SIGTERM, then removes the session dir).
+                // Also drop + reap the local writer child (the `cat >> in.fifo`
+                // connection) if it's still in the registry — its EOF on the remote
+                // doesn't kill claude (the keepalive holds the write end open), but
+                // we clean it up so the slot is freed.
+                let host = self.session_host_target(session_id).unwrap_or_default();
+                let script = remote_kill_script(session_id);
+                if let Some(out) = run_remote_script(&host, &script) {
+                    eprintln!(
+                        "marsad-agent: session {session_id} remote kill on {host:?}: {}",
+                        out.trim()
+                    );
+                } else {
+                    eprintln!(
+                        "marsad-agent: session {session_id} remote kill script failed (host unreachable?)"
+                    );
+                }
+                // Reap the local writer child.
                 let child = {
                     let mut children = self.session_children.0.lock().unwrap();
                     children.remove(session_id)
@@ -609,12 +648,13 @@ impl Agent {
         spec: marsad_proto::LaunchSpec,
     ) -> Result<String, AgentError> {
         let container_name = format!("marsad-{session_id}");
-        self.spawn_container(&container_name, &spec)?;
 
-        // For a REMOTE session, compute the single-connection run command now —
-        // this is the only point with the full LaunchSpec (posture + mode) in
-        // hand. The serve loop pops it by session_id and hands it to the reader
-        // thread, which spawns it as one piped child. Local sessions stash nothing.
+        // For a REMOTE session, compute the claude run command now — this is the
+        // only point with the full LaunchSpec (posture + mode) in hand.
+        // We stash it BEFORE spawn_container so the durable launch script (which
+        // spawn_container runs via run_remote_script) can embed it.
+        // The serve loop also pops it by session_id to pass to the reader thread.
+        // Local sessions stash nothing.
         #[cfg(not(coverage))]
         {
             if exec_prefix_for(spec.host_target.as_deref()).is_some() {
@@ -631,6 +671,8 @@ impl Agent {
                     .insert(session_id.clone(), run_cmd);
             }
         }
+
+        self.spawn_container(&container_name, &spec)?;
 
         let persisted = marsad_store::PersistedSession {
             id: session_id.clone(),
@@ -1162,29 +1204,71 @@ impl Agent {
 
         let data_root = self.config.data_root.clone();
 
-        // ── Reconnect LOCAL sessions that survived an agent restart ────────────
+        // ── Reconnect sessions that survived an agent restart ──────────────────
         // The agent is a detached daemon; if it died (e.g. killed on reinstall) but
-        // a LOCAL tmux/shim container is still alive, re-attach a reader to each live
+        // a session container is still alive, re-attach a reader to each live
         // session and re-track it so prompt/stop work and the conversation CONTINUES.
-        // `first_prompt: None` and `send_init: false` — the local claude is already
+        // `first_prompt: None` and `send_init: false` — the claude is already
         // running and initialized; we only re-attach to its stream.
         //
-        // REMOTE sessions are SKIPPED: a single-connection remote session is one
-        // piped ssh/wsl child of THIS agent process. When the agent dies the child
-        // (and its remote claude) die with it — there is no detached container to
-        // adopt. Such sessions are left for explicit resume (see docs/remote-hosts.md
-        // "liveness tradeoff").
+        // LOCAL sessions: reconcile via tmux/shim container as before.
+        // REMOTE sessions: durable (FIFO + setsid) — probe liveness via
+        // `remote_liveness_script`, then re-attach with writer + tail children.
         {
             use marsad_lifecycle::Action;
             let restored = self.store.0.restore().map(|r| r.sessions).unwrap_or_default();
             for s in restored {
-                if exec_prefix_for(s.host_target.as_deref()).is_some() {
-                    eprintln!(
-                        "marsad-agent: skip reconnect of remote session {} (single-connection; not adoptable)",
-                        s.id
-                    );
-                    continue;
+                if let Some(host) = s.host_target.as_deref() {
+                    if exec_prefix_for(Some(host)).is_some() {
+                        // REMOTE session: probe liveness, reconnect if alive.
+                        let live_script = remote_liveness_script(&s.id);
+                        let live = run_remote_script(host, &live_script)
+                            .map(|out| out.trim() == "LIVE")
+                            .unwrap_or(false);
+                        eprintln!(
+                            "marsad-agent: remote session {} on {host:?} liveness: {}",
+                            s.id,
+                            if live { "LIVE" } else { "DEAD" }
+                        );
+                        if live {
+                            self.sessions.insert(
+                                s.id.clone(),
+                                SessionRecord {
+                                    marsad_id: s.id.clone(),
+                                },
+                            );
+                            // On reconnect: no run_command (already running), no
+                            // first_prompt (already initialized), no send_init.
+                            // transcript_hint: supply for resume so backfill fires.
+                            let transcript_hint = s
+                                .session_id
+                                .as_ref()
+                                .filter(|_| true) // always try backfill on reconnect
+                                .map(|uuid| (s.project.clone(), Some(uuid.clone())))
+                                .or_else(|| Some((s.project.clone(), None)));
+                            spawn_session_reader(
+                                s.id.clone(),
+                                s.host_target.clone(),
+                                None,
+                                false, // already initialized
+                                None,  // run_command: already running
+                                transcript_hint,
+                                data_root.clone(),
+                                Arc::clone(&subscribers),
+                                Arc::clone(&self.session_writers.0),
+                                Arc::clone(&self.pending_gates.0),
+                                Arc::clone(&self.session_children.0),
+                            );
+                            eprintln!(
+                                "marsad-agent: reconnected live remote session {}",
+                                s.id
+                            );
+                        }
+                        continue;
+                    }
                 }
+
+                // LOCAL session: reconcile via tmux/shim container.
                 let known = Persisted {
                     session_id: s.session_id.clone(),
                     container_name: format!("marsad-{}", s.id),
@@ -1932,10 +2016,27 @@ struct LaunchSessionMsg {
 }
 
 /// Spawn the per-session reader thread: connect the transport (local FIFO/pipe, or a
-/// remote ssh/wsl/plink bridge), send the control `initialize` handshake + an optional
+/// remote durable FIFO bridge), send the control `initialize` handshake + an optional
 /// first prompt, register the writer, then stream claude's stdout to every subscriber
 /// until the session ends. Used both when a session is launched AND when reconnecting
 /// a session that survived an agent restart (pass `first_prompt: None` for reconnect).
+///
+/// # Remote durable model (design 2B)
+///
+/// A durable remote session uses two independent ssh/wsl children per agent connection:
+///   - **Writer child**: runs `cat >> $HOME/.marsad/<sid>/in.fifo` with its stdin piped
+///     from the agent.  The agent writes prompts + gate responses to it.  When the agent
+///     drops the child's stdin pipe the `cat` exits, but the remote claude keeps running
+///     because the keepalive holder (`sleep 999999 > in.fifo`, started at launch) still
+///     holds the FIFO write-end open.
+///   - **Reader child**: runs `tail -n0 -f $HOME/.marsad/<sid>/out.log` with its stdout
+///     piped to the agent.  Streams only NEW output (lines written after connect time)
+///     so reconnects don't replay historical output.  Historical conversation is supplied
+///     by the `TranscriptBackfill` mechanism over a separate `run_remote_script` call.
+///
+/// The writer child is stored in `children` so it can be reaped on thread exit.
+/// Killing the session runs `remote_kill_script` over ssh (SIGTERM to ka+claude, dir
+/// removal) rather than killing a child process.
 #[cfg(not(coverage))]
 #[allow(clippy::too_many_arguments)]
 fn spawn_session_reader(
@@ -1951,6 +2052,11 @@ fn spawn_session_reader(
     pending_fifo: std::sync::Arc<std::sync::Mutex<HashMap<String, PendingGate>>>,
     children: std::sync::Arc<std::sync::Mutex<HashMap<String, std::process::Child>>>,
 ) {
+    // `run_command` is only used when the caller signals that a launch script
+    // was not yet run (i.e. not provided to spawn_container).  For the durable
+    // model, it's not needed here — the launch script already ran.
+    let _ = run_command;
+
     let session_dir = std::path::PathBuf::from(&data_root)
         .join("sessions")
         .join(format!("marsad-{sid}"));
@@ -1961,80 +2067,108 @@ fn spawn_session_reader(
         // (tmux+FIFO on Unix, named pipe on Windows), yielding
         // a `SplitIo` (boxed writer + buffered boxed reader).
         //
-        // Remote session (host_target resolves to an exec
-        // prefix) → SINGLE piped child: one `ssh/plink/wsl`
-        // process running the session's run command, with
-        // claude's stdin+stdout piped to this agent. We write
-        // the initialize + user messages to the child's stdin
-        // and read stream-json events from its stdout. The
-        // child is kept in the `children` registry so a stop
-        // can kill it (closing the pipes drops the connection
-        // → the remote claude exits). The rest of this thread
-        // is transport-agnostic.
+        // Remote session (host_target resolves to an exec prefix) → DURABLE model:
+        //   • Writer child: ssh/wsl running `cat >> in.fifo` (stdin piped from agent).
+        //   • Reader child: ssh/wsl running `tail -n0 -f out.log` (stdout piped to agent).
+        // The writer child is stored in `children` so it can be reaped on exit.
+        // The reader child is owned entirely by this thread.
         let (writer, mut reader): marsad_transport::SplitIo =
             match exec_prefix_for(host_target.as_deref()) {
                 Some(prefix) => {
                     use std::process::{Command, Stdio};
-                    let argv = marsad_lifecycle::remote_shell_argv(
-                        &prefix,
-                        run_command.as_deref().unwrap_or(""),
-                    );
-                    // Resolve `plink` to a concrete path (PATH / PuTTY dirs) so a
-                    // PuTTY install that isn't on PATH still works.
-                    let bin = resolve_remote_bin(&argv[0]);
-                    let mut command = Command::new(&bin);
-                    command
-                        .args(&argv[1..])
+
+                    // ── Spawn writer child ─────────────────────────────────────
+                    // Appends everything written to its stdin into the remote FIFO.
+                    let writer_argv = remote_writer_argv(&prefix, &sid);
+                    let w_bin = resolve_remote_bin(&writer_argv[0]);
+                    let mut w_cmd = Command::new(&w_bin);
+                    w_cmd.args(&writer_argv[1..])
                         .stdin(Stdio::piped())
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped()); // capture → agent.log for diagnosis
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null());
                     #[cfg(windows)]
                     {
                         use std::os::windows::process::CommandExt;
-                        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+                        w_cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
                     }
-                    let mut child = match command.spawn() {
+                    let mut writer_child = match w_cmd.spawn() {
                         Ok(c) => c,
                         Err(e) => {
-                            eprintln!("marsad-agent: remote spawn {sid}: {e}");
+                            eprintln!("marsad-agent: remote writer spawn {sid}: {e}");
                             return;
                         }
                     };
-                    // Stream the remote child's stderr to agent.log so a silent exit
-                    // (claude/genie error, shell error) is visible.
-                    if let Some(errpipe) = child.stderr.take() {
+                    let child_stdin = match writer_child.stdin.take() {
+                        Some(s) => s,
+                        None => {
+                            eprintln!("marsad-agent: remote writer child {sid} has no stdin");
+                            let _ = writer_child.kill();
+                            let _ = writer_child.wait();
+                            return;
+                        }
+                    };
+                    // Store writer child so it is reaped on thread exit.
+                    children.lock().unwrap().insert(sid.clone(), writer_child);
+
+                    // ── Spawn reader child ─────────────────────────────────────
+                    // Streams only NEW out.log lines (tail -n0 = skip historical).
+                    let reader_argv = remote_reader_argv(&prefix, &sid);
+                    let r_bin = resolve_remote_bin(&reader_argv[0]);
+                    let mut r_cmd = Command::new(&r_bin);
+                    r_cmd.args(&reader_argv[1..])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped());
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        r_cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+                    }
+                    let mut reader_child = match r_cmd.spawn() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("marsad-agent: remote reader spawn {sid}: {e}");
+                            // Clean up writer child we already stored.
+                            if let Some(mut wc) = children.lock().unwrap().remove(&sid) {
+                                let _ = wc.kill();
+                                let _ = wc.wait();
+                            }
+                            return;
+                        }
+                    };
+                    // Stream reader's stderr to agent.log for diagnosis.
+                    if let Some(errpipe) = reader_child.stderr.take() {
                         let esid = sid.clone();
                         std::thread::spawn(move || {
                             use std::io::BufRead;
                             let r = std::io::BufReader::new(errpipe);
                             for line in r.lines().map_while(Result::ok) {
                                 if !line.trim().is_empty() {
-                                    eprintln!("marsad-agent: session {esid} child-stderr: {line}");
+                                    eprintln!("marsad-agent: session {esid} reader-stderr: {line}");
                                 }
                             }
                         });
                     }
-                    // Take the pipe ends BEFORE storing the child in the registry
-                    // (the registry keeps the Child alive + killable; we own the IO).
-                    let child_stdin = match child.stdin.take() {
+                    let child_stdout = match reader_child.stdout.take() {
                         Some(s) => s,
                         None => {
-                            eprintln!("marsad-agent: remote child {sid} has no stdin");
-                            let _ = child.kill();
-                            let _ = child.wait();
+                            eprintln!("marsad-agent: remote reader child {sid} has no stdout");
+                            let _ = reader_child.kill();
+                            let _ = reader_child.wait();
+                            if let Some(mut wc) = children.lock().unwrap().remove(&sid) {
+                                let _ = wc.kill();
+                                let _ = wc.wait();
+                            }
                             return;
                         }
                     };
-                    let child_stdout = match child.stdout.take() {
-                        Some(s) => s,
-                        None => {
-                            eprintln!("marsad-agent: remote child {sid} has no stdout");
-                            let _ = child.kill();
-                            let _ = child.wait();
-                            return;
-                        }
-                    };
-                    children.lock().unwrap().insert(sid.clone(), child);
+                    // Reader child: store in the session_children registry under a
+                    // distinct key so the read-loop cleanup can reap it.  We use a
+                    // `"reader:<sid>"` key (never used by other code) so the normal
+                    // kill path (keyed by plain sid) is unaffected.
+                    let reader_key = format!("reader:{sid}");
+                    children.lock().unwrap().insert(reader_key, reader_child);
+
                     let w: Box<dyn std::io::Write + Send> = Box::new(child_stdin);
                     let r: std::io::BufReader<Box<dyn std::io::Read + Send>> =
                         std::io::BufReader::new(Box::new(child_stdout));
@@ -2145,7 +2279,7 @@ fn spawn_session_reader(
             );
         }
 
-        // For a REMOTE resume/continue, fetch the prior conversation from the
+        // For a REMOTE resume/reconnect, fetch the prior conversation from the
         // remote host's `.jsonl` over a fresh connection (which reuses the
         // session's ControlMaster / plink-share, so no extra MFA), and broadcast
         // it as a `TranscriptBackfill` so core can show the history. The remote
@@ -2181,10 +2315,9 @@ fn spawn_session_reader(
             }
         }
 
-        // Read out.fifo lines and broadcast to all
-        // subscribers.  The reader blocks here; the
-        // writer clone is in the session_writers registry
-        // for handle_send_prompt — no lock contention.
+        // Read out.log tail lines and broadcast to all subscribers. The reader
+        // blocks here; the writer clone is in the session_writers registry for
+        // handle_send_prompt — no lock contention.
         eprintln!("marsad-agent: session {sid} stream connected");
         use std::io::BufRead;
         let mut lines_seen = 0u64;
@@ -2192,7 +2325,7 @@ fn spawn_session_reader(
             let mut raw = String::new();
             match reader.read_line(&mut raw) {
                 Ok(0) => {
-                    eprintln!("marsad-agent: session {sid} reader EOF (out.fifo writer closed) after {lines_seen} line(s)");
+                    eprintln!("marsad-agent: session {sid} reader EOF after {lines_seen} line(s)");
                     break;
                 }
                 Err(e) => {
@@ -2252,61 +2385,209 @@ fn spawn_session_reader(
         }
 
         eprintln!("marsad-agent: session {sid} stream ended after {lines_seen} line(s)");
-        // If claude produced NO output it failed to start on the remote. With the
-        // single-connection model the child's stderr is discarded, so probe the
-        // login shell directly: is `claude` on PATH (not installed / module not
-        // sourced is the usual cause)? This is a fresh, independent connection.
+        // If claude produced NO output on a remote session, run a diagnosis so the
+        // agent.log gives a clue (PATH, module, etc.).
         if lines_seen == 0 {
-            if let Some(prefix) = exec_prefix_for(host_target.as_deref()) {
+            if let Some(target) = host_target.as_deref() {
                 let script =
-                    "echo '== claude =='; command -v claude || echo 'claude NOT on PATH'"
-                        .to_string();
-                let argv = remote_diag_argv(&prefix, &script);
-                let bin = resolve_remote_bin(&argv[0]);
-                if let Ok(out) = std::process::Command::new(&bin)
-                    .args(&argv[1..])
-                    .output()
-                {
-                    let combined = format!(
-                        "{}{}",
-                        String::from_utf8_lossy(&out.stdout),
-                        String::from_utf8_lossy(&out.stderr)
-                    );
+                    "echo '== claude =='; command -v claude 2>/dev/null || echo 'claude NOT on PATH'";
+                if let Some(out) = run_remote_script(target, script) {
                     eprintln!(
                         "marsad-agent: session {sid} remote diagnosis:\n{}",
-                        combined.trim()
+                        out.trim()
                     );
                 }
             }
         }
 
-        // Clean up: remove writer from registry when
-        // claude exits (FIFO/pipe closed).
+        // Clean up: remove writer from registry when claude exits.
         {
             let mut registry = writers_fifo.lock().unwrap();
             registry.remove(&sid);
         }
         drop(writer);
-        // For a remote session, remove + reap the piped child (if a stop hasn't
-        // already removed it). Dropping the writer above closes the child's stdin,
-        // so it exits; `wait()` reaps the zombie. Local sessions never inserted one.
+        // Reap the writer child (remote sessions: the `cat >> in.fifo` child).
+        // Dropping the writer above closes the child's stdin; `wait()` reaps it.
+        // Local sessions never insert into `children`, so this is a no-op for them.
         if let Some(mut child) = children.lock().unwrap().remove(&sid) {
             let _ = child.wait();
+        }
+        // Reap the reader child (remote sessions: the `tail -n0 -f out.log` child)
+        // stored under the `"reader:<sid>"` key.
+        let reader_key = format!("reader:{sid}");
+        if let Some(mut rchild) = children.lock().unwrap().remove(&reader_key) {
+            let _ = rchild.kill(); // tail -f never exits on its own; kill it.
+            let _ = rchild.wait();
         }
     });
 }
 
-/// Build argv to run a diagnostic shell command on the remote (ssh/plink login shell
-/// or wsl `sh -c`). Reuses the same ssh-vs-wsl convention as the lifecycle helper.
-#[cfg(not(coverage))]
-fn remote_diag_argv(prefix: &[String], script: &str) -> Vec<String> {
+// ── Durable remote session helpers ────────────────────────────────────────────
+//
+// These functions build the shell scripts and argv vectors for the durable
+// remote session model (design 2B: FIFO + setsid + keepalive).  Pure logic
+// (no IO), so they are NOT gated on `cfg(not(coverage))` and are always
+// coverage-tested via the new tests in `tests/remote.rs`.
+
+/// Return the remote dir path for a session (`$HOME/.marsad/<sid>`).
+///
+/// The shell literal `$HOME` is used (not expanded at build time) so it
+/// resolves correctly on the remote host regardless of the local platform.
+pub fn remote_session_dir(sid: &str) -> String {
+    format!("$HOME/.marsad/{}", remote_shell_quote(sid))
+}
+
+/// Build the shell script that launches a NEW durable remote session.
+///
+/// Run via `bash -l -s` on the remote. Steps:
+///
+/// 1. Create `$HOME/.marsad/<sid>/` and a named FIFO `in.fifo`.
+/// 2. Start a keepalive holder (`nohup setsid sleep 999999 > in.fifo`) that keeps
+///    the FIFO write-end open so claude never sees EOF when the agent disconnects.
+/// 3. Start the detached claude (`nohup setsid sh -c '<run_cmd> < in.fifo >>
+///    out.log 2>&1'`). `nohup` + `setsid` detach it from the ssh session.
+/// 4. Write both PIDs to `$HOME/.marsad/<sid>/ka.pid` and `claude.pid`.
+///
+/// `run_cmd` is the `build_remote_spawn_cmd` output (`cd '<proj>' && exec
+/// 'claude' <args>`); it is embedded verbatim — no extra shell quoting.
+pub fn remote_durable_launch_script(sid: &str, run_cmd: &str) -> String {
+    let dir = remote_session_dir(sid);
+    // The run_cmd comes from build_remote_spawn_cmd which already applies
+    // remote_shell_quote to all paths and args.  Embedding it inside a
+    // `sh -c '...'` would create nested quoting problems (the run_cmd uses
+    // POSIX single-quoting internally).  We instead write it to `run.sh` via
+    // a heredoc (single-quoted marker `'MARSAD_RUN'` prevents `$`/`\`
+    // expansion inside the body, so the run_cmd is safe).  A separate
+    // `start.sh` wrapper execs `run.sh` with the FIFO redirections — this
+    // avoids passing the dir path through any additional quoting layer and
+    // lets `nohup setsid` operate on a simple executable path.
+    format!(
+        r#"set -e
+dir={dir}
+mkdir -p "$dir"
+rm -f "$dir/in.fifo"
+mkfifo "$dir/in.fifo"
+touch "$dir/out.log"
+cat > "$dir/run.sh" << 'MARSAD_RUN'
+{run_cmd}
+MARSAD_RUN
+printf '#!/bin/sh\nexec sh "%s/run.sh" < "%s/in.fifo" >> "%s/out.log" 2>&1\n' "$dir" "$dir" "$dir" > "$dir/start.sh"
+chmod +x "$dir/run.sh" "$dir/start.sh"
+nohup setsid sh -c 'exec sleep 999999 > '"$dir/in.fifo"'' </dev/null >/dev/null 2>/dev/null &
+echo $! > "$dir/ka.pid"
+sleep 0.1
+nohup setsid "$dir/start.sh" </dev/null >/dev/null 2>/dev/null &
+echo $! > "$dir/claude.pid"
+echo "marsad-durable-launch: sid={sid} dir=$dir"
+"#,
+        dir = dir,
+        run_cmd = run_cmd,
+        sid = sid,
+    )
+}
+
+/// Build the shell script that checks whether a durable remote session is live.
+///
+/// Returns `LIVE` on stdout if:
+///  - the session dir exists,
+///  - `in.fifo` is a named FIFO (proves the session was set up), and
+///  - the keepalive PID recorded in `ka.pid` is still running.
+///
+/// Returns `DEAD` otherwise.  Intended to be run via `run_remote_script`.
+pub fn remote_liveness_script(sid: &str) -> String {
+    let dir = remote_session_dir(sid);
+    format!(
+        r#"dir={dir}
+if [ ! -p "$dir/in.fifo" ]; then echo DEAD; exit 0; fi
+ka=$(cat "$dir/ka.pid" 2>/dev/null || echo "")
+if [ -n "$ka" ] && kill -0 "$ka" 2>/dev/null; then echo LIVE; else echo DEAD; fi
+"#,
+        dir = dir,
+    )
+}
+
+/// Build the shell script that tears down a durable remote session.
+///
+/// Sends SIGTERM to the keepalive holder and the detached claude process (both
+/// PIDs are stored in `$HOME/.marsad/<sid>/`), waits briefly for them to exit,
+/// then removes the session dir entirely.  Idempotent — missing PIDs or a
+/// missing dir are silently ignored.
+pub fn remote_kill_script(sid: &str) -> String {
+    let dir = remote_session_dir(sid);
+    format!(
+        r#"dir={dir}
+if [ -d "$dir" ]; then
+  ka=$(cat "$dir/ka.pid" 2>/dev/null || echo "")
+  cl=$(cat "$dir/claude.pid" 2>/dev/null || echo "")
+  [ -n "$ka" ] && kill "$ka" 2>/dev/null || true
+  [ -n "$cl" ] && kill "$cl" 2>/dev/null || true
+  sleep 0.2
+  [ -n "$ka" ] && kill -9 "$ka" 2>/dev/null || true
+  [ -n "$cl" ] && kill -9 "$cl" 2>/dev/null || true
+  rm -rf "$dir"
+  echo "marsad-kill: removed $dir"
+else
+  echo "marsad-kill: dir not found, nothing to do"
+fi
+"#,
+        dir = dir,
+    )
+}
+
+/// Build the argv for the writer child: an ssh/wsl process running
+/// `cat >> $HOME/.marsad/<sid>/in.fifo` with its stdin piped from the agent.
+///
+/// The agent writes prompts (stream-json user messages) to the child's stdin;
+/// the child forwards them into the remote FIFO.  The child's stdin EOF closes
+/// the `cat` on the remote side — but the FIFO is kept open by the keepalive
+/// holder, so the detached claude does NOT see EOF.
+pub fn remote_writer_argv(prefix: &[String], sid: &str) -> Vec<String> {
+    let dir = remote_session_dir(sid);
+    let cmd = format!("cat >> {dir}/in.fifo", dir = dir);
+    build_remote_inline_argv(prefix, &cmd)
+}
+
+/// Build the argv for the reader child: an ssh/wsl process running
+/// `tail -n0 -f $HOME/.marsad/<sid>/out.log` with its stdout piped to the agent.
+///
+/// `-n0` means "start from EOF" — only NEW lines written after this `tail`
+/// starts are streamed, so historical output (from before the reconnect) is
+/// not replayed.  History is supplied by the `TranscriptBackfill` mechanism.
+pub fn remote_reader_argv(prefix: &[String], sid: &str) -> Vec<String> {
+    let dir = remote_session_dir(sid);
+    // `--pid=<claude>` makes `tail -f` exit when the detached claude dies (stop,
+    // crash, or remote_kill_script): the reader then EOFs, the reader thread/child
+    // tear down cleanly, and the session correctly shows as ended instead of
+    // hanging "alive" forever. The pid is read from the session's claude.pid; if
+    // it's already gone, tail exits immediately (claude is dead anyway). Verified
+    // `tail --pid` is supported on WSL and the SSH/HPC hosts.
+    let cmd = format!(
+        "tail -n0 --pid=\"$(cat {dir}/claude.pid 2>/dev/null)\" -f {dir}/out.log",
+        dir = dir
+    );
+    build_remote_inline_argv(prefix, &cmd)
+}
+
+/// Build an argv vector that runs a short inline command on a remote host.
+///
+/// For ssh/plink: appends the command as a single shell argument (the remote
+/// sshd runs it via the login shell).  For wsl.exe: appends `sh -c <cmd>`.
+/// This is for simple, non-interactive commands (cat, tail) that need only
+/// one argv token, unlike the multi-line scripts sent via `run_remote_script`.
+fn build_remote_inline_argv(prefix: &[String], cmd: &str) -> Vec<String> {
     let mut argv = prefix.to_vec();
-    if matches!(prefix.first().map(String::as_str), Some("ssh") | Some("plink")) {
-        argv.push(format!("bash -lc '{}'", script.replace('\'', r"'\''")));
-    } else {
-        argv.push("sh".to_string());
-        argv.push("-c".to_string());
-        argv.push(script.to_string());
+    match prefix.first().map(String::as_str) {
+        Some("ssh") | Some("plink") => {
+            // The remote sshd passes the trailing argv token to the login shell.
+            argv.push(cmd.to_string());
+        }
+        _ => {
+            // wsl.exe: use `sh -c <cmd>`
+            argv.push("sh".to_string());
+            argv.push("-c".to_string());
+            argv.push(cmd.to_string());
+        }
     }
     argv
 }
+

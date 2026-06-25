@@ -1,7 +1,11 @@
-//! Remote-host execution helpers: `exec_prefix_for` (host target → argv prefix)
-//! and `build_remote_spawn_cmd` (the FIFO-wired claude invocation run on a remote).
+//! Remote-host execution helpers: `exec_prefix_for` (host target → argv prefix),
+//! `build_remote_spawn_cmd` (the claude invocation run on a remote), and
+//! durable session helpers (design 2B: FIFO + setsid + keepalive).
 
-use marsad_agent::{build_remote_spawn_cmd, exec_prefix_for};
+use marsad_agent::{
+    build_remote_spawn_cmd, exec_prefix_for, remote_durable_launch_script, remote_kill_script,
+    remote_liveness_script, remote_reader_argv, remote_session_dir, remote_writer_argv,
+};
 
 // ── exec_prefix_for ─────────────────────────────────────────────────────────────
 
@@ -149,4 +153,159 @@ fn remote_spawn_cmd_handles_no_args_and_empty_argv() {
     let empty: Vec<String> = vec![];
     let cmd2 = build_remote_spawn_cmd("/p", &empty, None, &[]);
     assert!(cmd2.contains("&& exec 'claude' "));
+}
+
+// ── Durable remote session helpers (design 2B) ─────────────────────────────────
+
+#[test]
+fn remote_session_dir_uses_home_and_quotes_sid() {
+    // Session dir should be $HOME/.marsad/<sid>.
+    // SIDs with special chars are single-quoted.
+    let plain = remote_session_dir("session-1");
+    assert!(plain.contains("$HOME/.marsad/"), "contains base dir: {plain}");
+    assert!(plain.contains("session-1"), "contains sid: {plain}");
+
+    // A sid with a single quote is escaped via remote_shell_quote.
+    let weird = remote_session_dir("sid'x");
+    assert!(weird.contains("$HOME/.marsad/"), "contains base dir: {weird}");
+    // The single quote is escaped: '\''
+    assert!(weird.contains(r"'\''"), "single-quote escaped: {weird}");
+}
+
+#[test]
+fn remote_durable_launch_script_contains_mkfifo_and_nohup_setsid() {
+    let argv = vec![
+        "claude".to_string(),
+        "--model".to_string(),
+        "haiku".to_string(),
+    ];
+    let run_cmd = build_remote_spawn_cmd("/proj", &argv, None, &[]);
+    let script = remote_durable_launch_script("session-42", &run_cmd);
+
+    // Must create the session dir.
+    assert!(script.contains("mkdir -p"), "mkdir: {script}");
+    // Must create the FIFO.
+    assert!(script.contains("mkfifo"), "mkfifo: {script}");
+    // Must start keepalive with nohup + setsid.
+    assert!(script.contains("nohup"), "nohup: {script}");
+    assert!(script.contains("setsid"), "setsid: {script}");
+    // Must write pids.
+    assert!(script.contains("ka.pid"), "ka.pid: {script}");
+    assert!(script.contains("claude.pid"), "claude.pid: {script}");
+    // Must include the run_cmd.
+    assert!(script.contains("'claude'"), "claude binary: {script}");
+    // Must reference the session id in the dir.
+    assert!(script.contains("session-42"), "sid in script: {script}");
+}
+
+#[test]
+fn remote_durable_launch_script_setup_and_env_pass_through() {
+    // The run_cmd (from build_remote_spawn_cmd) includes setup and env lines.
+    // They are embedded verbatim in the launch script.
+    let argv = vec!["genie".to_string(), "--model".to_string(), "haiku".to_string()];
+    let env = vec![("FOO".to_string(), "bar".to_string())];
+    let run_cmd = build_remote_spawn_cmd("/proj", &argv, Some("module load x"), &env);
+    let script = remote_durable_launch_script("sid-env", &run_cmd);
+    assert!(script.contains("module load x"), "setup in script: {script}");
+    assert!(script.contains("'FOO'"), "env key in script: {script}");
+    assert!(script.contains("'bar'"), "env val in script: {script}");
+}
+
+#[test]
+fn remote_liveness_script_structure() {
+    let script = remote_liveness_script("session-99");
+    // Must reference the session dir.
+    assert!(script.contains("session-99"), "sid: {script}");
+    // Must check for a named FIFO.
+    assert!(script.contains("-p "), "FIFO check: {script}");
+    // Must read the ka.pid file.
+    assert!(script.contains("ka.pid"), "ka.pid: {script}");
+    // Must print LIVE or DEAD.
+    assert!(script.contains("LIVE"), "LIVE output: {script}");
+    assert!(script.contains("DEAD"), "DEAD output: {script}");
+}
+
+#[test]
+fn remote_kill_script_structure() {
+    let script = remote_kill_script("session-77");
+    // Must reference the session dir.
+    assert!(script.contains("session-77"), "sid: {script}");
+    // Must read both PID files.
+    assert!(script.contains("ka.pid"), "ka.pid: {script}");
+    assert!(script.contains("claude.pid"), "claude.pid: {script}");
+    // Must kill and remove the dir.
+    assert!(script.contains("kill"), "kill: {script}");
+    assert!(script.contains("rm -rf"), "rm: {script}");
+}
+
+// ── remote_writer_argv / remote_reader_argv ────────────────────────────────────
+
+#[test]
+fn writer_argv_ssh_appends_cat_command() {
+    // For ssh/plink, the command is appended as a single trailing token.
+    let prefix = exec_prefix_for(Some("user@host")).expect("ssh prefix");
+    let argv = remote_writer_argv(&prefix, "sid-w");
+    // Last element is the shell command appended verbatim.
+    let last = argv.last().unwrap();
+    assert!(last.contains("cat >>"), "cat >> in argv: {argv:?}");
+    assert!(last.contains("in.fifo"), "in.fifo in argv: {argv:?}");
+    assert!(last.contains("sid-w"), "sid in argv: {argv:?}");
+}
+
+#[test]
+fn reader_argv_ssh_appends_tail_command() {
+    let prefix = exec_prefix_for(Some("user@host")).expect("ssh prefix");
+    let argv = remote_reader_argv(&prefix, "sid-r");
+    let last = argv.last().unwrap();
+    assert!(last.contains("tail"), "tail in argv: {argv:?}");
+    assert!(last.contains("-n0"), "-n0 in argv: {argv:?}");
+    assert!(last.contains("out.log"), "out.log in argv: {argv:?}");
+    assert!(last.contains("sid-r"), "sid in argv: {argv:?}");
+    // Reader must self-terminate when claude dies (clean stop/crash teardown).
+    assert!(last.contains("--pid"), "--pid in argv: {argv:?}");
+    assert!(last.contains("claude.pid"), "claude.pid in argv: {argv:?}");
+}
+
+#[test]
+fn writer_argv_wsl_uses_sh_c_form() {
+    // For wsl.exe, the command must be passed as ["sh", "-c", "<cmd>"].
+    let prefix = exec_prefix_for(Some("wsl:Ubuntu")).expect("wsl prefix");
+    let argv = remote_writer_argv(&prefix, "sid-wsl");
+    // The argv should end with ["sh", "-c", "<cmd>"].
+    let n = argv.len();
+    assert!(n >= 3, "wsl argv must have at least 3 elements: {argv:?}");
+    assert_eq!(argv[n - 3], "sh", "sh: {argv:?}");
+    assert_eq!(argv[n - 2], "-c", "-c: {argv:?}");
+    assert!(argv[n - 1].contains("cat >>"), "cat >>: {argv:?}");
+    assert!(argv[n - 1].contains("in.fifo"), "in.fifo: {argv:?}");
+}
+
+#[test]
+fn reader_argv_wsl_uses_sh_c_form() {
+    let prefix = exec_prefix_for(Some("wsl:Ubuntu")).expect("wsl prefix");
+    let argv = remote_reader_argv(&prefix, "sid-wsl-r");
+    let n = argv.len();
+    assert!(n >= 3, "wsl argv must have at least 3 elements: {argv:?}");
+    assert_eq!(argv[n - 3], "sh", "sh: {argv:?}");
+    assert_eq!(argv[n - 2], "-c", "-c: {argv:?}");
+    assert!(argv[n - 1].contains("tail"), "tail: {argv:?}");
+    assert!(argv[n - 1].contains("out.log"), "out.log: {argv:?}");
+}
+
+#[test]
+fn writer_argv_plink_appends_as_single_token() {
+    // plink behaves like ssh: command as a trailing single token.
+    let prefix = exec_prefix_for(Some("plink:etx")).expect("plink prefix");
+    let argv = remote_writer_argv(&prefix, "sid-plink");
+    let last = argv.last().unwrap();
+    assert!(last.contains("cat >>"), "cat >>: {argv:?}");
+}
+
+#[test]
+fn reader_argv_plink_appends_as_single_token() {
+    let prefix = exec_prefix_for(Some("plink:etx")).expect("plink prefix");
+    let argv = remote_reader_argv(&prefix, "sid-plink-r");
+    let last = argv.last().unwrap();
+    assert!(last.contains("tail"), "tail: {argv:?}");
+    assert!(last.contains("-n0"), "-n0: {argv:?}");
 }
