@@ -80,7 +80,10 @@ export async function snapshot(): Promise<AppSnapshot> {
   return invoke("snapshot") as Promise<AppSnapshot>;
 }
 
-export async function listSessions(project: string): Promise<SessionSummary[]> {
+export async function listSessions(
+  project: string,
+  hostId: string,
+): Promise<SessionSummary[]> {
   if (!isTauri()) {
     return [
       { id: "sess-aaaa-1111", snippet: "Add a login endpoint to the API", modified: 1719000000000 },
@@ -88,7 +91,7 @@ export async function listSessions(project: string): Promise<SessionSummary[]> {
     ];
   }
   const invoke = await getInvoke();
-  return invoke("list_sessions", { project }) as Promise<SessionSummary[]>;
+  return invoke("list_sessions", { project, host_id: hostId }) as Promise<SessionSummary[]>;
 }
 
 export async function launchSession(args: {

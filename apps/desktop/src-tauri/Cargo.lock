@@ -1961,6 +1961,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "marsad-agent"
+version = "0.1.0"
+dependencies = [
+ "marsad-events",
+ "marsad-gates",
+ "marsad-hosts",
+ "marsad-lifecycle",
+ "marsad-notify",
+ "marsad-proto",
+ "marsad-store",
+ "marsad-transport",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "marsad-core"
 version = "0.1.0"
 dependencies = [
@@ -1984,6 +2001,7 @@ dependencies = [
 name = "marsad-desktop"
 version = "0.1.0"
 dependencies = [
+ "marsad-agent",
  "marsad-core",
  "marsad-diff",
  "marsad-events",

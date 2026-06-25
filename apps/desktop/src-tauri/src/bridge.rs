@@ -115,11 +115,60 @@ pub fn launch_session(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn list_sessions(project: String) -> Result<Vec<SessionSummary>, String> {
-    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-    let projects_root = std::path::PathBuf::from(format!("{home}/.claude/projects"));
-    marsad_core::discovery::list_sessions(&projects_root, &project)
-        .map_err(|e| e.to_string())
+pub fn list_sessions(
+    state: State<'_, ManagedState>,
+    project: String,
+    host_id: String,
+) -> Result<Vec<SessionSummary>, String> {
+    // Resolve the host: a local host's transcripts live on this machine; a remote
+    // host's live on the remote box and must be listed over its own connection.
+    let host_target: Option<String> = {
+        let guard = state.lock().map_err(|e| e.to_string())?;
+        match &*guard {
+            AppState::Live(core) => core
+                .snapshot()
+                .hosts
+                .into_iter()
+                .find(|h| h.id == host_id)
+                .and_then(|h| if h.is_local { None } else { Some(h.target) }),
+            AppState::Mock(_) => None,
+        }
+    };
+    match host_target {
+        None => {
+            let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+            let projects_root = std::path::PathBuf::from(format!("{home}/.claude/projects"));
+            marsad_core::discovery::list_sessions(&projects_root, &project).map_err(|e| e.to_string())
+        }
+        Some(target) => Ok(parse_remote_session_list(
+            &marsad_agent::fetch_remote_session_list(&target, &project).unwrap_or_default(),
+        )),
+    }
+}
+
+/// Parse the `mtime_ms<TAB>uuid<TAB><first user line>` records produced by
+/// `marsad_agent::fetch_remote_session_list` into `SessionSummary` rows (newest
+/// first, as emitted). The snippet is derived from the raw user line via the same
+/// `first_user_prompt` parser the local lister uses.
+fn parse_remote_session_list(stdout: &str) -> Vec<SessionSummary> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(3, '\t');
+            let modified: u64 = parts.next()?.trim().parse().ok()?;
+            let id = parts.next()?.trim().to_string();
+            if id.is_empty() {
+                return None;
+            }
+            let raw = parts.next().unwrap_or("");
+            let snippet = marsad_core::discovery::first_user_prompt(raw).unwrap_or_default();
+            Some(SessionSummary {
+                id,
+                snippet,
+                modified,
+            })
+        })
+        .collect()
 }
 
 #[tauri::command(rename_all = "snake_case")]

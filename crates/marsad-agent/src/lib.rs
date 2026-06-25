@@ -1565,6 +1565,41 @@ fn remote_transcript_script(project: &str, uuid: Option<&str>) -> String {
     }
 }
 
+/// List a remote host's resumable Claude sessions for `project`.
+///
+/// Claude stores transcripts on the REMOTE host, so the desktop's local JSONL
+/// reader can't see them — the New Session "Resume" picker would only ever offer
+/// "Continue". This runs, over the host's own connection (reusing
+/// ControlMaster / plink-share), a script that resolves the real cwd, finds the
+/// project's `.jsonl` files newest-first, and prints one
+/// `mtime_ms<TAB>uuid<TAB><first user line JSON>` record per session. The caller
+/// parses each record into a `SessionSummary` (the snippet via
+/// `discovery::first_user_prompt` on the raw line). Returns the raw stdout, or
+/// `None` for a local/unknown host or a failed connection. Real-IO build only.
+#[cfg(not(coverage))]
+pub fn fetch_remote_session_list(host_target: &str, project: &str) -> Option<String> {
+    let prefix = exec_prefix_for(Some(host_target))?;
+    let cd = cd_target(project);
+    let script = format!(
+        "cwd=$(cd {cd} 2>/dev/null && pwd) || exit 0; \
+         enc=$(printf '%s' \"$cwd\" | sed 's/[^a-zA-Z0-9]/-/g'); \
+         dir=\"$HOME/.claude/projects/$enc\"; \
+         for f in $(ls -t \"$dir\"/*.jsonl 2>/dev/null); do \
+           u=$(basename \"$f\" .jsonl); \
+           m=$(stat -c %Y \"$f\" 2>/dev/null || echo 0); \
+           l=$(grep -m1 '\"type\":\"user\"' \"$f\" 2>/dev/null | head -c 4000); \
+           printf '%s000\\t%s\\t%s\\n' \"$m\" \"$u\" \"$l\"; \
+         done"
+    );
+    let argv = marsad_lifecycle::remote_shell_argv(&prefix, &script);
+    let bin = resolve_remote_bin(&argv[0]);
+    let out = std::process::Command::new(&bin)
+        .args(&argv[1..])
+        .output()
+        .ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 /// Resolve a host's execution target into the argv prefix every remote command is
 /// run through (see docs/remote-hosts.md). Returns:
 /// - `None` for the local machine (`None` / `"local"` / `"localhost"` / empty),

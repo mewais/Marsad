@@ -106,11 +106,13 @@ export function NewSession() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [selectedResume, setSelectedResume] = useState<string>("continue");
 
-  // Fetch sessions when project changes or resume toggle turns on
+  // Fetch sessions when project, host, or resume toggle changes. The host
+  // matters because a remote host's resumable sessions live on the remote box
+  // (listed over its connection), not on this machine.
   useEffect(() => {
     if (!resume || !project.trim()) return;
-    listSessions(project.trim()).then(setSessions).catch(() => setSessions([]));
-  }, [resume, project]);
+    listSessions(project.trim(), hostId).then(setSessions).catch(() => setSessions([]));
+  }, [resume, project, hostId]);
 
   function close() {
     dispatch({ type: "SET_SCREEN", screen: "overview" });
