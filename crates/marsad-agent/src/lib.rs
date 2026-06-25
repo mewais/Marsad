@@ -1558,13 +1558,17 @@ fn remote_transcript_script(project: &str, uuid: Option<&str>) -> String {
          enc=$(printf '%s' \"$cwd\" | sed 's/[^a-zA-Z0-9]/-/g'); \
          dir=\"$base/projects/$enc\"; "
     );
+    // Cap at the last ~1 MiB: full Claude `.jsonl` transcripts can be tens of MB
+    // (embedded tool outputs), too big to ship as one IPC line and render. `tail
+    // -c` keeps the most recent turns; the leading partial line is skipped by
+    // `parse_transcript` (invalid JSON). Small transcripts are returned whole.
     match uuid {
         Some(u) if !u.is_empty() => {
-            format!("{resolve}cat \"$dir/{u}.jsonl\" 2>/dev/null")
+            format!("{resolve}tail -c 1048576 \"$dir/{u}.jsonl\" 2>/dev/null")
         }
         _ => format!(
             "{resolve}f=$(ls -t \"$dir\"/*.jsonl 2>/dev/null | head -1); \
-             [ -n \"$f\" ] && cat \"$f\""
+             [ -n \"$f\" ] && tail -c 1048576 \"$f\""
         ),
     }
 }
