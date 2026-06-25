@@ -1750,7 +1750,14 @@ fn spawn_session_reader(
         loop {
             let mut raw = String::new();
             match reader.read_line(&mut raw) {
-                Ok(0) | Err(_) => break,
+                Ok(0) => {
+                    eprintln!("marsad-agent: session {sid} reader EOF (out.fifo writer closed) after {lines_seen} line(s)");
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("marsad-agent: session {sid} reader ERROR after {lines_seen} line(s): {e}");
+                    break;
+                }
                 Ok(_) => {
                     lines_seen += 1;
                     let raw = raw.trim_end_matches('\n');
