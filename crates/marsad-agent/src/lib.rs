@@ -1584,7 +1584,7 @@ fn remote_transcript_script(project: &str, uuid: Option<&str>) -> String {
 /// runs (otherwise it hangs waiting for more input). `None` for a local/unknown
 /// host or a spawn failure. Real-IO build only.
 #[cfg(not(coverage))]
-fn run_remote_script(host_target: &str, script: &str) -> Option<String> {
+pub fn run_remote_script(host_target: &str, script: &str) -> Option<String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
     let prefix = exec_prefix_for(Some(host_target))?;
@@ -1805,26 +1805,22 @@ pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
         posture_to_mode(&spec.posture).to_string(),
     ];
 
-    // Route tool-permission prompts to the control-protocol stream so the GUI
-    // can approve/deny them. `--permission-prompt-tool stdio` is the CLI sentinel
-    // that makes claude emit `can_use_tool` control_requests on stdout (verified
+    // Route tool-permission prompts to the control-protocol stream so the GUI can
+    // approve/deny them. `--permission-prompt-tool stdio` is the CLI sentinel that
+    // makes claude emit `can_use_tool` control_requests on stdout (verified
     // against the 2.1.x binary: `mx9("stdio") => createCanUseTool`).
     //
-    // Added for Ask AND AutoApproveSafe:
-    // - Ask (`--permission-mode default`): every action is gated.
-    // - AutoApproveSafe (`--permission-mode acceptEdits`): claude auto-approves
-    //   edits but routes the RISKY/MCP tools it can't auto-approve to this stdio
-    //   tool → they surface as Marsad gates ("Gate risky actions only"). Without
-    //   the flag, in non-interactive `--print` mode those prompts have nowhere to
-    //   go and the tool is effectively blocked — no gate ever appears.
-    // Only FullAutonomy (`bypassPermissions`) omits it: nothing is ever gated.
-    if matches!(
-        spec.posture,
-        marsad_proto::Posture::Ask | marsad_proto::Posture::AutoApproveSafe
-    ) {
-        argv.push("--permission-prompt-tool".to_string());
-        argv.push("stdio".to_string());
-    }
+    // ALWAYS included, for every posture (verified: claude accepts it alongside
+    // `--permission-mode bypassPermissions` with no conflict). The flag only
+    // *registers* a destination for approval requests; it never forces gating:
+    // - Ask (`default`): every action gates.
+    // - AutoApproveSafe (`acceptEdits`): edits auto-approve; risky tools gate.
+    // - FullAutonomy (`bypassPermissions`): claude's OWN checks are skipped, but
+    //   anything it can't bypass — notably MCP-server-sourced HITL (the MCP's own
+    //   elicitation/approval, independent of claude's permission mode) — still
+    //   routes here as a gate instead of silently hanging in `--print` mode.
+    argv.push("--permission-prompt-tool".to_string());
+    argv.push("stdio".to_string());
 
     match &spec.mode {
         // Fresh: nothing to add. The session's working directory is set by the
