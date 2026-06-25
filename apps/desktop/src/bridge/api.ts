@@ -138,6 +138,21 @@ export async function sendPrompt(id: string, text: string): Promise<void> {
   await invoke("send_prompt", { id, text });
 }
 
+/**
+ * Run a `!<command>` shell command on the session's host (local or remote)
+ * and inject the command + output into the session transcript.
+ * Does NOT send anything to Claude — this is purely a local/remote shell exec
+ * that appends two transcript entries (User + Tool) for display.
+ */
+export async function runShellCommand(
+  sessionId: string,
+  command: string
+): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("run_shell", { session_id: sessionId, command });
+}
+
 export async function interrupt(id: string): Promise<void> {
   if (!isTauri()) return;
   const invoke = await getInvoke();

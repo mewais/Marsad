@@ -14,6 +14,7 @@ import {
   sendPrompt,
   interrupt,
   runSlash,
+  runShellCommand,
   filterSlash,
 } from "../../bridge/api";
 import type { SlashEntry, SessionView, GateVM } from "../../bridge/types";
@@ -26,6 +27,8 @@ type MsgKind =
   | "prompt"
   | "response"
   | "tool"
+  | "shell_cmd"
+  | "shell_out"
   | "result"
   | "error"
   | "working"
@@ -73,7 +76,16 @@ function deriveTranscript(
     if (entry.role === "assistant") {
       msgs.push({ id: `t-${i}`, kind: "response", text: entry.text });
     } else if (entry.role === "user") {
-      msgs.push({ id: `t-${i}`, kind: "prompt", text: entry.text });
+      // Shell commands injected by the "!" prefix are User entries starting with
+      // "! " — render them as a distinct shell command row instead of a prompt bubble.
+      if (entry.text.startsWith("! ")) {
+        msgs.push({ id: `t-${i}`, kind: "shell_cmd", text: entry.text });
+      } else {
+        msgs.push({ id: `t-${i}`, kind: "prompt", text: entry.text });
+      }
+    } else if (entry.name === "shell") {
+      // Shell output from "!" commands: render as a pre-formatted output block.
+      msgs.push({ id: `t-${i}`, kind: "shell_out", text: entry.input });
     } else {
       msgs.push({
         id: `t-${i}`,
@@ -283,6 +295,54 @@ function ToolResult({ text }: { text: string }) {
   );
 }
 
+/** Shell command row — shows the "! <cmd>" user entry as a distinct monospaced
+ *  pill so it's visually different from a normal chat prompt. */
+function ShellCmd({ text }: { text: string }) {
+  return (
+    <div
+      className="mono"
+      style={{
+        alignSelf: "flex-end",
+        maxWidth: "78%",
+        background: "var(--panel2)",
+        border: "1px solid var(--border2)",
+        color: "var(--txt2)",
+        padding: "8px 14px",
+        borderRadius: "11px 11px 4px 11px",
+        fontSize: "calc(14px * var(--fs,1))",
+        lineHeight: 1.5,
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-all",
+      }}
+    >
+      {text}
+    </div>
+  );
+}
+
+/** Shell output block — preformatted, indented like a tool result. */
+function ShellOutput({ text }: { text: string }) {
+  return (
+    <pre
+      className="mono"
+      style={{
+        margin: "0 0 0 0",
+        padding: "11px 13px",
+        borderRadius: 9,
+        background: "var(--panel)",
+        border: "1px solid var(--border)",
+        fontSize: "calc(13px * var(--fs,1))",
+        lineHeight: 1.55,
+        color: "var(--txt)",
+        whiteSpace: "pre-wrap",
+        overflowX: "auto",
+      }}
+    >
+      {text}
+    </pre>
+  );
+}
+
 function ErrorMsg({ text }: { text: string }) {
   return (
     <pre
@@ -466,9 +526,25 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
   const { selectedSession, selectedGate } = useVm();
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // Auto-scroll to the bottom whenever the transcript grows or the session/phase
+  // changes, so the latest message is always in view by default. Track the
+  // transcript length AND a signature of the last entry (so a streaming message
+  // that grows in place still scrolls), plus the phase (drives live status rows),
+  // the gate, and the session id (jump to bottom when switching sessions).
+  const transcriptLen = selectedSession?.transcript?.length ?? 0;
+  const lastEntrySig =
+    transcriptLen > 0
+      ? JSON.stringify(selectedSession!.transcript[transcriptLen - 1])
+      : "";
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [selectedSession?.state]);
+    bottomRef.current?.scrollIntoView({ behavior: "auto" });
+  }, [
+    selectedSession?.id,
+    transcriptLen,
+    lastEntrySig,
+    selectedSession?.state,
+    selectedGate?.decision_id,
+  ]);
 
   const sv = selectedSession;
   if (!sv) {
@@ -482,6 +558,17 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
   const messages = deriveTranscript(sv, selectedGate);
 
   function handleSend(text: string) {
+    // If text starts with "!" run the shell command on the session's host.
+    // The command is stripped of the leading "!" and trimmed.
+    if (text.startsWith("!")) {
+      const cmd = text.slice(1).trim();
+      if (cmd.length > 0) {
+        runShellCommand(sessionId, cmd);
+        return;
+      }
+      // A bare "!" with no command is silently ignored.
+      return;
+    }
     // If text starts with "/" and matches a slash command, run it
     if (text.startsWith("/")) {
       const matches = filterSlash(text);
@@ -536,6 +623,10 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
                 );
               case "result":
                 return <ToolResult key={msg.id} text={msg.text ?? ""} />;
+              case "shell_cmd":
+                return <ShellCmd key={msg.id} text={msg.text ?? ""} />;
+              case "shell_out":
+                return <ShellOutput key={msg.id} text={msg.text ?? ""} />;
               case "error":
                 return <ErrorMsg key={msg.id} text={msg.text ?? ""} />;
               case "working":

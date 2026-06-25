@@ -2333,3 +2333,84 @@ fn transcript_backfill_empty_is_noop() {
         .expect("no error");
     assert!(updates.is_empty(), "empty history must yield no updates");
 }
+
+// ---------------------------------------------------------------------------
+// inject_shell_output — shell command + output injected into transcript
+// ---------------------------------------------------------------------------
+
+/// inject_shell_output appends a User entry (! <cmd>) and a Tool(shell) entry
+/// for the output, and returns a VmUpdate::Session for the caller to emit.
+#[test]
+fn inject_shell_output_appends_entries_and_returns_session_update() {
+    use marsad_events::TranscriptEntry;
+
+    let mut core = core_with_history(vec![], vec![]);
+    let id = launch_t(&mut core, None, LaunchMode::Fresh);
+    core.on_agent_line(&ipc_agent_event_system_init(&id))
+        .unwrap();
+
+    let updates = core
+        .inject_shell_output(&id, "ls -la", "total 0\n-rw-r--r-- 1 user group 0 file.txt")
+        .expect("inject_shell_output must succeed for known session");
+
+    // Must return exactly one Session update.
+    assert_eq!(updates.len(), 1, "inject_shell_output must return one update");
+    let sv = match &updates[0] {
+        VmUpdate::Session(s) => s.clone(),
+        other => panic!("expected Session update, got {other:?}"),
+    };
+
+    // Transcript must have: User("! ls -la") and Tool { name: "shell", input: output }
+    assert_eq!(sv.transcript.len(), 2, "two entries must be appended");
+    assert_eq!(
+        sv.transcript[0],
+        TranscriptEntry::User {
+            text: "! ls -la".to_string()
+        },
+        "first entry must be the ! command"
+    );
+    assert!(
+        matches!(&sv.transcript[1], TranscriptEntry::Tool { name, input }
+            if name == "shell" && input.contains("file.txt")),
+        "second entry must be Tool(shell) with the output"
+    );
+}
+
+/// inject_shell_output with leading/trailing whitespace on the command trims it
+/// so the User entry always reads "! <cmd>" without extra spaces.
+#[test]
+fn inject_shell_output_trims_command() {
+    use marsad_events::TranscriptEntry;
+
+    let mut core = core_with_history(vec![], vec![]);
+    let id = launch_t(&mut core, None, LaunchMode::Fresh);
+    let updates = core
+        .inject_shell_output(&id, "  echo hello  ", "hello\n")
+        .expect("inject");
+    let sv = match &updates[0] {
+        VmUpdate::Session(s) => s.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        sv.transcript[0],
+        TranscriptEntry::User {
+            text: "! echo hello".to_string()
+        },
+        "command must be trimmed"
+    );
+}
+
+/// inject_shell_output on an unknown session returns UnknownSession.
+#[test]
+fn inject_shell_output_unknown_session_returns_unknown_session_error() {
+    use marsad_core::CoreError;
+
+    let (mut core, _peer) = make_core();
+    let err = core
+        .inject_shell_output("no-such-session", "ls", "")
+        .unwrap_err();
+    assert!(
+        matches!(err, CoreError::UnknownSession(_)),
+        "expected UnknownSession, got {err:?}"
+    );
+}

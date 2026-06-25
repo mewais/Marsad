@@ -1080,6 +1080,37 @@ impl Core {
         ])
     }
 
+    /// Inject a shell command and its output into the session transcript.
+    ///
+    /// Called by the bridge after it runs `!<command>` on the session's host
+    /// (local or remote). Core is IO-free: the bridge does the actual execution
+    /// and passes the command string + captured output here. Two transcript
+    /// entries are appended:
+    ///   1. `User { text: "! <command>" }` — the issued command (matches how
+    ///      Claude Code shows shell commands: `!cmd` prefix).
+    ///   2. `Tool { name: "shell", input: <output> }` — the captured output,
+    ///      rendered in the Activity tab as a ⚙ tool row with monospaced output.
+    ///
+    /// Returns `UnknownSession` for an unrecognised `id`.
+    pub fn inject_shell_output(
+        &mut self,
+        id: &str,
+        command: &str,
+        output: &str,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        self.require_session(id)?;
+        let record = self.sessions.get_mut(id).unwrap();
+        record.transcript.push(marsad_events::TranscriptEntry::User {
+            text: format!("! {}", command.trim()),
+        });
+        record.transcript.push(marsad_events::TranscriptEntry::Tool {
+            name: "shell".to_string(),
+            input: output.to_string(),
+        });
+        let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
+        Ok(vec![VmUpdate::Session(sv)])
+    }
+
     pub fn send_prompt(&mut self, id: &str, text: &str) -> Result<(), CoreError> {
         self.require_session(id)?;
         // Record the user's prompt immediately — claude does not echo it on the

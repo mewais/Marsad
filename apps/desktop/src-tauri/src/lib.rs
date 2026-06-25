@@ -241,6 +241,7 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::restart_session,
             bridge::save_template,
             bridge::list_templates,
+            bridge::run_shell,
         ])
 }
 

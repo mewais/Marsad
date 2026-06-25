@@ -876,3 +876,147 @@ pub fn list_templates(state: State<'_, ManagedState>) -> Result<Vec<PersistedTem
         AppState::Mock(_) => Ok(vec![]),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Shell command execution (! prefix)
+// ---------------------------------------------------------------------------
+
+/// Run a shell command on the session's host (local or remote) and inject the
+/// result into the session's transcript as a `User("! <cmd>")` + `Tool(shell)`
+/// pair.  The transcript update is emitted to the webview via the usual
+/// `VmUpdate::Session` channel so the Activity tab refreshes immediately.
+///
+/// Execution is done OFF the Core mutex (same discipline as git/SSH probes):
+///   • local host → `sh -c` (Unix) / `cmd /C` (Windows)
+///   • remote host → `marsad_agent::run_remote_script` (ssh/wsl/plink)
+///
+/// Stdout and stderr are both captured and combined for display.
+///
+/// In mock mode, a canned output is injected so the UI renders something
+/// visually correct even without a real agent.
+#[tauri::command(rename_all = "snake_case")]
+pub fn run_shell(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    session_id: String,
+    command: String,
+) -> Result<(), String> {
+    // 1. Briefly lock to resolve the host target (local vs remote) AND the
+    //    session's project dir, so `!cmd` runs where the session runs (e.g. `!ls`
+    //    lists the project, not $HOME).
+    let (host_target, project): (Option<String>, String) = {
+        let guard = state.lock().map_err(|e| e.to_string())?;
+        match &*guard {
+            AppState::Live(core) => {
+                let snap = core.snapshot();
+                let sv = snap
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == session_id)
+                    .ok_or_else(|| format!("unknown session: {session_id}"))?;
+                let project = sv.project.clone();
+                let host_id = sv.host_id.clone();
+                let target = snap
+                    .hosts
+                    .into_iter()
+                    .find(|h| h.id == host_id)
+                    .and_then(|h| if h.is_local { None } else { Some(h.target) });
+                (target, project)
+            }
+            AppState::Mock(_) => (None, String::new()),
+        }
+    }; // lock released
+
+    // 2. Execute the command OFF the lock, in the session's project dir.
+    let output = match host_target {
+        Some(target) => {
+            // Remote: cd into the project (best-effort) then run the command, via
+            // marsad-agent's run_remote_script (login shell, quoting-safe stdin).
+            let script = format!("cd {} 2>/dev/null\n{}", shell_quote_cd(&project), command);
+            marsad_agent::run_remote_script(&target, &script)
+                .unwrap_or_else(|| "(no output)".to_string())
+        }
+        None => {
+            // Local execution in the project dir.
+            run_shell_locally(&command, &project)
+        }
+    };
+
+    // 3. Inject the result into the transcript (brief lock).
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core
+                .inject_shell_output(&session_id, &command, &output)
+                .map_err(map_err)?,
+            AppState::Mock(_) => {
+                // Mock: produce a canned entry so the UI looks correct in dev mode.
+                vec![]
+            }
+        }
+    }; // lock released
+
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Shell-quote a project path for use after `cd` in a remote POSIX script.
+/// Leaves `~` / `~/...` unquoted so the remote shell expands them; single-quotes
+/// anything else (safe for spaces). Empty → `.` (stay in the default dir).
+fn shell_quote_cd(project: &str) -> String {
+    if project.is_empty() {
+        ".".to_string()
+    } else if project == "~" || project.starts_with("~/") {
+        project.to_string()
+    } else {
+        format!("'{}'", project.replace('\'', r"'\''"))
+    }
+}
+
+/// Run a shell command locally in `project` (if it exists), capturing combined
+/// stdout+stderr.
+///
+/// Uses `sh -c` on Unix and `cmd /C` on Windows. Falls back to an error
+/// message if the subprocess cannot be spawned.
+fn run_shell_locally(command: &str, project: &str) -> String {
+    use std::process::Command;
+
+    #[cfg(windows)]
+    let (bin, flag) = ("cmd", "/C");
+    #[cfg(not(windows))]
+    let (bin, flag) = ("sh", "-c");
+
+    let mut cmd = Command::new(bin);
+    cmd.arg(flag).arg(command);
+    // Run in the session's project dir when it's a real existing path.
+    if !project.is_empty() && std::path::Path::new(project).is_dir() {
+        cmd.current_dir(project);
+    }
+
+    match cmd.output() {
+        Ok(out) => {
+            let mut combined = String::new();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if !stdout.is_empty() {
+                combined.push_str(&stdout);
+            }
+            if !stderr.is_empty() {
+                if !combined.is_empty() {
+                    combined.push('\n');
+                }
+                combined.push_str(&stderr);
+            }
+            if combined.is_empty() {
+                if out.status.success() {
+                    "(no output)".to_string()
+                } else {
+                    format!("(exit {})", out.status.code().unwrap_or(-1))
+                }
+            } else {
+                combined
+            }
+        }
+        Err(e) => format!("failed to run command: {e}"),
+    }
+}
