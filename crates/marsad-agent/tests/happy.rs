@@ -108,14 +108,20 @@ fn claude_argv_uses_claude_bin() {
     assert_eq!(argv[1], "--print");
 }
 
-/// `claude_argv` must include the project path somewhere after the prefix.
+/// `claude_argv` must NOT pass the project path as a positional.
+///
+/// In `--input-format stream-json` mode a positional is parsed as claude's
+/// *prompt*, not its working directory. The session's cwd is set by the spawn
+/// `cd <project>` (remote run command / local spawn cwd) instead, so the
+/// project path must never leak into argv as a stray prompt (e.g. a literal
+/// "~/").
 #[test]
-fn claude_argv_includes_project() {
+fn claude_argv_excludes_project_positional() {
     let spec = basic_launch_spec();
     let argv = claude_argv(&spec);
     assert!(
-        argv.iter().any(|a| a.contains("/home/user/myproject")),
-        "claude_argv must include the project path; got {argv:?}"
+        !argv.iter().any(|a| a.contains("/home/user/myproject")),
+        "claude_argv must NOT include the project path as a positional; got {argv:?}"
     );
 }
 

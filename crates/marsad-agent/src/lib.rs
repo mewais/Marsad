@@ -827,9 +827,25 @@ impl Agent {
             let writers = self.session_writers.0.lock().unwrap();
             if let Some(shared) = writers.get(session_id) {
                 let mut writer = shared.lock().unwrap();
-                let _ = writer.write_all(encoded.as_bytes());
-                let _ = writer.write_all(b"\n");
-                let _ = writer.flush();
+                match writer
+                    .write_all(encoded.as_bytes())
+                    .and_then(|_| writer.write_all(b"\n"))
+                    .and_then(|_| writer.flush())
+                {
+                    Ok(()) => eprintln!(
+                        "marsad-agent: session {session_id} send_prompt delivered ({} chars) to claude stdin",
+                        text.len()
+                    ),
+                    Err(e) => eprintln!(
+                        "marsad-agent: session {session_id} send_prompt WRITE FAILED: {e}"
+                    ),
+                }
+            } else {
+                // No registered writer — the prompt is dropped on the floor and
+                // the UI shows nothing. Surface it instead of failing silently.
+                eprintln!(
+                    "marsad-agent: session {session_id} send_prompt DROPPED — no writer registered (session not connected?)"
+                );
             }
         }
         // Suppress unused-variable warning in coverage builds.
@@ -1571,7 +1587,7 @@ fn posture_to_mode(posture: &marsad_proto::Posture) -> &'static str {
 /// stream-json user message, not as a positional CLI argument.
 ///
 /// The trailing argument depends on `spec.mode`:
-/// - `Fresh`    → the project path positional (a new conversation in that dir);
+/// - `Fresh`    → nothing (new conversation; cwd is set by the spawn `cd`);
 /// - `Continue` → `--continue` (resume the most recent conversation in the cwd);
 /// - `Resume(id)` → `--resume <id>` (resume that specific conversation).
 ///
@@ -1607,7 +1623,12 @@ pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
     }
 
     match &spec.mode {
-        marsad_proto::LaunchMode::Fresh => argv.push(spec.project.clone()),
+        // Fresh: nothing to add. The session's working directory is set by the
+        // `cd <project>` in the remote run command (and by the local spawn cwd),
+        // so claude starts a new conversation in the right place. A positional
+        // here would be parsed as claude's *prompt* (e.g. a literal "~/"), which
+        // is wrong — the first task is delivered as a stream-json user message.
+        marsad_proto::LaunchMode::Fresh => {}
         marsad_proto::LaunchMode::Continue => argv.push("--continue".to_string()),
         marsad_proto::LaunchMode::Resume(id) => {
             argv.push("--resume".to_string());
@@ -1881,6 +1902,7 @@ fn spawn_session_reader(
             let _ = w.write_all(init.as_bytes());
             let _ = w.write_all(b"\n");
             let _ = w.flush();
+            eprintln!("marsad-agent: session {sid} sent initialize handshake");
         }
 
         // Deliver the first_prompt (if any) immediately
@@ -1892,6 +1914,7 @@ fn spawn_session_reader(
                 encode_user_input, ContentBlock, UserInput,
             };
             use std::io::Write;
+            let plen = prompt.len();
             let encoded = encode_user_input(&UserInput {
                 content: vec![ContentBlock::Text {
                     text: prompt,
@@ -1901,6 +1924,9 @@ fn spawn_session_reader(
             let _ = w.write_all(encoded.as_bytes());
             let _ = w.write_all(b"\n");
             let _ = w.flush();
+            eprintln!("marsad-agent: session {sid} delivered first_prompt ({plen} chars) to claude stdin");
+        } else {
+            eprintln!("marsad-agent: session {sid} no first_prompt — claude idle until a prompt is sent (phase stays Starting)");
         }
 
         // Register the shared writer so handle_send_prompt

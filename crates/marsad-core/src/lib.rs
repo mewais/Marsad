@@ -276,6 +276,9 @@ impl TranscriptReader for RealTranscript {
 
 struct SessionRecord {
     project: String,
+    /// Host this session runs on (registry id). Surfaced in the SessionView so
+    /// the UI labels the session with its real host instead of always "local".
+    host_id: String,
     state: SessionState,
     /// Last-probed working-tree changes for this session's project dir.
     changes: Vec<FileChange>,
@@ -861,6 +864,7 @@ impl Core {
             id.clone(),
             SessionRecord {
                 project: spec.project,
+                host_id: spec.host_id,
                 state: SessionState::initial(),
                 changes: Vec::new(),
                 transcript,
@@ -890,6 +894,7 @@ impl Core {
 
         // Snapshot what we need before mutating state.
         let project = self.sessions[id].project.clone();
+        let host_id = self.sessions[id].host_id.clone();
         let claude_uuid = self.sessions[id].state.session_id.clone();
 
         // 1. Stop the running claude process.
@@ -905,9 +910,13 @@ impl Core {
         };
 
         // 3. Relaunch with the SAME marsad session id.
+        // Preserve the session's original host so a restart re-launches on the
+        // same machine (WSL/SSH), not silently back on local. host_target /
+        // claude_bin / setup / env are re-resolved from the registry by host_id
+        // inside launch_session_with_id.
         let spec = LaunchSpec {
             project,
-            host_id: "local".to_string(),
+            host_id,
             model: model.to_string(),
             posture,
             first_prompt: None,
@@ -1197,7 +1206,7 @@ impl Core {
         SessionView {
             id: id.to_string(),
             name: session_display_name(&record.project, id),
-            host_id: "local".to_string(),
+            host_id: record.host_id.clone(),
             project: record.project.clone(),
             branch: String::new(),
             model: s.model.clone().unwrap_or_default(),

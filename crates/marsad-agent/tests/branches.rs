@@ -145,10 +145,8 @@ fn launch_session_empty_resume_id_is_fresh() {
     let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-8","posture":"Ask","resume_session_id":""}"#;
     agent.handle_ipc(line).expect("launch fresh");
     let last = agent.container_calls().last().expect("spawn").clone();
-    assert!(
-        last.contains("/home/user/proj"),
-        "empty resume id → fresh (project positional); got {last}"
-    );
+    // Fresh launch: no resume/continue flags (and no project positional — the
+    // cwd is set by the spawn `cd <project>`, not a claude argument).
     assert!(
         !last.contains("--resume") && !last.contains("--continue"),
         "empty resume id must not add --resume/--continue; got {last}"
