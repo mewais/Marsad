@@ -2244,3 +2244,92 @@ fn remove_session_store_delete_failure_errors() {
         "a failing store delete must surface as an error"
     );
 }
+
+// ---------------------------------------------------------------------------
+// TranscriptBackfill — remote session history shipped by the agent
+// ---------------------------------------------------------------------------
+
+fn backfill_line(session_id: &str, jsonl: &str) -> String {
+    serde_json::json!({
+        "type": "TranscriptBackfill",
+        "session_id": session_id,
+        "jsonl": jsonl,
+    })
+    .to_string()
+}
+
+/// A TranscriptBackfill for a tracked session parses the NDJSON and prepends the
+/// history (user + assistant entries) to the session's transcript.
+#[test]
+fn transcript_backfill_populates_history() {
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed_session(&mut seed, "session-bf-1", "host-5", Some("uuid"));
+    let mut core = core_with_backend(backend);
+    core.load_sessions().expect("load_sessions");
+
+    let jsonl = concat!(
+        r#"{"type":"user","message":{"content":[{"type":"text","text":"first ask"}]}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"first reply"}]}}"#,
+    );
+    let updates = core
+        .on_agent_line(&backfill_line("session-bf-1", jsonl))
+        .expect("backfill applies");
+    assert!(
+        updates.iter().any(|u| matches!(u, VmUpdate::Session(_))),
+        "backfill must emit a Session update"
+    );
+    let sv = core
+        .snapshot()
+        .sessions
+        .into_iter()
+        .find(|s| s.id == "session-bf-1")
+        .expect("session present");
+    assert_eq!(
+        sv.transcript.len(),
+        2,
+        "history must be parsed into the transcript, got: {:?}",
+        sv.transcript
+    );
+}
+
+/// Backfill for an unknown session is a silent no-op (no update, no panic).
+#[test]
+fn transcript_backfill_unknown_session_is_noop() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let jsonl = r#"{"type":"user","message":{"content":[{"type":"text","text":"hi"}]}}"#;
+    let updates = core
+        .on_agent_line(&backfill_line("nope", jsonl))
+        .expect("no error");
+    assert!(updates.is_empty(), "unknown session must yield no updates");
+}
+
+/// Backfill missing a session_id is a protocol error.
+#[test]
+fn transcript_backfill_missing_session_id_errors() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let line = serde_json::json!({
+        "type": "TranscriptBackfill",
+        "jsonl": r#"{"type":"user","message":{"content":[{"type":"text","text":"x"}]}}"#,
+    })
+    .to_string();
+    assert!(
+        core.on_agent_line(&line).is_err(),
+        "backfill without session_id must be a protocol error"
+    );
+}
+
+/// Backfill with empty/parseless NDJSON yields no entries and no update.
+#[test]
+fn transcript_backfill_empty_is_noop() {
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed_session(&mut seed, "session-bf-2", "host-5", Some("uuid"));
+    let mut core = core_with_backend(backend);
+    core.load_sessions().expect("load_sessions");
+    let updates = core
+        .on_agent_line(&backfill_line("session-bf-2", "   \n  "))
+        .expect("no error");
+    assert!(updates.is_empty(), "empty history must yield no updates");
+}

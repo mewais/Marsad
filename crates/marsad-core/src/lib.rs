@@ -1181,8 +1181,38 @@ impl Core {
 
         match env.r#type.as_str() {
             "AgentEvent" => self.handle_agent_event(env),
+            "TranscriptBackfill" => self.handle_transcript_backfill(env),
             other => Err(CoreError::Protocol(format!("unknown IPC type: '{other}'"))),
         }
+    }
+
+    /// Apply a remote transcript backfill: parse the agent-shipped `.jsonl` into
+    /// transcript entries and prepend them to the session's transcript (history
+    /// first, ahead of any live entries). This is how a resumed/restored REMOTE
+    /// session gets its prior conversation — the file lives on the remote host,
+    /// so the agent reads it over the session's connection and forwards the text.
+    /// Unknown session or empty history → no-op (no update).
+    fn handle_transcript_backfill(
+        &mut self,
+        env: IpcEnvelope,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        let session_id = env.session_id.ok_or_else(|| {
+            CoreError::Protocol("missing session_id in transcript_backfill".to_string())
+        })?;
+        let history = discovery::parse_transcript(&env.jsonl.unwrap_or_default());
+        if history.is_empty() {
+            return Ok(vec![]);
+        }
+        let record = match self.sessions.get_mut(&session_id) {
+            Some(r) => r,
+            None => return Ok(vec![]),
+        };
+        // Prepend history so it precedes any live entries already streamed.
+        let mut combined = history;
+        combined.append(&mut record.transcript);
+        record.transcript = combined;
+        let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
+        Ok(vec![VmUpdate::Session(sv)])
     }
 
     // -----------------------------------------------------------------------
@@ -1338,6 +1368,11 @@ struct IpcEnvelope {
     /// Raw event payload for agent_event messages.
     #[serde(default)]
     event: Value,
+    /// Raw NDJSON transcript text for `TranscriptBackfill` messages — the agent
+    /// reads a remote session's `.jsonl` over the session's own connection and
+    /// ships it here so resume/restore of a remote session shows prior history.
+    #[serde(default)]
+    jsonl: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

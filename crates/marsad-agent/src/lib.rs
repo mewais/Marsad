@@ -541,6 +541,25 @@ impl Agent {
             .and_then(|s| s.host_target)
     }
 
+    /// Look up a stored session's `(project, claude_uuid)` so the reader thread
+    /// can fetch its remote transcript `.jsonl`. The uuid is `None` for a
+    /// `--continue` session (no specific id) — the fetch then picks the most
+    /// recent conversation in the project dir. Real-IO build only.
+    #[cfg(not(coverage))]
+    fn session_transcript_project_uuid(
+        &mut self,
+        session_id: &str,
+    ) -> Option<(String, Option<String>)> {
+        self.store
+            .0
+            .restore()
+            .ok()?
+            .sessions
+            .into_iter()
+            .find(|s| s.id == session_id)
+            .map(|s| (s.project, s.session_id))
+    }
+
     /// Kill a session's container — locally or on its remote host.
     #[cfg(coverage)]
     fn kill_container(&mut self, _session_id: &str, container_name: &str) {
@@ -1105,6 +1124,12 @@ impl Agent {
             /// && exec <claude> <args>`) to run as the single piped child. `None`
             /// for local sessions (which use the platform container).
             run_command: Option<String>,
+            /// For a REMOTE resume/continue: `(project, claude_uuid)` so the
+            /// reader thread fetches the remote `.jsonl` over the session's own
+            /// connection and broadcasts a TranscriptBackfill. `None` for local
+            /// sessions (core reads their JSONL directly) and fresh sessions
+            /// (no prior history to fetch).
+            transcript_hint: Option<(String, Option<String>)>,
         }
 
         // The command sender is cloned into each client thread.
@@ -1184,6 +1209,7 @@ impl Agent {
                         None,
                         false,
                         None,
+                        None, // reconnect path is local-only; no remote backfill
                         data_root.clone(),
                         Arc::clone(&subscribers),
                         Arc::clone(&self.session_writers.0),
@@ -1324,6 +1350,7 @@ impl Agent {
                                                 reply.first_prompt,
                                                 true, // launch: send the initialize handshake
                                                 reply.run_command,
+                                                reply.transcript_hint,
                                                 data_root_client.clone(),
                                                 Arc::clone(&subs_for_fifo),
                                                 Arc::clone(&writers_for_fifo),
@@ -1410,6 +1437,29 @@ impl Agent {
                 .as_deref()
                 .and_then(|s| self.session_run_cmds.0.lock().unwrap().remove(s));
 
+            // For a REMOTE resume/continue, tell the reader thread to backfill the
+            // transcript from the remote host. `wants_history` is true for a
+            // ResumeSession IPC, or a LaunchSession carrying resume_session_id /
+            // continue (NOT a fresh launch — that has no prior conversation).
+            let wants_history = is_resume
+                || serde_json::from_str::<serde_json::Value>(&cmd.line)
+                    .ok()
+                    .map(|v| {
+                        v["resume_session_id"]
+                            .as_str()
+                            .map(|s| !s.is_empty())
+                            .unwrap_or(false)
+                            || v["continue"].as_bool().unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+            let transcript_hint = if wants_history && host_target.is_some() {
+                new_session_id
+                    .as_deref()
+                    .and_then(|s| self.session_transcript_project_uuid(s))
+            } else {
+                None
+            };
+
             // Send reply; if the client thread is gone, ignore the error.
             let _ = cmd.reply_tx.send(AgentReply {
                 out_lines,
@@ -1417,6 +1467,7 @@ impl Agent {
                 first_prompt,
                 host_target,
                 run_command,
+                transcript_hint,
             });
         }
 
@@ -1483,6 +1534,35 @@ fn resolve_remote_bin(argv0: &str) -> String {
         }
     }
     "plink".to_string()
+}
+
+/// Build the remote shell script that prints a session's transcript `.jsonl`.
+///
+/// Claude names its `projects/<dir>` after the session's REAL working directory
+/// (every non-alphanumeric char → `-`), so we must encode the cwd Claude
+/// actually used — not the raw `project` string, which may be `~` or relative.
+/// The script therefore resolves the cwd ON THE REMOTE (`cd <target> && pwd`)
+/// and encodes it there with `sed`, matching `encode_project_dir` exactly. With
+/// a known claude uuid it cats that file; for `--continue` (no uuid) it cats the
+/// most-recently-modified `.jsonl`. `remote_diag_argv` wraps this in `bash -lc`,
+/// so `$HOME`/`~` resolve via the login shell. Real-IO build only.
+#[cfg(not(coverage))]
+fn remote_transcript_script(project: &str, uuid: Option<&str>) -> String {
+    let cd = cd_target(project);
+    let resolve = format!(
+        "cwd=$(cd {cd} 2>/dev/null && pwd) || exit 0; \
+         enc=$(printf '%s' \"$cwd\" | sed 's/[^a-zA-Z0-9]/-/g'); \
+         dir=\"$HOME/.claude/projects/$enc\"; "
+    );
+    match uuid {
+        Some(u) if !u.is_empty() => {
+            format!("{resolve}cat \"$dir/{u}.jsonl\" 2>/dev/null")
+        }
+        _ => format!(
+            "{resolve}f=$(ls -t \"$dir\"/*.jsonl 2>/dev/null | head -1); \
+             [ -n \"$f\" ] && cat \"$f\""
+        ),
+    }
 }
 
 /// Resolve a host's execution target into the argv prefix every remote command is
@@ -1781,6 +1861,7 @@ fn spawn_session_reader(
     first_prompt: Option<String>,
     send_init: bool,
     run_command: Option<String>,
+    transcript_hint: Option<(String, Option<String>)>,
     data_root: String,
     subs_fifo: std::sync::Arc<std::sync::Mutex<Vec<std::sync::mpsc::Sender<String>>>>,
     writers_fifo: std::sync::Arc<std::sync::Mutex<HashMap<String, SharedWriter>>>,
@@ -1979,6 +2060,45 @@ fn spawn_session_reader(
                 sid.clone(),
                 std::sync::Arc::clone(&writer),
             );
+        }
+
+        // For a REMOTE resume/continue, fetch the prior conversation from the
+        // remote host's `.jsonl` over a fresh connection (which reuses the
+        // session's ControlMaster / plink-share, so no extra MFA), and broadcast
+        // it as a `TranscriptBackfill` so core can show the history. The remote
+        // file is unreachable by core's local JSONL reader, so this is the only
+        // way a resumed WSL/SSH session shows its past turns. Done before the read
+        // loop so the backfill precedes any live events.
+        if let Some((project, uuid)) = &transcript_hint {
+            if let Some(prefix) = exec_prefix_for(host_target.as_deref()) {
+                let script = remote_transcript_script(project, uuid.as_deref());
+                // Use the LOGIN-shell form (same as the session run command): a
+                // nested `wsl.exe` drops $HOME unless `bash -lc` sources the
+                // profile, and the script's `cd "$HOME"` / `~/.claude` depend on it.
+                let argv = marsad_lifecycle::remote_shell_argv(&prefix, &script);
+                let bin = resolve_remote_bin(&argv[0]);
+                if let Ok(out) = std::process::Command::new(&bin).args(&argv[1..]).output() {
+                    let jsonl = String::from_utf8_lossy(&out.stdout);
+                    if !jsonl.trim().is_empty() {
+                        let line = serde_json::json!({
+                            "type": "TranscriptBackfill",
+                            "session_id": sid,
+                            "jsonl": jsonl,
+                        })
+                        .to_string();
+                        let subs = subs_fifo.lock().unwrap();
+                        for s in subs.iter() {
+                            let _ = s.send(line.clone());
+                        }
+                        eprintln!(
+                            "marsad-agent: session {sid} transcript backfill ({} bytes) broadcast",
+                            jsonl.len()
+                        );
+                    } else {
+                        eprintln!("marsad-agent: session {sid} transcript backfill: remote .jsonl empty/absent");
+                    }
+                }
+            }
         }
 
         // Read out.fifo lines and broadcast to all
