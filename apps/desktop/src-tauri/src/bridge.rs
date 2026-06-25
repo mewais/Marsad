@@ -141,12 +141,20 @@ pub fn attach_session(state: State<'_, ManagedState>, id: String) -> Result<(), 
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn stop_session(state: State<'_, ManagedState>, id: String) -> Result<(), String> {
-    let mut guard = state.lock().map_err(|e| e.to_string())?;
-    match &mut *guard {
-        AppState::Live(core) => core.stop_session(&id).map_err(map_err),
-        AppState::Mock(_) => Ok(()),
-    }
+pub fn stop_session(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.stop_session(&id).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -562,6 +570,33 @@ fn interactive_ssh_args(target: &str) -> Vec<String> {
     args
 }
 
+/// Resolve `plink.exe` to a concrete path: `PATH` first, then the standard PuTTY
+/// install dirs (modern PuTTY preferred over an Xming-bundled fallback). Falls
+/// back to the bare `"plink"` sentinel if none is found. Mirrors the agent's
+/// `resolve_remote_bin` so the interactive upstream and automated downstream use
+/// the same binary.
+#[cfg(target_os = "windows")]
+fn resolve_plink_bin() -> String {
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in path.split(';').filter(|d| !d.is_empty()) {
+            let cand = std::path::Path::new(dir).join("plink.exe");
+            if cand.exists() {
+                return cand.to_string_lossy().into_owned();
+            }
+        }
+    }
+    for cand in [
+        r"C:\Program Files\PuTTY\plink.exe",
+        r"C:\Program Files (x86)\PuTTY\plink.exe",
+        r"C:\Program Files (x86)\Xming\plink.exe",
+    ] {
+        if std::path::Path::new(cand).exists() {
+            return cand.to_string();
+        }
+    }
+    "plink".to_string()
+}
+
 /// Spawn a visible OS terminal emulator running the interactive ssh login.
 /// Factored per-OS so each branch only compiles on its target.
 #[cfg(target_os = "windows")]
@@ -576,7 +611,14 @@ fn launch_interactive_ssh(target: &str) -> Result<(), String> {
     //   login stays visible, and gives ssh a real console (PTY) for the prompt.
     const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
     // args[0] is the binary (`ssh` or `plink`); the rest are its arguments.
-    let args = interactive_ssh_args(target);
+    // Resolve `plink` to a concrete path (PATH / PuTTY install dirs) so a PuTTY
+    // install that isn't on PATH still opens the interactive login window. This
+    // MUST match the agent's resolution so the interactive upstream and the
+    // automated downstream use the same plink.
+    let mut args = interactive_ssh_args(target);
+    if args.first().map(String::as_str) == Some("plink") {
+        args[0] = resolve_plink_bin();
+    }
     let mut cmd = Command::new("cmd.exe");
     cmd.arg("/K");
     for a in &args {

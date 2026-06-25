@@ -1448,6 +1448,43 @@ fn remote_shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// Resolve the `plink` executable to a concrete path.
+///
+/// `exec_prefix_for` returns the sentinel `"plink"` for PuTTY hosts, but PuTTY's
+/// installer does not always add itself to `PATH` (and some users only have an
+/// old `plink` bundled with another tool, e.g. Xming). So at spawn time we look
+/// for `plink.exe` on `PATH` first, then in the standard PuTTY install dirs
+/// (preferring a modern PuTTY over an Xming-bundled fallback). Any other binary
+/// (`ssh`, `wsl.exe`) is returned unchanged — those are reliably on `PATH`.
+/// Gated out of the coverage build (filesystem/env probing, real-IO only).
+#[cfg(not(coverage))]
+fn resolve_remote_bin(argv0: &str) -> String {
+    if argv0 != "plink" {
+        return argv0.to_string();
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(path) = std::env::var("PATH") {
+            for dir in path.split(';').filter(|d| !d.is_empty()) {
+                let cand = std::path::Path::new(dir).join("plink.exe");
+                if cand.exists() {
+                    return cand.to_string_lossy().into_owned();
+                }
+            }
+        }
+        for cand in [
+            r"C:\Program Files\PuTTY\plink.exe",
+            r"C:\Program Files (x86)\PuTTY\plink.exe",
+            r"C:\Program Files (x86)\Xming\plink.exe",
+        ] {
+            if std::path::Path::new(cand).exists() {
+                return cand.to_string();
+            }
+        }
+    }
+    "plink".to_string()
+}
+
 /// Resolve a host's execution target into the argv prefix every remote command is
 /// run through (see docs/remote-hosts.md). Returns:
 /// - `None` for the local machine (`None` / `"local"` / `"localhost"` / empty),
@@ -1778,7 +1815,10 @@ fn spawn_session_reader(
                         &prefix,
                         run_command.as_deref().unwrap_or(""),
                     );
-                    let mut command = Command::new(&argv[0]);
+                    // Resolve `plink` to a concrete path (PATH / PuTTY dirs) so a
+                    // PuTTY install that isn't on PATH still works.
+                    let bin = resolve_remote_bin(&argv[0]);
+                    let mut command = Command::new(&bin);
                     command
                         .args(&argv[1..])
                         .stdin(Stdio::piped())
@@ -2018,7 +2058,8 @@ fn spawn_session_reader(
                     "echo '== claude =='; command -v claude || echo 'claude NOT on PATH'"
                         .to_string();
                 let argv = remote_diag_argv(&prefix, &script);
-                if let Ok(out) = std::process::Command::new(&argv[0])
+                let bin = resolve_remote_bin(&argv[0]);
+                if let Ok(out) = std::process::Command::new(&bin)
                     .args(&argv[1..])
                     .output()
                 {

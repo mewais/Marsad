@@ -241,6 +241,46 @@ fn send_prompt_transport_failure_returns_transport_error() {
     // If launch itself failed with Transport, this test is satisfied
 }
 
+#[test]
+fn stop_session_transport_failure_returns_transport_error() {
+    // Break the transport AFTER the session is launched so the initial launch
+    // succeeds (session registered) but the StopSession IPC send fails — this
+    // exercises the `?` error branch in stop_session.
+    let (mut a, mut b) = LoopbackFake::pair();
+    a.connect().ok();
+    b.connect().ok();
+
+    let cfg = CoreConfig {
+        agent_endpoint: "loopback://test".to_string(),
+        data_root: "/tmp/marsad-err-test".to_string(),
+    };
+    let mut core = Core::new(cfg, Box::new(a)).expect("Core::new");
+
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "p".to_string(),
+            host_id: "h".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
+            model: "m".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: LaunchMode::Fresh,
+        })
+        .expect("launch");
+
+    // Close the peer so the next IPC send (StopSession) fails.
+    b.close().ok();
+
+    let err = core.stop_session(&id).unwrap_err();
+    assert!(
+        matches!(err, CoreError::Transport(_)),
+        "expected Transport error from stop on broken transport, got {err:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // CoreError::Protocol — malformed inbound IPC lines
 // ---------------------------------------------------------------------------

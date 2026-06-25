@@ -977,11 +977,24 @@ impl Core {
         })
     }
 
-    pub fn stop_session(&mut self, id: &str) -> Result<(), CoreError> {
+    /// Stop a session: kill its running claude process (the agent drops the
+    /// pipe/container) and reflect it in the UI by marking the row not-live.
+    /// The session stays in the list and is resumable via `restart_session`.
+    ///
+    /// Previously this only fired the IPC and returned `()`, so the dashboard
+    /// never changed — the user saw "stop did nothing". Now it returns the
+    /// VmUpdates the bridge emits so the badge flips to Stale immediately.
+    pub fn stop_session(&mut self, id: &str) -> Result<Vec<VmUpdate>, CoreError> {
         self.require_session(id)?;
         self.send_ipc(&IpcMsg::StopSession {
             session_id: id.to_string(),
-        })
+        })?;
+        // Mark the session not-live. require_session above guarantees it exists.
+        self.sessions.get_mut(id).unwrap().state.phase = Phase::Stale;
+        let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
+        let snap = self.snapshot();
+        let groups = marsad_viewmodel::group_overview(&snap);
+        Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
     }
 
     pub fn send_prompt(&mut self, id: &str, text: &str) -> Result<(), CoreError> {
