@@ -239,73 +239,56 @@ fn remote_kill_script_structure() {
 }
 
 // ── remote_writer_argv / remote_reader_argv ────────────────────────────────────
+//
+// Both build SHELL-FREE, QUOTE-FREE, $()-FREE argv from a resolved absolute dir
+// (+ pid for the reader) — separate tokens so Rust→wsl.exe/ssh.exe can't mangle
+// them (the bug that killed durable sessions with "reader EOF after 0 lines").
 
-#[test]
-fn writer_argv_ssh_appends_cat_command() {
-    // For ssh/plink, the command is appended as a single trailing token.
-    let prefix = exec_prefix_for(Some("user@host")).expect("ssh prefix");
-    let argv = remote_writer_argv(&prefix, "sid-w");
-    // Last element is the shell command appended verbatim.
-    let last = argv.last().unwrap();
-    assert!(last.contains("cat >>"), "cat >> in argv: {argv:?}");
-    assert!(last.contains("in.fifo"), "in.fifo in argv: {argv:?}");
-    assert!(last.contains("sid-w"), "sid in argv: {argv:?}");
+const ABS_DIR: &str = "/home/u/.marsad/sid-x";
+
+fn assert_no_shell_or_quotes(argv: &[String]) {
+    // No `sh -c`, no embedded double-quotes, no command substitution anywhere.
+    assert!(
+        !argv.iter().any(|a| a == "-c"),
+        "must not use a shell wrapper: {argv:?}"
+    );
+    for a in argv {
+        assert!(!a.contains('"'), "no double-quotes allowed: {a:?}");
+        assert!(!a.contains("$("), "no command substitution allowed: {a:?}");
+        assert!(!a.contains("$HOME"), "no $HOME (use resolved abs dir): {a:?}");
+    }
 }
 
 #[test]
-fn reader_argv_ssh_appends_tail_command() {
-    let prefix = exec_prefix_for(Some("user@host")).expect("ssh prefix");
-    let argv = remote_reader_argv(&prefix, "sid-r");
-    let last = argv.last().unwrap();
-    assert!(last.contains("tail"), "tail in argv: {argv:?}");
-    assert!(last.contains("-n0"), "-n0 in argv: {argv:?}");
-    assert!(last.contains("out.log"), "out.log in argv: {argv:?}");
-    assert!(last.contains("sid-r"), "sid in argv: {argv:?}");
-    // Reader must self-terminate when claude dies (clean stop/crash teardown).
-    assert!(last.contains("--pid"), "--pid in argv: {argv:?}");
-    assert!(last.contains("claude.pid"), "claude.pid in argv: {argv:?}");
+fn writer_argv_is_shellfree_tee() {
+    for target in ["user@host", "wsl:Ubuntu", "plink:etx"] {
+        let prefix = exec_prefix_for(Some(target)).expect("prefix");
+        let argv = remote_writer_argv(&prefix, ABS_DIR);
+        assert!(argv.iter().any(|a| a == "tee"), "tee in argv: {argv:?}");
+        assert!(argv.iter().any(|a| a == "-a"), "-a in argv: {argv:?}");
+        assert!(
+            argv.iter().any(|a| a == &format!("{ABS_DIR}/in.fifo")),
+            "literal in.fifo path: {argv:?}"
+        );
+        assert_no_shell_or_quotes(&argv);
+    }
 }
 
 #[test]
-fn writer_argv_wsl_uses_sh_c_form() {
-    // For wsl.exe, the command must be passed as ["sh", "-c", "<cmd>"].
-    let prefix = exec_prefix_for(Some("wsl:Ubuntu")).expect("wsl prefix");
-    let argv = remote_writer_argv(&prefix, "sid-wsl");
-    // The argv should end with ["sh", "-c", "<cmd>"].
-    let n = argv.len();
-    assert!(n >= 3, "wsl argv must have at least 3 elements: {argv:?}");
-    assert_eq!(argv[n - 3], "sh", "sh: {argv:?}");
-    assert_eq!(argv[n - 2], "-c", "-c: {argv:?}");
-    assert!(argv[n - 1].contains("cat >>"), "cat >>: {argv:?}");
-    assert!(argv[n - 1].contains("in.fifo"), "in.fifo: {argv:?}");
-}
-
-#[test]
-fn reader_argv_wsl_uses_sh_c_form() {
-    let prefix = exec_prefix_for(Some("wsl:Ubuntu")).expect("wsl prefix");
-    let argv = remote_reader_argv(&prefix, "sid-wsl-r");
-    let n = argv.len();
-    assert!(n >= 3, "wsl argv must have at least 3 elements: {argv:?}");
-    assert_eq!(argv[n - 3], "sh", "sh: {argv:?}");
-    assert_eq!(argv[n - 2], "-c", "-c: {argv:?}");
-    assert!(argv[n - 1].contains("tail"), "tail: {argv:?}");
-    assert!(argv[n - 1].contains("out.log"), "out.log: {argv:?}");
-}
-
-#[test]
-fn writer_argv_plink_appends_as_single_token() {
-    // plink behaves like ssh: command as a trailing single token.
-    let prefix = exec_prefix_for(Some("plink:etx")).expect("plink prefix");
-    let argv = remote_writer_argv(&prefix, "sid-plink");
-    let last = argv.last().unwrap();
-    assert!(last.contains("cat >>"), "cat >>: {argv:?}");
-}
-
-#[test]
-fn reader_argv_plink_appends_as_single_token() {
-    let prefix = exec_prefix_for(Some("plink:etx")).expect("plink prefix");
-    let argv = remote_reader_argv(&prefix, "sid-plink-r");
-    let last = argv.last().unwrap();
-    assert!(last.contains("tail"), "tail: {argv:?}");
-    assert!(last.contains("-n0"), "-n0: {argv:?}");
+fn reader_argv_is_shellfree_tail_with_pid() {
+    for target in ["user@host", "wsl:Ubuntu", "plink:etx"] {
+        let prefix = exec_prefix_for(Some(target)).expect("prefix");
+        let argv = remote_reader_argv(&prefix, "12345", ABS_DIR);
+        assert!(argv.iter().any(|a| a == "tail"), "tail: {argv:?}");
+        assert!(argv.iter().any(|a| a == "-n0"), "-n0: {argv:?}");
+        assert!(
+            argv.iter().any(|a| a == "--pid=12345"),
+            "literal --pid: {argv:?}"
+        );
+        assert!(
+            argv.iter().any(|a| a == &format!("{ABS_DIR}/out.log")),
+            "literal out.log path: {argv:?}"
+        );
+        assert_no_shell_or_quotes(&argv);
+    }
 }

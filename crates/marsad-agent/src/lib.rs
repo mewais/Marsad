@@ -1697,6 +1697,26 @@ pub fn run_remote_script(host_target: &str, script: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Resolve a durable remote session's ABSOLUTE dir + the detached claude pid,
+/// read over the host's connection via the reliable stdin-pipe `run_remote_script`
+/// (login shell, so `$HOME` resolves). Returns `(pid, abs_dir)`, or `None` if the
+/// session dir is absent or `claude.pid` is empty (claude isn't running). These
+/// literals are then baked into the writer/reader argv so those commands carry NO
+/// `$HOME`/`$()`/quotes — the form that survives Rust→wsl.exe/ssh.exe. Real-IO only.
+#[cfg(not(coverage))]
+fn remote_resolve_pid_dir(host_target: &str, sid: &str) -> Option<(String, String)> {
+    let dir = remote_session_dir(sid);
+    let script = format!("d={dir}; cd \"$d\" 2>/dev/null && pwd; cat \"$d/claude.pid\" 2>/dev/null");
+    let out = run_remote_script(host_target, &script)?;
+    let mut lines = out.lines();
+    let abs_dir = lines.next().unwrap_or("").trim().to_string();
+    let pid = lines.next().unwrap_or("").trim().to_string();
+    if abs_dir.is_empty() || pid.is_empty() {
+        return None;
+    }
+    Some((pid, abs_dir))
+}
+
 /// List a remote host's resumable Claude sessions for `project`.
 ///
 /// Claude stores transcripts on the REMOTE host, so the desktop's local JSONL
@@ -2077,9 +2097,25 @@ fn spawn_session_reader(
                 Some(prefix) => {
                     use std::process::{Command, Stdio};
 
+                    // Resolve the session's ABSOLUTE dir + detached claude pid over
+                    // the reliable stdin-pipe path, so the writer/reader commands can
+                    // be built from literals (no $HOME/$()/quotes that Rust→wsl.exe/
+                    // ssh.exe would mangle). If claude isn't running, bail — the
+                    // session reader has nothing to attach to.
+                    let host = host_target.clone().unwrap_or_default();
+                    let (claude_pid, abs_dir) = match remote_resolve_pid_dir(&host, &sid) {
+                        Some(pd) => pd,
+                        None => {
+                            eprintln!(
+                                "marsad-agent: session {sid} remote resolve failed (claude not running?) — not attaching"
+                            );
+                            return;
+                        }
+                    };
+
                     // ── Spawn writer child ─────────────────────────────────────
                     // Appends everything written to its stdin into the remote FIFO.
-                    let writer_argv = remote_writer_argv(&prefix, &sid);
+                    let writer_argv = remote_writer_argv(&prefix, &abs_dir);
                     let w_bin = resolve_remote_bin(&writer_argv[0]);
                     let mut w_cmd = Command::new(&w_bin);
                     w_cmd.args(&writer_argv[1..])
@@ -2112,7 +2148,7 @@ fn spawn_session_reader(
 
                     // ── Spawn reader child ─────────────────────────────────────
                     // Streams only NEW out.log lines (tail -n0 = skip historical).
-                    let reader_argv = remote_reader_argv(&prefix, &sid);
+                    let reader_argv = remote_reader_argv(&prefix, &claude_pid, &abs_dir);
                     let r_bin = resolve_remote_bin(&reader_argv[0]);
                     let mut r_cmd = Command::new(&r_bin);
                     r_cmd.args(&reader_argv[1..])
@@ -2541,53 +2577,40 @@ fi
 /// the child forwards them into the remote FIFO.  The child's stdin EOF closes
 /// the `cat` on the remote side — but the FIFO is kept open by the keepalive
 /// holder, so the detached claude does NOT see EOF.
-pub fn remote_writer_argv(prefix: &[String], sid: &str) -> Vec<String> {
-    let dir = remote_session_dir(sid);
-    let cmd = format!("cat >> {dir}/in.fifo", dir = dir);
-    build_remote_inline_argv(prefix, &cmd)
-}
-
-/// Build the argv for the reader child: an ssh/wsl process running
-/// `tail -n0 -f $HOME/.marsad/<sid>/out.log` with its stdout piped to the agent.
+/// Build the argv for the writer child: `tee -a <dir>/in.fifo` with its stdin
+/// piped from the agent. The agent writes prompts (stream-json user messages) to
+/// the child's stdin; `tee` appends them into the remote FIFO (stdout → the
+/// child's null). The child's stdin EOF closes `tee` on the remote side — but the
+/// FIFO is kept open by the keepalive holder, so detached claude does NOT see EOF.
 ///
-/// `-n0` means "start from EOF" — only NEW lines written after this `tail`
-/// starts are streamed, so historical output (from before the reconnect) is
-/// not replayed.  History is supplied by the `TranscriptBackfill` mechanism.
-pub fn remote_reader_argv(prefix: &[String], sid: &str) -> Vec<String> {
-    let dir = remote_session_dir(sid);
-    // `--pid=<claude>` makes `tail -f` exit when the detached claude dies (stop,
-    // crash, or remote_kill_script): the reader then EOFs, the reader thread/child
-    // tear down cleanly, and the session correctly shows as ended instead of
-    // hanging "alive" forever. The pid is read from the session's claude.pid; if
-    // it's already gone, tail exits immediately (claude is dead anyway). Verified
-    // `tail --pid` is supported on WSL and the SSH/HPC hosts.
-    let cmd = format!(
-        "tail -n0 --pid=\"$(cat {dir}/claude.pid 2>/dev/null)\" -f {dir}/out.log",
-        dir = dir
-    );
-    build_remote_inline_argv(prefix, &cmd)
-}
-
-/// Build an argv vector that runs a short inline command on a remote host.
-///
-/// For ssh/plink: appends the command as a single shell argument (the remote
-/// sshd runs it via the login shell).  For wsl.exe: appends `sh -c <cmd>`.
-/// This is for simple, non-interactive commands (cat, tail) that need only
-/// one argv token, unlike the multi-line scripts sent via `run_remote_script`.
-fn build_remote_inline_argv(prefix: &[String], cmd: &str) -> Vec<String> {
+/// `dir` is the RESOLVED ABSOLUTE session dir (from `remote_resolve_pid_dir`), and
+/// the args are passed as separate argv tokens — NO shell, NO quotes, NO `$()`.
+/// This is essential: a command string with embedded `"$(...)"` (the old form) is
+/// mangled when Rust's Windows arg-quoting passes it through `wsl.exe`/`ssh.exe`,
+/// which made `tail`/`cat` fail and the session die instantly ("reader EOF after
+/// 0 lines"). Keeping every token shell-free and quote-free avoids that entirely.
+pub fn remote_writer_argv(prefix: &[String], dir: &str) -> Vec<String> {
     let mut argv = prefix.to_vec();
-    match prefix.first().map(String::as_str) {
-        Some("ssh") | Some("plink") => {
-            // The remote sshd passes the trailing argv token to the login shell.
-            argv.push(cmd.to_string());
-        }
-        _ => {
-            // wsl.exe: use `sh -c <cmd>`
-            argv.push("sh".to_string());
-            argv.push("-c".to_string());
-            argv.push(cmd.to_string());
-        }
-    }
+    argv.push("tee".to_string());
+    argv.push("-a".to_string());
+    argv.push(format!("{dir}/in.fifo"));
+    argv
+}
+
+/// Build the argv for the reader child: `tail -n0 --pid=<pid> -f <dir>/out.log`
+/// with its stdout piped to the agent. `-n0` streams only NEW lines (history comes
+/// from `TranscriptBackfill`); `--pid=<claude>` makes `tail` EOF when the detached
+/// claude dies (stop/crash/kill) so the reader tears down cleanly instead of
+/// hanging "alive". `pid` + `dir` are resolved literals (see
+/// `remote_resolve_pid_dir`); passed as separate argv tokens — NO shell, NO
+/// quotes, NO `$()` — to survive Rust→`wsl.exe`/`ssh.exe` arg passing.
+pub fn remote_reader_argv(prefix: &[String], pid: &str, dir: &str) -> Vec<String> {
+    let mut argv = prefix.to_vec();
+    argv.push("tail".to_string());
+    argv.push("-n0".to_string());
+    argv.push(format!("--pid={pid}"));
+    argv.push("-f".to_string());
+    argv.push(format!("{dir}/out.log"));
     argv
 }
 
