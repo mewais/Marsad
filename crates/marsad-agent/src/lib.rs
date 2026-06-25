@@ -1762,7 +1762,7 @@ fn spawn_session_reader(
                         .args(&argv[1..])
                         .stdin(Stdio::piped())
                         .stdout(Stdio::piped())
-                        .stderr(Stdio::null());
+                        .stderr(Stdio::piped()); // capture → agent.log for diagnosis
                     #[cfg(windows)]
                     {
                         use std::os::windows::process::CommandExt;
@@ -1775,6 +1775,20 @@ fn spawn_session_reader(
                             return;
                         }
                     };
+                    // Stream the remote child's stderr to agent.log so a silent exit
+                    // (claude/genie error, shell error) is visible.
+                    if let Some(errpipe) = child.stderr.take() {
+                        let esid = sid.clone();
+                        std::thread::spawn(move || {
+                            use std::io::BufRead;
+                            let r = std::io::BufReader::new(errpipe);
+                            for line in r.lines().map_while(Result::ok) {
+                                if !line.trim().is_empty() {
+                                    eprintln!("marsad-agent: session {esid} child-stderr: {line}");
+                                }
+                            }
+                        });
+                    }
                     // Take the pipe ends BEFORE storing the child in the registry
                     // (the registry keeps the Child alive + killable; we own the IO).
                     let child_stdin = match child.stdin.take() {
