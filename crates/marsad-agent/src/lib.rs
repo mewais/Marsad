@@ -1708,18 +1708,31 @@ fn spawn_session_reader(
         }
 
         eprintln!("marsad-agent: session {sid} stream ended after {lines_seen} line(s)");
-        // If claude produced NO output, it almost certainly failed to start on the
-        // remote (claude not installed / not authed / project dir missing). Surface the
-        // remote err.log so the cause is visible instead of a silent dead session.
+        // If claude produced NO output it failed to start on the remote. The cause is
+        // usually claude not installed / not authed / project dir missing — and for a
+        // "command not found" the message goes to the tmux PANE, not err.log. Probe all
+        // three: err.log, whether claude is on the (login-shell) PATH, and the pane.
         if lines_seen == 0 {
             if let Some(prefix) = exec_prefix_for(host_target.as_deref()) {
-                let err_path = format!("{}/sessions/marsad-{}/err.log", REMOTE_RUNTIME_DIR, sid);
-                let argv = remote_diag_argv(&prefix, &format!("cat {err_path} 2>/dev/null | tail -20"));
-                if let Ok(out) = std::process::Command::new(&argv[0]).args(&argv[1..]).output() {
-                    let log = String::from_utf8_lossy(&out.stdout);
+                let dir = format!("{}/sessions/marsad-{}", REMOTE_RUNTIME_DIR, sid);
+                let script = format!(
+                    "echo '== err.log =='; cat {dir}/err.log 2>/dev/null | tail -20; \
+                     echo '== claude =='; command -v claude || echo 'claude NOT on PATH'; \
+                     echo '== pane =='; tmux capture-pane -t marsad-{sid} -p 2>/dev/null | tail -20"
+                );
+                let argv = remote_diag_argv(&prefix, &script);
+                if let Ok(out) = std::process::Command::new(&argv[0])
+                    .args(&argv[1..])
+                    .output()
+                {
+                    let combined = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&out.stdout),
+                        String::from_utf8_lossy(&out.stderr)
+                    );
                     eprintln!(
-                        "marsad-agent: session {sid} remote err.log:\n{}",
-                        log.trim()
+                        "marsad-agent: session {sid} remote diagnosis:\n{}",
+                        combined.trim()
                     );
                 }
             }
