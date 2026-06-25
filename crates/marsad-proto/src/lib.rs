@@ -218,6 +218,19 @@ pub struct LaunchSpec {
     /// `#[serde(default)]` keeps older serialized specs (no field) working.
     #[serde(default)]
     pub host_target: Option<String>,
+    /// The `claude` executable to run on the host (a wrapper like `genie` or an
+    /// absolute path). `None` → the default `"claude"`. Resolved per-host from the
+    /// registry; `#[serde(default)]` keeps older serialized specs working.
+    #[serde(default)]
+    pub claude_bin: Option<String>,
+    /// A shell command run BEFORE claude on the host (e.g. `module load cuda`).
+    /// `None` → no setup. `#[serde(default)]` keeps older serialized specs working.
+    #[serde(default)]
+    pub setup: Option<String>,
+    /// Environment variables exported before claude on the host, as `(key, value)`
+    /// pairs. `#[serde(default)]` keeps older serialized specs working.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
 }
 
 // ---------------------------------------------------------------------------

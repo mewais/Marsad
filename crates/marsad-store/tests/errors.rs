@@ -26,6 +26,9 @@ fn make_session(id: &str) -> PersistedSession {
         name: format!("Session {id}"),
         host_id: "localhost".to_string(),
         host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
         project: "/project".to_string(),
         branch: "main".to_string(),
         model: "claude-opus-4-5".to_string(),
@@ -433,6 +436,9 @@ fn backend_write_failure_propagates_from_upsert_host() {
         label: "l".to_string(),
         target: "u@h".to_string(),
         is_local: false,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
     };
     match store.upsert_host(&host) {
         Err(StoreError::Backend(_)) => {}

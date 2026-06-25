@@ -39,6 +39,9 @@ fn basic_launch_spec() -> LaunchSpec {
         project: "/home/user/myproject".to_string(),
         host_id: "local".to_string(),
         host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
         posture: marsad_proto::Posture::Ask,
         first_prompt: None,
@@ -51,6 +54,9 @@ fn launch_spec_with_prompt(prompt: &str) -> LaunchSpec {
         project: "/home/user/myproject".to_string(),
         host_id: "local".to_string(),
         host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
         posture: marsad_proto::Posture::Ask,
         first_prompt: Some(prompt.to_string()),
@@ -88,6 +94,18 @@ fn claude_argv_prefix_exact_order() {
     );
     assert_eq!(argv[5], "stream-json", "argv[5] must be \"stream-json\"");
     assert_eq!(argv[6], "--verbose", "argv[6] must be \"--verbose\"");
+}
+
+/// `claude_argv` uses the spec's `claude_bin` as argv[0] when set (a wrapper
+/// like `genie` or an absolute path), defaulting to `"claude"` otherwise.
+#[test]
+fn claude_argv_uses_claude_bin() {
+    let mut spec = basic_launch_spec();
+    spec.claude_bin = Some("genie".to_string());
+    let argv = claude_argv(&spec);
+    assert_eq!(argv[0], "genie", "argv[0] must be the configured bin");
+    // The rest of the prefix is unchanged.
+    assert_eq!(argv[1], "--print");
 }
 
 /// `claude_argv` must include the project path somewhere after the prefix.
@@ -229,6 +247,9 @@ fn claude_argv_non_ask_omits_permission_prompt_tool() {
             project: "/home/user/myproject".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
             posture,
             first_prompt: None,
@@ -249,6 +270,9 @@ fn claude_argv_permission_mode_auto_approve_safe() {
         project: "/home/user/myproject".to_string(),
         host_id: "local".to_string(),
         host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
         posture: marsad_proto::Posture::AutoApproveSafe,
         first_prompt: None,
@@ -273,6 +297,9 @@ fn claude_argv_permission_mode_full_autonomy() {
         project: "/home/user/myproject".to_string(),
         host_id: "local".to_string(),
         host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
         posture: marsad_proto::Posture::FullAutonomy,
         first_prompt: None,
@@ -592,6 +619,9 @@ fn reconcile_all_adopt_does_not_spawn() {
             name: "test".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             project: "/home/user/proj".to_string(),
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),

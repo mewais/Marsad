@@ -18,10 +18,10 @@ use marsad_hosts::{
 fn add_duplicate_label_returns_duplicate_label_error() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    reg.add("server1", "alice@server1.example.com")
+    reg.add("server1", "alice@server1.example.com", None, None, Vec::new())
         .expect("first add must succeed");
     let err = reg
-        .add("server1", "bob@server2.example.com")
+        .add("server1", "bob@server2.example.com", None, None, Vec::new())
         .expect_err("duplicate add must fail");
     match err {
         HostError::DuplicateLabel(label) => assert_eq!(label, "server1"),
@@ -61,7 +61,7 @@ fn remove_localhost_returns_cannot_remove_localhost() {
 fn add_empty_target_returns_malformed_target() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    let err = reg.add("badhost", "").expect_err("empty target must fail");
+    let err = reg.add("badhost", "", None, None, Vec::new()).expect_err("empty target must fail");
     match err {
         HostError::MalformedTarget(t) => assert!(t.is_empty() || t.contains("")),
         other => panic!("expected MalformedTarget, got {:?}", other),
@@ -73,7 +73,7 @@ fn add_bare_ssh_alias_is_accepted() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
     // A bare host / ~/.ssh/config alias (e.g. "etx") is valid — `ssh etx` resolves it.
-    let host = reg.add("box", "etx").expect("bare alias must be accepted");
+    let host = reg.add("box", "etx", None, None, Vec::new()).expect("bare alias must be accepted");
     assert_eq!(host.target, "etx");
 }
 
@@ -83,7 +83,7 @@ fn add_half_formed_or_spaced_target_returns_malformed_target() {
     let mut reg = HostRegistry::new(runner);
     // "user@" / "@host" (half of user@host) and whitespace are still rejected.
     for (i, bad) in ["user@", "@host", "a b", "  "].iter().enumerate() {
-        match reg.add(&format!("bad{i}"), bad) {
+        match reg.add(&format!("bad{i}"), bad, None, None, Vec::new()) {
             Err(HostError::MalformedTarget(_)) => {}
             other => panic!("expected MalformedTarget for {bad:?}, got {other:?}"),
         }
@@ -94,7 +94,7 @@ fn add_half_formed_or_spaced_target_returns_malformed_target() {
 fn add_target_at_only_returns_malformed_target() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    let err = reg.add("badhost3", "@").expect_err("@ only must fail");
+    let err = reg.add("badhost3", "@", None, None, Vec::new()).expect_err("@ only must fail");
     match err {
         HostError::MalformedTarget(_) => {}
         other => panic!("expected MalformedTarget, got {:?}", other),
@@ -106,7 +106,7 @@ fn add_target_missing_user_returns_malformed_target() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
     let err = reg
-        .add("badhost4", "@somehost.example.com")
+        .add("badhost4", "@somehost.example.com", None, None, Vec::new())
         .expect_err("missing user must fail");
     match err {
         HostError::MalformedTarget(_) => {}
@@ -119,7 +119,7 @@ fn add_target_missing_host_returns_malformed_target() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
     let err = reg
-        .add("badhost5", "user@")
+        .add("badhost5", "user@", None, None, Vec::new())
         .expect_err("missing host must fail");
     match err {
         HostError::MalformedTarget(_) => {}
@@ -132,7 +132,7 @@ fn add_empty_wsl_distro_returns_malformed_target() {
     let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
     // `wsl:` with no distro name is malformed (the distro is required).
     let err = reg
-        .add("nodist", "wsl:")
+        .add("nodist", "wsl:", None, None, Vec::new())
         .expect_err("empty wsl distro must fail");
     match err {
         HostError::MalformedTarget(t) => assert_eq!(t, "wsl:"),
@@ -200,7 +200,7 @@ fn health_check_maps_runner_unreachable_to_unreachable_status() {
     let runner = Box::new(fake);
     let mut reg = HostRegistry::new(runner);
     let id = {
-        let host = reg.add("dead", "alice@dead.example.com").unwrap();
+        let host = reg.add("dead", "alice@dead.example.com", None, None, Vec::new()).unwrap();
         host.id.clone()
     };
     let status = reg.health_check(&id);
@@ -218,4 +218,13 @@ fn host_error_variants_are_debug() {
     let _ = format!("{:?}", HostError::MalformedTarget("bad".to_string()));
     let _ = format!("{:?}", HostError::Unreachable("host".to_string()));
     let _ = format!("{:?}", HostError::NotFound("id".to_string()));
+}
+
+#[test]
+fn update_unknown_id_is_not_found() {
+    let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
+    let err = reg
+        .update("nope", None, None, Vec::new(), None)
+        .expect_err("unknown id must be NotFound");
+    assert!(matches!(err, HostError::NotFound(id) if id == "nope"));
 }

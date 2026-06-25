@@ -173,7 +173,7 @@ fn part_a_add_and_remove_remote_host() {
 
     let id = {
         let host = reg
-            .add("ci-runner", "ci@ci-runner.example.com")
+            .add("ci-runner", "ci@ci-runner.example.com", None, None, Vec::new())
             .expect("add must succeed");
         assert_eq!(host.label, "ci-runner");
         assert_eq!(host.target, "ci@ci-runner.example.com");
@@ -208,7 +208,7 @@ fn part_a_health_check_connected_on_ok() {
     let mut reg = HostRegistry::new(Box::new(fake));
 
     let id = reg
-        .add("good", "alice@good.example.com")
+        .add("good", "alice@good.example.com", None, None, Vec::new())
         .unwrap()
         .id
         .clone();
@@ -231,7 +231,7 @@ fn part_a_health_check_reconnecting_on_transient_error() {
     let mut reg = HostRegistry::new(Box::new(fake));
 
     let id = reg
-        .add("flaky", "alice@flaky.example.com")
+        .add("flaky", "alice@flaky.example.com", None, None, Vec::new())
         .unwrap()
         .id
         .clone();
@@ -254,7 +254,7 @@ fn part_a_health_check_unreachable_on_hard_failure() {
     let mut reg = HostRegistry::new(Box::new(fake));
 
     let id = reg
-        .add("dead", "alice@dead.example.com")
+        .add("dead", "alice@dead.example.com", None, None, Vec::new())
         .unwrap()
         .id
         .clone();
@@ -284,10 +284,10 @@ fn part_a_health_check_unknown_id_is_unreachable() {
 fn part_a_duplicate_label_error() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    reg.add("builder", "ci@builder.example.com")
+    reg.add("builder", "ci@builder.example.com", None, None, Vec::new())
         .expect("first add must succeed");
     let err = reg
-        .add("builder", "ci@other.example.com")
+        .add("builder", "ci@other.example.com", None, None, Vec::new())
         .expect_err("duplicate label must fail");
     match err {
         HostError::DuplicateLabel(label) => assert_eq!(label, "builder"),
@@ -310,7 +310,7 @@ fn part_a_malformed_target_errors() {
         let runner = Box::new(FakeSshRunner::new());
         let mut reg = HostRegistry::new(runner);
         let err = reg
-            .add("host", bad)
+            .add("host", bad, None, None, Vec::new())
             .expect_err(&format!("target {:?} must fail", bad));
         assert!(
             matches!(err, HostError::MalformedTarget(_)),

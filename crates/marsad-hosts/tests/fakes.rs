@@ -89,7 +89,7 @@ fn health_check_connected_via_fake_ok() {
     let runner = Box::new(fake);
     let mut reg = HostRegistry::new(runner);
     let id = reg
-        .add("alive", "user@alive.example.com")
+        .add("alive", "user@alive.example.com", None, None, Vec::new())
         .unwrap()
         .id
         .clone();
@@ -109,7 +109,7 @@ fn health_check_unreachable_via_fake_err_unreachable() {
     );
     let runner = Box::new(fake);
     let mut reg = HostRegistry::new(runner);
-    let id = reg.add("gone", "user@gone.example.com").unwrap().id.clone();
+    let id = reg.add("gone", "user@gone.example.com", None, None, Vec::new()).unwrap().id.clone();
     assert_eq!(reg.health_check(&id), HostStatus::Unreachable);
 }
 
@@ -130,7 +130,7 @@ fn health_check_reconnecting_via_fake_err_non_unreachable() {
     let runner = Box::new(fake);
     let mut reg = HostRegistry::new(runner);
     let id = reg
-        .add("flaky", "user@flaky.example.com")
+        .add("flaky", "user@flaky.example.com", None, None, Vec::new())
         .unwrap()
         .id
         .clone();

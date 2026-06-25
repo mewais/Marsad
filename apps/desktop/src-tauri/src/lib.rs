@@ -227,6 +227,7 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::get_autostart,
             bridge::set_autostart,
             bridge::add_host,
+            bridge::update_host,
             bridge::remove_host,
             bridge::connect_host_interactive,
             bridge::list_wsl_distros,

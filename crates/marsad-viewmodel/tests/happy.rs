@@ -24,6 +24,9 @@ fn host_local() -> Host {
         session_count: 3,
         is_local: true,
         removable: false,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
     }
 }
 
@@ -36,6 +39,9 @@ fn host_remote() -> Host {
         session_count: 1,
         is_local: false,
         removable: true,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
     }
 }
 

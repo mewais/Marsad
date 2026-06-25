@@ -43,6 +43,9 @@ pub fn seeded_mock() -> MockState {
             session_count: 4,
             is_local: true,
             removable: false,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
         },
         Host {
             id: "hetzner".to_string(),
@@ -52,6 +55,9 @@ pub fn seeded_mock() -> MockState {
             session_count: 4,
             is_local: false,
             removable: true,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
         },
         Host {
             id: "gpu".to_string(),
@@ -61,6 +67,9 @@ pub fn seeded_mock() -> MockState {
             session_count: 2,
             is_local: false,
             removable: true,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
         },
     ];
 

@@ -14,7 +14,7 @@ import { useTheme } from "../theme/ThemeProvider";
 import { getUiScale, applyUiScale } from "../theme/uiScale";
 import { Toggle } from "../components/Toggle";
 import { MODELS as MODEL_LIST } from "../bridge/models";
-import { getAutostart, setAutostart, addHost, removeHost, connectHostInteractive, listWslDistros, getSettings, setSettings, DEFAULT_SETTINGS } from "../bridge/api";
+import { getAutostart, setAutostart, addHost, updateHost, removeHost, connectHostInteractive, listWslDistros, getSettings, setSettings, parseEnv, DEFAULT_SETTINGS } from "../bridge/api";
 import type { Settings, NotifPref } from "../bridge/types";
 
 // ---------------------------------------------------------------------------
@@ -601,6 +601,11 @@ function HostStatusDot({ status }: { status: string }) {
   );
 }
 
+/** Serialize a host's env pairs into the textarea form (one `KEY=VALUE` per line). */
+function envToText(env?: Array<[string, string]>): string {
+  return (env ?? []).map(([k, v]) => `${k}=${v}`).join("\n");
+}
+
 function HostsTab() {
   const { hosts } = useVm();
   const [label, setLabel] = useState("");
@@ -609,6 +614,49 @@ function HostsTab() {
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [wslDistros, setWslDistros] = useState<string[]>([]);
+
+  // Add-host launch config fields.
+  const [addClaudeBin, setAddClaudeBin] = useState("");
+  const [addSetup, setAddSetup] = useState("");
+  const [addEnv, setAddEnv] = useState("");
+
+  // Local-machine launch config, prefilled from the localhost host entry.
+  const localHost = hosts.find((h) => h.is_local);
+  const [localClaudeBin, setLocalClaudeBin] = useState("");
+  const [localSetup, setLocalSetup] = useState("");
+  const [localEnv, setLocalEnv] = useState("");
+  const [localBusy, setLocalBusy] = useState(false);
+  const [localSaved, setLocalSaved] = useState(false);
+
+  // Re-sync the local-machine fields whenever the localhost config changes
+  // (e.g. after restore on launch or a save round-trip via vm-update).
+  const localKey = `${localHost?.claude_bin ?? ""}|${localHost?.setup ?? ""}|${envToText(localHost?.env)}`;
+  useEffect(() => {
+    setLocalClaudeBin(localHost?.claude_bin ?? "");
+    setLocalSetup(localHost?.setup ?? "");
+    setLocalEnv(envToText(localHost?.env));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localKey]);
+
+  async function handleSaveLocal() {
+    if (localBusy) return;
+    setLocalBusy(true);
+    setError(null);
+    try {
+      await updateHost(
+        "localhost",
+        localClaudeBin.trim(),
+        localSetup.trim(),
+        parseEnv(localEnv),
+      );
+      setLocalSaved(true);
+      window.setTimeout(() => setLocalSaved(false), 2500);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLocalBusy(false);
+    }
+  }
 
   // Detect installed WSL distros once (empty off Windows) so they can be added
   // with one click instead of the user needing to know the `wsl:<distro>` syntax.
@@ -633,10 +681,19 @@ function HostsTab() {
     setBusy(true);
     setError(null);
     try {
-      await addHost(label.trim(), target.trim());
+      await addHost(
+        label.trim(),
+        target.trim(),
+        addClaudeBin.trim(),
+        addSetup.trim(),
+        parseEnv(addEnv),
+      );
       // The host list refreshes via the "hosts" vm-update; clear the form.
       setLabel("");
       setTarget("");
+      setAddClaudeBin("");
+      setAddSetup("");
+      setAddEnv("");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -663,8 +720,115 @@ function HostsTab() {
     }
   }
 
+  // Shared field styling — matches the existing add-host form inputs.
+  const fieldLabel: React.CSSProperties = {
+    fontSize: "calc(12.5px * var(--fs,1))",
+    fontWeight: 600,
+    color: "var(--txt3)",
+    marginBottom: 5,
+  };
+  const fieldInput: React.CSSProperties = {
+    width: "100%",
+    background: "var(--panel)",
+    border: "1px solid var(--border2)",
+    borderRadius: 8,
+    padding: "9px 11px",
+    color: "var(--txt)",
+    fontSize: "calc(14.5px * var(--fs,1))",
+    outline: "none",
+    boxSizing: "border-box",
+    fontFamily: "var(--font-mono)",
+  };
+
   return (
     <div style={{ maxWidth: 860 }}>
+      {/* Local machine launch config */}
+      <div style={{ ...S.sectionLabel, marginBottom: 10 }}>Local machine</div>
+      <div
+        style={{
+          padding: 15,
+          borderRadius: 12,
+          border: "1px solid var(--border)",
+          background: "var(--panel)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 11,
+          marginBottom: 26,
+        }}
+      >
+        <div style={{ display: "flex", gap: 11 }}>
+          <div style={{ flex: 1 }}>
+            <div style={fieldLabel}>Claude command</div>
+            <input
+              data-testid="local-claude-bin"
+              value={localClaudeBin}
+              onChange={(e) => setLocalClaudeBin(e.target.value)}
+              placeholder="claude"
+              className="mono"
+              style={fieldInput}
+            />
+          </div>
+          <div style={{ flex: 1.6 }}>
+            <div style={fieldLabel}>Setup command</div>
+            <input
+              data-testid="local-setup"
+              value={localSetup}
+              onChange={(e) => setLocalSetup(e.target.value)}
+              placeholder="module load cuda"
+              className="mono"
+              style={fieldInput}
+            />
+          </div>
+        </div>
+        <div>
+          <div style={fieldLabel}>Environment (one KEY=VALUE per line)</div>
+          <textarea
+            data-testid="local-env"
+            value={localEnv}
+            onChange={(e) => setLocalEnv(e.target.value)}
+            placeholder={"CUDA_HOME=/usr/local/cuda\nFOO=bar"}
+            className="mono"
+            rows={3}
+            style={{ ...fieldInput, resize: "vertical", minHeight: 64 }}
+          />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span
+            className="mono"
+            style={{ fontSize: "calc(12.5px * var(--fs,1))", color: "var(--txt3)", flex: 1 }}
+          >
+            Applied to every session launched on this machine.
+          </span>
+          {localSaved && (
+            <span
+              data-testid="local-saved"
+              style={{ fontSize: "calc(13px * var(--fs,1))", color: "var(--done)", fontWeight: 600 }}
+            >
+              Saved
+            </span>
+          )}
+          <button
+            data-testid="local-save-btn"
+            disabled={localBusy}
+            onClick={handleSaveLocal}
+            style={{
+              fontFamily: "inherit",
+              fontWeight: 700,
+              fontSize: "calc(14.5px * var(--fs,1))",
+              padding: "8px 15px",
+              borderRadius: 8,
+              border: "none",
+              background: localBusy ? "var(--border2)" : "var(--accent)",
+              color: "#fff",
+              cursor: localBusy ? "default" : "pointer",
+              opacity: localBusy ? 0.55 : 1,
+            }}
+          >
+            {localBusy ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+
       {/* Registered hosts */}
       <div style={{ ...S.sectionLabel, marginBottom: 10 }}>Registered hosts</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 9, marginBottom: 26 }}>
@@ -877,6 +1041,43 @@ function HostsTab() {
               }}
             />
           </div>
+        </div>
+        {/* Per-host launch config (optional) */}
+        <div style={{ display: "flex", gap: 11 }}>
+          <div style={{ flex: 1 }}>
+            <div style={fieldLabel}>Claude command</div>
+            <input
+              data-testid="host-add-claude-bin"
+              value={addClaudeBin}
+              onChange={(e) => setAddClaudeBin(e.target.value)}
+              placeholder="claude"
+              className="mono"
+              style={fieldInput}
+            />
+          </div>
+          <div style={{ flex: 1.6 }}>
+            <div style={fieldLabel}>Setup command</div>
+            <input
+              data-testid="host-add-setup"
+              value={addSetup}
+              onChange={(e) => setAddSetup(e.target.value)}
+              placeholder="module load cuda"
+              className="mono"
+              style={fieldInput}
+            />
+          </div>
+        </div>
+        <div>
+          <div style={fieldLabel}>Environment (one KEY=VALUE per line)</div>
+          <textarea
+            data-testid="host-add-env"
+            value={addEnv}
+            onChange={(e) => setAddEnv(e.target.value)}
+            placeholder={"CUDA_HOME=/usr/local/cuda\nFOO=bar"}
+            className="mono"
+            rows={3}
+            style={{ ...fieldInput, resize: "vertical", minHeight: 64 }}
+          />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span

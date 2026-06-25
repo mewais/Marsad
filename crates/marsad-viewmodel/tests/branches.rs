@@ -51,6 +51,9 @@ fn host(id: &str, label: &str) -> Host {
         session_count: 1,
         is_local: true,
         removable: false,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
     }
 }
 

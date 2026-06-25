@@ -34,6 +34,9 @@ fn host_session_workspace_round_trip_across_restart() {
                 label: "box".to_string(),
                 target: "user@box.example.com".to_string(),
                 is_local: false,
+                claude_bin: None,
+                setup: None,
+                env: Vec::new(),
             })
             .expect("persist host");
         store
@@ -43,6 +46,9 @@ fn host_session_workspace_round_trip_across_restart() {
                 name: "s1".to_string(),
                 host_id: "host-1".to_string(),
                 host_target: Some("user@box.example.com".to_string()),
+                claude_bin: None,
+                setup: None,
+                env: Vec::new(),
                 project: "/proj".to_string(),
                 branch: "main".to_string(),
                 model: "claude-haiku-4-5-20251001".to_string(),

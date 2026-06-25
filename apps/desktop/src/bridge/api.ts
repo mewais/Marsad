@@ -135,12 +135,64 @@ export async function interrupt(id: string): Promise<void> {
   await invoke("interrupt", { id });
 }
 
-/** Add a remote host (`label`, `user@host`). Rejects with the backend error
- *  string (e.g. duplicate label / malformed target) on failure. */
-export async function addHost(label: string, target: string): Promise<void> {
+/** Parse an environment textarea (one `KEY=VALUE` per line) into `[key, value]`
+ *  pairs. Blank lines and lines without a `=` (or with an empty key) are ignored. */
+export function parseEnv(text: string): Array<[string, string]> {
+  const pairs: Array<[string, string]> = [];
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue; // no '=' or empty key → ignore
+    const key = line.slice(0, eq).trim();
+    const value = line.slice(eq + 1);
+    if (!key) continue;
+    pairs.push([key, value]);
+  }
+  return pairs;
+}
+
+/** Add a remote host (`label`, `user@host`). The optional per-host launch config
+ *  (`claudeBin` / `setup` / `env` as `[key, value]` pairs) is applied whenever a
+ *  session launches on the host. Rejects with the backend error string (e.g.
+ *  duplicate label / malformed target) on failure. */
+export async function addHost(
+  label: string,
+  target: string,
+  claudeBin?: string,
+  setup?: string,
+  env?: Array<[string, string]>,
+): Promise<void> {
   if (!isTauri()) return;
   const invoke = await getInvoke();
-  await invoke("add_host", { label, target });
+  await invoke("add_host", {
+    label,
+    target,
+    claude_bin: claudeBin && claudeBin.length > 0 ? claudeBin : null,
+    setup: setup && setup.length > 0 ? setup : null,
+    env: env ?? [],
+  });
+}
+
+/** Update an existing host's launch config (`claudeBin` / `setup` / `env`), and
+ *  optionally its `target`. Works for any host id INCLUDING `"localhost"` (pass
+ *  no `target` to leave it unchanged). */
+export async function updateHost(
+  id: string,
+  claudeBin?: string,
+  setup?: string,
+  env?: Array<[string, string]>,
+  target?: string,
+): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("update_host", {
+    id,
+    claude_bin: claudeBin && claudeBin.length > 0 ? claudeBin : null,
+    setup: setup && setup.length > 0 ? setup : null,
+    env: env ?? [],
+    target: target && target.length > 0 ? target : null,
+  });
 }
 
 /** Remove a host by id. */

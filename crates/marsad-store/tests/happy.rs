@@ -25,6 +25,9 @@ fn make_session(id: &str) -> PersistedSession {
         name: format!("Session {id}"),
         host_id: "localhost".to_string(),
         host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
         project: "/home/user/project".to_string(),
         branch: "main".to_string(),
         model: "claude-opus-4-5".to_string(),
@@ -73,7 +76,11 @@ fn upsert_session_then_restore_returns_session() {
 #[test]
 fn upsert_session_preserves_all_fields() {
     let mut store = fresh_store();
-    let sess = make_session("sess-fields");
+    let mut sess = make_session("sess-fields");
+    // Set the per-host launch config so its round-trip is asserted too.
+    sess.claude_bin = Some("genie".to_string());
+    sess.setup = Some("module load x".to_string());
+    sess.env = vec![("A".to_string(), "b".to_string())];
     store.upsert_session(&sess).expect("upsert_session");
     let restored = store.restore().expect("restore");
     let found = restored
@@ -88,6 +95,9 @@ fn upsert_session_preserves_all_fields() {
     assert_eq!(found.branch, "main");
     assert_eq!(found.model, "claude-opus-4-5");
     assert_eq!(found.last_phase, "Done");
+    assert_eq!(found.claude_bin.as_deref(), Some("genie"));
+    assert_eq!(found.setup.as_deref(), Some("module load x"));
+    assert_eq!(found.env, vec![("A".to_string(), "b".to_string())]);
 }
 
 #[test]
@@ -352,15 +362,20 @@ fn make_host(id: &str) -> PersistedHost {
         label: format!("lbl-{id}"),
         target: "u@h".to_string(),
         is_local: false,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
     }
 }
 
 #[test]
 fn upsert_host_then_restore_returns_host_with_all_fields() {
     let mut store = fresh_store();
-    store
-        .upsert_host(&make_host("host-1"))
-        .expect("upsert_host");
+    let mut host = make_host("host-1");
+    host.claude_bin = Some("genie".to_string());
+    host.setup = Some("module load x".to_string());
+    host.env = vec![("A".to_string(), "b".to_string())];
+    store.upsert_host(&host).expect("upsert_host");
     let restored: Restored = store.restore().expect("restore");
     let h = restored
         .hosts
@@ -370,6 +385,9 @@ fn upsert_host_then_restore_returns_host_with_all_fields() {
     assert_eq!(h.label, "lbl-host-1");
     assert_eq!(h.target, "u@h");
     assert!(!h.is_local);
+    assert_eq!(h.claude_bin.as_deref(), Some("genie"));
+    assert_eq!(h.setup.as_deref(), Some("module load x"));
+    assert_eq!(h.env, vec![("A".to_string(), "b".to_string())]);
 }
 
 #[test]

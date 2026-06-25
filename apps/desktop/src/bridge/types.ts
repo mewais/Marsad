@@ -65,6 +65,12 @@ export interface Host {
   session_count: number;
   is_local: boolean;
   removable: boolean;
+  /** Per-host claude executable (wrapper / absolute path); null → default `claude`. */
+  claude_bin?: string | null;
+  /** Per-host setup shell command run before claude; null → none. */
+  setup?: string | null;
+  /** Per-host environment, as `[key, value]` pairs. */
+  env?: Array<[string, string]>;
 }
 
 // ---------------------------------------------------------------------------

@@ -302,6 +302,20 @@ pub struct PersistedSession {
     /// container after a restart. `#[serde(default)]` keeps older records loading.
     #[serde(default)]
     pub host_target: Option<String>,
+    /// The `claude` executable to run for this session (wrapper / absolute path),
+    /// resolved from the host config at launch. `None` → the default `"claude"`.
+    /// Persisted so resume reuses the same binary. `#[serde(default)]` keeps older
+    /// records loading.
+    #[serde(default)]
+    pub claude_bin: Option<String>,
+    /// Shell command run before claude for this session (resolved from the host
+    /// config). `#[serde(default)]` keeps older records loading.
+    #[serde(default)]
+    pub setup: Option<String>,
+    /// Environment variables exported before claude for this session, as
+    /// `(key, value)` pairs. `#[serde(default)]` keeps older records loading.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
     pub project: String,
     pub branch: String,
     pub model: String,
@@ -322,6 +336,19 @@ pub struct PersistedHost {
     pub label: String,
     pub target: String,
     pub is_local: bool,
+    /// The `claude` executable to run on this host (wrapper / absolute path).
+    /// `None` → the default `"claude"`. `#[serde(default)]` keeps older records
+    /// loading.
+    #[serde(default)]
+    pub claude_bin: Option<String>,
+    /// Shell command run before claude on this host (e.g. `module load cuda`).
+    /// `#[serde(default)]` keeps older records loading.
+    #[serde(default)]
+    pub setup: Option<String>,
+    /// Environment variables exported before claude on this host, as
+    /// `(key, value)` pairs. `#[serde(default)]` keeps older records loading.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
 }
 
 /// A named group of sessions.
@@ -690,6 +717,9 @@ impl Store {
                         name: sess.name,
                         host_id: sess.host_id,
                         host_target: sess.host_target,
+                        claude_bin: sess.claude_bin,
+                        setup: sess.setup,
+                        env: sess.env,
                         project: sess.project,
                         branch: sess.branch,
                         model: sess.model,
@@ -749,6 +779,9 @@ impl Store {
                 name: es.name.clone(),
                 host_id: es.host_id.clone(),
                 host_target: es.host_target.clone(),
+                claude_bin: es.claude_bin.clone(),
+                setup: es.setup.clone(),
+                env: es.env.clone(),
                 project: es.project.clone(),
                 branch: es.branch.clone(),
                 model: es.model.clone(),
@@ -785,6 +818,12 @@ struct ExportSession {
     host_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     host_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    claude_bin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    setup: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    env: Vec<(String, String)>,
     project: String,
     branch: String,
     model: String,

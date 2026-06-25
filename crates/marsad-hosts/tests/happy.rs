@@ -86,7 +86,7 @@ fn new_seeds_localhost_entry() {
 fn add_remote_host_returns_host_ref() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    let result = reg.add("myserver", "alice@myserver.example.com");
+    let result = reg.add("myserver", "alice@myserver.example.com", None, None, Vec::new());
     let host = result.expect("add should succeed");
     assert_eq!(host.label, "myserver");
     assert_eq!(host.target, "alice@myserver.example.com");
@@ -104,7 +104,7 @@ fn add_remote_host_returns_host_ref() {
 fn list_includes_localhost_and_added_remote() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    reg.add("remote1", "bob@remote1.example.com").unwrap();
+    reg.add("remote1", "bob@remote1.example.com", None, None, Vec::new()).unwrap();
     let hosts = reg.list();
     assert!(hosts.len() >= 2);
     assert!(
@@ -126,7 +126,7 @@ fn remove_remote_host_succeeds() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
     let id = {
-        let host = reg.add("toremove", "charlie@toremove.example.com").unwrap();
+        let host = reg.add("toremove", "charlie@toremove.example.com", None, None, Vec::new()).unwrap();
         host.id.clone()
     };
     let count_before = reg.list().len();
@@ -150,7 +150,7 @@ fn health_check_returns_connected_on_ok_response() {
     let runner = Box::new(fake);
     let mut reg = HostRegistry::new(runner);
     let id = {
-        let host = reg.add("healthy", "alice@healthy.example.com").unwrap();
+        let host = reg.add("healthy", "alice@healthy.example.com", None, None, Vec::new()).unwrap();
         host.id.clone()
     };
     let status = reg.health_check(&id);
@@ -196,7 +196,7 @@ fn host_entry_derives_debug_clone_partialeq() {
 fn host_derives_debug_clone_partialeq() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    reg.add("derivetest", "user@derivetest.example.com")
+    reg.add("derivetest", "user@derivetest.example.com", None, None, Vec::new())
         .unwrap();
     let hosts = reg.list();
     let h = &hosts[0];
@@ -212,7 +212,7 @@ fn host_derives_debug_clone_partialeq() {
 #[test]
 fn set_status_updates_existing_host() {
     let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
-    let id = reg.add("s", "u@h").unwrap().id.clone();
+    let id = reg.add("s", "u@h", None, None, Vec::new()).unwrap().id.clone();
     reg.set_status(&id, HostStatus::Connected);
     let h = reg.list().iter().find(|h| h.id == id).unwrap();
     assert_eq!(h.status, HostStatus::Connected);
@@ -233,13 +233,13 @@ fn set_status_unknown_id_is_noop() {
 #[test]
 fn load_remote_preserves_id_and_starts_reconnecting() {
     let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
-    reg.load_remote("host-7", "saved", "u@saved.example.com");
+    reg.load_remote("host-7", "saved", "u@saved.example.com", None, None, Vec::new());
     let h = reg.list().iter().find(|h| h.id == "host-7").unwrap();
     assert_eq!(h.label, "saved");
     assert!(!h.is_local && h.removable);
     assert_eq!(h.status, HostStatus::Connecting);
     // next_id must advance past 7 so a fresh add does not collide.
-    let added = reg.add("fresh", "u@fresh").unwrap();
+    let added = reg.add("fresh", "u@fresh", None, None, Vec::new()).unwrap();
     assert_eq!(added.id, "host-8");
 }
 
@@ -251,7 +251,7 @@ fn load_remote_preserves_id_and_starts_reconnecting() {
 fn add_wsl_target_is_accepted_and_flagged() {
     let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
     let host = reg
-        .add("ubuntu", "wsl:Ubuntu")
+        .add("ubuntu", "wsl:Ubuntu", None, None, Vec::new())
         .expect("wsl target must be accepted");
     assert_eq!(host.target, "wsl:Ubuntu");
     assert!(host.is_wsl(), "wsl:<distro> host must report is_wsl()");
@@ -261,7 +261,7 @@ fn add_wsl_target_is_accepted_and_flagged() {
 #[test]
 fn non_wsl_hosts_are_not_flagged_wsl() {
     let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
-    let ssh = reg.add("box", "user@box.example.com").unwrap();
+    let ssh = reg.add("box", "user@box.example.com", None, None, Vec::new()).unwrap();
     assert!(!ssh.is_wsl());
     assert_eq!(ssh.wsl_distro(), None);
     // The seeded localhost ("this machine") is also not WSL.
@@ -305,8 +305,50 @@ fn fake_wsl_runner_implements_trait_and_real_runner_constructs() {
 #[test]
 fn load_remote_non_numeric_id_leaves_next_id() {
     let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
-    reg.load_remote("custom-id", "x", "u@x"); // unparseable suffix
-    reg.load_remote("host-0", "y", "u@y"); // n (0) < next_id (1)
-    let added = reg.add("z", "u@z").unwrap();
+    reg.load_remote("custom-id", "x", "u@x", None, None, Vec::new()); // unparseable suffix
+    reg.load_remote("host-0", "y", "u@y", None, None, Vec::new()); // n (0) < next_id (1)
+    let added = reg.add("z", "u@z", None, None, Vec::new()).unwrap();
     assert_eq!(added.id, "host-1"); // next_id untouched by either load
+}
+
+// ---------------------------------------------------------------------------
+// HostRegistry::update — launch config on a remote host, and on localhost
+// ---------------------------------------------------------------------------
+
+#[test]
+fn update_sets_launch_config_on_remote_host() {
+    let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
+    let id = reg.add("box", "u@h", None, None, Vec::new()).unwrap().id.clone();
+    let updated = reg
+        .update(
+            &id,
+            Some("genie".to_string()),
+            Some("module load x".to_string()),
+            vec![("A".to_string(), "b".to_string())],
+            Some("u@h2".to_string()),
+        )
+        .expect("update existing host");
+    assert_eq!(updated.claude_bin.as_deref(), Some("genie"));
+    assert_eq!(updated.setup.as_deref(), Some("module load x"));
+    assert_eq!(updated.env, vec![("A".to_string(), "b".to_string())]);
+    assert_eq!(updated.target, "u@h2"); // target changed
+}
+
+#[test]
+fn update_localhost_keeps_target_when_none() {
+    let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
+    // localhost is seeded and protected; update must still work and leave its
+    // target ("this machine") unchanged when target is None.
+    let updated = reg
+        .update(
+            "localhost",
+            Some("/opt/claude".to_string()),
+            None,
+            Vec::new(),
+            None,
+        )
+        .expect("update localhost");
+    assert_eq!(updated.claude_bin.as_deref(), Some("/opt/claude"));
+    assert_eq!(updated.target, "this machine");
+    assert!(updated.is_local);
 }

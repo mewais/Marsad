@@ -67,6 +67,42 @@ interactive prompts. ControlMaster ssh options do **not** apply to plink and are
 Remote session dir: `~/.marsad/sessions/<id>/` containing `in.fifo`, `out.fifo`,
 `err.log` (the remote shell expands `~`).
 
+### Per-host launch configuration
+Each host (local, WSL, and SSH/plink alike) carries three OPTIONAL launch settings,
+applied whenever a session launches on that host:
+
+- `claude_bin: Option<String>` — the executable run in place of `claude` (a wrapper
+  like `genie`, or an absolute path). Default = `claude`. Becomes `argv[0]` in
+  `claude_argv`.
+- `setup: Option<String>` — a shell command run BEFORE claude (e.g. `module load cuda`).
+- `env: Vec<(String, String)>` — environment variables exported before claude.
+
+Plumbing mirrors `host_target` exactly: stored on `Host` / `PersistedHost` /
+`PersistedSession` / `LaunchSpec` / `LaunchSessionMsg`; resolved by `Core` from the
+registry (by `host_id`) into the LaunchSession IPC (`claude_bin`/`setup` as strings,
+`env` as a JSON array of `[k, v]` pairs); the agent sets them on the spec, persists
+them on the session (so resume reuses them), and folds them into the spawn command.
+
+The UI exposes them in two places on the Hosts settings tab: a fixed **Local machine**
+card (saved via `update_host("localhost", …)`, whose target stays `this machine`), and
+the same three fields in the **Add a host** form. The environment textarea is one
+`KEY=VALUE` per line (blank/invalid lines ignored).
+
+**Remote `run.sh` body** (`build_remote_spawn_cmd`) — with the FIFO wiring added later
+by `spawn_script`. Example for `claude_bin=genie`, `setup="module load x"`,
+`env=[("A","b")]`:
+
+```
+module load x
+export 'A'='b'
+cd '/proj' && exec 'genie' '--model' 'haiku'
+```
+
+Setup (when present) is the first line; one `export 'K'='V'` line per env pair follows
+(key and value POSIX single-quoted via `remote_shell_quote`); then `cd '<project>' &&
+exec '<bin>' '<args>'`. The local spawn command prepends the same setup + `export` lines
+before `cd … && '<bin>' … < in.fifo > out.fifo 2>err.log`.
+
 ## Slices
 
 1. **marsad-lifecycle** — `RemoteTmuxContainer` (`Container` impl) parameterized by an

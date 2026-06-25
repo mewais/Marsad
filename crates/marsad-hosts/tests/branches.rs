@@ -118,7 +118,7 @@ fn parse_only_comments_returns_empty_vec() {
 fn new_remote_host_starts_connecting() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    let host = reg.add("newhost", "user@newhost.example.com").unwrap();
+    let host = reg.add("newhost", "user@newhost.example.com", None, None, Vec::new()).unwrap();
     assert_eq!(host.status, HostStatus::Connecting);
 }
 
@@ -126,7 +126,7 @@ fn new_remote_host_starts_connecting() {
 fn set_status_never_connected_keeps_connecting_on_transient() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    let id = reg.add("nc", "user@nc.example.com").unwrap().id.clone();
+    let id = reg.add("nc", "user@nc.example.com", None, None, Vec::new()).unwrap().id.clone();
 
     // A transient failure before the first successful connect stays Connecting.
     reg.set_status(&id, HostStatus::Reconnecting);
@@ -149,7 +149,7 @@ fn health_check_transitions_reconnecting_to_connected() {
     let runner = Box::new(fake);
     let mut reg = HostRegistry::new(runner);
     let id = {
-        let h = reg.add("ok", "user@ok.example.com").unwrap();
+        let h = reg.add("ok", "user@ok.example.com", None, None, Vec::new()).unwrap();
         assert_eq!(
             h.status,
             HostStatus::Connecting,
@@ -176,7 +176,7 @@ fn health_check_transitions_connected_to_unreachable_on_hard_failure() {
     let runner = Box::new(fake);
     let mut reg = HostRegistry::new(runner);
     let id = {
-        let h = reg.add("flip", "user@flip.example.com").unwrap();
+        let h = reg.add("flip", "user@flip.example.com", None, None, Vec::new()).unwrap();
         h.id.clone()
     };
     // First health_check -> Connected
@@ -202,7 +202,7 @@ fn health_check_reconnecting_status_on_transient_failure() {
     let runner = Box::new(fake);
     let mut reg = HostRegistry::new(runner);
     let id = {
-        let h = reg.add("transient", "user@transient.example.com").unwrap();
+        let h = reg.add("transient", "user@transient.example.com", None, None, Vec::new()).unwrap();
         h.id.clone()
     };
     let status = reg.health_check(&id);
@@ -241,7 +241,7 @@ fn localhost_removable_false() {
 fn remote_host_is_local_false_and_removable_true() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    let host = reg.add("remote", "user@remote.example.com").unwrap();
+    let host = reg.add("remote", "user@remote.example.com", None, None, Vec::new()).unwrap();
     assert!(!host.is_local);
     assert!(host.removable);
 }
@@ -321,7 +321,7 @@ fn host_status_derives_partialeq_debug_clone() {
 fn new_remote_host_session_count_starts_at_zero() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    let host = reg.add("fresh", "user@fresh.example.com").unwrap();
+    let host = reg.add("fresh", "user@fresh.example.com", None, None, Vec::new()).unwrap();
     assert_eq!(host.session_count, 0);
 }
 
@@ -333,7 +333,7 @@ fn new_remote_host_session_count_starts_at_zero() {
 fn host_ids_are_unique() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    let id1 = reg.add("h1", "user@h1.example.com").unwrap().id.clone();
-    let id2 = reg.add("h2", "user@h2.example.com").unwrap().id.clone();
+    let id1 = reg.add("h1", "user@h1.example.com", None, None, Vec::new()).unwrap().id.clone();
+    let id2 = reg.add("h2", "user@h2.example.com", None, None, Vec::new()).unwrap().id.clone();
     assert_ne!(id1, id2);
 }

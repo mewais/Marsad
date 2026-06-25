@@ -442,7 +442,17 @@ impl Core {
             .restore()
             .map_err(|e| CoreError::Host(format!("restore hosts: {e:?}")))?;
         for h in restored.hosts {
-            self.hosts.load_remote(&h.id, &h.label, &h.target);
+            // localhost is seeded by the registry; its persisted launch config
+            // (claude_bin/setup/env) is applied via update so the seeded entry
+            // carries it, rather than appending a duplicate.
+            if h.is_local {
+                let _ = self
+                    .hosts
+                    .update(&h.id, h.claude_bin, h.setup, h.env, None);
+            } else {
+                self.hosts
+                    .load_remote(&h.id, &h.label, &h.target, h.claude_bin, h.setup, h.env);
+            }
         }
         Ok(vec![VmUpdate::Hosts(self.hosts.list().to_vec())])
     }
@@ -559,10 +569,17 @@ impl Core {
 
     /// Add a remote host (`label`, `user@host`), persist it, and return the
     /// updated host list. The host starts `Reconnecting` until a health check.
-    pub fn add_host(&mut self, label: &str, target: &str) -> Result<Vec<VmUpdate>, CoreError> {
+    pub fn add_host(
+        &mut self,
+        label: &str,
+        target: &str,
+        claude_bin: Option<String>,
+        setup: Option<String>,
+        env: Vec<(String, String)>,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
         let host = self
             .hosts
-            .add(label, target)
+            .add(label, target, claude_bin, setup, env)
             .map_err(|e| CoreError::Host(e.to_string()))?
             .clone();
         let persisted = PersistedHost {
@@ -570,6 +587,42 @@ impl Core {
             label: host.label,
             target: host.target,
             is_local: host.is_local,
+            claude_bin: host.claude_bin,
+            setup: host.setup,
+            env: host.env,
+        };
+        self.store
+            .upsert_host(&persisted)
+            .map_err(|e| CoreError::Host(format!("{e:?}")))?;
+        Ok(vec![VmUpdate::Hosts(self.hosts.list().to_vec())])
+    }
+
+    /// Update an existing host's launch configuration (`claude_bin` / `setup` /
+    /// `env`), and optionally its `target`. Works for any host id INCLUDING the
+    /// protected `localhost` (pass `None` for `target` to leave the target
+    /// unchanged — localhost's stays `"this machine"`). Persists the change and
+    /// returns the updated host list.
+    pub fn update_host(
+        &mut self,
+        id: &str,
+        claude_bin: Option<String>,
+        setup: Option<String>,
+        env: Vec<(String, String)>,
+        target: Option<String>,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        let host = self
+            .hosts
+            .update(id, claude_bin, setup, env, target)
+            .map_err(|e| CoreError::Host(e.to_string()))?
+            .clone();
+        let persisted = PersistedHost {
+            id: host.id,
+            label: host.label,
+            target: host.target,
+            is_local: host.is_local,
+            claude_bin: host.claude_bin,
+            setup: host.setup,
+            env: host.env,
         };
         self.store
             .upsert_host(&persisted)
@@ -723,6 +776,40 @@ impl Core {
         if let Some(target) = host_target {
             obj.insert("host_target".to_string(), Value::String(target));
         }
+        // Resolve the per-host launch config (claude_bin / setup / env) from the
+        // registry by host_id and inject it for the agent. Applies to ALL host
+        // types (local, WSL, SSH/plink). An explicit value already on the spec
+        // wins over the registry lookup. `env` is forwarded as a JSON array of
+        // `[k, v]` pairs (the agent parses it back identically).
+        let host_cfg = self.hosts.list().iter().find(|h| h.id == spec.host_id);
+        let claude_bin = spec
+            .claude_bin
+            .clone()
+            .or_else(|| host_cfg.and_then(|h| h.claude_bin.clone()));
+        if let Some(bin) = claude_bin {
+            obj.insert("claude_bin".to_string(), Value::String(bin));
+        }
+        let setup = spec
+            .setup
+            .clone()
+            .or_else(|| host_cfg.and_then(|h| h.setup.clone()));
+        if let Some(s) = setup {
+            obj.insert("setup".to_string(), Value::String(s));
+        }
+        let env = if !spec.env.is_empty() {
+            spec.env.clone()
+        } else {
+            host_cfg.map(|h| h.env.clone()).unwrap_or_default()
+        };
+        if !env.is_empty() {
+            let env_json: Vec<Value> = env
+                .iter()
+                .map(|(k, v)| {
+                    Value::Array(vec![Value::String(k.clone()), Value::String(v.clone())])
+                })
+                .collect();
+            obj.insert("env".to_string(), Value::Array(env_json));
+        }
         // The agent decodes posture from `posture` (the enum variant name);
         // `permission_mode` above is kept for back-compat.
         obj.insert(
@@ -826,6 +913,9 @@ impl Core {
             first_prompt: None,
             mode,
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
         };
         self.launch_session_with_id(id.to_string(), spec)?;
 

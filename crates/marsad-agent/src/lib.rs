@@ -309,12 +309,26 @@ impl Agent {
     ///   `cd <project> && claude <args> < in.fifo > out.fifo 2>err.log`
     ///   Otherwise falls back to `argv.join(" ")`.
     #[cfg(coverage)]
-    fn build_spawn_cmd(&self, _container_name: &str, _project: &str, argv: &[String]) -> String {
+    fn build_spawn_cmd(
+        &self,
+        _container_name: &str,
+        _project: &str,
+        argv: &[String],
+        _setup: Option<&str>,
+        _env: &[(String, String)],
+    ) -> String {
         argv.join(" ")
     }
 
     #[cfg(not(coverage))]
-    fn build_spawn_cmd(&self, container_name: &str, project: &str, argv: &[String]) -> String {
+    fn build_spawn_cmd(
+        &self,
+        container_name: &str,
+        project: &str,
+        argv: &[String],
+        setup: Option<&str>,
+        env: &[(String, String)],
+    ) -> String {
         if self.real_container.0.is_some() {
             // Platform-specific command construction.
             //
@@ -333,12 +347,30 @@ impl Agent {
                 let in_fifo = session_dir.join("in.fifo");
                 let out_fifo = session_dir.join("out.fifo");
                 let err_log = session_dir.join("err.log");
-                // argv[0] is "claude"; the rest are its arguments.
-                // We build: cd <project> && claude <args> < in.fifo > out.fifo 2>err.log
+                // argv[0] is the configured claude bin; the rest are its arguments.
+                // We build (with optional setup + env exports prepended):
+                //   <setup>
+                //   export 'K'='V'
+                //   cd <project> && <bin> <args> < in.fifo > out.fifo 2>err.log
+                let bin = argv.first().map(String::as_str).unwrap_or("claude");
                 let claude_args = &argv[1..];
+                let mut prefix = String::new();
+                if let Some(s) = setup.filter(|s| !s.is_empty()) {
+                    prefix.push_str(s);
+                    prefix.push('\n');
+                }
+                for (k, v) in env {
+                    prefix.push_str(&format!(
+                        "export {}={}\n",
+                        shell_quote(k),
+                        shell_quote(v)
+                    ));
+                }
                 format!(
-                    "cd {} && claude {} < {} > {} 2>{}",
+                    "{}cd {} && {} {} < {} > {} 2>{}",
+                    prefix,
                     shell_quote(project),
+                    shell_quote(bin),
                     claude_args
                         .iter()
                         .map(|a| shell_quote(a))
@@ -364,8 +396,24 @@ impl Agent {
                 // Windows paths never contain double-quote characters, so wrapping
                 // in double quotes is always safe and produces correct cmd.exe syntax.
                 let _ = container_name; // suppress unused-variable on Windows
+                // Best-effort env + setup prepend for the cmd.exe shim:
+                //   set K=V& <setup>& cd /d "proj" && <bin> args
+                let bin = argv.first().map(String::as_str).unwrap_or("claude");
                 let claude_args = &argv[1..];
-                format!("cd /d \"{}\" && claude {}", project, claude_args.join(" "))
+                let mut prefix = String::new();
+                for (k, v) in env {
+                    prefix.push_str(&format!("set {k}={v}& "));
+                }
+                if let Some(s) = setup.filter(|s| !s.is_empty()) {
+                    prefix.push_str(&format!("{s}& "));
+                }
+                format!(
+                    "{}cd /d \"{}\" && {} {}",
+                    prefix,
+                    project,
+                    bin,
+                    claude_args.join(" ")
+                )
             }
         } else {
             argv.join(" ")
@@ -383,7 +431,7 @@ impl Agent {
         spec: &marsad_proto::LaunchSpec,
     ) -> Result<(), AgentError> {
         let argv = claude_argv(spec);
-        let cmd = self.build_spawn_cmd(container_name, &spec.project, &argv);
+        let cmd = self.build_spawn_cmd(container_name, &spec.project, &argv, spec.setup.as_deref(), &spec.env);
         self.active_container()
             .spawn(container_name, &cmd)
             .map_err(|e| AgentError::Spawn(format!("{e}")))
@@ -401,15 +449,19 @@ impl Agent {
         let argv = claude_argv(spec);
         match exec_prefix_for(spec.host_target.as_deref()) {
             None => {
-                let cmd = self.build_spawn_cmd(container_name, &spec.project, &argv);
+                let cmd = self.build_spawn_cmd(container_name, &spec.project, &argv, spec.setup.as_deref(), &spec.env);
                 self.active_container()
                     .spawn(container_name, &cmd)
                     .map_err(|e| AgentError::Spawn(format!("{e}")))
             }
             Some(prefix) => {
                 use marsad_lifecycle::Container as _;
-                let cmd =
-                    build_remote_spawn_cmd(&spec.project, &argv);
+                let cmd = build_remote_spawn_cmd(
+                    &spec.project,
+                    &argv,
+                    spec.setup.as_deref(),
+                    &spec.env,
+                );
                 eprintln!(
                     "marsad-agent: remote spawn {container_name} on {:?} via {prefix:?}",
                     spec.host_target
@@ -491,6 +543,9 @@ impl Agent {
             name: session_id.clone(),
             host_id: spec.host_id.clone(),
             host_target: spec.host_target.clone(),
+            claude_bin: spec.claude_bin.clone(),
+            setup: spec.setup.clone(),
+            env: spec.env.clone(),
             project: spec.project.clone(),
             branch: "main".to_string(),
             model: spec.model.clone(),
@@ -556,6 +611,9 @@ impl Agent {
             // Fresh / continue / resume-by-id, from optional IPC fields.
             mode: parse_launch_mode_value(value),
             host_target: msg.host_target,
+            claude_bin: msg.claude_bin,
+            setup: msg.setup,
+            env: msg.env,
         };
         // Reuse the caller's session id when supplied (Core generates it so it can
         // navigate immediately and recognise the session's events); otherwise
@@ -616,6 +674,9 @@ impl Agent {
             first_prompt: value["first_prompt"].as_str().map(|s| s.to_string()),
             mode,
             host_target: persisted.host_target,
+            claude_bin: persisted.claude_bin,
+            setup: persisted.setup,
+            env: persisted.env,
         };
         let new_id = self.launch(spec)?;
         let event = serde_json::json!({"type": "SessionResumed", "session_id": new_id});
@@ -1331,17 +1392,40 @@ pub fn exec_prefix_for(host_target: Option<&str>) -> Option<Vec<String>> {
 /// into run.sh through a heredoc, so it's quoted exactly ONCE (the old approach nested
 /// `bash -lc` inside tmux inside `bash -lc` and produced mangled quoting → claude
 /// never ran).
-pub fn build_remote_spawn_cmd(project: &str, argv: &[String]) -> String {
+pub fn build_remote_spawn_cmd(
+    project: &str,
+    argv: &[String],
+    setup: Option<&str>,
+    env: &[(String, String)],
+) -> String {
+    let bin = argv.first().map(String::as_str).unwrap_or("claude");
     let claude_args = argv.get(1..).unwrap_or(&[]);
-    format!(
-        "cd {} && exec claude {}",
+    let mut body = String::new();
+    // Optional setup command, run before claude.
+    if let Some(s) = setup.filter(|s| !s.is_empty()) {
+        body.push_str(s);
+        body.push('\n');
+    }
+    // One `export 'K'='V'` line per env pair (key and value POSIX single-quoted
+    // via `remote_shell_quote`).
+    for (k, v) in env {
+        body.push_str(&format!(
+            "export {}={}\n",
+            remote_shell_quote(k),
+            remote_shell_quote(v)
+        ));
+    }
+    body.push_str(&format!(
+        "cd {} && exec {} {}",
         remote_shell_quote(project),
+        remote_shell_quote(bin),
         claude_args
             .iter()
             .map(|a| remote_shell_quote(a))
             .collect::<Vec<_>>()
             .join(" "),
-    )
+    ));
+    body
 }
 
 // ── claude_argv ───────────────────────────────────────────────────────────────
@@ -1371,7 +1455,9 @@ fn posture_to_mode(posture: &marsad_proto::Posture) -> &'static str {
 /// the right project directory.
 pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
     let mut argv = vec![
-        "claude".to_string(),
+        // argv[0] is the host's configured claude executable (a wrapper like
+        // `genie` or an absolute path), defaulting to the bare `claude`.
+        spec.claude_bin.clone().unwrap_or_else(|| "claude".to_string()),
         "--print".to_string(),
         "--input-format".to_string(),
         "stream-json".to_string(),
@@ -1486,6 +1572,15 @@ struct LaunchSessionMsg {
     host_id: Option<String>,
     #[serde(default)]
     host_target: Option<String>,
+    /// Per-host claude executable (wrapper / absolute path); core injects it.
+    #[serde(default)]
+    claude_bin: Option<String>,
+    /// Per-host setup shell command; core injects it.
+    #[serde(default)]
+    setup: Option<String>,
+    /// Per-host environment, as `[k, v]` pairs; core injects it.
+    #[serde(default)]
+    env: Vec<(String, String)>,
     model: String,
     first_prompt: Option<String>,
 }

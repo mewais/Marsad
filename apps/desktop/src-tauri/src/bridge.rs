@@ -99,6 +99,10 @@ pub fn launch_session(
                 host_id,
                 // Core resolves the remote target from host_id via its registry.
                 host_target: None,
+                // Core resolves claude_bin/setup/env from the host config too.
+                claude_bin: None,
+                setup: None,
+                env: Vec::new(),
                 model,
                 posture: posture_val,
                 first_prompt,
@@ -427,11 +431,43 @@ pub fn add_host(
     state: State<'_, ManagedState>,
     label: String,
     target: String,
+    claude_bin: Option<String>,
+    setup: Option<String>,
+    env: Option<Vec<(String, String)>>,
 ) -> Result<(), String> {
     let updates = {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
         match &mut *guard {
-            AppState::Live(core) => core.add_host(&label, &target).map_err(map_err)?,
+            AppState::Live(core) => core
+                .add_host(&label, &target, claude_bin, setup, env.unwrap_or_default())
+                .map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Update an existing host's launch configuration (`claude_bin` / `setup` /
+/// `env`), and optionally its `target`. Works for any host id INCLUDING the
+/// localhost (whose target is left unchanged when `target` is `None`). Persists
+/// the change and pushes the updated host list to the webview.
+#[tauri::command(rename_all = "snake_case")]
+pub fn update_host(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+    claude_bin: Option<String>,
+    setup: Option<String>,
+    env: Option<Vec<(String, String)>>,
+    target: Option<String>,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core
+                .update_host(&id, claude_bin, setup, env.unwrap_or_default(), target)
+                .map_err(map_err)?,
             AppState::Mock(_) => vec![],
         }
     };

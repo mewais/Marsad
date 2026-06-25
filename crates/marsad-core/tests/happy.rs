@@ -94,6 +94,9 @@ fn launch_session_returns_id_and_sends_ipc() {
         project: "my-project".to_string(),
         host_id: "local".to_string(),
         host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
         posture: Posture::Ask,
         first_prompt: None,
@@ -125,7 +128,7 @@ fn launch_session_returns_id_and_sends_ipc() {
 #[test]
 fn launch_session_on_remote_host_forwards_host_target() {
     let (mut core, mut peer) = make_core();
-    core.add_host("box", "user@box.example.com")
+    core.add_host("box", "user@box.example.com", None, None, Vec::new())
         .expect("add remote host");
     let host_id = core
         .snapshot()
@@ -139,6 +142,9 @@ fn launch_session_on_remote_host_forwards_host_target() {
         project: "p".to_string(),
         host_id,
         host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
         model: "claude-haiku-4-5-20251001".to_string(),
         posture: Posture::Ask,
         first_prompt: None,
@@ -162,6 +168,9 @@ fn launch_session_forwards_mode_and_posture() {
         project: "p".to_string(),
         host_id: "local".to_string(),
         host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
         model: "m".to_string(),
         posture: Posture::Ask,
         first_prompt: None,
@@ -184,6 +193,9 @@ fn launch_session_forwards_mode_and_posture() {
         project: "p".to_string(),
         host_id: "local".to_string(),
         host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
         model: "m".to_string(),
         posture: Posture::FullAutonomy,
         first_prompt: None,
@@ -209,6 +221,9 @@ fn launch_session_with_first_prompt_includes_prompt_in_ipc() {
         project: "proj-a".to_string(),
         host_id: "local".to_string(),
         host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
         model: "claude-sonnet-4-5".to_string(),
         posture: Posture::AutoApproveSafe,
         first_prompt: Some("Hello agent".to_string()),
@@ -242,6 +257,9 @@ fn resume_session_sends_ipc() {
             project: "proj-r".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -276,6 +294,9 @@ fn attach_session_sends_ipc() {
             project: "proj-a".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -310,6 +331,9 @@ fn stop_session_sends_ipc() {
             project: "proj-s".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
             posture: Posture::FullAutonomy,
             first_prompt: None,
@@ -344,6 +368,9 @@ fn send_prompt_sends_ipc() {
             project: "proj-p".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -378,6 +405,9 @@ fn interrupt_sends_ipc() {
             project: "proj-i".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -411,6 +441,9 @@ fn answer_gate_sends_ipc_and_routes_to_one_session() {
             project: "proj-gate".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -457,6 +490,9 @@ fn run_slash_sends_ipc() {
             project: "proj-slash".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -494,6 +530,9 @@ fn set_workspace_sends_ipc() {
             project: "proj-ws".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -522,6 +561,9 @@ fn on_agent_line_init_yields_session_vm_update() {
             project: "proj-events".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -554,6 +596,9 @@ fn session_name_derives_from_project_basename_with_id_fallback() {
                 project: project.to_string(),
                 host_id: "local".to_string(),
                 host_target: None,
+                claude_bin: None,
+                setup: None,
+                env: Vec::new(),
                 model: "m".to_string(),
                 posture: Posture::Ask,
                 first_prompt: None,
@@ -590,6 +635,9 @@ fn on_agent_line_assistant_yields_session_vm_update() {
             project: "proj-asst".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -619,6 +667,9 @@ fn on_agent_line_control_request_yields_session_needs_update() {
             project: "proj-ctrl".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -647,6 +698,9 @@ fn on_agent_line_result_success_yields_done_update() {
             project: "proj-done".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -676,6 +730,9 @@ fn on_agent_line_full_lifecycle_produces_overview_updates() {
             project: "proj-lifecycle".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -772,6 +829,9 @@ fn launch_spec_fields_all_postures() {
             project: "p".to_string(),
             host_id: "h".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "m".to_string(),
             posture,
             first_prompt: Some("hi".to_string()),
@@ -827,6 +887,9 @@ fn git_changes_flow_into_session_view_after_tool_runs() {
             project: "/tmp/proj".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "m".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -905,6 +968,9 @@ fn launch_t(core: &mut Core, first_prompt: Option<&str>, mode: LaunchMode) -> St
         project: "/tmp/proj".to_string(),
         host_id: "local".to_string(),
         host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
         model: "m".to_string(),
         posture: Posture::Ask,
         first_prompt: first_prompt.map(|s| s.to_string()),
@@ -1117,7 +1183,7 @@ fn remote_id(updates: &[VmUpdate]) -> String {
 fn add_host_appears_in_list_and_snapshot() {
     let mut core = core_with_backend(MemoryBackend::new());
     let u = core
-        .add_host("srv", "alice@srv.example.com")
+        .add_host("srv", "alice@srv.example.com", None, None, Vec::new())
         .expect("add_host");
     let hosts = hosts_from(&u);
     assert!(hosts.iter().any(|h| h.label == "srv" && !h.is_local));
@@ -1128,9 +1194,9 @@ fn add_host_appears_in_list_and_snapshot() {
 #[test]
 fn add_host_duplicate_label_errors() {
     let mut core = core_with_backend(MemoryBackend::new());
-    core.add_host("srv", "a@h1").expect("first add");
+    core.add_host("srv", "a@h1", None, None, Vec::new()).expect("first add");
     assert!(
-        core.add_host("srv", "b@h2").is_err(),
+        core.add_host("srv", "b@h2", None, None, Vec::new()).is_err(),
         "dup label must error"
     );
 }
@@ -1139,7 +1205,7 @@ fn add_host_duplicate_label_errors() {
 fn add_host_malformed_target_errors() {
     let mut core = core_with_backend(MemoryBackend::new());
     // Bare aliases are accepted now; a target with whitespace is still malformed.
-    assert!(core.add_host("x", "has a space").is_err());
+    assert!(core.add_host("x", "has a space", None, None, Vec::new()).is_err());
 }
 
 #[test]
@@ -1148,7 +1214,7 @@ fn add_host_store_write_failure_errors() {
     backend.fail_next(BackendOp::Write);
     let mut core = core_with_backend(backend);
     assert!(
-        core.add_host("srv", "a@h").is_err(),
+        core.add_host("srv", "a@h", None, None, Vec::new()).is_err(),
         "persist failure surfaces"
     );
 }
@@ -1156,7 +1222,7 @@ fn add_host_store_write_failure_errors() {
 #[test]
 fn remove_host_success_and_localhost_protected() {
     let mut core = core_with_backend(MemoryBackend::new());
-    let u = core.add_host("srv", "a@h").expect("add");
+    let u = core.add_host("srv", "a@h", None, None, Vec::new()).expect("add");
     let id = remote_id(&u);
     let u2 = core.remove_host(&id).expect("remove");
     assert!(!hosts_from(&u2).iter().any(|h| h.id == id));
@@ -1170,7 +1236,7 @@ fn remove_host_success_and_localhost_protected() {
 fn remove_host_store_delete_failure_errors() {
     let backend = MemoryBackend::new();
     let mut core = core_with_backend(backend.clone());
-    let u = core.add_host("srv", "a@h").expect("add");
+    let u = core.add_host("srv", "a@h", None, None, Vec::new()).expect("add");
     let id = remote_id(&u);
     backend.fail_next(BackendOp::Delete);
     assert!(core.remove_host(&id).is_err(), "delete failure surfaces");
@@ -1179,7 +1245,7 @@ fn remove_host_store_delete_failure_errors() {
 #[test]
 fn set_host_status_updates_the_list() {
     let mut core = core_with_backend(MemoryBackend::new());
-    let u = core.add_host("srv", "a@h").expect("add");
+    let u = core.add_host("srv", "a@h", None, None, Vec::new()).expect("add");
     let id = remote_id(&u);
     let u2 = core.set_host_status(&id, HostStatus::Connected);
     let h = hosts_from(&u2).into_iter().find(|h| h.id == id).unwrap();
@@ -1196,6 +1262,9 @@ fn load_hosts_restores_persisted_hosts() {
         label: "saved".to_string(),
         target: "u@saved".to_string(),
         is_local: false,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
     })
     .expect("seed");
     let mut core = core_with_backend(backend);
@@ -1211,6 +1280,196 @@ fn load_hosts_restore_failure_errors() {
     backend.fail_next(BackendOp::List);
     let mut core = core_with_backend(backend);
     assert!(core.load_hosts().is_err());
+}
+
+// Adding a host with claude_bin/setup/env persists them and they resolve into the
+// LaunchSession IPC line when a session launches on that host.
+#[test]
+fn add_host_with_launch_config_resolves_into_ipc() {
+    let (mut core, mut peer) = make_core();
+    core.add_host(
+        "box",
+        "user@box.example.com",
+        Some("genie".to_string()),
+        Some("module load x".to_string()),
+        vec![("A".to_string(), "b".to_string())],
+    )
+    .expect("add remote host with config");
+    let host_id = core
+        .snapshot()
+        .hosts
+        .into_iter()
+        .find(|h| !h.is_local)
+        .expect("remote host present")
+        .id;
+
+    core.launch_session(LaunchSpec {
+        project: "p".to_string(),
+        host_id,
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
+        model: "claude-haiku-4-5-20251001".to_string(),
+        posture: Posture::Ask,
+        first_prompt: None,
+        mode: Default::default(),
+    })
+    .expect("launch on remote host");
+
+    let outbound = peer.drain_outbound();
+    let line = &outbound[0];
+    assert!(line.contains("\"claude_bin\":\"genie\""), "got: {line}");
+    assert!(line.contains("\"setup\":\"module load x\""), "got: {line}");
+    // env forwarded as a JSON array of [k, v] pairs.
+    assert!(line.contains(r#""env":[["A","b"]]"#), "got: {line}");
+}
+
+// An explicit env on the LaunchSpec wins over the host's configured env.
+#[test]
+fn launch_spec_env_overrides_host_env() {
+    let (mut core, mut peer) = make_core();
+    core.update_host(
+        "localhost",
+        None,
+        None,
+        vec![("HOST".to_string(), "x".to_string())],
+        None,
+    )
+    .expect("seed localhost env");
+    core.launch_session(LaunchSpec {
+        project: "p".to_string(),
+        host_id: "localhost".to_string(),
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: vec![("SPEC".to_string(), "y".to_string())],
+        model: "claude-haiku-4-5-20251001".to_string(),
+        posture: Posture::Ask,
+        first_prompt: None,
+        mode: Default::default(),
+    })
+    .expect("launch with explicit env");
+    let outbound = peer.drain_outbound();
+    let line = &outbound[0];
+    assert!(line.contains(r#""env":[["SPEC","y"]]"#), "got: {line}");
+    assert!(!line.contains("HOST"), "spec env must win: {line}");
+}
+
+// update_host changes a remote host's config and persists it.
+#[test]
+fn update_host_changes_remote_config() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let u = core.add_host("srv", "a@h", None, None, Vec::new()).expect("add");
+    let id = remote_id(&u);
+    let u2 = core
+        .update_host(
+            &id,
+            Some("genie".to_string()),
+            Some("setup.sh".to_string()),
+            vec![("K".to_string(), "V".to_string())],
+            Some("a@h2".to_string()),
+        )
+        .expect("update_host");
+    let host = hosts_from(&u2).into_iter().find(|h| h.id == id).unwrap();
+    assert_eq!(host.claude_bin.as_deref(), Some("genie"));
+    assert_eq!(host.setup.as_deref(), Some("setup.sh"));
+    assert_eq!(host.env, vec![("K".to_string(), "V".to_string())]);
+    assert_eq!(host.target, "a@h2");
+}
+
+// update_host works on the protected localhost: its target is unchanged (None),
+// the config is persisted, and a session launched on localhost picks it up.
+#[test]
+fn update_host_localhost_config_resolves_into_ipc() {
+    let (mut core, mut peer) = make_core();
+    core.update_host(
+        "localhost",
+        Some("/opt/claude".to_string()),
+        Some("module load cuda".to_string()),
+        vec![("FOO".to_string(), "bar".to_string())],
+        None,
+    )
+    .expect("update localhost");
+    // localhost target stays "this machine".
+    let local = core
+        .snapshot()
+        .hosts
+        .into_iter()
+        .find(|h| h.is_local)
+        .expect("localhost present");
+    assert_eq!(local.target, "this machine");
+
+    core.launch_session(LaunchSpec {
+        project: "p".to_string(),
+        host_id: "localhost".to_string(),
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
+        model: "claude-haiku-4-5-20251001".to_string(),
+        posture: Posture::Ask,
+        first_prompt: None,
+        mode: Default::default(),
+    })
+    .expect("launch on localhost");
+    let outbound = peer.drain_outbound();
+    let line = &outbound[0];
+    assert!(line.contains("\"claude_bin\":\"/opt/claude\""), "got: {line}");
+    assert!(line.contains("\"setup\":\"module load cuda\""), "got: {line}");
+    assert!(line.contains(r#""env":[["FOO","bar"]]"#), "got: {line}");
+    // localhost is not remote, so no host_target is injected.
+    assert!(!line.contains("host_target"), "got: {line}");
+}
+
+// update_host store-write failure surfaces.
+#[test]
+fn update_host_store_write_failure_errors() {
+    let backend = MemoryBackend::new();
+    let mut core = core_with_backend(backend.clone());
+    core.add_host("srv", "a@h", None, None, Vec::new()).expect("add");
+    backend.fail_next(BackendOp::Write);
+    assert!(
+        core.update_host("localhost", Some("x".to_string()), None, Vec::new(), None)
+            .is_err(),
+        "persist failure surfaces"
+    );
+}
+
+// update_host on an unknown id errors (Host NotFound surfaced).
+#[test]
+fn update_host_unknown_id_errors() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    assert!(
+        core.update_host("nope", None, None, Vec::new(), None).is_err(),
+        "unknown id must error"
+    );
+}
+
+// load_hosts restores a persisted localhost config onto the seeded localhost.
+#[test]
+fn load_hosts_restores_localhost_config() {
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed.upsert_host(&PersistedHost {
+        id: "localhost".to_string(),
+        label: "localhost".to_string(),
+        target: "this machine".to_string(),
+        is_local: true,
+        claude_bin: Some("genie".to_string()),
+        setup: Some("module load x".to_string()),
+        env: vec![("A".to_string(), "b".to_string())],
+    })
+    .expect("seed localhost config");
+    let mut core = core_with_backend(backend);
+    let u = core.load_hosts().expect("load_hosts");
+    let hosts = hosts_from(&u);
+    let local = hosts.iter().find(|h| h.is_local).expect("localhost");
+    assert_eq!(local.claude_bin.as_deref(), Some("genie"));
+    assert_eq!(local.setup.as_deref(), Some("module load x"));
+    assert_eq!(local.env, vec![("A".to_string(), "b".to_string())]);
+    // Still exactly one localhost (update, not duplicate-append).
+    assert_eq!(hosts.iter().filter(|h| h.is_local).count(), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -1525,6 +1784,9 @@ fn set_session_changes_updates_session_view() {
             project: "/tmp/proj-changes".to_string(),
             host_id: "local".to_string(),
             host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
             model: "m".to_string(),
             posture: Posture::Ask,
             first_prompt: None,
@@ -1665,6 +1927,9 @@ fn restart_session_emits_stop_then_launch_with_same_id() {
         project: "/tmp/proj-restart".to_string(),
         host_id: "local".to_string(),
         host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
         model: "claude-sonnet-4-6".to_string(),
         posture: Posture::Ask,
         first_prompt: None,
@@ -1733,6 +1998,9 @@ fn restart_session_without_uuid_uses_continue_mode() {
         project: "/tmp/proj-no-uuid".to_string(),
         host_id: "local".to_string(),
         host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
         model: "claude-sonnet-4-6".to_string(),
         posture: Posture::Ask,
         first_prompt: None,

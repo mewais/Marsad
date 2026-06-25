@@ -112,6 +112,19 @@ pub struct Host {
     pub is_local: bool,
     /// `false` for the localhost entry; `true` for all remote hosts.
     pub removable: bool,
+    /// The `claude` executable to run on this host (a wrapper like `genie` or an
+    /// absolute path). `None` → the default `"claude"`. Applies to local, WSL, and
+    /// SSH/plink hosts alike. `#[serde(default)]` keeps older serialized hosts working.
+    #[serde(default)]
+    pub claude_bin: Option<String>,
+    /// A shell command run BEFORE claude on this host (e.g. `module load cuda`).
+    /// `None` → no setup. `#[serde(default)]` keeps older serialized hosts working.
+    #[serde(default)]
+    pub setup: Option<String>,
+    /// Environment variables exported before claude on this host, as `(key, value)`
+    /// pairs. `#[serde(default)]` keeps older serialized hosts working.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
 }
 
 impl Host {
@@ -365,6 +378,9 @@ impl HostRegistry {
             session_count: 0,
             is_local: true,
             removable: false,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
         };
         Self {
             hosts: vec![localhost],
@@ -382,7 +398,14 @@ impl HostRegistry {
     /// # Errors
     /// - [`HostError::MalformedTarget`] — `target` is not valid `user@host`.
     /// - [`HostError::DuplicateLabel`] — a host with that label already exists.
-    pub fn add(&mut self, label: &str, target: &str) -> Result<&Host, HostError> {
+    pub fn add(
+        &mut self,
+        label: &str,
+        target: &str,
+        claude_bin: Option<String>,
+        setup: Option<String>,
+        env: Vec<(String, String)>,
+    ) -> Result<&Host, HostError> {
         // A valid target is one of:
         //   - `wsl:<distro>`  — a WSL distro (distro must be non-empty),
         //   - `user@host`     — an SSH destination,
@@ -415,6 +438,9 @@ impl HostRegistry {
             session_count: 0,
             is_local: false,
             removable: true,
+            claude_bin,
+            setup,
+            env,
         });
 
         Ok(self.hosts.last().unwrap())
@@ -448,7 +474,16 @@ impl HostRegistry {
     /// Re-insert a previously-persisted remote host (no `user@host` validation;
     /// the id is preserved). Starts `Reconnecting` until the next health check.
     /// Keeps `next_id` ahead of any `host-N` id so fresh `add`s never collide.
-    pub fn load_remote(&mut self, id: &str, label: &str, target: &str) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_remote(
+        &mut self,
+        id: &str,
+        label: &str,
+        target: &str,
+        claude_bin: Option<String>,
+        setup: Option<String>,
+        env: Vec<(String, String)>,
+    ) {
         if let Some(n) = id.strip_prefix("host-").and_then(|s| s.parse::<u64>().ok()) {
             if n >= self.next_id {
                 self.next_id = n + 1;
@@ -462,7 +497,40 @@ impl HostRegistry {
             session_count: 0,
             is_local: false,
             removable: true,
+            claude_bin,
+            setup,
+            env,
         });
+    }
+
+    /// Update an existing host's launch configuration (`claude_bin` / `setup` /
+    /// `env`), and optionally its `target`. Works for ANY host id, including the
+    /// protected localhost (whose `target` stays `"this machine"` — pass `None`
+    /// for `target` to leave it unchanged). Returns a mutable reference to the
+    /// updated host.
+    ///
+    /// # Errors
+    /// - [`HostError::NotFound`] — no host with that id.
+    pub fn update(
+        &mut self,
+        id: &str,
+        claude_bin: Option<String>,
+        setup: Option<String>,
+        env: Vec<(String, String)>,
+        target: Option<String>,
+    ) -> Result<&Host, HostError> {
+        let host = self
+            .hosts
+            .iter_mut()
+            .find(|h| h.id == id)
+            .ok_or_else(|| HostError::NotFound(id.to_string()))?;
+        host.claude_bin = claude_bin;
+        host.setup = setup;
+        host.env = env;
+        if let Some(t) = target {
+            host.target = t;
+        }
+        Ok(host)
     }
 
     /// Set a host's status directly (used to apply an externally-computed health

@@ -91,17 +91,37 @@ fn remote_spawn_cmd_is_cd_and_exec_claude() {
         "--model".to_string(),
         "haiku".to_string(),
     ];
-    let cmd = build_remote_spawn_cmd("/proj", &argv);
-    // No redirects / no shell wrapping — just cd + exec claude with quoted args.
+    let cmd = build_remote_spawn_cmd("/proj", &argv, None, &[]);
+    // No redirects / no shell wrapping — just cd + exec <bin> with quoted args.
     // The FIFO wiring is added by spawn_script (which writes this into run.sh).
-    assert_eq!(cmd, "cd '/proj' && exec claude '--model' 'haiku'");
+    assert_eq!(cmd, "cd '/proj' && exec 'claude' '--model' 'haiku'");
+}
+
+#[test]
+fn remote_spawn_cmd_with_bin_setup_and_env() {
+    // Exact output for claude_bin=genie + setup + a single env pair.
+    let argv = vec!["genie".to_string(), "--model".to_string(), "haiku".to_string()];
+    let env = vec![("A".to_string(), "b".to_string())];
+    let cmd = build_remote_spawn_cmd("/proj", &argv, Some("module load x"), &env);
+    assert_eq!(
+        cmd,
+        "module load x\nexport 'A'='b'\ncd '/proj' && exec 'genie' '--model' 'haiku'"
+    );
+}
+
+#[test]
+fn remote_spawn_cmd_empty_setup_is_skipped() {
+    // An empty setup string adds no leading line.
+    let argv = vec!["claude".to_string()];
+    let cmd = build_remote_spawn_cmd("/p", &argv, Some(""), &[]);
+    assert_eq!(cmd, "cd '/p' && exec 'claude' ");
 }
 
 #[test]
 fn remote_spawn_cmd_quotes_embedded_single_quotes() {
     // Exercises the `'\''` escape in remote_shell_quote.
     let argv = vec!["claude".to_string(), "it's".to_string()];
-    let cmd = build_remote_spawn_cmd("/p", &argv);
+    let cmd = build_remote_spawn_cmd("/p", &argv, None, &[]);
     assert!(cmd.contains(r"'it'\''s'"));
 }
 
@@ -109,10 +129,10 @@ fn remote_spawn_cmd_quotes_embedded_single_quotes() {
 fn remote_spawn_cmd_handles_no_args_and_empty_argv() {
     // argv with only "claude" → no claude args.
     let only = vec!["claude".to_string()];
-    let cmd = build_remote_spawn_cmd("/p", &only);
-    assert!(cmd.contains("&& exec claude "));
-    // Fully empty argv → get(1..) is None → unwrap_or(&[]).
+    let cmd = build_remote_spawn_cmd("/p", &only, None, &[]);
+    assert!(cmd.contains("&& exec 'claude' "));
+    // Fully empty argv → get(1..) is None → unwrap_or(&[]); bin defaults to claude.
     let empty: Vec<String> = vec![];
-    let cmd2 = build_remote_spawn_cmd("/p", &empty);
-    assert!(cmd2.contains("&& exec claude "));
+    let cmd2 = build_remote_spawn_cmd("/p", &empty, None, &[]);
+    assert!(cmd2.contains("&& exec 'claude' "));
 }
