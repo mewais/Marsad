@@ -105,11 +105,16 @@ fn spawn_script_ssh_contains_all_stages() {
         s.contains("[ -p $HOME/.marsad/sessions/marsad-a/out.fifo ] || mkfifo $HOME/.marsad/sessions/marsad-a/out.fifo"),
         "missing out.fifo mkfifo guard: {s}"
     );
-    // idempotency guard before new-session; the command runs via a LOGIN shell
-    // (`bash -lc '<cmd>'`) so tmux's non-login session shell still finds claude.
+    // The command is written VERBATIM into run.sh via a quoted heredoc...
     assert!(
-        s.contains(r#"tmux has-session -t marsad-a 2>/dev/null || tmux new-session -d -s marsad-a 'bash -lc '\''claude --resume id1'\'''"#),
-        "missing idempotency guard + login-shell new-session: {s}"
+        s.contains("cat > $HOME/.marsad/sessions/marsad-a/run.sh <<'__MARSAD_RUN__'\nclaude --resume id1\n__MARSAD_RUN__"),
+        "missing run.sh heredoc with verbatim cmd: {s}"
+    );
+    // ...then tmux runs it via a LOGIN shell (`bash -l run.sh`) with the FIFOs wired,
+    // guarded by has-session for idempotency.
+    assert!(
+        s.contains(r#"tmux has-session -t marsad-a 2>/dev/null || tmux new-session -d -s marsad-a "bash -l $HOME/.marsad/sessions/marsad-a/run.sh < $HOME/.marsad/sessions/marsad-a/in.fifo > $HOME/.marsad/sessions/marsad-a/out.fifo 2>$HOME/.marsad/sessions/marsad-a/err.log""#),
+        "missing login-shell new-session with fifo wiring: {s}"
     );
 }
 
@@ -129,16 +134,16 @@ fn spawn_script_identical_across_prefixes() {
 // ── single-quote escaping of name and cmd ──────────────────────────────────────
 
 #[test]
-fn spawn_script_escapes_single_quotes_in_cmd() {
+fn spawn_script_writes_cmd_verbatim_into_run_sh() {
     let c = RemoteTmuxContainer::new(wsl_prefix(), "~/.marsad");
-    // A cmd containing a single quote must be escaped via the '\'' idiom so the
-    // remote shell parses it as one argument.
+    // The cmd is written VERBATIM into run.sh via a quoted heredoc — its own quotes
+    // are NOT re-escaped here (the single outer quoting is done by remote_shell_argv).
     let s = c.spawn_script("n", "echo 'hi'");
-    assert!(s.contains("bash -lc"), "cmd must run via a login shell: {s}");
     assert!(
-        s.contains(r"'\''"),
-        "single quotes in cmd must be escaped via the '\\'' idiom: {s}"
+        s.contains("<<'__MARSAD_RUN__'\necho 'hi'\n__MARSAD_RUN__"),
+        "cmd must be written verbatim into the run.sh heredoc: {s}"
     );
+    assert!(s.contains("bash -l ~/.marsad/sessions/n/run.sh"), "must run via login shell: {s}");
 }
 
 // ── remote_shell_argv: ssh re-parses (single token), wsl preserves (sh -c) ──────

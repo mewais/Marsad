@@ -409,7 +409,7 @@ impl Agent {
             Some(prefix) => {
                 use marsad_lifecycle::Container as _;
                 let cmd =
-                    build_remote_spawn_cmd(REMOTE_RUNTIME_DIR, container_name, &spec.project, &argv);
+                    build_remote_spawn_cmd(&spec.project, &argv);
                 eprintln!(
                     "marsad-agent: remote spawn {container_name} on {:?} via {prefix:?}",
                     spec.host_target
@@ -1324,20 +1324,17 @@ pub fn exec_prefix_for(host_target: Option<&str>) -> Option<Vec<String>> {
     Some(argv)
 }
 
-/// Build the FIFO-wired `claude` invocation that runs inside the remote tmux
-/// session. Mirrors the local unix command but with remote paths under
-/// `remote_runtime_dir` — `<root>/sessions/<name>/{in,out}.fifo` — matching the
-/// paths `RemoteTmuxContainer` creates.
-pub fn build_remote_spawn_cmd(
-    remote_runtime_dir: &str,
-    container_name: &str,
-    project: &str,
-    argv: &[String],
-) -> String {
-    let dir = format!("{remote_runtime_dir}/sessions/{container_name}");
+/// Build the `claude` invocation written into the remote `run.sh` (which the remote
+/// tmux session runs via `bash -l run.sh < in.fifo > out.fifo 2>err.log`). Returns
+/// just `cd '<project>' && exec claude '<arg>'…` — NO redirections and NO nested
+/// shell wrapping. The FIFO wiring lives in `spawn_script`, and the command body goes
+/// into run.sh through a heredoc, so it's quoted exactly ONCE (the old approach nested
+/// `bash -lc` inside tmux inside `bash -lc` and produced mangled quoting → claude
+/// never ran).
+pub fn build_remote_spawn_cmd(project: &str, argv: &[String]) -> String {
     let claude_args = argv.get(1..).unwrap_or(&[]);
     format!(
-        "cd {} && claude {} < {dir}/in.fifo > {dir}/out.fifo 2>{dir}/err.log",
+        "cd {} && exec claude {}",
         remote_shell_quote(project),
         claude_args
             .iter()

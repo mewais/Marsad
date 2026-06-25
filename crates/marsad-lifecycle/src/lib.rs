@@ -465,28 +465,31 @@ impl RemoteTmuxContainer {
     /// - `[ -p <fifo> ] || mkfifo <fifo>` for each FIFO (no-op if present)
     /// - idempotency guard: `tmux has-session -t <name> 2>/dev/null || tmux new-session …`
     ///
-    /// `name` and `cmd` are single-quoted for the remote shell (any embedded
-    /// single quotes are escaped via the `'\''` idiom).
+    /// The session `cmd` is written VERBATIM into a `run.sh` on the remote via a quoted
+    /// heredoc, then tmux runs it with `bash -l run.sh` (a LOGIN shell, so the remote
+    /// profile/modules are sourced — tmux's own session shell is non-login, where
+    /// `claude` on HPC hosts would be "command not found"). The FIFO redirections are
+    /// applied to that `bash -l` so claude inherits them AND run.sh's own errors (cd
+    /// failure, claude-not-found) land in err.log. Crucially the command is quoted
+    /// exactly ONCE — by the outer `remote_shell_argv` — instead of the old nested
+    /// `bash -lc` inside tmux inside `bash -lc`, whose quadruple quoting was mangled so
+    /// claude never ran. Paths are `$HOME/.marsad/...` + a safe `marsad-…` name, left
+    /// unquoted so the remote shell expands `$HOME`.
     pub fn spawn_script(&self, name: &str, cmd: &str) -> String {
-        // Paths are `$HOME/.marsad/...` + a safe `marsad-…` name — left UNQUOTED so the
-        // remote shell expands `$HOME` (single-quoting it, as before, created a literal
-        // `~`/`$HOME` dir on the local DrvFs mount → mkfifo "Operation not supported").
-        // Only the user command is single-quoted (it may contain spaces); tmux runs it
-        // through a shell that expands the `$HOME` redirections inside it.
         let dir = self.remote_session_dir(name);
         let in_fifo = self.in_fifo_path(name);
         let out_fifo = self.out_fifo_path(name);
-        // tmux runs the session command in its default (NON-login) shell, so `claude`
-        // — which on HPC hosts is provided by a module/login profile, like tmux — would
-        // be "command not found". Wrap the command in a LOGIN shell so the remote
-        // profile/modules are sourced inside the tmux session too.
-        let q_cmd = sh_single_quote(&format!("bash -lc {}", sh_single_quote(cmd)));
+        let err_log = format!("{dir}/err.log");
+        let run = format!("{dir}/run.sh");
         format!(
-            "mkdir -p {dir} && \
-             {{ [ -p {in_fifo} ] || mkfifo {in_fifo}; }} && \
-             {{ [ -p {out_fifo} ] || mkfifo {out_fifo}; }} && \
-             {{ tmux has-session -t {name} 2>/dev/null || \
-             tmux new-session -d -s {name} {q_cmd}; }}"
+            "mkdir -p {dir}\n\
+             {{ [ -p {in_fifo} ] || mkfifo {in_fifo}; }}\n\
+             {{ [ -p {out_fifo} ] || mkfifo {out_fifo}; }}\n\
+             cat > {run} <<'__MARSAD_RUN__'\n\
+             {cmd}\n\
+             __MARSAD_RUN__\n\
+             tmux has-session -t {name} 2>/dev/null || \
+             tmux new-session -d -s {name} \"bash -l {run} < {in_fifo} > {out_fifo} 2>{err_log}\"\n"
         )
     }
 }

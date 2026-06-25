@@ -85,27 +85,23 @@ fn plink_without_inner_is_local() {
 // ── build_remote_spawn_cmd ──────────────────────────────────────────────────────
 
 #[test]
-fn remote_spawn_cmd_wires_remote_fifos() {
+fn remote_spawn_cmd_is_cd_and_exec_claude() {
     let argv = vec![
         "claude".to_string(),
         "--model".to_string(),
         "haiku".to_string(),
     ];
-    let cmd = build_remote_spawn_cmd("~/.marsad", "marsad-s1", "/proj", &argv);
-    assert_eq!(
-        cmd,
-        "cd '/proj' && claude '--model' 'haiku' \
-         < ~/.marsad/sessions/marsad-s1/in.fifo \
-         > ~/.marsad/sessions/marsad-s1/out.fifo \
-         2>~/.marsad/sessions/marsad-s1/err.log"
-    );
+    let cmd = build_remote_spawn_cmd("/proj", &argv);
+    // No redirects / no shell wrapping — just cd + exec claude with quoted args.
+    // The FIFO wiring is added by spawn_script (which writes this into run.sh).
+    assert_eq!(cmd, "cd '/proj' && exec claude '--model' 'haiku'");
 }
 
 #[test]
 fn remote_spawn_cmd_quotes_embedded_single_quotes() {
     // Exercises the `'\''` escape in remote_shell_quote.
     let argv = vec!["claude".to_string(), "it's".to_string()];
-    let cmd = build_remote_spawn_cmd("~/.marsad", "n", "/p", &argv);
+    let cmd = build_remote_spawn_cmd("/p", &argv);
     assert!(cmd.contains(r"'it'\''s'"));
 }
 
@@ -113,10 +109,10 @@ fn remote_spawn_cmd_quotes_embedded_single_quotes() {
 fn remote_spawn_cmd_handles_no_args_and_empty_argv() {
     // argv with only "claude" → no claude args.
     let only = vec!["claude".to_string()];
-    let cmd = build_remote_spawn_cmd("~/.marsad", "n", "/p", &only);
-    assert!(cmd.contains("&& claude  <"));
+    let cmd = build_remote_spawn_cmd("/p", &only);
+    assert!(cmd.contains("&& exec claude "));
     // Fully empty argv → get(1..) is None → unwrap_or(&[]).
     let empty: Vec<String> = vec![];
-    let cmd2 = build_remote_spawn_cmd("~/.marsad", "n", "/p", &empty);
-    assert!(cmd2.contains("&& claude  <"));
+    let cmd2 = build_remote_spawn_cmd("/p", &empty);
+    assert!(cmd2.contains("&& exec claude "));
 }
