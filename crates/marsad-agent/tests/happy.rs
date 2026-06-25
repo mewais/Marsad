@@ -241,32 +241,52 @@ fn claude_argv_resume_mode_uses_resume_id() {
     assert!(!argv.iter().any(|a| a == "--continue"));
 }
 
-/// Non-Ask postures must NOT add `--permission-prompt-tool` — the CLI's own
-/// permission mode handles approvals (acceptEdits / bypassPermissions).
+/// FullAutonomy (bypassPermissions) must NOT add `--permission-prompt-tool` —
+/// nothing is ever gated. AutoApproveSafe DOES add it (acceptEdits auto-approves
+/// edits but routes risky/MCP tools to the gate); see the dedicated test below.
 #[test]
-fn claude_argv_non_ask_omits_permission_prompt_tool() {
-    for posture in [
-        marsad_proto::Posture::AutoApproveSafe,
-        marsad_proto::Posture::FullAutonomy,
-    ] {
-        let spec = LaunchSpec {
-            project: "/home/user/myproject".to_string(),
-            host_id: "local".to_string(),
-            host_target: None,
-            claude_bin: None,
-            setup: None,
-            env: Vec::new(),
-            model: "claude-opus-4-5".to_string(),
-            posture,
-            first_prompt: None,
-            mode: Default::default(),
-        };
-        let argv = claude_argv(&spec);
-        assert!(
-            !argv.iter().any(|a| a == "--permission-prompt-tool"),
-            "non-Ask posture must omit --permission-prompt-tool; argv: {argv:?}"
-        );
-    }
+fn claude_argv_full_autonomy_omits_permission_prompt_tool() {
+    let spec = LaunchSpec {
+        project: "/home/user/myproject".to_string(),
+        host_id: "local".to_string(),
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
+        model: "claude-opus-4-5".to_string(),
+        posture: marsad_proto::Posture::FullAutonomy,
+        first_prompt: None,
+        mode: Default::default(),
+    };
+    let argv = claude_argv(&spec);
+    assert!(
+        !argv.iter().any(|a| a == "--permission-prompt-tool"),
+        "FullAutonomy must omit --permission-prompt-tool; argv: {argv:?}"
+    );
+}
+
+/// AutoApproveSafe must add `--permission-prompt-tool stdio` so risky/MCP tools
+/// surface as gates while edits auto-approve ("Gate risky actions only").
+#[test]
+fn claude_argv_auto_approve_safe_adds_permission_prompt_tool() {
+    let spec = LaunchSpec {
+        project: "/home/user/myproject".to_string(),
+        host_id: "local".to_string(),
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
+        model: "claude-opus-4-5".to_string(),
+        posture: marsad_proto::Posture::AutoApproveSafe,
+        first_prompt: None,
+        mode: Default::default(),
+    };
+    let argv = claude_argv(&spec);
+    let pos = argv.iter().position(|a| a == "--permission-prompt-tool");
+    assert!(
+        pos.is_some() && argv.get(pos.unwrap() + 1).map(String::as_str) == Some("stdio"),
+        "AutoApproveSafe must emit --permission-prompt-tool stdio; argv: {argv:?}"
+    );
 }
 
 /// `claude_argv` with `Posture::AutoApproveSafe` must emit `--permission-mode` then `acceptEdits`.

@@ -1806,12 +1806,22 @@ pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
     ];
 
     // Route tool-permission prompts to the control-protocol stream so the GUI
-    // can approve/deny them — but ONLY when the posture wants human approval.
-    // `--permission-prompt-tool stdio` is the CLI sentinel that makes claude
-    // emit `can_use_tool` control_requests on stdout (verified against the 2.1.x
-    // binary: `mx9("stdio") => createCanUseTool`). For AutoApproveSafe /
-    // FullAutonomy we leave the CLI's own permission mode in charge.
-    if matches!(spec.posture, marsad_proto::Posture::Ask) {
+    // can approve/deny them. `--permission-prompt-tool stdio` is the CLI sentinel
+    // that makes claude emit `can_use_tool` control_requests on stdout (verified
+    // against the 2.1.x binary: `mx9("stdio") => createCanUseTool`).
+    //
+    // Added for Ask AND AutoApproveSafe:
+    // - Ask (`--permission-mode default`): every action is gated.
+    // - AutoApproveSafe (`--permission-mode acceptEdits`): claude auto-approves
+    //   edits but routes the RISKY/MCP tools it can't auto-approve to this stdio
+    //   tool → they surface as Marsad gates ("Gate risky actions only"). Without
+    //   the flag, in non-interactive `--print` mode those prompts have nowhere to
+    //   go and the tool is effectively blocked — no gate ever appears.
+    // Only FullAutonomy (`bypassPermissions`) omits it: nothing is ever gated.
+    if matches!(
+        spec.posture,
+        marsad_proto::Posture::Ask | marsad_proto::Posture::AutoApproveSafe
+    ) {
         argv.push("--permission-prompt-tool".to_string());
         argv.push("stdio".to_string());
     }
@@ -2209,6 +2219,10 @@ fn spawn_session_reader(
                         ),
                     ) = marsad_proto::parse_stream_line(raw)
                     {
+                        eprintln!(
+                            "marsad-agent: session {sid} gate captured (control_request {})",
+                            cr.request_id
+                        );
                         let mut gates =
                             pending_fifo.lock().unwrap();
                         gates.insert(
