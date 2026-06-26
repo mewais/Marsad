@@ -10,6 +10,7 @@ import { useRef, useEffect } from "react";
 import { useVm } from "../../bridge/useVm";
 import { Composer } from "../../components/Composer";
 import { Markdown } from "../../components/Markdown";
+import { ToolUse } from "../../components/ToolUse";
 import {
   sendPrompt,
   interrupt,
@@ -229,49 +230,7 @@ function ResponseMsg({ text }: { text: string }) {
   );
 }
 
-function ToolCall({
-  tool,
-  args,
-  toolStatus,
-}: {
-  tool: string;
-  args?: string;
-  toolStatus?: string;
-}) {
-  return (
-    <div
-      style={{
-        marginLeft: 37,
-        display: "flex",
-        alignItems: "center",
-        gap: 9,
-        padding: "9px 12px",
-        borderRadius: 9,
-        background: "var(--panel)",
-        border: "1px solid var(--border)",
-        fontSize: "calc(14px * var(--fs,1))",
-      }}
-    >
-      <span style={{ fontSize: "calc(13.5px * var(--fs,1))", color: "var(--accent2)" }}>⚙</span>
-      <span style={{ fontWeight: 700, color: "var(--txt)" }}>{tool}</span>
-      <span
-        className="mono"
-        style={{
-          color: "var(--txt2)",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          flex: 1,
-        }}
-      >
-        {args ?? ""}
-      </span>
-      {toolStatus && (
-        <span style={{ fontSize: "calc(12.5px * var(--fs,1))", color: "var(--done)" }}>{toolStatus}</span>
-      )}
-    </div>
-  );
-}
+// ToolCall is now handled by the imported ToolUse component (see ../../components/ToolUse.tsx).
 
 function ToolResult({ text }: { text: string }) {
   return (
@@ -621,7 +580,7 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
                 return <ResponseMsg key={msg.id} text={msg.text ?? ""} />;
               case "tool":
                 return (
-                  <ToolCall
+                  <ToolUse
                     key={msg.id}
                     tool={msg.tool ?? ""}
                     args={msg.args}
