@@ -151,6 +151,15 @@ pub struct ControlRequest {
     pub tool_name: String,
     pub input: serde_json::Value,
     pub request_id: String,
+    /// Set (to the human-readable approval prompt) when this is an MCP
+    /// `elicitation` request rather than a `can_use_tool` request. An MCP server
+    /// (e.g. a sandboxed-bash server) raises an elicitation to ask the user to
+    /// approve an action; claude bridges it over the control protocol. Presence
+    /// of this field marks the request as an elicitation, which MUST be answered
+    /// with `{action: accept|decline}` — NOT the `can_use_tool` `{behavior,
+    /// updatedInput}` shape. `None` for a normal tool-permission request.
+    #[serde(default)]
+    pub elicitation_message: Option<String>,
 }
 
 /// Outbound permission answer the GUI/agent sends back to the `claude` CLI in
@@ -390,6 +399,30 @@ fn parse_control_request(value: serde_json::Value) -> StreamMsg {
                 tool_name,
                 input,
                 request_id: rid.to_string(),
+                elicitation_message: None,
+            })
+        }
+        // MCP elicitation: an MCP server asking the user to approve an action.
+        // `tool_name` is set to the server name so the gate identifies the source;
+        // `elicitation_message` carries the prompt and marks the kind.
+        (Some(rid), Some(req))
+            if req.get("subtype").and_then(|v| v.as_str()) == Some("elicitation") =>
+        {
+            let server = req
+                .get("mcp_server_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let message = req
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            StreamMsg::ControlRequest(ControlRequest {
+                tool_name: server,
+                input: serde_json::Value::Null,
+                request_id: rid.to_string(),
+                elicitation_message: Some(message),
             })
         }
         _ => StreamMsg::Unknown(value),
@@ -447,6 +480,34 @@ pub fn encode_control_response(resp: &ControlResponse) -> String {
         }
     });
     serde_json::to_string(&wire).expect("ControlResponse is always serializable")
+}
+
+/// Encode the control_response that answers an MCP `elicitation` request.
+///
+/// Unlike `can_use_tool` (which uses `{behavior, updatedInput}`), an elicitation
+/// is answered with an MCP elicitation result `{action, content}`. Verified
+/// against the CLI bundle (`handleElicitation` returns this object verbatim from
+/// `sendRequest`; the host then reads `{action, content}`):
+/// - accept: `…"response":{"action":"accept","content":{}}`
+/// - decline: `…"response":{"action":"decline"}`
+///
+/// A declined/denied gate maps to `decline` (the user said no). `content` is an
+/// empty object on accept — the matched action carries no form fields here.
+pub fn encode_control_response_elicitation(request_id: &str, accept: bool) -> String {
+    let inner = if accept {
+        serde_json::json!({ "action": "accept", "content": {} })
+    } else {
+        serde_json::json!({ "action": "decline" })
+    };
+    let wire = serde_json::json!({
+        "type": "control_response",
+        "response": {
+            "subtype": "success",
+            "request_id": request_id,
+            "response": inner,
+        }
+    });
+    serde_json::to_string(&wire).expect("elicitation response is always serializable")
 }
 
 /// Encode the `initialize` control request the agent sends to the `claude` CLI

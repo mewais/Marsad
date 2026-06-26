@@ -3,8 +3,9 @@
 /// These tests WILL fail to compile until the code-agent implements `marsad_proto`.
 /// That is the expected tests-first signal.
 use marsad_proto::{
-    encode_control_response, encode_ipc, encode_user_input, parse_ipc, parse_stream_line,
-    ContentBlock, ControlResponse, IpcMsg, ResultSubtype, StreamMsg, UserInput,
+    encode_control_response, encode_control_response_elicitation, encode_ipc, encode_user_input,
+    parse_ipc, parse_stream_line, ContentBlock, ControlResponse, IpcMsg, ResultSubtype, StreamMsg,
+    UserInput,
 };
 
 // ---------------------------------------------------------------------------
@@ -142,6 +143,46 @@ fn parse_control_request() {
             assert!(cr.input.is_object());
             assert_eq!(cr.input["command"].as_str(), Some("ls /"));
         }
+        other => panic!("expected ControlRequest, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_control_request_elicitation_carries_message_and_server() {
+    // An MCP elicitation (e.g. a sandboxed-bash server asking to approve a push)
+    // must parse to a ControlRequest with the message captured and the server as
+    // tool_name — NOT fall through to Unknown (which left sessions stuck at Working).
+    let line = r#"{"type":"control_request","request_id":"eli-1","request":{"subtype":"elicitation","mcp_server_name":"hares","message":"Allow `git push`?","mode":"form","requested_schema":{"type":"object","properties":{}}}}"#;
+    let msg = parse_stream_line(line).expect("should parse elicitation control_request");
+    match msg {
+        StreamMsg::ControlRequest(cr) => {
+            assert_eq!(cr.request_id, "eli-1");
+            assert_eq!(cr.tool_name, "hares");
+            assert_eq!(cr.elicitation_message.as_deref(), Some("Allow `git push`?"));
+        }
+        other => panic!("expected ControlRequest, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_control_request_elicitation_missing_fields_default_empty() {
+    let line =
+        r#"{"type":"control_request","request_id":"eli-2","request":{"subtype":"elicitation"}}"#;
+    let msg = parse_stream_line(line).expect("should parse");
+    match msg {
+        StreamMsg::ControlRequest(cr) => {
+            assert_eq!(cr.tool_name, "");
+            assert_eq!(cr.elicitation_message.as_deref(), Some(""));
+        }
+        other => panic!("expected ControlRequest, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_control_request_can_use_tool_has_no_elicitation_message() {
+    let line = r#"{"type":"control_request","request_id":"r","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{}}}"#;
+    match parse_stream_line(line).expect("parse") {
+        StreamMsg::ControlRequest(cr) => assert!(cr.elicitation_message.is_none()),
         other => panic!("expected ControlRequest, got {other:?}"),
     }
 }
@@ -296,6 +337,26 @@ fn encode_control_response_deny_without_reason_defaults_to_empty_message() {
     let raw: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
     assert_eq!(raw["response"]["response"]["behavior"], "deny");
     assert_eq!(raw["response"]["response"]["message"], "");
+}
+
+#[test]
+fn encode_control_response_elicitation_accept() {
+    let encoded = encode_control_response_elicitation("eli-1", true);
+    let raw: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
+    assert_eq!(raw["type"], "control_response");
+    assert_eq!(raw["response"]["subtype"], "success");
+    assert_eq!(raw["response"]["request_id"], "eli-1");
+    assert_eq!(raw["response"]["response"]["action"], "accept");
+    assert!(raw["response"]["response"]["content"].is_object());
+}
+
+#[test]
+fn encode_control_response_elicitation_decline() {
+    let encoded = encode_control_response_elicitation("eli-2", false);
+    let raw: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
+    assert_eq!(raw["response"]["request_id"], "eli-2");
+    assert_eq!(raw["response"]["response"]["action"], "decline");
+    assert!(raw["response"]["response"].get("content").is_none());
 }
 
 #[test]

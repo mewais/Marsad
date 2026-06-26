@@ -313,19 +313,31 @@ fn reduce_control_request(
     req: marsad_proto::ControlRequest,
 ) -> SessionState {
     // Build a Permission gate from the control request. The `command` field is
-    // what the UI shows as `$ …`, so it must be the ACTUAL tool invocation, not
-    // the bare tool name — a Bash gate used to read `$ Bash` because we copied
+    // what the UI shows as `$ …`, so it must be the ACTUAL invocation, not the
+    // bare tool name — a Bash gate used to read `$ Bash` because we copied
     // `tool_name` here instead of reading the command out of `input`.
-    let command = describe_tool_request(&req.tool_name, &req.input);
-    // Prefer claude's own description of the action when present (the Bash tool
-    // input carries a `description`); fall back to a generic line.
-    let explanation = req
-        .input
-        .get("description")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| format!("Tool use request: {}", req.tool_name));
+    let (command, explanation) = if let Some(message) = &req.elicitation_message {
+        // MCP elicitation (e.g. a sandboxed-bash server asking to approve a
+        // command). The prompt is free-form markdown; pull the command out of its
+        // fenced code block for the `$ …` line and keep the full prompt as the
+        // explanation so the user sees the server's full justification.
+        (
+            elicitation_command(message),
+            format!("Approval requested by MCP server: {}", req.tool_name),
+        )
+    } else {
+        let command = describe_tool_request(&req.tool_name, &req.input);
+        // Prefer claude's own description of the action when present (the Bash
+        // tool input carries a `description`); fall back to a generic line.
+        let explanation = req
+            .input
+            .get("description")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("Tool use request: {}", req.tool_name));
+        (command, explanation)
+    };
     let gate = marsad_gates::Gate::Permission {
         request_id: req.request_id.clone(),
         command,
@@ -336,6 +348,33 @@ fn reduce_control_request(
     state.gate = Some(gate);
     state.phase = Phase::Needs;
     state
+}
+
+/// Pull the command out of an MCP elicitation prompt for the gate's `$ …` line.
+///
+/// MCP approval prompts are free-form markdown; servers conventionally put the
+/// command in a fenced ```code``` block (the `hares` sandboxed-bash server does).
+/// Prefer that block; else fall back to the first non-empty line; else the whole
+/// (trimmed) message — so the gate is never blank.
+fn elicitation_command(message: &str) -> String {
+    if let Some(open) = message.find("```") {
+        // Skip the opening fence and its (optional) language tag up to the newline.
+        if let Some(nl) = message[open + 3..].find('\n') {
+            let after = &message[open + 3 + nl + 1..];
+            if let Some(close) = after.find("```") {
+                let block = after[..close].trim();
+                if !block.is_empty() {
+                    return block.to_string();
+                }
+            }
+        }
+    }
+    message
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or_else(|| message.trim())
+        .to_string()
 }
 
 /// Render a human-readable one-line command for a `can_use_tool` permission gate.

@@ -161,6 +161,10 @@ impl fmt::Debug for SessionRunCmdsWrap {
 struct PendingGate {
     request_id: String,
     input: serde_json::Value,
+    /// True if this gate answers an MCP `elicitation` request (answered with
+    /// `{action}`) rather than a `can_use_tool` request (`{behavior,
+    /// updatedInput}`). See `handle_answer_gate`.
+    elicitation: bool,
 }
 
 /// Per-session pending-gate registry. Shared (Arc) between the FIFO reader
@@ -1006,13 +1010,21 @@ impl Agent {
             };
 
             if let Some(gate) = pending {
-                let resp = marsad_proto::ControlResponse {
-                    request_id: gate.request_id,
-                    allow,
-                    deny_reason,
-                    updated_input: if allow { Some(gate.input) } else { None },
+                // An MCP elicitation is answered with `{action: accept|decline}`,
+                // NOT the can_use_tool `{behavior, updatedInput}` shape — sending
+                // the wrong shape leaves claude blocked (the MCP host can't read
+                // the result). Branch on the kind captured when the gate arrived.
+                let encoded = if gate.elicitation {
+                    marsad_proto::encode_control_response_elicitation(&gate.request_id, allow)
+                } else {
+                    let resp = marsad_proto::ControlResponse {
+                        request_id: gate.request_id,
+                        allow,
+                        deny_reason,
+                        updated_input: if allow { Some(gate.input) } else { None },
+                    };
+                    marsad_proto::encode_control_response(&resp)
                 };
-                let encoded = marsad_proto::encode_control_response(&resp);
                 let writers = self.session_writers.0.lock().unwrap();
                 if let Some(shared) = writers.get(session_id) {
                     let mut writer = shared.lock().unwrap();
@@ -2600,6 +2612,9 @@ fn spawn_session_reader(
                             PendingGate {
                                 request_id: cr.request_id,
                                 input: cr.input,
+                                elicitation: cr
+                                    .elicitation_message
+                                    .is_some(),
                             },
                         );
                     }

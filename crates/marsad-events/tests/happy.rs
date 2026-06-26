@@ -203,6 +203,82 @@ fn unknown_tool_gate_falls_back_to_tool_name() {
     assert_eq!(command, "SomeMcpTool");
 }
 
+fn elicitation_request_json(request_id: &str, server: &str, message: &str) -> String {
+    let msg = serde_json::Value::String(message.to_string()).to_string();
+    format!(
+        r#"{{"type":"control_request","request_id":"{request_id}","request":{{"subtype":"elicitation","mcp_server_name":"{server}","message":{msg},"mode":"form","requested_schema":{{"type":"object","properties":{{}}}}}}}}"#
+    )
+}
+
+#[test]
+fn elicitation_gate_extracts_fenced_command_and_keeps_message() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let message = "**Command requires approval**\n\nPattern matched: `*git push*`\n\n```\ncd /proj && git push\n```\n\nAllow it to run?";
+    let s1 = reduce(
+        s0,
+        stream(&elicitation_request_json("eli-1", "hares", message)),
+    );
+    assert_eq!(s1.phase, Phase::Needs);
+    let (command, explanation) = gate_command_explanation(&s1);
+    assert_eq!(command, "cd /proj && git push");
+    assert_eq!(explanation, "Approval requested by MCP server: hares");
+}
+
+#[test]
+fn elicitation_gate_without_fence_uses_first_nonempty_line() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(
+        s0,
+        stream(&elicitation_request_json("eli-2", "srv", "\n  Approve writing to disk?  \nmore")),
+    );
+    let (command, _) = gate_command_explanation(&s1);
+    assert_eq!(command, "Approve writing to disk?");
+}
+
+#[test]
+fn elicitation_gate_empty_message_is_blank_not_panicking() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(s0, stream(&elicitation_request_json("eli-3", "srv", "")));
+    let (command, _) = gate_command_explanation(&s1);
+    assert_eq!(command, "");
+}
+
+#[test]
+fn elicitation_gate_unterminated_fence_falls_back_to_line() {
+    // Opening fence but no closing fence → fall through to first non-empty line.
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(
+        s0,
+        stream(&elicitation_request_json("eli-4", "srv", "Run this?\n```\nrm -rf x")),
+    );
+    let (command, _) = gate_command_explanation(&s1);
+    assert_eq!(command, "Run this?");
+}
+
+#[test]
+fn elicitation_gate_fence_with_only_whitespace_falls_back() {
+    // Fenced block present but empty/whitespace → fall through to first line.
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(
+        s0,
+        stream(&elicitation_request_json("eli-5", "srv", "Header\n```\n   \n```")),
+    );
+    let (command, _) = gate_command_explanation(&s1);
+    assert_eq!(command, "Header");
+}
+
+#[test]
+fn elicitation_gate_fence_without_following_newline_falls_back() {
+    // An opening ``` with no newline after it (no real block) → first-line fallback.
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(
+        s0,
+        stream(&elicitation_request_json("eli-6", "srv", "Allow it? ```inline")),
+    );
+    let (command, _) = gate_command_explanation(&s1);
+    assert_eq!(command, "Allow it? ```inline");
+}
+
 #[test]
 fn empty_primary_arg_falls_back_to_tool_name() {
     // A present-but-empty primary arg (e.g. file_path:"") must not produce a
