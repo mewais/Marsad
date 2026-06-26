@@ -291,6 +291,8 @@ struct SessionRecord {
     transcript: Vec<marsad_events::TranscriptEntry>,
     /// Assistant message ids already appended to the transcript (dedup).
     seen_msg_ids: std::collections::HashSet<String>,
+    /// User-supplied display name. `None` → derived from the project basename.
+    name: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +520,14 @@ impl Core {
             state.phase = Phase::Stale;
             state.model = Some(s.model.clone());
             state.session_id = s.session_id.clone();
+            // Restore the custom name: PersistedSession.name is the marsad id
+            // when no custom name was set (agent default). Treat that as None so
+            // the view falls back to the project basename.
+            let restored_name = if s.name != s.id {
+                Some(s.name.clone())
+            } else {
+                None
+            };
             self.session_order.push(s.id.clone());
             self.sessions.insert(
                 s.id.clone(),
@@ -528,6 +538,7 @@ impl Core {
                     changes: Vec::new(),
                     transcript,
                     seen_msg_ids: std::collections::HashSet::new(),
+                    name: restored_name,
                 },
             );
             let sv = self.make_session_view(&s.id, self.sessions.get(&s.id).unwrap());
@@ -891,6 +902,17 @@ impl Core {
             }
             LaunchMode::Fresh => {}
         }
+        // Forward the custom name so the agent persists it. Trim and treat
+        // whitespace-only as absent (pass nothing rather than a blank name).
+        let custom_name: Option<String> = spec
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        if let Some(ref n) = custom_name {
+            obj.insert("name".to_string(), Value::String(n.clone()));
+        }
         let line = serde_json::to_string(&val).unwrap();
 
         self.send_raw_line(&line)?;
@@ -925,6 +947,7 @@ impl Core {
                 changes: Vec::new(),
                 transcript,
                 seen_msg_ids: std::collections::HashSet::new(),
+                name: custom_name,
             },
         );
 
@@ -952,6 +975,8 @@ impl Core {
         let project = self.sessions[id].project.clone();
         let host_id = self.sessions[id].host_id.clone();
         let claude_uuid = self.sessions[id].state.session_id.clone();
+        // Preserve any custom name so a restart doesn't lose it.
+        let existing_name = self.sessions[id].name.clone();
 
         // 1. Stop the running claude process.
         self.send_ipc(&IpcMsg::StopSession {
@@ -981,6 +1006,7 @@ impl Core {
             claude_bin: None,
             setup: None,
             env: Vec::new(),
+            name: existing_name,
         };
         self.launch_session_with_id(id.to_string(), spec)?;
 
@@ -1362,7 +1388,10 @@ impl Core {
         let s = &record.state;
         SessionView {
             id: id.to_string(),
-            name: session_display_name(&record.project, id),
+            name: record
+                .name
+                .clone()
+                .unwrap_or_else(|| session_display_name(&record.project, id)),
             host_id: record.host_id.clone(),
             project: record.project.clone(),
             branch: String::new(),

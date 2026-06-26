@@ -65,6 +65,7 @@ export function NewSession() {
 
   const open = state.screen === "new-session";
 
+  const [name, setName] = useState("");
   const [project, setProject] = useState("");
   const [hostId, setHostId] = useState(
     hosts.find((h) => h.is_local)?.id ?? hosts[0]?.id ?? "local"
@@ -161,6 +162,7 @@ export function NewSession() {
         model,
         posture,
         first_prompt: firstPrompt.trim() || undefined,
+        name: name.trim() || undefined,
         ...resumeArgs,
       });
       // Navigate to the new session (closes this modal).
@@ -259,6 +261,38 @@ export function NewSession() {
           background: "var(--panel)",
         }}
       >
+        {/* ---- Session name (optional) ---- */}
+        <div>
+          <label
+            htmlFor="ns-name"
+            style={{ ...sectionLabel, display: "block" }}
+          >
+            Name{" "}
+            <span style={{ opacity: 0.6, fontWeight: 500, textTransform: "none" }}>
+              (optional)
+            </span>
+          </label>
+          <input
+            id="ns-name"
+            data-testid="ns-name-input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Defaults to the project directory name"
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              background: "var(--panel2)",
+              border: "1px solid var(--border2)",
+              borderRadius: 9,
+              padding: "11px 13px",
+              color: "var(--txt)",
+              fontFamily: "inherit",
+              fontSize: "calc(15px * var(--fs,1))",
+              outline: "none",
+            }}
+          />
+        </div>
+
         {/* ---- Project directory ---- */}
         <div>
           <div style={sectionLabel}>Project directory</div>

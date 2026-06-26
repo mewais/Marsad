@@ -231,6 +231,11 @@ pub struct LaunchSpec {
     /// pairs. `#[serde(default)]` keeps older serialized specs working.
     #[serde(default)]
     pub env: Vec<(String, String)>,
+    /// Optional human-readable display name for the session. `None` → name is
+    /// derived from the project directory basename. `#[serde(default)]` keeps
+    /// older serialized specs (no field) working.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

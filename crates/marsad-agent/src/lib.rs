@@ -674,10 +674,20 @@ impl Agent {
 
         self.spawn_container(&container_name, &spec)?;
 
+        // Use a custom name when provided (non-empty after trimming); otherwise
+        // fall back to the session id (the default the agent has always used).
+        let persisted_name = spec
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| session_id.clone());
+
         let persisted = marsad_store::PersistedSession {
             id: session_id.clone(),
             session_id: None,
-            name: session_id.clone(),
+            name: persisted_name,
             host_id: spec.host_id.clone(),
             host_target: spec.host_target.clone(),
             claude_bin: spec.claude_bin.clone(),
@@ -751,6 +761,7 @@ impl Agent {
             claude_bin: msg.claude_bin,
             setup: msg.setup,
             env: msg.env,
+            name: msg.name,
         };
         // Reuse the caller's session id when supplied (Core generates it so it can
         // navigate immediately and recognise the session's events); otherwise
@@ -802,6 +813,13 @@ impl Agent {
             _ => marsad_proto::LaunchMode::Continue,
         };
 
+        // Recover any custom name: PersistedSession.name is the marsad id when no
+        // custom name was set (agent default), so treat it as None in that case.
+        let persisted_name = if persisted.name != persisted.id {
+            Some(persisted.name.clone())
+        } else {
+            None
+        };
         let spec = marsad_proto::LaunchSpec {
             project: persisted.project,
             host_id: persisted.host_id,
@@ -814,6 +832,7 @@ impl Agent {
             claude_bin: persisted.claude_bin,
             setup: persisted.setup,
             env: persisted.env,
+            name: persisted_name,
         };
         // Reuse the SAME marsad id so the resumed session re-attaches to the
         // existing UI row. Using a fresh id (the old bug) meant the relaunched
@@ -2091,6 +2110,11 @@ struct LaunchSessionMsg {
     env: Vec<(String, String)>,
     model: String,
     first_prompt: Option<String>,
+    /// Optional human-readable display name for the session; `None` → derived
+    /// from the project directory basename. `#[serde(default)]` keeps older
+    /// callers (no field) working.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 /// Spawn the per-session reader thread: connect the transport (local FIFO/pipe, or a

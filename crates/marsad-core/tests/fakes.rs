@@ -86,6 +86,7 @@ fn scripted_full_happy_path_session() {
             posture: Posture::Ask,
             first_prompt: Some("Add a health check endpoint".to_string()),
             mode: Default::default(),
+            name: None,
         })
         .expect("launch_session");
 
@@ -255,6 +256,7 @@ fn scripted_gate_rejection_sends_deny_ipc() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -310,6 +312,7 @@ fn scripted_agent_error_result_sets_error_phase() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
 
@@ -358,6 +361,7 @@ fn scripted_send_prompt_during_live_session() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -397,6 +401,7 @@ fn scripted_interrupt_session() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -436,6 +441,7 @@ fn scripted_two_concurrent_sessions_no_cross_routing() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch alpha");
 
@@ -451,6 +457,7 @@ fn scripted_two_concurrent_sessions_no_cross_routing() {
             posture: Posture::AutoApproveSafe,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch beta");
 
@@ -519,6 +526,7 @@ fn scripted_slash_compact_dispatches_ipc() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -555,6 +563,7 @@ fn scripted_idempotent_answer_gate_end_to_end() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -625,6 +634,7 @@ fn scripted_stop_session_after_launch() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -663,6 +673,7 @@ fn scripted_resume_then_attach() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound();

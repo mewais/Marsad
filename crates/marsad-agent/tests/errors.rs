@@ -166,6 +166,7 @@ fn launch_spawn_failure_returns_spawn_error() {
         posture: marsad_proto::Posture::Ask,
         first_prompt: None,
         mode: Default::default(),
+        name: None,
     };
 
     // NOTE(test-agent): We need a FakeContainer configured to fail spawns.
@@ -546,6 +547,7 @@ fn launch_spawn_failure_deterministic_container_name() {
         posture: marsad_proto::Posture::Ask,
         first_prompt: None,
         mode: Default::default(),
+        name: None,
     };
     match agent.launch(spec) {
         Err(AgentError::Spawn(_)) => {}
@@ -590,6 +592,7 @@ fn launch_upsert_failure_returns_lifecycle_error() {
         posture: marsad_proto::Posture::Ask,
         first_prompt: None,
         mode: Default::default(),
+        name: None,
     };
     match agent.launch(spec) {
         Err(AgentError::Lifecycle(_)) => {}

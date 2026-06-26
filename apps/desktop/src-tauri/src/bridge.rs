@@ -76,6 +76,7 @@ pub fn launch_session(
     first_prompt: Option<String>,
     resume_session_id: Option<String>,
     continue_recent: Option<bool>,
+    name: Option<String>,
 ) -> Result<String, String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     match &mut *guard {
@@ -107,6 +108,7 @@ pub fn launch_session(
                 posture: posture_val,
                 first_prompt,
                 mode,
+                name,
             };
             core.launch_session(spec).map_err(map_err)
         }

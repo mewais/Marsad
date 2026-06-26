@@ -102,6 +102,7 @@ export async function launchSession(args: {
   first_prompt?: string;
   resume_session_id?: string;
   continue_recent?: boolean;
+  name?: string;
 }): Promise<string> {
   if (!isTauri()) return "mock-session-new";
   const invoke = await getInvoke();

@@ -101,6 +101,7 @@ fn launch_session_returns_id_and_sends_ipc() {
         posture: Posture::Ask,
         first_prompt: None,
         mode: Default::default(),
+        name: None,
     };
     let id = core
         .launch_session(spec)
@@ -149,6 +150,7 @@ fn launch_session_on_remote_host_forwards_host_target() {
         posture: Posture::Ask,
         first_prompt: None,
         mode: Default::default(),
+        name: None,
     })
     .expect("launch on remote host");
 
@@ -175,6 +177,7 @@ fn launch_session_forwards_mode_and_posture() {
         posture: Posture::Ask,
         first_prompt: None,
         mode: LaunchMode::Continue,
+        name: None,
     })
     .expect("launch continue");
     let out = peer.drain_outbound();
@@ -200,6 +203,7 @@ fn launch_session_forwards_mode_and_posture() {
         posture: Posture::FullAutonomy,
         first_prompt: None,
         mode: LaunchMode::Resume("uuid-7".to_string()),
+        name: None,
     })
     .expect("launch resume");
     let out2 = peer.drain_outbound();
@@ -228,6 +232,7 @@ fn launch_session_with_first_prompt_includes_prompt_in_ipc() {
         posture: Posture::AutoApproveSafe,
         first_prompt: Some("Hello agent".to_string()),
         mode: Default::default(),
+        name: None,
     };
     let _id = core.launch_session(spec).expect("launch");
     let outbound = peer.drain_outbound();
@@ -264,6 +269,7 @@ fn resume_session_sends_ipc() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound(); // consume launch IPC
@@ -301,6 +307,7 @@ fn attach_session_sends_ipc() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -338,6 +345,7 @@ fn stop_session_sends_ipc() {
             posture: Posture::FullAutonomy,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -375,6 +383,7 @@ fn send_prompt_sends_ipc() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -412,6 +421,7 @@ fn interrupt_sends_ipc() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -448,6 +458,7 @@ fn answer_gate_sends_ipc_and_routes_to_one_session() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -497,6 +508,7 @@ fn run_slash_sends_ipc() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -537,6 +549,7 @@ fn set_workspace_sends_ipc() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -568,6 +581,7 @@ fn on_agent_line_init_yields_session_vm_update() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
 
@@ -603,6 +617,7 @@ fn session_name_derives_from_project_basename_with_id_fallback() {
                 posture: Posture::Ask,
                 first_prompt: None,
                 mode: Default::default(),
+                name: None,
             })
             .expect("launch");
         let updates = core
@@ -642,6 +657,7 @@ fn on_agent_line_assistant_yields_session_vm_update() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
 
@@ -674,6 +690,7 @@ fn on_agent_line_control_request_yields_session_needs_update() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
 
@@ -705,6 +722,7 @@ fn on_agent_line_result_success_yields_done_update() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
 
@@ -737,6 +755,7 @@ fn on_agent_line_full_lifecycle_produces_overview_updates() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         })
         .expect("launch");
 
@@ -836,6 +855,7 @@ fn launch_spec_fields_all_postures() {
             posture,
             first_prompt: Some("hi".to_string()),
             mode: Default::default(),
+            name: None,
         };
         let _ = spec;
     }
@@ -894,6 +914,7 @@ fn git_changes_flow_into_session_view_after_tool_runs() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: LaunchMode::Fresh,
+            name: None,
         })
         .expect("launch");
 
@@ -975,6 +996,7 @@ fn launch_t(core: &mut Core, first_prompt: Option<&str>, mode: LaunchMode) -> St
         posture: Posture::Ask,
         first_prompt: first_prompt.map(|s| s.to_string()),
         mode,
+        name: None,
     })
     .expect("launch")
 }
@@ -1314,6 +1336,7 @@ fn add_host_with_launch_config_resolves_into_ipc() {
         posture: Posture::Ask,
         first_prompt: None,
         mode: Default::default(),
+        name: None,
     })
     .expect("launch on remote host");
 
@@ -1348,6 +1371,7 @@ fn launch_spec_env_overrides_host_env() {
         posture: Posture::Ask,
         first_prompt: None,
         mode: Default::default(),
+        name: None,
     })
     .expect("launch with explicit env");
     let outbound = peer.drain_outbound();
@@ -1411,6 +1435,7 @@ fn update_host_localhost_config_resolves_into_ipc() {
         posture: Posture::Ask,
         first_prompt: None,
         mode: Default::default(),
+        name: None,
     })
     .expect("launch on localhost");
     let outbound = peer.drain_outbound();
@@ -1791,6 +1816,7 @@ fn set_session_changes_updates_session_view() {
             posture: Posture::Ask,
             first_prompt: None,
             mode: LaunchMode::Fresh,
+            name: None,
         })
         .expect("launch");
 
@@ -1934,6 +1960,7 @@ fn restart_session_emits_stop_then_launch_with_same_id() {
         posture: Posture::Ask,
         first_prompt: None,
         mode: LaunchMode::Fresh,
+        name: None,
     };
     let id = core.launch_session(spec).expect("launch");
     let _ = peer.drain_outbound(); // consume the initial LaunchSession IPC
@@ -2005,6 +2032,7 @@ fn restart_session_without_uuid_uses_continue_mode() {
         posture: Posture::Ask,
         first_prompt: None,
         mode: LaunchMode::Fresh,
+        name: None,
     };
     let id = core.launch_session(spec).expect("launch");
     let _ = peer.drain_outbound();
@@ -2412,5 +2440,91 @@ fn inject_shell_output_unknown_session_returns_unknown_session_error() {
     assert!(
         matches!(err, CoreError::UnknownSession(_)),
         "expected UnknownSession, got {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Optional session name — custom name field on LaunchSpec
+// ---------------------------------------------------------------------------
+
+/// A session launched with a non-empty `name` forwards it in the IPC JSON and
+/// uses it as the session's display name in the view.
+#[test]
+fn launch_session_with_custom_name_uses_name_in_view() {
+    let (mut core, mut peer) = make_core();
+    let spec = LaunchSpec {
+        project: "/work/mewais/Marsad".to_string(),
+        host_id: "local".to_string(),
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
+        model: "claude-opus-4-5".to_string(),
+        posture: Posture::Ask,
+        first_prompt: None,
+        mode: Default::default(),
+        name: Some("My Named Session".to_string()),
+    };
+    let id = core.launch_session(spec).expect("launch_session with name");
+
+    // The outbound IPC JSON must include the name field.
+    let outbound = peer.drain_outbound();
+    let line = outbound.first().expect("must emit IPC line");
+    assert!(
+        line.contains("\"name\":\"My Named Session\""),
+        "IPC must carry the custom name; got: {line}"
+    );
+
+    // The session view uses the custom name, not the project basename.
+    let snap = core.snapshot();
+    let sv = snap
+        .sessions
+        .iter()
+        .find(|s| s.id == id)
+        .expect("session in snapshot");
+    assert_eq!(
+        sv.name, "My Named Session",
+        "SessionView.name must reflect the custom name"
+    );
+}
+
+/// A session persisted with a real custom name (name != id) is restored with
+/// that name by `load_sessions`, covering the `Some(s.name.clone())` branch.
+#[test]
+fn load_sessions_restores_custom_name() {
+    use marsad_store::{MemoryBackend, PersistedSession, Store};
+
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+
+    // Persist a session whose name differs from its id (= a real custom name).
+    seed.upsert_session(&PersistedSession {
+        id: "session-named-1".to_string(),
+        session_id: None,
+        name: "Custom Display Name".to_string(), // differs from id
+        host_id: "local".to_string(),
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
+        project: "/work/proj".to_string(),
+        branch: "main".to_string(),
+        model: "claude-opus-4-8".to_string(),
+        last_phase: "Working".to_string(),
+    })
+    .expect("seed named session");
+
+    let mut core = core_with_backend(backend);
+    core.load_sessions().expect("load_sessions");
+
+    let snap = core.snapshot();
+    let sv = snap
+        .sessions
+        .iter()
+        .find(|s| s.id == "session-named-1")
+        .expect("restored named session present");
+    assert_eq!(
+        sv.name, "Custom Display Name",
+        "load_sessions must restore the custom name as the display name"
     );
 }

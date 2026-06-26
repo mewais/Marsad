@@ -47,6 +47,7 @@ fn spec(project: &str, posture: Posture) -> LaunchSpec {
         posture,
         first_prompt: None,
         mode: Default::default(),
+        name: None,
     }
 }
 

@@ -46,6 +46,7 @@ fn basic_launch_spec() -> LaunchSpec {
         posture: marsad_proto::Posture::Ask,
         first_prompt: None,
         mode: Default::default(),
+        name: None,
     }
 }
 
@@ -61,6 +62,7 @@ fn launch_spec_with_prompt(prompt: &str) -> LaunchSpec {
         posture: marsad_proto::Posture::Ask,
         first_prompt: Some(prompt.to_string()),
         mode: Default::default(),
+        name: None,
     }
 }
 
@@ -263,6 +265,7 @@ fn claude_argv_all_postures_add_permission_prompt_tool() {
             posture,
             first_prompt: None,
             mode: Default::default(),
+            name: None,
         };
         let argv = claude_argv(&spec);
         let pos = argv.iter().position(|a| a == "--permission-prompt-tool");
@@ -287,6 +290,7 @@ fn claude_argv_permission_mode_auto_approve_safe() {
         posture: marsad_proto::Posture::AutoApproveSafe,
         first_prompt: None,
         mode: Default::default(),
+        name: None,
     };
     let argv = claude_argv(&spec);
     let idx = argv
@@ -314,6 +318,7 @@ fn claude_argv_permission_mode_full_autonomy() {
         posture: marsad_proto::Posture::FullAutonomy,
         first_prompt: None,
         mode: Default::default(),
+        name: None,
     };
     let argv = claude_argv(&spec);
     let idx = argv
