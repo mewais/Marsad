@@ -10,6 +10,7 @@ import { useTheme } from "../theme/ThemeProvider";
 import { Badge } from "./Badge";
 import { StateDot } from "./StateDot";
 import { Chip } from "./Chip";
+import { Watchtower } from "./Watchtower";
 
 // ---------------------------------------------------------------------------
 // Colour helpers
@@ -214,7 +215,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
               fontSize: "calc(18px * var(--fs,1))",
             }}
           >
-            M
+            <Watchtower size={17} />
           </div>
           <div
             style={{
