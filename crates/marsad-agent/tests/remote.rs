@@ -86,6 +86,36 @@ fn plink_without_inner_is_local() {
     assert_eq!(exec_prefix_for(Some("plink:")), None);
 }
 
+#[test]
+fn wslssh_target_builds_wsl_ssh_prefix_with_controlmaster() {
+    // `wslssh:<distro>:<target>` → ssh INSIDE the distro, with ControlMaster ALWAYS
+    // on (the ssh is Linux-in-WSL), so MFA hosts reuse one interactive login.
+    let p = exec_prefix_for(Some("wslssh:Ubuntu:agent33")).expect("wslssh prefix");
+    assert_eq!(p[0], "wsl.exe");
+    assert_eq!(p[1], "-d");
+    assert_eq!(p[2], "Ubuntu");
+    assert_eq!(p[3], "ssh");
+    assert_eq!(p.last().unwrap(), "agent33");
+    assert!(p.contains(&"ControlMaster=auto".to_string()), "{p:?}");
+    assert!(p.contains(&"ControlPath=~/.ssh/marsad-cm-%r@%h:%p".to_string()), "{p:?}");
+    assert!(p.contains(&"BatchMode=yes".to_string()), "{p:?}");
+}
+
+#[test]
+fn wslssh_target_preserves_target_with_user_and_at() {
+    // The target after the second colon is kept verbatim (e.g. `user@host`).
+    let p = exec_prefix_for(Some("wslssh:Debian:me@h.example.com")).expect("wslssh prefix");
+    assert_eq!(p[2], "Debian");
+    assert_eq!(p.last().unwrap(), "me@h.example.com");
+}
+
+#[test]
+fn wslssh_missing_distro_or_target_is_local() {
+    assert_eq!(exec_prefix_for(Some("wslssh:Ubuntu:")), None); // no target
+    assert_eq!(exec_prefix_for(Some("wslssh::agent33")), None); // no distro
+    assert_eq!(exec_prefix_for(Some("wslssh:")), None); // neither
+}
+
 // ── build_remote_spawn_cmd ──────────────────────────────────────────────────────
 
 #[test]

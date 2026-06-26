@@ -1787,6 +1787,40 @@ pub fn exec_prefix_for(host_target: Option<&str>) -> Option<Vec<String>> {
         }
         return Some(vec!["wsl.exe".to_string(), "-d".to_string(), distro.to_string()]);
     }
+    // WSL-routed SSH: run `ssh` INSIDE a WSL distro so it gets real ControlMaster
+    // (interactive MFA login once → automated connections reuse the master socket),
+    // using THAT distro's `~/.ssh` config + keys. This is the Windows answer for
+    // Duo/MFA hosts when the user's SSH lives in WSL — native `ssh.exe` can't do
+    // ControlMaster. Format: `wslssh:<distro>:<ssh-target>` (the target is an alias
+    // or `user@host` resolved by the distro's ssh, NOT by Windows). ControlMaster
+    // is ALWAYS applied here (the ssh binary is Linux-in-WSL, where it works),
+    // unlike the native-ssh branch which gates it on `cfg(unix)`.
+    if let Some(rest) = t.strip_prefix("wslssh:") {
+        let mut parts = rest.splitn(2, ':');
+        let distro = parts.next().unwrap_or("");
+        let target = parts.next().unwrap_or("");
+        if distro.is_empty() || target.is_empty() {
+            return None;
+        }
+        let opt = |k: &str| ["-o".to_string(), k.to_string()];
+        let mut argv = vec![
+            "wsl.exe".to_string(),
+            "-d".to_string(),
+            distro.to_string(),
+            "ssh".to_string(),
+            "-T".to_string(),
+        ];
+        argv.extend(opt("BatchMode=yes"));
+        argv.extend(opt("ConnectTimeout=10"));
+        argv.extend(opt("ServerAliveInterval=30"));
+        argv.extend(opt("ServerAliveCountMax=3"));
+        argv.extend(opt("TCPKeepAlive=yes"));
+        argv.extend(opt("ControlMaster=auto"));
+        argv.extend(opt("ControlPath=~/.ssh/marsad-cm-%r@%h:%p"));
+        argv.extend(opt("ControlPersist=600"));
+        argv.push(target.to_string());
+        return Some(argv);
+    }
     // PuTTY plink with SSH connection sharing — the Windows alternative to
     // ControlMaster (which `ssh.exe` can't do: `getsockname failed: Not a socket`).
     // The interactive login (bridge.rs) runs `plink -share <inner>` and becomes the

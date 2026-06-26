@@ -625,6 +625,32 @@ fn interactive_ssh_args(target: &str) -> Vec<String> {
             inner.to_string(),
         ];
     }
+    // WSL-routed SSH: open the interactive login INSIDE the distro (`wsl ssh …`)
+    // with ControlMaster, so completing the Duo/MFA prompt here establishes the
+    // master socket that the agent's automated `wsl ssh` connections then reuse.
+    // No -T / no BatchMode: the user needs a TTY to answer the prompt.
+    if let Some(rest) = target.strip_prefix("wslssh:") {
+        let mut parts = rest.splitn(2, ':');
+        let distro = parts.next().unwrap_or("");
+        let inner = parts.next().unwrap_or("");
+        if !distro.is_empty() && !inner.is_empty() {
+            return vec![
+                "wsl.exe".to_string(),
+                "-d".to_string(),
+                distro.to_string(),
+                "ssh".to_string(),
+                "-o".to_string(),
+                "ControlMaster=auto".to_string(),
+                "-o".to_string(),
+                "ControlPath=~/.ssh/marsad-cm-%r@%h:%p".to_string(),
+                "-o".to_string(),
+                "ControlPersist=600".to_string(),
+                "-o".to_string(),
+                "ServerAliveInterval=30".to_string(),
+                inner.to_string(),
+            ];
+        }
+    }
     let mut args = vec!["ssh".to_string()];
     // SSH connection multiplexing (ControlMaster/ControlPath/ControlPersist) lets an
     // interactive login's master socket be reused by later headless connections — but
