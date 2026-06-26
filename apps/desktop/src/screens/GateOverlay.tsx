@@ -483,19 +483,16 @@ export function GateOverlay() {
                       const selectedLabels = multiSelected[q.question] ?? [];
                       const isSelected = selectedLabels.includes(opt.label);
 
+                      // Fire-and-close immediately ONLY for a lone single-select
+                      // question. With multiple questions (or multi-select), an
+                      // immediate send would submit before the other questions are
+                      // answered — so accumulate and require the Submit button.
+                      const immediate =
+                        !q.multi_select && questionData.questions.length === 1;
+
                       const handleOptionClick = async () => {
                         if (!selectedSession || !questionData) return;
-                        if (q.multi_select) {
-                          // Toggle selection
-                          setMultiSelected((prev) => {
-                            const cur = prev[q.question] ?? [];
-                            const next = cur.includes(opt.label)
-                              ? cur.filter((l) => l !== opt.label)
-                              : [...cur, opt.label];
-                            return { ...prev, [q.question]: next };
-                          });
-                        } else {
-                          // Single-select: answer immediately
+                        if (immediate) {
                           setBusy(true);
                           await answerQuestion({
                             session_id: selectedSession.id,
@@ -504,7 +501,21 @@ export function GateOverlay() {
                           });
                           setBusy(false);
                           close();
+                          return;
                         }
+                        setMultiSelected((prev) => {
+                          const cur = prev[q.question] ?? [];
+                          let next: string[];
+                          if (q.multi_select) {
+                            next = cur.includes(opt.label)
+                              ? cur.filter((l) => l !== opt.label)
+                              : [...cur, opt.label];
+                          } else {
+                            // Single-select within a multi-question gate = radio.
+                            next = [opt.label];
+                          }
+                          return { ...prev, [q.question]: next };
+                        });
                       };
 
                       return (
@@ -723,8 +734,11 @@ export function GateOverlay() {
                   >
                     Skip
                   </button>
-                  {/* Submit button for multi-select questions */}
-                  {questionData?.questions.some((q) => q.multi_select) && (
+                  {/* Submit button — shown whenever immediate fire-on-click does
+                      NOT apply: multiple questions, or any multi-select question. */}
+                  {questionData &&
+                    (questionData.questions.length > 1 ||
+                      questionData.questions.some((q) => q.multi_select)) && (
                     <button
                       data-testid="question-submit-btn"
                       onClick={async () => {
@@ -732,8 +746,8 @@ export function GateOverlay() {
                         setBusy(true);
                         const answers: Record<string, string> = {};
                         for (const q of questionData.questions) {
-                          if (q.multi_select) {
-                            const sel = multiSelected[q.question] ?? [];
+                          const sel = multiSelected[q.question] ?? [];
+                          if (sel.length > 0) {
                             answers[q.question] = sel.join(", ");
                           }
                         }
