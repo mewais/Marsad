@@ -188,12 +188,20 @@ fn parse_remote_session_list(stdout: &str) -> Vec<SessionSummary> {
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn resume_session(state: State<'_, ManagedState>, id: String) -> Result<(), String> {
-    let mut guard = state.lock().map_err(|e| e.to_string())?;
-    match &mut *guard {
-        AppState::Live(core) => core.resume_session(&id).map_err(map_err),
-        AppState::Mock(_) => Ok(()),
-    }
+pub fn resume_session(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.resume_session(&id).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]

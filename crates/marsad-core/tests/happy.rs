@@ -274,7 +274,8 @@ fn resume_session_sends_ipc() {
         .expect("launch");
     let _ = peer.drain_outbound(); // consume launch IPC
 
-    core.resume_session(&id)
+    let updates = core
+        .resume_session(&id)
         .expect("resume_session should succeed for known id");
     let outbound = peer.drain_outbound();
     assert!(
@@ -285,6 +286,21 @@ fn resume_session_sends_ipc() {
     assert!(
         line.contains("resume") || line.contains("Resume"),
         "outbound must reference resume, got: {line}"
+    );
+    // resume must ALSO return VmUpdates that flip the badge off Stale, else the
+    // dashboard stays "stopped" forever (a resumed, prompt-less session emits no
+    // system/init to move the phase on its own).
+    assert!(
+        !updates.is_empty(),
+        "resume_session must return VmUpdates so the UI leaves the Stale state"
+    );
+    let has_session_starting = updates.iter().any(|u| {
+        matches!(u, VmUpdate::Session(sv)
+            if sv.id == id && sv.state == marsad_events::Phase::Starting)
+    });
+    assert!(
+        has_session_starting,
+        "resume_session must emit a Session update with phase Starting, got: {updates:?}"
     );
 }
 

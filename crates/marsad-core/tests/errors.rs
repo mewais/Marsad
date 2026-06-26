@@ -284,6 +284,47 @@ fn stop_session_transport_failure_returns_transport_error() {
     );
 }
 
+#[test]
+fn resume_session_transport_failure_returns_transport_error() {
+    // Mirror of the stop test: launch (registers the session), then break the
+    // transport so the ResumeSession IPC send fails — exercises the `?` error
+    // branch in resume_session (which now also returns VmUpdates on success).
+    let (mut a, mut b) = LoopbackFake::pair();
+    a.connect().ok();
+    b.connect().ok();
+
+    let cfg = CoreConfig {
+        agent_endpoint: "loopback://test".to_string(),
+        data_root: "/tmp/marsad-err-test".to_string(),
+    };
+    let mut core = Core::new(cfg, Box::new(a)).expect("Core::new");
+
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "p".to_string(),
+            host_id: "h".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
+            model: "m".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: LaunchMode::Fresh,
+            name: None,
+        })
+        .expect("launch");
+
+    // Close the peer so the next IPC send (ResumeSession) fails.
+    b.close().ok();
+
+    let err = core.resume_session(&id).unwrap_err();
+    assert!(
+        matches!(err, CoreError::Transport(_)),
+        "expected Transport error from resume on broken transport, got {err:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // CoreError::Protocol — malformed inbound IPC lines
 // ---------------------------------------------------------------------------

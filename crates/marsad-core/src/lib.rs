@@ -1045,11 +1045,27 @@ impl Core {
         Ok(restored.templates)
     }
 
-    pub fn resume_session(&mut self, id: &str) -> Result<(), CoreError> {
+    /// Resume a stopped session: tell the agent to relaunch/re-attach it, and
+    /// flip the UI badge OFF Stale immediately.
+    ///
+    /// Previously this only fired the IPC and returned `()`, so the dashboard
+    /// never changed — the user saw "resume did nothing, still stopped" (the same
+    /// bug `stop_session` had). The agent does relaunch claude, but a resumed
+    /// session has no first prompt, so claude stays idle and emits no
+    /// `system/init` — meaning NO inbound stream event would ever move the phase
+    /// off Stale. We therefore set `Starting` optimistically and return the
+    /// VmUpdates the bridge emits; typing a prompt then drives it to Active.
+    pub fn resume_session(&mut self, id: &str) -> Result<Vec<VmUpdate>, CoreError> {
         self.require_session(id)?;
         self.send_ipc(&IpcMsg::ResumeSession {
             session_id: id.to_string(),
-        })
+        })?;
+        // require_session above guarantees it exists.
+        self.sessions.get_mut(id).unwrap().state.phase = Phase::Starting;
+        let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
+        let snap = self.snapshot();
+        let groups = marsad_viewmodel::group_overview(&snap);
+        Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
     }
 
     pub fn attach_session(&mut self, id: &str) -> Result<(), CoreError> {
