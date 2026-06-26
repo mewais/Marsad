@@ -712,6 +712,19 @@ fn plink_health(inner: &str) -> marsad_core::HostStatus {
 /// `plink:<inner>` → PuTTY plink connection sharing, everything else
 /// (`user@host`, bare alias) → SSH.
 fn host_health(target: &str) -> marsad_core::HostStatus {
+    // `wslssh:<distro>:<target>` must be probed via `wsl ssh` (with the SAME
+    // ControlMaster path the agent uses), NOT native ssh — otherwise it probes a
+    // bogus literal host and never reads Connected even after the Duo login. Check
+    // this BEFORE the `wsl:` prefix (note: `wslssh:` does not start with `wsl:`).
+    if let Some(rest) = target.strip_prefix("wslssh:") {
+        let mut parts = rest.splitn(2, ':');
+        let distro = parts.next().unwrap_or("");
+        let inner = parts.next().unwrap_or("");
+        if !distro.is_empty() && !inner.is_empty() {
+            return wslssh_health(distro, inner);
+        }
+        return marsad_core::HostStatus::Unreachable;
+    }
     if let Some(distro) = target.strip_prefix("wsl:") {
         return wsl_health(distro);
     }
@@ -719,4 +732,38 @@ fn host_health(target: &str) -> marsad_core::HostStatus {
         return plink_health(inner);
     }
     ssh_health(target)
+}
+
+/// Probe a WSL-routed SSH host: `wsl -d <distro> ssh -o BatchMode … <target> true`,
+/// reusing the agent's ControlMaster path. Before the interactive Duo login there's
+/// no master and BatchMode fails → Unreachable; once the user has logged in, the
+/// shared master makes this succeed → Connected (same pattern as plink_health).
+fn wslssh_health(distro: &str, target: &str) -> marsad_core::HostStatus {
+    use marsad_core::HostStatus;
+    let mut cmd = std::process::Command::new("wsl.exe");
+    cmd.args([
+        "-d",
+        distro,
+        "ssh",
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=5",
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        "ControlPath=~/.ssh/marsad-cm-%r@%h:%p",
+        target,
+        "true",
+    ])
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null());
+    hide_console(&mut cmd);
+    match cmd.status() {
+        Ok(s) if s.success() => HostStatus::Connected,
+        Ok(_) => HostStatus::Unreachable,
+        Err(_) => HostStatus::Reconnecting,
+    }
 }
