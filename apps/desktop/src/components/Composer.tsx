@@ -1,9 +1,14 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { SlashEntry } from "../bridge/types";
 import { filterSlash } from "../bridge/api";
 import { SlashPopover } from "./SlashPopover";
 
 interface ComposerProps {
+  /** The session this composer is editing. Drafts are kept PER session so an
+   *  in-progress prompt typed in one session does not bleed into another (the
+   *  Composer instance is reused across session switches, so a single shared
+   *  `text` state would leak). */
+  sessionId: string;
   onSend: (text: string) => void;
   onInterrupt: () => void;
   onSlashSelect?: (entry: SlashEntry) => void;
@@ -14,6 +19,7 @@ interface ComposerProps {
 
 /** Composer textarea + slash button + send button, matching .dc.html layout. */
 export function Composer({
+  sessionId,
   onSend,
   onInterrupt,
   onSlashSelect,
@@ -29,6 +35,29 @@ export function Composer({
   // draft: the text the user had typed before entering history navigation.
   const historyIndexRef = useRef<number | null>(null);
   const draftRef = useRef<string>("");
+
+  // Per-session draft store. The Composer is NOT remounted when the user switches
+  // sessions, so we persist each session's in-progress text here and swap it in
+  // when sessionId changes — isolating drafts without losing them on switch.
+  const draftsRef = useRef<Map<string, string>>(new Map());
+  const prevSessionIdRef = useRef<string>(sessionId);
+  // Keep a ref to the live text so the swap effect reads the latest value without
+  // depending on `text` (which would re-run the effect on every keystroke).
+  const textRef = useRef<string>("");
+  textRef.current = text;
+
+  useEffect(() => {
+    const prev = prevSessionIdRef.current;
+    if (prev === sessionId) return;
+    // Save the outgoing session's draft, restore the incoming session's.
+    draftsRef.current.set(prev, textRef.current);
+    const incoming = draftsRef.current.get(sessionId) ?? "";
+    prevSessionIdRef.current = sessionId;
+    historyIndexRef.current = null;
+    draftRef.current = incoming;
+    setText(incoming);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
   const slashEntries = slashOpen ? filterSlash(text) : [];
 

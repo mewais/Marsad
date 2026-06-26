@@ -636,6 +636,7 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
       >
         <div style={{ maxWidth: 1040, margin: "0 auto" }}>
           <Composer
+            sessionId={sessionId}
             onSend={handleSend}
             onInterrupt={handleInterrupt}
             onSlashSelect={handleSlashSelect}
