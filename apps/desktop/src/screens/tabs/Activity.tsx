@@ -11,6 +11,7 @@ import { useVm } from "../../bridge/useVm";
 import { Composer } from "../../components/Composer";
 import { Markdown } from "../../components/Markdown";
 import { ToolUse } from "../../components/ToolUse";
+import { Watchtower } from "../../components/Watchtower";
 import {
   sendPrompt,
   interrupt,
@@ -164,7 +165,7 @@ function MAvatar() {
         fontSize: "calc(13.5px * var(--fs,1))",
       }}
     >
-      M
+      <Watchtower size={15} />
     </div>
   );
 }

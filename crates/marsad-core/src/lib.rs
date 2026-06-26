@@ -289,7 +289,11 @@ struct SessionRecord {
     /// Conversation transcript: resume history (loaded once at launch) + live
     /// assistant/tool entries (from the stream) + user prompts (injected on send).
     transcript: Vec<marsad_events::TranscriptEntry>,
-    /// Assistant message ids already appended to the transcript (dedup).
+    /// Keys of assistant content blocks already appended (dedup). claude streams
+    /// ONE assistant message as MULTIPLE events sharing a message id (one per
+    /// content block: text, tool_use, …), so we dedup per `<msg_id>\0<block>` —
+    /// NOT per message id, which dropped every block after the first (live
+    /// transcript looked frozen while the restart backfill showed the full reply).
     seen_msg_ids: std::collections::HashSet<String>,
     /// User-supplied display name. `None` → derived from the project basename.
     name: Option<String>,
@@ -1340,7 +1344,10 @@ impl Core {
         // live stream — immediate, no JSONL flush race). claude does not echo user
         // prompts here; those are injected by launch/send_prompt. Deduped below by
         // message id.
-        let assistant: Option<(String, Vec<marsad_events::TranscriptEntry>)> =
+        // Pair each entry with a content-based dedup key computed inline (we know
+        // each block is Text→Assistant or ToolUse→Tool here), so dedup works per
+        // BLOCK rather than per message id — see the append loop below.
+        let assistant: Option<(String, Vec<(String, marsad_events::TranscriptEntry)>)> =
             if let marsad_proto::StreamMsg::Assistant(am) = &stream_msg {
                 let mut entries = Vec::new();
                 for block in &am.message.content {
@@ -1348,16 +1355,21 @@ impl Core {
                         marsad_proto::ContentBlock::Text { text } => {
                             let t = text.trim();
                             if !t.is_empty() {
-                                entries.push(marsad_events::TranscriptEntry::Assistant {
-                                    text: t.to_string(),
-                                });
+                                entries.push((
+                                    format!("a\u{0}{t}"),
+                                    marsad_events::TranscriptEntry::Assistant { text: t.to_string() },
+                                ));
                             }
                         }
                         marsad_proto::ContentBlock::ToolUse { name, input, .. } => {
-                            entries.push(marsad_events::TranscriptEntry::Tool {
-                                name: name.clone(),
-                                input: serde_json::to_string(input).unwrap_or_default(),
-                            });
+                            let input = serde_json::to_string(input).unwrap_or_default();
+                            entries.push((
+                                format!("t\u{0}{name}\u{0}{input}"),
+                                marsad_events::TranscriptEntry::Tool {
+                                    name: name.clone(),
+                                    input,
+                                },
+                            ));
                         }
                         _ => {}
                     }
@@ -1389,11 +1401,16 @@ impl Core {
             self.sessions.get_mut(&session_id).unwrap().changes = changes;
         }
 
-        // Append this assistant message's entries once (dedup by message id).
+        // Append this assistant message's NEW content blocks. claude streams one
+        // assistant message as multiple events sharing a message id (one per
+        // block), so we dedup per `<msg_id>\0<block>` — deduping by id alone
+        // dropped every block after the first, freezing the live transcript.
         if let Some((msg_id, entries)) = assistant {
             let record = self.sessions.get_mut(&session_id).unwrap();
-            if record.seen_msg_ids.insert(msg_id) {
-                record.transcript.extend(entries);
+            for (block_key, entry) in entries {
+                if record.seen_msg_ids.insert(format!("{msg_id}\u{0}{block_key}")) {
+                    record.transcript.push(entry);
+                }
             }
         }
 

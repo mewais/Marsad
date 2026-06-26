@@ -399,6 +399,42 @@ fn concurrent_sessions_do_not_cross_route() {
 }
 
 #[test]
+fn streamed_blocks_sharing_a_message_id_all_appear_and_dedup() {
+    // claude streams ONE assistant message as multiple events sharing a message
+    // id (one per content block). All distinct blocks must land in the transcript
+    // (regression: deduping by id alone dropped every block after the first, so
+    // the live transcript froze and only the restart backfill showed the reply).
+    let (mut core, _peer) = make_core();
+    let id = core
+        .launch_session(spec("s-stream", Posture::Ask))
+        .expect("launch");
+    let _ = core.on_agent_line(&ipc_init(&id)).expect("init");
+
+    let text_evt = ipc_assistant(&id, "msg-same"); // content: text "ok"
+    let tool_evt = format!(
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"assistant","message":{{"id":"msg-same","content":[{{"type":"tool_use","id":"tu1","name":"Bash","input":{{"command":"ls"}}}}],"usage":{{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}}}"#
+    );
+    let _ = core.on_agent_line(&text_evt).expect("text block");
+    let _ = core.on_agent_line(&tool_evt).expect("tool block (same id)");
+    // Re-feed the identical text block — must be deduped (insert-false branch).
+    let _ = core.on_agent_line(&text_evt).expect("dup text block");
+
+    let snap = core.snapshot();
+    let sv = snap.sessions.iter().find(|s| s.id == id).expect("session");
+    let text_count = sv
+        .transcript
+        .iter()
+        .filter(|e| matches!(e, marsad_events::TranscriptEntry::Assistant { text } if text == "ok"))
+        .count();
+    let has_tool = sv
+        .transcript
+        .iter()
+        .any(|e| matches!(e, marsad_events::TranscriptEntry::Tool { name, .. } if name == "Bash"));
+    assert_eq!(text_count, 1, "text block present exactly once: {:?}", sv.transcript);
+    assert!(has_tool, "tool block (same msg id) must also appear: {:?}", sv.transcript);
+}
+
+#[test]
 fn snapshot_contains_all_launched_sessions() {
     let (mut core, _peer) = make_core();
     let id1 = core.launch_session(spec("s1", Posture::Ask)).expect("l1");
