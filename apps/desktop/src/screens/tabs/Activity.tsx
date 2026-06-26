@@ -171,6 +171,7 @@ function MAvatar() {
 function PromptBubble({ text }: { text: string }) {
   return (
     <div
+      className="md-bubble"
       style={{
         alignSelf: "flex-end",
         maxWidth: "78%",
@@ -181,11 +182,10 @@ function PromptBubble({ text }: { text: string }) {
         fontSize: "calc(15.5px * var(--fs,1))",
         lineHeight: 1.5,
         boxShadow: "var(--shadow-sm)",
-        whiteSpace: "pre-wrap",
         wordBreak: "break-word",
       }}
     >
-      {text}
+      <Markdown text={text} />
     </div>
   );
 }
@@ -557,6 +557,13 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
 
   const messages = deriveTranscript(sv, selectedGate);
 
+  // Derive prompt history for the Composer (Up/Down arrow recall).
+  // Collect user-typed prompts in arrival order, skipping shell "! " entries.
+  const promptHistory: string[] = sv.transcript.flatMap((entry) => {
+    if (entry.role !== "user") return [];
+    return entry.text.startsWith("! ") ? [] : [entry.text];
+  });
+
   function handleSend(text: string) {
     // If text starts with "!" run the shell command on the session's host.
     // The command is stripped of the leading "!" and trimmed.
@@ -673,6 +680,7 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
             onSend={handleSend}
             onInterrupt={handleInterrupt}
             onSlashSelect={handleSlashSelect}
+            history={promptHistory}
           />
         </div>
       </div>

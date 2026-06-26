@@ -8,6 +8,8 @@ interface ComposerProps {
   onInterrupt: () => void;
   onSlashSelect?: (entry: SlashEntry) => void;
   disabled?: boolean;
+  /** Previously sent prompts for this session, oldest first. Used for Up/Down history navigation. */
+  history?: string[];
 }
 
 /** Composer textarea + slash button + send button, matching .dc.html layout. */
@@ -16,25 +18,105 @@ export function Composer({
   onInterrupt,
   onSlashSelect,
   disabled,
+  history = [],
 }: ComposerProps) {
   const [text, setText] = useState("");
   const [slashOpen, setSlashOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // History navigation state.
+  // historyIndex: null = not navigating (live draft), or index into `history` (0 = oldest).
+  // draft: the text the user had typed before entering history navigation.
+  const historyIndexRef = useRef<number | null>(null);
+  const draftRef = useRef<string>("");
+
   const slashEntries = slashOpen ? filterSlash(text) : [];
+
+  /** Returns true if the textarea caret is on the first line. */
+  function caretOnFirstLine(): boolean {
+    const el = textareaRef.current;
+    if (!el) return true;
+    const pos = el.selectionStart;
+    // First line has no newline before the caret position
+    return !el.value.slice(0, pos).includes("\n");
+  }
+
+  /** Returns true if the textarea caret is on the last line. */
+  function caretOnLastLine(): boolean {
+    const el = textareaRef.current;
+    if (!el) return true;
+    const pos = el.selectionEnd;
+    // Last line has no newline after the caret position
+    return !el.value.slice(pos).includes("\n");
+  }
+
+  /** Load a history entry or draft into the textarea and resize it. */
+  function loadText(val: string) {
+    setText(val);
+    setSlashOpen(val.startsWith("/") && val.length > 0);
+    const el = textareaRef.current;
+    if (el) {
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 120) + "px";
+    }
+  }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       submit();
+      return;
     }
     if (e.key === "Escape") {
       setSlashOpen(false);
+      return;
+    }
+
+    if (e.key === "ArrowUp" && caretOnFirstLine()) {
+      // Only navigate if we have history entries to go back to
+      if (history.length === 0) return;
+      e.preventDefault();
+
+      const currentIdx = historyIndexRef.current;
+      if (currentIdx === null) {
+        // Just entering history navigation — save the current draft
+        draftRef.current = text;
+        const newIdx = history.length - 1;
+        historyIndexRef.current = newIdx;
+        loadText(history[newIdx]);
+      } else if (currentIdx > 0) {
+        // Go further back
+        const newIdx = currentIdx - 1;
+        historyIndexRef.current = newIdx;
+        loadText(history[newIdx]);
+      }
+      // If already at the oldest entry, do nothing further
+      return;
+    }
+
+    if (e.key === "ArrowDown" && caretOnLastLine()) {
+      const currentIdx = historyIndexRef.current;
+      if (currentIdx === null) return; // not in history navigation, let default behavior run
+      e.preventDefault();
+
+      if (currentIdx < history.length - 1) {
+        // Move forward in history
+        const newIdx = currentIdx + 1;
+        historyIndexRef.current = newIdx;
+        loadText(history[newIdx]);
+      } else {
+        // Past the newest entry — restore the in-progress draft
+        historyIndexRef.current = null;
+        loadText(draftRef.current);
+      }
     }
   }
 
   function handleInput(e: React.ChangeEvent<HTMLTextAreaElement>) {
     const val = e.target.value;
+    // Any manual edit resets history navigation and updates the draft
+    historyIndexRef.current = null;
+    draftRef.current = val;
     setText(val);
     setSlashOpen(val.startsWith("/") && val.length > 0);
     // Auto-resize textarea
@@ -48,6 +130,9 @@ export function Composer({
   function submit() {
     const t = text.trim();
     if (!t) return;
+    // Reset history navigation on send
+    historyIndexRef.current = null;
+    draftRef.current = "";
     onSend(t);
     setText("");
     setSlashOpen(false);
