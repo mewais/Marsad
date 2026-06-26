@@ -312,17 +312,55 @@ fn reduce_control_request(
     mut state: SessionState,
     req: marsad_proto::ControlRequest,
 ) -> SessionState {
-    // Build a Permission gate from the control request.
+    // Build a Permission gate from the control request. The `command` field is
+    // what the UI shows as `$ …`, so it must be the ACTUAL tool invocation, not
+    // the bare tool name — a Bash gate used to read `$ Bash` because we copied
+    // `tool_name` here instead of reading the command out of `input`.
+    let command = describe_tool_request(&req.tool_name, &req.input);
+    // Prefer claude's own description of the action when present (the Bash tool
+    // input carries a `description`); fall back to a generic line.
+    let explanation = req
+        .input
+        .get("description")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("Tool use request: {}", req.tool_name));
     let gate = marsad_gates::Gate::Permission {
         request_id: req.request_id.clone(),
-        command: req.tool_name.clone(),
+        command,
         cwd: state.cwd.clone().unwrap_or_default(),
         risk: String::new(),
-        explanation: format!("Tool use request: {}", req.tool_name),
+        explanation,
     };
     state.gate = Some(gate);
     state.phase = Phase::Needs;
     state
+}
+
+/// Render a human-readable one-line command for a `can_use_tool` permission gate.
+///
+/// claude nests the real arguments under `input`; the most useful summary depends
+/// on the tool. Bash puts the shell command in `input.command` — that's what the
+/// user needs to see to make an allow/deny decision. File/search/web tools expose
+/// a primary path/pattern/url. Anything unrecognised falls back to the tool name
+/// so the gate is never blank.
+fn describe_tool_request(tool_name: &str, input: &serde_json::Value) -> String {
+    // Bash (and any tool that names its action `command`): show it verbatim.
+    if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
+        if !cmd.is_empty() {
+            return cmd.to_string();
+        }
+    }
+    // File- and search-oriented tools: show "<Tool> <primary-arg>".
+    for key in ["file_path", "path", "notebook_path", "pattern", "url"] {
+        if let Some(arg) = input.get(key).and_then(|v| v.as_str()) {
+            if !arg.is_empty() {
+                return format!("{tool_name} {arg}");
+            }
+        }
+    }
+    tool_name.to_string()
 }
 
 fn reduce_hook(mut state: SessionState, hook: HookEvent) -> SessionState {

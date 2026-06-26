@@ -50,6 +50,25 @@ fn control_request_json(request_id: &str, tool_name: &str) -> String {
     )
 }
 
+/// Control request with a caller-supplied `input` object (raw JSON).
+fn control_request_json_with_input(request_id: &str, tool_name: &str, input: &str) -> String {
+    format!(
+        r#"{{"type":"control_request","request_id":"{request_id}","request":{{"subtype":"can_use_tool","tool_name":"{tool_name}","input":{input}}}}}"#
+    )
+}
+
+/// Extract the gate's command + explanation for assertions.
+fn gate_command_explanation(s: &SessionState) -> (String, String) {
+    match s.gate.as_ref().expect("gate present") {
+        marsad_gates::Gate::Permission {
+            command,
+            explanation,
+            ..
+        } => (command.clone(), explanation.clone()),
+        other => panic!("expected Permission gate, got {other:?}"),
+    }
+}
+
 fn user_json() -> &'static str {
     r#"{"type":"user","message":{"content":[{"type":"text","text":"yes"}]}}"#
 }
@@ -116,6 +135,89 @@ fn control_request_transitions_to_needs() {
     let s1 = reduce(s0, stream(&control_request_json("req-1", "Bash")));
     assert_eq!(s1.phase, Phase::Needs);
     assert!(s1.gate.is_some());
+}
+
+#[test]
+fn bash_gate_shows_the_actual_command_not_the_tool_name() {
+    // Regression: the gate used to display the tool name ("Bash") instead of the
+    // shell command the user is being asked to approve.
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(
+        s0,
+        stream(&control_request_json_with_input(
+            "req-1",
+            "Bash",
+            r#"{"command":"rm -rf /tmp/x","description":"Delete the temp dir"}"#,
+        )),
+    );
+    let (command, explanation) = gate_command_explanation(&s1);
+    assert_eq!(command, "rm -rf /tmp/x");
+    assert_eq!(explanation, "Delete the temp dir");
+}
+
+#[test]
+fn file_tool_gate_shows_tool_and_path() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(
+        s0,
+        stream(&control_request_json_with_input(
+            "req-2",
+            "Read",
+            r#"{"file_path":"/etc/hosts"}"#,
+        )),
+    );
+    let (command, explanation) = gate_command_explanation(&s1);
+    assert_eq!(command, "Read /etc/hosts");
+    // No description in input → generic explanation.
+    assert_eq!(explanation, "Tool use request: Read");
+}
+
+#[test]
+fn web_tool_gate_shows_tool_and_url() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(
+        s0,
+        stream(&control_request_json_with_input(
+            "req-3",
+            "WebFetch",
+            r#"{"url":"https://example.com"}"#,
+        )),
+    );
+    let (command, _) = gate_command_explanation(&s1);
+    assert_eq!(command, "WebFetch https://example.com");
+}
+
+#[test]
+fn unknown_tool_gate_falls_back_to_tool_name() {
+    // Empty input (and an empty command string) → bare tool name, never blank.
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(
+        s0,
+        stream(&control_request_json_with_input(
+            "req-4",
+            "SomeMcpTool",
+            r#"{"command":"","other":1}"#,
+        )),
+    );
+    let (command, _) = gate_command_explanation(&s1);
+    assert_eq!(command, "SomeMcpTool");
+}
+
+#[test]
+fn empty_primary_arg_falls_back_to_tool_name() {
+    // A present-but-empty primary arg (e.g. file_path:"") must not produce a
+    // trailing-space "Read " — it falls through to the bare tool name.
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(
+        s0,
+        stream(&control_request_json_with_input(
+            "req-5",
+            "Read",
+            r#"{"file_path":""}"#,
+        )),
+    );
+    let (command, _) = gate_command_explanation(&s1);
+    assert_eq!(command, "Read");
 }
 
 // ---------------------------------------------------------------------------
