@@ -68,7 +68,14 @@ export function Composer({
       return;
     }
     if (e.key === "Escape") {
-      setSlashOpen(false);
+      e.preventDefault();
+      // Esc dismisses the slash popover if it's open; otherwise it interrupts
+      // claude's current turn (same as the Interrupt button).
+      if (slashOpen) {
+        setSlashOpen(false);
+      } else {
+        onInterrupt();
+      }
       return;
     }
 

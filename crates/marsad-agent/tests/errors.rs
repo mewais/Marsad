@@ -623,13 +623,14 @@ fn resume_session_restore_failure_returns_lifecycle_error() {
     }
 }
 
-/// `handle_resume_session` ends with `self.launch(spec)?`.  Arming the resumed
-/// session's container name to fail spawn exercises that `?` error branch.
+/// `handle_resume_session` ends with `self.launch_with_id(session_id, spec)?`.
+/// Arming the resumed session's container name to fail spawn exercises that `?`
+/// error branch. Resume REUSES the original id ("r1") → container "marsad-r1".
 #[test]
 fn resume_session_launch_spawn_failure_propagates() {
     let mut container = FakeContainer::new();
-    // The resumed session is launched as the first session → "marsad-session-1".
-    container.fail_spawn("marsad-session-1");
+    // Resume reuses the session's own id → container name "marsad-r1".
+    container.fail_spawn("marsad-r1");
 
     let mut store = marsad_store::Store::new(Box::new(MemoryBackend::new()));
     store

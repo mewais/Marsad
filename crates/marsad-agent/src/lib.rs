@@ -815,7 +815,11 @@ impl Agent {
             setup: persisted.setup,
             env: persisted.env,
         };
-        let new_id = self.launch(spec)?;
+        // Reuse the SAME marsad id so the resumed session re-attaches to the
+        // existing UI row. Using a fresh id (the old bug) meant the relaunched
+        // session's stream events were tagged with an id core never tracked, so
+        // resume silently did nothing on the dashboard.
+        let new_id = self.launch_with_id(session_id.clone(), spec)?;
         let event = serde_json::json!({"type": "SessionResumed", "session_id": new_id});
         Ok(vec![event.to_string()])
     }
@@ -921,6 +925,26 @@ impl Agent {
         let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
             "Interrupt missing session_id".to_string(),
         ))?;
+        // Write an `interrupt` control_request to claude's stdin (via the session
+        // writer) to stop the current turn. claude acks + ends the turn with
+        // `result: error_during_execution`. Mirrors handle_answer_gate's writer
+        // use. Under cfg(coverage) the IO block is absent (fake path = no-op ack).
+        #[cfg(not(coverage))]
+        {
+            use std::io::Write;
+            let encoded = marsad_proto::encode_control_request_interrupt("req_interrupt");
+            let writers = self.session_writers.0.lock().unwrap();
+            if let Some(shared) = writers.get(session_id) {
+                let mut writer = shared.lock().unwrap();
+                let _ = writer
+                    .write_all(encoded.as_bytes())
+                    .and_then(|_| writer.write_all(b"\n"))
+                    .and_then(|_| writer.flush());
+                eprintln!("marsad-agent: session {session_id} interrupt sent to claude");
+            } else {
+                eprintln!("marsad-agent: session {session_id} interrupt DROPPED — no writer registered");
+            }
+        }
         // If the session is gone, interrupt is a benign no-op.
         let event = serde_json::json!({"type": "Interrupted", "session_id": session_id});
         Ok(vec![event.to_string()])

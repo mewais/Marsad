@@ -344,6 +344,16 @@ fn encode_initialize_handshake_shape() {
     );
 }
 
+#[test]
+fn encode_interrupt_request_shape() {
+    let encoded = marsad_proto::encode_control_request_interrupt("req_int");
+    let raw: serde_json::Value =
+        serde_json::from_str(&encoded).expect("encoded interrupt must be valid JSON");
+    assert_eq!(raw["type"], "control_request");
+    assert_eq!(raw["request_id"], "req_int");
+    assert_eq!(raw["request"]["subtype"], "interrupt");
+}
+
 // ---------------------------------------------------------------------------
 // IpcMsg happy paths — parse + encode round-trips
 // ---------------------------------------------------------------------------

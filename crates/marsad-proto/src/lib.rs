@@ -461,6 +461,23 @@ pub fn encode_control_request_initialize(request_id: &str) -> String {
     serde_json::to_string(&wire).expect("initialize request is always serializable")
 }
 
+/// Encode the control-protocol `interrupt` request that stops claude's current
+/// turn (verified against the CLI: it acks with a `control_response` success and
+/// ends the turn with `result: error_during_execution`). Written to claude's
+/// stdin like any other control message.
+///
+/// Shape: `{"type":"control_request","request_id":"X","request":{"subtype":"interrupt"}}`.
+pub fn encode_control_request_interrupt(request_id: &str) -> String {
+    let wire = serde_json::json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "interrupt",
+        }
+    });
+    serde_json::to_string(&wire).expect("interrupt request is always serializable")
+}
+
 // ---------------------------------------------------------------------------
 // parse_ipc
 // ---------------------------------------------------------------------------
