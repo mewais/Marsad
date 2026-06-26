@@ -105,13 +105,34 @@ export function NewSession() {
   const [resume, setResume] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [selectedResume, setSelectedResume] = useState<string>("continue");
+  const [loadingSessions, setLoadingSessions] = useState(false);
 
   // Fetch sessions when project, host, or resume toggle changes. The host
   // matters because a remote host's resumable sessions live on the remote box
-  // (listed over its connection), not on this machine.
+  // (listed over its connection), not on this machine. The fetch is async (the
+  // Tauri command no longer blocks the UI) and we show a spinner while it runs;
+  // a stale-guard drops results from a superseded request.
   useEffect(() => {
-    if (!resume || !project.trim()) return;
-    listSessions(project.trim(), hostId).then(setSessions).catch(() => setSessions([]));
+    if (!resume || !project.trim()) {
+      setLoadingSessions(false);
+      return;
+    }
+    let cancelled = false;
+    setLoadingSessions(true);
+    setSessions([]);
+    listSessions(project.trim(), hostId)
+      .then((s) => {
+        if (!cancelled) setSessions(s);
+      })
+      .catch(() => {
+        if (!cancelled) setSessions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSessions(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [resume, project, hostId]);
 
   function close() {
@@ -391,7 +412,32 @@ export function NewSession() {
               />
             </div>
           </div>
-          {resume && sessions.length === 0 && (
+          {resume && loadingSessions && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontSize: "calc(14px * var(--fs,1))",
+                color: "var(--txt3)",
+                marginTop: 8,
+              }}
+            >
+              <span
+                style={{
+                  width: 13,
+                  height: 13,
+                  border: "2px solid var(--border)",
+                  borderTopColor: "var(--accent)",
+                  borderRadius: "50%",
+                  display: "inline-block",
+                  animation: "spin 0.7s linear infinite",
+                }}
+              />
+              Loading sessions…
+            </div>
+          )}
+          {resume && !loadingSessions && sessions.length === 0 && (
             <div
               style={{
                 fontSize: "calc(14px * var(--fs,1))",

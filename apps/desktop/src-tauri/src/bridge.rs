@@ -114,8 +114,14 @@ pub fn launch_session(
     }
 }
 
+/// `async` is essential here: listing a REMOTE host's sessions runs an ssh/wsl
+/// round-trip that can take seconds. A synchronous Tauri command runs on the main
+/// thread and would FREEZE the whole UI for that time; an async command runs off
+/// it, and the remote fetch is further moved to a blocking pool thread so it never
+/// stalls the async runtime. The state lock is taken + dropped BEFORE any await
+/// (its guard isn't held across the await).
 #[tauri::command(rename_all = "snake_case")]
-pub fn list_sessions(
+pub async fn list_sessions(
     state: State<'_, ManagedState>,
     project: String,
     host_id: String,
@@ -133,16 +139,24 @@ pub fn list_sessions(
                 .and_then(|h| if h.is_local { None } else { Some(h.target) }),
             AppState::Mock(_) => None,
         }
-    };
+    }; // guard dropped here — nothing is held across the await below
     match host_target {
         None => {
             let home = std::env::var("HOME").map_err(|e| e.to_string())?;
             let projects_root = std::path::PathBuf::from(format!("{home}/.claude/projects"));
             marsad_core::discovery::list_sessions(&projects_root, &project).map_err(|e| e.to_string())
         }
-        Some(target) => Ok(parse_remote_session_list(
-            &marsad_agent::fetch_remote_session_list(&target, &project).unwrap_or_default(),
-        )),
+        Some(target) => {
+            // Run the blocking ssh/wsl fetch on the blocking pool so it doesn't
+            // stall the async runtime thread.
+            let raw = tauri::async_runtime::spawn_blocking(move || {
+                marsad_agent::fetch_remote_session_list(&target, &project)
+            })
+            .await
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+            Ok(parse_remote_session_list(&raw))
+        }
     }
 }
 
