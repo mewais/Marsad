@@ -1270,19 +1270,72 @@ impl Agent {
         {
             use marsad_lifecycle::Action;
             let restored = self.store.0.restore().map(|r| r.sessions).unwrap_or_default();
+
+            // Probe ALL remote sessions' liveness in PARALLEL with a bounded wait,
+            // BEFORE touching `self`. The probes are blocking remote calls; doing
+            // them sequentially on this (the serve) thread — as the code used to —
+            // froze the whole agent if any persisted session lived on a host that
+            // blocks (a Duo/MFA host with no live ControlMaster sits at the prompt
+            // forever). That manifested as "no sessions start, nothing appears at
+            // all": the command loop below never ran. Now each probe runs in its own
+            // thread with a hard timeout; any that don't answer in time are treated
+            // DEAD and skipped, so startup completes regardless of one bad host.
+            let mut live_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+            {
+                let remote: Vec<_> = restored
+                    .iter()
+                    .filter(|s| {
+                        s.host_target
+                            .as_deref()
+                            .map(|h| exec_prefix_for(Some(h)).is_some())
+                            .unwrap_or(false)
+                    })
+                    .cloned()
+                    .collect();
+                let n = remote.len();
+                if n > 0 {
+                    let (tx, rx) = mpsc::channel::<(String, bool)>();
+                    for s in &remote {
+                        let host = s.host_target.clone().unwrap_or_default();
+                        let id = s.id.clone();
+                        let tx = tx.clone();
+                        std::thread::spawn(move || {
+                            let live = run_remote_script_bounded(
+                                &host,
+                                &remote_liveness_script(&id),
+                                std::time::Duration::from_secs(6),
+                            )
+                            .map(|out| out.trim() == "LIVE")
+                            .unwrap_or(false);
+                            let _ = tx.send((id, live));
+                        });
+                    }
+                    drop(tx);
+                    // Each bounded probe self-terminates within ~6s, so the whole
+                    // collect finishes in ~6s (parallel) even with many hosts; the
+                    // 8s per-recv cap is a belt-and-suspenders backstop.
+                    for _ in 0..n {
+                        match rx.recv_timeout(std::time::Duration::from_secs(8)) {
+                            Ok((id, live)) => {
+                                eprintln!(
+                                    "marsad-agent: remote session {id} liveness: {}",
+                                    if live { "LIVE" } else { "DEAD" }
+                                );
+                                if live {
+                                    live_ids.insert(id);
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+
             for s in restored {
                 if let Some(host) = s.host_target.as_deref() {
                     if exec_prefix_for(Some(host)).is_some() {
-                        // REMOTE session: probe liveness, reconnect if alive.
-                        let live_script = remote_liveness_script(&s.id);
-                        let live = run_remote_script(host, &live_script)
-                            .map(|out| out.trim() == "LIVE")
-                            .unwrap_or(false);
-                        eprintln!(
-                            "marsad-agent: remote session {} on {host:?} liveness: {}",
-                            s.id,
-                            if live { "LIVE" } else { "DEAD" }
-                        );
+                        // REMOTE session: reconnect if the parallel probe found it live.
+                        let live = live_ids.contains(&s.id);
                         if live {
                             self.sessions.insert(
                                 s.id.clone(),
@@ -1748,6 +1801,66 @@ pub fn run_remote_script(host_target: &str, script: &str) -> Option<String> {
     }
     let out = child.wait_with_output().ok()?;
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Like [`run_remote_script`] but kills the child if it runs longer than
+/// `timeout`, returning `None`. Used for STARTUP liveness probes: a host that
+/// needs interactive MFA (Duo) and has no live ControlMaster yet will sit at the
+/// prompt forever, and the old unbounded probe — run sequentially on the serve
+/// thread before the command loop starts — froze the ENTIRE agent (no launches,
+/// blank UI) whenever one persisted session lived on such a host. Bounding the
+/// probe lets startup treat a slow/blocked host as DEAD and move on. Intended for
+/// SMALL outputs (it reads stdout only after the child exits). Real-IO build only.
+#[cfg(not(coverage))]
+pub fn run_remote_script_bounded(
+    host_target: &str,
+    script: &str,
+    timeout: std::time::Duration,
+) -> Option<String> {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    let prefix = exec_prefix_for(Some(host_target))?;
+    let bin = resolve_remote_bin(&prefix[0]);
+    let mut command = Command::new(&bin);
+    command
+        .args(&prefix[1..])
+        .arg("bash")
+        .arg("-l")
+        .arg("-s")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = command.spawn().ok()?;
+    {
+        let mut stdin = child.stdin.take()?;
+        stdin.write_all(script.as_bytes()).ok()?;
+    } // stdin dropped → EOF so `bash -s` runs and exits.
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let mut out = String::new();
+                if let Some(mut so) = child.stdout.take() {
+                    let _ = so.read_to_string(&mut out);
+                }
+                return Some(out);
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 /// Resolve a durable remote session's ABSOLUTE dir + the detached claude pid,
@@ -2583,7 +2696,19 @@ pub fn remote_session_dir(sid: &str) -> String {
 ///    the FIFO write-end open so claude never sees EOF when the agent disconnects.
 /// 3. Start the detached claude (`nohup setsid sh -c '<run_cmd> < in.fifo >>
 ///    out.log 2>&1'`). `nohup` + `setsid` detach it from the ssh session.
-/// 4. Write both PIDs to `$HOME/.marsad/<sid>/ka.pid` and `claude.pid`.
+/// 4. Write `ka.pid` (the keepalive `$!`) and `claude.pid`.
+///
+/// `claude.pid` is written from INSIDE `start.sh` as `$$` — the REAL claude pid.
+/// The exec chain `start.sh (sh) → exec bash -l run.sh → exec claude` keeps one
+/// pid throughout, so `$$` captured at the top of `start.sh` IS claude's pid. We
+/// must NOT rely on the launcher's `$!` (the `nohup setsid` wrapper): `setsid`
+/// forks on some systems and the wrapper then exits immediately, leaving `$!`
+/// pointing at a dead pid. That bug made `tail --pid=<claude.pid>` quit instantly
+/// ("reader EOF after 0 lines") and `remote_liveness_script` report DEAD on a
+/// claude that was actually alive — breaking launch display AND resume. The
+/// launcher still seeds `claude.pid` with `$!` as a placeholder; `start.sh`
+/// overwrites it with `$$`, and a short `sleep` lets that land before the reader
+/// resolves the pid.
 ///
 /// `run_cmd` is the `build_remote_spawn_cmd` output (`cd '<proj>' && exec
 /// 'claude' <args>`); it is embedded verbatim — no extra shell quoting.
@@ -2608,13 +2733,14 @@ touch "$dir/out.log"
 cat > "$dir/run.sh" << 'MARSAD_RUN'
 {run_cmd}
 MARSAD_RUN
-printf '#!/bin/sh\nexec bash -l "%s/run.sh" < "%s/in.fifo" >> "%s/out.log" 2>&1\n' "$dir" "$dir" "$dir" > "$dir/start.sh"
+printf '#!/bin/sh\necho $$ > "%s/claude.pid"\nexec bash -l "%s/run.sh" < "%s/in.fifo" >> "%s/out.log" 2>&1\n' "$dir" "$dir" "$dir" "$dir" > "$dir/start.sh"
 chmod +x "$dir/run.sh" "$dir/start.sh"
 nohup setsid sh -c 'exec sleep 999999 > '"$dir/in.fifo"'' </dev/null >/dev/null 2>/dev/null &
 echo $! > "$dir/ka.pid"
 sleep 0.1
 nohup setsid "$dir/start.sh" </dev/null >/dev/null 2>/dev/null &
 echo $! > "$dir/claude.pid"
+sleep 0.3
 echo "marsad-durable-launch: sid={sid} dir=$dir"
 "#,
         dir = dir,

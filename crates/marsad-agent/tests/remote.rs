@@ -222,6 +222,14 @@ fn remote_durable_launch_script_contains_mkfifo_and_nohup_setsid() {
     // Must write pids.
     assert!(script.contains("ka.pid"), "ka.pid: {script}");
     assert!(script.contains("claude.pid"), "claude.pid: {script}");
+    // claude.pid MUST be (re)written from inside start.sh as `$$` — the real pid
+    // surviving the sh→bash→claude exec chain. Relying on the launcher's `$!`
+    // (the setsid wrapper, which can fork+exit immediately) made `tail --pid` quit
+    // instantly and liveness report DEAD on a live claude.
+    assert!(
+        script.contains("echo $$ > \"%s/claude.pid\""),
+        "start.sh must capture the real claude pid via $$: {script}"
+    );
     // Must include the run_cmd.
     assert!(script.contains("'claude'"), "claude binary: {script}");
     // run.sh MUST be launched via a LOGIN shell so the user's PATH (e.g.
