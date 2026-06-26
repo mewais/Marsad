@@ -3,6 +3,12 @@ import type { SlashEntry } from "../bridge/types";
 import { filterSlash } from "../bridge/api";
 import { SlashPopover } from "./SlashPopover";
 
+// Per-session draft store, MODULE-level (not component state) so a draft survives
+// the Composer unmounting — which happens when the user switches tabs within a
+// session (ActivityTab is conditionally rendered) as well as between sessions.
+// Keyed by session id; cleared on send.
+const composerDrafts = new Map<string, string>();
+
 interface ComposerProps {
   /** The session this composer is editing. Drafts are kept PER session so an
    *  in-progress prompt typed in one session does not bleed into another (the
@@ -26,7 +32,10 @@ export function Composer({
   disabled,
   history = [],
 }: ComposerProps) {
-  const [text, setText] = useState("");
+  // Initialize from the per-session draft store so a draft survives BOTH a
+  // session switch AND a tab switch (the latter unmounts ActivityTab, so the
+  // store must live OUTSIDE the component — see module-level `composerDrafts`).
+  const [text, setText] = useState<string>(() => composerDrafts.get(sessionId) ?? "");
   const [slashOpen, setSlashOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -36,22 +45,16 @@ export function Composer({
   const historyIndexRef = useRef<number | null>(null);
   const draftRef = useRef<string>("");
 
-  // Per-session draft store. The Composer is NOT remounted when the user switches
-  // sessions, so we persist each session's in-progress text here and swap it in
-  // when sessionId changes — isolating drafts without losing them on switch.
-  const draftsRef = useRef<Map<string, string>>(new Map());
   const prevSessionIdRef = useRef<string>(sessionId);
-  // Keep a ref to the live text so the swap effect reads the latest value without
-  // depending on `text` (which would re-run the effect on every keystroke).
   const textRef = useRef<string>("");
   textRef.current = text;
 
+  // Swap drafts when the session changes IN PLACE (Composer stays mounted).
   useEffect(() => {
     const prev = prevSessionIdRef.current;
     if (prev === sessionId) return;
-    // Save the outgoing session's draft, restore the incoming session's.
-    draftsRef.current.set(prev, textRef.current);
-    const incoming = draftsRef.current.get(sessionId) ?? "";
+    composerDrafts.set(prev, textRef.current); // save outgoing
+    const incoming = composerDrafts.get(sessionId) ?? "";
     prevSessionIdRef.current = sessionId;
     historyIndexRef.current = null;
     draftRef.current = incoming;
@@ -153,6 +156,7 @@ export function Composer({
     // Any manual edit resets history navigation and updates the draft
     historyIndexRef.current = null;
     draftRef.current = val;
+    composerDrafts.set(sessionId, val); // persist so it survives tab/session switch
     setText(val);
     setSlashOpen(val.startsWith("/") && val.length > 0);
     // Auto-resize textarea
@@ -169,6 +173,7 @@ export function Composer({
     // Reset history navigation on send
     historyIndexRef.current = null;
     draftRef.current = "";
+    composerDrafts.delete(sessionId); // sent → clear the saved draft
     onSend(t);
     setText("");
     setSlashOpen(false);

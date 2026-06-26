@@ -339,23 +339,27 @@ export function GateOverlay() {
                 </div>
               </div>
 
-              {/* Risk warning — single-line amber banner */}
-              <div
-                data-testid="gate-risk"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "10px 13px",
-                  borderRadius: 9,
-                  background: "var(--needs-bg)",
-                  border: "1px solid var(--needs)",
-                  fontSize: "calc(14.5px * var(--fs,1))",
-                  color: "var(--needs)",
-                }}
-              >
-                ⚠ {permissionData.risk}
-              </div>
+              {/* Risk warning — single-line amber banner. Only shown when there
+                  IS a risk note; command gates carry no risk string, so an empty
+                  banner used to render as a blank amber box. */}
+              {permissionData.risk.trim() && (
+                <div
+                  data-testid="gate-risk"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "10px 13px",
+                    borderRadius: 9,
+                    background: "var(--needs-bg)",
+                    border: "1px solid var(--needs)",
+                    fontSize: "calc(14.5px * var(--fs,1))",
+                    color: "var(--needs)",
+                  }}
+                >
+                  ⚠ {permissionData.risk}
+                </div>
+              )}
             </div>
           )}
 
