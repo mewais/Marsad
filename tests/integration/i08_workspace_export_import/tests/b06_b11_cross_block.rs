@@ -32,6 +32,8 @@ fn make_session(id: &str, name: &str) -> PersistedSession {
         branch: "main".to_string(),
         model: "claude-opus-4-5".to_string(),
         last_phase: "done".to_string(),
+
+        posture: None,
     }
 }
 
@@ -62,6 +64,8 @@ fn sv(id: &str, cost: f64, tokens: u64, state: Phase) -> SessionView {
         gate: None,
         transcript: vec![],
         changes: vec![],
+
+        model_usage: vec![],
     }
 }
 

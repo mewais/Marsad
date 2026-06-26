@@ -39,6 +39,8 @@ fn make_session(
         gate: None,
         transcript: vec![],
         changes: vec![],
+
+        model_usage: vec![],
     }
 }
 
@@ -327,6 +329,8 @@ fn ctx_warn_false_at_74_pct() {
             gate: None,
             transcript: vec![],
             changes: vec![],
+
+            model_usage: vec![],
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -359,6 +363,8 @@ fn ctx_warn_true_at_75_pct() {
             gate: None,
             transcript: vec![],
             changes: vec![],
+
+            model_usage: vec![],
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -620,6 +626,8 @@ fn ctx_warn_true_at_100_pct() {
             gate: None,
             transcript: vec![],
             changes: vec![],
+
+            model_usage: vec![],
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],

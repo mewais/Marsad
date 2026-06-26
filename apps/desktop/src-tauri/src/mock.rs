@@ -128,7 +128,9 @@ pub fn seeded_mock() -> MockState {
             context_pct: 38.0,
             gate: Some(permission_gate),
             transcript: vec![],
-            changes: vec![],        },
+            changes: vec![],
+
+            model_usage: vec![],        },
         // Needs attention — plan gate
         SessionView {
             id: "s02".to_string(),
@@ -145,7 +147,9 @@ pub fn seeded_mock() -> MockState {
             context_pct: 62.0,
             gate: Some(plan_gate),
             transcript: vec![],
-            changes: vec![],        },
+            changes: vec![],
+
+            model_usage: vec![],        },
         // Error — edit gate shown for reference
         SessionView {
             id: "s03".to_string(),
@@ -162,7 +166,9 @@ pub fn seeded_mock() -> MockState {
             context_pct: 44.0,
             gate: Some(edit_gate),
             transcript: vec![],
-            changes: vec![],        },
+            changes: vec![],
+
+            model_usage: vec![],        },
         // Working sessions
         SessionView {
             id: "s04".to_string(),
@@ -179,7 +185,9 @@ pub fn seeded_mock() -> MockState {
             context_pct: 55.0,
             gate: None,
             transcript: vec![],
-            changes: vec![],        },
+            changes: vec![],
+
+            model_usage: vec![],        },
         SessionView {
             id: "s05".to_string(),
             name: "infra-terraform".to_string(),
@@ -195,7 +203,9 @@ pub fn seeded_mock() -> MockState {
             context_pct: 22.0,
             gate: None,
             transcript: vec![],
-            changes: vec![],        },
+            changes: vec![],
+
+            model_usage: vec![],        },
         SessionView {
             id: "s06".to_string(),
             name: "data-ingestion-pipeline".to_string(),
@@ -211,7 +221,9 @@ pub fn seeded_mock() -> MockState {
             context_pct: 48.0,
             gate: None,
             transcript: vec![],
-            changes: vec![],        },
+            changes: vec![],
+
+            model_usage: vec![],        },
         // Done sessions
         SessionView {
             id: "s07".to_string(),
@@ -228,7 +240,9 @@ pub fn seeded_mock() -> MockState {
             context_pct: 12.0,
             gate: None,
             transcript: vec![],
-            changes: vec![],        },
+            changes: vec![],
+
+            model_usage: vec![],        },
         SessionView {
             id: "s08".to_string(),
             name: "docs-update".to_string(),
@@ -244,7 +258,9 @@ pub fn seeded_mock() -> MockState {
             context_pct: 18.0,
             gate: None,
             transcript: vec![],
-            changes: vec![],        },
+            changes: vec![],
+
+            model_usage: vec![],        },
         SessionView {
             id: "s09".to_string(),
             name: "test-coverage-boost".to_string(),
@@ -260,7 +276,9 @@ pub fn seeded_mock() -> MockState {
             context_pct: 31.0,
             gate: None,
             transcript: vec![],
-            changes: vec![],        },
+            changes: vec![],
+
+            model_usage: vec![],        },
         // Stale session
         SessionView {
             id: "s10".to_string(),
@@ -277,7 +295,9 @@ pub fn seeded_mock() -> MockState {
             context_pct: 6.0,
             gate: None,
             transcript: vec![],
-            changes: vec![],        },
+            changes: vec![],
+
+            model_usage: vec![],        },
     ];
 
     let workspaces = vec![

@@ -37,6 +37,26 @@ pub struct SessionView {
     pub transcript: Vec<marsad_events::TranscriptEntry>,
     /// Working-tree changes in the session's project dir (from a git probe).
     pub changes: Vec<FileChange>,
+    /// Per-model token + cost breakdown, sorted by model name for determinism.
+    /// Empty when no `result` event with `modelUsage` has been received.
+    pub model_usage: Vec<ModelUsageRow>,
+}
+
+// ---------------------------------------------------------------------------
+// ModelUsageRow — one row of the per-model usage breakdown
+// ---------------------------------------------------------------------------
+
+/// One row of the per-model token + cost breakdown in the Usage tab.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelUsageRow {
+    /// Model name (e.g. `"claude-sonnet-4.6[1m]"`).
+    pub model: String,
+    /// Cumulative input tokens for this model.
+    pub input_tokens: u64,
+    /// Cumulative output tokens for this model.
+    pub output_tokens: u64,
+    /// Cumulative cost in USD for this model.
+    pub cost_usd: f64,
 }
 
 // ---------------------------------------------------------------------------

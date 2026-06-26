@@ -116,6 +116,11 @@ pub struct SessionState {
     pub subagents: Vec<Subagent>,
     pub gate: Option<marsad_gates::Gate>,
     pub changed_files: u32,
+    /// Per-model token + cost breakdown from the last `result` event.
+    /// Cumulative (replaced each time, not accumulated) — consistent with
+    /// `cost_usd` and `tokens` which the `result` event authoritatively sets.
+    #[serde(default)]
+    pub model_usage: std::collections::HashMap<String, marsad_proto::ModelUsage>,
     /// Message ids already counted for usage DEDUP.
     #[serde(default, skip_serializing_if = "HashSet::is_empty")]
     seen_message_ids: HashSet<String>,
@@ -136,6 +141,7 @@ impl SessionState {
             subagents: Vec::new(),
             gate: None,
             changed_files: 0,
+            model_usage: std::collections::HashMap::new(),
             seen_message_ids: HashSet::new(),
         }
     }
@@ -293,6 +299,9 @@ fn reduce_result(mut state: SessionState, result: marsad_proto::ResultMsg) -> Se
         .saturating_add(u.cache_read_input_tokens)
         .saturating_add(u.cache_creation_input_tokens);
     state.update_context_pct();
+
+    // Replace model_usage with the authoritative cumulative per-model breakdown.
+    state.model_usage = result.model_usage;
 
     // Determine phase from error flags / subtype.
     use marsad_proto::ResultSubtype;

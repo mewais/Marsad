@@ -320,6 +320,10 @@ pub struct PersistedSession {
     pub branch: String,
     pub model: String,
     pub last_phase: String,
+    /// Permission posture string ("Ask" | "AutoApproveSafe" | "FullAutonomy"),
+    /// persisted so RESUME restores the user's choice instead of defaulting to Ask.
+    #[serde(default)]
+    pub posture: Option<String>,
 }
 
 /// A single transcript event.
@@ -786,6 +790,7 @@ impl Store {
                 branch: es.branch.clone(),
                 model: es.model.clone(),
                 last_phase: es.last_phase.clone(),
+                posture: None,
             };
             let _ = self.upsert_session(&sess);
         }

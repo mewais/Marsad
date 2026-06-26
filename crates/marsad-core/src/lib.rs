@@ -1282,6 +1282,7 @@ impl Core {
         match env.r#type.as_str() {
             "AgentEvent" => self.handle_agent_event(env),
             "TranscriptBackfill" => self.handle_transcript_backfill(env),
+            "ChangesUpdate" => self.handle_changes_update(env),
             other => Err(CoreError::Protocol(format!("unknown IPC type: '{other}'"))),
         }
     }
@@ -1311,6 +1312,30 @@ impl Core {
         let mut combined = history;
         combined.append(&mut record.transcript);
         record.transcript = combined;
+        let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
+        Ok(vec![VmUpdate::Session(sv)])
+    }
+
+    /// Apply a remote changes update: parse the agent-shipped file-change list
+    /// into `Vec<FileChange>` and replace the session's changes list. This is
+    /// how a REMOTE session's Changes tab stays populated — the file lives on
+    /// the remote host, so the agent probes git after each result event and
+    /// ships the file list here. Unknown session or empty list → no-op.
+    fn handle_changes_update(
+        &mut self,
+        env: IpcEnvelope,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        let session_id = env.session_id.ok_or_else(|| {
+            CoreError::Protocol("missing session_id in changes_update".to_string())
+        })?;
+        let changes_val = env.changes.unwrap_or(serde_json::Value::Array(vec![]));
+        let parsed: Vec<FileChange> = serde_json::from_value(changes_val)
+            .unwrap_or_default();
+        let record = match self.sessions.get_mut(&session_id) {
+            Some(r) => r,
+            None => return Ok(vec![]),
+        };
+        record.changes = parsed;
         let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
         Ok(vec![VmUpdate::Session(sv)])
     }
@@ -1442,6 +1467,18 @@ impl Core {
 
     fn make_session_view(&self, id: &str, record: &SessionRecord) -> SessionView {
         let s = &record.state;
+        // Build a sorted Vec<ModelUsageRow> from the per-model map for determinism.
+        let mut model_usage: Vec<marsad_viewmodel::ModelUsageRow> = s
+            .model_usage
+            .iter()
+            .map(|(model, mu)| marsad_viewmodel::ModelUsageRow {
+                model: model.clone(),
+                input_tokens: mu.input_tokens,
+                output_tokens: mu.output_tokens,
+                cost_usd: mu.cost_usd,
+            })
+            .collect();
+        model_usage.sort_by(|a, b| a.model.cmp(&b.model));
         SessionView {
             id: id.to_string(),
             name: record
@@ -1461,6 +1498,7 @@ impl Core {
             gate: s.gate.clone(),
             transcript: record.transcript.clone(),
             changes: record.changes.clone(),
+            model_usage,
         }
     }
 }
@@ -1489,6 +1527,11 @@ struct IpcEnvelope {
     /// ships it here so resume/restore of a remote session shows prior history.
     #[serde(default)]
     jsonl: Option<String>,
+    /// Changed-file list for `ChangesUpdate` messages — the agent probes git on
+    /// the remote after each result event and broadcasts the file list here.
+    /// Each element is `{path, status, added, removed}`.
+    #[serde(default)]
+    changes: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------

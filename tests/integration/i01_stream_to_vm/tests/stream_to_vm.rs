@@ -116,6 +116,8 @@ fn fold_qa_stream_into_session_state_and_viewmodel() {
         gate: state.gate.clone(),
         transcript: vec![],
         changes: vec![],
+
+        model_usage: vec![],
     };
 
     let snapshot = AppSnapshot {

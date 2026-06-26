@@ -2175,6 +2175,7 @@ fn seed_session(seed: &mut Store, id: &str, host_id: &str, claude_uuid: Option<&
         branch: "main".to_string(),
         model: "claude-opus-4-8".to_string(),
         last_phase: "Working".to_string(),
+        posture: None,
     })
     .expect("seed session");
 }
@@ -2527,6 +2528,7 @@ fn load_sessions_restores_custom_name() {
         branch: "main".to_string(),
         model: "claude-opus-4-8".to_string(),
         last_phase: "Working".to_string(),
+        posture: None,
     })
     .expect("seed named session");
 
@@ -2597,4 +2599,111 @@ fn answer_question_unknown_session_returns_error() {
         result.is_err(),
         "answer_question for unknown session must return an error"
     );
+}
+
+// ---------------------------------------------------------------------------
+// ChangesUpdate — remote git probe result applied to session
+// ---------------------------------------------------------------------------
+
+/// A well-formed `ChangesUpdate` line for a launched session populates its
+/// changes list and returns a `VmUpdate::Session` with the new file-change data.
+#[test]
+fn on_agent_line_changes_update_populates_session_changes() {
+    let (mut core, _peer) = make_core();
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/home/user/proj".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
+            model: "claude-sonnet-4-6".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: LaunchMode::Fresh,
+            name: None,
+        })
+        .expect("launch");
+
+    let line = format!(
+        r#"{{"type":"ChangesUpdate","session_id":"{id}","changes":[{{"path":"a.rs","status":"M","added":3,"removed":1}}]}}"#
+    );
+    let updates = core.on_agent_line(&line).expect("on_agent_line");
+    let sv = updates
+        .iter()
+        .find_map(|u| if let VmUpdate::Session(sv) = u { Some(sv) } else { None })
+        .expect("must include Session update");
+    assert_eq!(sv.changes.len(), 1);
+    assert_eq!(sv.changes[0].path, "a.rs");
+    assert_eq!(sv.changes[0].status, "M");
+    assert_eq!(sv.changes[0].added, 3);
+    assert_eq!(sv.changes[0].removed, 1);
+}
+
+/// A `ChangesUpdate` for an UNKNOWN session is a no-op (empty update list, no error).
+#[test]
+fn on_agent_line_changes_update_unknown_session_is_noop() {
+    let (mut core, _peer) = make_core();
+    let line = r#"{"type":"ChangesUpdate","session_id":"no-such-session","changes":[{"path":"x.rs","status":"A","added":1,"removed":0}]}"#;
+    let updates = core.on_agent_line(line).expect("on_agent_line must not error");
+    assert!(updates.is_empty(), "unknown session must yield empty updates");
+}
+
+/// A `ChangesUpdate` with MISSING `session_id` returns a Protocol error.
+#[test]
+fn on_agent_line_changes_update_missing_session_id_is_error() {
+    let (mut core, _peer) = make_core();
+    let line = r#"{"type":"ChangesUpdate","changes":[{"path":"x.rs","status":"A","added":1,"removed":0}]}"#;
+    let result = core.on_agent_line(line);
+    assert!(
+        result.is_err(),
+        "ChangesUpdate without session_id must return an error"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// model_usage — populated in SessionView from result event's modelUsage
+// ---------------------------------------------------------------------------
+
+/// A result event with modelUsage populates the session view's model_usage rows.
+#[test]
+fn session_view_exposes_model_usage_after_result_with_model_usage() {
+    let (mut core, _peer) = make_core();
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/home/user/proj".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
+            model: "claude-sonnet-4-6".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: LaunchMode::Fresh,
+            name: None,
+        })
+        .expect("launch");
+
+    // Feed a system/init so the session is active.
+    core.on_agent_line(&ipc_agent_event_system_init(&id))
+        .expect("init");
+
+    // Feed a result event with modelUsage containing TWO models (so sort runs).
+    let result_line = format!(
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.368,"usage":{{"input_tokens":21,"output_tokens":255,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":1,"permission_denials":[],"modelUsage":{{"claude-sonnet-4.6[1m]":{{"inputTokens":11,"outputTokens":155,"costUSD":0.268}},"claude-haiku-4-5":{{"inputTokens":10,"outputTokens":100,"costUSD":0.1}}}}}}}}"#
+    );
+    let updates = core.on_agent_line(&result_line).expect("result");
+    let sv = updates
+        .iter()
+        .find_map(|u| if let VmUpdate::Session(sv) = u { Some(sv) } else { None })
+        .expect("must include Session update");
+    assert_eq!(sv.model_usage.len(), 2, "must have two model usage rows");
+    // Rows are sorted by model name: haiku before sonnet.
+    assert_eq!(sv.model_usage[0].model, "claude-haiku-4-5");
+    assert_eq!(sv.model_usage[1].model, "claude-sonnet-4.6[1m]");
+    assert_eq!(sv.model_usage[1].input_tokens, 11);
+    assert_eq!(sv.model_usage[1].output_tokens, 155);
+    assert!((sv.model_usage[1].cost_usd - 0.268).abs() < 1e-9);
 }

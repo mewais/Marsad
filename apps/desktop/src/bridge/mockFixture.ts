@@ -13,6 +13,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       name: "api-auth-refactor",
       transcript: [],
       changes: [],
+
+      model_usage: [],
       host_id: "local",
       project: "~/projects/api",
       branch: "feature/auth-v2",
@@ -38,6 +40,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       name: "queue-async-workers",
       transcript: [],
       changes: [],
+
+      model_usage: [],
       host_id: "hetzner",
       project: "~/projects/worker-svc",
       branch: "refactor/async-workers",
@@ -64,6 +68,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       name: "ml-feature-engineering",
       transcript: [],
       changes: [],
+
+      model_usage: [],
       host_id: "gpu",
       project: "~/projects/ml-pipeline",
       branch: "exp/feature-v3",
@@ -92,6 +98,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       name: "frontend-dashboard",
       transcript: [],
       changes: [],
+
+      model_usage: [],
       host_id: "local",
       project: "~/projects/dashboard",
       branch: "feat/overview-v2",
@@ -109,6 +117,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       name: "infra-terraform",
       transcript: [],
       changes: [],
+
+      model_usage: [],
       host_id: "hetzner",
       project: "~/projects/infra",
       branch: "main",
@@ -126,6 +136,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       name: "data-ingestion-pipeline",
       transcript: [],
       changes: [],
+
+      model_usage: [],
       host_id: "gpu",
       project: "~/projects/data",
       branch: "feat/kafka-consumer",
@@ -143,6 +155,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       name: "ci-pipeline-fix",
       transcript: [],
       changes: [],
+
+      model_usage: [],
       host_id: "local",
       project: "~/projects/ci",
       branch: "fix/gh-actions",
@@ -160,6 +174,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       name: "docs-update",
       transcript: [],
       changes: [],
+
+      model_usage: [],
       host_id: "local",
       project: "~/projects/docs",
       branch: "docs/api-v3",
@@ -177,6 +193,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       name: "test-coverage-boost",
       transcript: [],
       changes: [],
+
+      model_usage: [],
       host_id: "hetzner",
       project: "~/projects/api",
       branch: "test/coverage-90",
@@ -194,6 +212,8 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       name: "design-tokens-sync",
       transcript: [],
       changes: [],
+
+      model_usage: [],
       host_id: "hetzner",
       project: "~/projects/design",
       branch: "chore/tokens",

@@ -641,6 +641,7 @@ fn reconcile_all_adopt_does_not_spawn() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Done".to_string(),
+            posture: None,
         })
         .expect("upsert_session must succeed");
 

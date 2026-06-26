@@ -35,6 +35,7 @@ fn session(id: &str) -> PersistedSession {
         branch: "main".to_string(),
         model: "claude-sonnet-4-5".to_string(),
         last_phase: "Done".to_string(),
+        posture: None,
     }
 }
 
@@ -346,6 +347,7 @@ fn session_with_none_session_id_round_trips() {
         branch: "main".to_string(),
         model: "claude-opus-4-5".to_string(),
         last_phase: "Starting".to_string(),
+        posture: None,
     };
     store.upsert_session(&sess).expect("upsert");
     let r = store.restore().expect("restore");
@@ -425,6 +427,7 @@ fn last_phase_all_values_round_trip() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: phase.to_string(),
+            posture: None,
         };
         store.upsert_session(&sess).expect("upsert");
     }

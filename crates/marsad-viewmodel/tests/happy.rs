@@ -65,6 +65,8 @@ fn representative_snapshot() -> AppSnapshot {
             gate: None,
             transcript: vec![],
             changes: vec![],
+
+            model_usage: vec![],
         },
         SessionView {
             id: "s2".to_string(),
@@ -82,6 +84,8 @@ fn representative_snapshot() -> AppSnapshot {
             gate: None,
             transcript: vec![],
             changes: vec![],
+
+            model_usage: vec![],
         },
         SessionView {
             id: "s3".to_string(),
@@ -99,6 +103,8 @@ fn representative_snapshot() -> AppSnapshot {
             gate: None,
             transcript: vec![],
             changes: vec![],
+
+            model_usage: vec![],
         },
         SessionView {
             id: "s4".to_string(),
@@ -116,6 +122,8 @@ fn representative_snapshot() -> AppSnapshot {
             gate: None,
             transcript: vec![],
             changes: vec![],
+
+            model_usage: vec![],
         },
         SessionView {
             id: "s5".to_string(),
@@ -133,6 +141,8 @@ fn representative_snapshot() -> AppSnapshot {
             gate: None,
             transcript: vec![],
             changes: vec![],
+
+            model_usage: vec![],
         },
     ];
 
@@ -604,4 +614,27 @@ fn slash_catalog_no_match_returns_empty() {
         catalog.is_empty(),
         "no-match query should return empty list"
     );
+}
+
+// ---------------------------------------------------------------------------
+// ModelUsageRow — derives and construction
+// ---------------------------------------------------------------------------
+
+/// ModelUsageRow derives Debug, Clone, PartialEq.
+#[test]
+fn model_usage_row_derives_and_constructs() {
+    use marsad_viewmodel::ModelUsageRow;
+    let row = ModelUsageRow {
+        model: "claude-sonnet-4.6[1m]".to_string(),
+        input_tokens: 11,
+        output_tokens: 155,
+        cost_usd: 0.268,
+    };
+    let row2 = row.clone();
+    assert_eq!(row, row2);
+    let _ = format!("{row:?}");
+    assert_eq!(row.model, "claude-sonnet-4.6[1m]");
+    assert_eq!(row.input_tokens, 11);
+    assert_eq!(row.output_tokens, 155);
+    assert!((row.cost_usd - 0.268).abs() < 1e-9);
 }

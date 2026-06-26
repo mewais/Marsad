@@ -1,11 +1,12 @@
 /**
- * Usage tab — context window bar (amber warning ≥75%), token/cost/elapsed tiles.
- * All values sourced from selectedDetail (SessionDetailVM).
+ * Usage tab — context window bar (amber warning ≥75%), token/cost/elapsed tiles,
+ * and a per-model breakdown table when modelUsage data is available.
+ * All values sourced from selectedDetail (SessionDetailVM) and selectedSession.
  */
 import { useVm } from "../../bridge/useVm";
 
 export function UsageTab() {
-  const { selectedDetail } = useVm();
+  const { selectedDetail, selectedSession } = useVm();
 
   if (!selectedDetail) {
     return (
@@ -204,6 +205,89 @@ export function UsageTab() {
             </div>
           </div>
         </div>
+
+        {/* Per-model breakdown — only shown when modelUsage data is available */}
+        {selectedSession && selectedSession.model_usage.length > 0 && (
+          <div
+            data-testid="model-usage-table"
+            style={{
+              padding: 18,
+              borderRadius: 13,
+              border: "1px solid var(--border)",
+              background: "var(--panel)",
+            }}
+          >
+            <div
+              style={{
+                fontSize: "calc(13.5px * var(--fs,1))",
+                color: "var(--txt3)",
+                textTransform: "uppercase" as const,
+                letterSpacing: 0.4,
+                fontWeight: 700,
+                marginBottom: 12,
+              }}
+            >
+              Model Breakdown
+            </div>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: "calc(13.5px * var(--fs,1))",
+              }}
+            >
+              <thead>
+                <tr
+                  style={{
+                    color: "var(--txt3)",
+                    fontWeight: 700,
+                    textAlign: "left",
+                    borderBottom: "1px solid var(--border)",
+                  }}
+                >
+                  <th style={{ paddingBottom: 8, paddingRight: 16 }}>Model</th>
+                  <th style={{ paddingBottom: 8, paddingRight: 16 }}>Input Tokens</th>
+                  <th style={{ paddingBottom: 8, paddingRight: 16 }}>Output Tokens</th>
+                  <th style={{ paddingBottom: 8 }}>Cost (USD)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedSession.model_usage.map((row) => (
+                  <tr
+                    key={row.model}
+                    style={{ borderBottom: "1px solid var(--border)" }}
+                    data-testid={`model-usage-row-${row.model}`}
+                  >
+                    <td
+                      className="mono"
+                      style={{ paddingTop: 8, paddingBottom: 8, paddingRight: 16, color: "var(--accent)" }}
+                    >
+                      {row.model}
+                    </td>
+                    <td
+                      className="mono"
+                      style={{ paddingTop: 8, paddingBottom: 8, paddingRight: 16 }}
+                    >
+                      {row.input_tokens.toLocaleString()}
+                    </td>
+                    <td
+                      className="mono"
+                      style={{ paddingTop: 8, paddingBottom: 8, paddingRight: 16 }}
+                    >
+                      {row.output_tokens.toLocaleString()}
+                    </td>
+                    <td
+                      className="mono"
+                      style={{ paddingTop: 8, paddingBottom: 8 }}
+                    >
+                      ${row.cost_usd.toFixed(4)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

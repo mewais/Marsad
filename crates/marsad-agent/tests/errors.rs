@@ -351,6 +351,7 @@ fn reconcile_all_lifecycle_error_folds_into_stale() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Working".to_string(),
+            posture: None,
         })
         .expect("upsert");
 
@@ -660,6 +661,7 @@ fn resume_session_launch_spawn_failure_propagates() {
             branch: "main".to_string(),
             model: "m".to_string(),
             last_phase: "Done".to_string(),
+            posture: None,
         })
         .expect("upsert");
 

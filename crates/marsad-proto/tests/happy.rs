@@ -644,3 +644,58 @@ fn encode_decode_answer_question_roundtrip() {
     let reparsed = parse_ipc(&encoded).expect("roundtrip should succeed");
     assert_eq!(encode_ipc(&reparsed), encoded);
 }
+
+// ---------------------------------------------------------------------------
+// ModelUsage + ResultMsg.model_usage
+// ---------------------------------------------------------------------------
+
+/// A `result` event with a `modelUsage` map parses the per-model breakdown.
+#[test]
+fn parse_result_with_model_usage_populates_map() {
+    let line = r#"{"type":"result","subtype":"success","is_error":false,"num_turns":1,"total_cost_usd":0.268,"usage":{"input_tokens":11,"output_tokens":155,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"permission_denials":[],"modelUsage":{"claude-sonnet-4.6[1m]":{"inputTokens":11,"outputTokens":155,"costUSD":0.268,"cacheReadInputTokens":0,"cacheCreationInputTokens":0}}}"#;
+    let msg = parse_stream_line(line).expect("should parse result with modelUsage");
+    match msg {
+        StreamMsg::Result(r) => {
+            assert!(!r.model_usage.is_empty(), "model_usage must be populated");
+            let entry = r
+                .model_usage
+                .get("claude-sonnet-4.6[1m]")
+                .expect("must have the model key");
+            assert_eq!(entry.input_tokens, 11);
+            assert_eq!(entry.output_tokens, 155);
+            assert!((entry.cost_usd - 0.268).abs() < 1e-9);
+        }
+        other => panic!("expected Result, got {other:?}"),
+    }
+}
+
+/// A `result` event WITHOUT `modelUsage` defaults to an empty map.
+#[test]
+fn parse_result_without_model_usage_defaults_empty() {
+    let line = r#"{"type":"result","subtype":"success","is_error":false,"num_turns":1,"total_cost_usd":0.5,"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"permission_denials":[]}"#;
+    let msg = parse_stream_line(line).expect("should parse result without modelUsage");
+    match msg {
+        StreamMsg::Result(r) => {
+            assert!(r.model_usage.is_empty(), "absent modelUsage must default to empty map");
+        }
+        other => panic!("expected Result, got {other:?}"),
+    }
+}
+
+/// `ModelUsage` derives Default, Debug, Clone, PartialEq.
+#[test]
+fn model_usage_derives() {
+    use marsad_proto::ModelUsage;
+    let m = ModelUsage {
+        input_tokens: 10,
+        output_tokens: 20,
+        cost_usd: 0.5,
+    };
+    let m2 = m.clone();
+    assert_eq!(m, m2);
+    let _ = format!("{m:?}");
+    let def = ModelUsage::default();
+    assert_eq!(def.input_tokens, 0);
+    assert_eq!(def.output_tokens, 0);
+    assert!((def.cost_usd).abs() < 1e-15);
+}

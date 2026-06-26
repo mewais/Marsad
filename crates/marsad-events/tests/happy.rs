@@ -487,3 +487,20 @@ fn hook_pre_compact_is_total_and_working() {
     let s1 = reduce(s0, Event::Hook(HookEvent::PreCompact));
     assert_eq!(s1.phase, Phase::Working);
 }
+
+// ---------------------------------------------------------------------------
+// model_usage — populated from result event's modelUsage map
+// ---------------------------------------------------------------------------
+
+/// A result event with modelUsage populates state.model_usage (replace).
+#[test]
+fn result_with_model_usage_populates_state() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let result_json = r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.268,"usage":{"input_tokens":11,"output_tokens":155,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"num_turns":1,"permission_denials":[],"modelUsage":{"claude-sonnet-4.6[1m]":{"inputTokens":11,"outputTokens":155,"costUSD":0.268}}}"#;
+    let s1 = reduce(s0, stream(result_json));
+    assert!(!s1.model_usage.is_empty(), "model_usage must be populated from result");
+    let mu = s1.model_usage.get("claude-sonnet-4.6[1m]").expect("key must exist");
+    assert_eq!(mu.input_tokens, 11);
+    assert_eq!(mu.output_tokens, 155);
+    assert!((mu.cost_usd - 0.268).abs() < 1e-9);
+}

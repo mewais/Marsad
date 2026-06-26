@@ -711,6 +711,9 @@ impl Agent {
             branch: "main".to_string(),
             model: spec.model.clone(),
             last_phase: "Starting".to_string(),
+            posture: serde_json::to_value(&spec.posture)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string)),
         };
         self.store
             .0
@@ -839,8 +842,13 @@ impl Agent {
             project: persisted.project,
             host_id: persisted.host_id,
             model: persisted.model,
-            // The store does not persist posture; default to Ask so gates surface.
-            posture: marsad_proto::Posture::Ask,
+            posture: persisted
+                .posture
+                .as_deref()
+                .and_then(|s| {
+                    parse_posture_value(&serde_json::Value::String(s.to_string())).ok()
+                })
+                .unwrap_or(marsad_proto::Posture::Ask),
             first_prompt: value["first_prompt"].as_str().map(|s| s.to_string()),
             mode,
             host_target: persisted.host_target,
@@ -1815,6 +1823,84 @@ fn remote_transcript_script(project: &str, uuid: Option<&str>) -> String {
     }
 }
 
+/// Build the remote shell script that probes `git status` + `diff --numstat` for
+/// a session's project dir on the remote host.
+///
+/// Prints one TSV line per changed file: `status\tadded\tremoved\tpath`.
+/// The porcelain lines supply status+path; numstat supplies added/removed for
+/// tracked changes (untracked → 0/0). Run via `run_remote_script`. Real-IO only.
+#[cfg(not(coverage))]
+fn remote_changes_script(project: &str) -> String {
+    let cd = cd_target(project);
+    format!(
+        r#"cd {cd} 2>/dev/null || exit 0
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+git status --porcelain=v1 | while IFS= read -r line; do
+  st=$(printf '%s' "$line" | cut -c1-2 | tr -d ' '); f=$(printf '%s' "$line" | cut -c4-)
+  printf '%s\t0\t0\t%s\n' "$st" "$f"
+done
+git diff --numstat
+git diff --numstat --cached
+"#,
+        cd = cd
+    )
+}
+
+/// Parse the stdout of `remote_changes_script` into a JSON `ChangesUpdate`
+/// `changes` array. Lines from `git status --porcelain` contribute the status
+/// and path; lines from `git diff --numstat` contribute the added/removed counts.
+/// Returns the JSON array value (may be empty). Real-IO only.
+#[cfg(not(coverage))]
+fn parse_remote_changes(stdout: &str) -> serde_json::Value {
+    use std::collections::HashMap;
+
+    // Separate porcelain lines (tab-separated: `status\t0\t0\tpath`) from
+    // numstat lines (`added\tremoved\tpath`). We distinguish them by the second
+    // column: porcelain lines always have "0" there; numstat lines have a number
+    // or "-" (binary). Lines that parse as neither are silently ignored.
+    let mut statuses: Vec<(String, String)> = Vec::new(); // (status, path)
+    let mut numstats: HashMap<String, (u64, u64)> = HashMap::new(); // path → (added, removed)
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.splitn(4, '\t').collect();
+        match parts.as_slice() {
+            [st, "0", "0", path] => {
+                // Porcelain line from the `while` loop.
+                if !st.is_empty() && !path.is_empty() {
+                    statuses.push((st.to_string(), path.to_string()));
+                }
+            }
+            [added_s, removed_s, path] => {
+                // numstat line: `added\tremoved\tpath`.
+                let added = added_s.parse::<u64>().unwrap_or(0);
+                let removed = removed_s.parse::<u64>().unwrap_or(0);
+                if !path.is_empty() {
+                    // Later numstat lines (staged diff) may overwrite earlier ones;
+                    // we take the max to surface both unstaged + staged counts.
+                    let entry = numstats.entry(path.to_string()).or_insert((0, 0));
+                    entry.0 = entry.0.max(added);
+                    entry.1 = entry.1.max(removed);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let items: Vec<serde_json::Value> = statuses
+        .into_iter()
+        .map(|(status, path)| {
+            let (added, removed) = numstats.get(&path).copied().unwrap_or((0, 0));
+            serde_json::json!({
+                "path": path,
+                "status": status,
+                "added": added,
+                "removed": removed,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(items)
+}
+
 /// Run a shell `script` on a remote host and capture its stdout.
 ///
 /// The script is fed via the child's STDIN to `bash -l -s` (login shell reading
@@ -2572,6 +2658,19 @@ fn spawn_session_reader(
             );
         }
 
+        // For REMOTE sessions: save the project path so the read loop can probe
+        // git after each result event. Mirrors how transcript_hint carries the
+        // project, but we need the path even when transcript_hint is None (fresh
+        // remote launch with no prior history). We extract it from transcript_hint
+        // when available; otherwise we have no project path to probe (best-effort:
+        // skip silently).
+        let remote_project: Option<String> =
+            if host_target.is_some() {
+                transcript_hint.as_ref().map(|(p, _)| p.clone())
+            } else {
+                None
+            };
+
         // For a REMOTE resume/reconnect, fetch the prior conversation from the
         // remote host's `.jsonl` over a fresh connection (which reuses the
         // session's ControlMaster / plink-share, so no extra MFA), and broadcast
@@ -2664,6 +2763,37 @@ fn spawn_session_reader(
                             .unwrap_or_else(|_| {
                                 serde_json::json!({"raw": raw})
                             });
+                    // Detect a turn boundary: a `result` event means claude
+                    // finished a turn. For REMOTE sessions, probe git now and
+                    // broadcast a ChangesUpdate so the Changes tab populates.
+                    let is_result = event.get("type")
+                        .and_then(|t| t.as_str())
+                        == Some("result");
+                    if is_result {
+                        if let (Some(target), Some(project)) =
+                            (host_target.as_deref(), remote_project.as_deref())
+                        {
+                            let script = remote_changes_script(project);
+                            if let Some(stdout) =
+                                run_remote_script(target, &script)
+                            {
+                                let changes = parse_remote_changes(&stdout);
+                                let cu_line = serde_json::json!({
+                                    "type": "ChangesUpdate",
+                                    "session_id": sid,
+                                    "changes": changes,
+                                })
+                                .to_string();
+                                let subs2 = subs_fifo.lock().unwrap();
+                                subs2.iter().for_each(|s| {
+                                    let _ = s.send(cu_line.clone());
+                                });
+                                eprintln!(
+                                    "marsad-agent: session {sid} changes update broadcast"
+                                );
+                            }
+                        }
+                    }
                     let ipc_msg =
                         marsad_proto::IpcMsg::AgentEvent {
                             session_id: sid.clone(),

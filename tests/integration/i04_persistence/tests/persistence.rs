@@ -68,6 +68,8 @@ fn make_session(id: &str, session_id: Option<&str>) -> PersistedSession {
         branch: "main".to_string(),
         model: "claude-sonnet-4-5".to_string(),
         last_phase: "running".to_string(),
+
+        posture: None,
     }
 }
 

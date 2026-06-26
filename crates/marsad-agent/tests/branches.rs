@@ -186,6 +186,7 @@ fn resume_session_tracked_with_claude_id_resumes() {
             branch: "main".to_string(),
             model: "claude-opus-4-8".to_string(),
             last_phase: "Done".to_string(),
+            posture: None,
         })
         .expect("upsert");
     let mut agent = Agent::with_fakes(
@@ -224,6 +225,7 @@ fn resume_session_empty_claude_id_continues() {
             branch: "main".to_string(),
             model: "claude-opus-4-8".to_string(),
             last_phase: "Done".to_string(),
+            posture: None,
         })
         .expect("upsert");
     let mut agent = Agent::with_fakes(
@@ -252,6 +254,46 @@ fn resume_session_unknown_returns_error() {
     assert!(
         matches!(result, Err(AgentError::Protocol(_))),
         "unknown session → Protocol error; got {result:?}"
+    );
+}
+
+/// Resuming a session with a persisted posture restores it (not just "Ask").
+/// Exercises the Some(...) branch in handle_resume_session's posture restoration.
+#[test]
+fn resume_session_restores_persisted_posture() {
+    let mut store = marsad_store::Store::new(Box::new(MemoryBackend::new()));
+    store
+        .upsert_session(&marsad_store::PersistedSession {
+            id: "posture-sess".to_string(),
+            session_id: Some("claude-uuid-posture".to_string()),
+            name: "posture-test".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
+            project: "/home/user/posture".to_string(),
+            branch: "main".to_string(),
+            model: "claude-opus-4-8".to_string(),
+            last_phase: "Done".to_string(),
+            posture: Some("FullAutonomy".to_string()),
+        })
+        .expect("upsert");
+    let mut agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(FakeContainer::new()),
+        Box::new(CaptureNotifier::new()),
+        Box::new(store),
+    )
+    .expect("with_fakes");
+
+    let result = agent.handle_ipc(r#"{"type":"ResumeSession","session_id":"posture-sess"}"#);
+    assert!(result.is_ok(), "ResumeSession with persisted posture must succeed; got {result:?}");
+    // The spawn command should contain bypassPermissions (FullAutonomy's --permission-mode value).
+    let last = agent.container_calls().last().expect("spawn").clone();
+    assert!(
+        last.contains("bypassPermissions"),
+        "FullAutonomy posture must produce bypassPermissions in spawn; got {last}"
     );
 }
 
@@ -449,6 +491,7 @@ fn reconcile_all_adopt_branch() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Working".to_string(),
+            posture: None,
         })
         .expect("upsert");
 
@@ -500,6 +543,7 @@ fn reconcile_all_resume_branch() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Done".to_string(),
+            posture: None,
         })
         .expect("upsert");
 
@@ -552,6 +596,7 @@ fn reconcile_all_stale_branch() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Error".to_string(),
+            posture: None,
         })
         .expect("upsert");
 
@@ -607,6 +652,7 @@ fn reconcile_all_mixed_adopt_resume_stale() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Working".to_string(),
+            posture: None,
         })
         .expect("upsert adopt");
     store
@@ -623,6 +669,7 @@ fn reconcile_all_mixed_adopt_resume_stale() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Done".to_string(),
+            posture: None,
         })
         .expect("upsert resume");
     store
@@ -639,6 +686,7 @@ fn reconcile_all_mixed_adopt_resume_stale() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Error".to_string(),
+            posture: None,
         })
         .expect("upsert stale");
 
@@ -887,6 +935,7 @@ fn reconcile_all_adopt_phase_is_detached() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Working".to_string(),
+            posture: None,
         })
         .expect("upsert");
 
@@ -929,6 +978,7 @@ fn reconcile_all_resume_phase_is_none() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Done".to_string(),
+            posture: None,
         })
         .expect("upsert");
 
@@ -971,6 +1021,7 @@ fn reconcile_all_stale_phase_is_stale() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Error".to_string(),
+            posture: None,
         })
         .expect("upsert");
 

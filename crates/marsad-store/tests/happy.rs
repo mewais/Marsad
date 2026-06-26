@@ -32,6 +32,7 @@ fn make_session(id: &str) -> PersistedSession {
         branch: "main".to_string(),
         model: "claude-opus-4-5".to_string(),
         last_phase: "Done".to_string(),
+        posture: None,
     }
 }
 
@@ -596,4 +597,25 @@ fn persisted_template_derives_clone_eq_debug() {
     let t2 = t.clone();
     assert_eq!(t, t2);
     let _ = format!("{t:?}");
+}
+
+// ---------------------------------------------------------------------------
+// posture field round-trip
+// ---------------------------------------------------------------------------
+
+/// PersistedSession.posture round-trips through the store.
+/// Covers the Some branch for the new field.
+#[test]
+fn upsert_session_posture_round_trips() {
+    let mut store = fresh_store();
+    let mut sess = make_session("posture-rt");
+    sess.posture = Some("FullAutonomy".to_string());
+    store.upsert_session(&sess).expect("upsert");
+    let restored = store.restore().expect("restore");
+    let found = restored
+        .sessions
+        .into_iter()
+        .find(|s| s.id == "posture-rt")
+        .expect("session must exist");
+    assert_eq!(found.posture, Some("FullAutonomy".to_string()));
 }

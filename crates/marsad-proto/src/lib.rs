@@ -128,6 +128,21 @@ pub enum ResultSubtype {
 }
 
 // ---------------------------------------------------------------------------
+// ModelUsage
+// ---------------------------------------------------------------------------
+
+/// Per-model token/cost breakdown from claude's `result` event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ModelUsage {
+    #[serde(default, rename = "inputTokens")]
+    pub input_tokens: u64,
+    #[serde(default, rename = "outputTokens")]
+    pub output_tokens: u64,
+    #[serde(default, rename = "costUSD")]
+    pub cost_usd: f64,
+}
+
+// ---------------------------------------------------------------------------
 // ResultMsg
 // ---------------------------------------------------------------------------
 
@@ -140,6 +155,10 @@ pub struct ResultMsg {
     pub is_error: bool,
     #[serde(default)]
     pub permission_denials: Vec<serde_json::Value>,
+    /// Cumulative per-model token + cost breakdown (populated by newer claude
+    /// CLI versions). Empty when absent (e.g. older claude or no model breakdown).
+    #[serde(default, rename = "modelUsage")]
+    pub model_usage: std::collections::HashMap<String, ModelUsage>,
 }
 
 // ---------------------------------------------------------------------------

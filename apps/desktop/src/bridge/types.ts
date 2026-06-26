@@ -113,6 +113,17 @@ export type Tab = "Activity" | "Changes" | "Config" | "Usage" | "Terminal";
 // SessionView — raw from core
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// ModelUsageRow — one row in the per-model usage breakdown
+// ---------------------------------------------------------------------------
+
+export interface ModelUsageRow {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
 export interface SessionView {
   id: string;
   name: string;
@@ -129,6 +140,7 @@ export interface SessionView {
   gate: Gate | null;
   transcript: TranscriptEntry[];
   changes: FileChange[];
+  model_usage: ModelUsageRow[];
 }
 
 // ---------------------------------------------------------------------------
