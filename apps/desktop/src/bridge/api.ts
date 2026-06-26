@@ -165,12 +165,26 @@ export async function interrupt(id: string): Promise<void> {
 export function parseEnv(text: string): Array<[string, string]> {
   const pairs: Array<[string, string]> = [];
   for (const raw of text.split("\n")) {
-    const line = raw.trim();
+    let line = raw.trim();
     if (!line) continue;
+    // Tolerate a pasted-from-.bashrc `export ` prefix: `export KEY=VALUE` → `KEY=VALUE`.
+    if (line.startsWith("export ")) line = line.slice("export ".length).trimStart();
     const eq = line.indexOf("=");
     if (eq <= 0) continue; // no '=' or empty key → ignore
     const key = line.slice(0, eq).trim();
-    const value = line.slice(eq + 1);
+    let value = line.slice(eq + 1).trim();
+    // Strip ONE layer of matching surrounding quotes. Users copy values straight
+    // from their shell config, e.g. `CLAUDE_CONFIG_DIR="/proj/.../claude"`, where
+    // the quotes are shell syntax — NOT part of the value. Keeping them baked the
+    // quotes into the exported value (`export K='"/proj/..."'`), so claude looked
+    // for a directory literally named with quotes and reported "not logged in".
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1);
+    }
     if (!key) continue;
     pairs.push([key, value]);
   }
