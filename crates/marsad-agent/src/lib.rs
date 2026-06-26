@@ -684,9 +684,19 @@ impl Agent {
             .map(|s| s.to_string())
             .unwrap_or_else(|| session_id.clone());
 
+        // For a Resume(uuid) launch, persist the claude session uuid up front:
+        // claude `--resume <uuid>` IS that conversation, and the transcript
+        // backfill keys off this to fetch the RIGHT remote `.jsonl` (otherwise it
+        // falls back to "most recent", which on some hosts finds nothing → the
+        // "resumed but no transcript" bug). Fresh/Continue stay None (the real id
+        // arrives later via system/init).
+        let claude_uuid = match &spec.mode {
+            marsad_proto::LaunchMode::Resume(uuid) if !uuid.is_empty() => Some(uuid.clone()),
+            _ => None,
+        };
         let persisted = marsad_store::PersistedSession {
             id: session_id.clone(),
-            session_id: None,
+            session_id: claude_uuid,
             name: persisted_name,
             host_id: spec.host_id.clone(),
             host_target: spec.host_target.clone(),
