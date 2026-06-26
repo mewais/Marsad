@@ -2531,7 +2531,7 @@ touch "$dir/out.log"
 cat > "$dir/run.sh" << 'MARSAD_RUN'
 {run_cmd}
 MARSAD_RUN
-printf '#!/bin/sh\nexec sh "%s/run.sh" < "%s/in.fifo" >> "%s/out.log" 2>&1\n' "$dir" "$dir" "$dir" > "$dir/start.sh"
+printf '#!/bin/sh\nexec bash -l "%s/run.sh" < "%s/in.fifo" >> "%s/out.log" 2>&1\n' "$dir" "$dir" "$dir" > "$dir/start.sh"
 chmod +x "$dir/run.sh" "$dir/start.sh"
 nohup setsid sh -c 'exec sleep 999999 > '"$dir/in.fifo"'' </dev/null >/dev/null 2>/dev/null &
 echo $! > "$dir/ka.pid"

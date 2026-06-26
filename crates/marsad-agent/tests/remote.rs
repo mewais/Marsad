@@ -194,6 +194,13 @@ fn remote_durable_launch_script_contains_mkfifo_and_nohup_setsid() {
     assert!(script.contains("claude.pid"), "claude.pid: {script}");
     // Must include the run_cmd.
     assert!(script.contains("'claude'"), "claude binary: {script}");
+    // run.sh MUST be launched via a LOGIN shell so the user's PATH (e.g.
+    // ~/.local/bin/claude, or a wrapper's module env) is available — a non-login
+    // `sh` would not find claude and the session would die on startup.
+    assert!(
+        script.contains("bash -l \"%s/run.sh\"") || script.contains("bash -l"),
+        "run.sh must run via a login shell: {script}"
+    );
     // Must reference the session id in the dir.
     assert!(script.contains("session-42"), "sid in script: {script}");
 }

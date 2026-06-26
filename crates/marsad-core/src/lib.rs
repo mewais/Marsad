@@ -1427,9 +1427,19 @@ fn chrono_now() -> String {
 
 fn new_session_id() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("session-{n:016x}")
+    // Include the launch time so ids are UNIQUE ACROSS RESTARTS. A pure counter
+    // reset to 1 every process start, so each restart minted `session-…0001`
+    // again — and the durable remote dir `~/.marsad/<id>` then collided with a
+    // prior (possibly removed) session's, making old sessions appear to "come
+    // back". The seconds prefix makes every launch's ids distinct.
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("session-{secs:x}-{n:x}")
 }
 
 /// Human-friendly session name: the project directory's last path component
