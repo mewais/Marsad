@@ -1691,7 +1691,7 @@ fn remote_transcript_script(project: &str, uuid: Option<&str>) -> String {
     // (`bash -l -s`) has the wrapper's env, so $CLAUDE_CONFIG_DIR is set there.
     let resolve = format!(
         "base=${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}; \
-         cwd=$(cd {cd} 2>/dev/null && pwd) || exit 0; \
+         cwd=$(cd {cd} 2>/dev/null && pwd -P) || exit 0; \
          enc=$(printf '%s' \"$cwd\" | sed 's/[^a-zA-Z0-9]/-/g'); \
          dir=\"$base/projects/$enc\"; "
     );
@@ -1786,7 +1786,7 @@ pub fn fetch_remote_session_list(host_target: &str, project: &str) -> Option<Str
     let cd = cd_target(project);
     let script = format!(
         "base=${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}\n\
-         cwd=$(cd {cd} 2>/dev/null && pwd) || exit 0\n\
+         cwd=$(cd {cd} 2>/dev/null && pwd -P) || exit 0\n\
          enc=$(printf '%s' \"$cwd\" | sed 's/[^a-zA-Z0-9]/-/g')\n\
          dir=\"$base/projects/$enc\"\n\
          for f in $(ls -t \"$dir\"/*.jsonl 2>/dev/null); do \
@@ -2517,9 +2517,18 @@ fn spawn_session_reader(
         // agent.log gives a clue (PATH, module, etc.).
         if lines_seen == 0 {
             if let Some(target) = host_target.as_deref() {
-                let script =
-                    "echo '== claude =='; command -v claude 2>/dev/null || echo 'claude NOT on PATH'";
-                if let Some(out) = run_remote_script(target, script) {
+                // Dump claude's actual out.log — claude's stderr/error is redirected
+                // there (start.sh: `>> out.log 2>&1`), but the reader's `tail -n0`
+                // skips pre-existing content, so a startup error (bad flag, crash,
+                // `--continue` with no session, etc.) never reaches the stream. This
+                // surfaces the REAL reason claude exited, plus a PATH check.
+                let dir = remote_session_dir(&sid);
+                let script = format!(
+                    "echo '== claude =='; command -v claude 2>/dev/null || echo 'claude NOT on PATH'; \
+                     echo '== out.log (claude startup output/error) =='; \
+                     tail -c 2000 {dir}/out.log 2>/dev/null"
+                );
+                if let Some(out) = run_remote_script(target, &script) {
                     eprintln!(
                         "marsad-agent: session {sid} remote diagnosis:\n{}",
                         out.trim()
@@ -2616,19 +2625,26 @@ echo "marsad-durable-launch: sid={sid} dir=$dir"
 
 /// Build the shell script that checks whether a durable remote session is live.
 ///
-/// Returns `LIVE` on stdout if:
+/// Returns `LIVE` on stdout if ALL of:
 ///  - the session dir exists,
-///  - `in.fifo` is a named FIFO (proves the session was set up), and
-///  - the keepalive PID recorded in `ka.pid` is still running.
+///  - `in.fifo` is a named FIFO (proves the session was set up),
+///  - the keepalive PID recorded in `ka.pid` is still running, AND
+///  - the claude PID recorded in `claude.pid` is still running.
 ///
-/// Returns `DEAD` otherwise.  Intended to be run via `run_remote_script`.
+/// Returns `DEAD` otherwise.  Requiring `claude.pid` (not just the keepalive)
+/// prevents the agent from "reconnecting" to a zombie session whose keepalive
+/// still holds the FIFO open but whose claude process has already exited (e.g.
+/// crashed on startup, or finished) — such a reconnect would attach a reader to
+/// a stream that will never produce output.  Intended for `run_remote_script`.
 pub fn remote_liveness_script(sid: &str) -> String {
     let dir = remote_session_dir(sid);
     format!(
         r#"dir={dir}
 if [ ! -p "$dir/in.fifo" ]; then echo DEAD; exit 0; fi
 ka=$(cat "$dir/ka.pid" 2>/dev/null || echo "")
-if [ -n "$ka" ] && kill -0 "$ka" 2>/dev/null; then echo LIVE; else echo DEAD; fi
+cl=$(cat "$dir/claude.pid" 2>/dev/null || echo "")
+if [ -n "$ka" ] && kill -0 "$ka" 2>/dev/null \
+   && [ -n "$cl" ] && kill -0 "$cl" 2>/dev/null; then echo LIVE; else echo DEAD; fi
 "#,
         dir = dir,
     )

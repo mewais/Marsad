@@ -38,6 +38,11 @@ import * as api from "../src/bridge/api";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // ThemeProvider persists theme/glass to localStorage and re-reads it on init,
+  // so without this clear a test that switches to "light" leaks that choice into
+  // the next test (which expects the documented initialTheme="dark"). Reset to a
+  // clean slate so every test starts from defaults.
+  localStorage.clear();
   // Re-set implementations that clearAllMocks wipes out.
   (api.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({ ...api.DEFAULT_SETTINGS });
   (api.setSettings as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);

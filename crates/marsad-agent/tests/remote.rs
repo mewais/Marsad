@@ -257,6 +257,9 @@ fn remote_liveness_script_structure() {
     assert!(script.contains("-p "), "FIFO check: {script}");
     // Must read the ka.pid file.
     assert!(script.contains("ka.pid"), "ka.pid: {script}");
+    // Must ALSO require the claude process alive (not just the keepalive) —
+    // prevents reconnecting to a zombie session whose claude has exited.
+    assert!(script.contains("claude.pid"), "claude.pid: {script}");
     // Must print LIVE or DEAD.
     assert!(script.contains("LIVE"), "LIVE output: {script}");
     assert!(script.contains("DEAD"), "DEAD output: {script}");
