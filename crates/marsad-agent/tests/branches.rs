@@ -326,6 +326,26 @@ fn ipc_command_answer_gate() {
     }
 }
 
+/// AnswerQuestion → answers an AskUserQuestion gate. Like AnswerGate, in the
+/// fake environment there's no pending gate, so it's a no-op ack; we assert it
+/// parses and dispatches without a Protocol error.
+#[test]
+fn ipc_command_answer_question() {
+    let mut agent = make_agent();
+    let (_, sid) = do_launch(&mut agent);
+
+    let answer = format!(
+        r#"{{"type":"AnswerQuestion","session_id":"{sid}","request_id":"req-1","answers":{{"What?":"Red"}}}}"#
+    );
+    let result = agent.handle_ipc(&answer);
+    if let Err(ref e) = result {
+        assert!(
+            !matches!(e, AgentError::Protocol(_)),
+            "AnswerQuestion must not return AgentError::Protocol; got {e:?}"
+        );
+    }
+}
+
 /// Subscribe → registers a subscriber (no session required).
 #[test]
 fn ipc_command_subscribe() {

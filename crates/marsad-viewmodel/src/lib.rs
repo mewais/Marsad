@@ -398,12 +398,13 @@ pub struct GateVM {
     pub is_permission: bool,
     pub is_plan: bool,
     pub is_edit: bool,
+    pub is_question: bool,
     pub diff_rows: Vec<marsad_diff::SideRow>,
 }
 
 /// Map a gate variant to its dashboard icon codepoint.
 ///
-/// The viewmodel layer owns these icon assignments (U+2318 ⌘, U+25A1 □, U+00B1 ±).
+/// The viewmodel layer owns these icon assignments (U+2318 ⌘, U+25A1 □, U+00B1 ±, U+2753 ❓).
 /// They differ from the literal glyphs stored in marsad-format's GateMeta — the
 /// viewmodel test suite is the authority for this crate's icon strings.
 fn gate_icon(gate: &marsad_gates::Gate) -> &'static str {
@@ -411,6 +412,7 @@ fn gate_icon(gate: &marsad_gates::Gate) -> &'static str {
         marsad_gates::Gate::Permission { .. } => "\u{2318}", // ⌘
         marsad_gates::Gate::Plan { .. } => "\u{25a1}",       // □
         marsad_gates::Gate::Edit { .. } => "\u{00b1}",       // ±
+        marsad_gates::Gate::Question { .. } => "\u{2753}",   // ❓
     }
 }
 
@@ -426,6 +428,7 @@ pub fn gate_vm(s: &AppSnapshot) -> Option<GateVM> {
     let is_permission = matches!(gate, marsad_gates::Gate::Permission { .. });
     let is_plan = matches!(gate, marsad_gates::Gate::Plan { .. });
     let is_edit = matches!(gate, marsad_gates::Gate::Edit { .. });
+    let is_question = matches!(gate, marsad_gates::Gate::Question { .. });
 
     let diff_rows = if let marsad_gates::Gate::Edit { diff, .. } = gate {
         marsad_diff::split_side_by_side(diff)
@@ -441,6 +444,7 @@ pub fn gate_vm(s: &AppSnapshot) -> Option<GateVM> {
         is_permission,
         is_plan,
         is_edit,
+        is_question,
         diff_rows,
     })
 }

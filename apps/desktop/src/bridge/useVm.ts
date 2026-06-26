@@ -380,6 +380,7 @@ function computeGate(
       is_permission: true,
       is_plan: false,
       is_edit: false,
+      is_question: false,
       diff_rows: [],
     };
   }
@@ -393,6 +394,26 @@ function computeGate(
       is_permission: false,
       is_plan: true,
       is_edit: false,
+      is_question: false,
+      diff_rows: [],
+    };
+  }
+  if ("Question" in g) {
+    const qs = g.Question.questions;
+    const summary =
+      qs.length === 0 ? "Question" :
+      qs.length === 1 ? qs[0].question :
+      `${qs.length} questions`;
+    return {
+      kind: "question",
+      icon: "❓",
+      lead: "Wants your input",
+      summary,
+      decision_id: g.Question.request_id,
+      is_permission: false,
+      is_plan: false,
+      is_edit: false,
+      is_question: true,
       diff_rows: [],
     };
   }
@@ -417,6 +438,7 @@ function computeGate(
       is_permission: false,
       is_plan: false,
       is_edit: true,
+      is_question: false,
       diff_rows,
     };
   }

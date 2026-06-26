@@ -238,7 +238,8 @@ fn gate_meta_plan_with_single_step() {
 #[test]
 fn gate_meta_plan_empty_steps() {
     // Edge: 0 steps — the prototype would panic on steps[0].title; the Rust impl
-    // must handle this gracefully.
+    // must handle this gracefully. With 0 steps the summary is derived from the
+    // plan markdown body (first non-empty line), not "0 steps".
     let gate = Gate::Plan {
         summary: String::from("Empty plan"),
         steps: vec![],
@@ -246,7 +247,8 @@ fn gate_meta_plan_empty_steps() {
     let gm = gate_meta(&gate);
     assert_eq!(gm.kind, "Plan review");
     assert_eq!(gm.approve_label, "Approve plan");
-    assert_eq!(gm.summary, "0 steps");
+    // When steps is empty, summary comes from the plan markdown (first line).
+    assert_eq!(gm.summary, "Empty plan");
 }
 
 #[test]
@@ -310,4 +312,100 @@ fn gate_meta_edit_empty_diff() {
     };
     let gm = gate_meta(&gate);
     assert_eq!(gm.summary, "empty.rs · +0 −0");
+}
+
+// ---------------------------------------------------------------------------
+// Gate::Question coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gate_meta_question_single_question() {
+    use marsad_gates::{Gate, QuestionOption, QuestionPrompt};
+    let gate = Gate::Question {
+        request_id: "req-q".to_string(),
+        questions: vec![QuestionPrompt {
+            question: "Which approach?".to_string(),
+            header: "Strategy".to_string(),
+            multi_select: false,
+            options: vec![QuestionOption {
+                label: "A".to_string(),
+                description: "first".to_string(),
+            }],
+        }],
+    };
+    let gm = gate_meta(&gate);
+    assert_eq!(gm.kind, "question");
+    assert_eq!(gm.icon, "?");
+    assert_eq!(gm.lead, "Wants your input");
+    assert_eq!(gm.summary, "Which approach?");
+    assert_eq!(gm.approve_label, "Submit");
+}
+
+#[test]
+fn gate_meta_question_no_questions() {
+    use marsad_gates::Gate;
+    let gate = Gate::Question {
+        request_id: "req-q0".to_string(),
+        questions: vec![],
+    };
+    let gm = gate_meta(&gate);
+    assert_eq!(gm.summary, "Question");
+}
+
+#[test]
+fn gate_meta_question_multiple_questions() {
+    use marsad_gates::{Gate, QuestionPrompt};
+    let gate = Gate::Question {
+        request_id: "req-qn".to_string(),
+        questions: vec![
+            QuestionPrompt {
+                question: "Q1".to_string(),
+                header: String::new(),
+                multi_select: false,
+                options: vec![],
+            },
+            QuestionPrompt {
+                question: "Q2".to_string(),
+                header: String::new(),
+                multi_select: false,
+                options: vec![],
+            },
+        ],
+    };
+    let gm = gate_meta(&gate);
+    assert_eq!(gm.summary, "2 questions");
+}
+
+// ---------------------------------------------------------------------------
+// Plan with empty summary (all whitespace) → "Plan" fallback
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gate_meta_plan_whitespace_only_summary() {
+    use marsad_gates::Gate;
+    let gate = Gate::Plan {
+        summary: String::from("   \n  "),
+        steps: vec![],
+    };
+    let gm = gate_meta(&gate);
+    assert_eq!(gm.summary, "Plan");
+}
+
+// ---------------------------------------------------------------------------
+// Plan with summary > 60 chars (truncation)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gate_meta_plan_long_summary_truncated() {
+    use marsad_gates::Gate;
+    // A first line of exactly 65 characters.
+    let long_line = "A".repeat(65);
+    let gate = Gate::Plan {
+        summary: long_line.clone(),
+        steps: vec![],
+    };
+    let gm = gate_meta(&gate);
+    // Should be first 60 chars + "…"
+    let expected = format!("{}…", &long_line[..60]);
+    assert_eq!(gm.summary, expected);
 }

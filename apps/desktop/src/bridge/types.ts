@@ -34,6 +34,18 @@ export interface PlanStep {
   detail: string;
 }
 
+export interface QuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface QuestionPrompt {
+  question: string;
+  header: string;
+  multi_select: boolean;
+  options: QuestionOption[];
+}
+
 export type Gate =
   | {
       Permission: {
@@ -45,7 +57,13 @@ export type Gate =
       };
     }
   | { Plan: { summary: string; steps: PlanStep[] } }
-  | { Edit: { file: string; diff: DiffLine[] } };
+  | { Edit: { file: string; diff: DiffLine[] } }
+  | {
+      Question: {
+        request_id: string;
+        questions: QuestionPrompt[];
+      };
+    };
 
 // ---------------------------------------------------------------------------
 // Host (marsad-hosts)
@@ -239,6 +257,7 @@ export interface GateVM {
   is_permission: boolean;
   is_plan: boolean;
   is_edit: boolean;
+  is_question: boolean;
   diff_rows: SideRow[];
 }
 

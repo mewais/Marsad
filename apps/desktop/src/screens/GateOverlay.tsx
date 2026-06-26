@@ -4,8 +4,9 @@
  */
 import { useState, useEffect } from "react";
 import { useVm } from "../bridge/useVm";
-import { answerGate } from "../bridge/api";
+import { answerGate, answerQuestion } from "../bridge/api";
 import { DiffView } from "../components/DiffView";
+import { Markdown } from "../components/Markdown";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -14,12 +15,14 @@ import { DiffView } from "../components/DiffView";
 function approveLabel(kind: string): string {
   if (kind === "plan") return "Approve plan";
   if (kind === "edit") return "Approve change";
+  if (kind === "question") return "Submit";
   return "Approve & run";
 }
 
 function kindBadge(kind: string): string {
   if (kind === "plan") return "Plan";
   if (kind === "edit") return "Edit";
+  if (kind === "question") return "Question";
   return "Permission";
 }
 
@@ -33,6 +36,8 @@ export function GateOverlay() {
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
+  // Multi-select state for question gates: maps question text → selected labels.
+  const [multiSelected, setMultiSelected] = useState<Record<string, string[]>>({});
 
   const open = state.screen === "gate" && selectedGate !== null;
 
@@ -104,6 +109,8 @@ export function GateOverlay() {
     raw && "Plan" in raw ? raw.Plan : null;
   const editData =
     raw && "Edit" in raw ? raw.Edit : null;
+  const questionData =
+    raw && "Question" in raw ? raw.Question : null;
 
   // The route ID shown in the footer (mirrors decision_id / session id)
   const routeId = selectedSession.id;
@@ -355,78 +362,199 @@ export function GateOverlay() {
           {/* ---- PLAN variant ---- */}
           {gate.is_plan && planData && (
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-              {/* Summary */}
+              {/* Plan markdown body (ExitPlanMode populates summary with the markdown) */}
               <div
+                data-testid="gate-plan-body"
                 style={{
-                  fontSize: "calc(15.5px * var(--fs,1))",
+                  fontSize: "calc(15px * var(--fs,1))",
                   color: "var(--txt)",
                   lineHeight: 1.6,
                   marginBottom: 16,
                 }}
               >
-                {planData.summary}
+                <Markdown text={planData.summary} />
               </div>
 
-              {/* Steps */}
-              <div
-                data-testid="gate-plan-steps"
-                style={{ display: "flex", flexDirection: "column", gap: 9 }}
-              >
-                {planData.steps.map((step, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      display: "flex",
-                      gap: 12,
-                      padding: "13px 14px",
-                      borderRadius: 11,
-                      background: "var(--panel2)",
-                      border: "1px solid var(--border)",
-                    }}
-                  >
-                    {/* Step number circle — accent style */}
-                    <span
+              {/* Steps (only present for old-style Plan gates with parsed steps) */}
+              {planData.steps.length > 0 && (
+                <div
+                  data-testid="gate-plan-steps"
+                  style={{ display: "flex", flexDirection: "column", gap: 9 }}
+                >
+                  {planData.steps.map((step, i) => (
+                    <div
+                      key={i}
                       style={{
-                        width: 23,
-                        height: 23,
-                        borderRadius: "50%",
-                        background: "var(--accent-bg)",
-                        color: "var(--accent2)",
-                        fontWeight: 800,
-                        fontSize: "calc(14px * var(--fs,1))",
                         display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        flexShrink: 0,
+                        gap: 12,
+                        padding: "13px 14px",
+                        borderRadius: 11,
+                        background: "var(--panel2)",
+                        border: "1px solid var(--border)",
                       }}
                     >
-                      {i + 1}
-                    </span>
-
-                    <div>
-                      <div
+                      {/* Step number circle — accent style */}
+                      <span
                         style={{
-                          fontWeight: 600,
-                          fontSize: "calc(15.5px * var(--fs,1))",
-                          marginBottom: 2,
-                          color: "var(--txt)",
-                        }}
-                      >
-                        {step.title}
-                      </div>
-                      <div
-                        style={{
+                          width: 23,
+                          height: 23,
+                          borderRadius: "50%",
+                          background: "var(--accent-bg)",
+                          color: "var(--accent2)",
+                          fontWeight: 800,
                           fontSize: "calc(14px * var(--fs,1))",
-                          color: "var(--txt3)",
-                          lineHeight: 1.5,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          flexShrink: 0,
                         }}
                       >
-                        {step.detail}
+                        {i + 1}
+                      </span>
+
+                      <div>
+                        <div
+                          style={{
+                            fontWeight: 600,
+                            fontSize: "calc(15.5px * var(--fs,1))",
+                            marginBottom: 2,
+                            color: "var(--txt)",
+                          }}
+                        >
+                          {step.title}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "calc(14px * var(--fs,1))",
+                            color: "var(--txt3)",
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          {step.detail}
+                        </div>
                       </div>
                     </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ---- QUESTION variant ---- */}
+          {gate.is_question && questionData && (
+            <div
+              data-testid="gate-question-body"
+              style={{ display: "flex", flexDirection: "column", gap: 18 }}
+            >
+              {questionData.questions.map((q, qi) => (
+                <div key={qi} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {/* Header badge */}
+                  {q.header && (
+                    <span
+                      style={{
+                        fontSize: "calc(12.5px * var(--fs,1))",
+                        fontWeight: 700,
+                        letterSpacing: 0.4,
+                        padding: "2px 7px",
+                        borderRadius: 5,
+                        color: "var(--accent2)",
+                        background: "var(--accent-bg)",
+                        textTransform: "uppercase",
+                        alignSelf: "flex-start",
+                      }}
+                    >
+                      {q.header}
+                    </span>
+                  )}
+                  {/* Question text */}
+                  <div
+                    style={{
+                      fontSize: "calc(15.5px * var(--fs,1))",
+                      fontWeight: 600,
+                      color: "var(--txt)",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {q.question}
                   </div>
-                ))}
-              </div>
+                  {/* Options */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                    {q.options.map((opt, oi) => {
+                      const selectedLabels = multiSelected[q.question] ?? [];
+                      const isSelected = selectedLabels.includes(opt.label);
+
+                      const handleOptionClick = async () => {
+                        if (!selectedSession || !questionData) return;
+                        if (q.multi_select) {
+                          // Toggle selection
+                          setMultiSelected((prev) => {
+                            const cur = prev[q.question] ?? [];
+                            const next = cur.includes(opt.label)
+                              ? cur.filter((l) => l !== opt.label)
+                              : [...cur, opt.label];
+                            return { ...prev, [q.question]: next };
+                          });
+                        } else {
+                          // Single-select: answer immediately
+                          setBusy(true);
+                          await answerQuestion({
+                            session_id: selectedSession.id,
+                            request_id: questionData.request_id,
+                            answers: { [q.question]: opt.label },
+                          });
+                          setBusy(false);
+                          close();
+                        }
+                      };
+
+                      return (
+                        <button
+                          key={oi}
+                          onClick={handleOptionClick}
+                          disabled={busy}
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: "flex-start",
+                            gap: 2,
+                            padding: "11px 14px",
+                            borderRadius: 11,
+                            border: isSelected
+                              ? "1.5px solid var(--accent2)"
+                              : "1px solid var(--border2)",
+                            background: isSelected ? "var(--accent-bg)" : "var(--panel2)",
+                            cursor: busy ? "not-allowed" : "pointer",
+                            opacity: busy ? 0.6 : 1,
+                            textAlign: "left",
+                            fontFamily: "inherit",
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontWeight: 700,
+                              fontSize: "calc(15px * var(--fs,1))",
+                              color: isSelected ? "var(--accent2)" : "var(--txt)",
+                            }}
+                          >
+                            {opt.label}
+                          </span>
+                          {opt.description && (
+                            <span
+                              style={{
+                                fontSize: "calc(13.5px * var(--fs,1))",
+                                color: "var(--txt3)",
+                                lineHeight: 1.4,
+                              }}
+                            >
+                              {opt.description}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 
@@ -561,45 +689,122 @@ export function GateOverlay() {
             </>
           ) : (
             <>
-              {/* ---- Normal state: Reject… + Approve ---- */}
-              <button
-                data-testid="reject-btn"
-                onClick={() => setRejectOpen(true)}
-                disabled={busy}
-                style={{
-                  fontFamily: "inherit",
-                  fontWeight: 600,
-                  fontSize: "calc(15px * var(--fs,1))",
-                  padding: "9px 15px",
-                  borderRadius: 9,
-                  border: "1px solid var(--border2)",
-                  background: "var(--panel2)",
-                  color: "var(--txt2)",
-                  cursor: busy ? "not-allowed" : "pointer",
-                  opacity: busy ? 0.6 : 1,
-                }}
-              >
-                Reject…
-              </button>
-              <button
-                data-testid="approve-btn"
-                onClick={handleApprove}
-                disabled={busy}
-                style={{
-                  fontFamily: "inherit",
-                  fontWeight: 700,
-                  fontSize: "calc(15px * var(--fs,1))",
-                  padding: "9px 20px",
-                  borderRadius: 9,
-                  border: "none",
-                  background: "var(--done)",
-                  color: "#0e1116",
-                  cursor: busy ? "not-allowed" : "pointer",
-                  opacity: busy ? 0.6 : 1,
-                }}
-              >
-                {approveLabel(kind)}
-              </button>
+              {/* ---- Normal state ---- */}
+              {/* For question gates: Skip + (multi-select Submit); no Reject… */}
+              {gate.is_question ? (
+                <>
+                  {/* Skip button — sends empty answers */}
+                  <button
+                    data-testid="question-skip-btn"
+                    onClick={async () => {
+                      if (!selectedSession || !questionData) return;
+                      setBusy(true);
+                      await answerQuestion({
+                        session_id: selectedSession.id,
+                        request_id: questionData.request_id,
+                        answers: {},
+                      });
+                      setBusy(false);
+                      close();
+                    }}
+                    disabled={busy}
+                    style={{
+                      fontFamily: "inherit",
+                      fontWeight: 600,
+                      fontSize: "calc(15px * var(--fs,1))",
+                      padding: "9px 15px",
+                      borderRadius: 9,
+                      border: "1px solid var(--border2)",
+                      background: "var(--panel2)",
+                      color: "var(--txt2)",
+                      cursor: busy ? "not-allowed" : "pointer",
+                      opacity: busy ? 0.6 : 1,
+                    }}
+                  >
+                    Skip
+                  </button>
+                  {/* Submit button for multi-select questions */}
+                  {questionData?.questions.some((q) => q.multi_select) && (
+                    <button
+                      data-testid="question-submit-btn"
+                      onClick={async () => {
+                        if (!selectedSession || !questionData) return;
+                        setBusy(true);
+                        const answers: Record<string, string> = {};
+                        for (const q of questionData.questions) {
+                          if (q.multi_select) {
+                            const sel = multiSelected[q.question] ?? [];
+                            answers[q.question] = sel.join(", ");
+                          }
+                        }
+                        await answerQuestion({
+                          session_id: selectedSession.id,
+                          request_id: questionData.request_id,
+                          answers,
+                        });
+                        setBusy(false);
+                        close();
+                      }}
+                      disabled={busy}
+                      style={{
+                        fontFamily: "inherit",
+                        fontWeight: 700,
+                        fontSize: "calc(15px * var(--fs,1))",
+                        padding: "9px 20px",
+                        borderRadius: 9,
+                        border: "none",
+                        background: "var(--done)",
+                        color: "#0e1116",
+                        cursor: busy ? "not-allowed" : "pointer",
+                        opacity: busy ? 0.6 : 1,
+                      }}
+                    >
+                      Submit
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <button
+                    data-testid="reject-btn"
+                    onClick={() => setRejectOpen(true)}
+                    disabled={busy}
+                    style={{
+                      fontFamily: "inherit",
+                      fontWeight: 600,
+                      fontSize: "calc(15px * var(--fs,1))",
+                      padding: "9px 15px",
+                      borderRadius: 9,
+                      border: "1px solid var(--border2)",
+                      background: "var(--panel2)",
+                      color: "var(--txt2)",
+                      cursor: busy ? "not-allowed" : "pointer",
+                      opacity: busy ? 0.6 : 1,
+                    }}
+                  >
+                    Reject…
+                  </button>
+                  <button
+                    data-testid="approve-btn"
+                    onClick={handleApprove}
+                    disabled={busy}
+                    style={{
+                      fontFamily: "inherit",
+                      fontWeight: 700,
+                      fontSize: "calc(15px * var(--fs,1))",
+                      padding: "9px 20px",
+                      borderRadius: 9,
+                      border: "none",
+                      background: "var(--done)",
+                      color: "#0e1116",
+                      cursor: busy ? "not-allowed" : "pointer",
+                      opacity: busy ? 0.6 : 1,
+                    }}
+                  >
+                    {approveLabel(kind)}
+                  </button>
+                </>
+              )}
             </>
           )}
         </div>

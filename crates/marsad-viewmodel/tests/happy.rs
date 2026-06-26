@@ -441,6 +441,34 @@ fn gate_vm_edit_has_diff_rows() {
     assert!(!vm.diff_rows.is_empty(), "edit gate must produce diff rows");
 }
 
+#[test]
+fn gate_vm_question_kind_and_icon() {
+    use marsad_gates::{Gate, QuestionOption, QuestionPrompt};
+    let gate = Gate::Question {
+        request_id: "req-q-vm".to_string(),
+        questions: vec![QuestionPrompt {
+            question: "Best approach?".to_string(),
+            header: "Strategy".to_string(),
+            multi_select: false,
+            options: vec![QuestionOption {
+                label: "A".to_string(),
+                description: "first".to_string(),
+            }],
+        }],
+    };
+    let mut snap = representative_snapshot();
+    snap.sessions[0].gate = Some(gate);
+    snap.selected_id = Some("s1".to_string());
+    let vm = gate_vm(&snap).unwrap();
+    assert_eq!(vm.kind, "question");
+    assert_eq!(vm.icon, "\u{2753}"); // ❓
+    assert!(!vm.is_permission);
+    assert!(!vm.is_plan);
+    assert!(!vm.is_edit);
+    assert!(vm.is_question);
+    assert!(vm.diff_rows.is_empty());
+}
+
 // ---------------------------------------------------------------------------
 // rescope — restrict to workspace session_ids
 // ---------------------------------------------------------------------------

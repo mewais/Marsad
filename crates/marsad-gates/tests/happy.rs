@@ -6,7 +6,8 @@
 //! - route yields exactly the decision's session_id
 
 use marsad_gates::{
-    approve, reject, route, to_control_response, Decision, DiffLine, Gate, PlanStep, Sig,
+    approve, decision_id, reject, route, to_control_response, Decision, DiffLine, Gate, PlanStep,
+    QuestionOption, QuestionPrompt, Sig,
 };
 
 // ---------------------------------------------------------------------------
@@ -335,4 +336,95 @@ fn gate_edit_implements_clone_and_debug() {
     let g2 = g.clone();
     assert_eq!(g, g2);
     let _dbg = format!("{g:?}");
+}
+
+// ---------------------------------------------------------------------------
+// Gate::Question — approve / reject / decision_id / clone
+// ---------------------------------------------------------------------------
+
+fn make_question_gate() -> Gate {
+    Gate::Question {
+        request_id: "req-q1".to_string(),
+        questions: vec![QuestionPrompt {
+            question: "Which approach?".to_string(),
+            header: "Strategy".to_string(),
+            multi_select: false,
+            options: vec![
+                QuestionOption {
+                    label: "Option A".to_string(),
+                    description: "First approach".to_string(),
+                },
+                QuestionOption {
+                    label: "Option B".to_string(),
+                    description: "Second approach".to_string(),
+                },
+            ],
+        }],
+    }
+}
+
+#[test]
+fn approve_question_gate_returns_approve_decision() {
+    let gate = make_question_gate();
+    let d = approve("session-q", &gate);
+    assert_eq!(d.session_id, "session-q");
+    assert_eq!(d.decision, Decision::Approve);
+}
+
+#[test]
+fn reject_question_gate_returns_reject_decision() {
+    let gate = make_question_gate();
+    let d = reject("session-q", &gate, "skip");
+    match &d.decision {
+        Decision::Reject { reason } => assert_eq!(reason, "skip"),
+        Decision::Approve => panic!("expected Reject"),
+    }
+}
+
+#[test]
+fn decision_id_question_gate_is_stable() {
+    let gate = make_question_gate();
+    let id1 = decision_id("session-q", &gate);
+    let id2 = decision_id("session-q", &gate);
+    assert_eq!(id1, id2);
+    assert!(!id1.0.is_empty());
+}
+
+#[test]
+fn gate_question_implements_clone_and_debug() {
+    let g = make_question_gate();
+    let g2 = g.clone();
+    assert_eq!(g, g2);
+    let _dbg = format!("{g:?}");
+}
+
+#[test]
+fn question_option_implements_clone_and_debug() {
+    let opt = QuestionOption {
+        label: "Opt".to_string(),
+        description: "desc".to_string(),
+    };
+    let opt2 = opt.clone();
+    assert_eq!(opt, opt2);
+    let _dbg = format!("{opt:?}");
+}
+
+#[test]
+fn question_prompt_implements_clone_and_debug() {
+    let p = QuestionPrompt {
+        question: "q".to_string(),
+        header: "h".to_string(),
+        multi_select: true,
+        options: vec![],
+    };
+    let p2 = p.clone();
+    assert_eq!(p, p2);
+    let _dbg = format!("{p:?}");
+}
+
+#[test]
+fn route_question_gate_returns_session_id() {
+    let gate = make_question_gate();
+    let d = approve("session-q-route", &gate);
+    assert_eq!(route(&d), "session-q-route");
 }

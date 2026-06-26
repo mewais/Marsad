@@ -750,6 +750,7 @@ impl Agent {
             "SendPrompt" => self.handle_send_prompt(&value),
             "Interrupt" => self.handle_interrupt(&value),
             "AnswerGate" => self.handle_answer_gate(&value),
+            "AnswerQuestion" => self.handle_answer_question(&value),
             "Subscribe" => self.handle_subscribe(),
             "Unsubscribe" => Ok(vec![]),
             other => Err(AgentError::Protocol(format!("unknown IPC type: {other}"))),
@@ -1037,6 +1038,45 @@ impl Agent {
 
         // If no pending gate, this is a benign no-op (the tests assert non-Protocol-error).
         let event = serde_json::json!({"type": "GateAnswered", "session_id": session_id});
+        Ok(vec![event.to_string()])
+    }
+
+    fn handle_answer_question(&mut self, value: &serde_json::Value) -> Result<Vec<String>, AgentError> {
+        let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
+            "AnswerQuestion missing session_id".to_string(),
+        ))?;
+
+        // In production builds: pull (and clear) the pending gate for this session,
+        // then build and write the AskUserQuestion control_response to claude's stdin.
+        // Mirrors handle_answer_gate's writer-locking + write/flush pattern.
+        #[cfg(not(coverage))]
+        {
+            use std::io::Write;
+            let answers = value["answers"].clone();
+
+            let pending = {
+                let mut gates = self.pending_gates.0.lock().unwrap();
+                gates.remove(session_id)
+            };
+
+            if let Some(gate) = pending {
+                let encoded = marsad_proto::encode_control_response_question(
+                    &gate.request_id,
+                    &gate.input,
+                    &answers,
+                );
+                let writers = self.session_writers.0.lock().unwrap();
+                if let Some(shared) = writers.get(session_id) {
+                    let mut writer = shared.lock().unwrap();
+                    let _ = writer.write_all(encoded.as_bytes());
+                    let _ = writer.write_all(b"\n");
+                    let _ = writer.flush();
+                }
+            }
+        }
+
+        // Coverage builds: no IO — just return the ack.
+        let event = serde_json::json!({"type": "QuestionAnswered", "session_id": session_id});
         Ok(vec![event.to_string()])
     }
 

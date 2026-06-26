@@ -298,6 +298,14 @@ pub enum IpcMsg {
         #[serde(default)]
         deny_reason: Option<String>,
     },
+    AnswerQuestion {
+        /// The session whose pending AskUserQuestion gate this answers.
+        session_id: String,
+        request_id: String,
+        /// Answers map: question text → selected label(s).  An empty object
+        /// counts as "skip" (the tool returns "did not answer").
+        answers: serde_json::Value,
+    },
     Subscribe {
         session_id: String,
     },
@@ -510,6 +518,42 @@ pub fn encode_control_response_elicitation(request_id: &str, accept: bool) -> St
     serde_json::to_string(&wire).expect("elicitation response is always serializable")
 }
 
+/// Encode the control_response that answers an `AskUserQuestion` `can_use_tool`
+/// request.
+///
+/// Wire shape (verified from the spec):
+/// `{"type":"control_response","response":{"subtype":"success","request_id":"X","response":{"behavior":"allow","updatedInput":{"questions":[…],"answers":{"<question>":"<label>"}}}}}`
+///
+/// `original_input` is the full `input` object captured when the gate arrived
+/// (so we can echo the original `questions` array back as `updatedInput`).
+/// `answers` is an object keyed by question text → selected label(s) string; an
+/// empty object (`{}`) signals "skip" to the tool (it returns "did not answer").
+pub fn encode_control_response_question(
+    request_id: &str,
+    original_input: &serde_json::Value,
+    answers: &serde_json::Value,
+) -> String {
+    let questions = original_input
+        .get("questions")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+    let wire = serde_json::json!({
+        "type": "control_response",
+        "response": {
+            "subtype": "success",
+            "request_id": request_id,
+            "response": {
+                "behavior": "allow",
+                "updatedInput": {
+                    "questions": questions,
+                    "answers": answers,
+                }
+            }
+        }
+    });
+    serde_json::to_string(&wire).expect("question response is always serializable")
+}
+
 /// Encode the `initialize` control request the agent sends to the `claude` CLI
 /// once on connect. This handshake is required for the control protocol; the
 /// CLI replies with a `control_response` ack (which the agent ignores).
@@ -571,6 +615,7 @@ pub fn parse_ipc(line: &str) -> Result<IpcMsg, ProtoError> {
         "StopSession",
         "SendPrompt",
         "AnswerGate",
+        "AnswerQuestion",
         "Subscribe",
         "VmUpdate",
         "AgentEvent",

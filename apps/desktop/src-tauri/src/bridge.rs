@@ -270,6 +270,22 @@ pub fn interrupt(state: State<'_, ManagedState>, id: String) -> Result<(), Strin
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub fn answer_question(
+    state: State<'_, ManagedState>,
+    session_id: String,
+    request_id: String,
+    answers: serde_json::Value,
+) -> Result<(), String> {
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    match &mut *guard {
+        AppState::Live(core) => core
+            .answer_question(&session_id, &request_id, answers)
+            .map_err(map_err),
+        AppState::Mock(_) => Ok(()),
+    }
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub fn answer_gate(
     state: State<'_, ManagedState>,
     session_id: String,

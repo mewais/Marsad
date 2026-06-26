@@ -1175,15 +1175,38 @@ impl Core {
 
     pub fn interrupt(&mut self, id: &str) -> Result<(), CoreError> {
         self.require_session(id)?;
-        // Reuse StopSession with an added "interrupt" flag (infallible serde).
-        let mut val: Value = serde_json::from_str(&encode_ipc(&IpcMsg::StopSession {
+        // Emit a dedicated `Interrupt` message so the agent routes it to
+        // handle_interrupt — which writes claude's `interrupt` control_request to
+        // stop the CURRENT TURN (claude then ends the turn with
+        // error_during_execution, so the UI leaves "Working").
+        //
+        // Previously this sent a StopSession message with an extra `interrupt`
+        // flag, but the agent dispatches purely on `type`: it hit
+        // handle_stop_session, which KILLED the durable session AND never stopped
+        // the turn (so the badge stayed "Working"). proto has no Interrupt IpcMsg
+        // variant, so we emit the raw line the agent's dispatch already expects.
+        self.send_raw_line(
+            &serde_json::json!({ "type": "Interrupt", "session_id": id }).to_string(),
+        )
+    }
+
+    /// Answer an `AskUserQuestion` gate by sending the user's chosen answers to
+    /// the agent, which forwards them to claude as an `updatedInput` control_response.
+    ///
+    /// `id` is the marsad session id; `request_id` is the control-request id captured
+    /// in the `Gate::Question`; `answers` maps question text to the selected label.
+    pub fn answer_question(
+        &mut self,
+        id: &str,
+        request_id: &str,
+        answers: serde_json::Value,
+    ) -> Result<(), CoreError> {
+        self.require_session(id)?;
+        self.send_ipc(&marsad_proto::IpcMsg::AnswerQuestion {
             session_id: id.to_string(),
-        }))
-        .unwrap();
-        val.as_object_mut()
-            .unwrap()
-            .insert("interrupt".to_string(), Value::Bool(true));
-        self.send_raw_line(&serde_json::to_string(&val).unwrap())
+            request_id: request_id.to_string(),
+            answers,
+        })
     }
 
     pub fn answer_gate(&mut self, decision: GateDecision) -> Result<(), CoreError> {

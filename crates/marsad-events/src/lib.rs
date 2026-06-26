@@ -312,6 +312,34 @@ fn reduce_control_request(
     mut state: SessionState,
     req: marsad_proto::ControlRequest,
 ) -> SessionState {
+    // Detect special HITL tool names first.
+    if req.tool_name == "AskUserQuestion" {
+        let questions = parse_question_prompts(&req.input);
+        let gate = marsad_gates::Gate::Question {
+            request_id: req.request_id.clone(),
+            questions,
+        };
+        state.gate = Some(gate);
+        state.phase = Phase::Needs;
+        return state;
+    }
+
+    if req.tool_name == "ExitPlanMode" {
+        let plan_md = req
+            .input
+            .get("plan")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let gate = marsad_gates::Gate::Plan {
+            summary: plan_md,
+            steps: vec![],
+        };
+        state.gate = Some(gate);
+        state.phase = Phase::Needs;
+        return state;
+    }
+
     // Build a Permission gate from the control request. The `command` field is
     // what the UI shows as `$ …`, so it must be the ACTUAL invocation, not the
     // bare tool name — a Bash gate used to read `$ Bash` because we copied
@@ -348,6 +376,58 @@ fn reduce_control_request(
     state.gate = Some(gate);
     state.phase = Phase::Needs;
     state
+}
+
+/// Parse the `questions` array from an `AskUserQuestion` tool input.
+fn parse_question_prompts(input: &serde_json::Value) -> Vec<marsad_gates::QuestionPrompt> {
+    let arr = match input.get("questions").and_then(|v| v.as_array()) {
+        Some(a) => a,
+        None => return vec![],
+    };
+    arr.iter()
+        .map(|q| {
+            let question = q
+                .get("question")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let header = q
+                .get("header")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let multi_select = q
+                .get("multiSelect")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let options = q
+                .get("options")
+                .and_then(|v| v.as_array())
+                .map(|opts| {
+                    opts.iter()
+                        .map(|o| marsad_gates::QuestionOption {
+                            label: o
+                                .get("label")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            description: o
+                                .get("description")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            marsad_gates::QuestionPrompt {
+                question,
+                header,
+                multi_select,
+                options,
+            }
+        })
+        .collect()
 }
 
 /// Pull the command out of an MCP elicitation prompt for the gate's `$ …` line.

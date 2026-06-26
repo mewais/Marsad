@@ -181,10 +181,22 @@ pub fn gate_meta(gate: &Gate) -> GateMeta {
             summary: format!("$ {command}"),
             approve_label: "Approve & run",
         },
-        Gate::Plan { steps, .. } => {
+        Gate::Plan { summary, steps } => {
             let n = steps.len();
-            let summary = if n == 0 {
-                String::from("0 steps")
+            let plan_summary = if n == 0 {
+                // Derive a summary from the plan markdown body: first non-empty line.
+                let first_line = summary
+                    .lines()
+                    .map(|l| l.trim())
+                    .find(|l| !l.is_empty())
+                    .unwrap_or("");
+                if first_line.is_empty() {
+                    String::from("Plan")
+                } else if first_line.len() > 60 {
+                    format!("{}…", &first_line[..60])
+                } else {
+                    first_line.to_string()
+                }
             } else {
                 let first = &steps[0].title;
                 format!("{n} steps · {first}…")
@@ -193,8 +205,22 @@ pub fn gate_meta(gate: &Gate) -> GateMeta {
                 kind: "Plan review",
                 icon: "❑",
                 lead: "Proposed plan",
-                summary,
+                summary: plan_summary,
                 approve_label: "Approve plan",
+            }
+        }
+        Gate::Question { questions, .. } => {
+            let summary = match questions.len() {
+                0 => "Question".to_string(),
+                1 => questions[0].question.clone(),
+                n => format!("{n} questions"),
+            };
+            GateMeta {
+                kind: "question",
+                icon: "?",
+                lead: "Wants your input",
+                summary,
+                approve_label: "Submit",
             }
         }
         Gate::Edit { file, diff } => {

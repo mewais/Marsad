@@ -2544,3 +2544,57 @@ fn load_sessions_restores_custom_name() {
         "load_sessions must restore the custom name as the display name"
     );
 }
+
+// ---------------------------------------------------------------------------
+// answer_question — sends an outbound AnswerQuestion IPC line
+// ---------------------------------------------------------------------------
+
+#[test]
+fn answer_question_sends_ipc() {
+    let (mut core, mut peer) = make_core();
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "proj-q".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
+            model: "claude-opus-4-5".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+        })
+        .expect("launch");
+    let _ = peer.drain_outbound();
+
+    let answers = serde_json::json!({"Which approach?": "Option A"});
+    core.answer_question(&id, "req-q-1", answers)
+        .expect("answer_question should succeed");
+
+    let outbound = peer.drain_outbound();
+    assert!(
+        !outbound.is_empty(),
+        "answer_question must emit an outbound IPC line"
+    );
+    let combined = outbound.join(" ");
+    assert!(
+        combined.contains("AnswerQuestion") || combined.contains("question"),
+        "outbound must reference AnswerQuestion, got: {combined}"
+    );
+}
+
+#[test]
+fn answer_question_unknown_session_returns_error() {
+    let (mut core, _peer) = make_core();
+    let result = core.answer_question(
+        "no-such-session",
+        "req-q-1",
+        serde_json::json!({}),
+    );
+    assert!(
+        result.is_err(),
+        "answer_question for unknown session must return an error"
+    );
+}

@@ -37,6 +37,31 @@ pub enum Gate {
         file: String,
         diff: Vec<DiffLine>,
     },
+    Question {
+        /// The control-request id this gate answers.
+        request_id: String,
+        questions: Vec<QuestionPrompt>,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// QuestionPrompt / QuestionOption
+// ---------------------------------------------------------------------------
+
+/// One question in an `AskUserQuestion` gate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuestionPrompt {
+    pub question: String,
+    pub header: String,
+    pub multi_select: bool,
+    pub options: Vec<QuestionOption>,
+}
+
+/// One selectable option inside a `QuestionPrompt`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    pub description: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +186,9 @@ fn gate_canonical(session_id: &str, gate: &Gate) -> String {
         }
         Gate::Edit { file, .. } => {
             format!("edit\x00{session_id}\x00{file}")
+        }
+        Gate::Question { request_id, .. } => {
+            format!("question\x00{session_id}\x00{request_id}")
         }
     }
 }

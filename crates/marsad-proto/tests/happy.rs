@@ -3,9 +3,9 @@
 /// These tests WILL fail to compile until the code-agent implements `marsad_proto`.
 /// That is the expected tests-first signal.
 use marsad_proto::{
-    encode_control_response, encode_control_response_elicitation, encode_ipc, encode_user_input,
-    parse_ipc, parse_stream_line, ContentBlock, ControlResponse, IpcMsg, ResultSubtype, StreamMsg,
-    UserInput,
+    encode_control_response, encode_control_response_elicitation,
+    encode_control_response_question, encode_ipc, encode_user_input, parse_ipc, parse_stream_line,
+    ContentBlock, ControlResponse, IpcMsg, ResultSubtype, StreamMsg, UserInput,
 };
 
 // ---------------------------------------------------------------------------
@@ -555,6 +555,11 @@ fn encode_ipc_all_variants_produce_valid_json() {
             allow: true,
             deny_reason: None,
         },
+        IpcMsg::AnswerQuestion {
+            session_id: "sid-6".to_string(),
+            request_id: "req-q1".to_string(),
+            answers: serde_json::json!({"Which approach?": "Option A"}),
+        },
         IpcMsg::Subscribe {
             session_id: "sid-5".to_string(),
         },
@@ -570,4 +575,72 @@ fn encode_ipc_all_variants_produce_valid_json() {
         // just assert they re-encode to the same string (stable serialization)
         assert_eq!(encode_ipc(&reparsed), encoded);
     }
+}
+
+// ---------------------------------------------------------------------------
+// encode_control_response_question — new HITL question answer encoder
+// ---------------------------------------------------------------------------
+
+#[test]
+fn encode_control_response_question_with_answers() {
+    let original_input = serde_json::json!({
+        "questions": [{"question": "Which approach?", "header": "Strategy", "multiSelect": false, "options": []}]
+    });
+    let answers = serde_json::json!({"Which approach?": "Option A"});
+    let encoded = encode_control_response_question("req-q1", &original_input, &answers);
+    let val: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
+    assert_eq!(val["type"].as_str(), Some("control_response"));
+    let response = &val["response"];
+    assert_eq!(response["subtype"].as_str(), Some("success"));
+    assert_eq!(response["request_id"].as_str(), Some("req-q1"));
+    let inner = &response["response"];
+    assert_eq!(inner["behavior"].as_str(), Some("allow"));
+    let updated = &inner["updatedInput"];
+    assert!(updated["questions"].is_array());
+    assert_eq!(updated["answers"]["Which approach?"].as_str(), Some("Option A"));
+}
+
+#[test]
+fn encode_control_response_question_no_questions_field_uses_empty_array() {
+    // When the original input has no "questions" field, it should default to [].
+    let original_input = serde_json::json!({"plan": "some plan"});
+    let answers = serde_json::json!({});
+    let encoded = encode_control_response_question("req-q2", &original_input, &answers);
+    let val: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
+    let inner = &val["response"]["response"];
+    assert_eq!(inner["updatedInput"]["questions"], serde_json::json!([]));
+}
+
+// ---------------------------------------------------------------------------
+// parse_ipc / encode_ipc — AnswerQuestion round-trip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parse_ipc_answer_question() {
+    let line = r#"{"type":"AnswerQuestion","session_id":"s1","request_id":"req-q1","answers":{"Which approach?":"Option A"}}"#;
+    let msg = parse_ipc(line).expect("should parse AnswerQuestion");
+    match msg {
+        IpcMsg::AnswerQuestion {
+            session_id,
+            request_id,
+            answers,
+        } => {
+            assert_eq!(session_id, "s1");
+            assert_eq!(request_id, "req-q1");
+            assert_eq!(answers["Which approach?"].as_str(), Some("Option A"));
+        }
+        other => panic!("expected AnswerQuestion, got {other:?}"),
+    }
+}
+
+#[test]
+fn encode_decode_answer_question_roundtrip() {
+    let msg = IpcMsg::AnswerQuestion {
+        session_id: "s1".to_string(),
+        request_id: "req-q1".to_string(),
+        answers: serde_json::json!({"q": "a"}),
+    };
+    let encoded = encode_ipc(&msg);
+    let reparsed = parse_ipc(&encoded).expect("roundtrip should succeed");
+    assert_eq!(encode_ipc(&reparsed), encoded);
 }

@@ -517,6 +517,16 @@ fn handle_ipc_missing_session_id_answer_gate() {
     );
 }
 
+#[test]
+fn handle_ipc_missing_session_id_answer_question() {
+    let mut agent = make_agent_with_container(FakeContainer::new());
+    let result = agent.handle_ipc(r#"{"type":"AnswerQuestion","request_id":"r","answers":{}}"#);
+    assert!(
+        matches!(result, Err(AgentError::Protocol(_))),
+        "AnswerQuestion missing session_id must return Protocol; got {result:?}"
+    );
+}
+
 // ── launch: spawn failure with predictable container name ─────────────────────
 
 /// `Agent::next_session_id()` starts at 1, so the very first `launch` call on a

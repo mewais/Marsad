@@ -274,6 +274,16 @@ export async function answerGate(args: {
   await invoke("answer_gate", args);
 }
 
+export async function answerQuestion(args: {
+  session_id: string;
+  request_id: string;
+  answers: Record<string, string>;
+}): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("answer_question", args);
+}
+
 export async function runSlash(id: string, cmd: string): Promise<void> {
   if (!isTauri()) return;
   const invoke = await getInvoke();

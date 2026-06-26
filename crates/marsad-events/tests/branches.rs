@@ -613,3 +613,178 @@ fn subagent_status_derives_clone_eq_debug() {
     assert_ne!(running, done);
     let _ = format!("{running:?} {done:?}");
 }
+
+// ---------------------------------------------------------------------------
+// AskUserQuestion gate via control_request
+// ---------------------------------------------------------------------------
+
+fn system_init_json_br() -> &'static str {
+    r#"{"type":"system","subtype":"init","session_id":"sess-q","model":"claude-opus-4-5","cwd":"/tmp","tools":[],"mcp_servers":[],"permissionMode":"default"}"#
+}
+
+fn ask_user_question_json(request_id: &str) -> String {
+    let val = serde_json::json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": "AskUserQuestion",
+            "input": {
+                "questions": [{
+                    "question": "Which option?",
+                    "header": "Choose",
+                    "multiSelect": false,
+                    "options": [
+                        {"label": "A", "description": "First"},
+                        {"label": "B", "description": "Second"}
+                    ]
+                }]
+            }
+        }
+    });
+    serde_json::to_string(&val).unwrap()
+}
+
+fn ask_user_question_multi_json(request_id: &str) -> String {
+    let val = serde_json::json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": "AskUserQuestion",
+            "input": {
+                "questions": [{
+                    "question": "Pick all that apply?",
+                    "header": "Multi",
+                    "multiSelect": true,
+                    "options": [
+                        {"label": "X", "description": ""},
+                        {"label": "Y", "description": ""}
+                    ]
+                }]
+            }
+        }
+    });
+    serde_json::to_string(&val).unwrap()
+}
+
+fn ask_user_question_no_questions_json(request_id: &str) -> String {
+    let val = serde_json::json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": "AskUserQuestion",
+            "input": {}
+        }
+    });
+    serde_json::to_string(&val).unwrap()
+}
+
+fn exit_plan_mode_json(request_id: &str) -> String {
+    // Build via serde_json to avoid raw-string escaping issues with embedded newlines.
+    let plan_body = "## The Plan\n\n1. Step one\n2. Step two";
+    let val = serde_json::json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": "ExitPlanMode",
+            "input": { "plan": plan_body }
+        }
+    });
+    serde_json::to_string(&val).unwrap()
+}
+
+fn exit_plan_mode_no_plan_json(request_id: &str) -> String {
+    let val = serde_json::json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": "ExitPlanMode",
+            "input": {}
+        }
+    });
+    serde_json::to_string(&val).unwrap()
+}
+
+#[test]
+fn ask_user_question_single_select_builds_question_gate() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json_br()));
+    let s1 = reduce(s0, stream(&ask_user_question_json("req-aq-1")));
+    assert_eq!(s1.phase, Phase::Needs);
+    match s1.gate.as_ref().expect("gate must be set") {
+        marsad_gates::Gate::Question {
+            request_id,
+            questions,
+        } => {
+            assert_eq!(request_id, "req-aq-1");
+            assert_eq!(questions.len(), 1);
+            assert_eq!(questions[0].question, "Which option?");
+            assert_eq!(questions[0].header, "Choose");
+            assert!(!questions[0].multi_select);
+            assert_eq!(questions[0].options.len(), 2);
+            assert_eq!(questions[0].options[0].label, "A");
+            assert_eq!(questions[0].options[0].description, "First");
+        }
+        other => panic!("expected Question gate, got {other:?}"),
+    }
+}
+
+#[test]
+fn ask_user_question_multi_select_builds_question_gate() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json_br()));
+    let s1 = reduce(s0, stream(&ask_user_question_multi_json("req-aq-2")));
+    assert_eq!(s1.phase, Phase::Needs);
+    match s1.gate.as_ref().expect("gate must be set") {
+        marsad_gates::Gate::Question { questions, .. } => {
+            assert!(questions[0].multi_select);
+        }
+        other => panic!("expected Question gate, got {other:?}"),
+    }
+}
+
+#[test]
+fn ask_user_question_empty_input_yields_empty_questions() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json_br()));
+    let s1 = reduce(
+        s0,
+        stream(&ask_user_question_no_questions_json("req-aq-3")),
+    );
+    assert_eq!(s1.phase, Phase::Needs);
+    match s1.gate.as_ref().expect("gate must be set") {
+        marsad_gates::Gate::Question { questions, .. } => {
+            assert!(questions.is_empty());
+        }
+        other => panic!("expected Question gate, got {other:?}"),
+    }
+}
+
+#[test]
+fn exit_plan_mode_builds_plan_gate_with_markdown() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json_br()));
+    let s1 = reduce(s0, stream(&exit_plan_mode_json("req-ep-1")));
+    assert_eq!(s1.phase, Phase::Needs);
+    match s1.gate.as_ref().expect("gate must be set") {
+        marsad_gates::Gate::Plan { summary, steps } => {
+            assert!(summary.contains("Step one"), "summary: {summary}");
+            assert!(steps.is_empty());
+        }
+        other => panic!("expected Plan gate, got {other:?}"),
+    }
+}
+
+#[test]
+fn exit_plan_mode_no_plan_field_yields_empty_summary() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json_br()));
+    let s1 = reduce(s0, stream(&exit_plan_mode_no_plan_json("req-ep-2")));
+    assert_eq!(s1.phase, Phase::Needs);
+    match s1.gate.as_ref().expect("gate must be set") {
+        marsad_gates::Gate::Plan { summary, steps } => {
+            assert!(summary.is_empty());
+            assert!(steps.is_empty());
+        }
+        other => panic!("expected Plan gate, got {other:?}"),
+    }
+}
