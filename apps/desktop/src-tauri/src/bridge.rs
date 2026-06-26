@@ -625,10 +625,17 @@ fn interactive_ssh_args(target: &str) -> Vec<String> {
             inner.to_string(),
         ];
     }
-    // WSL-routed SSH: open the interactive login INSIDE the distro (`wsl ssh …`)
-    // with ControlMaster, so completing the Duo/MFA prompt here establishes the
-    // master socket that the agent's automated `wsl ssh` connections then reuse.
-    // No -T / no BatchMode: the user needs a TTY to answer the prompt.
+    // WSL-routed SSH: authenticate INSIDE the distro (`wsl ssh …`) with
+    // ControlMaster so completing the Duo/MFA prompt here establishes the master
+    // socket that the agent's automated `wsl ssh` connections then reuse.
+    //
+    // Crucially we DON'T open an interactive shell — `ssh <host>` with no command
+    // sits at a remote prompt forever ("doesn't go back to Marsad, stays in the
+    // terminal"). Instead we run a ONE-SHOT command: Duo prompts during auth, the
+    // master is established, the command prints a "done" message, and ssh EXITS.
+    // The master persists via ControlPersist=600, so later connections reuse it
+    // with no re-auth. The cmd /K window stays open showing the message until the
+    // user closes it. No -T/BatchMode: keyboard-interactive (Duo) needs prompting.
     if let Some(rest) = target.strip_prefix("wslssh:") {
         let mut parts = rest.splitn(2, ':');
         let distro = parts.next().unwrap_or("");
@@ -648,6 +655,16 @@ fn interactive_ssh_args(target: &str) -> Vec<String> {
                 "-o".to_string(),
                 "ServerAliveInterval=30".to_string(),
                 inner.to_string(),
+                // One-shot remote command (ssh joins the trailing tokens): confirms
+                // auth + leaves the persistent master, then ssh exits.
+                "echo".to_string(),
+                "Marsad:".to_string(),
+                "connected.".to_string(),
+                "You".to_string(),
+                "can".to_string(),
+                "close".to_string(),
+                "this".to_string(),
+                "window.".to_string(),
             ];
         }
     }
