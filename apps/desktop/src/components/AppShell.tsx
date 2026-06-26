@@ -243,7 +243,7 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
                 textTransform: "uppercase",
               }}
             >
-              Observatory
+              Watchtower
             </span>
           </div>
         </div>

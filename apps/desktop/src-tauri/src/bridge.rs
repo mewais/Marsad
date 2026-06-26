@@ -745,9 +745,24 @@ fn launch_interactive_ssh(target: &str) -> Result<(), String> {
         args[0] = resolve_plink_bin();
     }
     let mut cmd = Command::new("cmd.exe");
-    cmd.arg("/K");
-    for a in &args {
-        cmd.arg(a);
+    if target.starts_with("wslssh:") {
+        // wslssh authenticates with a one-shot command and EXITS (the ControlMaster
+        // persists), so the window has nothing to hold open. `cmd /C <login> & timeout`
+        // runs the login, shows the Duo prompt + result for a few seconds, then the
+        // window AUTO-CLOSES so the user lands back in Marsad instead of a leftover
+        // prompt. (/K would keep the dead window open — the reported issue.)
+        cmd.arg("/C");
+        for a in &args {
+            cmd.arg(a);
+        }
+        cmd.arg("&").arg("timeout").arg("/t").arg("6");
+    } else {
+        // Native ssh opens a real interactive shell; plink's window IS the persistent
+        // sharing upstream (closing it drops the connection). Keep it open with /K.
+        cmd.arg("/K");
+        for a in &args {
+            cmd.arg(a);
+        }
     }
     cmd.creation_flags(CREATE_NEW_CONSOLE);
     cmd.spawn()

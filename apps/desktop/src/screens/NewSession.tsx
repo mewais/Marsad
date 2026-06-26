@@ -278,6 +278,11 @@ export function NewSession() {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Defaults to the project directory name"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            // Defeat WebView2/Chromium autofill history dropdown on this field.
+            name="ns-name-nofill"
             style={{
               width: "100%",
               boxSizing: "border-box",
@@ -303,6 +308,10 @@ export function NewSession() {
             onChange={(e) => setProject(e.target.value)}
             placeholder="~/code/my-project"
             className="mono"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            name="ns-project-nofill"
             style={{
               width: "100%",
               boxSizing: "border-box",
