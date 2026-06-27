@@ -2892,11 +2892,11 @@ fn backfill_model_usage_haiku_pricing() {
     assert_eq!(sv.model_usage.len(), 1);
     let row = &sv.model_usage[0];
     assert!(row.model.contains("haiku"));
-    // haiku: input $0.80, output $4, cache_read $0.08, cache_write $1 per Mtok
-    let expected = 1000.0 / 1_000_000.0 * 0.80
-        + 500.0 / 1_000_000.0 * 4.0
-        + 100.0 / 1_000_000.0 * 0.08
-        + 50.0 / 1_000_000.0 * 1.0;
+    // Haiku 4.5: input $1, output $5, cache_read $0.10, cache_write $1.25 per Mtok
+    let expected = 1000.0 / 1_000_000.0 * 1.0
+        + 500.0 / 1_000_000.0 * 5.0
+        + 100.0 / 1_000_000.0 * 0.10
+        + 50.0 / 1_000_000.0 * 1.25;
     assert!((row.cost_usd - expected).abs() < 1e-9, "haiku cost: {} vs {}", row.cost_usd, expected);
 }
 
@@ -3053,10 +3053,10 @@ fn aggregate_model_usage_sonnet_pricing_correct() {
 #[test]
 fn aggregate_model_usage_haiku_pricing_correct() {
     let jsonl = r#"{"type":"assistant","message":{"model":"claude-haiku-4-5","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":1000000,"cache_creation_input_tokens":0}}}"#;
-    // 1M cache_read tokens at $0.08/Mtok = $0.08
+    // 1M cache_read tokens on Haiku 4.5 at $0.10/Mtok = $0.10
     let result = discovery::aggregate_model_usage(jsonl);
     let row = result.get("claude-haiku-4-5").expect("haiku");
-    assert!((row.cost_usd - 0.08).abs() < 1e-9, "haiku cache_read cost: {}", row.cost_usd);
+    assert!((row.cost_usd - 0.10).abs() < 1e-9, "haiku cache_read cost: {}", row.cost_usd);
 }
 
 /// aggregate_model_usage cache_creation uses the correct per-model rate.
@@ -3307,8 +3307,8 @@ fn usage_update_populates_two_model_rows_with_correct_cost() {
     core.on_agent_line(&ipc_agent_event_system_init(&id)).expect("init");
 
     // Feed a UsageUpdate with two models (opus + sonnet).
-    // 1_000 input tokens on opus = 1000 / 1_000_000 * 15 = $0.015
-    // 2_000 output tokens on sonnet = 2000 / 1_000_000 * 15 = $0.030
+    // 1_000 input tokens on Opus 4.8 = 1000 / 1_000_000 * 5 = $0.005
+    // 2_000 output tokens on sonnet  = 2000 / 1_000_000 * 15 = $0.030
     let usage = r#"{"claude-opus-4-8":{"input":1000,"output":0,"cache_read":0,"cache_creation":0},"claude-sonnet-4-6":{"input":0,"output":2000,"cache_read":0,"cache_creation":0}}"#;
     let updates = core.on_agent_line(&ipc_usage_update(&id, usage)).expect("usage_update");
 
@@ -3318,7 +3318,7 @@ fn usage_update_populates_two_model_rows_with_correct_cost() {
     let opus = sv.model_usage.iter().find(|r| r.model.contains("opus")).expect("opus row");
     let sonnet = sv.model_usage.iter().find(|r| r.model.contains("sonnet")).expect("sonnet row");
     assert_eq!(opus.input_tokens, 1000);
-    assert!((opus.cost_usd - 0.015).abs() < 1e-6, "opus cost wrong: {}", opus.cost_usd);
+    assert!((opus.cost_usd - 0.005).abs() < 1e-6, "opus cost wrong: {}", opus.cost_usd);
     assert_eq!(sonnet.output_tokens, 2000);
     assert!((sonnet.cost_usd - 0.030).abs() < 1e-6, "sonnet cost wrong: {}", sonnet.cost_usd);
 }

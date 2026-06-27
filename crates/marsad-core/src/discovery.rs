@@ -220,13 +220,30 @@ pub struct ModelUsageSummary {
 
 /// Pricing table: (input $/Mtok, output $/Mtok, cache_read $/Mtok, cache_write $/Mtok).
 fn pricing_for(model: &str) -> (f64, f64, f64, f64) {
+    // (input, output, cache_read, cache_write) $ per million tokens. Pricing is
+    // PER MODEL VERSION — claude charges different rates across versions, so a
+    // bare "opus" substring is wrong. Rates below for Opus 4.8 and Sonnet 4.6 are
+    // VERIFIED to the cent against claude's own `result.modelUsage.costUSD`; the
+    // Opus 4.0/4.1 rate is verified against `/usage`. cache_read = 0.1×input,
+    // cache_write = 1.25×input throughout. Update here when claude changes prices.
     let m = model.to_lowercase();
     if m.contains("opus") {
-        (15.0, 75.0, 1.50, 18.75)
+        // Opus 4.8 dropped to $5/$25 (incl. its 1M-context default); older Opus
+        // (4.0/4.1/3.x) stays at $15/$75.
+        if m.contains("opus-4-8") || m.contains("opus-4.8") {
+            (5.0, 25.0, 0.50, 6.25)
+        } else {
+            (15.0, 75.0, 1.50, 18.75)
+        }
     } else if m.contains("sonnet") {
         (3.0, 15.0, 0.30, 3.75)
     } else if m.contains("haiku") {
-        (0.80, 4.0, 0.08, 1.0)
+        // Haiku 4.5 is $1/$5; Haiku 3.5 was $0.80/$4.
+        if m.contains("haiku-3") {
+            (0.80, 4.0, 0.08, 1.0)
+        } else {
+            (1.0, 5.0, 0.10, 1.25)
+        }
     } else {
         (0.0, 0.0, 0.0, 0.0)
     }
@@ -237,11 +254,9 @@ fn pricing_for(model: &str) -> (f64, f64, f64, f64) {
 /// Public so `marsad-core` can call it from `handle_usage_update` without
 /// duplicating the pricing table.
 ///
-/// Pricing (per million tokens):
-/// - opus:   input $15, output $75, cache_read $1.50, cache_creation $18.75
-/// - sonnet: input $3,  output $15, cache_read $0.30, cache_creation $3.75
-/// - haiku:  input $0.80, output $4, cache_read $0.08, cache_creation $1.00
-/// - unknown → $0 (no cost, not an error)
+/// Pricing is per model VERSION (see `pricing_for`): e.g. Opus 4.8 = $5/$25,
+/// older Opus = $15/$75, Sonnet = $3/$15, Haiku 4.5 = $1/$5 (cache_read =
+/// 0.1×input, cache_write = 1.25×input). Unknown model → $0 (not an error).
 pub fn model_cost_usd(model: &str, input: u64, output: u64, cache_read: u64, cache_creation: u64) -> f64 {
     let (ri, ro, rcr, rcc) = pricing_for(model);
     let c_in = input as f64 * ri;
@@ -1058,18 +1073,32 @@ mod tests {
 
     #[test]
     fn model_cost_usd_opus_input() {
-        // 1_000_000 input tokens on opus = $15.00
+        // 1_000_000 input tokens on Opus 4.8 = $5.00
         let cost = model_cost_usd("claude-opus-4-8", 1_000_000, 0, 0, 0);
         let micros = (cost * 1_000_000.0).round() as i64;
-        assert_eq!(micros, 15_000_000);
+        assert_eq!(micros, 5_000_000);
     }
 
     #[test]
     fn model_cost_usd_opus_output() {
-        // 1_000_000 output tokens on opus = $75.00
+        // 1_000_000 output tokens on Opus 4.8 = $25.00
         let cost = model_cost_usd("claude-opus-4-8", 0, 1_000_000, 0, 0);
         let micros = (cost * 1_000_000.0).round() as i64;
-        assert_eq!(micros, 75_000_000);
+        assert_eq!(micros, 25_000_000);
+    }
+
+    #[test]
+    fn model_cost_usd_opus_old_version_higher_rate() {
+        // Older Opus (4.0/4.1) stays at $15/$75.
+        let cost = model_cost_usd("claude-opus-4-0", 1_000_000, 0, 0, 0);
+        assert_eq!((cost * 1_000_000.0).round() as i64, 15_000_000);
+    }
+
+    #[test]
+    fn model_cost_usd_haiku_35_lower_rate() {
+        // Haiku 3.5 = $0.80 input.
+        let cost = model_cost_usd("claude-haiku-3-5", 1_000_000, 0, 0, 0);
+        assert_eq!((cost * 1_000_000.0).round() as i64, 800_000);
     }
 
     #[test]
@@ -1090,18 +1119,18 @@ mod tests {
 
     #[test]
     fn model_cost_usd_haiku() {
-        // 1_000_000 input + 1_000_000 output on haiku = $0.80 + $4.00 = $4.80
+        // 1_000_000 input + 1_000_000 output on Haiku 4.5 = $1.00 + $5.00 = $6.00
         let cost = model_cost_usd("claude-haiku-4-5", 1_000_000, 1_000_000, 0, 0);
         let micros = (cost * 1_000_000.0).round() as i64;
-        assert_eq!(micros, 4_800_000);
+        assert_eq!(micros, 6_000_000);
     }
 
     #[test]
     fn model_cost_usd_opus_cache_read() {
-        // 1_000_000 cache_read tokens on opus = $1.50
+        // 1_000_000 cache_read tokens on Opus 4.8 = $0.50
         let cost = model_cost_usd("claude-opus-4-8", 0, 0, 1_000_000, 0);
         let micros = (cost * 1_000_000.0).round() as i64;
-        assert_eq!(micros, 1_500_000);
+        assert_eq!(micros, 500_000);
     }
 
     #[test]
