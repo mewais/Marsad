@@ -233,7 +233,7 @@ describe("ActivityTab — composer", () => {
 
     // The composer textarea has a placeholder text
     const textarea = screen.getByPlaceholderText(
-      /Send a prompt, or \/ for commands/i
+      /Send a prompt/i
     );
     fireEvent.change(textarea, { target: { value: "Hello Claude" } });
     fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
@@ -244,7 +244,7 @@ describe("ActivityTab — composer", () => {
   it("clicking Send button also calls sendPrompt", () => {
     renderWith({ selectedId: "s04" });
     const textarea = screen.getByPlaceholderText(
-      /Send a prompt, or \/ for commands/i
+      /Send a prompt/i
     );
     fireEvent.change(textarea, { target: { value: "Test message" } });
 
@@ -257,7 +257,7 @@ describe("ActivityTab — composer", () => {
   it("empty message does NOT call sendPrompt", () => {
     renderWith({ selectedId: "s04" });
     const textarea = screen.getByPlaceholderText(
-      /Send a prompt, or \/ for commands/i
+      /Send a prompt/i
     );
     fireEvent.change(textarea, { target: { value: "" } });
     fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
@@ -267,7 +267,7 @@ describe("ActivityTab — composer", () => {
   it("Shift+Enter does NOT submit", () => {
     renderWith({ selectedId: "s04" });
     const textarea = screen.getByPlaceholderText(
-      /Send a prompt, or \/ for commands/i
+      /Send a prompt/i
     );
     fireEvent.change(textarea, { target: { value: "No submit" } });
     fireEvent.keyDown(textarea, { key: "Enter", shiftKey: true });

@@ -193,8 +193,40 @@ export function Composer({
     onSlashSelect?.(entry);
   }
 
+  // `!`-prefixed input runs as a shell command on the session's host (handled by
+  // Marsad, not sent to claude) — surface that mode visually, like `/` commands.
+  const bangMode = text.trimStart().startsWith("!");
+
   return (
     <div style={{ position: "relative" }}>
+      {bangMode && !slashOpen && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: "calc(100% + 8px)",
+            left: 0,
+            right: 0,
+            zIndex: 5,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "8px 12px",
+            background: "var(--panel)",
+            border: "1px solid var(--border2)",
+            borderLeft: "3px solid var(--done)",
+            borderRadius: 9,
+            fontSize: "calc(13px * var(--fs,1))",
+            color: "var(--txt2)",
+            boxShadow: "var(--shadow-sm)",
+          }}
+          data-testid="composer-bang-hint"
+        >
+          <span style={{ color: "var(--done)", fontWeight: 800 }}>!</span>
+          <span>
+            Shell command — runs on this session&apos;s host (not sent to Claude)
+          </span>
+        </div>
+      )}
       {slashOpen && slashEntries.length >= 0 && (
         <div
           style={{
@@ -253,7 +285,7 @@ export function Composer({
           onChange={handleInput}
           onKeyDown={handleKeyDown}
           disabled={disabled}
-          placeholder="Send a prompt, or / for commands…  (⏎ to send, ⇧⏎ newline)"
+          placeholder="Send a prompt · / commands · ! shell  (⏎ send, ⇧⏎ newline)"
           style={{
             flex: 1,
             background: "none",
@@ -296,12 +328,12 @@ export function Composer({
               padding: "8px 16px",
               borderRadius: 8,
               border: "none",
-              background: "var(--accent)",
-              color: "#fff",
+              background: bangMode ? "var(--done)" : "var(--accent)",
+              color: bangMode ? "#0e1116" : "#fff",
               cursor: "pointer",
             }}
           >
-            Send ↵
+            {bangMode ? "Run ↵" : "Send ↵"}
           </button>
         </div>
       </div>

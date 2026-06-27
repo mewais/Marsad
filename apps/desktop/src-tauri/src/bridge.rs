@@ -1034,9 +1034,20 @@ pub fn run_shell(
         Some(target) => {
             // Remote: cd into the project (best-effort) then run the command, via
             // marsad-agent's run_remote_script (login shell, quoting-safe stdin).
-            let script = format!("cd {} 2>/dev/null\n{}", shell_quote_cd(&project), command);
-            marsad_agent::run_remote_script(&target, &script)
-                .unwrap_or_else(|| "(no output)".to_string())
+            // `2>&1` folds stderr into stdout — run_remote_script captures stdout
+            // only, so without this an erroring/stderr-only command (e.g. a "not
+            // found") would render as an empty block. Empty result → "(no output)".
+            let script = format!(
+                "cd {} 2>/dev/null\n{} 2>&1",
+                shell_quote_cd(&project),
+                command
+            );
+            let out = marsad_agent::run_remote_script(&target, &script).unwrap_or_default();
+            if out.trim().is_empty() {
+                "(no output)".to_string()
+            } else {
+                out
+            }
         }
         None => {
             // Local execution in the project dir.
