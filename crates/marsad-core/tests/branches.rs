@@ -627,3 +627,29 @@ fn answer_gate_edit_gate_outbound_references_gate() {
     let out = peer.drain_outbound();
     assert!(!out.is_empty(), "answer_gate(Edit reject) must emit IPC");
 }
+
+// ---------------------------------------------------------------------------
+// handle_usage_update — None-usage and non-object-usage no-ops
+// ---------------------------------------------------------------------------
+
+/// A UsageUpdate with missing `usage` field (null / absent) is a no-op.
+#[test]
+fn usage_update_null_usage_field_is_noop() {
+    let (mut core, _peer) = make_core();
+    let id = core.launch_session(spec("/p", Posture::Ask)).expect("launch");
+    // `usage` key absent → serde default = None → should return Ok(vec![])
+    let line = format!(r#"{{"type":"UsageUpdate","session_id":"{id}"}}"#);
+    let updates = core.on_agent_line(&line).expect("null usage is ok");
+    assert!(updates.is_empty(), "null usage must produce no updates");
+}
+
+/// A UsageUpdate where `usage` is a JSON array (not an object) is a no-op.
+#[test]
+fn usage_update_array_usage_field_is_noop() {
+    let (mut core, _peer) = make_core();
+    let id = core.launch_session(spec("/p", Posture::Ask)).expect("launch");
+    // `usage` is an array instead of an object → as_object() returns None → no-op
+    let line = format!(r#"{{"type":"UsageUpdate","session_id":"{id}","usage":[1,2,3]}}"#);
+    let updates = core.on_agent_line(&line).expect("array usage is ok");
+    assert!(updates.is_empty(), "array usage must produce no updates");
+}

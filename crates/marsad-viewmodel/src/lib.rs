@@ -52,6 +52,16 @@ pub struct SessionView {
     /// Slash commands available in this session (from the system/init event).
     #[serde(default)]
     pub slash_commands: Vec<marsad_proto::SlashCommandInfo>,
+    /// Permission posture for this session, derived from the system/init
+    /// `permissionMode` field: "default"→"ask", "acceptEdits"→"auto",
+    /// "bypassPermissions"→"full". Falls back to "ask" when unknown or before
+    /// the first system/init event.
+    #[serde(default = "default_posture")]
+    pub posture: String,
+}
+
+fn default_posture() -> String {
+    "ask".to_string()
 }
 
 // ---------------------------------------------------------------------------

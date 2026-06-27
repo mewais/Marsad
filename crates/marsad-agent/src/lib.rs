@@ -1826,6 +1826,73 @@ fn remote_transcript_script(project: &str, uuid: Option<&str>) -> String {
     }
 }
 
+/// Build the remote shell script that aggregates project-wide per-model token
+/// usage across ALL `*.jsonl` files in the claude projects directory for a
+/// session's project.  Uses python3 to sum `message.usage` fields grouped by
+/// `message.model` across every `assistant`-typed line in every `.jsonl` file,
+/// skipping the `<synthetic>` pseudo-model.  Prints one compact JSON object:
+/// `{"<model>":{"input":N,"output":N,"cache_read":N,"cache_creation":N},...}`.
+///
+/// Run via `run_remote_script` on the `is_result` trigger (same branch as the
+/// ChangesUpdate probe).  Guard: exit 0 silently if python3 is not available.
+/// Real-IO build only.
+#[cfg(not(coverage))]
+fn remote_usage_script(project: &str) -> String {
+    let cd = cd_target(project);
+    format!(
+        r#"command -v python3 >/dev/null || exit 0
+base=${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}
+cwd=$(cd {cd} 2>/dev/null && pwd -P) || exit 0
+enc=$(printf '%s' "$cwd" | sed 's/[^a-zA-Z0-9]/-/g')
+dir="$base/projects/$enc"
+python3 - "$dir" << 'MARSAD_USAGE_EOF'
+import sys, os, json
+d = sys.argv[1]
+agg = {{}}
+if not os.path.isdir(d):
+    print('{{}}')
+    sys.exit(0)
+for fn in os.listdir(d):
+    if not fn.endswith('.jsonl'):
+        continue
+    try:
+        with open(os.path.join(d, fn), encoding='utf-8', errors='replace') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if obj.get('type') != 'assistant':
+                    continue
+                msg = obj.get('message', {{}})
+                model = msg.get('model', '')
+                if not model or model == '<synthetic>':
+                    continue
+                u = msg.get('usage', {{}})
+                inp = u.get('input_tokens', 0) or 0
+                out = u.get('output_tokens', 0) or 0
+                cr  = u.get('cache_read_input_tokens', 0) or 0
+                cc  = u.get('cache_creation_input_tokens', 0) or 0
+                if inp == 0 and out == 0 and cr == 0 and cc == 0:
+                    continue
+                if model not in agg:
+                    agg[model] = {{'input': 0, 'output': 0, 'cache_read': 0, 'cache_creation': 0}}
+                agg[model]['input'] += inp
+                agg[model]['output'] += out
+                agg[model]['cache_read'] += cr
+                agg[model]['cache_creation'] += cc
+    except Exception:
+        pass
+print(json.dumps(agg, separators=(',', ':')))
+MARSAD_USAGE_EOF
+"#,
+        cd = cd,
+    )
+}
+
 /// Build the remote shell script that probes `git status` + `diff --numstat` for
 /// a session's project dir on the remote host.
 ///
@@ -2895,6 +2962,34 @@ fn spawn_session_reader(
                                         "marsad-agent: session {sid} changes update broadcast ({})",
                                         if is_result { "result" } else { "tool_use" }
                                     );
+                                }
+                                // Project-wide usage aggregation: run on result events
+                                // only (not on every tool_use — it reads all *.jsonl,
+                                // so it's more expensive than the git probe).
+                                if is_result {
+                                    let usage_script = remote_usage_script(project);
+                                    if let Some(usage_out) = run_remote_script(target, &usage_script) {
+                                        let trimmed = usage_out.trim();
+                                        if !trimmed.is_empty() && trimmed != "{}" {
+                                            if let Ok(usage_val) =
+                                                serde_json::from_str::<serde_json::Value>(trimmed)
+                                            {
+                                                let uu_line = serde_json::json!({
+                                                    "type": "UsageUpdate",
+                                                    "session_id": sid,
+                                                    "usage": usage_val,
+                                                })
+                                                .to_string();
+                                                let subs3 = subs_fifo.lock().unwrap();
+                                                subs3.iter().for_each(|s| {
+                                                    let _ = s.send(uu_line.clone());
+                                                });
+                                                eprintln!(
+                                                    "marsad-agent: session {sid} usage update broadcast"
+                                                );
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }

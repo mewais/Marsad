@@ -122,6 +122,7 @@ fn fold_qa_stream_into_session_state_and_viewmodel() {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "ask".to_string(),
     };
 
     let snapshot = AppSnapshot {

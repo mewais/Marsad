@@ -71,6 +71,7 @@ fn representative_snapshot() -> AppSnapshot {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "ask".to_string(),
         },
         SessionView {
             id: "s2".to_string(),
@@ -94,6 +95,7 @@ fn representative_snapshot() -> AppSnapshot {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "ask".to_string(),
         },
         SessionView {
             id: "s3".to_string(),
@@ -117,6 +119,7 @@ fn representative_snapshot() -> AppSnapshot {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "ask".to_string(),
         },
         SessionView {
             id: "s4".to_string(),
@@ -140,6 +143,7 @@ fn representative_snapshot() -> AppSnapshot {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "ask".to_string(),
         },
         SessionView {
             id: "s5".to_string(),
@@ -163,6 +167,7 @@ fn representative_snapshot() -> AppSnapshot {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "ask".to_string(),
         },
     ];
 
@@ -689,6 +694,7 @@ fn session_view_new_fields_populated() {
         tools: vec!["Read".to_string(), "Bash".to_string()],
         mcp_servers: vec![McpServerInfo { name: "hares".to_string(), status: "connected".to_string() }],
         slash_commands: vec![SlashCommandInfo { name: "/clear".to_string(), description: "Clear".to_string(), argument_hint: "".to_string() }],
+        posture: "auto".to_string(),
     };
     let sv2 = sv.clone();
     assert_eq!(sv, sv2);
@@ -721,8 +727,24 @@ fn session_view_new_fields_empty_by_default_in_literal() {
         tools: vec![],
         mcp_servers: vec![],
         slash_commands: vec![],
+        posture: "ask".to_string(),
     };
     assert!(sv.tools.is_empty());
     assert!(sv.mcp_servers.is_empty());
     assert!(sv.slash_commands.is_empty());
+}
+
+/// Deserializing a SessionView JSON that omits `posture` uses the `default_posture()` fn → "ask".
+#[test]
+fn session_view_posture_defaults_via_serde_when_missing() {
+    // Build minimal JSON without a `posture` field to trigger serde's default.
+    let json = r#"{
+        "id":"z","name":"z","host_id":"local","project":"/p","branch":"main",
+        "model":"m","state":"Working","changed_files":0,"subagents":0,
+        "running_subagents":0,"cost_usd":0.0,"tokens":0,"context_pct":0.0,
+        "gate":null,"transcript":[],"changes":[],"model_usage":[],
+        "tools":[],"mcp_servers":[],"slash_commands":[]
+    }"#;
+    let sv: SessionView = serde_json::from_str(json).expect("must deserialize");
+    assert_eq!(sv.posture, "ask", "missing posture field must default to 'ask' via serde");
 }

@@ -1295,6 +1295,7 @@ impl Core {
             "AgentEvent" => self.handle_agent_event(env),
             "TranscriptBackfill" => self.handle_transcript_backfill(env),
             "ChangesUpdate" => self.handle_changes_update(env),
+            "UsageUpdate" => self.handle_usage_update(env),
             other => Err(CoreError::Protocol(format!("unknown IPC type: '{other}'"))),
         }
     }
@@ -1372,6 +1373,78 @@ impl Core {
             None => return Ok(vec![]),
         };
         record.changes = parsed;
+        let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
+        Ok(vec![VmUpdate::Session(sv)])
+    }
+
+    /// Apply a project-wide usage update from the agent's python3 aggregation
+    /// script.  The `usage` field is a JSON object keyed by model name with
+    /// `{input, output, cache_read, cache_creation}` integer values.  This is
+    /// the authoritative project-wide number (captures subagent transcripts) and
+    /// SUPERSEDES whatever the result-event or backfill set before.
+    ///
+    /// Unknown session or missing session_id → error / no-op.
+    fn handle_usage_update(
+        &mut self,
+        env: IpcEnvelope,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        let session_id = env.session_id.ok_or_else(|| {
+            CoreError::Protocol("missing session_id in usage_update".to_string())
+        })?;
+        let usage_val = match env.usage {
+            Some(v) => v,
+            None => return Ok(vec![]), // no usage data → no-op
+        };
+        let usage_obj = match usage_val.as_object() {
+            Some(o) => o,
+            None => return Ok(vec![]), // malformed → no-op
+        };
+
+        // Parse into ModelUsageRow vec, skipping "<synthetic>" and zero-usage rows.
+        let mut rows: Vec<marsad_viewmodel::ModelUsageRow> = Vec::new();
+        for (model, val) in usage_obj {
+            if model == "<synthetic>" {
+                continue;
+            }
+            let input = val.get("input").and_then(|v| v.as_u64()).unwrap_or(0);
+            let output = val.get("output").and_then(|v| v.as_u64()).unwrap_or(0);
+            let cache_read = val.get("cache_read").and_then(|v| v.as_u64()).unwrap_or(0);
+            let cache_creation = val
+                .get("cache_creation")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            // Skip zero-usage rows.
+            if input == 0 && output == 0 && cache_read == 0 && cache_creation == 0 {
+                continue;
+            }
+            let cost = discovery::model_cost_usd(model, input, output, cache_read, cache_creation);
+            rows.push(marsad_viewmodel::ModelUsageRow {
+                model: model.clone(),
+                input_tokens: input,
+                output_tokens: output,
+                cost_usd: cost,
+            });
+        }
+        rows.sort_by(|a, b| a.model.cmp(&b.model));
+
+        // Find the session and update its model_usage.
+        let record = match self.sessions.get_mut(&session_id) {
+            Some(r) => r,
+            None => return Ok(vec![]), // unknown session → no-op
+        };
+        // Replace the in-state model_usage map so make_session_view picks it up.
+        record.state.model_usage.clear();
+        for row in &rows {
+            record.state.model_usage.insert(
+                row.model.clone(),
+                marsad_proto::ModelUsage {
+                    input_tokens: row.input_tokens,
+                    output_tokens: row.output_tokens,
+                    cost_usd: row.cost_usd,
+                },
+            );
+        }
+
         let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
         Ok(vec![VmUpdate::Session(sv)])
     }
@@ -1515,6 +1588,7 @@ impl Core {
             })
             .collect();
         model_usage.sort_by(|a, b| a.model.cmp(&b.model));
+        let posture = permission_mode_to_posture(s.permission_mode.as_deref());
         SessionView {
             id: id.to_string(),
             name: record
@@ -1543,6 +1617,7 @@ impl Core {
             tools: s.tools.clone(),
             mcp_servers: s.mcp_servers.clone(),
             slash_commands: s.slash_commands.clone(),
+            posture,
         }
     }
 }
@@ -1576,6 +1651,12 @@ struct IpcEnvelope {
     /// Each element is `{path, status, added, removed}`.
     #[serde(default)]
     changes: Option<serde_json::Value>,
+    /// Project-wide per-model usage map for `UsageUpdate` messages.
+    /// Shape: `{"<model>":{"input":N,"output":N,"cache_read":N,"cache_creation":N}}`.
+    /// Computed by the agent's remote python3 aggregation script across ALL
+    /// `*.jsonl` in the project dir (captures subagent transcripts too).
+    #[serde(default)]
+    usage: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1621,6 +1702,21 @@ fn session_display_name(project: &str, id: &str) -> String {
     match project.trim_end_matches('/').rsplit('/').next() {
         Some(base) if !base.is_empty() => base.to_string(),
         _ => id.to_string(),
+    }
+}
+
+/// Map a `permissionMode` string from the claude `system/init` event to the
+/// canonical posture id used in `SessionView` and the Config tab.
+///
+/// - `"default"` → `"ask"` (Ask every time)
+/// - `"acceptEdits"` → `"auto"` (Auto-approve safe actions)
+/// - `"bypassPermissions"` → `"full"` (Full autonomy)
+/// - unknown / `None` → `"ask"` (safe fallback)
+fn permission_mode_to_posture(mode: Option<&str>) -> String {
+    match mode {
+        Some("acceptEdits") => "auto".to_string(),
+        Some("bypassPermissions") => "full".to_string(),
+        _ => "ask".to_string(),
     }
 }
 

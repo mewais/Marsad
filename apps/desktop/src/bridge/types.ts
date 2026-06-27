@@ -164,6 +164,8 @@ export interface SessionView {
   mcp_servers: McpServerInfo[];
   /** Slash commands available in this session (from system/init). */
   slash_commands: SlashCommandInfo[];
+  /** Permission posture: "ask" | "auto" | "full" (from system/init permissionMode). */
+  posture: string;
 }
 
 // ---------------------------------------------------------------------------

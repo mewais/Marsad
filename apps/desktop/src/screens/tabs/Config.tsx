@@ -54,15 +54,26 @@ export function ConfigTab() {
   const { selectedSession } = useVm();
 
   // Local state mirrors current session values; Apply restarts the session.
+  // Initial values come from the selected session so the tab reflects the
+  // session's REAL posture/model rather than a hardcoded default.
   const initialModel = selectedSession?.model ?? DEFAULT_MODEL;
+  const initialPosture = (selectedSession?.posture as PostureId) ?? "ask";
   const [selectedModel, setSelectedModel] = useState(initialModel);
-  const [posture, setPosture] = useState<PostureId>("ask");
+  const [posture, setPosture] = useState<PostureId>(initialPosture);
 
   // Tool toggle state: keyed by tool name. Initially all tools are enabled
   // (empty disallowed set). When the session provides a real tools list it is
   // used; otherwise the set is empty (no tools to show).
   const sessionTools = selectedSession?.tools ?? [];
   const [disabledTools, setDisabledTools] = useState<Set<string>>(new Set());
+
+  // Re-sync model and posture whenever the selected session changes so each
+  // session shows its own real values, not values left over from the previous one.
+  useEffect(() => {
+    setSelectedModel(selectedSession?.model ?? DEFAULT_MODEL);
+    setPosture((selectedSession?.posture as PostureId) ?? "ask");
+    setDisabledTools(new Set()); // reset tool overrides for the new session
+  }, [selectedSession?.id]);
 
   // Apply / Save-template busy + error state.
   const [applyBusy, setApplyBusy] = useState(false);

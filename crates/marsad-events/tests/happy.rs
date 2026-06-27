@@ -527,13 +527,42 @@ fn system_init_populates_tools_mcp_servers_slash_commands() {
     assert_eq!(s1.slash_commands[1].argument_hint, "model-name");
 }
 
-/// Initial state has empty tools, mcp_servers, and slash_commands.
+/// Initial state has empty tools, mcp_servers, slash_commands, and permission_mode None.
 #[test]
 fn initial_state_new_fields_empty() {
     let s = SessionState::initial();
     assert!(s.tools.is_empty());
     assert!(s.mcp_servers.is_empty());
     assert!(s.slash_commands.is_empty());
+    assert!(s.permission_mode.is_none(), "initial permission_mode must be None");
+}
+
+// ---------------------------------------------------------------------------
+// permission_mode — stored from system/init permissionMode
+// ---------------------------------------------------------------------------
+
+#[test]
+fn system_init_stores_permission_mode_default() {
+    // "default" permissionMode (Ask posture)
+    let json = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"default"}"#;
+    let s = reduce(SessionState::initial(), stream(json));
+    assert_eq!(s.permission_mode, Some("default".to_string()));
+}
+
+#[test]
+fn system_init_stores_permission_mode_accept_edits() {
+    // "acceptEdits" permissionMode (Auto posture)
+    let json = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"acceptEdits"}"#;
+    let s = reduce(SessionState::initial(), stream(json));
+    assert_eq!(s.permission_mode, Some("acceptEdits".to_string()));
+}
+
+#[test]
+fn system_init_stores_permission_mode_bypass() {
+    // "bypassPermissions" permissionMode (Full posture)
+    let json = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"bypassPermissions"}"#;
+    let s = reduce(SessionState::initial(), stream(json));
+    assert_eq!(s.permission_mode, Some("bypassPermissions".to_string()));
 }
 
 /// system/init with string-array slash_commands populates correctly.

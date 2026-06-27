@@ -387,6 +387,7 @@ dependencies = [
  "marsad-hosts",
  "marsad-proto",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

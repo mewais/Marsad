@@ -45,6 +45,7 @@ fn make_session(
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "ask".to_string(),
     }
 }
 
@@ -339,6 +340,7 @@ fn ctx_warn_false_at_74_pct() {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "ask".to_string(),
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -377,6 +379,7 @@ fn ctx_warn_true_at_75_pct() {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "ask".to_string(),
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -644,6 +647,7 @@ fn ctx_warn_true_at_100_pct() {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "ask".to_string(),
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],

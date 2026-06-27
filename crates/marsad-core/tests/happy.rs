@@ -3154,3 +3154,189 @@ fn launch_session_with_disallowed_tools_includes_field_in_ipc() {
     assert!(line.contains("Bash"), "IPC must include Bash; line: {line}");
     assert!(line.contains("Edit"), "IPC must include Edit; line: {line}");
 }
+
+// ---------------------------------------------------------------------------
+// SessionView posture — reflects real permissionMode from system/init
+// ---------------------------------------------------------------------------
+
+/// Helper: build an AgentEvent with a given permissionMode for posture tests.
+fn ipc_agent_event_init_with_mode(session_id: &str, mode: &str) -> String {
+    format!(
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"claude-uuid","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"{mode}"}}}}"#
+    )
+}
+
+/// After system/init with permissionMode "default", posture must be "ask".
+#[test]
+fn session_view_posture_default_maps_to_ask() {
+    let (mut core, _peer) = make_core();
+    let id = core.launch_session(LaunchSpec {
+        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
+        claude_bin: None, setup: None, env: vec![],
+        model: "m".to_string(), posture: Posture::Ask, first_prompt: None,
+        mode: Default::default(), name: None, disallowed_tools: vec![],
+    }).expect("launch");
+    let updates = core.on_agent_line(&ipc_agent_event_init_with_mode(&id, "default")).expect("init");
+    let sv = updates.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
+    assert_eq!(sv.posture, "ask", "permissionMode=default → posture=ask");
+}
+
+/// After system/init with permissionMode "acceptEdits", posture must be "auto".
+#[test]
+fn session_view_posture_accept_edits_maps_to_auto() {
+    let (mut core, _peer) = make_core();
+    let id = core.launch_session(LaunchSpec {
+        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
+        claude_bin: None, setup: None, env: vec![],
+        model: "m".to_string(), posture: Posture::AutoApproveSafe, first_prompt: None,
+        mode: Default::default(), name: None, disallowed_tools: vec![],
+    }).expect("launch");
+    let updates = core.on_agent_line(&ipc_agent_event_init_with_mode(&id, "acceptEdits")).expect("init");
+    let sv = updates.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
+    assert_eq!(sv.posture, "auto", "permissionMode=acceptEdits → posture=auto");
+}
+
+/// After system/init with permissionMode "bypassPermissions", posture must be "full".
+#[test]
+fn session_view_posture_bypass_maps_to_full() {
+    let (mut core, _peer) = make_core();
+    let id = core.launch_session(LaunchSpec {
+        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
+        claude_bin: None, setup: None, env: vec![],
+        model: "m".to_string(), posture: Posture::FullAutonomy, first_prompt: None,
+        mode: Default::default(), name: None, disallowed_tools: vec![],
+    }).expect("launch");
+    let updates = core.on_agent_line(&ipc_agent_event_init_with_mode(&id, "bypassPermissions")).expect("init");
+    let sv = updates.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
+    assert_eq!(sv.posture, "full", "permissionMode=bypassPermissions → posture=full");
+}
+
+/// Before system/init, posture defaults to "ask".
+#[test]
+fn session_view_posture_defaults_to_ask_before_init() {
+    let (mut core, _peer) = make_core();
+    let _id = core.launch_session(LaunchSpec {
+        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
+        claude_bin: None, setup: None, env: vec![],
+        model: "m".to_string(), posture: Posture::Ask, first_prompt: None,
+        mode: Default::default(), name: None, disallowed_tools: vec![],
+    }).expect("launch");
+    // Without any init event, the snapshot's posture must default to "ask".
+    let snap = core.snapshot();
+    let sv = snap.sessions.first().expect("session in snap");
+    assert_eq!(sv.posture, "ask", "posture must default to 'ask' before system/init");
+}
+
+/// Unknown permissionMode falls back to "ask".
+#[test]
+fn session_view_posture_unknown_mode_falls_back_to_ask() {
+    let (mut core, _peer) = make_core();
+    let id = core.launch_session(LaunchSpec {
+        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
+        claude_bin: None, setup: None, env: vec![],
+        model: "m".to_string(), posture: Posture::Ask, first_prompt: None,
+        mode: Default::default(), name: None, disallowed_tools: vec![],
+    }).expect("launch");
+    let updates = core.on_agent_line(&ipc_agent_event_init_with_mode(&id, "someUnknownMode")).expect("init");
+    let sv = updates.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
+    assert_eq!(sv.posture, "ask", "unknown permissionMode → posture=ask");
+}
+
+// ---------------------------------------------------------------------------
+// Feature #2: UsageUpdate — project-wide per-model usage
+// ---------------------------------------------------------------------------
+
+/// Helper: build a UsageUpdate IPC line for tests.
+fn ipc_usage_update(session_id: &str, usage_json: &str) -> String {
+    format!(
+        r#"{{"type":"UsageUpdate","session_id":"{session_id}","usage":{usage_json}}}"#
+    )
+}
+
+/// A UsageUpdate with two real models populates model_usage with correct costs
+/// and supersedes any prior result-event usage.
+#[test]
+fn usage_update_populates_two_model_rows_with_correct_cost() {
+    let (mut core, _peer) = make_core();
+    let id = core.launch_session(LaunchSpec {
+        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
+        claude_bin: None, setup: None, env: vec![],
+        model: "m".to_string(), posture: Posture::Ask, first_prompt: None,
+        mode: Default::default(), name: None, disallowed_tools: vec![],
+    }).expect("launch");
+    core.on_agent_line(&ipc_agent_event_system_init(&id)).expect("init");
+
+    // Feed a UsageUpdate with two models (opus + sonnet).
+    // 1_000 input tokens on opus = 1000 / 1_000_000 * 15 = $0.015
+    // 2_000 output tokens on sonnet = 2000 / 1_000_000 * 15 = $0.030
+    let usage = r#"{"claude-opus-4-8":{"input":1000,"output":0,"cache_read":0,"cache_creation":0},"claude-sonnet-4-6":{"input":0,"output":2000,"cache_read":0,"cache_creation":0}}"#;
+    let updates = core.on_agent_line(&ipc_usage_update(&id, usage)).expect("usage_update");
+
+    let sv = updates.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
+    assert_eq!(sv.model_usage.len(), 2, "must have 2 model rows");
+    // Sorted by model name: opus before sonnet alphabetically.
+    let opus = sv.model_usage.iter().find(|r| r.model.contains("opus")).expect("opus row");
+    let sonnet = sv.model_usage.iter().find(|r| r.model.contains("sonnet")).expect("sonnet row");
+    assert_eq!(opus.input_tokens, 1000);
+    assert!((opus.cost_usd - 0.015).abs() < 1e-6, "opus cost wrong: {}", opus.cost_usd);
+    assert_eq!(sonnet.output_tokens, 2000);
+    assert!((sonnet.cost_usd - 0.030).abs() < 1e-6, "sonnet cost wrong: {}", sonnet.cost_usd);
+}
+
+/// UsageUpdate for an unknown session is a no-op (returns empty vec).
+#[test]
+fn usage_update_unknown_session_is_noop() {
+    let (mut core, _peer) = make_core();
+    let updates = core.on_agent_line(
+        &ipc_usage_update("no-such-session", r#"{"claude-opus-4-8":{"input":100,"output":0,"cache_read":0,"cache_creation":0}}"#)
+    ).expect("unknown session is ok (no-op)");
+    assert!(updates.is_empty(), "unknown session must produce no updates");
+}
+
+/// UsageUpdate with missing session_id is a Protocol error.
+#[test]
+fn usage_update_missing_session_id_is_error() {
+    let (mut core, _peer) = make_core();
+    let bad_line = r#"{"type":"UsageUpdate","usage":{"claude-opus-4-8":{"input":1,"output":0,"cache_read":0,"cache_creation":0}}}"#;
+    let result = core.on_agent_line(bad_line);
+    assert!(result.is_err(), "missing session_id must be a Protocol error");
+}
+
+/// UsageUpdate filters out the <synthetic> pseudo-model.
+#[test]
+fn usage_update_filters_synthetic_model() {
+    let (mut core, _peer) = make_core();
+    let id = core.launch_session(LaunchSpec {
+        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
+        claude_bin: None, setup: None, env: vec![],
+        model: "m".to_string(), posture: Posture::Ask, first_prompt: None,
+        mode: Default::default(), name: None, disallowed_tools: vec![],
+    }).expect("launch");
+    core.on_agent_line(&ipc_agent_event_system_init(&id)).expect("init");
+
+    // Usage includes synthetic which must be dropped, real model kept.
+    let usage = r#"{"<synthetic>":{"input":999,"output":999,"cache_read":0,"cache_creation":0},"claude-haiku-4-5":{"input":500,"output":100,"cache_read":0,"cache_creation":0}}"#;
+    let updates = core.on_agent_line(&ipc_usage_update(&id, usage)).expect("usage_update");
+    let sv = updates.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
+    assert_eq!(sv.model_usage.len(), 1, "synthetic must be filtered out");
+    assert!(sv.model_usage[0].model.contains("haiku"), "only haiku row must remain");
+}
+
+/// UsageUpdate filters zero-usage rows.
+#[test]
+fn usage_update_filters_zero_usage_rows() {
+    let (mut core, _peer) = make_core();
+    let id = core.launch_session(LaunchSpec {
+        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
+        claude_bin: None, setup: None, env: vec![],
+        model: "m".to_string(), posture: Posture::Ask, first_prompt: None,
+        mode: Default::default(), name: None, disallowed_tools: vec![],
+    }).expect("launch");
+    core.on_agent_line(&ipc_agent_event_system_init(&id)).expect("init");
+
+    let usage = r#"{"claude-opus-4-8":{"input":0,"output":0,"cache_read":0,"cache_creation":0},"claude-sonnet-4-6":{"input":100,"output":50,"cache_read":0,"cache_creation":0}}"#;
+    let updates = core.on_agent_line(&ipc_usage_update(&id, usage)).expect("usage_update");
+    let sv = updates.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
+    assert_eq!(sv.model_usage.len(), 1, "zero-usage opus row must be filtered");
+    assert!(sv.model_usage[0].model.contains("sonnet"));
+}

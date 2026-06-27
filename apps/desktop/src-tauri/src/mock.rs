@@ -141,6 +141,7 @@ pub fn seeded_mock() -> MockState {
                 SlashCommandInfo { name: "/clear".to_string(), description: "Clear conversation history".to_string(), argument_hint: "".to_string() },
                 SlashCommandInfo { name: "/compact".to_string(), description: "Compact context to save tokens".to_string(), argument_hint: "".to_string() },
             ],
+            posture: "auto".to_string(),
         },
         // Needs attention — plan gate
         SessionView {
@@ -165,6 +166,7 @@ pub fn seeded_mock() -> MockState {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "auto".to_string(),
         },
         // Error — edit gate shown for reference
         SessionView {
@@ -189,6 +191,7 @@ pub fn seeded_mock() -> MockState {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "auto".to_string(),
         },
         // Working sessions
         SessionView {
@@ -213,6 +216,7 @@ pub fn seeded_mock() -> MockState {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "auto".to_string(),
         },
         SessionView {
             id: "s05".to_string(),
@@ -236,6 +240,7 @@ pub fn seeded_mock() -> MockState {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "auto".to_string(),
         },
         SessionView {
             id: "s06".to_string(),
@@ -259,6 +264,7 @@ pub fn seeded_mock() -> MockState {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "auto".to_string(),
         },
         // Done sessions
         SessionView {
@@ -283,6 +289,7 @@ pub fn seeded_mock() -> MockState {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "auto".to_string(),
         },
         SessionView {
             id: "s08".to_string(),
@@ -306,6 +313,7 @@ pub fn seeded_mock() -> MockState {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "auto".to_string(),
         },
         SessionView {
             id: "s09".to_string(),
@@ -329,6 +337,7 @@ pub fn seeded_mock() -> MockState {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "auto".to_string(),
         },
         // Stale session
         SessionView {
@@ -353,6 +362,7 @@ pub fn seeded_mock() -> MockState {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "auto".to_string(),
         },
     ];
 

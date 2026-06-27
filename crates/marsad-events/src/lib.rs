@@ -130,6 +130,10 @@ pub struct SessionState {
     /// Slash commands available in this session (from the system/init event).
     #[serde(default)]
     pub slash_commands: Vec<marsad_proto::SlashCommandInfo>,
+    /// Permission mode from the system/init event ("default", "acceptEdits",
+    /// "bypassPermissions"). `None` before the first system/init.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
     /// Message ids already counted for usage DEDUP.
     #[serde(default, skip_serializing_if = "HashSet::is_empty")]
     seen_message_ids: HashSet<String>,
@@ -158,6 +162,7 @@ impl SessionState {
             tools: Vec::new(),
             mcp_servers: Vec::new(),
             slash_commands: Vec::new(),
+            permission_mode: None,
             seen_message_ids: HashSet::new(),
             running_task_ids: HashMap::new(),
         }
@@ -237,6 +242,7 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
             state.tools = init.tools;
             state.mcp_servers = init.mcp_servers;
             state.slash_commands = init.slash_commands;
+            state.permission_mode = Some(init.permission_mode);
             state.phase = Phase::Working;
             state
         }

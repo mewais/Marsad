@@ -232,19 +232,25 @@ fn pricing_for(model: &str) -> (f64, f64, f64, f64) {
     }
 }
 
-/// Compute cost in USD from token counts and a pricing tuple.
-fn compute_cost(
-    input: u64,
-    output: u64,
-    cache_read: u64,
-    cache_write: u64,
-    (in_rate, out_rate, cr_rate, cw_rate): (f64, f64, f64, f64),
-) -> f64 {
-    input as f64 / 1_000_000.0 * in_rate
-        + output as f64 / 1_000_000.0 * out_rate
-        + cache_read as f64 / 1_000_000.0 * cr_rate
-        + cache_write as f64 / 1_000_000.0 * cw_rate
+/// Compute cost in USD from token counts and a pricing tuple ($/Mtok rates).
+///
+/// Public so `marsad-core` can call it from `handle_usage_update` without
+/// duplicating the pricing table.
+///
+/// Pricing (per million tokens):
+/// - opus:   input $15, output $75, cache_read $1.50, cache_creation $18.75
+/// - sonnet: input $3,  output $15, cache_read $0.30, cache_creation $3.75
+/// - haiku:  input $0.80, output $4, cache_read $0.08, cache_creation $1.00
+/// - unknown → $0 (no cost, not an error)
+pub fn model_cost_usd(model: &str, input: u64, output: u64, cache_read: u64, cache_creation: u64) -> f64 {
+    let (ri, ro, rcr, rcc) = pricing_for(model);
+    let c_in = input as f64 * ri;
+    let c_out = output as f64 * ro;
+    let c_cr = cache_read as f64 * rcr;
+    let c_cc = cache_creation as f64 * rcc;
+    (c_in + c_out + c_cr + c_cc) / 1_000_000.0
 }
+
 
 /// Minimal serde shape for the assistant entries in a JSONL file.
 #[derive(serde::Deserialize)]
@@ -277,6 +283,10 @@ struct AssistantJsonlUsage {
 /// Walks all `"assistant"` lines (which includes subagent turns since they are
 /// recorded with `isSidechain: true` but the same `type: "assistant"` discriminant).
 /// Returns a map from model name → `ModelUsageSummary`.
+///
+/// Filters out:
+/// - the `"<synthetic>"` pseudo-model (claude's token-counting placeholder),
+/// - rows where all token counts are zero (no real usage).
 pub fn aggregate_model_usage(
     jsonl: &str,
 ) -> std::collections::HashMap<String, ModelUsageSummary> {
@@ -299,17 +309,22 @@ pub fn aggregate_model_usage(
         let Some(model) = message.model else {
             continue;
         };
+        // Skip the synthetic pseudo-model (claude's internal placeholder).
+        if model == "<synthetic>" {
+            continue;
+        }
         let Some(usage) = message.usage else {
             continue;
         };
-        let pricing = pricing_for(&model);
-        let cost = compute_cost(
-            usage.input_tokens,
-            usage.output_tokens,
-            usage.cache_read_input_tokens,
-            usage.cache_creation_input_tokens,
-            pricing,
-        );
+        // Skip zero-usage rows (no real tokens consumed).
+        let total_tokens = usage.input_tokens
+            .saturating_add(usage.output_tokens)
+            .saturating_add(usage.cache_read_input_tokens)
+            .saturating_add(usage.cache_creation_input_tokens);
+        if total_tokens == 0 {
+            continue;
+        }
+        let cost = model_cost_usd(&model, usage.input_tokens, usage.output_tokens, usage.cache_read_input_tokens, usage.cache_creation_input_tokens);
         let entry = out.entry(model).or_insert(ModelUsageSummary {
             input_tokens: 0,
             output_tokens: 0,
@@ -1035,5 +1050,136 @@ mod tests {
         let path = std::env::temp_dir().join(format!("marsad-discovery-test-{n}"));
         std::fs::create_dir_all(&path).unwrap();
         TempDir(path)
+    }
+
+    // -------------------------------------------------------------------------
+    // model_cost_usd — pricing table unit tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn model_cost_usd_opus_input() {
+        // 1_000_000 input tokens on opus = $15.00
+        let cost = model_cost_usd("claude-opus-4-8", 1_000_000, 0, 0, 0);
+        let micros = (cost * 1_000_000.0).round() as i64;
+        assert_eq!(micros, 15_000_000);
+    }
+
+    #[test]
+    fn model_cost_usd_opus_output() {
+        // 1_000_000 output tokens on opus = $75.00
+        let cost = model_cost_usd("claude-opus-4-8", 0, 1_000_000, 0, 0);
+        let micros = (cost * 1_000_000.0).round() as i64;
+        assert_eq!(micros, 75_000_000);
+    }
+
+    #[test]
+    fn model_cost_usd_sonnet_input() {
+        // 1_000_000 input tokens on sonnet = $3.00
+        let cost = model_cost_usd("claude-sonnet-4-6", 1_000_000, 0, 0, 0);
+        let micros = (cost * 1_000_000.0).round() as i64;
+        assert_eq!(micros, 3_000_000);
+    }
+
+    #[test]
+    fn model_cost_usd_sonnet_output() {
+        // 1_000_000 output on sonnet = $15.00
+        let cost = model_cost_usd("claude-sonnet-4-6", 0, 1_000_000, 0, 0);
+        let micros = (cost * 1_000_000.0).round() as i64;
+        assert_eq!(micros, 15_000_000);
+    }
+
+    #[test]
+    fn model_cost_usd_haiku() {
+        // 1_000_000 input + 1_000_000 output on haiku = $0.80 + $4.00 = $4.80
+        let cost = model_cost_usd("claude-haiku-4-5", 1_000_000, 1_000_000, 0, 0);
+        let micros = (cost * 1_000_000.0).round() as i64;
+        assert_eq!(micros, 4_800_000);
+    }
+
+    #[test]
+    fn model_cost_usd_opus_cache_read() {
+        // 1_000_000 cache_read tokens on opus = $1.50
+        let cost = model_cost_usd("claude-opus-4-8", 0, 0, 1_000_000, 0);
+        let micros = (cost * 1_000_000.0).round() as i64;
+        assert_eq!(micros, 1_500_000);
+    }
+
+    #[test]
+    fn model_cost_usd_sonnet_cache_creation() {
+        // 1_000_000 cache_creation tokens on sonnet = $3.75
+        let cost = model_cost_usd("claude-sonnet-4-6", 0, 0, 0, 1_000_000);
+        let micros = (cost * 1_000_000.0).round() as i64;
+        assert_eq!(micros, 3_750_000);
+    }
+
+    #[test]
+    fn model_cost_usd_unknown_model_returns_zero() {
+        assert_eq!(model_cost_usd("unknown-model-xyz", 1_000_000, 1_000_000, 1_000_000, 1_000_000), 0.0);
+    }
+
+    // -------------------------------------------------------------------------
+    // aggregate_model_usage — synthetic + zero filtering
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn aggregate_model_usage_skips_synthetic_model() {
+        let jsonl = r#"{"type":"assistant","message":{"model":"<synthetic>","usage":{"input_tokens":999,"output_tokens":999,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
+        let result = aggregate_model_usage(jsonl);
+        assert!(result.is_empty(), "<synthetic> must be skipped");
+    }
+
+    #[test]
+    fn aggregate_model_usage_skips_zero_usage_rows() {
+        let jsonl = r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
+        let result = aggregate_model_usage(jsonl);
+        assert!(result.is_empty(), "zero-usage row must be skipped");
+    }
+
+    #[test]
+    fn aggregate_model_usage_keeps_real_rows() {
+        let jsonl = r#"{"type":"assistant","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
+        let result = aggregate_model_usage(jsonl);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result["claude-sonnet-4-6"].input_tokens, 100);
+    }
+
+    /// A row with only cache_read tokens (zero input/output) must NOT be skipped.
+    #[test]
+    fn aggregate_model_usage_keeps_cache_only_rows() {
+        let jsonl = r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":500,"cache_creation_input_tokens":0}}}"#;
+        let result = aggregate_model_usage(jsonl);
+        assert_eq!(result.len(), 1, "cache_read-only row must be kept");
+        assert_eq!(result["claude-opus-4-8"].cache_read_input_tokens, 500);
+    }
+
+    /// A row with only cache_creation tokens must NOT be skipped.
+    #[test]
+    fn aggregate_model_usage_keeps_cache_creation_only_rows() {
+        let jsonl = r#"{"type":"assistant","message":{"model":"claude-haiku-4-5","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":200}}}"#;
+        let result = aggregate_model_usage(jsonl);
+        assert_eq!(result.len(), 1, "cache_creation-only row must be kept");
+        assert_eq!(result["claude-haiku-4-5"].cache_creation_input_tokens, 200);
+    }
+
+    /// Exercise every skip branch (empty line, bad JSON, non-assistant, missing
+    /// message/model/usage) AND the same-model accumulation path in one pass.
+    #[test]
+    fn aggregate_model_usage_skips_all_malformed_and_accumulates() {
+        let jsonl = concat!(
+            "\n",                                                                 // empty line → skip
+            "   \n",                                                              // whitespace-only → skip
+            "not json at all\n",                                                  // parse error → skip
+            r#"{"type":"user","message":{"model":"claude-opus-4-8","usage":{"input_tokens":5}}}"#, "\n", // non-assistant → skip
+            r#"{"type":"assistant"}"#, "\n",                                       // no message → skip
+            r#"{"type":"assistant","message":{"usage":{"input_tokens":5}}}"#, "\n", // no model → skip
+            r#"{"type":"assistant","message":{"model":"claude-opus-4-8"}}"#, "\n", // no usage → skip
+            r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#, "\n",
+            r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":20,"output_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#, "\n", // same model → accumulate
+        );
+        let result = aggregate_model_usage(jsonl);
+        assert_eq!(result.len(), 1, "only the two real opus rows count: {result:?}");
+        let opus = &result["claude-opus-4-8"];
+        assert_eq!(opus.input_tokens, 30, "accumulated input");
+        assert_eq!(opus.output_tokens, 3, "accumulated output");
     }
 }

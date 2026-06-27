@@ -483,15 +483,17 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
 
                 // AgentEvent broadcasts carry session stream data; TranscriptBackfill
                 // carries a resumed remote session's history; ChangesUpdate carries a
-                // remote git-status probe. All go to core. The agent also sends command
-                // acks (Subscribed, SessionLaunched, …) on this subscriber connection —
-                // skip those silently rather than feeding them to on_agent_line (which
-                // would log an "unknown IPC type").
+                // remote git-status probe; UsageUpdate carries the project-wide
+                // per-model token aggregation. All go to core. The agent also sends
+                // command acks (Subscribed, SessionLaunched, …) on this subscriber
+                // connection — skip those silently rather than feeding them to
+                // on_agent_line (which would log an "unknown IPC type").
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
                     let ty = v.get("type").and_then(|t| t.as_str());
                     if ty != Some("AgentEvent")
                         && ty != Some("TranscriptBackfill")
                         && ty != Some("ChangesUpdate")
+                        && ty != Some("UsageUpdate")
                     {
                         continue;
                     }

@@ -71,6 +71,7 @@ fn sv(id: &str, cost: f64, tokens: u64, state: Phase) -> SessionView {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
+            posture: "ask".to_string(),
     }
 }
 
