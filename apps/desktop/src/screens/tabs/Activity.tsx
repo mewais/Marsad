@@ -130,14 +130,26 @@ function deriveTranscript(
     });
   }
 
-  // If there are subagents, show a stub subagent entry
-  if (sv.subagents > 0) {
+  // If there are running subagents, show a running indicator
+  if (sv.running_subagents > 0) {
+    msgs.push({
+      id: "subagent-running-0",
+      kind: "subagent",
+      name: `${sv.running_subagents} sub-agent${sv.running_subagents > 1 ? "s" : ""} running`,
+      model: sv.model,
+      subStatus: "Working",
+    });
+  }
+
+  // If there are completed subagents, show a summary entry
+  const completedSubagents = sv.subagents - sv.running_subagents;
+  if (completedSubagents > 0) {
     msgs.push({
       id: "subagent-0",
       kind: "subagent",
-      name: `${sv.subagents} sub-agent${sv.subagents > 1 ? "s" : ""}`,
+      name: `${completedSubagents} sub-agent${completedSubagents > 1 ? "s" : ""}`,
       model: sv.model,
-      subStatus: sv.state === "Working" ? "Working" : "Done",
+      subStatus: "Done",
     });
   }
 

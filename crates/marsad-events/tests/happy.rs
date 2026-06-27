@@ -545,3 +545,159 @@ fn system_init_slash_commands_string_array_populates() {
     assert_eq!(s1.slash_commands[0].name, "/clear");
     assert_eq!(s1.slash_commands[1].name, "/compact");
 }
+
+// ---------------------------------------------------------------------------
+// Feature #3 — Running subagents via Task tool_use / tool_result
+// ---------------------------------------------------------------------------
+
+fn task_tool_use_json(msg_id: &str, tool_use_id: &str, subagent_type: &str) -> String {
+    serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "id": msg_id,
+            "content": [{
+                "type": "tool_use",
+                "id": tool_use_id,
+                "name": "Task",
+                "input": {
+                    "subagent_type": subagent_type,
+                    "description": "Do some work"
+                }
+            }],
+            "usage": {"input_tokens": 10, "output_tokens": 5,
+                      "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        }
+    })
+    .to_string()
+}
+
+fn task_tool_result_json(tool_use_id: &str) -> String {
+    serde_json::json!({
+        "type": "user",
+        "message": {
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "content": "done"
+            }]
+        }
+    })
+    .to_string()
+}
+
+/// A Task tool_use with subagent_type marks a subagent as Running.
+#[test]
+fn task_tool_use_marks_subagent_running() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(s0, stream(&task_tool_use_json("m-task-1", "tu-task-1", "researcher")));
+    assert_eq!(s1.subagents.len(), 1);
+    let agent = &s1.subagents[0];
+    assert_eq!(agent.name, "researcher");
+    assert_eq!(agent.status, SubagentStatus::Running);
+}
+
+/// A Task tool_result matching the tool_use id marks the subagent as Done.
+#[test]
+fn task_tool_result_marks_subagent_done() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(s0, stream(&task_tool_use_json("m-task-2", "tu-task-2", "coder")));
+    assert_eq!(s1.subagents[0].status, SubagentStatus::Running);
+
+    let s2 = reduce(s1, stream(&task_tool_result_json("tu-task-2")));
+    assert_eq!(s2.subagents[0].status, SubagentStatus::Done);
+}
+
+/// A tool_result for an unknown tool_use_id (not a Task) is a no-op.
+#[test]
+fn task_tool_result_unknown_id_is_noop() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(s0, stream(&task_tool_result_json("unknown-tu-id")));
+    assert!(s1.subagents.is_empty());
+}
+
+/// Task tool_use uses description when subagent_type is absent.
+#[test]
+fn task_tool_use_uses_description_fallback() {
+    let json = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "id": "m-fb",
+            "content": [{
+                "type": "tool_use",
+                "id": "tu-fb",
+                "name": "Task",
+                "input": { "description": "analyze codebase" }
+            }],
+            "usage": {"input_tokens": 1, "output_tokens": 1,
+                      "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        }
+    })
+    .to_string();
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(s0, stream(&json));
+    assert_eq!(s1.subagents[0].name, "analyze codebase");
+    assert_eq!(s1.subagents[0].status, SubagentStatus::Running);
+}
+
+/// Task tool_use with no subagent_type or description falls back to "subagent".
+#[test]
+fn task_tool_use_uses_default_name_when_input_empty() {
+    let json = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "id": "m-def",
+            "content": [{
+                "type": "tool_use",
+                "id": "tu-def",
+                "name": "Task",
+                "input": {}
+            }],
+            "usage": {"input_tokens": 1, "output_tokens": 1,
+                      "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        }
+    })
+    .to_string();
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(s0, stream(&json));
+    assert_eq!(s1.subagents[0].name, "subagent");
+}
+
+/// Two Task tool_uses then both tool_results: both resolve to Done.
+#[test]
+fn two_task_tool_uses_both_resolve_to_done() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(s0, stream(&task_tool_use_json("m-t3a", "tu-t3a", "worker-a")));
+    let s2 = reduce(s1, stream(&task_tool_use_json("m-t3b", "tu-t3b", "worker-b")));
+    assert_eq!(s2.subagents.len(), 2);
+    assert_eq!(s2.subagents[0].status, SubagentStatus::Running);
+    assert_eq!(s2.subagents[1].status, SubagentStatus::Running);
+
+    let s3 = reduce(s2, stream(&task_tool_result_json("tu-t3a")));
+    assert_eq!(s3.subagents[0].status, SubagentStatus::Done);
+    assert_eq!(s3.subagents[1].status, SubagentStatus::Running);
+
+    let s4 = reduce(s3, stream(&task_tool_result_json("tu-t3b")));
+    assert_eq!(s4.subagents[0].status, SubagentStatus::Done);
+    assert_eq!(s4.subagents[1].status, SubagentStatus::Done);
+}
+
+/// SubagentStop hook from the hook system still records a Done subagent (secondary signal).
+#[test]
+fn subagent_stop_hook_still_records_done_alongside_task_tracking() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    // Start a task-tracked subagent
+    let s1 = reduce(s0, stream(&task_tool_use_json("m-t4", "tu-t4", "helper")));
+    // Also receive a SubagentStop hook for a different subagent (untracked by Task)
+    let s2 = reduce(
+        s1,
+        Event::Hook(HookEvent::SubagentStop {
+            name: "external-agent".to_string(),
+        }),
+    );
+    assert_eq!(s2.subagents.len(), 2);
+    // The hook-recorded one is Done
+    assert_eq!(s2.subagents[1].status, SubagentStatus::Done);
+    assert_eq!(s2.subagents[1].name, "external-agent");
+    // The task-tracked one is still Running
+    assert_eq!(s2.subagents[0].status, SubagentStatus::Running);
+}

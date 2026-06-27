@@ -59,6 +59,7 @@ fn sv(id: &str, cost: f64, tokens: u64, state: Phase) -> SessionView {
         state,
         changed_files: 0,
         subagents: 0,
+        running_subagents: 0,
         cost_usd: cost,
         tokens,
         context_pct: 10.0,

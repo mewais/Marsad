@@ -204,6 +204,132 @@ pub fn parse_transcript(jsonl: &str) -> Vec<TranscriptEntry> {
     out
 }
 
+// ---------------------------------------------------------------------------
+// per-model usage aggregation from JSONL backfill
+// ---------------------------------------------------------------------------
+
+/// One row of per-model accumulated usage, computed from a session's JSONL.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelUsageSummary {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cost_usd: f64,
+}
+
+/// Pricing table: (input $/Mtok, output $/Mtok, cache_read $/Mtok, cache_write $/Mtok).
+fn pricing_for(model: &str) -> (f64, f64, f64, f64) {
+    let m = model.to_lowercase();
+    if m.contains("opus") {
+        (15.0, 75.0, 1.50, 18.75)
+    } else if m.contains("sonnet") {
+        (3.0, 15.0, 0.30, 3.75)
+    } else if m.contains("haiku") {
+        (0.80, 4.0, 0.08, 1.0)
+    } else {
+        (0.0, 0.0, 0.0, 0.0)
+    }
+}
+
+/// Compute cost in USD from token counts and a pricing tuple.
+fn compute_cost(
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+    (in_rate, out_rate, cr_rate, cw_rate): (f64, f64, f64, f64),
+) -> f64 {
+    input as f64 / 1_000_000.0 * in_rate
+        + output as f64 / 1_000_000.0 * out_rate
+        + cache_read as f64 / 1_000_000.0 * cr_rate
+        + cache_write as f64 / 1_000_000.0 * cw_rate
+}
+
+/// Minimal serde shape for the assistant entries in a JSONL file.
+#[derive(serde::Deserialize)]
+struct AssistantJsonlLine {
+    #[serde(rename = "type")]
+    line_type: Option<String>,
+    message: Option<AssistantJsonlMessage>,
+}
+
+#[derive(serde::Deserialize)]
+struct AssistantJsonlMessage {
+    model: Option<String>,
+    usage: Option<AssistantJsonlUsage>,
+}
+
+#[derive(serde::Deserialize)]
+struct AssistantJsonlUsage {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    cache_read_input_tokens: u64,
+    #[serde(default)]
+    cache_creation_input_tokens: u64,
+}
+
+/// Parse a full session JSONL and aggregate token usage per model.
+///
+/// Walks all `"assistant"` lines (which includes subagent turns since they are
+/// recorded with `isSidechain: true` but the same `type: "assistant"` discriminant).
+/// Returns a map from model name → `ModelUsageSummary`.
+pub fn aggregate_model_usage(
+    jsonl: &str,
+) -> std::collections::HashMap<String, ModelUsageSummary> {
+    let mut out: std::collections::HashMap<String, ModelUsageSummary> =
+        std::collections::HashMap::new();
+    for line in jsonl.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(parsed) = serde_json::from_str::<AssistantJsonlLine>(trimmed) else {
+            continue;
+        };
+        if parsed.line_type.as_deref() != Some("assistant") {
+            continue;
+        }
+        let Some(message) = parsed.message else {
+            continue;
+        };
+        let Some(model) = message.model else {
+            continue;
+        };
+        let Some(usage) = message.usage else {
+            continue;
+        };
+        let pricing = pricing_for(&model);
+        let cost = compute_cost(
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_input_tokens,
+            usage.cache_creation_input_tokens,
+            pricing,
+        );
+        let entry = out.entry(model).or_insert(ModelUsageSummary {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cost_usd: 0.0,
+        });
+        entry.input_tokens = entry.input_tokens.saturating_add(usage.input_tokens);
+        entry.output_tokens = entry.output_tokens.saturating_add(usage.output_tokens);
+        entry.cache_read_input_tokens = entry
+            .cache_read_input_tokens
+            .saturating_add(usage.cache_read_input_tokens);
+        entry.cache_creation_input_tokens = entry
+            .cache_creation_input_tokens
+            .saturating_add(usage.cache_creation_input_tokens);
+        entry.cost_usd += cost;
+    }
+    out
+}
+
 /// Read the transcript for one Claude session.
 ///
 /// Reads `<projects_root>/<encode_project_dir(cwd)>/<session_id>.jsonl` and

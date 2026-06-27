@@ -28,7 +28,10 @@ pub struct SessionView {
     pub model: String,
     pub state: Phase,
     pub changed_files: u32,
+    /// Total completed subagents count.
     pub subagents: u32,
+    /// Number of currently running (in-progress) subagents.
+    pub running_subagents: u32,
     pub cost_usd: f64,
     pub tokens: u64,
     pub context_pct: f32,

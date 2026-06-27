@@ -2728,6 +2728,11 @@ fn spawn_session_reader(
         eprintln!("marsad-agent: session {sid} stream connected");
         use std::io::BufRead;
         let mut lines_seen = 0u64;
+        // Debounce tracker for the tool_use-triggered Changes probe (#4).
+        // Stores the Instant of the last probe so rapid edits don't spam ssh
+        // (at most one probe per CHANGES_PROBE_DEBOUNCE_SECS per session).
+        let mut last_changes_probe: Option<std::time::Instant> = None;
+        const CHANGES_PROBE_DEBOUNCE_SECS: u64 = 3;
         loop {
             let mut raw = String::new();
             match reader.read_line(&mut raw) {
@@ -2755,22 +2760,46 @@ fn spawn_session_reader(
                         ),
                     ) = marsad_proto::parse_stream_line(raw)
                     {
-                        eprintln!(
-                            "marsad-agent: session {sid} gate captured (control_request {})",
-                            cr.request_id
-                        );
                         let mut gates =
                             pending_fifo.lock().unwrap();
-                        gates.insert(
-                            sid.clone(),
-                            PendingGate {
-                                request_id: cr.request_id,
-                                input: cr.input,
-                                elicitation: cr
-                                    .elicitation_message
-                                    .is_some(),
-                            },
-                        );
+                        // Deduplicate: if the SAME request_id already
+                        // sits in the registry (claude re-emitted it),
+                        // ignore the duplicate so we don't clobber the
+                        // existing entry and misroute a later AnswerGate.
+                        // If it's a genuinely NEW request_id while one
+                        // is already pending, replace it (the first one
+                        // was either answered or abandoned) and warn.
+                        let dup = gates.get(&sid)
+                            .map(|existing| existing.request_id == cr.request_id)
+                            .unwrap_or(false);
+                        if dup {
+                            eprintln!(
+                                "marsad-agent: session {sid} gate DUPLICATE ignored (control_request {})",
+                                cr.request_id
+                            );
+                        } else {
+                            if gates.contains_key(&sid) {
+                                eprintln!(
+                                    "marsad-agent: session {sid} gate REPLACED — new control_request {} (previous unanswered)",
+                                    cr.request_id
+                                );
+                            } else {
+                                eprintln!(
+                                    "marsad-agent: session {sid} gate captured (control_request {})",
+                                    cr.request_id
+                                );
+                            }
+                            gates.insert(
+                                sid.clone(),
+                                PendingGate {
+                                    request_id: cr.request_id,
+                                    input: cr.input,
+                                    elicitation: cr
+                                        .elicitation_message
+                                        .is_some(),
+                                },
+                            );
+                        }
                     }
 
                     let event: serde_json::Value =
@@ -2778,13 +2807,36 @@ fn spawn_session_reader(
                             .unwrap_or_else(|_| {
                                 serde_json::json!({"raw": raw})
                             });
-                    // Detect a turn boundary: a `result` event means claude
-                    // finished a turn. For REMOTE sessions, probe git now and
-                    // broadcast a ChangesUpdate so the Changes tab populates.
+
+                    // Determine whether this event should trigger a
+                    // remote git Changes probe.
+                    //
+                    // Trigger 1 (existing): `result` event — turn ended.
+                    // Trigger 2 (new, #4): `assistant` event containing a
+                    // `tool_use` block for a file-modifying tool (Bash,
+                    // Edit, Write, NotebookEdit, MultiEdit).  Debounced:
+                    // at most one probe per CHANGES_PROBE_DEBOUNCE_SECS.
                     let is_result = event.get("type")
                         .and_then(|t| t.as_str())
                         == Some("result");
-                    if is_result {
+                    let is_file_modifying_tool_use =
+                        !is_result
+                        && event.get("type").and_then(|t| t.as_str())
+                            == Some("assistant")
+                        && assistant_has_file_modifying_tool_use(&event);
+                    let should_probe_changes = is_result
+                        || (is_file_modifying_tool_use && {
+                            let now = std::time::Instant::now();
+                            let elapsed_ok = last_changes_probe
+                                .map(|t| now.duration_since(t).as_secs()
+                                    >= CHANGES_PROBE_DEBOUNCE_SECS)
+                                .unwrap_or(true);
+                            if elapsed_ok {
+                                last_changes_probe = Some(now);
+                            }
+                            elapsed_ok
+                        });
+                    if should_probe_changes {
                         if let (Some(target), Some(project)) =
                             (host_target.as_deref(), remote_project.as_deref())
                         {
@@ -2804,7 +2856,8 @@ fn spawn_session_reader(
                                     let _ = s.send(cu_line.clone());
                                 });
                                 eprintln!(
-                                    "marsad-agent: session {sid} changes update broadcast"
+                                    "marsad-agent: session {sid} changes update broadcast ({})",
+                                    if is_result { "result" } else { "tool_use" }
                                 );
                             }
                         }
@@ -2870,6 +2923,36 @@ fn spawn_session_reader(
             let _ = rchild.wait();
         }
     });
+}
+
+// ── assistant_has_file_modifying_tool_use ────────────────────────────────────
+
+/// Return `true` if the given `assistant` stream event contains at least one
+/// `tool_use` content block whose tool name is a known file-modifying tool.
+///
+/// Used by `spawn_session_reader` (#4) to decide whether to trigger a debounced
+/// remote git Changes probe BEFORE the turn ends, so the Changes tab updates
+/// while claude is mid-turn writing files rather than only at `result`.
+///
+/// Pure logic (no IO), compiled in all build modes — covered by unit tests.
+pub fn assistant_has_file_modifying_tool_use(event: &serde_json::Value) -> bool {
+    // File-modifying tools whose use signals a likely git-visible change.
+    const FILE_TOOLS: &[&str] = &["Bash", "Edit", "Write", "NotebookEdit", "MultiEdit"];
+    let content = match event.get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+    {
+        Some(arr) => arr,
+        None => return false,
+    };
+    content.iter().any(|block| {
+        block.get("type").and_then(|t| t.as_str()) == Some("tool_use")
+            && block
+                .get("name")
+                .and_then(|n| n.as_str())
+                .map(|name| FILE_TOOLS.contains(&name))
+                .unwrap_or(false)
+    })
 }
 
 // ── Durable remote session helpers ────────────────────────────────────────────

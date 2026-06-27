@@ -3,8 +3,9 @@
 //! durable session helpers (design 2B: FIFO + setsid + keepalive).
 
 use marsad_agent::{
-    build_remote_spawn_cmd, exec_prefix_for, remote_durable_launch_script, remote_kill_script,
-    remote_liveness_script, remote_reader_argv, remote_session_dir, remote_writer_argv,
+    assistant_has_file_modifying_tool_use, build_remote_spawn_cmd, exec_prefix_for,
+    remote_durable_launch_script, remote_kill_script, remote_liveness_script, remote_reader_argv,
+    remote_session_dir, remote_writer_argv,
 };
 
 // ── exec_prefix_for ─────────────────────────────────────────────────────────────
@@ -339,4 +340,109 @@ fn reader_argv_is_shellfree_tail_with_pid() {
         );
         assert_no_shell_or_quotes(&argv);
     }
+}
+
+// ── assistant_has_file_modifying_tool_use (#4 Changes probe trigger) ───────────
+//
+// Pure-logic function: tested here so it gets 100% line+branch coverage and the
+// debounced Changes probe is verified to fire on the right tools only.
+
+fn make_assistant_event(tool_name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": tool_name,
+                    "id": "tu_123",
+                    "input": {}
+                }
+            ]
+        }
+    })
+}
+
+/// Each file-modifying tool triggers the probe.
+#[test]
+fn file_modifying_tools_return_true() {
+    for tool in ["Bash", "Edit", "Write", "NotebookEdit", "MultiEdit"] {
+        let ev = make_assistant_event(tool);
+        assert!(
+            assistant_has_file_modifying_tool_use(&ev),
+            "tool {tool} should be recognised as file-modifying"
+        );
+    }
+}
+
+/// Read-only tools must NOT trigger the probe.
+#[test]
+fn read_only_tools_return_false() {
+    for tool in ["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Task"] {
+        let ev = make_assistant_event(tool);
+        assert!(
+            !assistant_has_file_modifying_tool_use(&ev),
+            "tool {tool} should NOT be recognised as file-modifying"
+        );
+    }
+}
+
+/// A non-assistant event (e.g. `result`) must never match.
+#[test]
+fn non_assistant_event_returns_false() {
+    let ev = serde_json::json!({"type": "result", "subtype": "success"});
+    assert!(!assistant_has_file_modifying_tool_use(&ev));
+}
+
+/// An assistant event with NO content blocks must not match.
+#[test]
+fn assistant_with_no_content_returns_false() {
+    let ev = serde_json::json!({"type": "assistant", "message": {"content": []}});
+    assert!(!assistant_has_file_modifying_tool_use(&ev));
+}
+
+/// An assistant event with only text blocks (no tool_use) must not match.
+#[test]
+fn assistant_with_only_text_blocks_returns_false() {
+    let ev = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "content": [{"type": "text", "text": "here's my plan"}]
+        }
+    });
+    assert!(!assistant_has_file_modifying_tool_use(&ev));
+}
+
+/// Mixed content: text block + file-modifying tool_use → true.
+#[test]
+fn assistant_mixed_content_text_and_write_returns_true() {
+    let ev = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "content": [
+                {"type": "text", "text": "writing now"},
+                {"type": "tool_use", "name": "Write", "id": "tu_1", "input": {}}
+            ]
+        }
+    });
+    assert!(assistant_has_file_modifying_tool_use(&ev));
+}
+
+/// Missing `message` field → false (not a panic).
+#[test]
+fn assistant_missing_message_returns_false() {
+    let ev = serde_json::json!({"type": "assistant"});
+    assert!(!assistant_has_file_modifying_tool_use(&ev));
+}
+
+/// `tool_use` block with no `name` field → false (not a panic).
+#[test]
+fn tool_use_missing_name_returns_false() {
+    let ev = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "content": [{"type": "tool_use", "id": "tu_1", "input": {}}]
+        }
+    });
+    assert!(!assistant_has_file_modifying_tool_use(&ev));
 }

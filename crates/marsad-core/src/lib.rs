@@ -1304,7 +1304,10 @@ impl Core {
     /// first, ahead of any live entries). This is how a resumed/restored REMOTE
     /// session gets its prior conversation — the file lives on the remote host,
     /// so the agent reads it over the session's connection and forwards the text.
-    /// Unknown session or empty history → no-op (no update).
+    /// Also aggregates per-model token usage (including subagent turns recorded as
+    /// `isSidechain: true` entries in the JSONL) and updates the session's
+    /// `model_usage` map so the Usage tab shows a full multi-model breakdown.
+    /// Unknown session or empty history+usage → no-op (no update).
     fn handle_transcript_backfill(
         &mut self,
         env: IpcEnvelope,
@@ -1312,8 +1315,12 @@ impl Core {
         let session_id = env.session_id.ok_or_else(|| {
             CoreError::Protocol("missing session_id in transcript_backfill".to_string())
         })?;
-        let history = discovery::parse_transcript(&env.jsonl.unwrap_or_default());
-        if history.is_empty() {
+        let jsonl_text = env.jsonl.unwrap_or_default();
+        let history = discovery::parse_transcript(&jsonl_text);
+        // Aggregate per-model usage from the full JSONL (includes subagent turns).
+        let model_usage_agg = discovery::aggregate_model_usage(&jsonl_text);
+
+        if history.is_empty() && model_usage_agg.is_empty() {
             return Ok(vec![]);
         }
         let record = match self.sessions.get_mut(&session_id) {
@@ -1321,9 +1328,26 @@ impl Core {
             None => return Ok(vec![]),
         };
         // Prepend history so it precedes any live entries already streamed.
-        let mut combined = history;
-        combined.append(&mut record.transcript);
-        record.transcript = combined;
+        if !history.is_empty() {
+            let mut combined = history;
+            combined.append(&mut record.transcript);
+            record.transcript = combined;
+        }
+        // Populate model_usage from JSONL aggregation (supersedes the result-event value
+        // since it includes subagents and is the authoritative source of truth).
+        if !model_usage_agg.is_empty() {
+            record.state.model_usage.clear();
+            for (model, summary) in model_usage_agg {
+                record.state.model_usage.insert(
+                    model,
+                    marsad_proto::ModelUsage {
+                        input_tokens: summary.input_tokens,
+                        output_tokens: summary.output_tokens,
+                        cost_usd: summary.cost_usd,
+                    },
+                );
+            }
+        }
         let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
         Ok(vec![VmUpdate::Session(sv)])
     }
@@ -1504,6 +1528,11 @@ impl Core {
             state: s.phase.clone(),
             changed_files: record.changes.len() as u32,
             subagents: s.subagents.len() as u32,
+            running_subagents: s
+                .subagents
+                .iter()
+                .filter(|a| a.status == marsad_events::SubagentStatus::Running)
+                .count() as u32,
             cost_usd: s.cost_usd,
             tokens: s.tokens,
             context_pct: s.context_pct,

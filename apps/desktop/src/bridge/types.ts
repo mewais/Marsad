@@ -149,6 +149,8 @@ export interface SessionView {
   state: Phase;
   changed_files: number;
   subagents: number;
+  /** Number of currently running (in-progress) subagents. */
+  running_subagents: number;
   cost_usd: number;
   tokens: number;
   context_pct: number;

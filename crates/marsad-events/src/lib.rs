@@ -2,7 +2,7 @@
 //!
 //! See `docs/specs/events.md` for the authoritative contract.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -133,6 +133,10 @@ pub struct SessionState {
     /// Message ids already counted for usage DEDUP.
     #[serde(default, skip_serializing_if = "HashSet::is_empty")]
     seen_message_ids: HashSet<String>,
+    /// Map from Task tool_use id → subagent index in `subagents`, for resolving
+    /// tool_result completions. Keyed by the `id` of the `Task` tool_use block.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    running_task_ids: HashMap<String, usize>,
 }
 
 impl SessionState {
@@ -155,6 +159,7 @@ impl SessionState {
             mcp_servers: Vec::new(),
             slash_commands: Vec::new(),
             seen_message_ids: HashSet::new(),
+            running_task_ids: HashMap::new(),
         }
     }
 
@@ -243,13 +248,22 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
             reduce_assistant(state, msg)
         }
 
-        StreamMsg::User(_) => {
+        StreamMsg::User(msg) => {
             if stale_or_detached {
                 return state;
             }
             // A user turn answers a pending gate / need.
             state.gate = None;
             state.phase = Phase::Working;
+            // Check for tool_result blocks that complete a running Task subagent.
+            for block in &msg.message.content {
+                if let marsad_proto::ContentBlock::ToolResult { tool_use_id, .. } = block {
+                    if let Some(idx) = state.running_task_ids.remove(tool_use_id) {
+                        // idx is always valid — we push() then record len()-1.
+                        state.subagents[idx].status = SubagentStatus::Done;
+                    }
+                }
+            }
             state
         }
 
@@ -291,10 +305,28 @@ fn reduce_assistant(mut state: SessionState, msg: marsad_proto::AssistantMsg) ->
     }
 
     // Extract last_action from the first tool-use content block (if any).
+    // Also track Task tool_use blocks to mark subagents as Running.
     for block in &msg.message.content {
-        if let marsad_proto::ContentBlock::ToolUse { name, input, .. } = block {
+        if let marsad_proto::ContentBlock::ToolUse { name, input, id } = block {
             let input_str = serde_json::to_string(input).unwrap_or_default();
             state.last_action = Some(format!("{name}({input_str})"));
+
+            // A Task tool_use starts a running subagent.
+            if name == "Task" {
+                let subagent_name = input
+                    .get("subagent_type")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| input.get("description").and_then(|v| v.as_str()))
+                    .unwrap_or("subagent")
+                    .to_string();
+                let idx = state.subagents.len();
+                state.subagents.push(Subagent {
+                    name: subagent_name,
+                    model: None,
+                    status: SubagentStatus::Running,
+                });
+                state.running_task_ids.insert(id.clone(), idx);
+            }
         }
     }
 

@@ -110,6 +110,7 @@ fn fold_qa_stream_into_session_state_and_viewmodel() {
         state: state.phase.clone(),
         changed_files: state.changed_files,
         subagents: state.subagents.len() as u32,
+        running_subagents: 0,
         cost_usd: state.cost_usd,
         tokens: state.tokens,
         context_pct: state.context_pct,
