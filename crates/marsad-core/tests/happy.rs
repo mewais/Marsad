@@ -102,6 +102,7 @@ fn launch_session_returns_id_and_sends_ipc() {
         first_prompt: None,
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     };
     let id = core
         .launch_session(spec)
@@ -151,6 +152,7 @@ fn launch_session_on_remote_host_forwards_host_target() {
         first_prompt: None,
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     })
     .expect("launch on remote host");
 
@@ -178,6 +180,7 @@ fn launch_session_forwards_mode_and_posture() {
         first_prompt: None,
         mode: LaunchMode::Continue,
         name: None,
+        disallowed_tools: vec![],
     })
     .expect("launch continue");
     let out = peer.drain_outbound();
@@ -204,6 +207,7 @@ fn launch_session_forwards_mode_and_posture() {
         first_prompt: None,
         mode: LaunchMode::Resume("uuid-7".to_string()),
         name: None,
+        disallowed_tools: vec![],
     })
     .expect("launch resume");
     let out2 = peer.drain_outbound();
@@ -233,6 +237,7 @@ fn launch_session_with_first_prompt_includes_prompt_in_ipc() {
         first_prompt: Some("Hello agent".to_string()),
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     };
     let _id = core.launch_session(spec).expect("launch");
     let outbound = peer.drain_outbound();
@@ -270,6 +275,7 @@ fn resume_session_sends_ipc() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound(); // consume launch IPC
@@ -324,6 +330,7 @@ fn attach_session_sends_ipc() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -362,6 +369,7 @@ fn stop_session_sends_ipc() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -400,6 +408,7 @@ fn send_prompt_sends_ipc() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -438,6 +447,7 @@ fn interrupt_sends_ipc() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -475,6 +485,7 @@ fn answer_gate_sends_ipc_and_routes_to_one_session() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -525,6 +536,7 @@ fn run_slash_sends_ipc() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -566,6 +578,7 @@ fn set_workspace_sends_ipc() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -598,6 +611,7 @@ fn on_agent_line_init_yields_session_vm_update() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
 
@@ -634,6 +648,7 @@ fn session_name_derives_from_project_basename_with_id_fallback() {
                 first_prompt: None,
                 mode: Default::default(),
                 name: None,
+                disallowed_tools: vec![],
             })
             .expect("launch");
         let updates = core
@@ -674,6 +689,7 @@ fn on_agent_line_assistant_yields_session_vm_update() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
 
@@ -707,6 +723,7 @@ fn on_agent_line_control_request_yields_session_needs_update() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
 
@@ -739,6 +756,7 @@ fn on_agent_line_result_success_yields_done_update() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
 
@@ -772,6 +790,7 @@ fn on_agent_line_full_lifecycle_produces_overview_updates() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
 
@@ -872,6 +891,7 @@ fn launch_spec_fields_all_postures() {
             first_prompt: Some("hi".to_string()),
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         };
         let _ = spec;
     }
@@ -931,6 +951,7 @@ fn git_changes_flow_into_session_view_after_tool_runs() {
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
 
@@ -1013,6 +1034,7 @@ fn launch_t(core: &mut Core, first_prompt: Option<&str>, mode: LaunchMode) -> St
         first_prompt: first_prompt.map(|s| s.to_string()),
         mode,
         name: None,
+        disallowed_tools: vec![],
     })
     .expect("launch")
 }
@@ -1353,6 +1375,7 @@ fn add_host_with_launch_config_resolves_into_ipc() {
         first_prompt: None,
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     })
     .expect("launch on remote host");
 
@@ -1388,6 +1411,7 @@ fn launch_spec_env_overrides_host_env() {
         first_prompt: None,
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     })
     .expect("launch with explicit env");
     let outbound = peer.drain_outbound();
@@ -1452,6 +1476,7 @@ fn update_host_localhost_config_resolves_into_ipc() {
         first_prompt: None,
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     })
     .expect("launch on localhost");
     let outbound = peer.drain_outbound();
@@ -1833,6 +1858,7 @@ fn set_session_changes_updates_session_view() {
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
 
@@ -1977,6 +2003,7 @@ fn restart_session_emits_stop_then_launch_with_same_id() {
         first_prompt: None,
         mode: LaunchMode::Fresh,
         name: None,
+        disallowed_tools: vec![],
     };
     let id = core.launch_session(spec).expect("launch");
     let _ = peer.drain_outbound(); // consume the initial LaunchSession IPC
@@ -1988,7 +2015,7 @@ fn restart_session_emits_stop_then_launch_with_same_id() {
 
     // Restart with a new model and posture.
     let updates = core
-        .restart_session(&id, "claude-opus-4-8", Posture::FullAutonomy)
+        .restart_session(&id, "claude-opus-4-8", Posture::FullAutonomy, vec![])
         .expect("restart_session should succeed");
 
     // Must emit a VmUpdate::Session for the same id.
@@ -2049,13 +2076,14 @@ fn restart_session_without_uuid_uses_continue_mode() {
         first_prompt: None,
         mode: LaunchMode::Fresh,
         name: None,
+        disallowed_tools: vec![],
     };
     let id = core.launch_session(spec).expect("launch");
     let _ = peer.drain_outbound();
 
     // Restart — no UUID known → should use Continue mode.
     let updates = core
-        .restart_session(&id, "claude-haiku-4-5", Posture::AutoApproveSafe)
+        .restart_session(&id, "claude-haiku-4-5", Posture::AutoApproveSafe, vec![])
         .expect("restart without uuid");
 
     let has_session = updates.iter().any(|u| matches!(u, VmUpdate::Session(sv) if sv.id == id));
@@ -2082,7 +2110,7 @@ fn restart_session_unknown_id_returns_unknown_session_error() {
     use marsad_core::CoreError;
     let (mut core, _peer) = make_core();
     let err = core
-        .restart_session("no-such-session", "model", Posture::Ask)
+        .restart_session("no-such-session", "model", Posture::Ask, vec![])
         .unwrap_err();
     assert!(
         matches!(err, CoreError::UnknownSession(_)),
@@ -2176,6 +2204,7 @@ fn seed_session(seed: &mut Store, id: &str, host_id: &str, claude_uuid: Option<&
         model: "claude-opus-4-8".to_string(),
         last_phase: "Working".to_string(),
         posture: None,
+            disallowed_tools: vec![],
     })
     .expect("seed session");
 }
@@ -2481,6 +2510,7 @@ fn launch_session_with_custom_name_uses_name_in_view() {
         first_prompt: None,
         mode: Default::default(),
         name: Some("My Named Session".to_string()),
+        disallowed_tools: vec![],
     };
     let id = core.launch_session(spec).expect("launch_session with name");
 
@@ -2529,6 +2559,7 @@ fn load_sessions_restores_custom_name() {
         model: "claude-opus-4-8".to_string(),
         last_phase: "Working".to_string(),
         posture: None,
+            disallowed_tools: vec![],
     })
     .expect("seed named session");
 
@@ -2567,6 +2598,7 @@ fn answer_question_sends_ipc() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -2623,6 +2655,7 @@ fn on_agent_line_changes_update_populates_session_changes() {
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
 
@@ -2683,6 +2716,7 @@ fn session_view_exposes_model_usage_after_result_with_model_usage() {
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
 
@@ -2706,4 +2740,42 @@ fn session_view_exposes_model_usage_after_result_with_model_usage() {
     assert_eq!(sv.model_usage[1].input_tokens, 11);
     assert_eq!(sv.model_usage[1].output_tokens, 155);
     assert!((sv.model_usage[1].cost_usd - 0.268).abs() < 1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// Feature B: disallowed_tools forwarded in IPC JSON
+// ---------------------------------------------------------------------------
+
+/// When `disallowed_tools` is non-empty in `LaunchSpec`, `launch_session`
+/// includes the field in the outbound IPC JSON so the agent passes
+/// `--disallowedTools` to claude.
+#[test]
+fn launch_session_with_disallowed_tools_includes_field_in_ipc() {
+    let (mut core, mut peer) = make_core();
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/p".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "claude-opus-4-5".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec!["Bash".to_string(), "Edit".to_string()],
+        })
+        .expect("launch");
+    assert!(!id.is_empty());
+    let outbound = peer.drain_outbound();
+    let line = outbound.first().expect("must emit IPC");
+    assert!(
+        line.contains("disallowed_tools"),
+        "IPC must include disallowed_tools when non-empty; line: {line}"
+    );
+    // Verify the values are present.
+    assert!(line.contains("Bash"), "IPC must include Bash; line: {line}");
+    assert!(line.contains("Edit"), "IPC must include Edit; line: {line}");
 }

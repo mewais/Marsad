@@ -87,6 +87,7 @@ fn scripted_full_happy_path_session() {
             first_prompt: Some("Add a health check endpoint".to_string()),
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch_session");
 
@@ -257,6 +258,7 @@ fn scripted_gate_rejection_sends_deny_ipc() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -313,6 +315,7 @@ fn scripted_agent_error_result_sets_error_phase() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
 
@@ -362,6 +365,7 @@ fn scripted_send_prompt_during_live_session() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -402,6 +406,7 @@ fn scripted_interrupt_session() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -442,6 +447,7 @@ fn scripted_two_concurrent_sessions_no_cross_routing() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch alpha");
 
@@ -458,6 +464,7 @@ fn scripted_two_concurrent_sessions_no_cross_routing() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch beta");
 
@@ -527,6 +534,7 @@ fn scripted_slash_compact_dispatches_ipc() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -564,6 +572,7 @@ fn scripted_idempotent_answer_gate_end_to_end() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -635,6 +644,7 @@ fn scripted_stop_session_after_launch() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -674,6 +684,7 @@ fn scripted_resume_then_attach() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -698,4 +709,55 @@ fn scripted_resume_then_attach() {
         attach_combined.contains("attach") || attach_combined.contains("Attach"),
         "attach IPC must mention attach; got: {attach_combined}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Feature A: SessionView exposes tools/mcp_servers/slash_commands from system/init
+// ---------------------------------------------------------------------------
+
+/// After a system/init AgentEvent the SessionView must expose tools, mcp_servers,
+/// and slash_commands populated from the event.
+#[test]
+fn session_view_exposes_tools_mcp_slash_after_init() {
+    let (mut core, mut peer) = make_core();
+
+    // Launch, drain the outbound LaunchSession IPC.
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/work/proj".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "claude-opus-4-5".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
+    let _ = peer.drain_outbound();
+
+    // Deliver a rich system/init with tools, mcp_servers, and slash_commands.
+    let init_line = format!(
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"system","subtype":"init","session_id":"claude-uuid","model":"claude-opus-4-5","cwd":"/work/proj","tools":["Read","Bash","Edit"],"mcp_servers":[{{"name":"hares","status":"failed"}},{{"name":"hub","status":"connected"}}],"permissionMode":"default","slash_commands":[{{"name":"/clear","description":"Clear conversation history","argumentHint":""}},{{"name":"/model","description":"Switch model","argumentHint":"model-name"}}]}}}}"#
+    );
+    let updates = core.on_agent_line(&init_line).expect("on_agent_line");
+
+    // Find the Session VmUpdate.
+    let sv = updates.iter().find_map(|u| match u {
+        VmUpdate::Session(sv) => Some(sv.clone()),
+        _ => None,
+    }).expect("Session VmUpdate must be emitted");
+
+    assert_eq!(sv.tools, vec!["Read", "Bash", "Edit"]);
+    assert_eq!(sv.mcp_servers.len(), 2);
+    assert_eq!(sv.mcp_servers[0].name, "hares");
+    assert_eq!(sv.mcp_servers[0].status, "failed");
+    assert_eq!(sv.mcp_servers[1].name, "hub");
+    assert_eq!(sv.slash_commands.len(), 2);
+    assert_eq!(sv.slash_commands[0].name, "/clear");
+    assert_eq!(sv.slash_commands[1].argument_hint, "model-name");
 }

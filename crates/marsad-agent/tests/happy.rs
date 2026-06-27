@@ -47,6 +47,7 @@ fn basic_launch_spec() -> LaunchSpec {
         first_prompt: None,
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     }
 }
 
@@ -63,6 +64,7 @@ fn launch_spec_with_prompt(prompt: &str) -> LaunchSpec {
         first_prompt: Some(prompt.to_string()),
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     }
 }
 
@@ -266,6 +268,7 @@ fn claude_argv_all_postures_add_permission_prompt_tool() {
             first_prompt: None,
             mode: Default::default(),
             name: None,
+            disallowed_tools: vec![],
         };
         let argv = claude_argv(&spec);
         let pos = argv.iter().position(|a| a == "--permission-prompt-tool");
@@ -291,6 +294,7 @@ fn claude_argv_permission_mode_auto_approve_safe() {
         first_prompt: None,
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     };
     let argv = claude_argv(&spec);
     let idx = argv
@@ -319,6 +323,7 @@ fn claude_argv_permission_mode_full_autonomy() {
         first_prompt: None,
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     };
     let argv = claude_argv(&spec);
     let idx = argv
@@ -642,6 +647,7 @@ fn reconcile_all_adopt_does_not_spawn() {
             model: "claude-opus-4-5".to_string(),
             last_phase: "Done".to_string(),
             posture: None,
+            disallowed_tools: vec![],
         })
         .expect("upsert_session must succeed");
 
@@ -732,4 +738,62 @@ fn agent_debug_format_executes() {
     .expect("with_fakes");
     let s = format!("{agent:?}");
     assert!(!s.is_empty(), "Agent Debug output must be non-empty");
+}
+
+// ---------------------------------------------------------------------------
+// Feature B: --disallowedTools in claude_argv
+// ---------------------------------------------------------------------------
+
+/// When `disallowed_tools` is non-empty, `claude_argv` appends
+/// `--disallowedTools <comma-joined-list>`.
+#[test]
+fn claude_argv_disallowed_tools_present_when_non_empty() {
+    let spec = LaunchSpec {
+        project: "/p".to_string(),
+        host_id: "local".to_string(),
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: vec![],
+        model: "claude-opus-4-5".to_string(),
+        posture: marsad_proto::Posture::Ask,
+        first_prompt: None,
+        mode: Default::default(),
+        name: None,
+        disallowed_tools: vec!["Bash".to_string(), "Edit".to_string()],
+    };
+    let argv = claude_argv(&spec);
+    let idx = argv
+        .iter()
+        .position(|a| a == "--disallowedTools")
+        .expect("--disallowedTools must be present when disallowed_tools is non-empty");
+    assert_eq!(
+        argv.get(idx + 1).map(String::as_str),
+        Some("Bash,Edit"),
+        "--disallowedTools value must be comma-joined; argv: {argv:?}"
+    );
+}
+
+/// When `disallowed_tools` is empty, `--disallowedTools` must NOT appear in argv.
+#[test]
+fn claude_argv_disallowed_tools_absent_when_empty() {
+    let spec = LaunchSpec {
+        project: "/p".to_string(),
+        host_id: "local".to_string(),
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: vec![],
+        model: "claude-opus-4-5".to_string(),
+        posture: marsad_proto::Posture::Ask,
+        first_prompt: None,
+        mode: Default::default(),
+        name: None,
+        disallowed_tools: vec![],
+    };
+    let argv = claude_argv(&spec);
+    assert!(
+        !argv.iter().any(|a| a == "--disallowedTools"),
+        "--disallowedTools must not appear when disallowed_tools is empty; argv: {argv:?}"
+    );
 }

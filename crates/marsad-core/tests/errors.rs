@@ -203,6 +203,7 @@ fn launch_session_transport_failure_returns_transport_error() {
         first_prompt: None,
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     };
     let result = core.launch_session(spec);
     // Either the launch succeeds (transport failure deferred) or returns Transport error
@@ -230,6 +231,7 @@ fn send_prompt_transport_failure_returns_transport_error() {
         first_prompt: None,
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     };
     // try launch (may succeed or fail)
     let id_result = core.launch_session(spec);
@@ -271,6 +273,7 @@ fn stop_session_transport_failure_returns_transport_error() {
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
 
@@ -312,6 +315,7 @@ fn resume_session_transport_failure_returns_transport_error() {
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
 
@@ -495,7 +499,7 @@ fn answer_gate_unknown_session_returns_unknown_session_error() {
 fn restart_session_unknown_id_returns_unknown_session_error() {
     let (mut core, _peer) = make_core();
     let err = core
-        .restart_session("no-such-session", "model", Posture::Ask)
+        .restart_session("no-such-session", "model", Posture::Ask, vec![])
         .unwrap_err();
     assert!(
         matches!(err, CoreError::UnknownSession(_)),
@@ -531,6 +535,7 @@ fn restart_session_transport_failure_on_stop_returns_transport_error() {
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("launch");
 
@@ -538,7 +543,7 @@ fn restart_session_transport_failure_on_stop_returns_transport_error() {
     b.close().ok();
 
     let err = core
-        .restart_session(&id, "new-model", Posture::FullAutonomy)
+        .restart_session(&id, "new-model", Posture::FullAutonomy, vec![])
         .unwrap_err();
     assert!(
         matches!(err, CoreError::Transport(_)),
@@ -570,11 +575,12 @@ fn restart_session_transport_failure_on_relaunch_returns_transport_error() {
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
+            disallowed_tools: vec![],
         })
         .expect("send #1 must succeed");
 
     let err = core
-        .restart_session(&id, "new-model", Posture::Ask)
+        .restart_session(&id, "new-model", Posture::Ask, vec![])
         .unwrap_err();
     assert!(
         matches!(err, CoreError::Transport(_)),

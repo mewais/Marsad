@@ -110,6 +110,21 @@ export type Filter = "All" | "Needs" | "Working" | "Error";
 export type Tab = "Activity" | "Changes" | "Config" | "Usage" | "Terminal";
 
 // ---------------------------------------------------------------------------
+// McpServerInfo / SlashCommandInfo (from system/init)
+// ---------------------------------------------------------------------------
+
+export interface McpServerInfo {
+  name: string;
+  status: string;
+}
+
+export interface SlashCommandInfo {
+  name: string;
+  description: string;
+  argument_hint: string;
+}
+
+// ---------------------------------------------------------------------------
 // SessionView — raw from core
 // ---------------------------------------------------------------------------
 
@@ -141,6 +156,12 @@ export interface SessionView {
   transcript: TranscriptEntry[];
   changes: FileChange[];
   model_usage: ModelUsageRow[];
+  /** Tools available in this session (from system/init). Empty before first init. */
+  tools: string[];
+  /** MCP servers connected in this session (from system/init). */
+  mcp_servers: McpServerInfo[];
+  /** Slash commands available in this session (from system/init). */
+  slash_commands: SlashCommandInfo[];
 }
 
 // ---------------------------------------------------------------------------

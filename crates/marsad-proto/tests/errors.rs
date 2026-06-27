@@ -213,6 +213,48 @@ fn ipc_schema_mismatch_wrong_field_type() {
 }
 
 // ---------------------------------------------------------------------------
+// SlashCommandInfo deserializer — invalid element type
+// ---------------------------------------------------------------------------
+
+/// A non-string, non-object element inside `slash_commands` must be a parse error.
+#[test]
+fn stream_slash_commands_invalid_element_type() {
+    // A number element is neither a string nor an object — must fail.
+    let line = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"default","slash_commands":[42]}"#;
+    let err = parse_stream_line(line).expect_err("numeric element in slash_commands must fail");
+    assert!(
+        matches!(err, ProtoError::SchemaMismatch { .. }),
+        "expected SchemaMismatch, got {err:?}"
+    );
+}
+
+/// An OBJECT element with a wrong-typed field (name as a number) must fail when
+/// converted to SlashCommandInfo — exercises the `from_value(...)?` error edge.
+#[test]
+fn stream_slash_commands_object_bad_field_type() {
+    let line = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"default","slash_commands":[{"name":42}]}"#;
+    let err = parse_stream_line(line).expect_err("object with numeric name must fail");
+    assert!(
+        matches!(err, ProtoError::SchemaMismatch { .. }),
+        "expected SchemaMismatch, got {err:?}"
+    );
+}
+
+/// `slash_commands` field that is a non-sequence (e.g. a plain string) must fail.
+/// This exercises the `expecting()` method of the visitor, which serde calls when
+/// the outer value is not a sequence at all.
+#[test]
+fn stream_slash_commands_not_a_sequence() {
+    // The whole field is a string instead of an array.
+    let line = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"default","slash_commands":"not-an-array"}"#;
+    let err = parse_stream_line(line).expect_err("non-array slash_commands must fail");
+    assert!(
+        matches!(err, ProtoError::SchemaMismatch { .. }),
+        "expected SchemaMismatch, got {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // ProtoError derives Debug — confirm we can format it
 // ---------------------------------------------------------------------------
 

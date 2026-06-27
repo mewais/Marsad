@@ -699,3 +699,238 @@ fn model_usage_derives() {
     assert_eq!(def.output_tokens, 0);
     assert!((def.cost_usd).abs() < 1e-15);
 }
+
+// ---------------------------------------------------------------------------
+// McpServerInfo tests
+// ---------------------------------------------------------------------------
+
+/// `McpServerInfo` derives Default, Debug, Clone, PartialEq, Serialize, Deserialize.
+#[test]
+fn mcp_server_info_derives() {
+    use marsad_proto::McpServerInfo;
+    let s = McpServerInfo {
+        name: "hares".to_string(),
+        status: "connected".to_string(),
+    };
+    let s2 = s.clone();
+    assert_eq!(s, s2);
+    let _ = format!("{s:?}");
+    let def = McpServerInfo::default();
+    assert_eq!(def.name, "");
+    assert_eq!(def.status, "");
+}
+
+/// `McpServerInfo` round-trips through serde.
+#[test]
+fn mcp_server_info_serde_roundtrip() {
+    use marsad_proto::McpServerInfo;
+    let s = McpServerInfo {
+        name: "agent-hub".to_string(),
+        status: "failed".to_string(),
+    };
+    let json = serde_json::to_string(&s).unwrap();
+    let back: McpServerInfo = serde_json::from_str(&json).unwrap();
+    assert_eq!(s, back);
+}
+
+/// `McpServerInfo` status defaults to empty string when the field is absent.
+#[test]
+fn mcp_server_info_status_defaults() {
+    use marsad_proto::McpServerInfo;
+    let s: McpServerInfo = serde_json::from_str(r#"{"name":"foo"}"#).unwrap();
+    assert_eq!(s.name, "foo");
+    assert_eq!(s.status, "");
+}
+
+// ---------------------------------------------------------------------------
+// SlashCommandInfo tests
+// ---------------------------------------------------------------------------
+
+/// `SlashCommandInfo` derives Default, Debug, Clone, PartialEq, Serialize, Deserialize.
+#[test]
+fn slash_command_info_derives() {
+    use marsad_proto::SlashCommandInfo;
+    let s = SlashCommandInfo {
+        name: "/clear".to_string(),
+        description: "Clear conversation".to_string(),
+        argument_hint: "".to_string(),
+    };
+    let s2 = s.clone();
+    assert_eq!(s, s2);
+    let _ = format!("{s:?}");
+    let def = SlashCommandInfo::default();
+    assert_eq!(def.name, "");
+    assert_eq!(def.description, "");
+    assert_eq!(def.argument_hint, "");
+}
+
+/// `SlashCommandInfo` round-trips through serde with camelCase argumentHint.
+#[test]
+fn slash_command_info_serde_roundtrip() {
+    use marsad_proto::SlashCommandInfo;
+    let s = SlashCommandInfo {
+        name: "/model".to_string(),
+        description: "Switch model".to_string(),
+        argument_hint: "model-name".to_string(),
+    };
+    let json = serde_json::to_string(&s).unwrap();
+    let back: SlashCommandInfo = serde_json::from_str(&json).unwrap();
+    assert_eq!(s, back);
+    // The wire key is "argumentHint" (camelCase rename).
+    assert!(json.contains("argumentHint"), "wire key must be argumentHint; json: {json}");
+}
+
+/// `SlashCommandInfo` defaults: description and argumentHint absent → empty.
+#[test]
+fn slash_command_info_defaults() {
+    use marsad_proto::SlashCommandInfo;
+    let s: SlashCommandInfo = serde_json::from_str(r#"{"name":"/clear"}"#).unwrap();
+    assert_eq!(s.name, "/clear");
+    assert_eq!(s.description, "");
+    assert_eq!(s.argument_hint, "");
+}
+
+// ---------------------------------------------------------------------------
+// SystemInit with new fields
+// ---------------------------------------------------------------------------
+
+/// `system/init` with typed `mcp_servers` (name+status objects) parses correctly.
+#[test]
+fn parse_system_init_with_mcp_servers() {
+    use marsad_proto::{McpServerInfo, StreamMsg};
+    let line = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":["Read"],"mcp_servers":[{"name":"hares","status":"failed"},{"name":"agent-hub","status":"connected"}],"permissionMode":"default"}"#;
+    let msg = parse_stream_line(line).expect("parse");
+    match msg {
+        StreamMsg::SystemInit(init) => {
+            assert_eq!(init.mcp_servers.len(), 2);
+            assert_eq!(init.mcp_servers[0], McpServerInfo { name: "hares".to_string(), status: "failed".to_string() });
+            assert_eq!(init.mcp_servers[1], McpServerInfo { name: "agent-hub".to_string(), status: "connected".to_string() });
+        }
+        other => panic!("expected SystemInit, got {other:?}"),
+    }
+}
+
+/// `system/init` with `slash_commands` as an OBJECT array.
+#[test]
+fn parse_system_init_slash_commands_object_array() {
+    use marsad_proto::StreamMsg;
+    let line = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"default","slash_commands":[{"name":"/clear","description":"Clear conversation history","argumentHint":""},{"name":"/model","description":"Switch the active model","argumentHint":"model-name"}]}"#;
+    let msg = parse_stream_line(line).expect("parse");
+    match msg {
+        StreamMsg::SystemInit(init) => {
+            assert_eq!(init.slash_commands.len(), 2);
+            assert_eq!(init.slash_commands[0].name, "/clear");
+            assert_eq!(init.slash_commands[0].description, "Clear conversation history");
+            assert_eq!(init.slash_commands[1].name, "/model");
+            assert_eq!(init.slash_commands[1].argument_hint, "model-name");
+        }
+        other => panic!("expected SystemInit, got {other:?}"),
+    }
+}
+
+/// `system/init` with `slash_commands` as a STRING array (bare command names).
+#[test]
+fn parse_system_init_slash_commands_string_array() {
+    use marsad_proto::StreamMsg;
+    // Bare strings: some with leading slash, some without.
+    let line = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"default","slash_commands":["clear","/compact","help"]}"#;
+    let msg = parse_stream_line(line).expect("parse");
+    match msg {
+        StreamMsg::SystemInit(init) => {
+            assert_eq!(init.slash_commands.len(), 3);
+            // "clear" without slash → normalised to "/clear"
+            assert_eq!(init.slash_commands[0].name, "/clear");
+            assert_eq!(init.slash_commands[0].description, "");
+            // "/compact" already has slash
+            assert_eq!(init.slash_commands[1].name, "/compact");
+            // "help" without slash → "/help"
+            assert_eq!(init.slash_commands[2].name, "/help");
+        }
+        other => panic!("expected SystemInit, got {other:?}"),
+    }
+}
+
+/// `system/init` with absent `slash_commands` field → empty vec (default).
+#[test]
+fn parse_system_init_no_slash_commands_defaults_empty() {
+    use marsad_proto::StreamMsg;
+    let line = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"default"}"#;
+    let msg = parse_stream_line(line).expect("parse");
+    match msg {
+        StreamMsg::SystemInit(init) => {
+            assert!(init.slash_commands.is_empty());
+        }
+        other => panic!("expected SystemInit, got {other:?}"),
+    }
+}
+
+/// `system/init` with tools populated — the `tools` vec is a `Vec<String>`.
+#[test]
+fn parse_system_init_tools_populated() {
+    use marsad_proto::StreamMsg;
+    let line = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":["Read","Bash","Edit"],"mcp_servers":[],"permissionMode":"default"}"#;
+    let msg = parse_stream_line(line).expect("parse");
+    match msg {
+        StreamMsg::SystemInit(init) => {
+            assert_eq!(init.tools, vec!["Read", "Bash", "Edit"]);
+        }
+        other => panic!("expected SystemInit, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LaunchSpec.disallowed_tools
+// ---------------------------------------------------------------------------
+
+/// `LaunchSpec.disallowed_tools` defaults to empty when the field is absent.
+#[test]
+fn launch_spec_disallowed_tools_defaults_empty() {
+    use marsad_proto::{LaunchSpec, LaunchMode, Posture};
+    let spec = LaunchSpec {
+        project: "/p".to_string(),
+        host_id: "local".to_string(),
+        model: "m".to_string(),
+        posture: Posture::Ask,
+        first_prompt: None,
+        mode: LaunchMode::Fresh,
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: vec![],
+        name: None,
+        disallowed_tools: vec![],
+    };
+    assert!(spec.disallowed_tools.is_empty());
+}
+
+/// `LaunchSpec.disallowed_tools` with values round-trips through serde.
+#[test]
+fn launch_spec_disallowed_tools_roundtrip() {
+    use marsad_proto::{LaunchSpec, LaunchMode, Posture};
+    let spec = LaunchSpec {
+        project: "/p".to_string(),
+        host_id: "local".to_string(),
+        model: "m".to_string(),
+        posture: Posture::Ask,
+        first_prompt: None,
+        mode: LaunchMode::Fresh,
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: vec![],
+        name: None,
+        disallowed_tools: vec!["Bash".to_string(), "Edit".to_string()],
+    };
+    let json = serde_json::to_string(&spec).unwrap();
+    let back: LaunchSpec = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.disallowed_tools, vec!["Bash", "Edit"]);
+}
+
+/// Old `LaunchSpec` JSON without `disallowed_tools` deserialises to empty vec.
+#[test]
+fn launch_spec_disallowed_tools_absent_field_defaults() {
+    use marsad_proto::LaunchSpec;
+    let json = r#"{"project":"/p","host_id":"local","model":"m","posture":"Ask","permissionMode":"default","mode":"Fresh"}"#;
+    let spec: LaunchSpec = serde_json::from_str(json).unwrap();
+    assert!(spec.disallowed_tools.is_empty());
+}

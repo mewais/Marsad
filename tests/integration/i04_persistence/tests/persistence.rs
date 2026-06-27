@@ -70,6 +70,7 @@ fn make_session(id: &str, session_id: Option<&str>) -> PersistedSession {
         last_phase: "running".to_string(),
 
         posture: None,
+            disallowed_tools: vec![],
     }
 }
 

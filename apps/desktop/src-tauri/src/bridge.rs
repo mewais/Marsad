@@ -109,6 +109,7 @@ pub fn launch_session(
                 first_prompt,
                 mode,
                 name,
+                disallowed_tools: Vec::new(),
             };
             core.launch_session(spec).map_err(map_err)
         }
@@ -920,12 +921,13 @@ pub fn commit(
 // Session config commands
 // ---------------------------------------------------------------------------
 
-/// Restart a session with a new model and posture.
+/// Restart a session with a new model, posture, and disallowed tools.
 ///
 /// Sends `StopSession` to kill the current claude process, then relaunches it
 /// with the SAME marsad session id (so the UI row is preserved) and resumes
 /// the conversation via `--resume <claude-uuid>` (or `--continue` if no UUID
-/// is known yet).
+/// is known yet). Any tools in `disallowed_tools` are passed to claude via
+/// `--disallowedTools`.
 #[tauri::command(rename_all = "snake_case")]
 pub fn restart_session(
     app: tauri::AppHandle,
@@ -933,16 +935,18 @@ pub fn restart_session(
     id: String,
     model: String,
     posture: String,
+    disallowed_tools: Option<Vec<String>>,
 ) -> Result<(), String> {
     let posture_val = match posture.as_str() {
         "auto" => Posture::AutoApproveSafe,
         "full" => Posture::FullAutonomy,
         _ => Posture::Ask,
     };
+    let disallowed = disallowed_tools.unwrap_or_default();
     let updates = {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
         match &mut *guard {
-            AppState::Live(core) => core.restart_session(&id, &model, posture_val).map_err(map_err)?,
+            AppState::Live(core) => core.restart_session(&id, &model, posture_val, disallowed).map_err(map_err)?,
             AppState::Mock(_) => vec![],
         }
     };

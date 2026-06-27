@@ -5,7 +5,7 @@
  * mock fixture so Vitest + Playwright work without the Rust side.
  */
 
-import type { AppSnapshot, PersistedTemplate, SessionSummary, Settings } from "./types";
+import type { AppSnapshot, PersistedTemplate, SessionSummary, Settings, SlashCommandInfo } from "./types";
 import { MOCK_SNAPSHOT } from "./mockFixture";
 
 // ---------------------------------------------------------------------------
@@ -384,16 +384,17 @@ export async function commit(
 // ---------------------------------------------------------------------------
 
 /**
- * Restart a session with a new model and posture.
+ * Restart a session with a new model, posture, and disallowed tools.
  *
  * Sends StopSession + LaunchSession (Resume or Continue) with the SAME
- * marsad session id so the UI row is preserved. The backend emits a
- * Session vm-update after the relaunch is initiated.
+ * marsad session id so the UI row is preserved. Tools in `disallowed_tools`
+ * are passed as `--disallowedTools` to the restarted claude process.
  */
 export async function restartSession(args: {
   id: string;
   model: string;
   posture: "ask" | "auto" | "full";
+  disallowed_tools?: string[];
 }): Promise<void> {
   if (!isTauri()) return;
   const invoke = await getInvoke();
@@ -453,7 +454,24 @@ export const SLASH_CATALOG = [
   { name: "/help",     desc: "Show available commands" },
 ] as const;
 
-export function filterSlash(query: string) {
-  if (!query) return [...SLASH_CATALOG];
-  return SLASH_CATALOG.filter((e) => e.name.startsWith(query));
+/** Map a `SlashCommandInfo` from the session to the `SlashEntry` shape. */
+function slashInfoToEntry(info: SlashCommandInfo): { name: string; desc: string } {
+  return { name: info.name, desc: info.description };
+}
+
+/**
+ * Filter slash commands for the given query, using the session's live
+ * `slash_commands` list when non-empty, falling back to `SLASH_CATALOG`.
+ * `sessionSlash` is optional — pass `undefined` or `[]` to always use the catalog.
+ */
+export function filterSlash(
+  query: string,
+  sessionSlash?: SlashCommandInfo[],
+): { name: string; desc: string }[] {
+  const source: { name: string; desc: string }[] =
+    sessionSlash && sessionSlash.length > 0
+      ? sessionSlash.map(slashInfoToEntry)
+      : [...SLASH_CATALOG];
+  if (!query) return source;
+  return source.filter((e) => e.name.startsWith(query));
 }

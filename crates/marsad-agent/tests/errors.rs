@@ -167,6 +167,7 @@ fn launch_spawn_failure_returns_spawn_error() {
         first_prompt: None,
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     };
 
     // NOTE(test-agent): We need a FakeContainer configured to fail spawns.
@@ -352,6 +353,7 @@ fn reconcile_all_lifecycle_error_folds_into_stale() {
             model: "claude-opus-4-5".to_string(),
             last_phase: "Working".to_string(),
             posture: None,
+            disallowed_tools: vec![],
         })
         .expect("upsert");
 
@@ -559,6 +561,7 @@ fn launch_spawn_failure_deterministic_container_name() {
         first_prompt: None,
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     };
     match agent.launch(spec) {
         Err(AgentError::Spawn(_)) => {}
@@ -604,6 +607,7 @@ fn launch_upsert_failure_returns_lifecycle_error() {
         first_prompt: None,
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     };
     match agent.launch(spec) {
         Err(AgentError::Lifecycle(_)) => {}
@@ -662,6 +666,7 @@ fn resume_session_launch_spawn_failure_propagates() {
             model: "m".to_string(),
             last_phase: "Done".to_string(),
             posture: None,
+            disallowed_tools: vec![],
         })
         .expect("upsert");
 

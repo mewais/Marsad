@@ -714,6 +714,7 @@ impl Agent {
             posture: serde_json::to_value(&spec.posture)
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_string)),
+            disallowed_tools: spec.disallowed_tools.clone(),
         };
         self.store
             .0
@@ -780,6 +781,7 @@ impl Agent {
             setup: msg.setup,
             env: msg.env,
             name: msg.name,
+            disallowed_tools: msg.disallowed_tools,
         };
         // Reuse the caller's session id when supplied (Core generates it so it can
         // navigate immediately and recognise the session's events); otherwise
@@ -856,6 +858,7 @@ impl Agent {
             setup: persisted.setup,
             env: persisted.env,
             name: persisted_name,
+            disallowed_tools: persisted.disallowed_tools,
         };
         // Reuse the SAME marsad id so the resumed session re-attaches to the
         // existing UI row. Using a fresh id (the old bug) meant the relaunched
@@ -2278,6 +2281,14 @@ pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
         }
     }
 
+    // Disabled tools: pass as a single comma-joined value to --disallowedTools.
+    // Only added when the list is non-empty (verified: the flag is absent when
+    // the list is empty so the absence/presence test holds trivially).
+    if !spec.disallowed_tools.is_empty() {
+        argv.push("--disallowedTools".to_string());
+        argv.push(spec.disallowed_tools.join(","));
+    }
+
     argv
 }
 
@@ -2376,6 +2387,10 @@ struct LaunchSessionMsg {
     /// callers (no field) working.
     #[serde(default)]
     name: Option<String>,
+    /// Tools to disable via `--disallowedTools`. `#[serde(default)]` keeps older
+    /// callers (no field) working — an absent field means no tools are disabled.
+    #[serde(default)]
+    disallowed_tools: Vec<String>,
 }
 
 /// Spawn the per-session reader thread: connect the transport (local FIFO/pipe, or a

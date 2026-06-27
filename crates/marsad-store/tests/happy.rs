@@ -10,8 +10,8 @@
 //!   Restored, StoreError
 
 use marsad_store::{
-    MemoryBackend, NotifPref, PersistedHost, PersistedSession, PersistedSettings, PersistedTemplate,
-    Restored, Store, StoreError, TranscriptEntry, Workspace,
+    Backend, MemoryBackend, NotifPref, PersistedHost, PersistedSession, PersistedSettings,
+    PersistedTemplate, Restored, Store, StoreError, TranscriptEntry, Workspace,
 };
 
 // ---------------------------------------------------------------------------
@@ -33,6 +33,7 @@ fn make_session(id: &str) -> PersistedSession {
         model: "claude-opus-4-5".to_string(),
         last_phase: "Done".to_string(),
         posture: None,
+            disallowed_tools: vec![],
     }
 }
 
@@ -618,4 +619,50 @@ fn upsert_session_posture_round_trips() {
         .find(|s| s.id == "posture-rt")
         .expect("session must exist");
     assert_eq!(found.posture, Some("FullAutonomy".to_string()));
+}
+
+// ---------------------------------------------------------------------------
+// Feature B: PersistedSession.disallowed_tools
+// ---------------------------------------------------------------------------
+
+/// `disallowed_tools` is persisted and restored correctly.
+#[test]
+fn persisted_session_disallowed_tools_round_trips() {
+    let backend = MemoryBackend::new();
+    let mut store = Store::new(Box::new(backend));
+    let session = PersistedSession {
+        id: "sess-dt".to_string(),
+        session_id: None,
+        name: "sess-dt".to_string(),
+        host_id: "local".to_string(),
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: vec![],
+        project: "/p".to_string(),
+        branch: "main".to_string(),
+        model: "m".to_string(),
+        last_phase: "Starting".to_string(),
+        posture: None,
+        disallowed_tools: vec!["Bash".to_string(), "Edit".to_string()],
+    };
+    store.upsert_session(&session).expect("upsert");
+    let restored = store.restore().expect("restore");
+    let s = restored.sessions.iter().find(|s| s.id == "sess-dt").expect("session must exist");
+    assert_eq!(s.disallowed_tools, vec!["Bash", "Edit"]);
+}
+
+/// An old `PersistedSession` JSON without `disallowed_tools` loads with empty vec.
+/// Uses a `MemoryBackend` clone to write a raw versioned blob that simulates an
+/// old on-disk record (the backend is `Arc<Mutex<_>>` so both handles share state).
+#[test]
+fn persisted_session_missing_disallowed_tools_defaults_empty() {
+    let backend = MemoryBackend::new();
+    // Write a versioned blob directly through the backend clone — no Store::backend access.
+    let old_json = r#"{"version":1,"payload":{"id":"old-sess","session_id":null,"name":"old-sess","host_id":"local","host_target":null,"project":"/p","branch":"main","model":"m","last_phase":"Done","posture":null}}"#;
+    backend.write("session:old-sess", old_json.as_bytes()).expect("write");
+    let store = Store::new(Box::new(backend));
+    let restored = store.restore().expect("restore");
+    let s = restored.sessions.iter().find(|s| s.id == "old-sess").expect("session must exist");
+    assert!(s.disallowed_tools.is_empty());
 }

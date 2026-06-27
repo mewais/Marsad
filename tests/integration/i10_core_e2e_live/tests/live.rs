@@ -262,6 +262,7 @@ fn spec(project: &str, first_prompt: &str, posture: Posture, mode: LaunchMode) -
         first_prompt: Some(first_prompt.to_string()),
         mode,
         name: None,
+        disallowed_tools: vec![],
     }
 }
 

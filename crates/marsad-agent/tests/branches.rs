@@ -187,6 +187,7 @@ fn resume_session_tracked_with_claude_id_resumes() {
             model: "claude-opus-4-8".to_string(),
             last_phase: "Done".to_string(),
             posture: None,
+            disallowed_tools: vec![],
         })
         .expect("upsert");
     let mut agent = Agent::with_fakes(
@@ -226,6 +227,7 @@ fn resume_session_empty_claude_id_continues() {
             model: "claude-opus-4-8".to_string(),
             last_phase: "Done".to_string(),
             posture: None,
+            disallowed_tools: vec![],
         })
         .expect("upsert");
     let mut agent = Agent::with_fakes(
@@ -277,6 +279,7 @@ fn resume_session_restores_persisted_posture() {
             model: "claude-opus-4-8".to_string(),
             last_phase: "Done".to_string(),
             posture: Some("FullAutonomy".to_string()),
+            disallowed_tools: vec![],
         })
         .expect("upsert");
     let mut agent = Agent::with_fakes(
@@ -492,6 +495,7 @@ fn reconcile_all_adopt_branch() {
             model: "claude-opus-4-5".to_string(),
             last_phase: "Working".to_string(),
             posture: None,
+            disallowed_tools: vec![],
         })
         .expect("upsert");
 
@@ -544,6 +548,7 @@ fn reconcile_all_resume_branch() {
             model: "claude-opus-4-5".to_string(),
             last_phase: "Done".to_string(),
             posture: None,
+            disallowed_tools: vec![],
         })
         .expect("upsert");
 
@@ -597,6 +602,7 @@ fn reconcile_all_stale_branch() {
             model: "claude-opus-4-5".to_string(),
             last_phase: "Error".to_string(),
             posture: None,
+            disallowed_tools: vec![],
         })
         .expect("upsert");
 
@@ -653,6 +659,7 @@ fn reconcile_all_mixed_adopt_resume_stale() {
             model: "claude-opus-4-5".to_string(),
             last_phase: "Working".to_string(),
             posture: None,
+            disallowed_tools: vec![],
         })
         .expect("upsert adopt");
     store
@@ -670,6 +677,7 @@ fn reconcile_all_mixed_adopt_resume_stale() {
             model: "claude-opus-4-5".to_string(),
             last_phase: "Done".to_string(),
             posture: None,
+            disallowed_tools: vec![],
         })
         .expect("upsert resume");
     store
@@ -687,6 +695,7 @@ fn reconcile_all_mixed_adopt_resume_stale() {
             model: "claude-opus-4-5".to_string(),
             last_phase: "Error".to_string(),
             posture: None,
+            disallowed_tools: vec![],
         })
         .expect("upsert stale");
 
@@ -936,6 +945,7 @@ fn reconcile_all_adopt_phase_is_detached() {
             model: "claude-opus-4-5".to_string(),
             last_phase: "Working".to_string(),
             posture: None,
+            disallowed_tools: vec![],
         })
         .expect("upsert");
 
@@ -979,6 +989,7 @@ fn reconcile_all_resume_phase_is_none() {
             model: "claude-opus-4-5".to_string(),
             last_phase: "Done".to_string(),
             posture: None,
+            disallowed_tools: vec![],
         })
         .expect("upsert");
 
@@ -1022,6 +1033,7 @@ fn reconcile_all_stale_phase_is_stale() {
             model: "claude-opus-4-5".to_string(),
             last_phase: "Error".to_string(),
             posture: None,
+            disallowed_tools: vec![],
         })
         .expect("upsert");
 

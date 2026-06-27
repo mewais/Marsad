@@ -504,3 +504,44 @@ fn result_with_model_usage_populates_state() {
     assert_eq!(mu.output_tokens, 155);
     assert!((mu.cost_usd - 0.268).abs() < 1e-9);
 }
+
+
+// ---------------------------------------------------------------------------
+// tools / mcp_servers / slash_commands — populated from system/init
+// ---------------------------------------------------------------------------
+
+/// A system/init event with tools, mcp_servers, and slash_commands populates all three.
+#[test]
+fn system_init_populates_tools_mcp_servers_slash_commands() {
+    use marsad_proto::{McpServerInfo, SlashCommandInfo};
+    let json = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":["Read","Bash","Edit"],"mcp_servers":[{"name":"hares","status":"failed"},{"name":"hub","status":"connected"}],"permissionMode":"default","slash_commands":[{"name":"/clear","description":"Clear conversation history","argumentHint":""},{"name":"/model","description":"Switch model","argumentHint":"model-name"}]}"#;
+    let s0 = SessionState::initial();
+    let s1 = reduce(s0, stream(json));
+    assert_eq!(s1.tools, vec!["Read", "Bash", "Edit"]);
+    assert_eq!(s1.mcp_servers.len(), 2);
+    assert_eq!(s1.mcp_servers[0], McpServerInfo { name: "hares".to_string(), status: "failed".to_string() });
+    assert_eq!(s1.mcp_servers[1], McpServerInfo { name: "hub".to_string(), status: "connected".to_string() });
+    assert_eq!(s1.slash_commands.len(), 2);
+    assert_eq!(s1.slash_commands[0], SlashCommandInfo { name: "/clear".to_string(), description: "Clear conversation history".to_string(), argument_hint: "".to_string() });
+    assert_eq!(s1.slash_commands[1].name, "/model");
+    assert_eq!(s1.slash_commands[1].argument_hint, "model-name");
+}
+
+/// Initial state has empty tools, mcp_servers, and slash_commands.
+#[test]
+fn initial_state_new_fields_empty() {
+    let s = SessionState::initial();
+    assert!(s.tools.is_empty());
+    assert!(s.mcp_servers.is_empty());
+    assert!(s.slash_commands.is_empty());
+}
+
+/// system/init with string-array slash_commands populates correctly.
+#[test]
+fn system_init_slash_commands_string_array_populates() {
+    let json = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"default","slash_commands":["clear","compact"]}"#;
+    let s1 = reduce(SessionState::initial(), stream(json));
+    assert_eq!(s1.slash_commands.len(), 2);
+    assert_eq!(s1.slash_commands[0].name, "/clear");
+    assert_eq!(s1.slash_commands[1].name, "/compact");
+}

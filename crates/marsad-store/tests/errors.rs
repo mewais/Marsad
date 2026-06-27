@@ -34,6 +34,7 @@ fn make_session(id: &str) -> PersistedSession {
         model: "claude-opus-4-5".to_string(),
         last_phase: "Done".to_string(),
         posture: None,
+            disallowed_tools: vec![],
     }
 }
 

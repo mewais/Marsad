@@ -67,6 +67,9 @@ fn representative_snapshot() -> AppSnapshot {
             changes: vec![],
 
             model_usage: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+            slash_commands: vec![],
         },
         SessionView {
             id: "s2".to_string(),
@@ -86,6 +89,9 @@ fn representative_snapshot() -> AppSnapshot {
             changes: vec![],
 
             model_usage: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+            slash_commands: vec![],
         },
         SessionView {
             id: "s3".to_string(),
@@ -105,6 +111,9 @@ fn representative_snapshot() -> AppSnapshot {
             changes: vec![],
 
             model_usage: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+            slash_commands: vec![],
         },
         SessionView {
             id: "s4".to_string(),
@@ -124,6 +133,9 @@ fn representative_snapshot() -> AppSnapshot {
             changes: vec![],
 
             model_usage: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+            slash_commands: vec![],
         },
         SessionView {
             id: "s5".to_string(),
@@ -143,6 +155,9 @@ fn representative_snapshot() -> AppSnapshot {
             changes: vec![],
 
             model_usage: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+            slash_commands: vec![],
         },
     ];
 
@@ -637,4 +652,70 @@ fn model_usage_row_derives_and_constructs() {
     assert_eq!(row.input_tokens, 11);
     assert_eq!(row.output_tokens, 155);
     assert!((row.cost_usd - 0.268).abs() < 1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// SessionView — tools / mcp_servers / slash_commands fields round-trip
+// ---------------------------------------------------------------------------
+
+/// A SessionView with populated tools/mcp_servers/slash_commands has correct field values
+/// and Clone/PartialEq work (the new fields are fully wired).
+#[test]
+fn session_view_new_fields_populated() {
+    use marsad_proto::{McpServerInfo, SlashCommandInfo};
+    let sv = SessionView {
+        id: "x".to_string(),
+        name: "x".to_string(),
+        host_id: "local".to_string(),
+        project: "/p".to_string(),
+        branch: "main".to_string(),
+        model: "m".to_string(),
+        state: Phase::Working,
+        changed_files: 0,
+        subagents: 0,
+        cost_usd: 0.0,
+        tokens: 0,
+        context_pct: 0.0,
+        gate: None,
+        transcript: vec![],
+        changes: vec![],
+        model_usage: vec![],
+        tools: vec!["Read".to_string(), "Bash".to_string()],
+        mcp_servers: vec![McpServerInfo { name: "hares".to_string(), status: "connected".to_string() }],
+        slash_commands: vec![SlashCommandInfo { name: "/clear".to_string(), description: "Clear".to_string(), argument_hint: "".to_string() }],
+    };
+    let sv2 = sv.clone();
+    assert_eq!(sv, sv2);
+    assert_eq!(sv.tools, vec!["Read", "Bash"]);
+    assert_eq!(sv.mcp_servers[0].name, "hares");
+    assert_eq!(sv.slash_commands[0].name, "/clear");
+}
+
+/// A SessionView with empty new fields has empty vecs.
+#[test]
+fn session_view_new_fields_empty_by_default_in_literal() {
+    let sv = SessionView {
+        id: "y".to_string(),
+        name: "y".to_string(),
+        host_id: "local".to_string(),
+        project: "/p".to_string(),
+        branch: "main".to_string(),
+        model: "m".to_string(),
+        state: Phase::Working,
+        changed_files: 0,
+        subagents: 0,
+        cost_usd: 0.0,
+        tokens: 0,
+        context_pct: 0.0,
+        gate: None,
+        transcript: vec![],
+        changes: vec![],
+        model_usage: vec![],
+        tools: vec![],
+        mcp_servers: vec![],
+        slash_commands: vec![],
+    };
+    assert!(sv.tools.is_empty());
+    assert!(sv.mcp_servers.is_empty());
+    assert!(sv.slash_commands.is_empty());
 }

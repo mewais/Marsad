@@ -13,8 +13,13 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       name: "api-auth-refactor",
       transcript: [],
       changes: [],
-
       model_usage: [],
+      tools: ["Read", "Bash", "Edit", "Write"],
+      mcp_servers: [{ name: "hares", status: "connected" }],
+      slash_commands: [
+        { name: "/clear", description: "Clear conversation history", argument_hint: "" },
+        { name: "/compact", description: "Compact context to save tokens", argument_hint: "" },
+      ],
       host_id: "local",
       project: "~/projects/api",
       branch: "feature/auth-v2",
@@ -42,6 +47,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       changes: [],
 
       model_usage: [],
+      tools: [],
+      mcp_servers: [],
+      slash_commands: [],
       host_id: "hetzner",
       project: "~/projects/worker-svc",
       branch: "refactor/async-workers",
@@ -70,6 +78,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       changes: [],
 
       model_usage: [],
+      tools: [],
+      mcp_servers: [],
+      slash_commands: [],
       host_id: "gpu",
       project: "~/projects/ml-pipeline",
       branch: "exp/feature-v3",
@@ -100,6 +111,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       changes: [],
 
       model_usage: [],
+      tools: [],
+      mcp_servers: [],
+      slash_commands: [],
       host_id: "local",
       project: "~/projects/dashboard",
       branch: "feat/overview-v2",
@@ -119,6 +133,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       changes: [],
 
       model_usage: [],
+      tools: [],
+      mcp_servers: [],
+      slash_commands: [],
       host_id: "hetzner",
       project: "~/projects/infra",
       branch: "main",
@@ -138,6 +155,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       changes: [],
 
       model_usage: [],
+      tools: [],
+      mcp_servers: [],
+      slash_commands: [],
       host_id: "gpu",
       project: "~/projects/data",
       branch: "feat/kafka-consumer",
@@ -157,6 +177,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       changes: [],
 
       model_usage: [],
+      tools: [],
+      mcp_servers: [],
+      slash_commands: [],
       host_id: "local",
       project: "~/projects/ci",
       branch: "fix/gh-actions",
@@ -176,6 +199,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       changes: [],
 
       model_usage: [],
+      tools: [],
+      mcp_servers: [],
+      slash_commands: [],
       host_id: "local",
       project: "~/projects/docs",
       branch: "docs/api-v3",
@@ -195,6 +221,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       changes: [],
 
       model_usage: [],
+      tools: [],
+      mcp_servers: [],
+      slash_commands: [],
       host_id: "hetzner",
       project: "~/projects/api",
       branch: "test/coverage-90",
@@ -214,6 +243,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       changes: [],
 
       model_usage: [],
+      tools: [],
+      mcp_servers: [],
+      slash_commands: [],
       host_id: "hetzner",
       project: "~/projects/design",
       branch: "chore/tokens",

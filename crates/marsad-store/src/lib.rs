@@ -324,6 +324,10 @@ pub struct PersistedSession {
     /// persisted so RESUME restores the user's choice instead of defaulting to Ask.
     #[serde(default)]
     pub posture: Option<String>,
+    /// Tools disabled for this session, persisted so RESUME applies the same set.
+    /// `#[serde(default)]` keeps older records loading as empty (no tools disabled).
+    #[serde(default)]
+    pub disallowed_tools: Vec<String>,
 }
 
 /// A single transcript event.
@@ -791,6 +795,7 @@ impl Store {
                 model: es.model.clone(),
                 last_phase: es.last_phase.clone(),
                 posture: None,
+                disallowed_tools: vec![],
             };
             let _ = self.upsert_session(&sess);
         }

@@ -40,6 +40,15 @@ pub struct SessionView {
     /// Per-model token + cost breakdown, sorted by model name for determinism.
     /// Empty when no `result` event with `modelUsage` has been received.
     pub model_usage: Vec<ModelUsageRow>,
+    /// Tools available in this session (from the system/init event).
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// MCP servers connected in this session (from the system/init event).
+    #[serde(default)]
+    pub mcp_servers: Vec<marsad_proto::McpServerInfo>,
+    /// Slash commands available in this session (from the system/init event).
+    #[serde(default)]
+    pub slash_commands: Vec<marsad_proto::SlashCommandInfo>,
 }
 
 // ---------------------------------------------------------------------------

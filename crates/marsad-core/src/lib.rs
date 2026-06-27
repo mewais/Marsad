@@ -917,6 +917,15 @@ impl Core {
         if let Some(ref n) = custom_name {
             obj.insert("name".to_string(), Value::String(n.clone()));
         }
+        // Forward disallowed_tools so the agent passes --disallowedTools to claude.
+        if !spec.disallowed_tools.is_empty() {
+            let tools_json: Vec<Value> = spec
+                .disallowed_tools
+                .iter()
+                .map(|t| Value::String(t.clone()))
+                .collect();
+            obj.insert("disallowed_tools".to_string(), Value::Array(tools_json));
+        }
         let line = serde_json::to_string(&val).unwrap();
 
         self.send_raw_line(&line)?;
@@ -958,7 +967,8 @@ impl Core {
         Ok(id)
     }
 
-    /// Restart a session with a new model and posture.
+    /// Restart a session with a new model, posture, and optionally a new set of
+    /// disallowed tools.
     ///
     /// Sends `StopSession` to kill the running claude process, then re-launches
     /// the session with the **same `id`** so the UI row stays in place.  If a
@@ -972,6 +982,7 @@ impl Core {
         id: &str,
         model: &str,
         posture: Posture,
+        disallowed_tools: Vec<String>,
     ) -> Result<Vec<VmUpdate>, CoreError> {
         self.require_session(id)?;
 
@@ -1011,6 +1022,7 @@ impl Core {
             setup: None,
             env: Vec::new(),
             name: existing_name,
+            disallowed_tools,
         };
         self.launch_session_with_id(id.to_string(), spec)?;
 
@@ -1499,6 +1511,9 @@ impl Core {
             transcript: record.transcript.clone(),
             changes: record.changes.clone(),
             model_usage,
+            tools: s.tools.clone(),
+            mcp_servers: s.mcp_servers.clone(),
+            slash_commands: s.slash_commands.clone(),
         }
     }
 }

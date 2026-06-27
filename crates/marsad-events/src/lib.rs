@@ -121,6 +121,15 @@ pub struct SessionState {
     /// `cost_usd` and `tokens` which the `result` event authoritatively sets.
     #[serde(default)]
     pub model_usage: std::collections::HashMap<String, marsad_proto::ModelUsage>,
+    /// Tools available in this session (from the system/init event).
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// MCP servers connected in this session (from the system/init event).
+    #[serde(default)]
+    pub mcp_servers: Vec<marsad_proto::McpServerInfo>,
+    /// Slash commands available in this session (from the system/init event).
+    #[serde(default)]
+    pub slash_commands: Vec<marsad_proto::SlashCommandInfo>,
     /// Message ids already counted for usage DEDUP.
     #[serde(default, skip_serializing_if = "HashSet::is_empty")]
     seen_message_ids: HashSet<String>,
@@ -142,6 +151,9 @@ impl SessionState {
             gate: None,
             changed_files: 0,
             model_usage: std::collections::HashMap::new(),
+            tools: Vec::new(),
+            mcp_servers: Vec::new(),
+            slash_commands: Vec::new(),
             seen_message_ids: HashSet::new(),
         }
     }
@@ -217,6 +229,9 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
             state.session_id = Some(init.session_id);
             state.model = Some(init.model);
             state.cwd = Some(init.cwd);
+            state.tools = init.tools;
+            state.mcp_servers = init.mcp_servers;
+            state.slash_commands = init.slash_commands;
             state.phase = Phase::Working;
             state
         }

@@ -48,6 +48,7 @@ fn spec(project: &str, posture: Posture) -> LaunchSpec {
         first_prompt: None,
         mode: Default::default(),
         name: None,
+        disallowed_tools: vec![],
     }
 }
 

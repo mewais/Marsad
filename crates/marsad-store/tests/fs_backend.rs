@@ -54,6 +54,7 @@ fn host_session_workspace_round_trip_across_restart() {
                 model: "claude-haiku-4-5-20251001".to_string(),
                 last_phase: "Starting".to_string(),
                 posture: None,
+            disallowed_tools: vec![],
             })
             .expect("persist session");
         store

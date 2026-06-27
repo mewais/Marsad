@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import type { SlashEntry } from "../bridge/types";
+import type { SlashCommandInfo, SlashEntry } from "../bridge/types";
 import { filterSlash } from "../bridge/api";
 import { SlashPopover } from "./SlashPopover";
 
@@ -21,6 +21,10 @@ interface ComposerProps {
   disabled?: boolean;
   /** Previously sent prompts for this session, oldest first. Used for Up/Down history navigation. */
   history?: string[];
+  /** Live slash commands from the current session's system/init event. When
+   *  provided and non-empty these replace the static SLASH_CATALOG in the
+   *  popover. Falls back to SLASH_CATALOG when empty/absent. */
+  slashCommands?: SlashCommandInfo[];
 }
 
 /** Composer textarea + slash button + send button, matching .dc.html layout. */
@@ -31,6 +35,7 @@ export function Composer({
   onSlashSelect,
   disabled,
   history = [],
+  slashCommands,
 }: ComposerProps) {
   // Initialize from the per-session draft store so a draft survives BOTH a
   // session switch AND a tab switch (the latter unmounts ActivityTab, so the
@@ -62,7 +67,9 @@ export function Composer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  const slashEntries = slashOpen ? filterSlash(text) : [];
+  // Use the session's live slash commands when available; fall back to the
+  // static SLASH_CATALOG when the session has none (pre-init or empty list).
+  const slashEntries = slashOpen ? filterSlash(text, slashCommands) : [];
 
   /** Returns true if the textarea caret is on the first line. */
   function caretOnFirstLine(): boolean {

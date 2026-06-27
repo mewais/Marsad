@@ -9,6 +9,7 @@ use marsad_diff::{DiffLine, Sig};
 use marsad_events::Phase;
 use marsad_gates::{Gate, PlanStep};
 use marsad_hosts::{Host, HostStatus};
+use marsad_proto::{McpServerInfo, SlashCommandInfo};
 use marsad_viewmodel::{AppSnapshot, Filter, SessionView, Tab, Workspace};
 
 // ---------------------------------------------------------------------------
@@ -130,7 +131,16 @@ pub fn seeded_mock() -> MockState {
             transcript: vec![],
             changes: vec![],
 
-            model_usage: vec![],        },
+            model_usage: vec![],
+            tools: vec!["Read".to_string(), "Bash".to_string(), "Edit".to_string(), "Write".to_string()],
+            mcp_servers: vec![
+                McpServerInfo { name: "hares".to_string(), status: "connected".to_string() },
+            ],
+            slash_commands: vec![
+                SlashCommandInfo { name: "/clear".to_string(), description: "Clear conversation history".to_string(), argument_hint: "".to_string() },
+                SlashCommandInfo { name: "/compact".to_string(), description: "Compact context to save tokens".to_string(), argument_hint: "".to_string() },
+            ],
+        },
         // Needs attention — plan gate
         SessionView {
             id: "s02".to_string(),
@@ -149,7 +159,11 @@ pub fn seeded_mock() -> MockState {
             transcript: vec![],
             changes: vec![],
 
-            model_usage: vec![],        },
+            model_usage: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+            slash_commands: vec![],
+        },
         // Error — edit gate shown for reference
         SessionView {
             id: "s03".to_string(),
@@ -168,7 +182,11 @@ pub fn seeded_mock() -> MockState {
             transcript: vec![],
             changes: vec![],
 
-            model_usage: vec![],        },
+            model_usage: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+            slash_commands: vec![],
+        },
         // Working sessions
         SessionView {
             id: "s04".to_string(),
@@ -187,7 +205,11 @@ pub fn seeded_mock() -> MockState {
             transcript: vec![],
             changes: vec![],
 
-            model_usage: vec![],        },
+            model_usage: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+            slash_commands: vec![],
+        },
         SessionView {
             id: "s05".to_string(),
             name: "infra-terraform".to_string(),
@@ -205,7 +227,11 @@ pub fn seeded_mock() -> MockState {
             transcript: vec![],
             changes: vec![],
 
-            model_usage: vec![],        },
+            model_usage: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+            slash_commands: vec![],
+        },
         SessionView {
             id: "s06".to_string(),
             name: "data-ingestion-pipeline".to_string(),
@@ -223,7 +249,11 @@ pub fn seeded_mock() -> MockState {
             transcript: vec![],
             changes: vec![],
 
-            model_usage: vec![],        },
+            model_usage: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+            slash_commands: vec![],
+        },
         // Done sessions
         SessionView {
             id: "s07".to_string(),
@@ -242,7 +272,11 @@ pub fn seeded_mock() -> MockState {
             transcript: vec![],
             changes: vec![],
 
-            model_usage: vec![],        },
+            model_usage: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+            slash_commands: vec![],
+        },
         SessionView {
             id: "s08".to_string(),
             name: "docs-update".to_string(),
@@ -260,7 +294,11 @@ pub fn seeded_mock() -> MockState {
             transcript: vec![],
             changes: vec![],
 
-            model_usage: vec![],        },
+            model_usage: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+            slash_commands: vec![],
+        },
         SessionView {
             id: "s09".to_string(),
             name: "test-coverage-boost".to_string(),
@@ -278,7 +316,11 @@ pub fn seeded_mock() -> MockState {
             transcript: vec![],
             changes: vec![],
 
-            model_usage: vec![],        },
+            model_usage: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+            slash_commands: vec![],
+        },
         // Stale session
         SessionView {
             id: "s10".to_string(),
@@ -297,7 +339,11 @@ pub fn seeded_mock() -> MockState {
             transcript: vec![],
             changes: vec![],
 
-            model_usage: vec![],        },
+            model_usage: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+            slash_commands: vec![],
+        },
     ];
 
     let workspaces = vec![

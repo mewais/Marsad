@@ -61,6 +61,70 @@ pub enum ContentBlock {
 }
 
 // ---------------------------------------------------------------------------
+// McpServerInfo / SlashCommandInfo
+// ---------------------------------------------------------------------------
+
+/// One MCP server entry from the `system/init` event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct McpServerInfo {
+    pub name: String,
+    #[serde(default)]
+    pub status: String,
+}
+
+/// One slash command entry from the `system/init` event.
+///
+/// `slash_commands` may be a string-array OR an object-array — the custom
+/// deserializer handles both: a bare string `"clear"` maps to
+/// `SlashCommandInfo { name: "/clear", description: "", argument_hint: "" }`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SlashCommandInfo {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default, rename = "argumentHint")]
+    pub argument_hint: String,
+}
+
+/// Deserialize a `Vec<SlashCommandInfo>` that may contain bare strings or objects.
+pub fn deserialize_slash_commands<'de, D>(
+    deserializer: D,
+) -> Result<Vec<SlashCommandInfo>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Deserialize};
+    // Deserialize the field to a Vec of raw JSON values first, then normalise each
+    // element (claude sends slash_commands as EITHER a string array or an object
+    // array). Going through `Vec<Value>` keeps every branch below reachable for
+    // tests — a hand-rolled SeqAccess visitor has a `next_element()?` error edge
+    // that can't fire when deserializing from an already-parsed value.
+    let raw = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    let mut commands = Vec::with_capacity(raw.len());
+    for elem in raw {
+        match elem {
+            serde_json::Value::String(s) => {
+                // Bare string: normalise to "/name" if it lacks the slash.
+                let name = if s.starts_with('/') { s } else { format!("/{s}") };
+                commands.push(SlashCommandInfo {
+                    name,
+                    ..Default::default()
+                });
+            }
+            obj @ serde_json::Value::Object(_) => {
+                commands.push(serde_json::from_value(obj).map_err(de::Error::custom)?);
+            }
+            other => {
+                return Err(de::Error::custom(format!(
+                    "expected string or object in slash_commands, got: {other}"
+                )));
+            }
+        }
+    }
+    Ok(commands)
+}
+
+// ---------------------------------------------------------------------------
 // SystemInit
 // ---------------------------------------------------------------------------
 
@@ -71,9 +135,11 @@ pub struct SystemInit {
     pub cwd: String,
     pub tools: Vec<String>,
     #[serde(default)]
-    pub mcp_servers: Vec<serde_json::Value>,
+    pub mcp_servers: Vec<McpServerInfo>,
     #[serde(rename = "permissionMode")]
     pub permission_mode: String,
+    #[serde(default, deserialize_with = "deserialize_slash_commands")]
+    pub slash_commands: Vec<SlashCommandInfo>,
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +330,11 @@ pub struct LaunchSpec {
     /// older serialized specs (no field) working.
     #[serde(default)]
     pub name: Option<String>,
+    /// Tools that should be disabled for this session. When non-empty the agent
+    /// passes `--disallowedTools <comma-joined-list>` to the `claude` CLI.
+    /// `#[serde(default)]` keeps older serialized specs (no field) working.
+    #[serde(default)]
+    pub disallowed_tools: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

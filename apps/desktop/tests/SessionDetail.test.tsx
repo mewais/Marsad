@@ -373,12 +373,14 @@ describe("ConfigTab — model and posture", () => {
     expect(screen.getByTestId("config-save-template")).toBeTruthy();
   });
 
-  it("renders tool chips", () => {
-    renderWith({ selectedId: "s04" });
+  it("renders tool chips from live session tools", () => {
+    // s01 has representative tools: ["Read", "Bash", "Edit", "Write"]
+    renderWith({ selectedId: "s01" });
     fireEvent.click(screen.getByTestId("tab-Config"));
 
-    expect(screen.getByTestId("tool-chip-bash")).toBeTruthy();
-    expect(screen.getByTestId("tool-chip-git")).toBeTruthy();
+    // Real tool chips are rendered per tool in the session's tools array.
+    expect(screen.getByTestId("tool-chip-Read")).toBeTruthy();
+    expect(screen.getByTestId("tool-chip-Bash")).toBeTruthy();
   });
 });
 

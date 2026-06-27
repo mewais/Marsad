@@ -31,6 +31,7 @@ marsad-events = { path = "../../../crates/marsad-events" }
 marsad-hosts = { path = "../../../crates/marsad-hosts" }
 marsad-diff = { path = "../../../crates/marsad-diff" }
 marsad-transport = { path = "../../../crates/marsad-transport" }
+marsad-proto = { path = "../../../crates/marsad-proto" }
 
 [workspace]
 # Empty table: detaches this package from the parent workspace so `cargo tauri`

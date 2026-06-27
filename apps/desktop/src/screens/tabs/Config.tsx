@@ -9,8 +9,7 @@ import { restartSession, saveTemplate, listTemplates } from "../../bridge/api";
 import type { PersistedTemplate } from "../../bridge/types";
 
 // ---------------------------------------------------------------------------
-// Static options (mirroring design tokens; wired to local UI state only —
-// a real Apply would call a bridge command once the backend exposes one)
+// Static options
 // ---------------------------------------------------------------------------
 
 type PostureId = "ask" | "auto" | "full";
@@ -37,16 +36,15 @@ const POSTURE_OPTIONS: {
   },
 ];
 
-const TOOL_CHIPS = [
-  { id: "bash", label: "Bash" },
-  { id: "edit", label: "Edit" },
-  { id: "read", label: "Read" },
-  { id: "web_search", label: "WebSearch" },
-  { id: "git", label: "Git" },
-  { id: "mcp", label: "MCP·postgres" },
-] as const;
-
-type ToolId = (typeof TOOL_CHIPS)[number]["id"];
+// Status → color token for MCP server chips.
+function mcpStatusColor(status: string): string {
+  switch (status) {
+    case "connected": return "var(--success, #22c55e)";
+    case "failed":    return "var(--error, #ef4444)";
+    case "pending":   return "var(--warning, #f59e0b)";
+    default:          return "var(--txt3)";
+  }
+}
 
 // ---------------------------------------------------------------------------
 // ConfigTab
@@ -55,14 +53,16 @@ type ToolId = (typeof TOOL_CHIPS)[number]["id"];
 export function ConfigTab() {
   const { selectedSession } = useVm();
 
-  // Local state mirrors current session values (read from session); Apply
-  // restarts the session with the chosen model/posture.
+  // Local state mirrors current session values; Apply restarts the session.
   const initialModel = selectedSession?.model ?? DEFAULT_MODEL;
   const [selectedModel, setSelectedModel] = useState(initialModel);
   const [posture, setPosture] = useState<PostureId>("ask");
-  const [activeTools, setActiveTools] = useState<Set<ToolId>>(
-    new Set(["bash", "edit", "read", "git"])
-  );
+
+  // Tool toggle state: keyed by tool name. Initially all tools are enabled
+  // (empty disallowed set). When the session provides a real tools list it is
+  // used; otherwise the set is empty (no tools to show).
+  const sessionTools = selectedSession?.tools ?? [];
+  const [disabledTools, setDisabledTools] = useState<Set<string>>(new Set());
 
   // Apply / Save-template busy + error state.
   const [applyBusy, setApplyBusy] = useState(false);
@@ -77,8 +77,8 @@ export function ConfigTab() {
     listTemplates().then(setTemplates).catch(() => {});
   }, []);
 
-  function toggleTool(tool: ToolId) {
-    setActiveTools((prev) => {
+  function toggleTool(tool: string) {
+    setDisabledTools((prev) => {
       const next = new Set(prev);
       if (next.has(tool)) next.delete(tool);
       else next.add(tool);
@@ -95,6 +95,7 @@ export function ConfigTab() {
         id: selectedSession.id,
         model: selectedModel,
         posture,
+        disallowed_tools: Array.from(disabledTools),
       });
     } catch (e) {
       setApplyError(String(e));
@@ -245,48 +246,100 @@ export function ConfigTab() {
           </div>
         </div>
 
-        {/* Tools & connectors */}
-        <div>
-          <div
-            style={{
-              fontSize: "calc(14.5px * var(--fs,1))",
-              fontWeight: 700,
-              marginBottom: 9,
-              color: "var(--txt2)",
-            }}
-          >
-            Tools &amp; connectors
+        {/* Tools (real list from system/init — toggleable; unchecked = disallowed) */}
+        {sessionTools.length > 0 && (
+          <div>
+            <div
+              style={{
+                fontSize: "calc(14.5px * var(--fs,1))",
+                fontWeight: 700,
+                marginBottom: 9,
+                color: "var(--txt2)",
+              }}
+            >
+              Tools
+            </div>
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+              {sessionTools.map((tool) => {
+                const enabled = !disabledTools.has(tool);
+                return (
+                  <span
+                    key={tool}
+                    data-testid={`tool-chip-${tool}`}
+                    onClick={() => toggleTool(tool)}
+                    style={{
+                      fontFamily: "inherit",
+                      fontSize: "calc(14px * var(--fs,1))",
+                      fontWeight: 600,
+                      padding: "6px 11px",
+                      borderRadius: 7,
+                      cursor: "pointer",
+                      border: enabled
+                        ? "1px solid var(--accent)"
+                        : "1px solid var(--border)",
+                      background: enabled ? "var(--accent-bg)" : "var(--panel2)",
+                      color: enabled ? "var(--accent2)" : "var(--txt3)",
+                      userSelect: "none" as const,
+                    }}
+                  >
+                    {enabled ? "● " : "○ "}
+                    {tool}
+                  </span>
+                );
+              })}
+            </div>
           </div>
-          <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-            {TOOL_CHIPS.map((tc) => {
-              const active = activeTools.has(tc.id);
-              return (
+        )}
+
+        {/* MCP connectors (display-only — status colored by connection state) */}
+        {selectedSession && selectedSession.mcp_servers.length > 0 && (
+          <div>
+            <div
+              style={{
+                fontSize: "calc(14.5px * var(--fs,1))",
+                fontWeight: 700,
+                marginBottom: 9,
+                color: "var(--txt2)",
+              }}
+            >
+              MCP connectors
+            </div>
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+              {selectedSession.mcp_servers.map((srv) => (
                 <span
-                  key={tc.id}
-                  data-testid={`tool-chip-${tc.id}`}
-                  onClick={() => toggleTool(tc.id)}
+                  key={srv.name}
+                  data-testid={`mcp-chip-${srv.name}`}
+                  title={`Status: ${srv.status || "unknown"}`}
                   style={{
                     fontFamily: "inherit",
                     fontSize: "calc(14px * var(--fs,1))",
                     fontWeight: 600,
                     padding: "6px 11px",
                     borderRadius: 7,
-                    cursor: "pointer",
-                    border: active
-                      ? "1px solid var(--accent)"
-                      : "1px solid var(--border)",
-                    background: active ? "var(--accent-bg)" : "var(--panel2)",
-                    color: active ? "var(--accent2)" : "var(--txt3)",
+                    border: "1px solid var(--border)",
+                    background: "var(--panel2)",
+                    color: "var(--txt2)",
                     userSelect: "none" as const,
+                    cursor: "default",
                   }}
                 >
-                  {active ? "● " : "○ "}
-                  {tc.label}
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      background: mcpStatusColor(srv.status),
+                      marginRight: 6,
+                      verticalAlign: "middle",
+                    }}
+                  />
+                  {srv.name}
                 </span>
-              );
-            })}
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Saved templates — quick-apply chips */}
         {templates.length > 0 && (
