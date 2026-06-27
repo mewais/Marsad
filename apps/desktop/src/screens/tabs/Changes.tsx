@@ -8,10 +8,10 @@
  * once the backend exposes a `files` array on SessionView or via a separate
  * Tauri command.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useVm } from "../../bridge/useVm";
 import { DiffView } from "../../components/DiffView";
-import { commit as apiCommit } from "../../bridge/api";
+import { commit as apiCommit, getFileDiff } from "../../bridge/api";
 import type { SideRow } from "../../bridge/types";
 
 // ---------------------------------------------------------------------------
@@ -88,6 +88,52 @@ export function ChangesTab() {
   const [commitMsg, setCommitMsg] = useState("");
   const [committing, setCommitting] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
+  const [fetchedDiff, setFetchedDiff] = useState<SideRow[]>([]);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
+
+  const files = selectedSession
+    ? deriveFiles(selectedSession.changes, selectedGate)
+    : [];
+  const activeFile =
+    files.find((f) => f.name === selectedFile) ?? files[0] ?? null;
+
+  // The active file already carries diff rows when it matches a pending Edit
+  // gate; in that case we use them directly and skip the backend fetch.
+  const hasGateDiff = (activeFile?.diffRows.length ?? 0) > 0;
+  const sessionId = selectedSession?.id ?? null;
+  const activeName = activeFile?.name ?? null;
+
+  // Fetch the active file's diff whenever the session or file changes (unless
+  // the gate already supplied it). Keyed on session id + file name; an
+  // `ignore` flag guards against out-of-order responses / unmount.
+  useEffect(() => {
+    if (!sessionId || !activeName || hasGateDiff) {
+      setFetchedDiff([]);
+      setDiffError(null);
+      setDiffLoading(false);
+      return;
+    }
+    let ignore = false;
+    setDiffLoading(true);
+    setDiffError(null);
+    getFileDiff(sessionId, activeName)
+      .then((rows) => {
+        if (ignore) return;
+        setFetchedDiff(rows);
+      })
+      .catch((err) => {
+        if (ignore) return;
+        setFetchedDiff([]);
+        setDiffError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!ignore) setDiffLoading(false);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [sessionId, activeName, hasGateDiff]);
 
   if (!selectedSession) {
     return (
@@ -97,15 +143,12 @@ export function ChangesTab() {
     );
   }
 
-  const files = deriveFiles(selectedSession.changes, selectedGate);
-
   // Default all files to staged = true
   const effectiveStaged: Record<string, boolean> = {};
   files.forEach((f) => {
     effectiveStaged[f.name] = staged[f.name] ?? true;
   });
 
-  const activeFile = files.find((f) => f.name === selectedFile) ?? files[0] ?? null;
   const stagedCount = Object.values(effectiveStaged).filter(Boolean).length;
 
   function toggleStage(name: string) {
@@ -272,22 +315,65 @@ export function ChangesTab() {
       >
         {/* Diff view */}
         <div style={{ flex: 1, overflow: "auto" }}>
-          {activeFile ? (
-            <DiffView
-              rows={activeFile.diffRows}
-              filename={activeFile.name}
-            />
-          ) : (
-            <div
-              style={{
-                padding: 24,
-                color: "var(--txt3)",
-                fontSize: "calc(14.5px * var(--fs,1))",
-              }}
-            >
-              Select a file to view its diff.
-            </div>
-          )}
+          {(() => {
+            if (!activeFile) {
+              return (
+                <div
+                  style={{
+                    padding: 24,
+                    color: "var(--txt3)",
+                    fontSize: "calc(14.5px * var(--fs,1))",
+                  }}
+                >
+                  Select a file to view its diff.
+                </div>
+              );
+            }
+            // Diff rows: the gate's rows take precedence (a pending edit), else
+            // the rows fetched from the backend for this file.
+            const rows = hasGateDiff ? activeFile.diffRows : fetchedDiff;
+            if (diffError) {
+              return (
+                <div
+                  style={{
+                    padding: 24,
+                    color: "var(--error)",
+                    fontSize: "calc(14.5px * var(--fs,1))",
+                    wordBreak: "break-all",
+                  }}
+                >
+                  Failed to load diff: {diffError}
+                </div>
+              );
+            }
+            if (diffLoading && !hasGateDiff) {
+              return (
+                <div
+                  style={{
+                    padding: 24,
+                    color: "var(--txt3)",
+                    fontSize: "calc(14.5px * var(--fs,1))",
+                  }}
+                >
+                  Loading diff…
+                </div>
+              );
+            }
+            if (rows.length === 0) {
+              return (
+                <div
+                  style={{
+                    padding: 24,
+                    color: "var(--txt3)",
+                    fontSize: "calc(14.5px * var(--fs,1))",
+                  }}
+                >
+                  No diff
+                </div>
+              );
+            }
+            return <DiffView rows={rows} filename={activeFile.name} />;
+          })()}
         </div>
 
         {/* Commit bar */}

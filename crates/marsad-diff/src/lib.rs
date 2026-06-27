@@ -162,3 +162,175 @@ pub fn unified(lines: &[DiffLine]) -> Vec<UnifiedRow> {
         })
         .collect()
 }
+
+/// Metadata / header prefixes in a `git diff` unified patch that carry no body
+/// content and must be skipped when extracting `DiffLine`s.
+const SKIP_PREFIXES: &[&str] = &[
+    "diff ",
+    "index ",
+    "--- ",
+    "+++ ",
+    "@@",
+    "new file",
+    "deleted file",
+    "old mode",
+    "new mode",
+    "similarity",
+    "rename ",
+    "copy ",
+    "Binary files",
+    r"\ No newline",
+];
+
+/// Parse a `git diff` unified patch into a flat list of `DiffLine`s.
+///
+/// Header / metadata lines (see [`SKIP_PREFIXES`]) are dropped. Body lines are
+/// classified by their leading character — `'+'` → [`Sig::Add`], `'-'` →
+/// [`Sig::Del`], `' '` → [`Sig::Context`] — and the leading character is
+/// stripped from the stored text. Lines that match none of the above (e.g. a
+/// truly empty line in the patch stream) are treated as context with empty text.
+///
+/// The `ln` label is left empty: unified patches do not carry a per-line number
+/// without reconstructing hunk ranges, which is out of scope here.
+///
+/// Empty input yields an empty `Vec`.
+pub fn parse_unified(diff: &str) -> Vec<DiffLine> {
+    let mut lines = Vec::new();
+
+    for raw in diff.lines() {
+        if SKIP_PREFIXES.iter().any(|p| raw.starts_with(p)) {
+            continue;
+        }
+
+        let (sig, text) = match raw.chars().next() {
+            Some('+') => (Sig::Add, &raw[1..]),
+            Some('-') => (Sig::Del, &raw[1..]),
+            Some(' ') => (Sig::Context, &raw[1..]),
+            // A bare empty line (no leading sigil) → context with empty text.
+            _ => (Sig::Context, raw),
+        };
+
+        lines.push(DiffLine {
+            ln: String::new(),
+            sig,
+            text: text.to_string(),
+        });
+    }
+
+    lines
+}
+
+#[cfg(test)]
+mod parse_unified_tests {
+    use super::*;
+
+    #[test]
+    fn empty_input_yields_empty_vec() {
+        assert!(parse_unified("").is_empty());
+    }
+
+    #[test]
+    fn modified_file_patch_adds_dels_context() {
+        let diff = "\
+diff --git a/foo.txt b/foo.txt
+index e69de29..4b825dc 100644
+--- a/foo.txt
++++ b/foo.txt
+@@ -1,3 +1,3 @@
+ context line
+-removed line
++added line
+ trailing context";
+        let lines = parse_unified(diff);
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0].sig, Sig::Context);
+        assert_eq!(lines[0].text, "context line");
+        assert_eq!(lines[1].sig, Sig::Del);
+        assert_eq!(lines[1].text, "removed line");
+        assert_eq!(lines[2].sig, Sig::Add);
+        assert_eq!(lines[2].text, "added line");
+        assert_eq!(lines[3].sig, Sig::Context);
+        assert_eq!(lines[3].text, "trailing context");
+    }
+
+    #[test]
+    fn all_additions_patch() {
+        let diff = "\
+diff --git a/new.txt b/new.txt
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/new.txt
+@@ -0,0 +1,2 @@
++first
++second";
+        let lines = parse_unified(diff);
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|l| l.sig == Sig::Add));
+        assert_eq!(lines[0].text, "first");
+        assert_eq!(lines[1].text, "second");
+    }
+
+    #[test]
+    fn skips_all_header_and_metadata_prefixes() {
+        // Every skippable prefix appears at least once; only the body line stays.
+        let diff = "\
+diff --git a/x b/x
+index aaa..bbb 100644
+old mode 100644
+new mode 100755
+similarity index 90%
+rename from a
+copy from b
+new file mode 100644
+deleted file mode 100644
+--- a/x
++++ b/x
+@@ -1 +1 @@
+ only body line";
+        let lines = parse_unified(diff);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].sig, Sig::Context);
+        assert_eq!(lines[0].text, "only body line");
+    }
+
+    #[test]
+    fn skips_no_newline_marker() {
+        let diff = "\
+@@ -1 +1 @@
+-old
+\\ No newline at end of file
++new
+\\ No newline at end of file";
+        let lines = parse_unified(diff);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].sig, Sig::Del);
+        assert_eq!(lines[0].text, "old");
+        assert_eq!(lines[1].sig, Sig::Add);
+        assert_eq!(lines[1].text, "new");
+    }
+
+    #[test]
+    fn skips_binary_files_line() {
+        let diff = "\
+diff --git a/img.png b/img.png
+index 1111..2222 100644
+Binary files a/img.png and b/img.png differ";
+        assert!(parse_unified(diff).is_empty());
+    }
+
+    #[test]
+    fn bare_empty_line_becomes_empty_context() {
+        // A blank line in the patch stream (a context line whose content is "").
+        // git emits these as " " but a stripped/edge stream may carry just "".
+        let diff = "@@ -1,2 +1,2 @@\n context\n\n+added";
+        let lines = parse_unified(diff);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].sig, Sig::Context);
+        assert_eq!(lines[0].text, "context");
+        assert_eq!(lines[1].sig, Sig::Context);
+        assert_eq!(lines[1].text, "");
+        assert_eq!(lines[2].sig, Sig::Add);
+        assert_eq!(lines[2].text, "added");
+    }
+}

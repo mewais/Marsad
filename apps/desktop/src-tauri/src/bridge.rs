@@ -1073,6 +1073,95 @@ pub fn run_shell(
     Ok(())
 }
 
+/// Compute the side-by-side diff rows for a single changed file in the session's
+/// project directory (local or remote host).
+///
+/// Resolves the session's host + project exactly like [`run_shell`], then runs a
+/// small POSIX script that tries, in order: `git diff HEAD -- <path>` (staged or
+/// unstaged change to a tracked file), `git diff -- <path>` (worktree change),
+/// and finally `git diff --no-index -- /dev/null <path>` (an untracked file, so
+/// the whole file shows as additions). The captured unified patch is parsed into
+/// `DiffLine`s and folded into `SideRow`s for the UI.
+///
+/// Returns an empty vec when there is no diff (e.g. the file is unchanged or the
+/// path doesn't exist).
+#[tauri::command(rename_all = "snake_case")]
+pub fn get_file_diff(
+    state: State<'_, ManagedState>,
+    session_id: String,
+    path: String,
+) -> Result<Vec<marsad_diff::SideRow>, String> {
+    // 1. Resolve host target (local vs remote) + project dir under a brief lock.
+    let (host_target, project): (Option<String>, String) = {
+        let guard = state.lock().map_err(|e| e.to_string())?;
+        match &*guard {
+            AppState::Live(core) => {
+                let snap = core.snapshot();
+                let sv = snap
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == session_id)
+                    .ok_or_else(|| format!("unknown session: {session_id}"))?;
+                let project = sv.project.clone();
+                let host_id = sv.host_id.clone();
+                let target = snap
+                    .hosts
+                    .into_iter()
+                    .find(|h| h.id == host_id)
+                    .and_then(|h| if h.is_local { None } else { Some(h.target) });
+                (target, project)
+            }
+            AppState::Mock(_) => (None, String::new()),
+        }
+    }; // lock released
+
+    // 2. Build the diff script (tracked, then worktree, then untracked).
+    //    Single-quote the path so spaces/specials are safe inside the script.
+    let qpath = format!("'{}'", path.replace('\'', r"'\''"));
+    let script = format!(
+        "cd {cd} 2>/dev/null\n\
+         d=$(git diff HEAD -- {p} 2>/dev/null)\n\
+         [ -z \"$d\" ] && d=$(git diff -- {p} 2>/dev/null)\n\
+         [ -z \"$d\" ] && d=$(git diff --no-index -- /dev/null {p} 2>/dev/null)\n\
+         printf '%s' \"$d\"",
+        cd = shell_quote_cd(&project),
+        p = qpath,
+    );
+
+    // 3. Execute OFF the lock.
+    let out = match host_target {
+        Some(target) => marsad_agent::run_remote_script(&target, &script).unwrap_or_default(),
+        None => run_diff_locally(&script, &project),
+    };
+
+    // 4. Parse the unified patch into side-by-side rows.
+    let lines = marsad_diff::parse_unified(&out);
+    Ok(marsad_diff::split_side_by_side(&lines))
+}
+
+/// Run a POSIX diff `script` locally in `project` (if it exists), returning the
+/// captured stdout. Mirrors [`run_shell_locally`] but returns stdout verbatim
+/// (no "(no output)" substitution) so an empty diff stays empty.
+fn run_diff_locally(script: &str, project: &str) -> String {
+    use std::process::Command;
+
+    #[cfg(windows)]
+    let (bin, flag) = ("cmd", "/C");
+    #[cfg(not(windows))]
+    let (bin, flag) = ("sh", "-c");
+
+    let mut cmd = Command::new(bin);
+    cmd.arg(flag).arg(script);
+    if !project.is_empty() && std::path::Path::new(project).is_dir() {
+        cmd.current_dir(project);
+    }
+
+    match cmd.output() {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).into_owned(),
+        Err(_) => String::new(),
+    }
+}
+
 /// Shell-quote a project path for use after `cd` in a remote POSIX script.
 /// Leaves `~` / `~/...` unquoted so the remote shell expands them; single-quotes
 /// anything else (safe for spaces). Empty → `.` (stay in the default dir).

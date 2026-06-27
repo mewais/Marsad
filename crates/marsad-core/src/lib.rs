@@ -524,6 +524,15 @@ impl Core {
             state.phase = Phase::Stale;
             state.model = Some(s.model.clone());
             state.session_id = s.session_id.clone();
+            // Restore the persisted posture so the Config tab shows the correct
+            // posture even when the live claude process does NOT re-emit
+            // system/init (reconnect after restart). Without this, permission_mode
+            // stays None and posture defaults to "ask" for every reconnected session.
+            state.permission_mode = s
+                .posture
+                .as_deref()
+                .and_then(posture_name_to_permission_mode)
+                .map(str::to_string);
             // Restore the custom name: PersistedSession.name is the marsad id
             // when no custom name was set (agent default). Treat that as None so
             // the view falls back to the project basename.
@@ -951,12 +960,30 @@ impl Core {
         if !self.sessions.contains_key(&id) {
             self.session_order.push(id.clone());
         }
+        // Seed permission_mode from the launch posture so the Config tab shows
+        // the correct posture immediately — before the authoritative system/init
+        // event arrives (which will override it when it does).
+        // NOTE: We use `posture_name_to_permission_mode` (which maps proto enum
+        // variant names to the `permissionMode` values claude emits) rather than
+        // reusing `permission_mode` from `posture_to_permission_mode` above,
+        // because the IPC wire value ("autoApprove") differs from the value that
+        // claude reports in system/init ("acceptEdits"). The state value must
+        // match what `permission_mode_to_posture` recognises.
+        let display_permission_mode = posture_name_to_permission_mode(
+            match &spec.posture {
+                Posture::Ask => "Ask",
+                Posture::AutoApproveSafe => "AutoApproveSafe",
+                Posture::FullAutonomy => "FullAutonomy",
+            },
+        );
+        let mut initial_state = SessionState::initial();
+        initial_state.permission_mode = display_permission_mode.map(str::to_string);
         self.sessions.insert(
             id.clone(),
             SessionRecord {
                 project: spec.project,
                 host_id: spec.host_id,
-                state: SessionState::initial(),
+                state: initial_state,
                 changes: Vec::new(),
                 transcript,
                 seen_msg_ids: std::collections::HashSet::new(),
@@ -1737,6 +1764,22 @@ fn permission_mode_to_posture(mode: Option<&str>) -> String {
         Some("acceptEdits") => "auto".to_string(),
         Some("bypassPermissions") => "full".to_string(),
         _ => "ask".to_string(),
+    }
+}
+
+/// Map a persisted proto-enum name (the `Posture` variant name stored in
+/// `PersistedSession.posture`) back to the `permissionMode` string that
+/// `SessionState` / `make_session_view` understand.
+///
+/// Values: `"Ask"` → `Some("default")`, `"AutoApproveSafe"` →
+/// `Some("acceptEdits")`, `"FullAutonomy"` → `Some("bypassPermissions")`,
+/// anything else / unknown → `None` (caller falls back to the default "ask").
+fn posture_name_to_permission_mode(name: &str) -> Option<&'static str> {
+    match name {
+        "Ask" => Some("default"),
+        "AutoApproveSafe" => Some("acceptEdits"),
+        "FullAutonomy" => Some("bypassPermissions"),
+        _ => None,
     }
 }
 

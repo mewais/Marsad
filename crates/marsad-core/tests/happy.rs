@@ -3384,3 +3384,265 @@ fn usage_update_filters_zero_usage_rows() {
     assert_eq!(sv.model_usage.len(), 1, "zero-usage opus row must be filtered");
     assert!(sv.model_usage[0].model.contains("sonnet"));
 }
+
+// ---------------------------------------------------------------------------
+// Posture-persistence bug fix — reconnect scenario tests
+//
+// These test the RECONNECT path: a session is restored from the store via
+// load_sessions() WITHOUT a subsequent system/init event.  The persisted
+// posture must be visible in the SessionView immediately.
+// ---------------------------------------------------------------------------
+
+/// Helper: seed a session with a specific posture string into the store.
+fn seed_session_with_posture(seed: &mut Store, id: &str, posture: Option<&str>) {
+    seed.upsert_session(&PersistedSession {
+        id: id.to_string(),
+        session_id: Some("claude-uuid-xyz".to_string()),
+        name: id.to_string(),
+        host_id: "local".to_string(),
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
+        project: "/work/proj".to_string(),
+        branch: "main".to_string(),
+        model: "claude-opus-4-8".to_string(),
+        last_phase: "Done".to_string(),
+        posture: posture.map(|s| s.to_string()),
+        disallowed_tools: vec![],
+    })
+    .expect("seed session with posture");
+}
+
+/// RECONNECT: persisted posture "AutoApproveSafe" restores as "auto" WITHOUT system/init.
+#[test]
+fn load_sessions_restores_auto_approve_safe_posture_without_init() {
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed_session_with_posture(&mut seed, "session-posture-auto", Some("AutoApproveSafe"));
+
+    let mut core = core_with_backend(backend);
+    core.load_sessions().expect("load_sessions");
+
+    // No system/init event — posture must come from the persisted record.
+    let snap = core.snapshot();
+    let sv = snap
+        .sessions
+        .iter()
+        .find(|s| s.id == "session-posture-auto")
+        .expect("restored session present");
+    assert_eq!(
+        sv.posture, "auto",
+        "persisted AutoApproveSafe must restore as 'auto' without system/init"
+    );
+}
+
+/// RECONNECT: persisted posture "FullAutonomy" restores as "full" WITHOUT system/init.
+#[test]
+fn load_sessions_restores_full_autonomy_posture_without_init() {
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed_session_with_posture(&mut seed, "session-posture-full", Some("FullAutonomy"));
+
+    let mut core = core_with_backend(backend);
+    core.load_sessions().expect("load_sessions");
+
+    let snap = core.snapshot();
+    let sv = snap
+        .sessions
+        .iter()
+        .find(|s| s.id == "session-posture-full")
+        .expect("restored session present");
+    assert_eq!(
+        sv.posture, "full",
+        "persisted FullAutonomy must restore as 'full' without system/init"
+    );
+}
+
+/// RECONNECT: persisted posture "Ask" restores as "ask" WITHOUT system/init.
+#[test]
+fn load_sessions_restores_ask_posture_without_init() {
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed_session_with_posture(&mut seed, "session-posture-ask", Some("Ask"));
+
+    let mut core = core_with_backend(backend);
+    core.load_sessions().expect("load_sessions");
+
+    let snap = core.snapshot();
+    let sv = snap
+        .sessions
+        .iter()
+        .find(|s| s.id == "session-posture-ask")
+        .expect("restored session present");
+    assert_eq!(
+        sv.posture, "ask",
+        "persisted Ask must restore as 'ask' without system/init"
+    );
+}
+
+/// RECONNECT: persisted posture None (absent) falls back to "ask".
+#[test]
+fn load_sessions_none_posture_falls_back_to_ask() {
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed_session_with_posture(&mut seed, "session-posture-none", None);
+
+    let mut core = core_with_backend(backend);
+    core.load_sessions().expect("load_sessions");
+
+    let snap = core.snapshot();
+    let sv = snap
+        .sessions
+        .iter()
+        .find(|s| s.id == "session-posture-none")
+        .expect("restored session present");
+    assert_eq!(
+        sv.posture, "ask",
+        "absent posture must fall back to 'ask'"
+    );
+}
+
+/// RECONNECT: an unrecognised persisted posture string falls back to "ask"
+/// (exercises the `_ => None` arm of `posture_name_to_permission_mode`).
+#[test]
+fn load_sessions_unrecognised_posture_falls_back_to_ask() {
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed_session_with_posture(&mut seed, "session-posture-unknown", Some("SomeUnknownPosture"));
+
+    let mut core = core_with_backend(backend);
+    core.load_sessions().expect("load_sessions");
+
+    let snap = core.snapshot();
+    let sv = snap
+        .sessions
+        .iter()
+        .find(|s| s.id == "session-posture-unknown")
+        .expect("restored session present");
+    assert_eq!(
+        sv.posture, "ask",
+        "unrecognised posture name must fall back to 'ask'"
+    );
+}
+
+/// LAUNCH path: freshly launched session with AutoApproveSafe shows "auto"
+/// BEFORE any system/init arrives.
+#[test]
+fn launch_session_auto_approve_safe_posture_visible_before_init() {
+    let (mut core, _peer) = make_core();
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/p".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "m".to_string(),
+            posture: Posture::AutoApproveSafe,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
+
+    // No system/init fed — posture must already reflect the launch spec.
+    let snap = core.snapshot();
+    let sv = snap
+        .sessions
+        .iter()
+        .find(|s| s.id == id)
+        .expect("session in snapshot");
+    assert_eq!(
+        sv.posture, "auto",
+        "freshly launched AutoApproveSafe session must show 'auto' before system/init"
+    );
+}
+
+/// LAUNCH path: freshly launched session with FullAutonomy shows "full"
+/// BEFORE any system/init arrives.
+#[test]
+fn launch_session_full_autonomy_posture_visible_before_init() {
+    let (mut core, _peer) = make_core();
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/p".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "m".to_string(),
+            posture: Posture::FullAutonomy,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
+
+    let snap = core.snapshot();
+    let sv = snap
+        .sessions
+        .iter()
+        .find(|s| s.id == id)
+        .expect("session in snapshot");
+    assert_eq!(
+        sv.posture, "full",
+        "freshly launched FullAutonomy session must show 'full' before system/init"
+    );
+}
+
+/// system/init OVERRIDES the launch posture: launched with AutoApproveSafe ("auto"),
+/// but system/init reports "bypassPermissions" → posture becomes "full".
+/// Verifies that system/init remains authoritative even after the fix.
+#[test]
+fn system_init_overrides_launch_posture() {
+    let (mut core, _peer) = make_core();
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/p".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "m".to_string(),
+            posture: Posture::AutoApproveSafe,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
+
+    // Before init: must show "auto" from the launch spec.
+    let snap_before = core.snapshot();
+    let sv_before = snap_before
+        .sessions
+        .iter()
+        .find(|s| s.id == id)
+        .expect("session");
+    assert_eq!(sv_before.posture, "auto", "pre-init posture must be 'auto'");
+
+    // Feed system/init with bypassPermissions — must override to "full".
+    let updates = core
+        .on_agent_line(&ipc_agent_event_init_with_mode(&id, "bypassPermissions"))
+        .expect("system/init");
+    let sv_after = updates
+        .iter()
+        .find_map(|u| {
+            if let VmUpdate::Session(s) = u {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
+        .expect("Session update from system/init");
+    assert_eq!(
+        sv_after.posture, "full",
+        "system/init bypassPermissions must override launch posture to 'full'"
+    );
+}

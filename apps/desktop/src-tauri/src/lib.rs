@@ -243,6 +243,7 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::save_template,
             bridge::list_templates,
             bridge::run_shell,
+            bridge::get_file_diff,
         ])
 }
 

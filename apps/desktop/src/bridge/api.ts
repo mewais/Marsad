@@ -5,7 +5,7 @@
  * mock fixture so Vitest + Playwright work without the Rust side.
  */
 
-import type { AppSnapshot, PersistedTemplate, SessionSummary, Settings, SlashCommandInfo } from "./types";
+import type { AppSnapshot, PersistedTemplate, SessionSummary, Settings, SideRow, SlashCommandInfo } from "./types";
 import { MOCK_SNAPSHOT } from "./mockFixture";
 
 // ---------------------------------------------------------------------------
@@ -377,6 +377,62 @@ export async function commit(
   if (!isTauri()) return;
   const invoke = await getInvoke();
   await invoke("commit", { session_id: sessionId, message, files });
+}
+
+// ---------------------------------------------------------------------------
+// Per-file diff
+// ---------------------------------------------------------------------------
+
+/** Raw cell shape as serialized by `marsad_diff::Cell`. */
+interface RawCell {
+  ln: string;
+  sig: string;
+  text: string;
+  kind: "Context" | "Add" | "Del" | "Empty";
+}
+
+/** Raw row shape as serialized by `marsad_diff::SideRow`. */
+interface RawSideRow {
+  left: RawCell;
+  right: RawCell;
+}
+
+function rawCellToSideCell(c: RawCell): SideRow["l"] {
+  const bg =
+    c.kind === "Add"
+      ? "rgba(70,192,138,0.12)"
+      : c.kind === "Del"
+        ? "rgba(224,89,74,0.12)"
+        : "transparent";
+  const fg =
+    c.kind === "Add" ? "#46c08a" : c.kind === "Del" ? "#e0594a" : "var(--txt2)";
+  const sigColor =
+    c.kind === "Add" ? "#46c08a" : c.kind === "Del" ? "#e0594a" : "var(--txt3)";
+  // Empty padding cells render blank.
+  const sig = c.kind === "Empty" ? "" : c.sig;
+  return { ln: c.ln, sig, sigColor, text: c.text, fg, bg };
+}
+
+function rawRowToSideRow(r: RawSideRow): SideRow {
+  return { l: rawCellToSideCell(r.left), r: rawCellToSideCell(r.right) };
+}
+
+/**
+ * Fetch the side-by-side diff for a single changed file in the session's
+ * project (local or remote host). Returns styled `SideRow`s ready for
+ * `<DiffView>`. Empty array when there's no diff. No-op `[]` outside Tauri.
+ */
+export async function getFileDiff(
+  sessionId: string,
+  path: string
+): Promise<SideRow[]> {
+  if (!isTauri()) return [];
+  const invoke = await getInvoke();
+  const raw = (await invoke("get_file_diff", {
+    session_id: sessionId,
+    path,
+  })) as RawSideRow[];
+  return raw.map(rawRowToSideRow);
 }
 
 // ---------------------------------------------------------------------------
