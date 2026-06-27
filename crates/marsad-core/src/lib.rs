@@ -1515,7 +1515,7 @@ impl Core {
 
         // Reduce the event, then decide whether the working tree may have changed.
         // Safe: require_session above guarantees the entry exists.
-        let (project, should_probe) = {
+        let (project, host_id, should_probe) = {
             let record = self.sessions.get_mut(&session_id).unwrap();
             let old_state = record.state.clone();
             let old_last_action = old_state.last_action.clone();
@@ -1526,10 +1526,18 @@ impl Core {
             let tool_ran = record.state.last_action != old_last_action;
             let just_finished =
                 matches!(record.state.phase, Phase::Done | Phase::Error) && !was_finished;
-            (record.project.clone(), tool_ran || just_finished)
+            (
+                record.project.clone(),
+                record.host_id.clone(),
+                tool_ran || just_finished,
+            )
         };
 
-        if should_probe {
+        // Only probe the LOCAL working tree for LOCAL sessions. REMOTE sessions
+        // get their changes from the agent's `ChangesUpdate` IPC — a local `git
+        // status` on a remote project path returns nothing and would CLOBBER the
+        // real (remote) changes on the next tool_use/result event.
+        if should_probe && self.host_is_local(&host_id) {
             let changes = self.git.changes(&project);
             // Safe: entry still exists (single-threaded, no removal in between).
             self.sessions.get_mut(&session_id).unwrap().changes = changes;
@@ -1552,6 +1560,18 @@ impl Core {
         let snap = self.snapshot();
         let groups = marsad_viewmodel::group_overview(&snap);
         Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
+    }
+
+    /// Whether a session's host runs on this machine (so a local `git` probe is
+    /// valid). Remote hosts get their changes from the agent's `ChangesUpdate`.
+    /// Unknown host id falls back to treating the bare `"local"`/empty id as local.
+    fn host_is_local(&self, host_id: &str) -> bool {
+        self.hosts
+            .list()
+            .iter()
+            .find(|h| h.id == host_id)
+            .map(|h| h.is_local)
+            .unwrap_or(host_id == "local" || host_id.is_empty())
     }
 
     fn require_session(&self, id: &str) -> Result<(), CoreError> {

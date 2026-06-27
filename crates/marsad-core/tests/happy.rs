@@ -2674,6 +2674,46 @@ fn on_agent_line_changes_update_populates_session_changes() {
     assert_eq!(sv.changes[0].removed, 1);
 }
 
+/// A REMOTE session's changes (from ChangesUpdate) must NOT be clobbered by the
+/// local git probe on a result/tool_use event — that probe runs for LOCAL
+/// sessions only (a local `git status` on a remote project path is empty).
+#[test]
+fn remote_session_changes_survive_result_event() {
+    let (mut core, _peer) = make_core();
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/remote/proj".to_string(),
+            host_id: "narval".to_string(), // remote, unregistered → host_is_local=false
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
+            model: "claude-opus-4-8".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: LaunchMode::Fresh,
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
+
+    let cu = format!(
+        r#"{{"type":"ChangesUpdate","session_id":"{id}","changes":[{{"path":"x.rs","status":"M","added":2,"removed":0}}]}}"#
+    );
+    core.on_agent_line(&cu).expect("changes update");
+
+    // result event → should_probe; remote session must SKIP the local probe.
+    let result = format!(
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0,"usage":{{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":1,"permission_denials":[]}}}}"#
+    );
+    core.on_agent_line(&result).expect("result event");
+
+    let snap = core.snapshot();
+    let sv = snap.sessions.iter().find(|s| s.id == id).expect("session");
+    assert_eq!(sv.changes.len(), 1, "remote changes must survive: {:?}", sv.changes);
+    assert_eq!(sv.changes[0].path, "x.rs");
+}
+
 /// A `ChangesUpdate` for an UNKNOWN session is a no-op (empty update list, no error).
 #[test]
 fn on_agent_line_changes_update_unknown_session_is_noop() {
