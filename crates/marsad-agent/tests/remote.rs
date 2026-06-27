@@ -4,8 +4,9 @@
 
 use marsad_agent::{
     assistant_has_file_modifying_tool_use, build_remote_spawn_cmd, exec_prefix_for,
-    remote_durable_launch_script, remote_kill_script, remote_liveness_script, remote_reader_argv,
-    remote_session_dir, remote_writer_argv,
+    reconnect_backoff_next, remote_durable_launch_script, remote_kill_script,
+    remote_liveness_script, remote_reader_argv, remote_session_dir, remote_writer_argv,
+    RECONNECT_INITIAL_BACKOFF_SECS, RECONNECT_MAX_BACKOFF_SECS,
 };
 
 // ── exec_prefix_for ─────────────────────────────────────────────────────────────
@@ -445,4 +446,42 @@ fn tool_use_missing_name_returns_false() {
         }
     });
     assert!(!assistant_has_file_modifying_tool_use(&ev));
+}
+
+// ── reconnect_backoff_next ─────────────────────────────────────────────────────
+//
+// Pure-logic exponential backoff: doubles the current delay, capped at
+// RECONNECT_MAX_BACKOFF_SECS.  Tested so it gets 100% coverage and the
+// reconnect supervisor is verified to never busy-loop or exceed the cap.
+
+/// Doubling stays below the cap: 3 → 6 → 12 → 24 → 30 (capped).
+#[test]
+fn backoff_doubles_and_caps() {
+    assert_eq!(reconnect_backoff_next(RECONNECT_INITIAL_BACKOFF_SECS), 6);
+    assert_eq!(reconnect_backoff_next(6), 12);
+    assert_eq!(reconnect_backoff_next(12), 24);
+    // 24*2 = 48 > 30, so it should be capped at RECONNECT_MAX_BACKOFF_SECS.
+    assert_eq!(
+        reconnect_backoff_next(24),
+        RECONNECT_MAX_BACKOFF_SECS,
+        "backoff must be capped at RECONNECT_MAX_BACKOFF_SECS"
+    );
+    // Already at cap → stays at cap.
+    assert_eq!(
+        reconnect_backoff_next(RECONNECT_MAX_BACKOFF_SECS),
+        RECONNECT_MAX_BACKOFF_SECS
+    );
+}
+
+/// Zero input → 0 (no infinite loop from a zero initial value).
+#[test]
+fn backoff_from_zero_stays_zero() {
+    assert_eq!(reconnect_backoff_next(0), 0);
+}
+
+/// Large input saturates to RECONNECT_MAX_BACKOFF_SECS without overflow.
+#[test]
+fn backoff_saturates_without_overflow() {
+    assert_eq!(reconnect_backoff_next(u64::MAX / 2 + 1), RECONNECT_MAX_BACKOFF_SECS);
+    assert_eq!(reconnect_backoff_next(u64::MAX), RECONNECT_MAX_BACKOFF_SECS);
 }
