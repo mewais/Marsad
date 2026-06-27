@@ -2840,11 +2840,13 @@ fn backfill_with_multi_model_jsonl_populates_model_usage() {
     // Opus tokens: 100 input + 50 output + 10 cache_read.
     assert_eq!(opus.input_tokens, 100);
     assert_eq!(opus.output_tokens, 50);
-    // Opus cost: 100/1e6*15 + 50/1e6*75 + 10/1e6*1.5 + 0/1e6*18.75
-    let expected_opus_cost = 100.0 / 1_000_000.0 * 15.0
-        + 50.0 / 1_000_000.0 * 75.0
-        + 10.0 / 1_000_000.0 * 1.50
-        + 0.0 / 1_000_000.0 * 18.75;
+    // Opus cost: LiteLLM has claude-opus-4-5 at $5/$25/$0.50/$6.25 (the newer Opus
+    // 4.x pricing tier). Updated from $15/$75/$1.50/$18.75 when LiteLLM lookup was wired in.
+    // 100/1e6*5 + 50/1e6*25 + 10/1e6*0.50 + 0/1e6*6.25
+    let expected_opus_cost = 100.0 / 1_000_000.0 * 5.0
+        + 50.0 / 1_000_000.0 * 25.0
+        + 10.0 / 1_000_000.0 * 0.50
+        + 0.0 / 1_000_000.0 * 6.25;
     assert!(
         (opus.cost_usd - expected_opus_cost).abs() < 1e-9,
         "opus cost mismatch: {} vs {}",
@@ -3033,10 +3035,12 @@ fn aggregate_model_usage_accumulates_same_model() {
 fn aggregate_model_usage_opus_pricing_correct() {
     // 1_000_000 tokens in JSON must be written without underscore (JSON doesn't support it)
     let jsonl = r#"{"type":"assistant","message":{"model":"claude-opus-4-5","usage":{"input_tokens":1000000,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
-    // 1M input tokens at $15/Mtok = $15
+    // LiteLLM has claude-opus-4-5 at $5/Mtok input (the newer Opus 4.x pricing tier;
+    // older $15/Mtok applied only to claude-opus-4-1 and earlier). Updated from the
+    // previous hand-written $15 when LiteLLM lookup was wired in.
     let result = discovery::aggregate_model_usage(jsonl);
     let row = result.get("claude-opus-4-5").expect("opus");
-    assert!((row.cost_usd - 15.0).abs() < 1e-6, "opus input cost: {}", row.cost_usd);
+    assert!((row.cost_usd - 5.0).abs() < 1e-6, "opus input cost: {}", row.cost_usd);
 }
 
 /// aggregate_model_usage with sonnet model applies the sonnet pricing.

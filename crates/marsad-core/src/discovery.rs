@@ -15,6 +15,156 @@ use marsad_events::TranscriptEntry;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
+// LiteLLM pricing DB (embedded at compile time)
+// ---------------------------------------------------------------------------
+
+/// Raw per-token costs for one model entry in the LiteLLM pricing JSON.
+#[derive(Deserialize)]
+struct LiteLlmEntry {
+    input_cost_per_token: f64,
+    output_cost_per_token: f64,
+    #[serde(default)]
+    cache_read_input_token_cost: Option<f64>,
+    #[serde(default)]
+    cache_creation_input_token_cost: Option<f64>,
+}
+
+/// Resolved $/million-token rates after applying the claude default conventions
+/// for missing cache fields (cache_read = 0.1×input, cache_write = 1.25×input).
+#[derive(Clone, Copy)]
+struct LiteLlmRate {
+    /// Input tokens $/Mtok.
+    input: f64,
+    /// Output tokens $/Mtok.
+    output: f64,
+    /// Cache read tokens $/Mtok.
+    cache_read: f64,
+    /// Cache write (creation) tokens $/Mtok.
+    cache_write: f64,
+}
+
+impl LiteLlmRate {
+    fn from_entry(e: &LiteLlmEntry) -> Self {
+        let input = e.input_cost_per_token * 1_000_000.0;
+        let output = e.output_cost_per_token * 1_000_000.0;
+        let cache_read = e.cache_read_input_token_cost
+            .map(|v| v * 1_000_000.0)
+            .unwrap_or(input * 0.1);
+        let cache_write = e.cache_creation_input_token_cost
+            .map(|v| v * 1_000_000.0)
+            .unwrap_or(input * 1.25);
+        LiteLlmRate { input, output, cache_read, cache_write }
+    }
+}
+
+/// The compiled-in LiteLLM claude/anthropic pricing subset.
+static LITELLM_JSON: &str = include_str!("litellm_pricing.json");
+
+/// Parsed pricing map, initialised once and reused.
+static LITELLM_MAP: std::sync::OnceLock<std::collections::HashMap<String, LiteLlmRate>> =
+    std::sync::OnceLock::new();
+
+fn litellm_map() -> &'static std::collections::HashMap<String, LiteLlmRate> {
+    LITELLM_MAP.get_or_init(|| {
+        let raw: std::collections::HashMap<String, LiteLlmEntry> =
+            serde_json::from_str(LITELLM_JSON).unwrap_or_default();
+        raw.into_iter()
+            .map(|(k, v)| (k, LiteLlmRate::from_entry(&v)))
+            .collect()
+    })
+}
+
+/// Strip provider prefix (e.g. `"anthropic/"`, `"azure_ai/"`) from a model key
+/// so bare names like `"claude-sonnet-4-6"` are tried too.
+fn strip_provider_prefix(key: &str) -> &str {
+    // Keys look like: "anthropic/claude-sonnet-4-6", "azure_ai/claude-opus-4-8",
+    // "openrouter/anthropic/claude-opus-4.5", "claude-opus-4-8" (already bare).
+    if let Some(pos) = key.rfind('/') {
+        &key[pos + 1..]
+    } else {
+        key
+    }
+}
+
+/// Normalise a model id as seen in Claude Code transcripts into a bare
+/// LiteLLM-style key:
+///   1. Strip a trailing `[…]` suffix (e.g. `[1m]`, `[128k]`).
+///   2. Strip any provider prefix like `"anthropic/"`.
+///   3. Lowercase.
+fn normalize_model_id(model: &str) -> String {
+    // Strip trailing [...] suffix (e.g. "[1m]", "[128k]")
+    let s = if let Some(bracket) = model.find('[') {
+        &model[..bracket]
+    } else {
+        model
+    };
+    let s = s.trim_end_matches('-').trim();
+    // Strip provider prefix
+    let s = strip_provider_prefix(s);
+    s.to_lowercase()
+}
+
+/// Look up $/million-token rates for `model` from the LiteLLM pricing DB.
+///
+/// Matching order (first hit wins):
+/// (a) Exact key (case-sensitive as stored).
+/// (b) Normalized key — strip `[1m]`/`[…]` suffix, strip provider prefix, lowercase.
+/// (c) Normalized key with dots replaced by dashes (`claude-sonnet-4.6` → `claude-sonnet-4-6`).
+/// (d) Family-major-minor prefix fallback: pick the lexicographically greatest
+///     key whose bare name starts with `claude-<family>-<major>-<minor>`.
+///     This handles date-suffixed variants (e.g. `claude-opus-4-8-20260604`).
+///     NOTE: this only matches keys with the SAME family/major/minor triple, so
+///     `claude-opus-4-0` (absent from LiteLLM) won't accidentally inherit opus-4-8
+///     pricing — that model falls through to the hand-written table.
+///
+/// Returns `None` if no entry is found anywhere (caller falls back to the
+/// hand-written table).
+pub fn litellm_rate(model: &str) -> Option<(f64, f64, f64, f64)> {
+    let map = litellm_map();
+
+    // (a) exact key
+    if let Some(r) = map.get(model) {
+        return Some((r.input, r.output, r.cache_read, r.cache_write));
+    }
+
+    // (b) normalised (strip suffix + prefix + lowercase)
+    let norm = normalize_model_id(model);
+    if let Some(r) = map.get(norm.as_str()) {
+        return Some((r.input, r.output, r.cache_read, r.cache_write));
+    }
+
+    // (c) dots → dashes
+    let dashed = norm.replace('.', "-");
+    if let Some(r) = map.get(dashed.as_str()) {
+        return Some((r.input, r.output, r.cache_read, r.cache_write));
+    }
+
+    // (d) family-major-minor prefix: e.g. "claude-opus-4-8", "claude-sonnet-4-6".
+    // Split on "-" and require at least 4 parts (claude / family / major / minor).
+    // This intentionally does NOT fall back to a family+major prefix, because that
+    // could return wrong pricing for older versions absent from LiteLLM (e.g.
+    // claude-opus-4-0 would otherwise inherit opus-4-8 rates instead of the
+    // correct $15/$75 hand-written value).
+    let parts: Vec<&str> = dashed.split('-').collect();
+    if parts.len() >= 4 && parts[0] == "claude" {
+        let prefix4 = format!("{}-{}-{}-{}", parts[0], parts[1], parts[2], parts[3]);
+        let best4 = map
+            .keys()
+            .filter(|k| {
+                let bare = strip_provider_prefix(k).to_lowercase();
+                bare.starts_with(&prefix4)
+            })
+            .max_by(|a, b| a.cmp(b));
+        if let Some(key) = best4 {
+            let r = &map[key];
+            return Some((r.input, r.output, r.cache_read, r.cache_write));
+        }
+    }
+
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
@@ -219,31 +369,43 @@ pub struct ModelUsageSummary {
 }
 
 /// Pricing table: (input $/Mtok, output $/Mtok, cache_read $/Mtok, cache_write $/Mtok).
+///
+/// Tries the LiteLLM embedded pricing DB first (see `litellm_rate`); falls back
+/// to the verified hand-written table for models absent from LiteLLM or for
+/// correctness overrides. The hand-written rates for Opus 4.8 and Sonnet 4.6 are
+/// VERIFIED to the cent against claude's own `result.modelUsage.costUSD`.
 fn pricing_for(model: &str) -> (f64, f64, f64, f64) {
-    // (input, output, cache_read, cache_write) $ per million tokens. Pricing is
-    // PER MODEL VERSION — claude charges different rates across versions, so a
-    // bare "opus" substring is wrong. Rates below for Opus 4.8 and Sonnet 4.6 are
-    // VERIFIED to the cent against claude's own `result.modelUsage.costUSD`; the
-    // Opus 4.0/4.1 rate is verified against `/usage`. cache_read = 0.1×input,
-    // cache_write = 1.25×input throughout. Update here when claude changes prices.
+    // LiteLLM lookup — returns Some on hit, None on miss.
+    if let Some(rates) = litellm_rate(model) {
+        return rates;
+    }
+
+    // Hand-written fallback: covers unknown/future models not yet in LiteLLM.
+    // All known specific versions (opus-4-8, sonnet-4-6, haiku-4-5, …) are already
+    // handled by litellm_rate above. This table only fires for:
+    //   • brand-new versions whose LiteLLM entry hasn't landed yet, OR
+    //   • very old versions (e.g. claude-opus-4-0, claude-haiku-3-5) that LiteLLM
+    //     uses a different naming scheme for.
+    // Rates are (input, output, cache_read, cache_write) $ per million tokens.
+    // cache_read = 0.1×input, cache_write = 1.25×input throughout.
+    //
+    // NOTE: sub-version branches for known LiteLLM entries (e.g. opus-4-8, sonnet)
+    // have been removed here — the LiteLLM lookup handles them. Only coarse family
+    // fallbacks remain so that any future model that misses LiteLLM still gets a
+    // reasonable approximation rather than $0.
     let m = model.to_lowercase();
     if m.contains("opus") {
-        // Opus 4.8 dropped to $5/$25 (incl. its 1M-context default); older Opus
-        // (4.0/4.1/3.x) stays at $15/$75.
-        if m.contains("opus-4-8") || m.contains("opus-4.8") {
-            (5.0, 25.0, 0.50, 6.25)
-        } else {
-            (15.0, 75.0, 1.50, 18.75)
-        }
+        // All known Opus 4.x versions with lower pricing ($5/$25) are in LiteLLM.
+        // Old Opus (4.0/4.1/3.x) isn't in LiteLLM under the "claude-opus-4-0"
+        // naming, so this branch handles those at $15/$75.
+        (15.0, 75.0, 1.50, 18.75)
     } else if m.contains("sonnet") {
+        // All known Sonnet versions are in LiteLLM; this is a safety net.
         (3.0, 15.0, 0.30, 3.75)
     } else if m.contains("haiku") {
-        // Haiku 4.5 is $1/$5; Haiku 3.5 was $0.80/$4.
-        if m.contains("haiku-3") {
-            (0.80, 4.0, 0.08, 1.0)
-        } else {
-            (1.0, 5.0, 0.10, 1.25)
-        }
+        // Haiku 3.5 uses a different key in LiteLLM (anthropic.claude-3-5-haiku-*)
+        // so "claude-haiku-3-5" lands here. Use $0.80/$4.00 (Haiku 3.5 rate).
+        (0.80, 4.0, 0.08, 1.0)
     } else {
         (0.0, 0.0, 0.0, 0.0)
     }
@@ -1210,5 +1372,171 @@ mod tests {
         let opus = &result["claude-opus-4-8"];
         assert_eq!(opus.input_tokens, 30, "accumulated input");
         assert_eq!(opus.output_tokens, 3, "accumulated output");
+    }
+
+    // -------------------------------------------------------------------------
+    // litellm_rate — branch coverage for every matching step
+    // -------------------------------------------------------------------------
+
+    /// (a) Exact key: "claude-opus-4-8" is a top-level key in LiteLLM.
+    /// Ground truth: $5/$25/$0.50/$6.25 verified against claude's own costUSD.
+    #[test]
+    fn litellm_rate_exact_key_opus_4_8() {
+        let (inp, out, cr, cc) = litellm_rate("claude-opus-4-8").expect("must hit exact key");
+        assert!((inp - 5.0).abs() < 1e-9, "input $/Mtok: {inp}");
+        assert!((out - 25.0).abs() < 1e-9, "output $/Mtok: {out}");
+        assert!((cr - 0.5).abs() < 1e-9, "cache_read $/Mtok: {cr}");
+        assert!((cc - 6.25).abs() < 1e-9, "cache_write $/Mtok: {cc}");
+    }
+
+    /// (a) Exact key: "claude-sonnet-4-6".
+    /// Ground truth: $3/$15/$0.30/$3.75 verified against claude's own costUSD.
+    #[test]
+    fn litellm_rate_exact_key_sonnet_4_6() {
+        let (inp, out, cr, cc) = litellm_rate("claude-sonnet-4-6").expect("must hit exact key");
+        assert!((inp - 3.0).abs() < 1e-9, "input $/Mtok: {inp}");
+        assert!((out - 15.0).abs() < 1e-9, "output $/Mtok: {out}");
+        assert!((cr - 0.3).abs() < 1e-9, "cache_read $/Mtok: {cr}");
+        assert!((cc - 3.75).abs() < 1e-9, "cache_write $/Mtok: {cc}");
+    }
+
+    /// (a) Exact key: "claude-haiku-4-5" is present as a top-level key.
+    #[test]
+    fn litellm_rate_exact_key_haiku_4_5() {
+        let (inp, out, cr, cc) = litellm_rate("claude-haiku-4-5").expect("must hit exact key");
+        assert!((inp - 1.0).abs() < 1e-9, "input $/Mtok: {inp}");
+        assert!((out - 5.0).abs() < 1e-9, "output $/Mtok: {out}");
+        assert!((cr - 0.1).abs() < 1e-9, "cache_read $/Mtok: {cr}");
+        assert!((cc - 1.25).abs() < 1e-9, "cache_write $/Mtok: {cc}");
+    }
+
+    /// (b) Normalized match: "[1m]" suffix stripped → hits exact key.
+    #[test]
+    fn litellm_rate_normalized_strip_1m_suffix_sonnet() {
+        // "claude-sonnet-4.6[1m]" → normalize → "claude-sonnet-4.6" → still not exact
+        // → dashed → "claude-sonnet-4-6" → exact match.
+        let (inp, out, _cr, _cc) = litellm_rate("claude-sonnet-4.6[1m]").expect("must resolve via [1m] strip + dot-dash");
+        assert!((inp - 3.0).abs() < 1e-9, "input $/Mtok after [1m] strip: {inp}");
+        assert!((out - 15.0).abs() < 1e-9, "output $/Mtok: {out}");
+    }
+
+    /// (c) Dots → dashes: "claude-sonnet-4.6" → "claude-sonnet-4-6" is in LiteLLM.
+    #[test]
+    fn litellm_rate_dotted_model_id_resolved() {
+        let (inp, out, cr, cc) = litellm_rate("claude-sonnet-4.6").expect("must resolve via dot→dash");
+        assert!((inp - 3.0).abs() < 1e-9, "input $/Mtok: {inp}");
+        assert!((out - 15.0).abs() < 1e-9, "output $/Mtok: {out}");
+        assert!((cr - 0.3).abs() < 1e-9, "cache_read $/Mtok: {cr}");
+        assert!((cc - 3.75).abs() < 1e-9, "cache_write $/Mtok: {cc}");
+    }
+
+    /// (d) Family-major-minor prefix fallback: a date-suffixed key for the same
+    /// family+major+minor should be found as the "best" key for that prefix.
+    /// "claude-haiku-4-5-20251001" is in LiteLLM, so prefix4 = "claude-haiku-4-5" matches it.
+    #[test]
+    fn litellm_rate_prefix4_family_fallback_finds_date_suffixed_key() {
+        // "claude-haiku-4-5-20251001" is an exact key in LiteLLM.
+        // Separately, if we query "claude-haiku-4-5" it matches (a) directly.
+        // Query the date-suffixed variant to exercise the prefix4 path for a model
+        // that ISN'T an exact key but shares the prefix4 with an existing key.
+        // "claude-haiku-4-5-alt" does not exist but its prefix4 = "claude-haiku-4-5"
+        // will match "claude-haiku-4-5" and "claude-haiku-4-5-20251001".
+        // We use a made-up suffix that forces the prefix path.
+        // Actually the prefix4 extraction uses parts [0..3] = "claude-haiku-4-5"
+        // for any "claude-haiku-4-5-*" input. Let's pass the date-suffixed key
+        // directly — it is an exact match at step (a) first.
+        // To truly exercise step (d), use something like "claude-haiku-4-5-rc1" which
+        // won't be an exact key but has prefix4 "claude-haiku-4-5" matching the real key.
+        let (inp, out, _cr, _cc) = litellm_rate("claude-haiku-4-5-rc1")
+            .expect("prefix4 should match claude-haiku-4-5-* keys");
+        // The "best" (lex max) key starting with "claude-haiku-4-5" is "claude-haiku-4-5-20251001"
+        // or "claude-haiku-4-5" itself — both have $1/$5 for the standard region.
+        assert!((inp - 1.0).abs() < 1e-9, "input $/Mtok via prefix4: {inp}");
+        assert!((out - 5.0).abs() < 1e-9, "output $/Mtok via prefix4: {out}");
+    }
+
+    /// Unknown model → litellm_rate returns None; pricing_for falls back to hand table.
+    #[test]
+    fn litellm_rate_unknown_model_returns_none() {
+        assert!(litellm_rate("claude-future-xyz").is_none());
+    }
+
+    /// Unknown model → model_cost_usd falls through to hand table → $0 for fully unknown.
+    #[test]
+    fn model_cost_usd_fully_unknown_model_falls_back_to_zero() {
+        assert_eq!(model_cost_usd("totally-unknown-model", 1_000_000, 0, 0, 0), 0.0);
+    }
+
+    /// Older Opus (claude-opus-4-0) not in LiteLLM → falls through to hand table → $15/$75.
+    /// This validates the hand-table fallback path and ensures old models get correct pricing.
+    #[test]
+    fn litellm_rate_old_opus_4_0_returns_none_hand_table_used() {
+        // claude-opus-4-0 is NOT in LiteLLM; litellm_rate must return None so the
+        // hand table kicks in and returns the correct $15/$75 rates.
+        assert!(litellm_rate("claude-opus-4-0").is_none(),
+            "claude-opus-4-0 must NOT be found in LiteLLM (would return wrong $5 rate)");
+        let cost = model_cost_usd("claude-opus-4-0", 1_000_000, 0, 0, 0);
+        assert!((cost - 15.0).abs() < 1e-9, "old opus must use hand table $15: {cost}");
+    }
+
+    /// Haiku 3.5 not in LiteLLM (LiteLLM uses a different naming scheme) →
+    /// hand table returns $0.80/$4.00.
+    #[test]
+    fn litellm_rate_haiku_3_5_not_in_litellm_hand_table_used() {
+        assert!(litellm_rate("claude-haiku-3-5").is_none(),
+            "claude-haiku-3-5 must NOT be found in LiteLLM (different naming)");
+        let cost = model_cost_usd("claude-haiku-3-5", 1_000_000, 0, 0, 0);
+        assert!((cost - 0.80).abs() < 1e-9, "haiku 3.5 hand table: {cost}");
+    }
+
+    /// A hypothetical future sonnet not yet in LiteLLM falls through to the hand
+    /// table sonnet branch → $3/$15 approximate rate.
+    #[test]
+    fn hand_table_sonnet_branch_future_model_not_in_litellm() {
+        // "claude-sonnet-future-1" is not in LiteLLM; prefix4 = "claude-sonnet-future-1"
+        // matches nothing; hand table's sonnet branch fires → $3/$15.
+        assert!(litellm_rate("claude-sonnet-future-1").is_none());
+        let cost = model_cost_usd("claude-sonnet-future-1", 1_000_000, 0, 0, 0);
+        assert!((cost - 3.0).abs() < 1e-9, "sonnet hand-table fallback: {cost}");
+    }
+
+    /// The embedded JSON parses correctly (OnceLock init path is exercised).
+    #[test]
+    fn litellm_embedded_json_parses_and_map_is_non_empty() {
+        let map = litellm_map();
+        assert!(!map.is_empty(), "litellm_map must not be empty after parse");
+        // Confirm the map contains expected canonical keys.
+        assert!(map.contains_key("claude-opus-4-8"), "must contain claude-opus-4-8");
+        assert!(map.contains_key("claude-sonnet-4-6"), "must contain claude-sonnet-4-6");
+        assert!(map.contains_key("claude-haiku-4-5"), "must contain claude-haiku-4-5");
+    }
+
+    /// Cache fields absent from LiteLLM entry → defaults applied (0.1×input and 1.25×input).
+    /// anthropic.claude-instant-v1 has no cache fields in LiteLLM.
+    #[test]
+    fn litellm_rate_missing_cache_fields_default_to_conventions() {
+        // anthropic.claude-instant-v1: input=8e-07, output=2.4e-06, no cache fields.
+        let (inp, _out, cr, cc) = litellm_rate("anthropic.claude-instant-v1")
+            .expect("must find exact key");
+        // cache_read default = 0.1 × input = 0.1 × 0.8 = 0.08 $/Mtok
+        assert!((cr - inp * 0.1).abs() < 1e-9, "cache_read must default to 0.1×input: cr={cr} inp={inp}");
+        // cache_write default = 1.25 × input = 1.25 × 0.8 = 1.0 $/Mtok
+        assert!((cc - inp * 1.25).abs() < 1e-9, "cache_write must default to 1.25×input: cc={cc} inp={inp}");
+    }
+
+    /// Provider-prefixed key lookup: "anthropic/claude-sonnet-4-6" is not an exact key
+    /// in the map (our subset uses bare "anthropic." prefix keys), but normalization
+    /// strips the provider prefix and the bare key is found.
+    #[test]
+    fn litellm_rate_anthropic_slash_prefix_stripped() {
+        // The LiteLLM map uses "anthropic.claude-sonnet-4-6" as a key, not
+        // "anthropic/claude-sonnet-4-6". The normalize step strips the "/" prefix
+        // to get "claude-sonnet-4-6" which IS in the map at step (b).
+        let result = litellm_rate("anthropic/claude-sonnet-4-6");
+        // Must resolve via normalize (strip prefix to "claude-sonnet-4-6").
+        assert!(result.is_some(), "anthropic/ prefix must be stripped to find the model");
+        let (inp, out, _cr, _cc) = result.unwrap();
+        assert!((inp - 3.0).abs() < 1e-9, "input $/Mtok: {inp}");
+        assert!((out - 15.0).abs() < 1e-9, "output $/Mtok: {out}");
     }
 }
