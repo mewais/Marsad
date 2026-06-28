@@ -3385,6 +3385,42 @@ fn usage_update_filters_zero_usage_rows() {
     assert!(sv.model_usage[0].model.contains("sonnet"));
 }
 
+/// UsageUpdate with an empty payload (all models filtered out) does NOT clear
+/// pre-existing model_usage.  This guards against an attach-time probe that
+/// returns an empty JSON object `{}` wiping a good backfill that arrived first.
+#[test]
+fn usage_update_empty_payload_does_not_clear_existing_model_usage() {
+    let (mut core, _peer) = make_core();
+    let id = core.launch_session(LaunchSpec {
+        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
+        claude_bin: None, setup: None, env: vec![],
+        model: "m".to_string(), posture: Posture::Ask, first_prompt: None,
+        mode: Default::default(), name: None, disallowed_tools: vec![],
+    }).expect("launch");
+    core.on_agent_line(&ipc_agent_event_system_init(&id)).expect("init");
+
+    // Seed a real usage row via a valid UsageUpdate.
+    let good_usage = r#"{"claude-sonnet-4-6":{"input":1000,"output":500,"cache_read":0,"cache_creation":0}}"#;
+    let u1 = core.on_agent_line(&ipc_usage_update(&id, good_usage)).expect("good usage");
+    let sv1 = u1.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
+    assert_eq!(sv1.model_usage.len(), 1, "pre-condition: one model row seeded");
+
+    // Now feed an empty UsageUpdate (e.g. an attach-time probe before any turns).
+    // This must NOT clear the existing row.
+    let line_empty = format!(r#"{{"type":"UsageUpdate","session_id":"{id}","usage":{{}}}}"#);
+    let u2 = core.on_agent_line(&line_empty).expect("empty usage is ok");
+    assert!(u2.is_empty(), "empty usage must produce no VmUpdate (no-op)");
+
+    // The existing model_usage must still be intact.
+    let snap = core.snapshot();
+    let sv2 = snap.sessions.iter().find(|s| s.id == id).expect("session still present");
+    assert_eq!(
+        sv2.model_usage.len(), 1,
+        "empty UsageUpdate must NOT clear existing model_usage; got {:?}", sv2.model_usage
+    );
+    assert!(sv2.model_usage[0].model.contains("sonnet"), "sonnet row must survive");
+}
+
 // ---------------------------------------------------------------------------
 // Posture-persistence bug fix — reconnect scenario tests
 //

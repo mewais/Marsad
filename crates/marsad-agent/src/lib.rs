@@ -2823,6 +2823,42 @@ fn spawn_session_reader(
                 }
             }
 
+            // For a REMOTE first-attach, probe full-project usage AFTER the transcript
+            // backfill so the result supersedes the partial per-session value the
+            // backfill set.  Best-effort: if the output is empty or the script fails,
+            // broadcast nothing (do not send an empty UsageUpdate — the empty-guard in
+            // core would no-op it, but skipping the broadcast is cleaner and avoids
+            // the network round-trip).
+            if is_first_attach {
+                if let (Some(target), Some(project)) =
+                    (host_target.as_deref(), remote_project.as_deref())
+                {
+                    let usage_script = remote_usage_script(project);
+                    if let Some(usage_out) = run_remote_script(target, &usage_script) {
+                        let trimmed = usage_out.trim();
+                        if !trimmed.is_empty() && trimmed != "{}" {
+                            if let Ok(usage_val) =
+                                serde_json::from_str::<serde_json::Value>(trimmed)
+                            {
+                                let uu_line = serde_json::json!({
+                                    "type": "UsageUpdate",
+                                    "session_id": sid,
+                                    "usage": usage_val,
+                                })
+                                .to_string();
+                                let subs = subs_fifo.lock().unwrap();
+                                subs.iter().for_each(|s| {
+                                    let _ = s.send(uu_line.clone());
+                                });
+                                eprintln!(
+                                    "marsad-agent: session {sid} usage update broadcast (attach)"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             is_first_attach = false;
 
             // Read out.log tail lines and broadcast to all subscribers. The reader

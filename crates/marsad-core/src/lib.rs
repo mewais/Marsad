@@ -1454,6 +1454,14 @@ impl Core {
         }
         rows.sort_by(|a, b| a.model.cmp(&b.model));
 
+        // Guard: an empty rows vec means the probe returned no real usage data
+        // (e.g. an empty project dir, or the script exited early). Do NOT clear
+        // the existing model_usage — that would wipe good data from a previous
+        // result-event or backfill. Return no update so the UI is unchanged.
+        if rows.is_empty() {
+            return Ok(vec![]);
+        }
+
         // Find the session and update its model_usage.
         let record = match self.sessions.get_mut(&session_id) {
             Some(r) => r,
