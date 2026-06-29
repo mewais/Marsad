@@ -1003,10 +1003,10 @@ pub fn run_shell(
     session_id: String,
     command: String,
 ) -> Result<(), String> {
-    // 1. Briefly lock to resolve the host target (local vs remote) AND the
-    //    session's project dir, so `!cmd` runs where the session runs (e.g. `!ls`
-    //    lists the project, not $HOME).
-    let (host_target, project): (Option<String>, String) = {
+    // 1. Briefly lock to resolve the host target (local vs remote), the
+    //    session's project dir, and the host's setup+env, so `!cmd` runs in
+    //    the SAME environment as the session's claude process.
+    let (host_target, project, host_setup, host_env): (Option<String>, String, Option<String>, Vec<(String, String)>) = {
         let guard = state.lock().map_err(|e| e.to_string())?;
         match &*guard {
             AppState::Live(core) => {
@@ -1018,30 +1018,31 @@ pub fn run_shell(
                     .ok_or_else(|| format!("unknown session: {session_id}"))?;
                 let project = sv.project.clone();
                 let host_id = sv.host_id.clone();
-                let target = snap
-                    .hosts
-                    .into_iter()
-                    .find(|h| h.id == host_id)
-                    .and_then(|h| if h.is_local { None } else { Some(h.target) });
-                (target, project)
+                let host = snap.hosts.into_iter().find(|h| h.id == host_id);
+                let (target, setup, env) = match host {
+                    Some(h) => {
+                        let target = if h.is_local { None } else { Some(h.target) };
+                        (target, h.setup, h.env)
+                    }
+                    None => (None, None, Vec::new()),
+                };
+                (target, project, setup, env)
             }
-            AppState::Mock(_) => (None, String::new()),
+            AppState::Mock(_) => (None, String::new(), None, Vec::new()),
         }
     }; // lock released
 
     // 2. Execute the command OFF the lock, in the session's project dir.
+    //    Prepend the host's setup command + env exports so `!cmd` runs in the
+    //    SAME environment that claude itself gets.
     let output = match host_target {
         Some(target) => {
-            // Remote: cd into the project (best-effort) then run the command, via
-            // marsad-agent's run_remote_script (login shell, quoting-safe stdin).
+            // Remote: prepend setup + env exports, then cd into the project
+            // (best-effort) and run the command.
             // `2>&1` folds stderr into stdout — run_remote_script captures stdout
             // only, so without this an erroring/stderr-only command (e.g. a "not
             // found") would render as an empty block. Empty result → "(no output)".
-            let script = format!(
-                "cd {} 2>/dev/null\n{} 2>&1",
-                shell_quote_cd(&project),
-                command
-            );
+            let script = build_remote_shell_script(&host_setup, &host_env, &project, &command);
             let out = marsad_agent::run_remote_script(&target, &script).unwrap_or_default();
             if out.trim().is_empty() {
                 "(no output)".to_string()
@@ -1050,8 +1051,8 @@ pub fn run_shell(
             }
         }
         None => {
-            // Local execution in the project dir.
-            run_shell_locally(&command, &project)
+            // Local execution in the project dir with setup+env prepended.
+            run_shell_locally_with_env(&command, &project, &host_setup, &host_env)
         }
     };
 
@@ -1140,8 +1141,8 @@ pub fn get_file_diff(
 }
 
 /// Run a POSIX diff `script` locally in `project` (if it exists), returning the
-/// captured stdout. Mirrors [`run_shell_locally`] but returns stdout verbatim
-/// (no "(no output)" substitution) so an empty diff stays empty.
+/// captured stdout. Returns stdout verbatim (no "(no output)" substitution) so
+/// an empty diff stays empty.
 fn run_diff_locally(script: &str, project: &str) -> String {
     use std::process::Command;
 
@@ -1175,13 +1176,79 @@ fn shell_quote_cd(project: &str) -> String {
     }
 }
 
-/// Run a shell command locally in `project` (if it exists), capturing combined
-/// stdout+stderr.
+/// POSIX single-quote a VALUE string for use in `export K='V'` lines inside a
+/// shell script.  Only values are quoted; keys are always valid identifiers and
+/// must NOT be quoted (POSIX sh does not allow quoted variable names in export).
+/// The remote target is always a POSIX `sh`, so this quoting is platform-safe.
+fn shell_quote_value(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// Build the POSIX shell script that `run_shell` sends to the remote host.
 ///
-/// Uses `sh -c` on Unix and `cmd /C` on Windows. Falls back to an error
-/// message if the subprocess cannot be spawned.
-fn run_shell_locally(command: &str, project: &str) -> String {
+/// Prepends the host's `setup` command (if any) and `export K=V` lines for
+/// each `env` pair BEFORE the `cd` + user command, so `!cmd` runs in the
+/// SAME environment that the session's claude process gets.
+fn build_remote_shell_script(
+    setup: &Option<String>,
+    env: &[(String, String)],
+    project: &str,
+    command: &str,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(s) = setup.as_deref() {
+        if !s.trim().is_empty() {
+            parts.push(s.to_string());
+        }
+    }
+    for (k, v) in env {
+        // Key is always a valid identifier — no quoting needed; value is quoted.
+        parts.push(format!("export {}={}", k, shell_quote_value(v)));
+    }
+    parts.push(format!("cd {} 2>/dev/null", shell_quote_cd(project)));
+    parts.push(format!("{command} 2>&1"));
+    parts.join("\n")
+}
+
+/// Run a shell command locally in `project` (if it exists), capturing combined
+/// stdout+stderr.  Prepends `setup` and `env` exports so the command runs in
+/// the SAME environment as the session's claude process.
+///
+/// Uses `sh -c` on Unix and `cmd /C` on Windows (on Windows, setup/env are
+/// best-effort since the setup is typically a POSIX command). Falls back to an
+/// error message if the subprocess cannot be spawned.
+// On Windows the POSIX setup/env preamble is intentionally skipped (the setup
+// command is a POSIX shell expression that wouldn't run under cmd), so those
+// params are unused on that target only.
+#[cfg_attr(windows, allow(unused_variables))]
+fn run_shell_locally_with_env(
+    command: &str,
+    project: &str,
+    setup: &Option<String>,
+    env: &[(String, String)],
+) -> String {
     use std::process::Command;
+
+    // Build a composite script: prepend setup + exports, then the command.
+    // On Windows we stay with `cmd /C` and skip the POSIX preamble (the setup
+    // command is typically a POSIX shell expression that wouldn't run under cmd).
+    #[cfg(windows)]
+    let full_command = command.to_string();
+    #[cfg(not(windows))]
+    let full_command = {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(s) = setup.as_deref() {
+            if !s.trim().is_empty() {
+                parts.push(s.to_string());
+            }
+        }
+        for (k, v) in env {
+            // Key is always a valid identifier — no quoting needed; value is quoted.
+            parts.push(format!("export {}={}", k, shell_quote_value(v)));
+        }
+        parts.push(command.to_string());
+        parts.join("\n")
+    };
 
     #[cfg(windows)]
     let (bin, flag) = ("cmd", "/C");
@@ -1189,7 +1256,7 @@ fn run_shell_locally(command: &str, project: &str) -> String {
     let (bin, flag) = ("sh", "-c");
 
     let mut cmd = Command::new(bin);
-    cmd.arg(flag).arg(command);
+    cmd.arg(flag).arg(&full_command);
     // Run in the session's project dir when it's a real existing path.
     if !project.is_empty() && std::path::Path::new(project).is_dir() {
         cmd.current_dir(project);
@@ -1222,3 +1289,5 @@ fn run_shell_locally(command: &str, project: &str) -> String {
         Err(e) => format!("failed to run command: {e}"),
     }
 }
+
+

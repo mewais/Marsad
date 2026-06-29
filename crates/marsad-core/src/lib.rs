@@ -1034,9 +1034,24 @@ impl Core {
 
         // 3. Relaunch with the SAME marsad session id.
         // Preserve the session's original host so a restart re-launches on the
-        // same machine (WSL/SSH), not silently back on local. host_target /
-        // claude_bin / setup / env are re-resolved from the registry by host_id
-        // inside launch_session_with_id.
+        // same machine (WSL/SSH), not silently back on local.
+        //
+        // Load the persisted session to recover its per-session launch config
+        // (setup / env / claude_bin). The store is the authoritative source: it
+        // was written at launch time with the resolved values, so a restart
+        // reproduces EXACTLY what the initial launch used — even if the host
+        // registry has since been modified or the host removed.  If the record
+        // is absent (e.g. session was never persisted, or was already deleted),
+        // fall back to None/empty so launch_session_with_id re-resolves from
+        // the registry as before.
+        let (persisted_setup, persisted_env, persisted_claude_bin) = self
+            .store
+            .restore()
+            .ok()
+            .and_then(|r| r.sessions.into_iter().find(|s| s.id == id))
+            .map(|s| (s.setup, s.env, s.claude_bin))
+            .unwrap_or((None, Vec::new(), None));
+
         let spec = LaunchSpec {
             project,
             host_id,
@@ -1045,9 +1060,9 @@ impl Core {
             first_prompt: None,
             mode,
             host_target: None,
-            claude_bin: None,
-            setup: None,
-            env: Vec::new(),
+            claude_bin: persisted_claude_bin,
+            setup: persisted_setup,
+            env: persisted_env,
             name: existing_name,
             disallowed_tools,
         };

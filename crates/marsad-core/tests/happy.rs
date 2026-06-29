@@ -3631,6 +3631,136 @@ fn launch_session_full_autonomy_posture_visible_before_init() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// GAP 1: restart_session must carry persisted setup/env/claude_bin
+// ---------------------------------------------------------------------------
+
+/// A persisted session with setup/env/claude_bin: restart_session must
+/// load those values from the store and forward them in the outbound
+/// LaunchSession IPC — regardless of whether the host registry still has them.
+#[test]
+fn restart_session_carries_persisted_setup_env_claude_bin() {
+    let backend = MemoryBackend::new();
+
+    // Seed a persisted session with a full launch config.
+    let mut seed = Store::new(Box::new(backend.clone()));
+    let session_id = "session-restart-cfg";
+    seed.upsert_session(&PersistedSession {
+        id: session_id.to_string(),
+        session_id: Some("claude-uuid-cfg".to_string()),
+        name: session_id.to_string(),
+        host_id: "localhost".to_string(),
+        host_target: None,
+        claude_bin: Some("genie".to_string()),
+        setup: Some("source ~/module.sh".to_string()),
+        env: vec![("K".to_string(), "V".to_string())],
+        project: "/work/proj-cfg".to_string(),
+        branch: "main".to_string(),
+        model: "claude-sonnet-4-6".to_string(),
+        last_phase: "Working".to_string(),
+        posture: Some("Ask".to_string()),
+        disallowed_tools: vec![],
+    })
+    .expect("seed session");
+
+    // Build a Core with the shared backend and a transport to drain.
+    let (transport_a, mut peer) = LoopbackFake::pair();
+    let cfg = CoreConfig {
+        agent_endpoint: "loopback://test".to_string(),
+        data_root: "/tmp/marsad-test".to_string(),
+    };
+    let mut core = Core::with_deps(
+        cfg,
+        Box::new(transport_a),
+        Box::new(marsad_core::RealGit),
+        Box::new(marsad_core::RealTranscript),
+        Box::new(backend),
+    )
+    .expect("with_deps");
+
+    // Restore the persisted session so core tracks it.
+    core.load_sessions().expect("load_sessions");
+    let _ = peer.drain_outbound(); // discard any load-time IPC
+
+    // Now restart with a new model/posture.
+    core.restart_session(session_id, "claude-opus-4-8", Posture::FullAutonomy, vec![])
+        .expect("restart_session must succeed");
+
+    let outbound = peer.drain_outbound();
+    // At least 2 lines: StopSession + LaunchSession.
+    assert!(outbound.len() >= 2, "expected >= 2 IPC lines, got {}", outbound.len());
+
+    let launch_line = &outbound[1];
+
+    // The LaunchSession must carry the persisted claude_bin, setup, and env.
+    assert!(
+        launch_line.contains("\"claude_bin\":\"genie\""),
+        "restart LaunchSession must carry persisted claude_bin; got: {launch_line}"
+    );
+    assert!(
+        launch_line.contains("\"setup\":\"source ~/module.sh\""),
+        "restart LaunchSession must carry persisted setup; got: {launch_line}"
+    );
+    assert!(
+        launch_line.contains(r#""env":[["K","V"]]"#),
+        "restart LaunchSession must carry persisted env; got: {launch_line}"
+    );
+}
+
+/// When the persisted record for a session cannot be found (e.g. already deleted
+/// from the store), restart_session must not panic and must fall back to the
+/// None/empty behavior (host-registry resolution inside launch_session_with_id).
+#[test]
+fn restart_session_absent_persisted_record_does_not_panic() {
+    // Use an in-memory core (no seeded session in the store).
+    let (mut core, mut peer) = make_core();
+
+    // Launch a session via the normal path (NOT persisted to the store in test).
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/tmp/proj-no-persist".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
+            model: "claude-sonnet-4-6".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: LaunchMode::Fresh,
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
+    let _ = peer.drain_outbound();
+
+    // Restart — no persisted record in the store → should NOT panic, and must
+    // still emit StopSession + LaunchSession.
+    let result = core.restart_session(&id, "claude-haiku-4-5", Posture::Ask, vec![]);
+    assert!(
+        result.is_ok(),
+        "restart must succeed even when persisted record is absent, got: {:?}",
+        result
+    );
+
+    let outbound = peer.drain_outbound();
+    assert!(outbound.len() >= 2, "must still emit Stop + Launch, got {}", outbound.len());
+    let launch_line = &outbound[1];
+    // Should NOT carry any claude_bin/setup/env (fell back to None/empty).
+    assert!(
+        !launch_line.contains("\"claude_bin\""),
+        "fallback must not inject claude_bin; got: {launch_line}"
+    );
+    assert!(
+        !launch_line.contains("\"setup\""),
+        "fallback must not inject setup; got: {launch_line}"
+    );
+    assert!(
+        !launch_line.contains("\"env\""),
+        "fallback must not inject env; got: {launch_line}"
+    );
+}
+
 /// system/init OVERRIDES the launch posture: launched with AutoApproveSafe ("auto"),
 /// but system/init reports "bypassPermissions" → posture becomes "full".
 /// Verifies that system/init remains authoritative even after the fix.
