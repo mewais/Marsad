@@ -13,6 +13,8 @@ import { GateOverlay } from "./screens/GateOverlay";
 import { NewSession } from "./screens/NewSession";
 import { Settings } from "./screens/Settings";
 import { Workspaces } from "./screens/Workspaces";
+import { BoardScreen } from "./screens/BoardScreen";
+import { GraphScreenConnected } from "./screens/graph/GraphScreenConnected";
 
 // ---------------------------------------------------------------------------
 // Inner router (uses useVm which requires VmProvider above it)
@@ -35,6 +37,10 @@ function Router() {
         return <Settings />;
       case "workspaces":
         return <Workspaces />;
+      case "board":
+        return <BoardScreen />;
+      case "graph":
+        return <GraphScreenConnected />;
       default:
         return <Overview />;
     }

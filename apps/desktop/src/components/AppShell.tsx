@@ -138,7 +138,7 @@ interface AppShellProps {
 }
 
 export function AppShell({ children, onNewSession, onOpenSettings }: AppShellProps) {
-  const { state, dispatch, counts, sidebarList, hosts, workspaces, activeWs } =
+  const { state, dispatch, counts, sidebarList, hosts, workspaces, activeWs, openBoard } =
     useVm();
   const { theme, toggleTheme } = useTheme();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -586,6 +586,32 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
             <span style={{ fontSize: "calc(13.5px * var(--fs,1))", color: "var(--txt3)" }}>
               {counts.total}
             </span>
+          </div>
+
+          {/* Board entry */}
+          <div
+            onClick={openBoard}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              margin: "0 12px 6px",
+              padding: "10px 12px",
+              borderRadius: 9,
+              cursor: "pointer",
+              fontWeight: 600,
+              background:
+                state.screen === "board" || state.screen === "graph"
+                  ? "var(--accent-bg)"
+                  : "transparent",
+              color:
+                state.screen === "board" || state.screen === "graph"
+                  ? "var(--accent2)"
+                  : "var(--txt)",
+            }}
+            data-testid="nav-board"
+          >
+            <span style={{ fontSize: "calc(17px * var(--fs,1))" }}>▤</span> Workstreams
           </div>
 
           {/* Filter chips */}
