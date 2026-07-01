@@ -334,11 +334,6 @@ pub struct PersistedSession {
     /// `#[serde(default)]` keeps older records loading as empty (no tools disabled).
     #[serde(default)]
     pub disallowed_tools: Vec<String>,
-    /// Id of the workstream this session (node) belongs to; `None` = ungrouped /
-    /// legacy. Persisted so workstream membership survives restart. `#[serde(default)]`
-    /// keeps older records loading as `None`.
-    #[serde(default)]
-    pub ws: Option<String>,
 }
 
 /// A single transcript event.
@@ -888,9 +883,6 @@ impl Store {
                 last_phase: es.last_phase.clone(),
                 posture: None,
                 disallowed_tools: vec![],
-                // Legacy workspace import predates workstreams — imported sessions
-                // are ungrouped until re-associated.
-                ws: None,
             };
             let _ = self.upsert_session(&sess);
         }

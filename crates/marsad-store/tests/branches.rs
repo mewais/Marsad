@@ -37,7 +37,7 @@ fn session(id: &str) -> PersistedSession {
         last_phase: "Done".to_string(),
         posture: None,
             disallowed_tools: vec![],
-            ws: None,    }
+    }
 }
 
 fn workspace(id: &str, session_ids: &[&str]) -> Workspace {
@@ -350,7 +350,7 @@ fn session_with_none_session_id_round_trips() {
         last_phase: "Starting".to_string(),
         posture: None,
             disallowed_tools: vec![],
-            ws: None,    };
+    };
     store.upsert_session(&sess).expect("upsert");
     let r = store.restore().expect("restore");
     let found = r
@@ -431,7 +431,7 @@ fn last_phase_all_values_round_trip() {
             last_phase: phase.to_string(),
             posture: None,
             disallowed_tools: vec![],
-            ws: None,        };
+        };
         store.upsert_session(&sess).expect("upsert");
     }
     let r = store.restore().expect("restore");
