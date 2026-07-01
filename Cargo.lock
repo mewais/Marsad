@@ -97,6 +97,7 @@ dependencies = [
  "marsad-store",
  "marsad-transport",
  "marsad-viewmodel",
+ "marsad-workstream",
  "serde",
  "serde_json",
  "thiserror",

@@ -1,0 +1,21 @@
+tests/workstreams.rs requires `marsad-workstream` as a dev-dependency of the
+marsad-core crate (it is currently only a TRANSITIVE dependency via
+marsad-store/marsad-viewmodel, and Rust does not expose transitive deps as
+externs to a crate's own tests). It is already a workspace member with an
+alias defined in the root Cargo.toml:
+
+    marsad-workstream = { path = "crates/marsad-workstream" }
+
+The code-agent must add the following line to
+crates/marsad-core/Cargo.toml under [dev-dependencies] (mirroring the
+existing `serde_json = { workspace = true }` entry):
+
+    marsad-workstream = { workspace = true }
+
+No other new dev-dependencies are required — marsad-store, marsad-transport,
+marsad-events, and marsad-viewmodel are already available (marsad-store and
+marsad-transport are already used as dev-deps transitively via the existing
+sibling test files' `use` statements against the crate's normal
+[dependencies]; marsad-viewmodel and marsad-events are already direct
+[dependencies] of marsad-core itself, so `marsad_viewmodel::EdgeStatus` and
+`marsad_events::Phase` are usable from tests/ without any Cargo.toml change).

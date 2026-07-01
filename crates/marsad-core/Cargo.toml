@@ -28,6 +28,7 @@ marsad-transport = { workspace = true }
 marsad-lifecycle = { workspace = true }
 marsad-notify = { workspace = true }
 marsad-viewmodel = { workspace = true }
+marsad-workstream = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
