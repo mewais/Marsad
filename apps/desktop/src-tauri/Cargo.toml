@@ -26,6 +26,7 @@ marsad-core = { path = "../../../crates/marsad-core" }
 # plink discovery); the bridge reuses it to list remote resumable sessions.
 marsad-agent = { path = "../../../crates/marsad-agent" }
 marsad-viewmodel = { path = "../../../crates/marsad-viewmodel" }
+marsad-workstream = { path = "../../../crates/marsad-workstream" }
 marsad-gates = { path = "../../../crates/marsad-gates" }
 marsad-events = { path = "../../../crates/marsad-events" }
 marsad-hosts = { path = "../../../crates/marsad-hosts" }

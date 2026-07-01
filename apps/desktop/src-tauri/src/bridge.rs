@@ -1291,3 +1291,197 @@ fn run_shell_locally_with_env(
 }
 
 
+
+// ---------------------------------------------------------------------------
+// Workstream / connection / profile / board / graph commands
+//
+// The B12 workstream layer over marsad-core. Mutations return the refreshed
+// board (and related updates) which we push to the webview via "vm-update";
+// `board`/`graph` are pure reads. Invoke names + payload keys mirror
+// apps/desktop/src/bridge/api.ts exactly. In Mock mode these are inert (the
+// JS layer uses its own mockWorkstreams when not running under Tauri).
+// ---------------------------------------------------------------------------
+
+/// Create a workstream, persist, and push the refreshed board to the webview.
+#[tauri::command(rename_all = "snake_case")]
+pub fn create_workstream(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+    name: String,
+    goal: String,
+    profile: Option<String>,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core
+                .create_workstream(id, name, goal, profile)
+                .map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Delete a workstream (and cascade its connections), then refresh the board.
+#[tauri::command(rename_all = "snake_case")]
+pub fn delete_workstream(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.delete_workstream(&id).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Add a connection between two sessions in a workstream, then refresh the board.
+#[tauri::command(rename_all = "snake_case")]
+pub fn add_connection(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+    ws: String,
+    from: String,
+    to: String,
+    kind: marsad_workstream::ConnKind,
+    bi: bool,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core
+                .add_connection(id, ws, from, to, kind, bi)
+                .map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Remove a connection, then refresh the board.
+#[tauri::command(rename_all = "snake_case")]
+pub fn remove_connection(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.remove_connection(&id).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Create a profile, then refresh the board.
+#[tauri::command(rename_all = "snake_case")]
+pub fn create_profile(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+    name: String,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.create_profile(id, name).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Delete a profile (unassigning its workstreams), then refresh the board.
+#[tauri::command(rename_all = "snake_case")]
+pub fn delete_profile(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.delete_profile(&id).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Assign a session to a workstream (optionally as its lead), then refresh the board.
+#[tauri::command(rename_all = "snake_case")]
+pub fn assign_session(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    session_id: String,
+    ws_id: String,
+    lead: bool,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core
+                .assign_session(&session_id, &ws_id, lead)
+                .map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Set (or clear) the active profile board filter, then refresh the board.
+#[tauri::command(rename_all = "snake_case")]
+pub fn set_active_profile(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    profile: Option<String>,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.set_active_profile(profile),
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Read the Level-1 workstreams board (profile-filtered by core's active profile).
+#[tauri::command(rename_all = "snake_case")]
+pub fn board(state: State<'_, ManagedState>) -> Result<marsad_viewmodel::BoardView, String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    match &*guard {
+        AppState::Live(core) => Ok(core.board()),
+        AppState::Mock(_) => Ok(marsad_viewmodel::board_view(&[], &[], &[], &[], &[], None)),
+    }
+}
+
+/// Read the Level-2 dependency graph for one workstream (None if unknown).
+#[tauri::command(rename_all = "snake_case")]
+pub fn graph(
+    state: State<'_, ManagedState>,
+    ws_id: String,
+) -> Result<Option<marsad_viewmodel::GraphView>, String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    match &*guard {
+        AppState::Live(core) => Ok(core.graph(&ws_id)),
+        AppState::Mock(_) => Ok(None),
+    }
+}

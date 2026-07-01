@@ -1992,6 +1992,7 @@ dependencies = [
  "marsad-store",
  "marsad-transport",
  "marsad-viewmodel",
+ "marsad-workstream",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -2097,6 +2098,7 @@ dependencies = [
  "marsad-events",
  "marsad-gates",
  "marsad-proto",
+ "marsad-workstream",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -2121,6 +2123,15 @@ dependencies = [
  "marsad-gates",
  "marsad-hosts",
  "marsad-proto",
+ "marsad-workstream",
+ "serde",
+]
+
+[[package]]
+name = "marsad-workstream"
+version = "0.1.0"
+dependencies = [
+ "marsad-events",
  "serde",
 ]
 

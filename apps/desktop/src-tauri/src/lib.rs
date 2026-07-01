@@ -244,6 +244,16 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::list_templates,
             bridge::run_shell,
             bridge::get_file_diff,
+            bridge::create_workstream,
+            bridge::delete_workstream,
+            bridge::add_connection,
+            bridge::remove_connection,
+            bridge::create_profile,
+            bridge::delete_profile,
+            bridge::assign_session,
+            bridge::set_active_profile,
+            bridge::board,
+            bridge::graph,
         ])
 }
 
