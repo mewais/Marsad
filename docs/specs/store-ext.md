@@ -37,9 +37,12 @@ pub workstreams: Vec<marsad_workstream::Workstream>,
 pub connections: Vec<marsad_workstream::Connection>,
 pub profiles: Vec<marsad_workstream::Profile>,
 ```
-`restore()` populates them by listing each prefix, decoding version-matched blobs (skipping corrupt /
-version-mismatched entries exactly as the existing entity loads do), sorted **by id ascending** for
-determinism. (Existing `Restored` fields and their load/sort behavior are unchanged.)
+`restore()` populates them by decoding the blobs under each new prefix, sorted **by id ascending** for
+determinism. Corrupt and version-mismatched blobs are handled by the EXISTING shared code — the single
+read closure returns `StoreError::Corrupt{key}` for any corrupt key, and the single version check returns
+`StoreError::VersionMismatch` for any versioned blob whose version ≠ `SCHEMA_VERSION` — so the new
+prefixes get this behavior for free; the code-agent only adds the decode/dispatch arms for the three new
+prefixes after that shared check. (Existing `Restored` fields and their load/sort behavior are unchanged.)
 
 Note: `Restored` gains fields, so any code/tests constructing a `Restored` literal must add the three
 new fields (empty vecs). This mechanical update to existing store tests is permitted and expected;

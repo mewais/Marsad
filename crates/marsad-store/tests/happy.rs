@@ -342,6 +342,10 @@ fn restored_derives_clone_eq_debug() {
         transcripts: std::collections::HashMap::new(),
         settings: None,
         templates: vec![],
+        // Workstreams extension (B06 additive): new entity collections.
+        workstreams: vec![],
+        connections: vec![],
+        profiles: vec![],
     };
     let r2 = r.clone();
     assert_eq!(r, r2);
