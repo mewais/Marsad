@@ -605,3 +605,343 @@ pub fn slash_catalog(query: &str) -> Vec<SlashEntry> {
         .filter(|e| e.name.starts_with(query))
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// B11 — Workstreams board + graph (additive extension)
+// ---------------------------------------------------------------------------
+
+use marsad_workstream::{
+    conns_of, dependency_depth, driver_dots, head_state, host_chips, nodes_of, state_counts,
+    ConnKind, Connection, Driver, HeadState, Node, StateCounts, Workstream,
+};
+
+// ---------------------------------------------------------------------------
+// HostLink / LinkStatus — new input types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LinkStatus {
+    Ok,
+    Degraded,
+    Down,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostLink {
+    pub a: String,
+    pub b: String,
+    pub status: LinkStatus,
+    pub note: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Board (Level 1)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BoardView {
+    pub summary: BoardSummary,
+    pub host_chips: Vec<HostChip>,
+    pub link_chips: Vec<LinkChip>,
+    pub attention: Vec<WorkstreamCard>,
+    pub all: Vec<WorkstreamCard>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardSummary {
+    pub workstreams: usize,
+    pub sessions: usize,
+    pub hosts: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostChip {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkChip {
+    pub a: String,
+    pub b: String,
+    pub status: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkstreamCard {
+    pub id: String,
+    pub name: String,
+    pub goal: String,
+    pub head_state: Option<HeadState>,
+    pub driver_dots: Vec<Driver>,
+    pub host_chips: Vec<String>,
+    pub session_count: usize,
+    pub counts: StateCounts,
+    pub needs_attention: bool,
+    pub is_single_node: bool,
+}
+
+/// Lowercase status string for a host, matching `marsad_hosts::HostStatus`.
+fn host_status_str(status: &HostStatus) -> &'static str {
+    match status {
+        HostStatus::Connected => "connected",
+        HostStatus::Connecting => "connecting",
+        HostStatus::Reconnecting => "reconnecting",
+        HostStatus::Unreachable => "unreachable",
+    }
+}
+
+/// `"local"` if `host.is_local`, else `"wsl"` if the target starts with `"wsl:"`,
+/// else `"remote"`.
+fn host_kind_str(host: &Host) -> &'static str {
+    if host.is_local {
+        "local"
+    } else if host.target.starts_with("wsl:") {
+        "wsl"
+    } else {
+        "remote"
+    }
+}
+
+/// Lowercase status string for a non-`Ok` `LinkStatus`. `Ok` links are filtered
+/// out by the caller before a `LinkChip` is ever built, so this only covers the
+/// two statuses that can actually reach a chip.
+fn link_status_str(status: &LinkStatus) -> &'static str {
+    if *status == LinkStatus::Down {
+        "down"
+    } else {
+        "degraded"
+    }
+}
+
+/// Build a `WorkstreamCard` for one workstream, deriving over its nodes/connections.
+fn workstream_card(ws: &Workstream, nodes: &[Node], connections: &[Connection]) -> WorkstreamCard {
+    let ws_nodes = nodes_of(&ws.id, nodes);
+    let owned_nodes: Vec<Node> = ws_nodes.iter().map(|n| (*n).clone()).collect();
+    let hs = head_state(&owned_nodes);
+    let ws_conns = conns_of(&ws.id, connections);
+
+    let needs_attention = matches!(hs, Some(HeadState::Needs) | Some(HeadState::Error))
+        || ws_conns.iter().any(|c| c.gate.is_some());
+
+    WorkstreamCard {
+        id: ws.id.clone(),
+        name: ws.name.clone(),
+        goal: ws.goal.clone(),
+        head_state: hs,
+        driver_dots: driver_dots(&owned_nodes),
+        host_chips: host_chips(&owned_nodes),
+        session_count: owned_nodes.len(),
+        counts: state_counts(&owned_nodes),
+        needs_attention,
+        is_single_node: owned_nodes.len() == 1,
+    }
+}
+
+/// Build the workstreams board: summary, host/link chips, and per-workstream cards.
+pub fn board_view(
+    workstreams: &[Workstream],
+    nodes: &[Node],
+    connections: &[Connection],
+    hosts: &[Host],
+    links: &[HostLink],
+    active_profile: Option<&str>,
+) -> BoardView {
+    let filtered: Vec<&Workstream> = workstreams
+        .iter()
+        .filter(|w| match active_profile {
+            Some(p) => w.profile.as_deref() == Some(p),
+            None => true,
+        })
+        .collect();
+
+    let all: Vec<WorkstreamCard> = filtered
+        .iter()
+        .map(|ws| workstream_card(ws, nodes, connections))
+        .collect();
+
+    let attention: Vec<WorkstreamCard> =
+        all.iter().filter(|c| c.needs_attention).cloned().collect();
+
+    let sessions: usize = filtered
+        .iter()
+        .map(|ws| nodes_of(&ws.id, nodes).len())
+        .sum();
+
+    let host_chips: Vec<HostChip> = hosts
+        .iter()
+        .map(|h| HostChip {
+            id: h.id.clone(),
+            label: h.label.clone(),
+            kind: host_kind_str(h).to_string(),
+            status: host_status_str(&h.status).to_string(),
+        })
+        .collect();
+
+    let link_chips: Vec<LinkChip> = links
+        .iter()
+        .filter(|l| l.status != LinkStatus::Ok)
+        .map(|l| LinkChip {
+            a: l.a.clone(),
+            b: l.b.clone(),
+            status: link_status_str(&l.status).to_string(),
+            note: l.note.clone(),
+        })
+        .collect();
+
+    BoardView {
+        summary: BoardSummary {
+            workstreams: filtered.len(),
+            sessions,
+            hosts: hosts.len(),
+        },
+        host_chips,
+        link_chips,
+        attention,
+        all,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Graph (Level 2)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphView {
+    pub ws_id: String,
+    pub name: String,
+    pub goal: String,
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+    pub inspector: Inspector,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphNode {
+    pub id: String,
+    pub name: String,
+    pub driver: Driver,
+    pub host: String,
+    pub state: Phase,
+    pub status: String,
+    pub context_pct: u8,
+    pub is_lead: bool,
+    pub depth: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EdgeStatus {
+    Normal,
+    Consulting,
+    Needs,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphEdge {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    pub kind: ConnKind,
+    pub bi: bool,
+    pub status: EdgeStatus,
+    pub has_gate: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Inspector {
+    pub working: usize,
+    pub needs: usize,
+    pub pending_handoff: Option<HandoffSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandoffSummary {
+    pub conn_id: String,
+    pub from: String,
+    pub to: String,
+    pub payload: String,
+    pub risk: String,
+}
+
+/// Build the Level-2 dependency graph for one workstream, or `None` if `ws_id`
+/// does not match any workstream.
+pub fn graph_view(
+    ws_id: &str,
+    workstreams: &[Workstream],
+    nodes: &[Node],
+    connections: &[Connection],
+) -> Option<GraphView> {
+    let ws = workstreams.iter().find(|w| w.id == ws_id)?;
+
+    let ws_nodes = nodes_of(ws_id, nodes);
+    let graph_nodes: Vec<GraphNode> = ws_nodes
+        .iter()
+        .map(|n| GraphNode {
+            id: n.id.clone(),
+            name: n.name.clone(),
+            driver: n.driver,
+            host: n.host.clone(),
+            state: n.state.clone(),
+            status: n.status.clone(),
+            context_pct: n.context_pct,
+            is_lead: n.lead,
+            depth: dependency_depth(&n.id, ws_id, connections),
+        })
+        .collect();
+
+    let ws_conns = conns_of(ws_id, connections);
+    let graph_edges: Vec<GraphEdge> = ws_conns
+        .iter()
+        .map(|c| {
+            let has_gate = c.gate.is_some();
+            let status = if has_gate {
+                EdgeStatus::Needs
+            } else if c.bi {
+                EdgeStatus::Consulting
+            } else {
+                EdgeStatus::Normal
+            };
+            GraphEdge {
+                id: c.id.clone(),
+                from: c.from.clone(),
+                to: c.to.clone(),
+                kind: c.kind,
+                bi: c.bi,
+                status,
+                has_gate,
+            }
+        })
+        .collect();
+
+    let owned_nodes: Vec<Node> = ws_nodes.iter().map(|n| (*n).clone()).collect();
+    let counts = state_counts(&owned_nodes);
+
+    let pending_handoff = ws_conns.iter().find(|c| c.gate.is_some()).map(|c| {
+        let gate = c.gate.as_ref().expect("filtered by gate.is_some()");
+        HandoffSummary {
+            conn_id: c.id.clone(),
+            from: c.from.clone(),
+            to: c.to.clone(),
+            payload: gate.payload.clone(),
+            risk: gate.risk.clone(),
+        }
+    });
+
+    Some(GraphView {
+        ws_id: ws.id.clone(),
+        name: ws.name.clone(),
+        goal: ws.goal.clone(),
+        nodes: graph_nodes,
+        edges: graph_edges,
+        inspector: Inspector {
+            working: counts.working,
+            needs: counts.needs,
+            pending_handoff,
+        },
+    })
+}

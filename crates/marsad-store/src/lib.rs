@@ -264,8 +264,14 @@ impl Backend for FsBackend {
         // alongside our key tree. Reading a socket file (`agent.sock`) errors and would
         // abort restore (→ hosts/sessions silently fail to load). Filter to our own
         // top-level categories so foreign files are never enumerated or read.
-        const STORE_CATEGORIES: [&str; 6] =
-            ["session", "host", "workspace", "transcript", "template", "meta"];
+        const STORE_CATEGORIES: [&str; 6] = [
+            "session",
+            "host",
+            "workspace",
+            "transcript",
+            "template",
+            "meta",
+        ];
         let mut keys = Vec::new();
         walk(&self.root, &self.root, &mut keys)?;
         keys.retain(|k| {
@@ -418,6 +424,10 @@ pub struct Restored {
     pub transcripts: HashMap<String, Vec<TranscriptEntry>>,
     pub settings: Option<PersistedSettings>,
     pub templates: Vec<PersistedTemplate>,
+    // Workstreams extension (B06 additive): new entity collections.
+    pub workstreams: Vec<marsad_workstream::Workstream>,
+    pub connections: Vec<marsad_workstream::Connection>,
+    pub profiles: Vec<marsad_workstream::Profile>,
 }
 
 // ── Versioned blob wrappers ────────────────────────────────────────────────────
@@ -470,6 +480,10 @@ const PREFIX_TRANSCRIPT: &str = "transcript:";
 const PREFIX_TEMPLATE: &str = "template:";
 const KEY_ACTIVE_WS: &str = "meta:active_ws";
 const KEY_SETTINGS: &str = "meta:settings";
+// Workstreams extension (B06 additive): new key prefixes.
+const PREFIX_WORKSTREAM: &str = "workstream:";
+const PREFIX_CONNECTION: &str = "connection:";
+const PREFIX_PROFILE: &str = "profile:";
 
 /// The local-first persistence store.
 pub struct Store {
@@ -555,6 +569,59 @@ impl Store {
         Ok(())
     }
 
+    // ── Workstreams extension (B06 additive) ────────────────────────────────
+
+    /// Persist (insert or overwrite) a workstream.
+    pub fn upsert_workstream(
+        &mut self,
+        w: &marsad_workstream::Workstream,
+    ) -> Result<(), StoreError> {
+        let key = format!("{}{}", PREFIX_WORKSTREAM, w.id);
+        let bytes = encode(w);
+        self.backend.write(&key, &bytes)?;
+        Ok(())
+    }
+
+    /// Delete a persisted workstream by id (no-op if absent).
+    pub fn delete_workstream(&mut self, id: &str) -> Result<(), StoreError> {
+        let key = format!("{}{}", PREFIX_WORKSTREAM, id);
+        self.backend.delete(&key)?;
+        Ok(())
+    }
+
+    /// Persist (insert or overwrite) a connection.
+    pub fn upsert_connection(
+        &mut self,
+        c: &marsad_workstream::Connection,
+    ) -> Result<(), StoreError> {
+        let key = format!("{}{}", PREFIX_CONNECTION, c.id);
+        let bytes = encode(c);
+        self.backend.write(&key, &bytes)?;
+        Ok(())
+    }
+
+    /// Delete a persisted connection by id (no-op if absent).
+    pub fn delete_connection(&mut self, id: &str) -> Result<(), StoreError> {
+        let key = format!("{}{}", PREFIX_CONNECTION, id);
+        self.backend.delete(&key)?;
+        Ok(())
+    }
+
+    /// Persist (insert or overwrite) a profile.
+    pub fn upsert_profile(&mut self, p: &marsad_workstream::Profile) -> Result<(), StoreError> {
+        let key = format!("{}{}", PREFIX_PROFILE, p.id);
+        let bytes = encode(p);
+        self.backend.write(&key, &bytes)?;
+        Ok(())
+    }
+
+    /// Delete a persisted profile by id (no-op if absent).
+    pub fn delete_profile(&mut self, id: &str) -> Result<(), StoreError> {
+        let key = format!("{}{}", PREFIX_PROFILE, id);
+        self.backend.delete(&key)?;
+        Ok(())
+    }
+
     /// Append a transcript entry for `session_id`.
     ///
     /// Each entry is stored as an independent key using a monotonically
@@ -624,6 +691,9 @@ impl Store {
         let mut active_ws: Option<String> = None;
         let mut settings: Option<PersistedSettings> = None;
         let mut templates: Vec<PersistedTemplate> = Vec::new();
+        let mut workstreams: Vec<marsad_workstream::Workstream> = Vec::new();
+        let mut connections: Vec<marsad_workstream::Connection> = Vec::new();
+        let mut profiles: Vec<marsad_workstream::Profile> = Vec::new();
 
         // ONE version-check per versioned blob — Err branch covered by VersionMismatch tests
         // (fires on the session key in those tests; the same code covers all versioned prefixes).
@@ -662,6 +732,15 @@ impl Store {
             if key.starts_with(PREFIX_TEMPLATE) {
                 templates.push(decode_payload(bytes));
             }
+            if key.starts_with(PREFIX_WORKSTREAM) {
+                workstreams.push(decode_payload(bytes));
+            }
+            if key.starts_with(PREFIX_CONNECTION) {
+                connections.push(decode_payload(bytes));
+            }
+            if key.starts_with(PREFIX_PROFILE) {
+                profiles.push(decode_payload(bytes));
+            }
             if let Some(rest) = key.strip_prefix(PREFIX_TRANSCRIPT) {
                 // rest = "{session_id}:{seq}"
                 let (sid, seq) = rest.rfind(':').map_or((rest, 0u64), |p| {
@@ -684,6 +763,11 @@ impl Store {
             })
             .collect();
 
+        // Deterministic ordering for the three new entity kinds: sorted by id ascending.
+        workstreams.sort_by(|a, b| a.id.cmp(&b.id));
+        connections.sort_by(|a, b| a.id.cmp(&b.id));
+        profiles.sort_by(|a, b| a.id.cmp(&b.id));
+
         Ok(Restored {
             sessions,
             hosts,
@@ -692,6 +776,9 @@ impl Store {
             transcripts,
             settings,
             templates,
+            workstreams,
+            connections,
+            profiles,
         })
     }
 
@@ -838,4 +925,21 @@ struct ExportSession {
     branch: String,
     model: String,
     last_phase: String,
+}
+
+// ── Workstreams extension (B06 additive) ────────────────────────────────────────
+
+/// Legacy `Workspace` (a named bag of session ids) → a `Profile` (grouping lens).
+///
+/// Pure and deterministic: preserves input order; `Profile.id = Workspace.id`,
+/// `Profile.name = Workspace.name`. Session→workstream migration is the caller's
+/// job (core).
+pub fn profiles_from_workspaces(workspaces: &[Workspace]) -> Vec<marsad_workstream::Profile> {
+    workspaces
+        .iter()
+        .map(|w| marsad_workstream::Profile {
+            id: w.id.clone(),
+            name: w.name.clone(),
+        })
+        .collect()
 }

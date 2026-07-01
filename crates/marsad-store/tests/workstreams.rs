@@ -35,7 +35,15 @@ fn workstream(id: &str, profile: Option<&str>) -> Workstream {
     }
 }
 
-fn connection(id: &str, ws: &str, from: &str, to: &str, kind: ConnKind, bi: bool, gate: Option<Handoff>) -> Connection {
+fn connection(
+    id: &str,
+    ws: &str,
+    from: &str,
+    to: &str,
+    kind: ConnKind,
+    bi: bool,
+    gate: Option<Handoff>,
+) -> Connection {
     Connection {
         id: id.to_string(),
         ws: ws.to_string(),
@@ -163,11 +171,7 @@ fn ws2_multiple_workstreams_restore_sorted_by_id_ascending() {
             .expect("upsert_workstream");
     }
     let restored = store.restore().expect("restore");
-    let ids: Vec<&str> = restored
-        .workstreams
-        .iter()
-        .map(|w| w.id.as_str())
-        .collect();
+    let ids: Vec<&str> = restored.workstreams.iter().map(|w| w.id.as_str()).collect();
     let mut expected = ids.clone();
     expected.sort();
     assert_eq!(
@@ -248,7 +252,15 @@ fn ws4_upsert_connection_round_trips_bi_true_and_gate_some() {
 #[test]
 fn ws4_upsert_connection_default_bi_false_gate_none_round_trips() {
     let mut store = fresh_store();
-    let c = connection("c-2", "w-1", "node-a", "node-c", ConnKind::Data, false, None);
+    let c = connection(
+        "c-2",
+        "w-1",
+        "node-a",
+        "node-c",
+        ConnKind::Data,
+        false,
+        None,
+    );
     store.upsert_connection(&c).expect("upsert_connection");
     let restored = store.restore().expect("restore");
     let found = restored
@@ -265,15 +277,19 @@ fn ws4_multiple_connections_restore_sorted_by_id() {
     let mut store = fresh_store();
     for id in ["c-z", "c-a", "c-m"] {
         store
-            .upsert_connection(&connection(id, "w-1", "a", "b", ConnKind::Command, false, None))
+            .upsert_connection(&connection(
+                id,
+                "w-1",
+                "a",
+                "b",
+                ConnKind::Command,
+                false,
+                None,
+            ))
             .expect("upsert_connection");
     }
     let restored = store.restore().expect("restore");
-    let ids: Vec<&str> = restored
-        .connections
-        .iter()
-        .map(|c| c.id.as_str())
-        .collect();
+    let ids: Vec<&str> = restored.connections.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids, vec!["c-a", "c-m", "c-z"]);
 }
 
@@ -285,7 +301,15 @@ fn ws4_multiple_connections_restore_sorted_by_id() {
 fn ws5_delete_connection_removes_it_from_restore() {
     let mut store = fresh_store();
     store
-        .upsert_connection(&connection("c-del", "w-1", "a", "b", ConnKind::Data, false, None))
+        .upsert_connection(&connection(
+            "c-del",
+            "w-1",
+            "a",
+            "b",
+            ConnKind::Data,
+            false,
+            None,
+        ))
         .expect("upsert_connection");
     store
         .delete_connection("c-del")
