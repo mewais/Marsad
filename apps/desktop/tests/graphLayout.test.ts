@@ -166,10 +166,13 @@ describe("layoutByHost — GL4 node centering and stable order", () => {
     const z = findNode(layout, "z");
     const a = findNode(layout, "a");
 
-    expect(z.x).toBe(centeredX(1));
-    expect(z.x).toBe(268);
-    expect(a.x).toBe(centeredX(0));
-    expect(a.x).toBe(16);
+    // Host columns are FIRST-APPEARANCE order (consistent with the board's
+    // host_chips): z is on h2 (first in graph.nodes) → h2 is column 0; a is on
+    // h1 (second) → h1 is column 1.
+    expect(z.x).toBe(centeredX(0));
+    expect(z.x).toBe(16);
+    expect(a.x).toBe(centeredX(1));
+    expect(a.x).toBe(268);
 
     for (const n of layout.nodes) {
       expect(n.w).toBe(190);
