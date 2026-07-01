@@ -55,7 +55,7 @@ fn host_session_workspace_round_trip_across_restart() {
                 last_phase: "Starting".to_string(),
                 posture: None,
             disallowed_tools: vec![],
-            })
+            ws: None,            })
             .expect("persist session");
         store
             .snapshot_workspace(&Workspace {

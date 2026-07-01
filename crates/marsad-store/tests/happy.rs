@@ -34,7 +34,7 @@ fn make_session(id: &str) -> PersistedSession {
         last_phase: "Done".to_string(),
         posture: None,
             disallowed_tools: vec![],
-    }
+            ws: None,    }
 }
 
 fn make_workspace(id: &str, session_ids: Vec<String>) -> Workspace {
@@ -649,7 +649,7 @@ fn persisted_session_disallowed_tools_round_trips() {
         last_phase: "Starting".to_string(),
         posture: None,
         disallowed_tools: vec!["Bash".to_string(), "Edit".to_string()],
-    };
+        ws: None,    };
     store.upsert_session(&session).expect("upsert");
     let restored = store.restore().expect("restore");
     let s = restored.sessions.iter().find(|s| s.id == "sess-dt").expect("session must exist");
