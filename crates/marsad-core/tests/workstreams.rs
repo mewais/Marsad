@@ -26,7 +26,7 @@
 
 use marsad_core::{Core, CoreConfig, CoreError, LaunchSpec, Posture, VmUpdate};
 use marsad_events::Phase;
-use marsad_store::MemoryBackend;
+use marsad_store::{BackendOp, MemoryBackend};
 use marsad_transport::LoopbackFake;
 use marsad_viewmodel::EdgeStatus;
 use marsad_workstream::{ConnKind, Driver};
@@ -124,7 +124,10 @@ fn cw1_create_workstream_appears_in_board_and_update() {
     // Board VmUpdate is also returned and includes the card.
     let board = board_from(&updates);
     assert!(
-        board.all.iter().any(|c| c.id == "ws-alpha" && c.name == "Alpha"),
+        board
+            .all
+            .iter()
+            .any(|c| c.id == "ws-alpha" && c.name == "Alpha"),
         "board().all must contain the new workstream card"
     );
 
@@ -155,7 +158,11 @@ fn cw1_create_workstream_duplicate_id_overwrites() {
 
     let wss = workstreams_from(&updates);
     let matches: Vec<_> = wss.iter().filter(|w| w.id == "ws-dup").collect();
-    assert_eq!(matches.len(), 1, "duplicate id must overwrite, not duplicate");
+    assert_eq!(
+        matches.len(),
+        1,
+        "duplicate id must overwrite, not duplicate"
+    );
     assert_eq!(matches[0].name, "Second");
     assert_eq!(matches[0].goal, "goal2");
 }
@@ -172,8 +179,10 @@ fn cw2_delete_workstream_cascades_connections_membership_lead() {
 
     core.create_workstream("ws-del".to_string(), "Del".to_string(), String::new(), None)
         .expect("create ws");
-    core.assign_session(&s1, "ws-del", true).expect("assign s1 lead");
-    core.assign_session(&s2, "ws-del", false).expect("assign s2");
+    core.assign_session(&s1, "ws-del", true)
+        .expect("assign s1 lead");
+    core.assign_session(&s2, "ws-del", false)
+        .expect("assign s2");
     core.add_connection(
         "conn-1".to_string(),
         "ws-del".to_string(),
@@ -197,7 +206,10 @@ fn cw2_delete_workstream_cascades_connections_membership_lead() {
     assert!(!board.all.iter().any(|c| c.id == "ws-del"));
 
     // Graph for the deleted workstream is gone.
-    assert!(core.graph("ws-del").is_none(), "graph must be None after delete");
+    assert!(
+        core.graph("ws-del").is_none(),
+        "graph must be None after delete"
+    );
 
     // Membership + lead cleared: neither session appears in nodes() anymore
     // (nodes() only includes sessions WITH a membership entry).
@@ -210,7 +222,10 @@ fn cw2_delete_workstream_cascades_connections_membership_lead() {
 fn cw2_delete_workstream_absent_id_is_noop_ok() {
     let mut core = core_with_backend(MemoryBackend::new());
     let result = core.delete_workstream("ws-does-not-exist");
-    assert!(result.is_ok(), "deleting an absent workstream id must be Ok");
+    assert!(
+        result.is_ok(),
+        "deleting an absent workstream id must be Ok"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -262,10 +277,17 @@ fn cw3_add_connection_persists_and_survives_reload() {
 
     let s1 = launch(&mut core, "proj-p1");
     let s2 = launch(&mut core, "proj-p2");
-    core.create_workstream("ws-persist".to_string(), "Persist".to_string(), String::new(), None)
-        .expect("create ws");
-    core.assign_session(&s1, "ws-persist", true).expect("assign s1");
-    core.assign_session(&s2, "ws-persist", false).expect("assign s2");
+    core.create_workstream(
+        "ws-persist".to_string(),
+        "Persist".to_string(),
+        String::new(),
+        None,
+    )
+    .expect("create ws");
+    core.assign_session(&s1, "ws-persist", true)
+        .expect("assign s1");
+    core.assign_session(&s2, "ws-persist", false)
+        .expect("assign s2");
     core.add_connection(
         "conn-persist".to_string(),
         "ws-persist".to_string(),
@@ -285,7 +307,9 @@ fn cw3_add_connection_persists_and_survives_reload() {
     // which requires the sessions to exist in THIS Core — out of scope for a
     // fresh Core that never launched them). We instead assert at the
     // workstream/connection/membership persistence layer via load_workstreams.
-    let reload_updates = core2.load_workstreams().expect("load_workstreams on fresh core");
+    let reload_updates = core2
+        .load_workstreams()
+        .expect("load_workstreams on fresh core");
     let wss = workstreams_from(&reload_updates);
     assert!(
         wss.iter().any(|w| w.id == "ws-persist"),
@@ -355,8 +379,10 @@ fn cw4_add_connection_cross_workstream_errors() {
         .expect("create ws1");
     core.create_workstream("ws-c2".to_string(), "C2".to_string(), String::new(), None)
         .expect("create ws2");
-    core.assign_session(&s1, "ws-c1", true).expect("assign s1 to ws-c1");
-    core.assign_session(&s2, "ws-c2", true).expect("assign s2 to ws-c2");
+    core.assign_session(&s1, "ws-c1", true)
+        .expect("assign s1 to ws-c1");
+    core.assign_session(&s2, "ws-c2", true)
+        .expect("assign s2 to ws-c2");
 
     let err = core
         .add_connection(
@@ -381,10 +407,17 @@ fn cw4_add_connection_duplicate_errors() {
     let mut core = core_with_backend(MemoryBackend::new());
     let s1 = launch(&mut core, "proj-d1");
     let s2 = launch(&mut core, "proj-d2");
-    core.create_workstream("ws-dupconn".to_string(), "D".to_string(), String::new(), None)
-        .expect("create ws");
-    core.assign_session(&s1, "ws-dupconn", true).expect("assign s1");
-    core.assign_session(&s2, "ws-dupconn", false).expect("assign s2");
+    core.create_workstream(
+        "ws-dupconn".to_string(),
+        "D".to_string(),
+        String::new(),
+        None,
+    )
+    .expect("create ws");
+    core.assign_session(&s1, "ws-dupconn", true)
+        .expect("assign s1");
+    core.assign_session(&s2, "ws-dupconn", false)
+        .expect("assign s2");
     core.add_connection(
         "conn-first".to_string(),
         "ws-dupconn".to_string(),
@@ -417,11 +450,19 @@ fn cw4_add_connection_cycle_errors() {
     let s1 = launch(&mut core, "proj-cyc1");
     let s2 = launch(&mut core, "proj-cyc2");
     let s3 = launch(&mut core, "proj-cyc3");
-    core.create_workstream("ws-cycle".to_string(), "Cyc".to_string(), String::new(), None)
-        .expect("create ws");
-    core.assign_session(&s1, "ws-cycle", true).expect("assign s1");
-    core.assign_session(&s2, "ws-cycle", false).expect("assign s2");
-    core.assign_session(&s3, "ws-cycle", false).expect("assign s3");
+    core.create_workstream(
+        "ws-cycle".to_string(),
+        "Cyc".to_string(),
+        String::new(),
+        None,
+    )
+    .expect("create ws");
+    core.assign_session(&s1, "ws-cycle", true)
+        .expect("assign s1");
+    core.assign_session(&s2, "ws-cycle", false)
+        .expect("assign s2");
+    core.assign_session(&s3, "ws-cycle", false)
+        .expect("assign s3");
 
     core.add_connection(
         "conn-c1".to_string(),
@@ -484,7 +525,9 @@ fn cw5_remove_connection_removes_from_graph() {
 
     assert_eq!(core.graph("ws-rm").unwrap().edges.len(), 1);
 
-    let updates = core.remove_connection("conn-rm").expect("remove_connection");
+    let updates = core
+        .remove_connection("conn-rm")
+        .expect("remove_connection");
     let board = board_from(&updates);
     assert!(board.all.iter().any(|c| c.id == "ws-rm"));
 
@@ -499,7 +542,10 @@ fn cw5_remove_connection_removes_from_graph() {
 fn cw5_remove_connection_absent_id_is_noop_ok() {
     let mut core = core_with_backend(MemoryBackend::new());
     let result = core.remove_connection("conn-does-not-exist");
-    assert!(result.is_ok(), "removing an absent connection id must be Ok");
+    assert!(
+        result.is_ok(),
+        "removing an absent connection id must be Ok"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -572,7 +618,8 @@ fn cw6_delete_profile_not_active_leaves_active_profile_untouched() {
         .expect("create other");
     core.set_active_profile(Some("prof-keep".to_string()));
 
-    core.delete_profile("prof-other").expect("delete other profile");
+    core.delete_profile("prof-other")
+        .expect("delete other profile");
 
     // active_profile filter (prof-keep) is unaffected: create a workstream
     // under prof-keep and confirm it's still visible when filtered.
@@ -594,8 +641,13 @@ fn cw6_delete_profile_not_active_leaves_active_profile_untouched() {
 #[test]
 fn cw7_assign_session_unknown_session_errors() {
     let mut core = core_with_backend(MemoryBackend::new());
-    core.create_workstream("ws-known".to_string(), "Known".to_string(), String::new(), None)
-        .expect("create ws");
+    core.create_workstream(
+        "ws-known".to_string(),
+        "Known".to_string(),
+        String::new(),
+        None,
+    )
+    .expect("create ws");
 
     let err = core
         .assign_session("session-nope", "ws-known", false)
@@ -618,8 +670,13 @@ fn cw7_assign_session_unknown_workstream_errors() {
 fn cw7_assign_session_valid_sets_membership_and_node_appears() {
     let mut core = core_with_backend(MemoryBackend::new());
     let s1 = launch(&mut core, "proj-assign");
-    core.create_workstream("ws-assign".to_string(), "Assign".to_string(), String::new(), None)
-        .expect("create ws");
+    core.create_workstream(
+        "ws-assign".to_string(),
+        "Assign".to_string(),
+        String::new(),
+        None,
+    )
+    .expect("create ws");
 
     let updates = core
         .assign_session(&s1, "ws-assign", false)
@@ -628,10 +685,16 @@ fn cw7_assign_session_valid_sets_membership_and_node_appears() {
     let wss = workstreams_from(&updates);
     assert!(wss.iter().any(|w| w.id == "ws-assign"));
     let board = board_from(&updates);
-    assert!(board.all.iter().any(|c| c.id == "ws-assign" && c.session_count == 1));
+    assert!(board
+        .all
+        .iter()
+        .any(|c| c.id == "ws-assign" && c.session_count == 1));
 
     let nodes = core.nodes();
-    let node = nodes.iter().find(|n| n.id == s1).expect("node appears in nodes()");
+    let node = nodes
+        .iter()
+        .find(|n| n.id == s1)
+        .expect("node appears in nodes()");
     assert_eq!(node.ws, "ws-assign");
     assert!(!node.lead, "lead:false must not mark the node lead");
 
@@ -643,10 +706,16 @@ fn cw7_assign_session_valid_sets_membership_and_node_appears() {
 fn cw7_assign_session_lead_true_marks_node_lead() {
     let mut core = core_with_backend(MemoryBackend::new());
     let s1 = launch(&mut core, "proj-lead");
-    core.create_workstream("ws-lead".to_string(), "Lead".to_string(), String::new(), None)
-        .expect("create ws");
+    core.create_workstream(
+        "ws-lead".to_string(),
+        "Lead".to_string(),
+        String::new(),
+        None,
+    )
+    .expect("create ws");
 
-    core.assign_session(&s1, "ws-lead", true).expect("assign lead");
+    core.assign_session(&s1, "ws-lead", true)
+        .expect("assign lead");
 
     let nodes = core.nodes();
     let node = nodes.iter().find(|n| n.id == s1).expect("node present");
@@ -660,8 +729,10 @@ fn cw7_assign_session_lead_true_marks_node_lead() {
 #[test]
 fn cw8_set_active_profile_filters_board() {
     let mut core = core_with_backend(MemoryBackend::new());
-    core.create_profile("prof-x".to_string(), "X".to_string()).expect("create profile x");
-    core.create_profile("prof-y".to_string(), "Y".to_string()).expect("create profile y");
+    core.create_profile("prof-x".to_string(), "X".to_string())
+        .expect("create profile x");
+    core.create_profile("prof-y".to_string(), "Y".to_string())
+        .expect("create profile y");
     core.create_workstream(
         "ws-x".to_string(),
         "WS X".to_string(),
@@ -704,11 +775,18 @@ fn cw9_nodes_only_sessions_with_membership_in_session_order() {
     let s2 = launch(&mut core, "proj-n2");
     let s3 = launch(&mut core, "proj-n3"); // never assigned
 
-    core.create_workstream("ws-nodes".to_string(), "Nodes".to_string(), String::new(), None)
-        .expect("create ws");
+    core.create_workstream(
+        "ws-nodes".to_string(),
+        "Nodes".to_string(),
+        String::new(),
+        None,
+    )
+    .expect("create ws");
     // Assign s2 first, then s1 — but session_order was s1, s2, s3 at launch.
-    core.assign_session(&s2, "ws-nodes", false).expect("assign s2");
-    core.assign_session(&s1, "ws-nodes", true).expect("assign s1 lead");
+    core.assign_session(&s2, "ws-nodes", false)
+        .expect("assign s2");
+    core.assign_session(&s1, "ws-nodes", true)
+        .expect("assign s1 lead");
 
     let nodes = core.nodes();
     let ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
@@ -717,7 +795,10 @@ fn cw9_nodes_only_sessions_with_membership_in_session_order() {
         vec![s1.as_str(), s2.as_str()],
         "nodes() must follow session_order (s1 before s2), not assignment order"
     );
-    assert!(!ids.contains(&s3.as_str()), "s3 has no membership, excluded");
+    assert!(
+        !ids.contains(&s3.as_str()),
+        "s3 has no membership, excluded"
+    );
 
     let n1 = nodes.iter().find(|n| n.id == s1).unwrap();
     assert_eq!(n1.driver, Driver::Claude, "Phase 1 is Claude-only");
@@ -743,13 +824,21 @@ fn cw10_migration_creates_single_node_workstreams_for_unassigned_sessions() {
     let s1 = launch(&mut core, "proj-mig1");
     let s2 = launch(&mut core, "proj-mig2");
 
-    let updates = core.load_workstreams().expect("load_workstreams (migration)");
+    let updates = core
+        .load_workstreams()
+        .expect("load_workstreams (migration)");
     let wss = workstreams_from(&updates);
 
     let ws1_id = format!("ws-{s1}");
     let ws2_id = format!("ws-{s2}");
-    let ws1 = wss.iter().find(|w| w.id == ws1_id).expect("ws-<s1> created");
-    let ws2 = wss.iter().find(|w| w.id == ws2_id).expect("ws-<s2> created");
+    let ws1 = wss
+        .iter()
+        .find(|w| w.id == ws1_id)
+        .expect("ws-<s1> created");
+    let ws2 = wss
+        .iter()
+        .find(|w| w.id == ws2_id)
+        .expect("ws-<s2> created");
     assert_eq!(ws1.goal, String::new());
     assert_eq!(ws1.profile, None);
     assert_eq!(ws2.goal, String::new());
@@ -760,12 +849,19 @@ fn cw10_migration_creates_single_node_workstreams_for_unassigned_sessions() {
     let n1 = nodes.iter().find(|n| n.id == s1).expect("s1 has a node");
     let n2 = nodes.iter().find(|n| n.id == s2).expect("s2 has a node");
     assert_eq!(n1.ws, ws1_id);
-    assert!(n1.lead, "migrated session is lead of its own fast-lane workstream");
+    assert!(
+        n1.lead,
+        "migrated session is lead of its own fast-lane workstream"
+    );
     assert_eq!(n2.ws, ws2_id);
     assert!(n2.lead);
 
     let board = board_from(&updates);
-    let card1 = board.all.iter().find(|c| c.id == ws1_id).expect("card1 present");
+    let card1 = board
+        .all
+        .iter()
+        .find(|c| c.id == ws1_id)
+        .expect("card1 present");
     assert!(card1.is_single_node, "migrated workstream is single-node");
     assert_eq!(card1.session_count, 1);
 }
@@ -818,7 +914,9 @@ fn cw10_migration_is_idempotent() {
         "exactly one fast-lane workstream after first migration"
     );
 
-    let second = core.load_workstreams().expect("second migration (idempotent)");
+    let second = core
+        .load_workstreams()
+        .expect("second migration (idempotent)");
     let wss_second = workstreams_from(&second);
     assert_eq!(
         wss_second.iter().filter(|w| w.id == ws_id).count(),
@@ -859,7 +957,8 @@ fn cw11_persistence_round_trip_restores_everything() {
         Some("prof-rt".to_string()),
     )
     .expect("create workstream");
-    core.assign_session(&s1, "ws-rt", true).expect("assign s1 lead");
+    core.assign_session(&s1, "ws-rt", true)
+        .expect("assign s1 lead");
     core.assign_session(&s2, "ws-rt", false).expect("assign s2");
     core.add_connection(
         "conn-rt".to_string(),
@@ -880,10 +979,15 @@ fn cw11_persistence_round_trip_restores_everything() {
     // (it mints a fresh id), so restore the round-trip at the
     // workstream/connection/profile/membership layer, which is what
     // load_workstreams is specified to restore.
-    let updates2 = core2.load_workstreams().expect("load_workstreams on fresh core");
+    let updates2 = core2
+        .load_workstreams()
+        .expect("load_workstreams on fresh core");
 
     let wss2 = workstreams_from(&updates2);
-    let ws_rt = wss2.iter().find(|w| w.id == "ws-rt").expect("ws-rt restored");
+    let ws_rt = wss2
+        .iter()
+        .find(|w| w.id == "ws-rt")
+        .expect("ws-rt restored");
     assert_eq!(ws_rt.name, "RT");
     assert_eq!(ws_rt.goal, "round trip goal");
     assert_eq!(ws_rt.profile, Some("prof-rt".to_string()));
@@ -917,15 +1021,24 @@ fn cw12_board_head_state_reflects_node_phase() {
     let ctrl_line = format!(
         r#"{{"type":"AgentEvent","session_id":"{s1}","event":{{"type":"control_request","request_id":"rq-hs","request":{{"subtype":"can_use_tool","tool_name":"Bash","input":{{"command":"ls"}}}}}}}}"#
     );
-    core.on_agent_line(&ctrl_line).expect("control_request event");
+    core.on_agent_line(&ctrl_line)
+        .expect("control_request event");
 
     // Sanity: the session itself reached Needs.
     let snap = core.snapshot();
-    let sv = snap.sessions.iter().find(|s| s.id == s1).expect("session present");
+    let sv = snap
+        .sessions
+        .iter()
+        .find(|s| s.id == s1)
+        .expect("session present");
     assert_eq!(sv.state, Phase::Needs);
 
     let board = core.board();
-    let card = board.all.iter().find(|c| c.id == "ws-hs").expect("card present");
+    let card = board
+        .all
+        .iter()
+        .find(|c| c.id == "ws-hs")
+        .expect("card present");
     assert_eq!(
         card.head_state,
         Some(marsad_workstream::HeadState::Needs),
@@ -938,10 +1051,17 @@ fn cw12_graph_edge_status_reflects_gate() {
     let mut core = core_with_backend(MemoryBackend::new());
     let s1 = launch(&mut core, "proj-gate1");
     let s2 = launch(&mut core, "proj-gate2");
-    core.create_workstream("ws-gate".to_string(), "Gate".to_string(), String::new(), None)
-        .expect("create ws");
-    core.assign_session(&s1, "ws-gate", true).expect("assign s1");
-    core.assign_session(&s2, "ws-gate", false).expect("assign s2");
+    core.create_workstream(
+        "ws-gate".to_string(),
+        "Gate".to_string(),
+        String::new(),
+        None,
+    )
+    .expect("create ws");
+    core.assign_session(&s1, "ws-gate", true)
+        .expect("assign s1");
+    core.assign_session(&s2, "ws-gate", false)
+        .expect("assign s2");
 
     // A bidirectional edge with no gate must report Consulting status.
     core.add_connection(
@@ -955,11 +1075,115 @@ fn cw12_graph_edge_status_reflects_gate() {
     .expect("add bi connection");
 
     let graph = core.graph("ws-gate").expect("graph exists");
-    let edge = graph.edges.iter().find(|e| e.id == "conn-bi").expect("edge present");
+    let edge = graph
+        .edges
+        .iter()
+        .find(|e| e.id == "conn-bi")
+        .expect("edge present");
     assert_eq!(
         edge.status,
         EdgeStatus::Consulting,
         "bidirectional edge with no gate must have Consulting status"
     );
     assert!(!edge.has_gate);
+}
+
+// ---------------------------------------------------------------------------
+// CW13: store-write/delete/restore failures on the single-write mutations
+// surface as CoreError (consistent with save_workspace/add_host — persistence
+// failures are not silently swallowed for user-initiated entity mutations).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cw13_create_workstream_write_failure_errors() {
+    let backend = MemoryBackend::new();
+    let mut core = core_with_backend(backend.clone());
+    backend.fail_next(BackendOp::Write);
+    assert!(matches!(
+        core.create_workstream("w".to_string(), "N".to_string(), "G".to_string(), None),
+        Err(CoreError::Agent(_))
+    ));
+}
+
+#[test]
+fn cw13_create_profile_write_failure_errors() {
+    let backend = MemoryBackend::new();
+    let mut core = core_with_backend(backend.clone());
+    backend.fail_next(BackendOp::Write);
+    assert!(matches!(
+        core.create_profile("p".to_string(), "N".to_string()),
+        Err(CoreError::Agent(_))
+    ));
+}
+
+#[test]
+fn cw13_assign_session_write_failure_errors() {
+    let backend = MemoryBackend::new();
+    let mut core = core_with_backend(backend.clone());
+    let s1 = launch(&mut core, "p-assign-fail");
+    core.create_workstream("w".to_string(), "N".to_string(), "G".to_string(), None)
+        .expect("create ws");
+    backend.fail_next(BackendOp::Write);
+    assert!(matches!(
+        core.assign_session(&s1, "w", false),
+        Err(CoreError::Agent(_))
+    ));
+}
+
+#[test]
+fn cw13_add_connection_write_failure_errors() {
+    let backend = MemoryBackend::new();
+    let mut core = core_with_backend(backend.clone());
+    let s1 = launch(&mut core, "p-a");
+    let s2 = launch(&mut core, "p-b");
+    core.create_workstream("w".to_string(), "N".to_string(), "G".to_string(), None)
+        .expect("create ws");
+    core.assign_session(&s1, "w", true).expect("assign s1");
+    core.assign_session(&s2, "w", false).expect("assign s2");
+    backend.fail_next(BackendOp::Write);
+    assert!(matches!(
+        core.add_connection(
+            "c".to_string(),
+            "w".to_string(),
+            s1.clone(),
+            s2.clone(),
+            ConnKind::Data,
+            false
+        ),
+        Err(CoreError::Agent(_))
+    ));
+}
+
+#[test]
+fn cw13_remove_connection_delete_failure_errors() {
+    let backend = MemoryBackend::new();
+    let mut core = core_with_backend(backend.clone());
+    let s1 = launch(&mut core, "p-a");
+    let s2 = launch(&mut core, "p-b");
+    core.create_workstream("w".to_string(), "N".to_string(), "G".to_string(), None)
+        .expect("create ws");
+    core.assign_session(&s1, "w", true).expect("assign s1");
+    core.assign_session(&s2, "w", false).expect("assign s2");
+    core.add_connection(
+        "c".to_string(),
+        "w".to_string(),
+        s1.clone(),
+        s2.clone(),
+        ConnKind::Data,
+        false,
+    )
+    .expect("add connection");
+    backend.fail_next(BackendOp::Delete);
+    assert!(matches!(
+        core.remove_connection("c"),
+        Err(CoreError::Agent(_))
+    ));
+}
+
+#[test]
+fn cw13_load_workstreams_restore_failure_errors() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::List);
+    let mut core = core_with_backend(backend);
+    assert!(core.load_workstreams().is_err());
 }
