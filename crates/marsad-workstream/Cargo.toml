@@ -11,3 +11,6 @@ description = "Workstream/graph domain: profiles, workstreams, nodes, typed conn
 [dependencies]
 serde = { workspace = true }
 marsad-events = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
