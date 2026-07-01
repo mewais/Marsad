@@ -1,0 +1,13 @@
+[package]
+name = "marsad-workstream"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Workstream/graph domain: profiles, workstreams, nodes, typed connections, head-state + graph derivations"
+
+[dependencies]
+serde = { workspace = true }
+marsad-events = { workspace = true }

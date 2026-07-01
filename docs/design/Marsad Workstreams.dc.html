@@ -1,0 +1,1212 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/elkjs@0.9.3/lib/elk.bundled.js"></script>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#151921; --panel2:#1a1f29; --elev:#1e2530;
+    --border:#242b37; --border2:#313a48;
+    --txt:#e8ecf1; --txt2:#97a1b1; --txt3:#5f6979;
+    --accent:#5b8def; --accent2:#7aa2f5; --cmd:#b48ad9;
+    --needs:#f1a83a; --error:#e0594a; --done:#46c08a; --neutral:#7e8896;
+    --needs-bg:rgba(241,168,58,0.13); --error-bg:rgba(224,89,74,0.12); --done-bg:rgba(70,192,138,0.12); --work-bg:rgba(91,141,239,0.12); --accent-bg:rgba(91,141,239,0.14);
+    --d-claude:#d97757; --d-codex:#3fb6a8; --d-gemini:#9b8cf0;
+    --shadow:0 14px 44px rgba(0,0,0,0.5); --shadow-sm:0 2px 10px rgba(0,0,0,0.32);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{font-family:'Hanken Grotesk',system-ui,sans-serif;background:var(--bg);color:var(--txt);-webkit-font-smoothing:antialiased}
+  .mono{font-family:'JetBrains Mono',monospace}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:var(--border2);border-radius:6px}::-webkit-scrollbar-track{background:transparent}
+  @keyframes flow{to{stroke-dashoffset:-40}}
+  @keyframes dotpulse{0%,100%{opacity:1}50%{opacity:.35}}
+  @keyframes glow{0%,100%{box-shadow:0 0 0 1px var(--needs),0 0 0 4px rgba(241,168,58,0.12)}50%{box-shadow:0 0 0 1px var(--needs),0 0 16px 2px rgba(241,168,58,0.28)}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes slideup{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+  .md p{margin:0 0 8px}.md p:last-child{margin-bottom:0}
+  .md h1,.md h2,.md h3{margin:10px 0 6px;font-weight:700;line-height:1.25}.md h1{font-size:16px}.md h2{font-size:14.5px}.md h3{font-size:13.5px}
+  .md ul,.md ol{margin:4px 0 8px;padding-left:20px}.md li{margin:2px 0}
+  .md code{font-family:'JetBrains Mono',monospace;font-size:.88em;background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:1px 5px}
+  .md pre{margin:8px 0;padding:11px 13px;border-radius:9px;background:var(--bg);border:1px solid var(--border2);overflow-x:auto}
+  .md pre code{background:none;border:none;padding:0;font-size:11.5px;line-height:1.55;color:var(--txt)}
+  .md strong{font-weight:700}.md em{font-style:italic}.md a{color:var(--accent2)}
+  .md .tok-k{color:var(--d-gemini)}.md .tok-s{color:var(--done)}.md .tok-c{color:var(--txt3);font-style:italic}.md .tok-n{color:var(--needs)}
+</style>
+</helmet>
+
+<div style="height:100vh;display:flex;flex-direction:column;background:var(--bg);color:var(--txt);overflow:hidden;font-size:13.5px;position:relative;{{ themeVars }}">
+  <div style="position:absolute;inset:0;z-index:0;background:radial-gradient(900px 620px at 10% -6%,rgba(91,141,239,0.13),transparent 60%),radial-gradient(820px 600px at 96% 8%,rgba(155,140,240,0.11),transparent 58%),radial-gradient(760px 760px at 78% 108%,rgba(63,182,168,0.08),transparent 58%)"></div>
+
+  <!-- ===== HEADER w/ breadcrumb ===== -->
+  <header style="position:relative;z-index:5;display:flex;align-items:center;gap:14px;height:52px;padding:0 18px;border-bottom:1px solid var(--border);background:rgba(18,22,29,0.72);backdrop-filter:blur(22px);flex-shrink:0">
+    <div onClick="{{ goBoard }}" style="display:flex;align-items:center;gap:10px;cursor:pointer">
+      <div style="width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;font-size:15px">M</div>
+      <div style="display:flex;flex-direction:column;line-height:1.05">
+        <span style="font-weight:700;font-size:14.5px;letter-spacing:-0.2px">Marsad <span style="color:var(--txt3);font-weight:400">—</span> مرصد</span>
+        <span style="font-size:9px;color:var(--txt3);letter-spacing:1.5px;text-transform:uppercase">Watchtower</span>
+      </div>
+    </div>
+    <sc-for list="{{ crumbs }}" as="c" hint-placeholder-count="1">
+      <span style="color:var(--txt3)">/</span>
+      <span onClick="{{ c.onClick }}" style="font-weight:600;font-size:13px;color:{{ c.color }};cursor:pointer;white-space:nowrap">{{ c.label }}</span>
+    </sc-for>
+    <div style="flex:1"></div>
+    <div style="flex:1"></div>
+    <sc-if value="{{ neverShow }}" hint-placeholder-val="{{ false }}">
+      <button onClick="{{ goBoard }}" style="display:flex;align-items:center;gap:8px;border:1px solid var(--needs);background:var(--needs-bg);color:var(--needs);font-weight:700;font-size:12px;padding:7px 13px;border-radius:9px;cursor:pointer;font-family:inherit">▲ {{ attentionLabel }}</button>
+    </sc-if>
+    <button onClick="{{ toggleTheme }}" title="Toggle theme" style="width:32px;height:32px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--txt2);cursor:pointer;font-size:14px">{{ themeIcon }}</button>
+    <button onClick="{{ openSettings }}" title="Settings" style="width:32px;height:32px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--txt2);cursor:pointer;font-size:15px">⚙</button>
+    <button onClick="{{ openWsWizard }}" style="font-family:inherit;display:flex;align-items:center;gap:7px;border:none;background:var(--accent);color:#fff;font-weight:700;font-size:12px;padding:7px 13px;border-radius:9px;cursor:pointer">＋ New workstream</button>
+  </header>
+
+  <div style="position:relative;z-index:2;flex:1;overflow:hidden;display:flex;flex-direction:column">
+
+  <!-- ===================== LEVEL 1 — BOARD ===================== -->
+  <sc-if value="{{ isBoard }}" hint-placeholder-val="{{ true }}">
+  <div style="flex:1;overflow-y:auto;padding:22px 26px 40px">
+    <div style="max-width:1200px;margin:0 auto">
+      <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:3px">
+        <h1 style="font-size:21px;font-weight:700;margin:0;letter-spacing:-0.3px">Workstreams</h1>
+        <span style="font-size:12.5px;color:var(--txt2)">{{ board.count }} workstreams · {{ board.sessionCount }} sessions · {{ board.hostCount }} hosts</span>
+      </div>
+      <p style="font-size:12.5px;color:var(--txt3);margin:0 0 14px">A workstream is one or more sessions across one or more hosts. Open one to inspect its graph, or jump straight into a session.</p>
+
+      <!-- host health -->
+      <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:0 0 22px">
+        <span style="font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--txt3);margin-right:2px">Hosts</span>
+        <sc-for list="{{ hostHealth }}" as="h" hint-placeholder-count="3">
+          <div style="display:flex;align-items:center;gap:7px;padding:5px 11px;border-radius:8px;background:var(--panel);border:1px solid {{ h.border }}">
+            <span style="width:8px;height:8px;border-radius:50%;background:{{ h.color }};{{ h.anim }}"></span>
+            <span class="mono" style="font-size:11px;color:var(--txt2)">{{ h.icon }} {{ h.label }}</span>
+            <span style="font-size:10px;font-weight:600;color:{{ h.color }}">{{ h.statusText }}</span>
+          </div>
+        </sc-for>
+        <sc-for list="{{ linkIssues }}" as="l" hint-placeholder-count="1">
+          <div style="display:flex;align-items:center;gap:7px;padding:5px 11px;border-radius:8px;background:var(--needs-bg);border:1px solid var(--needs)">
+            <span style="font-size:11px;color:var(--needs)">⚠</span>
+            <span class="mono" style="font-size:11px;color:var(--needs)">{{ l.label }}</span>
+            <span style="font-size:10px;color:var(--txt2)">{{ l.note }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- attention -->
+      <sc-if value="{{ hasAttention }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:center;gap:9px;margin:0 0 12px">
+        <span style="width:9px;height:9px;border-radius:50%;background:var(--needs);animation:dotpulse 1.4s infinite"></span>
+        <h2 style="font-size:13px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin:0;color:var(--needs)">Needs your attention</h2>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:13px;margin-bottom:26px">
+        <sc-for list="{{ attention }}" as="w" hint-placeholder-count="2">
+          <div onClick="{{ w.onOpen }}" style="border-radius:14px;padding:16px;background:var(--panel);border:1px solid {{ w.color }};box-shadow:0 0 22px {{ w.glow }};position:relative;overflow:hidden;cursor:pointer">
+            <div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:{{ w.color }}"></div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+              <span style="font-size:9px;font-weight:700;letter-spacing:.4px;padding:2px 7px;border-radius:5px;color:{{ w.color }};background:{{ w.bg }};text-transform:uppercase">{{ w.headLabel }}</span>
+              <span style="flex:1"></span>
+              <sc-for list="{{ w.hostChips }}" as="h" hint-placeholder-count="2"><span class="mono" style="font-size:9.5px;color:var(--txt3)">{{ h.icon }} {{ h.label }}</span></sc-for>
+            </div>
+            <div style="font-weight:700;font-size:15.5px;letter-spacing:-0.2px">{{ w.name }}</div>
+            <div style="font-size:11.5px;color:var(--txt3);margin-top:2px">{{ w.goal }}</div>
+            <div style="margin:12px 0;padding:10px 12px;border-radius:9px;background:var(--panel2);border:1px solid var(--border);font-size:12px;color:var(--txt)">{{ w.headline }}</div>
+            <div style="display:flex;align-items:center;gap:9px">
+              <button onClick="{{ w.onReview }}" style="flex:1;font-family:inherit;font-weight:700;font-size:12.5px;padding:9px;border-radius:9px;border:none;background:{{ w.color }};color:#0e1116;cursor:pointer">{{ w.cta }}</button>
+              <div style="display:flex;align-items:center;gap:5px">
+                <sc-for list="{{ w.sessionDots }}" as="s" hint-placeholder-count="3"><span title="{{ s.title }}" style="width:9px;height:9px;border-radius:50%;background:{{ s.color }};{{ s.anim }}"></span></sc-for>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+
+      <!-- all workstreams -->
+      <h2 style="font-size:13px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin:0 0 12px;color:var(--txt2)">All workstreams</h2>
+      <div style="display:flex;flex-direction:column;gap:9px">
+        <sc-for list="{{ allWs }}" as="w" hint-placeholder-count="5">
+          <div onClick="{{ w.onOpen }}" style="display:flex;align-items:center;gap:16px;padding:14px 16px;border-radius:13px;background:var(--panel);border:1px solid var(--border);cursor:pointer">
+            <span style="width:10px;height:10px;border-radius:50%;background:{{ w.color }};{{ w.headAnim }};flex-shrink:0"></span>
+            <div style="min-width:210px;max-width:280px">
+              <div style="font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ w.name }}</div>
+              <div style="font-size:11px;color:var(--txt3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ w.goal }}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;width:150px;flex-shrink:0">
+              <sc-for list="{{ w.hostChips }}" as="h" hint-placeholder-count="2"><span class="mono" style="font-size:9.5px;color:var(--txt2);background:var(--panel2);border:1px solid var(--border);padding:2px 7px;border-radius:5px;white-space:nowrap">{{ h.icon }} {{ h.label }}</span></sc-for>
+            </div>
+            <div style="display:flex;align-items:center;gap:5px;width:88px;flex-shrink:0">
+              <sc-for list="{{ w.driverDots }}" as="d" hint-placeholder-count="2"><span title="{{ d.label }}" style="width:7px;height:7px;border-radius:50%;background:{{ d.tint }}"></span></sc-for>
+              <span style="font-size:10.5px;color:var(--txt3)">{{ w.sessionLabel }}</span>
+            </div>
+            <div style="flex:1;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <sc-for list="{{ w.statusPills }}" as="p" hint-placeholder-count="2"><span style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:6px;color:{{ p.color }};background:{{ p.bg }}">{{ p.label }}</span></sc-for>
+            </div>
+            <span style="font-size:9px;font-weight:700;letter-spacing:.3px;padding:3px 9px;border-radius:6px;color:{{ w.color }};background:{{ w.bg }};text-transform:uppercase;flex-shrink:0">{{ w.headLabel }}</span>
+            <span style="color:var(--txt3);font-size:15px;flex-shrink:0">›</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===================== LEVEL 2 — GRAPH ===================== -->
+  <sc-if value="{{ isGraph }}" hint-placeholder-val="{{ false }}">
+  <div style="flex:1;display:flex;overflow:hidden">
+    <div style="flex:1;position:relative;overflow:hidden">
+      <div ref="{{ canvasWrapRef }}" style="position:absolute;inset:0;overflow:auto;display:flex;justify-content:safe center;align-items:flex-start">
+        <div style="{{ spacerStyle }};flex:none">
+          <div ref="{{ canvasElRef }}" style="{{ zoomStyle }}">
+            <div onClick="{{ clearNodeSel }}" style="{{ canvasStyle }}">
+              <sc-for list="{{ gZones }}" as="z" hint-placeholder-count="3">
+                <div style="{{ z.box }}">
+                  <div style="display:flex;align-items:center;gap:9px;padding:11px 15px;border-bottom:1px solid var(--border)">
+                    <span style="font-size:13px;color:var(--txt3)">{{ z.icon }}</span>
+                    <span style="font-weight:700;font-size:13px">{{ z.label }}</span>
+                    <span style="font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:1px 6px;border-radius:5px;background:var(--panel2);color:var(--txt3)">{{ z.kind }}</span>
+                    <span style="flex:1"></span>
+                    <span style="width:7px;height:7px;border-radius:50%;background:{{ z.dot }};{{ z.dotAnim }}"></span>
+                  </div>
+                </div>
+              </sc-for>
+              <svg style="position:absolute;left:0;top:0;z-index:2;pointer-events:none;overflow:visible;{{ svgSize }}">
+                <defs>
+                  <marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1 L9 5 L0 9 z" fill="#5b8def"></path></marker>
+                  <marker id="arrN" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1 L9 5 L0 9 z" fill="#f1a83a"></path></marker>
+                  <marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1 L9 5 L0 9 z" fill="#97a1b1"></path></marker>
+                </defs>
+                <sc-for list="{{ gWires }}" as="w" hint-placeholder-count="5"><path d="{{ w.d }}" style="{{ w.style }}"></path></sc-for>
+              </svg>
+              <sc-for list="{{ gGates }}" as="g" hint-placeholder-count="1">
+                <div onClick="{{ g.onClick }}" style="{{ g.box }}"><div style="width:30px;height:30px;border-radius:9px;transform:rotate(45deg);background:var(--needs-bg);border:1px solid var(--needs);display:flex;align-items:center;justify-content:center;animation:glow 2.6s ease-in-out infinite"><span style="transform:rotate(-45deg);color:var(--needs);font-size:13px;font-weight:800">▲</span></div></div>
+              </sc-for>
+              <sc-if value="{{ dragActive }}" hint-placeholder-val="{{ false }}"><svg style="position:absolute;left:0;top:0;z-index:5;pointer-events:none;overflow:visible;{{ svgSize }}"><line x1="{{ dragX1 }}" y1="{{ dragY1 }}" x2="{{ dragX2 }}" y2="{{ dragY2 }}" style="stroke:var(--accent);stroke-width:2.5;stroke-dasharray:6 5"></line></svg></sc-if>
+              <sc-for list="{{ gNodes }}" as="n" hint-placeholder-count="5">
+                <div onClick="{{ n.onClick }}" data-node-id="{{ n.id }}" style="{{ n.box }}">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span style="width:8px;height:8px;border-radius:50%;background:{{ n.color }};{{ n.dotAnim }};flex-shrink:0"></span>
+                    <span style="font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">{{ n.name }}</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:7px;margin-top:7px">
+                    <span style="font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:5px;color:{{ n.driverTint }};background:{{ n.driverBg }};border:1px solid {{ n.driverTint }}">{{ n.driverShort }}</span>
+                    <sc-if value="{{ n.showHost }}" hint-placeholder-val="{{ false }}"><span class="mono" style="font-size:9px;color:var(--txt3);white-space:nowrap">{{ n.hostChip }}</span></sc-if>
+                    <span class="mono" style="font-size:9.5px;color:var(--txt3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">{{ n.status }}</span>
+                    <sc-if value="{{ n.showArrow }}" hint-placeholder-val="{{ true }}"><span style="color:var(--txt3);font-size:13px">›</span></sc-if>
+                  </div>
+                  <sc-if value="{{ n.canConnect }}" hint-placeholder-val="{{ false }}"><div onMouseDown="{{ n.onHandleDown }}" title="Drag to connect" style="position:absolute;left:50%;bottom:-8px;transform:translateX(-50%);width:16px;height:16px;border-radius:50%;background:var(--accent);border:2px solid var(--panel);cursor:crosshair;z-index:3"></div></sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- edge legend -->
+      <div style="position:absolute;left:14px;top:14px;z-index:6;display:flex;flex-direction:column;gap:5px;background:var(--elev);border:1px solid var(--border2);border-radius:9px;padding:9px 11px;box-shadow:var(--shadow-sm)">
+        <div style="display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--txt2)"><svg width="28" height="9"><line x1="1" y1="4.5" x2="22" y2="4.5" style="stroke:var(--accent);stroke-width:2.5;stroke-dasharray:8 5"></line><path d="M22 1 L27 4.5 L22 8 z" fill="var(--accent)"></path></svg>Data / message</div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--txt2)"><svg width="28" height="9"><line x1="1" y1="4.5" x2="22" y2="4.5" style="stroke:var(--accent);stroke-width:2;stroke-dasharray:2 4;stroke-linecap:round"></line><path d="M22 1 L27 4.5 L22 8 z" fill="var(--accent)"></path></svg>Command / prompt</div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--txt2)"><svg width="28" height="9"><line x1="1" y1="4.5" x2="22" y2="4.5" style="stroke:var(--accent);stroke-width:2.6"></line><path d="M22 1 L27 4.5 L22 8 z" fill="var(--accent)"></path></svg>Both</div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--txt2)"><svg width="28" height="9"><path d="M5 4.5 L23 4.5" style="stroke:var(--txt2);stroke-width:1.6"></path><path d="M5 1.5 L1 4.5 L5 7.5" fill="none" stroke="var(--txt2)" stroke-width="1.4"></path><path d="M23 1.5 L27 4.5 L23 7.5" fill="none" stroke="var(--txt2)" stroke-width="1.4"></path></svg>Consulting (two-way)</div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--txt2)"><svg width="28" height="9"><line x1="1" y1="4.5" x2="22" y2="4.5" style="stroke:var(--needs);stroke-width:2.6"></line><path d="M22 1 L27 4.5 L22 8 z" fill="var(--needs)"></path></svg>Needs attention</div>
+      </div>
+      <!-- add node -->
+      <sc-if value="{{ designing }}" hint-placeholder-val="{{ false }}"><button onClick="{{ addNodeHere }}" style="position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:6;font-family:inherit;font-weight:700;font-size:12px;padding:8px 15px;border-radius:9px;border:none;background:var(--accent);color:#fff;cursor:pointer;box-shadow:var(--shadow-sm)">＋ Add agent</button></sc-if>
+      <sc-if value="{{ notDesigning }}" hint-placeholder-val="{{ true }}"><button onClick="{{ enterDesign }}" style="position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:6;font-family:inherit;font-weight:600;font-size:12px;padding:8px 15px;border-radius:9px;border:1px solid var(--border2);background:var(--elev);color:var(--txt2);cursor:pointer;box-shadow:var(--shadow-sm)">✎ Update workflow</button></sc-if>
+      <sc-if value="{{ graphEmpty }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;pointer-events:none"><div style="text-align:center;color:var(--txt3)"><div style="font-size:32px;margin-bottom:10px;opacity:.5">⛓</div><div style="font-size:13px;font-weight:600;color:var(--txt2)">No agents yet</div><div style="font-size:11.5px;margin-top:3px">Click ＋ Add agent to place your first one</div></div></div>
+      </sc-if>
+      <!-- layout toggle -->
+      <div style="position:absolute;left:14px;bottom:14px;z-index:6;display:flex;background:var(--elev);border:1px solid var(--border2);border-radius:9px;padding:3px;box-shadow:var(--shadow-sm)">
+        <sc-for list="{{ layoutOpts }}" as="o" hint-placeholder-count="2"><button onClick="{{ o.onClick }}" style="font-family:inherit;font-size:11.5px;font-weight:600;padding:5px 11px;border-radius:7px;cursor:pointer;border:none;background:{{ o.bg }};color:{{ o.fg }}">{{ o.label }}</button></sc-for>
+      </div>
+      <!-- zoom controls -->
+      <div style="position:absolute;right:14px;bottom:14px;z-index:6;display:flex;align-items:center;gap:4px;background:var(--elev);border:1px solid var(--border2);border-radius:9px;padding:4px;box-shadow:var(--shadow-sm)">
+        <button onClick="{{ zoomOut }}" style="font-family:inherit;width:28px;height:28px;border-radius:7px;border:none;background:var(--panel2);color:var(--txt2);cursor:pointer;font-size:16px;line-height:1">−</button>
+        <span onClick="{{ zoomReset }}" class="mono" style="font-size:11px;color:var(--txt2);min-width:42px;text-align:center;cursor:pointer">{{ zoomPct }}</span>
+        <button onClick="{{ zoomIn }}" style="font-family:inherit;width:28px;height:28px;border-radius:7px;border:none;background:var(--panel2);color:var(--txt2);cursor:pointer;font-size:15px;line-height:1">＋</button>
+        <button onClick="{{ fitView }}" style="font-family:inherit;font-size:11px;font-weight:600;padding:0 10px;height:28px;border-radius:7px;border:none;background:var(--panel2);color:var(--txt2);cursor:pointer">Fit</button>
+      </div>
+    </div>
+    <!-- graph inspector -->
+    <aside style="width:320px;flex-shrink:0;border-left:1px solid var(--border);background:rgba(18,22,29,0.74);backdrop-filter:blur(22px);overflow-y:auto;padding:18px">
+      <div style="font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--txt3)">Workstream</div>
+      <div style="font-size:17px;font-weight:700;letter-spacing:-0.2px;margin-top:4px">{{ gWs.name }}</div>
+      <div style="font-size:11.5px;color:var(--txt3);margin-top:3px">{{ gWs.goal }}</div>
+      <sc-if value="{{ designing }}" hint-placeholder-val="{{ false }}">
+        <div style="margin:15px 0;padding:13px;border-radius:12px;border:1px dashed var(--accent);background:var(--accent-bg)">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="color:var(--accent2)">✎</span><span style="font-weight:700;font-size:12.5px;color:var(--accent2)">Design mode</span></div>
+          <div style="font-size:11.5px;color:var(--txt);line-height:1.5">Place agents and wire them together. Nothing runs until you confirm.</div>
+          <div style="display:flex;gap:8px;margin-top:12px"><button onClick="{{ confirmDraft }}" style="flex:1;font-family:inherit;font-weight:700;font-size:12px;padding:9px;border-radius:9px;border:none;background:var(--done);color:#0e1116;cursor:pointer">Confirm &amp; launch</button><button onClick="{{ discardDraft }}" style="font-family:inherit;font-weight:600;font-size:12px;padding:9px 13px;border-radius:9px;border:1px solid var(--border2);background:var(--panel2);color:var(--txt2);cursor:pointer">Discard</button></div>
+        </div>
+        <div style="font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--txt3);margin-bottom:9px">Agents ({{ gWs.nodeCount }})</div>
+      </sc-if>
+      <sc-if value="{{ notDesigning }}" hint-placeholder-val="{{ true }}">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:15px 0">
+        <div style="padding:11px 13px;border-radius:11px;border:1px solid var(--border);background:var(--panel)"><div style="font-size:21px;font-weight:800;color:var(--accent)">{{ gWs.working }}</div><div style="font-size:10.5px;color:var(--txt2)">working</div></div>
+        <div style="padding:11px 13px;border-radius:11px;border:1px solid {{ gWs.needBorder }};background:{{ gWs.needBg }}"><div style="font-size:21px;font-weight:800;color:{{ gWs.needColor }}">{{ gWs.needs }}</div><div style="font-size:10.5px;color:var(--txt2)">need you</div></div>
+      </div>
+      <sc-if value="{{ gWs.hasGate }}" hint-placeholder-val="{{ false }}">
+        <div onClick="{{ gWs.onGate }}" style="border-radius:12px;border:1px solid var(--needs);background:var(--needs-bg);padding:13px;cursor:pointer;margin-bottom:14px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="color:var(--needs);font-size:12px">▲</span><span style="font-weight:700;font-size:12px;color:var(--needs)">Governed handoff</span></div>
+          <div style="font-size:11.5px;color:var(--txt);line-height:1.5">{{ gWs.gateText }}</div>
+        </div>
+      </sc-if>
+      <div style="padding:14px;border-radius:12px;border:1px solid var(--border);background:var(--panel);margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:13px"><span style="font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--txt3)">Cost</span><span style="font-size:19px;font-weight:800">{{ gWs.costTotal }}</span></div>
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:7px">By host</div>
+        <div style="height:7px;border-radius:5px;overflow:hidden;display:flex;margin-bottom:9px"><sc-for list="{{ gWs.hostCosts }}" as="h" hint-placeholder-count="2"><div style="height:100%;width:{{ h.pct }}%;background:{{ h.color }}"></div></sc-for></div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:15px">
+          <sc-for list="{{ gWs.hostCosts }}" as="h" hint-placeholder-count="2"><div style="display:flex;align-items:center;gap:8px;font-size:11.5px"><span style="width:8px;height:8px;border-radius:2px;background:{{ h.color }};flex-shrink:0"></span><span class="mono" style="color:var(--txt2)">{{ h.icon }} {{ h.label }}</span><span style="flex:1"></span><span class="mono" style="font-weight:700">{{ h.cost }}</span><span class="mono" style="font-size:10px;color:var(--txt3);width:34px;text-align:right">{{ h.pct }}%</span></div></sc-for>
+        </div>
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:7px">By node</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <sc-for list="{{ gWs.nodeCosts }}" as="n" hint-placeholder-count="3"><div onClick="{{ n.onClick }}" style="display:flex;align-items:center;gap:8px;font-size:11.5px;cursor:pointer"><span style="width:7px;height:7px;border-radius:50%;background:{{ n.color }};{{ n.anim }};flex-shrink:0"></span><span style="color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:118px">{{ n.name }}</span><span style="font-size:8.5px;font-weight:700;padding:0 5px;border-radius:4px;color:{{ n.dtint }};background:{{ n.dbg }};flex-shrink:0">{{ n.driver }}</span><span style="flex:1"></span><span class="mono" style="font-weight:700">{{ n.cost }}</span><span class="mono" style="font-size:10px;color:var(--txt3);width:34px;text-align:right">{{ n.pct }}%</span></div></sc-for>
+        </div>
+      </div>
+      <div style="font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--txt3);margin-bottom:9px">Sessions</div>
+      </sc-if>
+      <sc-for list="{{ gWs.sessionList }}" as="s" hint-placeholder-count="3">
+        <div onClick="{{ s.onClick }}" style="display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:9px;background:var(--panel2);border:1px solid var(--border);cursor:pointer;margin-bottom:4px"><span style="width:7px;height:7px;border-radius:50%;background:{{ s.color }};{{ s.anim }}"></span><span style="font-size:12px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.name }}</span><span style="color:var(--txt3);font-size:13px">›</span></div>
+      </sc-for>
+    </aside>
+  </div>
+  <sc-if value="{{ edgePick }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ edgeCancel }}" style="position:fixed;inset:0;z-index:62;display:flex;align-items:center;justify-content:center;background:rgba(5,7,10,0.4)">
+    <div onClick="{{ stop }}" style="background:var(--elev);border:1px solid var(--border2);border-radius:14px;box-shadow:var(--shadow);padding:16px 18px;animation:slideup .15s ease">
+      <div style="font-size:12.5px;font-weight:700;margin-bottom:3px">Connect {{ edgeFrom }} → {{ edgeTo }}</div>
+      <div style="font-size:11px;color:var(--txt3);margin-bottom:13px">What kind of connection?</div>
+      <div style="display:flex;gap:8px">
+        <button onClick="{{ edgeData }}" style="font-family:inherit;font-weight:700;font-size:12px;padding:9px 14px;border-radius:9px;border:1px solid var(--accent);background:var(--accent-bg);color:var(--accent2);cursor:pointer">Data / message</button>
+        <button onClick="{{ edgeCommand }}" style="font-family:inherit;font-weight:700;font-size:12px;padding:9px 14px;border-radius:9px;border:1px solid var(--cmd);background:transparent;color:var(--cmd);cursor:pointer">Command</button>
+        <button onClick="{{ edgeBoth }}" style="font-family:inherit;font-weight:700;font-size:12px;padding:9px 14px;border-radius:9px;border:1px solid var(--border2);background:var(--panel2);color:var(--txt2);cursor:pointer">Both</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+  </sc-if>
+
+  <!-- ===================== LEVEL 3 — SESSION ===================== -->
+  <sc-if value="{{ isSession }}" hint-placeholder-val="{{ false }}">
+  <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:15px 24px 0;border-bottom:1px solid var(--border);flex-shrink:0">
+      <div style="display:flex;align-items:flex-start;gap:14px">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <h1 style="font-size:18px;font-weight:700;margin:0;letter-spacing:-0.2px">{{ ses.name }}</h1>
+            <span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:6px;color:{{ ses.color }};background:{{ ses.bg }};text-transform:uppercase">{{ ses.stateLabel }}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:13px;margin-top:7px;font-size:11.5px" class="mono">
+            <span style="font-weight:700;padding:2px 8px;border-radius:6px;color:{{ ses.driverTint }};background:{{ ses.driverBg }};border:1px solid {{ ses.driverTint }}">{{ ses.driverLabel }}</span>
+            <span style="color:var(--txt3)">{{ ses.hostIcon }} {{ ses.hostLabel }}</span>
+            <span style="color:var(--txt3)">⎇ {{ ses.branch }}</span>
+            <span style="color:var(--txt3)">ctx {{ ses.contextPct }}%</span>
+          </div>
+        </div>
+        <button onClick="{{ ses.onBack }}" style="font-family:inherit;font-weight:600;font-size:12px;padding:7px 13px;border-radius:8px;border:1px solid var(--border2);background:var(--panel2);color:var(--txt2);cursor:pointer">‹ {{ ses.backLabel }}</button>
+      </div>
+      <div style="display:flex;gap:2px;margin-top:13px">
+        <sc-for list="{{ ses.tabs }}" as="t" hint-placeholder-count="5"><button onClick="{{ t.onClick }}" style="font-family:inherit;font-size:12.5px;font-weight:600;padding:9px 14px;border:none;background:none;cursor:pointer;border-bottom:2px solid {{ t.bd }};color:{{ t.fg }}">{{ t.label }}</button></sc-for>
+      </div>
+    </div>
+
+    <sc-if value="{{ ses.isActivity }}" hint-placeholder-val="{{ true }}">
+
+    <sc-if value="{{ ses.hasGate }}" hint-placeholder-val="{{ false }}">
+      <div style="flex-shrink:0;margin:14px 24px 0;border-radius:11px;border:1px solid var(--needs);background:var(--needs-bg);padding:13px 15px;display:flex;align-items:center;gap:12px;animation:glow 2.8s ease-in-out infinite">
+        <span style="font-size:13px">▲</span>
+        <div style="flex:1"><div style="font-weight:700;font-size:12.5px;color:var(--needs)">{{ ses.gateLead }}</div><div class="mono" style="font-size:11px;color:var(--txt);margin-top:2px">{{ ses.gateSummary }}</div></div>
+        <button onClick="{{ ses.onReview }}" style="font-family:inherit;font-weight:700;font-size:12px;padding:8px 15px;border-radius:8px;border:none;background:var(--needs);color:#0e1116;cursor:pointer">Review →</button>
+      </div>
+    </sc-if>
+
+    <div style="flex:1;overflow-y:auto;padding:18px 24px">
+      <div style="max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px">
+        <sc-for list="{{ transcript }}" as="m" hint-placeholder-count="4">
+          <sc-if value="{{ m.isPrompt }}" hint-placeholder-val="{{ false }}"><div style="align-self:flex-end;max-width:78%;background:var(--accent);color:#fff;padding:11px 14px;border-radius:13px 13px 4px 13px;font-size:13px;line-height:1.5">{{ m.text }}</div></sc-if>
+          <sc-if value="{{ m.isResponse }}" hint-placeholder-val="{{ false }}"><div style="display:flex;gap:11px"><div style="width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent2));flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:11px">{{ ses.driverMark }}</div><div class="md" style="flex:1;font-size:13px;line-height:1.6;padding-top:3px">{{ m.body }}</div></div></sc-if>
+          <sc-if value="{{ m.isTool }}" hint-placeholder-val="{{ false }}"><div style="margin-left:37px"><div onClick="{{ m.onToggle }}" style="display:flex;align-items:center;gap:9px;padding:9px 12px;border-radius:9px;background:var(--panel);border:1px solid var(--border);font-size:11.5px;cursor:pointer"><span style="color:var(--txt3);font-size:9px;width:9px">{{ m.caret }}</span><span style="color:var(--accent2)">⚙</span><span style="font-weight:700">{{ m.tool }}</span><span class="mono" style="color:var(--txt2);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ m.args }}</span><span style="font-size:10px;color:{{ m.statusColor }}">{{ m.toolStatus }}</span></div><sc-if value="{{ m.open }}" hint-placeholder-val="{{ false }}"><pre class="mono" style="margin:6px 0 0;padding:10px 12px;border-radius:9px;background:var(--bg);border:1px solid var(--border);font-size:11px;color:var(--txt2);white-space:pre-wrap;line-height:1.55">{{ m.output }}</pre></sc-if></div></sc-if>
+          <sc-if value="{{ m.isBash }}" hint-placeholder-val="{{ false }}"><div style="margin-left:37px;border-radius:9px;overflow:hidden;border:1px solid var(--border2)"><div class="mono" style="padding:8px 12px;background:var(--bg);color:var(--accent2);font-size:11.5px">$ {{ m.cmd }}</div><pre class="mono" style="margin:0;padding:9px 12px;background:var(--panel2);color:var(--txt2);font-size:11px;white-space:pre-wrap;line-height:1.5">{{ m.output }}</pre></div></sc-if>
+          <sc-if value="{{ m.isSubagents }}" hint-placeholder-val="{{ false }}"><div style="margin-left:37px;display:flex;align-items:center;gap:9px;padding:7px 12px;border-radius:9px;background:var(--panel2);border:1px solid var(--border);font-size:11.5px;color:var(--txt2)"><span style="color:var(--accent2)">⑂</span><span style="font-weight:600">Spawned {{ m.total }} background job(s)</span><span style="color:var(--txt3);font-size:10.5px">— tracked in the tray below</span></div></sc-if>
+          <sc-if value="{{ m.isQuestions }}" hint-placeholder-val="{{ false }}"><div style="margin-left:37px">
+            <sc-if value="{{ m.qPending }}" hint-placeholder-val="{{ true }}"><div style="border-radius:11px;border:1px solid var(--needs);background:var(--needs-bg);padding:13px;animation:glow 2.8s ease-in-out infinite"><div style="display:flex;align-items:center;gap:8px;margin-bottom:7px"><span style="color:var(--needs);font-weight:800">▲</span><span style="font-weight:700;font-size:12.5px;color:var(--needs)">{{ m.qCount }} question(s) need you</span></div><div style="font-size:13px;margin-bottom:11px">{{ m.text }}</div><button onClick="{{ m.onOpen }}" style="font-family:inherit;font-weight:700;font-size:12px;padding:8px 15px;border-radius:8px;border:none;background:var(--needs);color:#0e1116;cursor:pointer">Answer →</button></div></sc-if>
+            <sc-if value="{{ m.qResolved }}" hint-placeholder-val="{{ false }}"><div style="border-radius:9px;border:1px solid var(--border);background:var(--panel)"><div onClick="{{ m.onToggle }}" style="display:flex;align-items:center;gap:9px;padding:9px 12px;font-size:11.5px;cursor:pointer"><span style="color:var(--txt3);font-size:9px;width:9px">{{ m.caret }}</span><span style="color:var(--accent2);font-weight:800">?</span><span style="font-weight:700">Questions</span><span style="color:var(--txt3);flex:1">{{ m.qCount }} answered</span></div><sc-if value="{{ m.open }}" hint-placeholder-val="{{ false }}"><div style="padding:0 13px 12px 30px;display:flex;flex-direction:column;gap:11px"><sc-for list="{{ m.qList }}" as="q" hint-placeholder-count="2"><div><div style="font-size:12.5px;margin-bottom:6px">{{ q.q }}</div><div style="display:flex;gap:6px;flex-wrap:wrap"><sc-for list="{{ q.opts }}" as="o" hint-placeholder-count="2"><span style="font-size:11px;font-weight:600;padding:4px 10px;border-radius:7px;border:1px solid {{ o.bd }};background:{{ o.bg }};color:{{ o.fg }}">{{ o.mark }}{{ o.label }}</span></sc-for></div></div></sc-for></div></sc-if></div></sc-if>
+          </div></sc-if>
+          <sc-if value="{{ m.isPermission }}" hint-placeholder-val="{{ false }}"><div style="margin-left:37px">
+            <sc-if value="{{ m.gPending }}" hint-placeholder-val="{{ true }}"><div style="border-radius:11px;border:1px solid var(--needs);background:var(--needs-bg);padding:14px;animation:glow 2.8s ease-in-out infinite"><div style="display:flex;align-items:center;gap:8px;margin-bottom:7px"><span style="color:var(--needs);font-weight:800">▲</span><span style="font-weight:700;font-size:12.5px;color:var(--needs)">Permission needed</span></div><div class="mono" style="font-size:12px;color:var(--accent2);background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:8px 12px;margin-bottom:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">$ {{ m.cmdPreview }}</div><div style="display:flex;align-items:center;gap:10px"><button onClick="{{ m.onOpen }}" style="font-family:inherit;font-weight:700;font-size:12px;padding:8px 15px;border-radius:8px;border:none;background:var(--needs);color:#0e1116;cursor:pointer">Review →</button><span style="font-size:11px;color:var(--txt3)">{{ m.cmdMeta }}</span></div></div></sc-if>
+            <sc-if value="{{ m.gResolved }}" hint-placeholder-val="{{ false }}"><div style="border-radius:9px;border:1px solid var(--border);background:var(--panel)"><div onClick="{{ m.onToggle }}" style="display:flex;align-items:center;gap:9px;padding:9px 12px;font-size:11.5px;cursor:pointer"><span style="color:var(--txt3);font-size:9px;width:9px">{{ m.caret }}</span><span style="color:var(--needs)">▲</span><span style="font-weight:700">Permission</span><span class="mono" style="color:var(--txt3);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ m.cmd }}</span><span class="mono" style="font-size:10px;color:{{ m.decColor }}">{{ m.decMark }} {{ m.decision }}</span></div></div></sc-if>
+          </div></sc-if>
+          <sc-if value="{{ m.isPlan }}" hint-placeholder-val="{{ false }}"><div style="margin-left:37px">
+            <sc-if value="{{ m.pPending }}" hint-placeholder-val="{{ true }}"><div style="border-radius:11px;border:1px solid var(--needs);background:var(--needs-bg);padding:14px;animation:glow 2.8s ease-in-out infinite"><div style="display:flex;align-items:center;gap:8px;margin-bottom:7px"><span style="color:var(--needs);font-weight:800">▲</span><span style="font-weight:700;font-size:12.5px;color:var(--needs)">Plan mode — needs you</span></div><div style="font-size:12px;color:var(--txt2);margin-bottom:12px">{{ m.text }}</div><div style="display:flex;align-items:center;gap:10px"><button onClick="{{ m.onOpen }}" style="font-family:inherit;font-weight:700;font-size:12px;padding:8px 15px;border-radius:8px;border:none;background:var(--needs);color:#0e1116;cursor:pointer">Review plan →</button><span style="font-size:11px;color:var(--txt3)">{{ m.stepCount }} steps</span></div></div></sc-if>
+            <sc-if value="{{ m.pResolved }}" hint-placeholder-val="{{ false }}"><div style="border-radius:9px;border:1px solid var(--border);background:var(--panel)"><div onClick="{{ m.onToggle }}" style="display:flex;align-items:center;gap:9px;padding:9px 12px;font-size:11.5px;cursor:pointer"><span style="color:var(--txt3);font-size:9px;width:9px">{{ m.caret }}</span><span style="font-size:12px">❑</span><span style="font-weight:700">Plan</span><span style="color:var(--txt3);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ m.short }}</span><span class="mono" style="font-size:10px;color:{{ m.decColor }}">{{ m.decMark }} {{ m.decision }}</span></div><sc-if value="{{ m.open }}" hint-placeholder-val="{{ false }}"><div style="padding:0 13px 13px 30px"><div style="font-size:12px;color:var(--txt2);margin-bottom:10px">{{ m.text }}</div><div style="display:flex;flex-direction:column;gap:8px"><sc-for list="{{ m.stepList }}" as="st" hint-placeholder-count="3"><div style="display:flex;gap:11px;font-size:12.5px"><span style="width:19px;height:19px;flex-shrink:0;border-radius:50%;background:var(--accent-bg);color:var(--accent2);font-weight:800;font-size:10px;display:flex;align-items:center;justify-content:center">{{ st.n }}</span><span style="padding-top:1px">{{ st.t }}</span></div></sc-for></div></div></sc-if></div></sc-if>
+          </div></sc-if>
+          <sc-if value="{{ m.isSystem }}" hint-placeholder-val="{{ false }}"><div class="mono" style="align-self:center;font-size:10.5px;color:var(--txt3);background:var(--panel2);border:1px solid var(--border);padding:5px 13px;border-radius:20px">{{ m.text }}</div></sc-if>
+          <sc-if value="{{ m.isError }}" hint-placeholder-val="{{ false }}"><pre class="mono" style="margin:0 0 0 37px;padding:11px 13px;border-radius:9px;background:var(--error-bg);border:1px solid var(--error);font-size:11.5px;color:var(--error);white-space:pre-wrap">{{ m.text }}</pre></sc-if>
+          <sc-if value="{{ m.isWorking }}" hint-placeholder-val="{{ false }}"><div style="display:flex;gap:11px;align-items:center"><div style="width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent2));flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:11px">{{ ses.driverMark }}</div><div style="display:flex;align-items:center;gap:9px;color:var(--txt2);font-size:12.5px"><span style="width:13px;height:13px;border:2px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite"></span>{{ m.text }}</div></div></sc-if>
+        </sc-for>
+      </div>
+    </div>
+    <sc-if value="{{ bg.show }}" hint-placeholder-val="{{ false }}">
+    <div style="flex-shrink:0;border-top:1px solid var(--border);background:var(--panel2);padding:8px 24px">
+      <div style="max-width:760px;margin:0 auto">
+        <div onClick="{{ bg.onToggle }}" style="display:flex;align-items:center;gap:9px;cursor:pointer">
+          <span style="color:var(--accent2);font-size:12px">⑂</span>
+          <span style="font-weight:700;font-size:11.5px">Background jobs</span>
+          <span style="font-size:10px;color:var(--txt3)">{{ bg.summary }}</span>
+          <span style="flex:1"></span>
+          <span style="color:var(--txt3);font-size:9px">{{ bg.caret }}</span>
+        </div>
+        <sc-if value="{{ bg.open }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;flex-direction:column;gap:5px;margin-top:8px">
+          <sc-for list="{{ bg.jobs }}" as="j" hint-placeholder-count="2">
+            <div onClick="{{ j.onOpen }}" style="display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:8px;background:var(--panel);border:1px solid var(--border);font-size:11.5px;cursor:pointer"><span style="width:7px;height:7px;border-radius:50%;background:{{ j.color }};{{ j.anim }}"></span><span style="font-weight:600">{{ j.name }}</span><span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:5px;color:{{ j.dtint }};background:{{ j.dbg }}">{{ j.driver }}</span><span class="mono" style="color:var(--txt3);flex:1;font-size:10px">{{ j.host }}</span><span class="mono" style="font-size:10px;color:{{ j.sColor }}">{{ j.status }}</span></div>
+          </sc-for>
+        </div>
+        </sc-if>
+      </div>
+    </div>
+    </sc-if>
+    <div style="flex-shrink:0;border-top:1px solid var(--border);padding:14px 24px;background:var(--panel)">
+      <div style="max-width:760px;margin:0 auto;position:relative">
+        <sc-if value="{{ slashOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;bottom:calc(100% + 8px);left:0;right:0;background:var(--elev);border:1px solid var(--border2);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;max-height:236px;overflow-y:auto;z-index:5">
+            <div style="padding:8px 13px;font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);border-bottom:1px solid var(--border)">Slash commands</div>
+            <sc-for list="{{ slashCmds }}" as="c" hint-placeholder-count="4"><div onClick="{{ c.onClick }}" style="display:flex;gap:12px;padding:9px 13px;cursor:pointer;{{ c.sel }}"><span class="mono" style="font-size:12px;font-weight:600;color:var(--accent2);min-width:86px;flex-shrink:0">{{ c.name }}</span><span style="font-size:11.5px;color:var(--txt2)">{{ c.desc }}</span></div></sc-for>
+          </div>
+        </sc-if>
+        <div style="display:flex;gap:10px;align-items:flex-end;background:var(--panel2);border:1px solid {{ composerBorder }};border-radius:13px;padding:10px 12px">
+          <sc-if value="{{ bashMode }}" hint-placeholder-val="{{ false }}"><span class="mono" style="font-size:11px;font-weight:700;color:var(--accent2);background:var(--bg);padding:5px 9px;border-radius:6px;flex-shrink:0">! bash</span></sc-if>
+          <textarea ref="{{ composerRef }}" rows="1" placeholder="{{ composerPlaceholder }}" onInput="{{ onComposerInput }}" onKeyDown="{{ onKey }}" style="flex:1;background:none;border:none;outline:none;color:var(--txt);font-family:inherit;font-size:13px;resize:none;line-height:1.5;max-height:120px"></textarea>
+          <button onClick="{{ send }}" style="font-family:inherit;font-weight:700;font-size:12.5px;padding:8px 16px;border-radius:8px;border:none;background:var(--accent);color:#fff;cursor:pointer">{{ sendLabel }}</button>
+        </div>
+        <div style="display:flex;gap:16px;margin-top:7px;padding-left:4px"><span class="mono" style="font-size:10px;color:var(--txt3)">/ commands</span><span class="mono" style="font-size:10px;color:var(--txt3)">! bash</span><span class="mono" style="font-size:10px;color:var(--txt3)">⏎ send · ⇧⏎ newline · ⎋ pause</span></div>
+      </div>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ ses.isChanges }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;display:flex;overflow:hidden">
+      <div style="width:252px;flex-shrink:0;border-right:1px solid var(--border);overflow-y:auto;padding:12px">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:8px;padding:0 4px">Changed files · {{ chg.stat }}</div>
+        <sc-for list="{{ chg.files }}" as="f" hint-placeholder-count="3">
+          <div onClick="{{ f.onSelect }}" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;margin-bottom:2px;{{ f.sel }}"><span class="mono" style="font-size:11px;width:12px;text-align:center;color:{{ f.statusColor }};font-weight:700">{{ f.status }}</span><span class="mono" style="font-size:11px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ f.name }}</span><span class="mono" style="font-size:9.5px;color:var(--done)">+{{ f.add }}</span><span class="mono" style="font-size:9.5px;color:var(--error)">−{{ f.del }}</span></div>
+        </sc-for>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+        <div class="mono" style="font-size:10px;padding:9px 14px;color:var(--txt2);border-bottom:1px solid var(--border);background:var(--panel);display:flex;gap:10px"><span style="flex:1">{{ chg.file }}</span><span style="text-transform:uppercase;letter-spacing:.5px;color:var(--txt3);font-size:9px">Side-by-side</span></div>
+        <div style="display:flex;background:var(--panel);border-bottom:1px solid var(--border);font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3)"><span style="flex:1;padding:6px 14px">Before</span><span style="flex:1;padding:6px 14px;border-left:1px solid var(--border2)">After</span></div>
+        <div style="flex:1;overflow:auto">
+          <sc-for list="{{ chg.rows }}" as="r" hint-placeholder-count="8">
+            <div style="display:flex;font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.7">
+              <div style="flex:1;display:flex;min-width:0;background:{{ r.l.bg }}"><span style="width:34px;flex-shrink:0;text-align:right;padding-right:8px;color:var(--txt3);opacity:.55">{{ r.l.ln }}</span><span style="width:13px;flex-shrink:0;text-align:center;color:{{ r.l.sc }}">{{ r.l.sig }}</span><span style="white-space:pre-wrap;color:{{ r.l.fg }};padding-right:8px;flex:1;min-width:0">{{ r.l.text }}</span></div>
+              <div style="flex:1;display:flex;min-width:0;background:{{ r.r.bg }};border-left:1px solid var(--border2)"><span style="width:34px;flex-shrink:0;text-align:right;padding-right:8px;color:var(--txt3);opacity:.55">{{ r.r.ln }}</span><span style="width:13px;flex-shrink:0;text-align:center;color:{{ r.r.sc }}">{{ r.r.sig }}</span><span style="white-space:pre-wrap;color:{{ r.r.fg }};padding-right:8px;flex:1;min-width:0">{{ r.r.text }}</span></div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="flex-shrink:0;border-top:1px solid var(--border);padding:11px 16px;background:var(--panel);display:flex;align-items:center;gap:11px"><span style="font-size:12px;color:var(--txt2)">{{ chg.staged }}</span><span style="flex:1"></span><input placeholder="Commit message…" style="width:230px;background:var(--panel2);border:1px solid var(--border2);border-radius:8px;padding:7px 11px;color:var(--txt);font-family:inherit;font-size:12px;outline:none"></input><button style="font-family:inherit;font-weight:700;font-size:12px;padding:8px 15px;border-radius:8px;border:none;background:var(--done);color:#0e1116;cursor:pointer">Commit ✓</button></div>
+      </div>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ ses.isUsage }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;overflow-y:auto;padding:22px 24px">
+      <div style="max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:15px">
+        <sc-if value="{{ usage.warn }}" hint-placeholder-val="{{ false }}"><div style="display:flex;align-items:center;gap:10px;padding:12px 15px;border-radius:11px;border:1px solid var(--needs);background:var(--needs-bg);color:var(--needs);font-size:12.5px;font-weight:600">⚠ Context {{ usage.pct }}% full — auto-compaction is near. Consider /compact or wrapping up.</div></sc-if>
+        <div style="padding:17px;border-radius:13px;border:1px solid var(--border);background:var(--panel)"><div style="display:flex;justify-content:space-between;margin-bottom:8px"><span style="font-size:12px;font-weight:700">Context window</span><span class="mono" style="font-size:12px;color:var(--txt2)">{{ usage.pct }}% used</span></div><div style="height:9px;border-radius:5px;background:var(--border);overflow:hidden"><div style="height:100%;border-radius:5px;background:{{ usage.ctxColor }};width:{{ usage.pct }}%"></div></div></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+          <div style="padding:16px;border-radius:13px;border:1px solid var(--border);background:var(--panel)"><div style="font-size:11px;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;font-weight:700">Tokens</div><div style="font-size:23px;font-weight:800;margin-top:5px">{{ usage.tokens }}</div></div>
+          <div style="padding:16px;border-radius:13px;border:1px solid var(--border);background:var(--panel)"><div style="font-size:11px;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;font-weight:700">Cost</div><div style="font-size:23px;font-weight:800;margin-top:5px">{{ usage.cost }}</div></div>
+          <div style="padding:16px;border-radius:13px;border:1px solid var(--border);background:var(--panel)"><div style="font-size:11px;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;font-weight:700">Turns</div><div style="font-size:23px;font-weight:800;margin-top:5px">{{ usage.turns }}</div></div>
+        </div>
+        <div style="padding:17px;border-radius:13px;border:1px solid var(--border);background:var(--panel)">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px"><span style="font-size:12px;font-weight:700">Cost by model</span><span class="mono" style="font-size:11px;color:var(--txt3)">{{ usage.cost }} total</span></div>
+          <div style="height:8px;border-radius:5px;overflow:hidden;display:flex;margin-bottom:14px">
+            <sc-for list="{{ usage.breakdown }}" as="b" hint-placeholder-count="3"><div style="height:100%;width:{{ b.pct }}%;background:{{ b.color }}"></div></sc-for>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:9px">
+            <sc-for list="{{ usage.breakdown }}" as="b" hint-placeholder-count="3">
+              <div style="display:flex;align-items:center;gap:10px;font-size:12px"><span style="width:9px;height:9px;border-radius:3px;background:{{ b.color }};flex-shrink:0"></span><span style="font-weight:600">{{ b.model }}</span><span class="mono" style="font-size:10px;color:var(--txt3)">{{ b.driver }}</span><span style="flex:1"></span><span class="mono" style="font-size:11px;color:var(--txt2)">{{ b.tokens }}</span><span class="mono" style="font-size:12px;font-weight:700;width:64px;text-align:right">{{ b.cost }}</span><span class="mono" style="font-size:10px;color:var(--txt3);width:36px;text-align:right">{{ b.pct }}%</span></div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ ses.isConfig }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;overflow-y:auto;padding:22px 24px">
+      <div style="max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:22px">
+        <div>
+          <div style="font-size:12px;font-weight:700;margin-bottom:4px;color:var(--txt2)">Model</div>
+          <div style="font-size:11px;color:var(--txt3);margin-bottom:9px">{{ cfg.modelNote }}</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <sc-for list="{{ cfg.models }}" as="m" hint-placeholder-count="3"><button onClick="{{ m.onClick }}" style="font-family:inherit;font-size:12px;font-weight:600;padding:9px 14px;border-radius:9px;cursor:pointer;border:1px solid {{ m.bd }};background:{{ m.bg }};color:{{ m.fg }}">{{ m.label }}</button></sc-for>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:700;margin-bottom:9px;color:var(--txt2)">Permissions</div>
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <sc-for list="{{ cfg.postures }}" as="p" hint-placeholder-count="3"><div onClick="{{ p.onClick }}" style="display:flex;align-items:center;gap:11px;padding:12px 14px;border-radius:10px;cursor:pointer;border:1px solid {{ p.bd }};background:{{ p.bg }}"><span style="width:16px;height:16px;border-radius:50%;border:2px solid {{ p.ring }};flex-shrink:0;display:flex;align-items:center;justify-content:center"><span style="width:7px;height:7px;border-radius:50%;background:{{ p.dot }}"></span></span><div><div style="font-weight:600;font-size:12.5px">{{ p.label }}</div><div style="font-size:11px;color:var(--txt3)">{{ p.desc }}</div></div></div></sc-for>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:700;margin-bottom:4px;color:var(--txt2)">Tools &amp; MCP servers</div>
+          <div style="font-size:11px;color:var(--txt3);margin-bottom:9px">What this agent is allowed to use. Click to toggle.</div>
+          <div style="display:flex;gap:7px;flex-wrap:wrap">
+            <sc-for list="{{ cfg.tools }}" as="tc" hint-placeholder-count="6"><span onClick="{{ tc.onClick }}" style="font-family:inherit;font-size:11.5px;font-weight:600;padding:6px 11px;border-radius:7px;cursor:pointer;border:1px solid {{ tc.bd }};background:{{ tc.bg }};color:{{ tc.fg }}">{{ tc.dot }} {{ tc.label }}</span></sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ ses.isTerminal }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;background:#0a0d12">
+      <div style="flex-shrink:0;display:flex;align-items:center;gap:10px;padding:10px 18px;border-bottom:1px solid var(--border);background:var(--panel)"><span style="font-size:11px;font-weight:700;color:var(--needs)">⎈ Escape hatch</span><span style="font-size:11.5px;color:var(--txt2)">Raw session — anything the UI doesn't cover, do it here.</span><span style="flex:1"></span><span class="mono" style="font-size:10.5px;color:var(--txt3)">{{ term.title }}</span></div>
+      <div style="flex:1;overflow-y:auto;padding:14px 18px">
+        <sc-for list="{{ term.lines }}" as="l" hint-placeholder-count="6"><div class="mono" style="font-size:12px;line-height:1.65;white-space:pre-wrap;color:{{ l.c }}">{{ l.t }}</div></sc-for>
+        <div style="display:flex;align-items:center;gap:9px;margin-top:6px"><span class="mono" style="font-size:12.5px;color:var(--done)">❯</span><input ref="{{ termRef }}" onKeyDown="{{ onTermKey }}" placeholder="type a command…" class="mono" style="flex:1;background:none;border:none;outline:none;color:var(--txt);font-size:12px"></input></div>
+      </div>
+    </div>
+    </sc-if>
+  </div>
+  </sc-if>
+
+  </div>
+
+  <!-- ===== NEW WORKSTREAM WIZARD ===== -->
+  <sc-if value="{{ wizOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ wizClose }}" style="position:fixed;inset:0;background:rgba(5,7,10,0.64);backdrop-filter:blur(3px);z-index:60;display:flex;align-items:center;justify-content:center;padding:32px">
+    <div onClick="{{ stop }}" style="width:100%;max-width:560px;background:var(--panel);border:1px solid var(--border2);border-radius:18px;box-shadow:var(--shadow);overflow:hidden;animation:slideup .18s ease">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px">
+        <div style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:16px">＋</div>
+        <div style="flex:1"><h2 style="font-size:16px;font-weight:700;margin:0;letter-spacing:-0.2px">New workstream</h2><div style="font-size:11.5px;color:var(--txt3)">A workstream is one or more agent sessions across your hosts</div></div>
+        <button onClick="{{ wizClose }}" style="width:30px;height:30px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--txt2);cursor:pointer;font-size:14px">✕</button>
+      </div>
+      <div style="padding:20px 22px;display:flex;flex-direction:column;gap:16px">
+        <div><div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">Name</div><input ref="{{ wizNameRef }}" placeholder="Release v2.5" style="width:100%;background:var(--panel2);border:1px solid var(--border2);border-radius:9px;padding:10px 12px;color:var(--txt);font-family:inherit;font-size:13px;outline:none"></input></div>
+        <div><div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">Goal <span style="opacity:.7;text-transform:none;font-weight:500">· optional</span></div><input ref="{{ wizGoalRef }}" placeholder="What is this workstream trying to achieve?" style="width:100%;background:var(--panel2);border:1px solid var(--border2);border-radius:9px;padding:10px 12px;color:var(--txt);font-family:inherit;font-size:13px;outline:none"></input></div>
+        <div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-top:2px">How do you want to start?</div>
+        <div style="display:flex;gap:11px">
+          <div onClick="{{ wizPickQuick }}" style="flex:1;padding:15px;border-radius:12px;border:1px solid {{ wizQuickBd }};background:{{ wizQuickBg }};cursor:pointer"><div style="font-size:20px;margin-bottom:7px">◆</div><div style="font-weight:700;font-size:13px;margin-bottom:3px">Single session</div><div style="font-size:11px;color:var(--txt3);line-height:1.4">One agent. Configure and launch right now.</div></div>
+          <div onClick="{{ wizPickBuild }}" style="flex:1;padding:15px;border-radius:12px;border:1px solid {{ wizBuildBd }};background:{{ wizBuildBg }};cursor:pointer"><div style="font-size:20px;margin-bottom:7px">⛓</div><div style="font-weight:700;font-size:13px;margin-bottom:3px">Build it out</div><div style="font-size:11px;color:var(--txt3);line-height:1.4">Multiple agents on a canvas you wire together.</div></div>
+        </div>
+      </div>
+      <div style="padding:15px 22px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px"><div class="mono" style="font-size:10px;color:var(--txt3);flex:1">{{ wizFoot }}</div><button onClick="{{ wizClose }}" style="font-family:inherit;font-weight:600;font-size:12.5px;padding:9px 15px;border-radius:9px;border:1px solid var(--border2);background:var(--panel2);color:var(--txt2);cursor:pointer">Cancel</button><button onClick="{{ wizNext }}" style="font-family:inherit;font-weight:700;font-size:12.5px;padding:9px 18px;border-radius:9px;border:none;background:var(--accent);color:#fff;cursor:pointer">{{ wizNextLabel }}</button></div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== NODE MODAL (add agent) ===== -->
+  <sc-if value="{{ nmOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ nmClose }}" style="position:fixed;inset:0;background:rgba(5,7,10,0.64);backdrop-filter:blur(3px);z-index:61;display:flex;align-items:center;justify-content:center;padding:32px">
+    <div onClick="{{ stop }}" style="width:100%;max-width:600px;max-height:88vh;overflow-y:auto;background:var(--panel);border:1px solid var(--border2);border-radius:18px;box-shadow:var(--shadow);animation:slideup .18s ease">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;position:sticky;top:0;background:var(--panel);z-index:2">
+        <div style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:16px">＋</div>
+        <div style="flex:1"><h2 style="font-size:16px;font-weight:700;margin:0;letter-spacing:-0.2px">Add an agent</h2><div style="font-size:11.5px;color:var(--txt3)">to {{ nmWsName }}</div></div>
+        <button onClick="{{ nmClose }}" style="width:30px;height:30px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--txt2);cursor:pointer;font-size:14px">✕</button>
+      </div>
+      <div style="padding:20px 22px;display:flex;flex-direction:column;gap:16px">
+        <div><div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">Agent</div><div style="display:flex;gap:8px"><sc-for list="{{ nmDrivers }}" as="o" hint-placeholder-count="3"><button onClick="{{ o.onClick }}" style="font-family:inherit;font-size:12px;font-weight:600;padding:9px 14px;border-radius:9px;cursor:pointer;border:1px solid {{ o.bd }};background:{{ o.bg }};color:{{ o.fg }}">{{ o.label }}</button></sc-for></div></div>
+        <sc-if value="{{ nmShowName }}" hint-placeholder-val="{{ true }}"><div><div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">Name</div><input ref="{{ nmNameRef }}" placeholder="e.g. Build frontend bundle" style="width:100%;background:var(--panel2);border:1px solid var(--border2);border-radius:9px;padding:10px 12px;color:var(--txt);font-family:inherit;font-size:13px;outline:none"></input></div></sc-if>
+        <div><div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">Project directory</div><input ref="{{ nmDirRef }}" placeholder="~/code/my-project" class="mono" style="width:100%;background:var(--panel2);border:1px solid var(--border2);border-radius:9px;padding:10px 12px;color:var(--txt);font-size:12.5px;outline:none"></input></div>
+        <div><div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">Host</div><div style="display:flex;gap:8px;flex-wrap:wrap"><sc-for list="{{ nmHosts }}" as="o" hint-placeholder-count="3"><button onClick="{{ o.onClick }}" style="font-family:inherit;font-size:12px;font-weight:600;padding:9px 13px;border-radius:9px;cursor:pointer;border:1px solid {{ o.bd }};background:{{ o.bg }};color:{{ o.fg }};display:flex;align-items:center;gap:7px"><span style="width:7px;height:7px;border-radius:50%;background:{{ o.dot }}"></span>{{ o.label }}</button></sc-for></div></div>
+        <sc-if value="{{ nmHasNodes }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;gap:14px">
+          <div style="flex:1"><div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">Controlled by <span style="opacity:.7;text-transform:none;font-weight:500">· optional</span></div><div style="display:flex;flex-direction:column;gap:5px"><sc-for list="{{ nmControllers }}" as="o" hint-placeholder-count="2"><button onClick="{{ o.onClick }}" style="font-family:inherit;font-size:11.5px;font-weight:600;padding:7px 11px;border-radius:8px;cursor:pointer;text-align:left;border:1px solid {{ o.bd }};background:{{ o.bg }};color:{{ o.fg }}">{{ o.label }}</button></sc-for></div></div>
+          <div style="flex:1"><div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">Feeds from <span style="opacity:.7;text-transform:none;font-weight:500">· optional</span></div><div style="display:flex;flex-direction:column;gap:5px"><sc-for list="{{ nmFeeders }}" as="o" hint-placeholder-count="2"><button onClick="{{ o.onClick }}" style="font-family:inherit;font-size:11.5px;font-weight:600;padding:7px 11px;border-radius:8px;cursor:pointer;text-align:left;border:1px solid {{ o.bd }};background:{{ o.bg }};color:{{ o.fg }}">{{ o.label }}</button></sc-for></div></div>
+        </div>
+        </sc-if>
+        <div style="display:flex;gap:14px">
+          <div style="flex:1"><div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">Model</div><div style="display:flex;flex-direction:column;gap:6px"><sc-for list="{{ nmModels }}" as="o" hint-placeholder-count="3"><button onClick="{{ o.onClick }}" style="font-family:inherit;font-size:12px;font-weight:600;padding:8px 11px;border-radius:8px;cursor:pointer;text-align:left;border:1px solid {{ o.bd }};background:{{ o.bg }};color:{{ o.fg }}">{{ o.label }}</button></sc-for></div></div>
+          <div style="flex:1"><div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">Permission</div><div style="display:flex;flex-direction:column;gap:6px"><sc-for list="{{ nmPostures }}" as="o" hint-placeholder-count="3"><button onClick="{{ o.onClick }}" style="font-family:inherit;font-size:12px;font-weight:600;padding:8px 11px;border-radius:8px;cursor:pointer;text-align:left;border:1px solid {{ o.bd }};background:{{ o.bg }};color:{{ o.fg }}">{{ o.label }}</button></sc-for></div></div>
+        </div>
+        <div><div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">First prompt <span style="opacity:.7;text-transform:none;font-weight:500">· optional</span></div><textarea ref="{{ nmPromptRef }}" rows="2" placeholder="What should this agent start working on?" style="width:100%;background:var(--panel2);border:1px solid var(--border2);border-radius:9px;padding:10px 12px;color:var(--txt);font-family:inherit;font-size:12.5px;outline:none;resize:vertical"></textarea></div>
+      </div>
+      <div style="padding:15px 22px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;position:sticky;bottom:0;background:var(--panel)"><div class="mono" style="font-size:10px;color:var(--txt3);flex:1">Runs over your SSH config · nothing installed inbound</div><button onClick="{{ nmClose }}" style="font-family:inherit;font-weight:600;font-size:12.5px;padding:9px 15px;border-radius:9px;border:1px solid var(--border2);background:var(--panel2);color:var(--txt2);cursor:pointer">Cancel</button><button onClick="{{ nmLaunch }}" style="font-family:inherit;font-weight:700;font-size:12.5px;padding:9px 18px;border-radius:9px;border:none;background:var(--accent);color:#fff;cursor:pointer">{{ nmLaunchLabel }}</button></div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== SETTINGS MODAL ===== -->
+  <sc-if value="{{ setOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeSettings }}" style="position:fixed;inset:0;background:rgba(5,7,10,0.64);backdrop-filter:blur(3px);z-index:60;display:flex;align-items:center;justify-content:center;padding:32px">
+    <div onClick="{{ stop }}" style="width:100%;max-width:880px;height:86vh;background:var(--panel);border:1px solid var(--border2);border-radius:18px;box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;animation:slideup .18s ease">
+      <div style="padding:16px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px">
+        <div style="width:34px;height:34px;border-radius:9px;background:var(--panel2);border:1px solid var(--border2);display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--txt2)">⚙</div>
+        <h2 style="font-size:16px;font-weight:700;margin:0;flex:1;letter-spacing:-0.2px">Settings</h2>
+        <button onClick="{{ closeSettings }}" style="width:30px;height:30px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--txt2);cursor:pointer;font-size:14px">✕</button>
+      </div>
+      <div style="display:flex;flex:1;overflow:hidden">
+        <div style="width:190px;flex-shrink:0;border-right:1px solid var(--border);padding:12px 10px;display:flex;flex-direction:column;gap:3px">
+          <sc-for list="{{ setTabs }}" as="t" hint-placeholder-count="4"><div onClick="{{ t.onClick }}" style="padding:9px 12px;border-radius:9px;cursor:pointer;font-size:12.5px;font-weight:600;background:{{ t.bg }};color:{{ t.fg }}">{{ t.label }}</div></sc-for>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:20px 22px">
+
+          <sc-if value="{{ setIsGeneral }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;flex-direction:column;gap:22px">
+            <div>
+              <div style="font-size:12px;font-weight:700;margin-bottom:9px;color:var(--txt2)">Appearance</div>
+              <div style="display:flex;gap:8px">
+                <sc-for list="{{ themeOpts }}" as="o" hint-placeholder-count="2"><button onClick="{{ o.onClick }}" style="font-family:inherit;font-size:12px;font-weight:600;padding:9px 18px;border-radius:9px;cursor:pointer;border:1px solid {{ o.bd }};background:{{ o.bg }};color:{{ o.fg }}">{{ o.label }}</button></sc-for>
+              </div>
+            </div>
+            <div>
+              <div style="font-size:12px;font-weight:700;margin-bottom:9px;color:var(--txt2)">Background</div>
+              <div style="display:flex;gap:8px;margin-bottom:9px">
+                <sc-for list="{{ bgOpts }}" as="o" hint-placeholder-count="3"><button onClick="{{ o.onClick }}" style="font-family:inherit;font-size:12px;font-weight:600;padding:9px 16px;border-radius:9px;cursor:pointer;border:1px solid {{ o.bd }};background:{{ o.bg }};color:{{ o.fg }}">{{ o.label }}</button></sc-for>
+              </div>
+              <div style="font-size:10.5px;color:var(--txt3)">{{ bgNote }}</div>
+            </div>
+            <div>
+              <div style="font-size:12px;font-weight:700;margin-bottom:9px;color:var(--txt2)">Behavior</div>
+              <div style="display:flex;flex-direction:column;gap:9px">
+                <sc-for list="{{ setToggles }}" as="g" hint-placeholder-count="3"><div style="display:flex;align-items:center;gap:13px;padding:13px 15px;border-radius:11px;background:var(--panel2);border:1px solid var(--border)"><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px">{{ g.label }}</div><div style="font-size:11.5px;color:var(--txt3);margin-top:1px">{{ g.desc }}</div></div><button onClick="{{ g.onToggle }}" style="width:40px;height:23px;border-radius:12px;border:none;cursor:pointer;background:{{ g.track }};position:relative;flex-shrink:0"><span style="position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#fff;transform:{{ g.knob }};box-shadow:0 1px 3px rgba(0,0,0,.35)"></span></button></div></sc-for>
+              </div>
+            </div>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ setIsHosts }}" hint-placeholder-val="{{ false }}">
+          <div>
+            <div style="font-size:12px;font-weight:700;margin-bottom:4px;color:var(--txt2)">Hosts</div>
+            <div style="font-size:11px;color:var(--txt3);margin-bottom:12px">Local, WSL and remote SSH hosts where sessions can run.</div>
+            <div style="font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:7px">This machine</div>
+            <div style="border-radius:11px;background:var(--panel2);border:1px solid var(--border2);padding:14px;margin-bottom:20px">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:13px"><span style="width:9px;height:9px;border-radius:50%;background:var(--done)"></span><div style="flex:1"><div style="font-weight:600;font-size:12.5px">{{ localHost.icon }} {{ localHost.label }}</div><div class="mono" style="font-size:10.5px;color:var(--txt3)">this machine · always available</div></div><span style="font-size:11px;color:var(--done);font-weight:600">connected</span></div>
+              <div style="display:flex;flex-direction:column;gap:12px">
+                <div><div style="font-size:9.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">Agent commands <span style="opacity:.7">· blank resolves to the default</span></div><div style="display:flex;flex-direction:column;gap:6px"><sc-for list="{{ localHost.agentEdits }}" as="a" hint-placeholder-count="3"><div style="display:flex;align-items:center;gap:9px"><span style="font-size:11.5px;font-weight:600;min-width:100px">{{ a.name }}</span><input value="{{ a.cmd }}" placeholder="{{ a.ph }}" class="mono" style="flex:1;background:var(--panel);border:1px solid var(--border2);border-radius:8px;padding:8px 11px;color:var(--txt);font-size:12px;outline:none"></input></div></sc-for></div></div>
+                <div><div style="font-size:9.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">Setup command <span style="opacity:.7">· runs before the agent</span></div><input value="{{ localHost.setup }}" placeholder="e.g. source ~/.profile" class="mono" style="width:100%;background:var(--panel);border:1px solid var(--border2);border-radius:8px;padding:8px 11px;color:var(--txt);font-size:12px;outline:none"></input></div>
+                <div><div style="font-size:9.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">Environment <span style="opacity:.7">· one KEY=VALUE per line</span></div><textarea rows="2" placeholder="KEY=value" class="mono" style="width:100%;background:var(--panel);border:1px solid var(--border2);border-radius:8px;padding:8px 11px;color:var(--txt);font-size:12px;outline:none;resize:vertical">{{ localHost.env }}</textarea></div>
+              </div>
+            </div>
+            <div style="font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:7px">Connected hosts</div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <sc-for list="{{ setHosts }}" as="h" hint-placeholder-count="3">
+                <div style="border-radius:11px;background:var(--panel2);border:1px solid var(--border);overflow:hidden">
+                  <div onClick="{{ h.onToggle }}" style="display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer"><span style="width:9px;height:9px;border-radius:50%;background:{{ h.dot }};{{ h.anim }};flex-shrink:0"></span><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:12.5px">{{ h.icon }} {{ h.label }}</div><div class="mono" style="font-size:10.5px;color:var(--txt3);margin-top:1px">{{ h.sub }}</div></div><span style="font-size:11px;color:{{ h.sColor }};font-weight:600">{{ h.status }}</span><span style="color:var(--txt3);font-size:9px">{{ h.caret }}</span></div>
+                  <sc-if value="{{ h.open }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:0 14px 13px;display:flex;flex-direction:column;gap:11px;border-top:1px solid var(--border);padding-top:12px">
+                    <sc-if value="{{ h.hasTarget }}" hint-placeholder-val="{{ false }}"><div><div style="font-size:9.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--txt3);margin-bottom:4px">Target</div><div class="mono" style="font-size:11.5px;color:var(--txt2)">{{ h.target }}</div></div></sc-if>
+                    <div><div style="font-size:9.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--txt3);margin-bottom:6px">Agents available</div><div style="display:flex;flex-direction:column;gap:5px"><sc-for list="{{ h.agents }}" as="a" hint-placeholder-count="2"><div style="display:flex;align-items:center;gap:9px;font-size:11.5px"><span style="font-weight:600;min-width:96px">{{ a.name }}</span><span class="mono" style="color:var(--txt3);flex:1">{{ a.cmd }}</span></div></sc-for></div></div>
+                    <div><div style="font-size:9.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--txt3);margin-bottom:4px">Setup command</div><div class="mono" style="font-size:11.5px;color:{{ h.setupColor }}">{{ h.setup }}</div></div>
+                    <div><div style="font-size:9.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--txt3);margin-bottom:4px">Environment</div><pre class="mono" style="margin:0;font-size:11px;color:{{ h.envColor }};white-space:pre-wrap">{{ h.env }}</pre></div>
+                  </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+            <sc-if value="{{ addHostClosed }}" hint-placeholder-val="{{ true }}"><button onClick="{{ toggleAddHost }}" style="margin-top:11px;font-family:inherit;font-weight:600;font-size:12px;padding:9px 14px;border-radius:9px;border:1px dashed var(--border2);background:transparent;color:var(--txt2);cursor:pointer;width:100%">＋ Add a host…</button></sc-if>
+            <sc-if value="{{ addHostOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:13px;padding:15px;border-radius:12px;border:1px dashed var(--border2);background:var(--panel2)">
+              <div style="font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:12px">Add a host</div>
+              <div style="display:flex;gap:11px;margin-bottom:11px">
+                <div style="flex:1"><div style="font-size:10px;font-weight:600;color:var(--txt3);margin-bottom:5px">Label</div><input placeholder="gpu-box-2" class="mono" style="width:100%;background:var(--panel);border:1px solid var(--border2);border-radius:8px;padding:9px 11px;color:var(--txt);font-size:12px;outline:none"></input></div>
+                <div style="flex:1.4"><div style="font-size:10px;font-weight:600;color:var(--txt3);margin-bottom:5px">Target <span style="color:var(--txt3);opacity:.7">· name · ssh:name · wsl:distro · wslssh:distro:target · plink:target</span></div><input placeholder="user@10.0.0.5" class="mono" style="width:100%;background:var(--panel);border:1px solid var(--border2);border-radius:8px;padding:9px 11px;color:var(--txt);font-size:12px;outline:none"></input></div>
+              </div>
+              <div style="margin-bottom:11px"><div style="font-size:10px;font-weight:600;color:var(--txt3);margin-bottom:5px">Agent commands <span style="color:var(--txt3);opacity:.7">· blank resolves to the agent's default (e.g. claude)</span></div><div style="display:flex;flex-direction:column;gap:6px"><sc-for list="{{ newAgentRows }}" as="a" hint-placeholder-count="3"><div style="display:flex;align-items:center;gap:9px"><span style="font-size:11.5px;font-weight:600;min-width:96px">{{ a.name }}</span><input placeholder="{{ a.ph }}" class="mono" style="flex:1;background:var(--panel);border:1px solid var(--border2);border-radius:8px;padding:8px 11px;color:var(--txt);font-size:12px;outline:none"></input></div></sc-for></div></div>
+              <div style="margin-bottom:11px"><div style="font-size:10px;font-weight:600;color:var(--txt3);margin-bottom:5px">Setup command <span style="color:var(--txt3);opacity:.7">· optional, runs before the agent</span></div><input placeholder="module load cuda" class="mono" style="width:100%;background:var(--panel);border:1px solid var(--border2);border-radius:8px;padding:9px 11px;color:var(--txt);font-size:12px;outline:none"></input></div>
+              <div style="margin-bottom:12px"><div style="font-size:10px;font-weight:600;color:var(--txt3);margin-bottom:5px">Environment <span style="color:var(--txt3);opacity:.7">· one KEY=VALUE per line, optional</span></div><textarea rows="2" placeholder="CUDA_HOME=/usr/local/cuda" class="mono" style="width:100%;background:var(--panel);border:1px solid var(--border2);border-radius:8px;padding:9px 11px;color:var(--txt);font-size:12px;outline:none;resize:vertical"></textarea></div>
+              <div style="display:flex;align-items:center;gap:10px"><span class="mono" style="font-size:10px;color:var(--txt3);flex:1;line-height:1.5">ssh: honors ~/.ssh/config · wsl: runs in that distro · wslssh: MFA/Duo via distro's ssh · plink: PuTTY</span><button onClick="{{ toggleAddHost }}" style="font-family:inherit;font-weight:600;font-size:11.5px;padding:8px 13px;border-radius:8px;border:1px solid var(--border2);background:transparent;color:var(--txt2);cursor:pointer">Cancel</button><button onClick="{{ addHostSave }}" style="font-family:inherit;font-weight:700;font-size:11.5px;padding:8px 14px;border-radius:8px;border:none;background:var(--accent);color:#fff;cursor:pointer">Add host</button></div>
+            </div>
+            </sc-if>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ setIsDefaults }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;gap:22px">
+            <div><div style="font-size:12px;font-weight:700;margin-bottom:9px;color:var(--txt2)">Default driver</div><div style="display:flex;gap:8px"><sc-for list="{{ setDrivers }}" as="o" hint-placeholder-count="3"><button onClick="{{ o.onClick }}" style="font-family:inherit;font-size:12px;font-weight:600;padding:9px 14px;border-radius:9px;cursor:pointer;border:1px solid {{ o.bd }};background:{{ o.bg }};color:{{ o.fg }}">{{ o.label }}</button></sc-for></div></div>
+            <div><div style="font-size:12px;font-weight:700;margin-bottom:4px;color:var(--txt2)">Default model</div><div style="font-size:11px;color:var(--txt3);margin-bottom:9px">{{ setModelNote }}</div><div style="display:flex;gap:8px;flex-wrap:wrap"><sc-for list="{{ setModels }}" as="o" hint-placeholder-count="3"><button onClick="{{ o.onClick }}" style="font-family:inherit;font-size:12px;font-weight:600;padding:9px 14px;border-radius:9px;cursor:pointer;border:1px solid {{ o.bd }};background:{{ o.bg }};color:{{ o.fg }}">{{ o.label }}</button></sc-for></div></div>
+            <div><div style="font-size:12px;font-weight:700;margin-bottom:9px;color:var(--txt2)">Default permission posture</div><div style="display:flex;flex-direction:column;gap:7px"><sc-for list="{{ setPostures }}" as="p" hint-placeholder-count="3"><div onClick="{{ p.onClick }}" style="display:flex;align-items:center;gap:11px;padding:12px 14px;border-radius:10px;cursor:pointer;border:1px solid {{ p.bd }};background:{{ p.bg }}"><span style="width:16px;height:16px;border-radius:50%;border:2px solid {{ p.ring }};flex-shrink:0;display:flex;align-items:center;justify-content:center"><span style="width:7px;height:7px;border-radius:50%;background:{{ p.dot }}"></span></span><div><div style="font-weight:600;font-size:12.5px">{{ p.label }}</div><div style="font-size:11px;color:var(--txt3)">{{ p.desc }}</div></div></div></sc-for></div></div>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ setIsNotif }}" hint-placeholder-val="{{ false }}">
+          <div>
+            <div style="font-size:12px;font-weight:700;margin-bottom:4px;color:var(--txt2)">Notifications</div>
+            <div style="font-size:11px;color:var(--txt3);margin-bottom:12px">Desktop alerts when a session needs you, finishes, or errors.</div>
+            <div style="display:flex;flex-direction:column;gap:9px">
+              <sc-for list="{{ setNotif }}" as="g" hint-placeholder-count="3"><div style="display:flex;align-items:center;gap:13px;padding:13px 15px;border-radius:11px;background:var(--panel2);border:1px solid var(--border)"><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px">{{ g.label }}</div><div style="font-size:11.5px;color:var(--txt3);margin-top:1px">{{ g.desc }}</div></div><button onClick="{{ g.onToggle }}" style="width:40px;height:23px;border-radius:12px;border:none;cursor:pointer;background:{{ g.track }};position:relative;flex-shrink:0"><span style="position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#fff;transform:{{ g.knob }};box-shadow:0 1px 3px rgba(0,0,0,.35)"></span></button></div></sc-for>
+            </div>
+          </div>
+          </sc-if>
+
+        </div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== PLAN / QUESTION OVERLAY ===== -->
+  <sc-if value="{{ ov.open }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ ov.close }}" style="position:fixed;inset:0;background:rgba(5,7,10,0.64);backdrop-filter:blur(3px);z-index:60;display:flex;align-items:center;justify-content:center;padding:32px">
+    <div onClick="{{ stop }}" style="width:100%;max-width:600px;max-height:82vh;background:var(--panel);border:1px solid var(--border2);border-radius:18px;box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;animation:slideup .18s ease">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:13px">
+        <div style="width:40px;height:40px;border-radius:11px;background:var(--accent-bg);border:1px solid var(--accent);display:flex;align-items:center;justify-content:center;font-size:17px;color:var(--accent2);flex-shrink:0">{{ ov.icon }}</div>
+        <div style="flex:1"><div style="font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--accent2)">{{ ov.kind }}</div><h2 style="font-size:16px;font-weight:700;margin:5px 0 0;letter-spacing:-0.2px">{{ ov.title }}</h2></div>
+        <button onClick="{{ ov.close }}" style="width:30px;height:30px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--txt2);cursor:pointer;font-size:14px">✕</button>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:20px 22px">
+        <sc-if value="{{ ov.hasText }}" hint-placeholder-val="{{ true }}"><div style="font-size:13.5px;line-height:1.6;color:var(--txt);margin-bottom:16px">{{ ov.text }}</div></sc-if>
+        <sc-if value="{{ ov.isPlan }}" hint-placeholder-val="{{ false }}"><div style="display:flex;flex-direction:column;gap:10px"><sc-for list="{{ ov.steps }}" as="st" hint-placeholder-count="4"><div style="display:flex;gap:12px;padding:12px 14px;border-radius:11px;background:var(--panel2);border:1px solid var(--border)"><span style="width:22px;height:22px;flex-shrink:0;border-radius:50%;background:var(--accent-bg);color:var(--accent2);font-weight:800;font-size:11px;display:flex;align-items:center;justify-content:center">{{ st.n }}</span><span style="font-size:13px;padding-top:2px">{{ st.t }}</span></div></sc-for></div></sc-if>
+        <sc-if value="{{ ov.isQuestion }}" hint-placeholder-val="{{ false }}"><div style="display:flex;flex-direction:column;gap:18px"><sc-for list="{{ ov.questions }}" as="q" hint-placeholder-count="2"><div><div style="display:flex;align-items:center;gap:8px;margin-bottom:9px"><span style="width:20px;height:20px;flex-shrink:0;border-radius:50%;background:var(--needs-bg);color:var(--needs);font-weight:800;font-size:11px;display:flex;align-items:center;justify-content:center">{{ q.n }}</span><span style="font-size:13.5px;font-weight:600">{{ q.q }}</span></div><div style="display:flex;gap:8px;flex-wrap:wrap;padding-left:28px"><sc-for list="{{ q.opts }}" as="o" hint-placeholder-count="2"><button onClick="{{ o.onClick }}" style="font-family:inherit;font-weight:600;font-size:12px;padding:8px 14px;border-radius:8px;cursor:pointer;border:1px solid {{ o.bd }};background:{{ o.bg }};color:{{ o.fg }}">{{ o.mark }}{{ o.label }}</button></sc-for><input value="{{ q.customVal }}" onInput="{{ q.onCustom }}" placeholder="Write your own…" style="flex:1;min-width:150px;background:var(--panel2);border:1px solid {{ q.customBd }};border-radius:8px;padding:8px 11px;color:var(--txt);font-family:inherit;font-size:12px;outline:none"></input></div></div></sc-for></div></sc-if>
+        <sc-if value="{{ ov.isPerm }}" hint-placeholder-val="{{ false }}"><div><div style="font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3);margin-bottom:7px">Command to run</div><pre class="mono" style="margin:0 0 12px;padding:14px;border-radius:11px;background:var(--bg);border:1px solid var(--border2);font-size:12.5px;line-height:1.6;color:var(--accent2);white-space:pre-wrap;overflow-x:auto">$ {{ ov.cmd }}</pre><div class="mono" style="font-size:11px;color:var(--txt3);margin-bottom:12px">cwd: {{ ov.cwd }}</div><div style="display:flex;align-items:center;gap:9px;padding:11px 13px;border-radius:10px;background:var(--needs-bg);border:1px solid var(--needs);font-size:12.5px;color:var(--needs)">⚠ {{ ov.risk }}</div></div></sc-if>
+      </div>
+      <div style="flex-shrink:0;padding:15px 22px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px">
+        <div class="mono" style="font-size:10px;color:var(--txt3);flex:1">{{ ov.foot }}</div>
+        <sc-if value="{{ ov.isPlan }}" hint-placeholder-val="{{ false }}"><button onClick="{{ ov.reject }}" style="font-family:inherit;font-weight:600;font-size:12.5px;padding:9px 15px;border-radius:9px;border:1px solid var(--border2);background:var(--panel2);color:var(--txt2);cursor:pointer">Keep planning</button><button onClick="{{ ov.approve }}" style="font-family:inherit;font-weight:700;font-size:12.5px;padding:9px 18px;border-radius:9px;border:none;background:var(--done);color:#0e1116;cursor:pointer">Approve plan &amp; run</button></sc-if>
+        <sc-if value="{{ ov.isPerm }}" hint-placeholder-val="{{ false }}"><button onClick="{{ ov.reject }}" style="font-family:inherit;font-weight:600;font-size:12.5px;padding:9px 15px;border-radius:9px;border:1px solid var(--border2);background:var(--panel2);color:var(--txt2);cursor:pointer">Reject</button><button onClick="{{ ov.approveAll }}" style="font-family:inherit;font-weight:600;font-size:12.5px;padding:9px 15px;border-radius:9px;border:1px solid var(--done);background:transparent;color:var(--done);cursor:pointer">Approve all</button><button onClick="{{ ov.approve }}" style="font-family:inherit;font-weight:700;font-size:12.5px;padding:9px 18px;border-radius:9px;border:none;background:var(--done);color:#0e1116;cursor:pointer">Approve &amp; run</button></sc-if>
+        <sc-if value="{{ ov.isQuestion }}" hint-placeholder-val="{{ false }}"><span style="font-size:11px;color:var(--txt3)">{{ ov.answeredLabel }}</span><button onClick="{{ ov.submit }}" style="font-family:inherit;font-weight:700;font-size:12.5px;padding:9px 18px;border-radius:9px;border:none;background:{{ ov.submitBg }};color:{{ ov.submitFg }};cursor:pointer">Submit answers</button></sc-if>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== GATE MODAL ===== -->
+  <sc-if value="{{ gateOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeGate }}" style="position:fixed;inset:0;background:rgba(5,7,10,0.64);backdrop-filter:blur(3px);z-index:60;display:flex;align-items:center;justify-content:center;padding:32px">
+    <div onClick="{{ stop }}" style="width:100%;max-width:560px;background:var(--panel);border:1px solid var(--border2);border-radius:18px;box-shadow:var(--shadow);overflow:hidden;animation:slideup .18s ease">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:13px">
+        <div style="width:40px;height:40px;border-radius:11px;background:var(--needs-bg);border:1px solid var(--needs);display:flex;align-items:center;justify-content:center;font-size:17px;color:var(--needs);flex-shrink:0">{{ gate.icon }}</div>
+        <div style="flex:1"><div style="font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--needs)">{{ gate.kind }}</div><h2 style="font-size:16px;font-weight:700;margin:5px 0 1px;letter-spacing:-0.2px">{{ gate.title }}</h2><div class="mono" style="font-size:11px;color:var(--txt3)">{{ gate.route }}</div></div>
+        <button onClick="{{ closeGate }}" style="width:30px;height:30px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--txt2);cursor:pointer;font-size:14px">✕</button>
+      </div>
+      <div style="padding:20px 22px">
+        <sc-if value="{{ gate.isHandoff }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:11px;margin-bottom:15px">
+            <div style="flex:1;text-align:center;padding:11px;border-radius:10px;background:var(--panel2);border:1px solid var(--border)"><div style="font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--txt3)">Source</div><div style="font-size:12.5px;font-weight:700;margin-top:3px">{{ gate.fromName }}</div><div class="mono" style="font-size:10px;color:var(--d-claude);margin-top:2px">{{ gate.fromHost }}</div></div>
+            <span style="color:var(--needs);font-size:18px">⇆</span>
+            <div style="flex:1;text-align:center;padding:11px;border-radius:10px;background:var(--panel2);border:1px solid var(--border)"><div style="font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--txt3)">Destination</div><div style="font-size:12.5px;font-weight:700;margin-top:3px">{{ gate.toName }}</div><div class="mono" style="font-size:10px;color:var(--d-codex);margin-top:2px">{{ gate.toHost }}</div></div>
+          </div>
+        </sc-if>
+        <div style="border-radius:11px;border:1px solid var(--border2);overflow:hidden;margin-bottom:14px">
+          <div style="padding:8px 13px;background:var(--panel2);border-bottom:1px solid var(--border);font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--txt3)">{{ gate.payloadLabel }}</div>
+          <pre class="mono" style="margin:0;padding:13px;font-size:12px;color:{{ gate.payloadColor }};background:var(--bg);white-space:pre-wrap;line-height:1.6">{{ gate.payload }}</pre>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:10px 13px;border-radius:9px;background:var(--needs-bg);border:1px solid var(--needs);font-size:12px;color:var(--needs)">⚠ {{ gate.risk }}</div>
+      </div>
+      <div style="padding:15px 22px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px"><div class="mono" style="font-size:10px;color:var(--txt3);flex:1">{{ gate.foot }}</div>
+        <button onClick="{{ rejectGate }}" style="font-family:inherit;font-weight:600;font-size:12.5px;padding:9px 15px;border-radius:9px;border:1px solid var(--border2);background:var(--panel2);color:var(--txt2);cursor:pointer">Reject</button>
+        <button onClick="{{ approveGate }}" style="font-family:inherit;font-weight:700;font-size:12.5px;padding:9px 20px;border-radius:9px;border:none;background:var(--done);color:#0e1116;cursor:pointer">{{ gate.approve }}</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ hasToast }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:80;background:var(--elev);border:1px solid var(--border2);border-radius:11px;padding:12px 18px;box-shadow:var(--shadow);display:flex;align-items:center;gap:10px;font-size:12.5px;font-weight:600;animation:slideup .2s ease"><span style="color:{{ toast.color }};font-size:14px">{{ toast.icon }}</span>{{ toast.text }}</div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:&quot;100%&quot;,&quot;height&quot;:&quot;100%&quot;}}">
+class Component extends DCLogic {
+  constructor(p){ super(p); this.composerRef=React.createRef(); this.canvasWrapRef=React.createRef(); this.canvasElRef=React.createRef(); this.termRef=React.createRef(); this.wizNameRef=React.createRef(); this.wizGoalRef=React.createRef(); this.nmNameRef=React.createRef(); this.nmDirRef=React.createRef(); this.nmPromptRef=React.createRef(); }
+  state = {
+    view:'board', wsId:null, sessionId:null, fromGraph:false, nodeSel:null,
+    theme:'dark', setOpen:false, setTab:'general', translucency:true,
+    general:{ startup:false, restore:true, confirmStop:true }, defDriver:'claude', defModel:0, defPosture:'ask', bgSource:'gradient', hostExpand:null, addHost:false,
+    notif:{ needs:true, done:true, error:true, sound:true, dnd:false, group:true },
+    wiz:null, nm:null, drag:null, edge:null, draftWs:null,
+    graphZoom:0.85, graphLayout:'host', didFit:false, elk:null, slashOpen:false, bashMode:false, slashQuery:'',
+    sessTab:'activity', selFile:0, sessModel:'opus', sessPosture:'ask', overlay:null, bgOpen:true, qDraft:{},
+    sessTools:{Bash:true,Read:true,Edit:true,Write:false,WebSearch:false,'MCP·postgres':true},
+    termLines:[ {c:'var(--done)',t:'✻ Claude Code — attached (tmux: marsad-session)'},{c:'var(--txt3)',t:'  type a command, or exit to detach'},{c:'var(--txt3)',t:''} ],
+    gateOpen:false, gateRef:null, toast:null,
+    hosts:[ {id:'local',label:'localhost',kind:'local',status:'connected',agents:[{name:'Claude Code',cmd:''},{name:'Codex',cmd:'codex'}],setup:'',env:''}, {id:'hz',label:'hetzner-fra1',kind:'remote',target:'ssh:hetzner-fra1',status:'connected',agents:[{name:'Claude Code',cmd:''},{name:'Codex',cmd:'codex --sandbox'}],setup:'source ~/.profile',env:'NODE_ENV=staging'}, {id:'gpu',label:'gpu-box',kind:'remote',target:'wslssh:Ubuntu:gpu-box',status:'reconnecting',agents:[{name:'Claude Code',cmd:''},{name:'Gemini',cmd:'gemini'}],setup:'module load cuda',env:'CUDA_HOME=/usr/local/cuda\nHF_HOME=/data/hf'} ],
+    addHostOpen:false,
+    hostLinks:[ {a:'hz',b:'gpu',status:'degraded',note:'packet loss · 38%'} ],
+    workstreams:[
+      {id:'w1', name:'Release v2.4', goal:'Ship v2.4 to staging across web, tests and model'},
+      {id:'w2', name:'Fix checkout tax crash', goal:'Reproduce and fix the empty-cart tax error'},
+      {id:'w3', name:'Refactor auth middleware', goal:'Move to the new session store + per-IP rate limiting'},
+      {id:'w4', name:'Update API reference docs', goal:'Regenerate the reference from the OpenAPI spec'},
+      {id:'w5', name:'Tune ranking model', goal:'Improve the recency feature and sweep params'}
+    ],
+    sessions:[
+      {id:'r_orch', ws:'w1', name:'Release orchestrator', driver:'claude', host:'local', state:'working', role:'lead', branch:'release/2.4', contextPct:54, status:'Coordinating 4 agents'},
+      {id:'r_build', ws:'w1', name:'Build frontend bundle', driver:'claude', host:'local', state:'done', branch:'release/2.4', contextPct:31, status:'Built — 12 files'},
+      {id:'r_tests', ws:'w1', name:'Integration tests', driver:'codex', host:'hz', state:'working', branch:'release/2.4', contextPct:40, status:'Awaiting artifact'},
+      {id:'r_deploy', ws:'w1', name:'Deploy to staging', driver:'codex', host:'hz', state:'needs', branch:'release/2.4', contextPct:18, status:'Blocked on inputs'},
+      {id:'r_bench', ws:'w1', name:'Benchmark ranking model', driver:'gemini', host:'gpu', state:'working', branch:'exp/v3', contextPct:77, status:'Eval 1.2M rows'},
+      {id:'c_repro', ws:'w2', name:'Reproduce checkout bug', driver:'claude', host:'local', state:'done', branch:'fix/checkout', contextPct:22, status:'Reproduced'},
+      {id:'c_test', ws:'w2', name:'Write failing test', driver:'codex', host:'local', state:'error', branch:'fix/checkout', contextPct:33, status:'TypeError in computeTax'},
+      {id:'a_auth', ws:'w3', name:'Refactor auth middleware', driver:'claude', host:'local', state:'needs', branch:'feat/auth-store', contextPct:62, status:'Wants a DB migration',
+        gate:{kind:'permission', title:'Run a database migration', command:'npx prisma migrate deploy', cwd:'~/code/api-gateway', risk:'Writes to the database; not easily reversible.'}},
+      {id:'d_docs', ws:'w4', name:'Update API reference docs', driver:'gemini', host:'hz', state:'done', branch:'main', contextPct:18, status:'Finished — 4 files'},
+      {id:'t_rank', ws:'w5', name:'Tune ranking model', driver:'gemini', host:'gpu', state:'working', branch:'exp/v3', contextPct:71, status:'Sweeping hyperparams'}
+    ],
+    conns:[
+      {id:'k1', ws:'w1', from:'r_orch', to:'r_build', kind:'command'},
+      {id:'k2', ws:'w1', from:'r_orch', to:'r_tests', kind:'data', dir:'bi'},
+      {id:'k3', ws:'w1', from:'r_orch', to:'r_bench', kind:'command'},
+      {id:'d1', ws:'w1', from:'r_build', to:'r_tests', kind:'data', gate:{kind:'handoff', title:'Transfer build artifact to the test host', payload:'artifact: frontend-bundle@2.1MB\nsha256: 9f3c…b1\n~/code/web/dist  →  hetzner:/srv/test/in', risk:'Moves a build artifact from localhost to a remote host over SSH.'}},
+      {id:'d2', ws:'w1', from:'r_tests', to:'r_deploy', kind:'both'},
+      {id:'d3', ws:'w1', from:'r_bench', to:'r_deploy', kind:'data'},
+      {id:'k4', ws:'w2', from:'c_repro', to:'c_test', kind:'data'}
+    ],
+    transcripts:{
+      r_orch:[ {type:'prompt',text:'Take Release v2.4 to staging: build the web bundle, run integration tests, benchmark the new ranking model, then deploy.'},
+        {type:'response',text:'I’ve split this into **four agents** across three hosts:\n\n- `build` on localhost — compiles the web bundle\n- `tests` on hetzner — runs the integration suite\n- `bench` on gpu-box — evaluates the ranking model\n\nThe entrypoint I’m wiring up:\n\n```ts\nasync function release() {\n  const artifact = await build();      // localhost\n  await handoff(artifact, HOST);       // gated\n  return deploy({ target: STAGING });\n}\n```'},
+        {type:'tool',tool:'Bash',args:'npm run build',toolStatus:'exit 0',output:'compiled in 4.2s\n12 files, 2.1 MB\nno type errors'},
+        {type:'subagents',items:[{name:'test-runner',driver:'codex',status:'running'},{name:'benchmarker',driver:'gemini',status:'done'}]},
+        {type:'questions',allowCustom:true,items:[{q:'Which deploy target should staging use?',options:['staging-eu (hetzner-fra1)','staging-us (gpu-box)']},{q:'Run the smoke-test suite after deploy?',options:['Yes, full smoke suite','Critical-path only','Skip']},{q:'Notify the #releases channel when done?',options:['Yes','No']}]},
+        {type:'permission',cmd:'aws s3 sync ./dist s3://marsad-staging-eu/ \\\n  --delete --cache-control max-age=3600 \\\n  --exclude "*.map" --acl public-read',cwd:'~/code/web',risk:'Uploads the build to the staging bucket and deletes removed files. Affects the live staging site.'},
+        {type:'plan',text:'Proposed release plan. Nothing runs until you approve.',steps:['Hand off the build artifact to the test host','Run the integration suite on staging','Gate on the benchmark result','Deploy to staging and smoke-test']},
+        {type:'tool',tool:'Dispatch',args:'Integration tests → hetzner-fra1 (Codex)',toolStatus:'running',output:'session r_tests attached, awaiting artifact'},
+        {type:'working',text:'Waiting on the build→test handoff approval…'} ],
+      r_tests:[ {type:'prompt',text:'Run the integration suite against staging once the build lands.'},
+        {type:'response',text:'Ready. I\u2019m waiting for the frontend bundle to arrive from localhost before I start pytest.'},
+        {type:'working',text:'Awaiting artifact from Build frontend bundle…'} ],
+      a_auth:[ {type:'prompt',text:'Refactor the auth middleware to use the new session store and add per-IP rate limiting.'},
+        {type:'tool',tool:'Edit',args:'src/middleware/auth.ts  (+38 −12)',toolStatus:'applied',output:'+ import { SessionStore } from "../store/session-store";\n+ const limiter = new TokenBucket({ rate: 30, per: 60 });\n+ if (!limiter.take(req.ip)) return res.status(429).end();'},
+        {type:'response',text:'Done. The schema needs a rate_limit table — I need permission to apply the migration before tests pass.'} ],
+      c_test:[ {type:'prompt',text:'Write an integration test for the checkout tax path.'},
+        {type:'tool',tool:'Bash',args:'pytest tests/test_checkout.py',toolStatus:'failed'},
+        {type:'error',text:'TypeError: cannot read property "total" of undefined\n  at computeTax (checkout.py:88)'},
+        {type:'response',text:'The fixture returns an empty cart. Want me to seed it before computing tax?'} ]
+    }
+  };
+
+  drv(d){ return ({claude:{label:'Claude Code',short:'Claude',mark:'C',tint:'var(--d-claude)',bg:'rgba(217,119,87,0.12)'},codex:{label:'Codex',short:'Codex',mark:'Cx',tint:'var(--d-codex)',bg:'rgba(63,182,168,0.12)'},gemini:{label:'Gemini',short:'Gemini',mark:'G',tint:'var(--d-gemini)',bg:'rgba(155,140,240,0.12)'}})[d]; }
+  stm(s){ return ({working:{c:'var(--accent)',bg:'var(--work-bg)',label:'Working'},needs:{c:'var(--needs)',bg:'var(--needs-bg)',label:'Needs you'},error:{c:'var(--error)',bg:'var(--error-bg)',label:'Error'},done:{c:'var(--done)',bg:'var(--done-bg)',label:'Done'},starting:{c:'var(--neutral)',bg:'rgba(126,136,150,0.13)',label:'Starting'}})[s] || {c:'var(--neutral)',bg:'rgba(126,136,150,0.13)',label:s||'—'}; }
+  hostIcon(k){ return k==='local'?'▪':(k==='wsl'?'⊞':'⤓'); }
+  wsSessions(id){ return this.state.sessions.filter(s=>s.ws===id); }
+  sesCost(s){ return (s.contextPct||0)*0.035 + (s.role==='lead'?0.6:0.12); }
+  headState(id){ const ss=this.wsSessions(id); const order=['needs','error','working','done']; for(const o of order){ if(ss.some(s=>s.state===o)) return o; } return 'done'; }
+
+  toastMsg(i,c,t){ clearTimeout(this._t); this.setState({toast:{icon:i,color:c,text:t}}); this._t=setTimeout(()=>this.setState({toast:null}),2600); }
+  stop(e){ if(e&&e.stopPropagation) e.stopPropagation(); }
+  goBoard(){ this.setState({view:'board', wsId:null, sessionId:null, nodeSel:null}); }
+  openWsWizard(){ this.setState({wiz:{mode:null}}); }
+  wizClose(){ this.setState({wiz:null}); }
+  wizPick(mode){ this.setState({wiz:{...this.state.wiz,mode}}); }
+  wizNext(){
+    const name=(this.wizNameRef.current&&this.wizNameRef.current.value.trim())||'Untitled workstream';
+    const goal=(this.wizGoalRef.current&&this.wizGoalRef.current.value.trim())||'';
+    const mode=this.state.wiz.mode||'build';
+    const id='w'+Date.now();
+    this.setState({workstreams:[{id,name,goal},...this.state.workstreams], wiz:null});
+    if(mode==='quick'){ this.openNodeModal(id,true); }
+    else { this.setState({view:'graph', wsId:id, nodeSel:null, didFit:false, draftWs:id}); this._fitSig=null; }
+  }
+  confirmDraft(){ const id=this.state.draftWs; this.setState({draftWs:null}); this.toastMsg('✓','var(--done)','Workstream saved — agents launching'); }
+  enterDesign(){ if(this.state.wsId) this.setState({draftWs:this.state.wsId, nodeSel:null}); }
+  discardDraft(){ const id=this.state.draftWs; this.setState({draftWs:null, view:'board', wsId:null, workstreams:this.state.workstreams.filter(w=>w.id!==id), sessions:this.state.sessions.filter(s=>s.ws!==id), conns:this.state.conns.filter(c=>c.ws!==id)}); }
+  openNodeModal(wsId,firstAndLaunch){ this.setState({nm:{wsId,driver:this.state.defDriver,host:'local',model:0,posture:this.state.defPosture,controller:null,feeder:null,firstAndLaunch:!!firstAndLaunch}}); }
+  addNodeHere(){ if(this.state.wsId) this.openNodeModal(this.state.wsId,false); }
+  nmClose(){ this.setState({nm:null}); }
+  nmSet(patch){ this.setState({nm:{...this.state.nm,...patch}}); }
+  nmLaunch(){
+    const nm=this.state.nm; if(!nm)return; const wsId=nm.wsId;
+    const ws=this.state.workstreams.find(w=>w.id===wsId)||{};
+    const dir=(this.nmDirRef.current&&this.nmDirRef.current.value.trim())||'~/code/project';
+    const typed=(this.nmNameRef.current&&this.nmNameRef.current.value.trim())||'';
+    let nmeName;
+    if(nm.firstAndLaunch){ nmeName = ws.name||typed||(dir.split('/').filter(Boolean).pop()||'agent'); }
+    else { if(!typed){ this.toastMsg('⚠','var(--needs)','Agent name is required'); return; } nmeName=typed; }
+    const fp=(this.nmPromptRef.current&&this.nmPromptRef.current.value.trim())||'';
+    const existing=this.wsSessions(wsId);
+    const id='n'+Date.now();
+    const modelMap={claude:['Opus 4.6','Sonnet 4.6','Haiku 4'],codex:['GPT-5.2 Codex','GPT-5.1'],gemini:['Gemini 2.5 Pro','Gemini 2.5 Flash']};
+    const model=(modelMap[nm.driver]||['Default'])[nm.model]||'Default';
+    const role=existing.length===0?'lead':'worker';
+    const s={id,ws:wsId,name:nmeName,driver:nm.driver,host:nm.host,state:'starting',role,branch:'main',contextPct:2,status:'Booting…'};
+    const conns=[...this.state.conns];
+    if(nm.controller){ conns.push({id:'c'+id,ws:wsId,from:nm.controller,to:id,kind:'command'}); }
+    if(nm.feeder){ conns.push({id:'d'+id,ws:wsId,from:nm.feeder,to:id,kind:'data'}); }
+    const transcripts={...this.state.transcripts};
+    transcripts[id]= fp? [{type:'prompt',text:fp},{type:'working',text:'Starting up and reading the project…'}] : [{type:'working',text:'Session booting…'}];
+    this.setState({sessions:[s,...this.state.sessions], conns, transcripts, nm:null, didFit:false});
+    this._fitSig=null;
+    if(nm.firstAndLaunch){ this.setState({view:'session', wsId:wsId, sessionId:id, fromGraph:false, sessTab:'activity'}); }
+    else { this.setState({view:'graph', wsId:wsId}); }
+    setTimeout(()=>{ this.setState(stt=>({sessions:stt.sessions.map(x=>x.id===id?{...x,state:'working',contextPct:5,status:'Exploring the project'}:x)})); }, 1600);
+  }
+  openSettings(){ this.setState({setOpen:true}); }
+  closeSettings(){ this.setState({setOpen:false}); }
+  toggleTheme(){ this.setState({theme:this.state.theme==='dark'?'light':'dark'}); }
+  openWs(id){ const ss=this.wsSessions(id); if(ss.length===1){ this.setState({view:'session', wsId:id, sessionId:ss[0].id, fromGraph:false}); } else { this.setState({view:'graph', wsId:id, nodeSel:null}); } }
+  openSession(id, fromGraph){ this.setState({view:'session', sessionId:id, fromGraph:!!fromGraph, sessTab:'activity', selFile:0, slashOpen:false, bashMode:false}); }
+  setSessTab(k){ this.setState({sessTab:k}); }
+  openOverlay(kind,idx){ this.setState({overlay:{kind,idx}, qDraft:{}}); }
+  closeOverlay(){ this.setState({overlay:null}); }
+  setQDraft(i,val){ this.setState(s=>({qDraft:{...s.qDraft,[i]:val}})); }
+  submitQuestions(){ const ov=this.state.overlay; if(!ov)return; const id=this.state.sessionId; const tr={...this.state.transcripts}; let arr=(tr[id]||[]).slice(); const it=arr[ov.idx]; if(!it)return; const ans=(it.items||[]).map((q,i)=>this.state.qDraft[i]||'(skipped)'); arr[ov.idx]={...it,answered:true,answers:ans}; const summary=(it.items||[]).map((q,i)=>'• '+q.q+' → '+ans[i]).join('\n'); arr=arr.concat([{type:'prompt',text:summary},{type:'working',text:'Thinking…'}]); tr[id]=arr; this.setState({transcripts:tr,overlay:null,qDraft:{}}); this._resolveWorking(id); }
+  decidePermission(idx,mode){ const id=this.state.sessionId; const tr={...this.state.transcripts}; let arr=(tr[id]||[]).slice(); const dec=mode==='approve'?'Approved':(mode==='all'?'Approved (all this session)':'Rejected'); if(arr[idx]) arr[idx]={...arr[idx],decided:true,decision:dec}; arr=arr.concat(mode==='reject'?[{type:'prompt',text:'Rejected — do not run that command.'}]:[{type:'system',text:'✓ '+dec},{type:'working',text:'Running…'}]); tr[id]=arr; this.setState({transcripts:tr}); if(mode!=='reject')this._resolveWorking(id); }
+  pauseSession(){ const id=this.state.sessionId; const sessions=this.state.sessions.map(s=>s.id===id?{...s,state:s.state==='working'?'needs':s.state,status:'Paused by you'}:s); this.setState({sessions}); this.toastMsg('⎋','var(--needs)','Interrupt sent — session paused'); }
+  onTermKey(e){ if(e.key!=='Enter')return; const v=e.target.value.trim(); if(!v){return;} e.target.value=''; if(v==='clear'){this.setState({termLines:[]});return;} this.setState({termLines:[...this.state.termLines,{c:'var(--txt)',t:'❯ '+v},{c:'var(--txt3)',t:'  ⏺ '+v+' — routed to the live session'}]}); }
+  _esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  _hlCode(code){ const KW=/^(const|let|var|function|return|if|else|for|while|import|from|export|class|new|await|async|def|end|null|true|false|public|private)$/;
+    let out='',i=0,n=code.length;
+    while(i<n){ const ch=code[i];
+      if((ch==='/'&&code[i+1]==='/')||ch==='#'){ let j=i; while(j<n&&code[j]!=='\n')j++; out+='<span class="tok-c">'+this._esc(code.slice(i,j))+'</span>'; i=j; continue; }
+      if(ch==='"'||ch==="'"){ let j=i+1; while(j<n&&code[j]!==ch)j++; j=Math.min(j+1,n); out+='<span class="tok-s">'+this._esc(code.slice(i,j))+'</span>'; i=j; continue; }
+      if(/[A-Za-z_$]/.test(ch)){ let j=i; while(j<n&&/[A-Za-z0-9_$]/.test(code[j]))j++; const w=code.slice(i,j); out+=KW.test(w)?'<span class="tok-k">'+w+'</span>':this._esc(w); i=j; continue; }
+      if(/[0-9]/.test(ch)){ let j=i; while(j<n&&/[0-9.]/.test(code[j]))j++; out+='<span class="tok-n">'+code.slice(i,j)+'</span>'; i=j; continue; }
+      out+=this._esc(ch); i++; }
+    return out; }
+  _inline(s){ let h=this._esc(s);
+    h=h.replace(/`([^`]+)`/g,(m,c)=>'<code>'+this._esc(c)+'</code>');
+    h=h.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+    h=h.replace(/(^|[^*])\*([^*]+)\*/g,'$1<em>$2</em>');
+    h=h.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2">$1</a>');
+    return h; }
+  renderMd(src){ if(!src) return ''; const lines=(''+src).split('\n'); let html='',i=0,list=null;
+    const closeList=()=>{ if(list){ html+='</'+list+'>'; list=null; } };
+    while(i<lines.length){ let ln=lines[i];
+      const fence=ln.match(/^```(\w*)/);
+      if(fence){ closeList(); let body=[]; i++; while(i<lines.length && !/^```/.test(lines[i])){ body.push(lines[i]); i++; } i++; html+='<pre><code>'+this._hlCode(body.join('\n'))+'</code></pre>'; continue; }
+      const h=ln.match(/^(#{1,3})\s+(.*)/);
+      if(h){ closeList(); html+='<h'+h[1].length+'>'+this._inline(h[2])+'</h'+h[1].length+'>'; i++; continue; }
+      const ul=ln.match(/^\s*[-*]\s+(.*)/), ol=ln.match(/^\s*\d+\.\s+(.*)/);
+      if(ul){ if(list!=='ul'){closeList();list='ul';html+='<ul>';} html+='<li>'+this._inline(ul[1])+'</li>'; i++; continue; }
+      if(ol){ if(list!=='ol'){closeList();list='ol';html+='<ol>';} html+='<li>'+this._inline(ol[1])+'</li>'; i++; continue; }
+      if(ln.trim()===''){ closeList(); i++; continue; }
+      closeList(); html+='<p>'+this._inline(ln)+'</p>'; i++;
+    }
+    closeList(); return html; }
+  mdEl(src){ return React.createElement('div',{className:'md',style:{flex:1,fontSize:'13px',lineHeight:1.6,paddingTop:'3px'},dangerouslySetInnerHTML:{__html:this.renderMd(src)}}); }
+  _changes(id){ const d={
+    a_auth:[ {name:'src/middleware/auth.ts',status:'M',add:38,del:12,diff:[{sig:' ',text:'import { Request, Response } from "express";',ln:'1'},{sig:'-',text:'import { createSession } from "./legacy";',ln:'2'},{sig:'+',text:'import { SessionStore } from "../store/session-store";',ln:'2'},{sig:'+',text:'import { TokenBucket } from "../ratelimit/bucket";',ln:'3'},{sig:' ',text:'',ln:'4'},{sig:'+',text:'const limiter = new TokenBucket({ rate: 30, per: 60 });',ln:'5'},{sig:' ',text:'export async function auth(req, res, next) {',ln:'6'},{sig:'-',text:'  const s = await createSession(req.cookies.sid);',ln:'7'},{sig:'+',text:'  if (!limiter.take(req.ip)) return res.status(429).end();',ln:'7'},{sig:'+',text:'  const s = await SessionStore.get(req.cookies.sid);',ln:'8'},{sig:' ',text:'  if (!s) return res.status(401).end();',ln:'9'},{sig:' ',text:'  next();',ln:'10'},{sig:' ',text:'}',ln:'11'}]},
+      {name:'prisma/schema.prisma',status:'M',add:9,del:0,diff:[{sig:' ',text:'model Session { id String @id }',ln:'20'},{sig:'+',text:'',ln:'21'},{sig:'+',text:'model RateLimit {',ln:'22'},{sig:'+',text:'  ip        String   @id',ln:'23'},{sig:'+',text:'  tokens    Int      @default(30)',ln:'24'},{sig:'+',text:'  updatedAt DateTime @updatedAt',ln:'25'},{sig:'+',text:'}',ln:'26'}]},
+      {name:'src/ratelimit/bucket.ts',status:'A',add:34,del:0,diff:[{sig:'+',text:'export class TokenBucket {',ln:'1'},{sig:'+',text:'  constructor(private cfg: {rate:number;per:number}) {}',ln:'2'},{sig:'+',text:'  take(key: string): boolean { return true; }',ln:'3'},{sig:'+',text:'}',ln:'4'}]} ]
+    }; return d[id] || [ {name:'src/main.ts',status:'M',add:14,del:6,diff:[{sig:' ',text:'// '+id,ln:'1'},{sig:'-',text:'const x = legacy();',ln:'2'},{sig:'+',text:'const x = improved();',ln:'2'},{sig:' ',text:'export default x;',ln:'3'}]} ]; }
+  clearNodeSel(){ this.setState({nodeSel:null}); }
+  setZoom(z){ this.setState({graphZoom:Math.max(0.25,Math.min(1.6,z)), didFit:true}); }
+  zoomIn(){ this.setZoom(this.state.graphZoom*1.2); }
+  zoomOut(){ this.setZoom(this.state.graphZoom/1.2); }
+  zoomReset(){ this.setZoom(1); }
+  fitView(){ const w=this.canvasWrapRef.current; if(!w||!this._cw){ return; } const z=Math.max(0.25,Math.min((w.clientWidth-36)/this._cw,(w.clientHeight-36)/this._ch,1.4)); this.setState({graphZoom:z,didFit:true}); setTimeout(()=>{ const el=this.canvasWrapRef.current; if(el){ el.scrollLeft=Math.max(0,(this._cw*z-el.clientWidth)/2); el.scrollTop=0; } },30); }
+  smoothPath(p){ if(!p||p.length<2) return ''; if(p.length===2){ return `M ${p[0].x} ${p[0].y} L ${p[1].x} ${p[1].y}`; } let d=`M ${p[0].x} ${p[0].y}`; for(let i=1;i<p.length-1;i++){ const mx=(p[i].x+p[i+1].x)/2, my=(p[i].y+p[i+1].y)/2; d+=` Q ${p[i].x} ${p[i].y}, ${mx} ${my}`; } d+=` L ${p[p.length-1].x} ${p[p.length-1].y}`; return d; }
+  setLayout(k){ this.setState({graphLayout:k, didFit:false}); }
+  componentDidMount(){ this._tryElk(); }
+  toCanvas(clientX,clientY){ const el=this.canvasElRef&&this.canvasElRef.current; const z=this.state.graphZoom; if(el){ const r=el.getBoundingClientRect(); return {x:(clientX-r.left)/z, y:(clientY-r.top)/z}; } const w=this.canvasWrapRef.current; if(!w)return{x:0,y:0}; const r=w.getBoundingClientRect(); return {x:(clientX-r.left+w.scrollLeft)/z, y:(clientY-r.top+w.scrollTop)/z}; }
+  onHandleDown(id,e){ e.preventDefault(); e.stopPropagation(); const p=this.toCanvas(e.clientX,e.clientY); this.setState({drag:{from:id,x0:p.x,y0:p.y,x:p.x,y:p.y}});
+    this._mv=(ev)=>{ const q=this.toCanvas(ev.clientX,ev.clientY); this.setState(s=>s.drag?{drag:{...s.drag,x:q.x,y:q.y}}:null); };
+    this._up=(ev)=>{ window.removeEventListener('mousemove',this._mv); window.removeEventListener('mouseup',this._up); const el=document.elementFromPoint(ev.clientX,ev.clientY); const host=el&&el.closest?el.closest('[data-node-id]'):null; const to=host&&host.getAttribute('data-node-id'); const from=this.state.drag&&this.state.drag.from; this.setState({drag:null}); if(to&&from&&to!==from){ this.setState({edge:{from,to}}); } };
+    window.addEventListener('mousemove',this._mv); window.addEventListener('mouseup',this._up); }
+  makeEdge(kind){ const e=this.state.edge; if(!e)return; const id='e'+Date.now(); this.setState({conns:[...this.state.conns,{id,ws:this.state.wsId,from:e.from,to:e.to,kind}], edge:null, didFit:false}); this._fitSig=null; this.toastMsg('⛓','var(--accent2)','Connected'); }
+  componentDidUpdate(){ const sig=this.state.view+'|'+this.state.wsId+'|'+this.state.graphLayout; if(this.state.view==='graph' && sig!==this._seenSig){ this._seenSig=sig; this._tryElk(); } if(this.state.view==='graph' && !this.state.didFit && sig!==this._fitSig){ this._fitSig=sig; setTimeout(()=>this.fitView(),60); } }
+  _tryElk(tries){ tries=tries||0; if(this.state.view!=='graph'||!this.state.wsId||this.state.graphLayout!=='flow') return; if(!window.ELK){ if(tries<25) setTimeout(()=>this._tryElk(tries+1),200); return; } this.computeElk(); }
+  async computeElk(){
+    const st=this.state; const wsId=st.wsId, flow=st.graphLayout==='flow'; const sig=wsId+'|'+st.graphLayout;
+    if(!flow) return;
+    if(this._elkRunning===sig) return; this._elkRunning=sig;
+    const ss=this.wsSessions(wsId); const wsConns=st.conns.filter(c=>c.ws===wsId);
+    const NW=190,NH=66;
+    const children=ss.map(s=>({id:s.id,width:NW,height:NH}));
+    const rootOpts={'elk.algorithm':'layered','elk.direction':'DOWN','elk.edgeRouting':'SPLINES','elk.layered.spacing.nodeNodeBetweenLayers':'78','elk.spacing.nodeNode':'48','elk.layered.spacing.edgeNodeBetweenLayers':'26','elk.layered.crossingMinimization.semiInteractive':'false'};
+    const graph={ id:'root', layoutOptions:rootOpts, children, edges: wsConns.map(c=>({id:c.id, sources:[c.from], targets:[c.to]})) };
+    try{
+      const elk=this.elk||(this.elk=new window.ELK());
+      const res=await elk.layout(graph);
+      const nodes={}, zones=[];
+      const walk=(p,ox,oy)=>{ (p.children||[]).forEach(ch=>{ const ax=ox+(ch.x||0), ay=oy+(ch.y||0); if((''+ch.id).indexOf('host_')===0){ zones.push({hid:(''+ch.id).slice(5),x:ax,y:ay,w:ch.width,h:ch.height}); walk(ch,ax,ay); } else { nodes[ch.id]={x:ax,y:ay}; } }); };
+      walk(res,0,0);
+      const edges={}; (res.edges||[]).forEach(e=>{ const s=(e.sections||[])[0]; if(!s)return; edges[e.id]=[s.startPoint,...(s.bendPoints||[]),s.endPoint]; });
+      this._elkRunning=null;
+      this.setState({ elk:{sig, nodes, zones, edges, w:res.width, h:res.height} });
+      setTimeout(()=>{ this.setState({didFit:false}); this._fitSig=null; },20);
+    }catch(err){ this._elkRunning=null; }
+  }
+  // Catmull-Rom spline through points with vertical end tangents
+  spline(pts){ if(pts.length===2){ const a=pts[0],b=pts[1],dy=b.y-a.y; return `M ${a.x} ${a.y} C ${a.x} ${a.y+dy*0.45}, ${b.x} ${b.y-dy*0.45}, ${b.x} ${b.y}`; }
+    const P=[{x:pts[0].x,y:pts[0].y-1},...pts,{x:pts[pts.length-1].x,y:pts[pts.length-1].y+1}];
+    let d=`M ${pts[0].x} ${pts[0].y}`;
+    for(let i=1;i<P.length-2;i++){ const p0=P[i-1],p1=P[i],p2=P[i+1],p3=P[i+2];
+      const c1x=p1.x+(p2.x-p0.x)/6, c1y=p1.y+(p2.y-p0.y)/6, c2x=p2.x-(p3.x-p1.x)/6, c2y=p2.y-(p3.y-p1.y)/6;
+      d+=` C ${c1x} ${c1y}, ${c2x} ${c2y}, ${p2.x} ${p2.y}`; }
+    return d; }
+  openGateConn(id){ this.setState({gateOpen:true, gateRef:{type:'conn',id}}); }
+  openGateSession(id){ this.setState({gateOpen:true, gateRef:{type:'session',id}}); }
+  closeGate(){ this.setState({gateOpen:false, gateRef:null}); }
+  approveGate(){ const r=this.state.gateRef; if(!r){return;} 
+    if(r.type==='conn'){ const conns=this.state.conns.map(c=>c.id===r.id?{...c,gate:{...c.gate,state:'approved'}}:c); const sessions=this.state.sessions.map(s=>s.id==='r_tests'?{...s,status:'Running pytest'}:s); this.setState({conns,sessions,gateOpen:false,gateRef:null}); this.toastMsg('✓','var(--done)','Handoff approved — released to hetzner-fra1'); }
+    else { const sessions=this.state.sessions.map(s=>s.id===r.id?{...s,state:'working',gate:null,status:'Approved — resuming'}:s); this.setState({sessions,gateOpen:false,gateRef:null}); this.toastMsg('✓','var(--done)','Approved — decision sent to the session'); } }
+  rejectGate(){ this.setState({gateOpen:false,gateRef:null}); this.toastMsg('↩','var(--error)','Rejected — held'); }
+
+  send(){ const el=this.composerRef.current; if(!el)return; const t=el.value.trim(); if(!t)return; if(t[0]==='/'){ this.runSlash(t.split(' ')[0]); return; } el.value=''; const id=this.state.sessionId; const tr={...this.state.transcripts}; const base=tr[id]||[];
+    if(t[0]==='!'){ const cmd=t.slice(1).trim(); const host=(this.state.sessions.find(s=>s.id===id)||{}).host||'local'; tr[id]=base.concat([{type:'bash',cmd,output:'(ran on '+host+') $ '+cmd+'\nexit 0'}]); this.setState({transcripts:tr,bashMode:false}); return; }
+    tr[id]=base.concat([{type:'prompt',text:t},{type:'working',text:'Thinking…'}]); this.setState({transcripts:tr,slashOpen:false,bashMode:false}); this._resolveWorking(id); }
+  _resolveWorking(id){ clearTimeout(this._rw); this._rw=setTimeout(()=>{ const t={...this.state.transcripts}; if(t[id]){ t[id]=t[id].filter(m=>m.type!=='working').concat([{type:'response',text:'Got it — on it now.'}]); this.setState({transcripts:t}); } },1000); }
+  onKey(e){ if(e.key==='Escape'){ if(this.state.slashOpen){ this.setState({slashOpen:false}); } else { this.pauseSession(); } return; } if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); this.send(); } }
+  onComposerInput(e){ const v=e.target.value; this.setState({slashOpen:v[0]==='/', bashMode:v[0]==='!', slashQuery:v}); }
+  toggleTool(idx){ const id=this.state.sessionId; const tr={...this.state.transcripts}; const arr=(tr[id]||[]).slice(); if(arr[idx]){ arr[idx]={...arr[idx],open:!arr[idx].open}; tr[id]=arr; this.setState({transcripts:tr}); } }
+  answerQuestion(idx,ans){ const id=this.state.sessionId; const tr={...this.state.transcripts}; let arr=(tr[id]||[]).slice(); if(arr[idx]) arr[idx]={...arr[idx],answered:true,answer:ans}; arr=arr.concat([{type:'prompt',text:ans},{type:'working',text:'Thinking…'}]); tr[id]=arr; this.setState({transcripts:tr,overlay:null}); this._resolveWorking(id); }
+  decidePlan(idx,ok){ const id=this.state.sessionId; const tr={...this.state.transcripts}; let arr=(tr[id]||[]).slice(); if(arr[idx]) arr[idx]={...arr[idx],decided:true,decision:ok?'Approved — exiting plan mode':'Kept in plan mode'}; arr=arr.concat(ok?[{type:'system',text:'⏎ Plan approved — exiting plan mode'},{type:'working',text:'Executing step 1…'}]:[{type:'prompt',text:'Keep refining the plan before running.'}]); tr[id]=arr; this.setState({transcripts:tr,overlay:null}); if(ok)this._resolveWorking(id); }
+  runSlash(name){ const el=this.composerRef.current; if(el)el.value=''; const id=this.state.sessionId; const tr={...this.state.transcripts}; const arr=(tr[id]||[]).slice();
+    if(name==='/clear'){ tr[id]=[{type:'system',text:'⌘ /clear — conversation history cleared'}]; }
+    else if(name==='/plan'){ arr.push({type:'plan',text:'Plan mode on — I’ll outline the approach before acting.',steps:['Explore the affected modules','Draft the change set','Run the tests','Report back for approval']}); tr[id]=arr; }
+    else if(name==='/compact'){ const sessions=this.state.sessions.map(s=>s.id===id?{...s,contextPct:Math.max(12,Math.round(s.contextPct*0.4))}:s); this.setState({sessions}); arr.push({type:'system',text:'⌘ /compact — context compacted'}); tr[id]=arr; }
+    else if(name==='/agents'){ arr.push({type:'subagents',items:[{name:'test-runner',driver:'codex',status:'running'},{name:'benchmarker',driver:'gemini',status:'done'}]}); tr[id]=arr; }
+    else { arr.push({type:'system',text:'⌘ '+name}); tr[id]=arr; }
+    this.setState({transcripts:tr,slashOpen:false}); }
+
+  nc(p){ return {cx:p.x+96, cy:p.y+33}; }
+  path(a,b){ const A=this.nc(a),B=this.nc(b); const dx=B.cx-A.cx,dy=B.cy-A.cy; if(Math.abs(dx)>=Math.abs(dy)){ const o=Math.max(46,Math.abs(dx)*0.45); return `M ${A.cx} ${A.cy} C ${A.cx+o} ${A.cy}, ${B.cx-o} ${B.cy}, ${B.cx} ${B.cy}`; } const o=Math.max(40,Math.abs(dy)*0.5); return `M ${A.cx} ${A.cy} C ${A.cx} ${A.cy+o}, ${B.cx} ${B.cy-o}, ${B.cx} ${B.cy}`; }
+
+  renderVals(){
+    const st=this.state;
+    const hById={}; st.hosts.forEach(h=>hById[h.id]=h);
+    const sById={}; st.sessions.forEach(s=>sById[s.id]=s);
+
+    // ---- board rollups ----
+    const wsCard=(w)=>{
+      const ss=this.wsSessions(w.id); const head=this.headState(w.id); const hm=this.stm(head);
+      const hostIds=[...new Set(ss.map(s=>s.host))];
+      const drivers=[...new Set(ss.map(s=>s.driver))];
+      const counts={}; ss.forEach(s=>{counts[s.state]=(counts[s.state]||0)+1;});
+      const pillOrder=['needs','working','error','done'];
+      const statusPills=pillOrder.filter(k=>counts[k]).map(k=>{ const m=this.stm(k); return {label:counts[k]+' '+m.label.toLowerCase(), color:m.c, bg:m.bg}; });
+      const gateConn=st.conns.find(c=>c.ws===w.id && c.gate && c.gate.state!=='approved');
+      const gateSes=ss.find(s=>s.gate);
+      let headline='', cta='Open';
+      if(head==='needs'){ if(gateConn){ headline='Cross-host handoff waiting — build artifact → test host.'; cta='Review handoff'; } else if(gateSes){ headline=gateSes.name+' wants to run: '+gateSes.gate.command; cta='Review'; } else { headline='A session is waiting on your decision.'; cta='Review'; } }
+      else if(head==='error'){ const e=ss.find(s=>s.state==='error'); headline=(e?e.name+': ':'')+(e?e.status:'A session errored.'); cta='Open'; }
+      return { id:w.id, name:w.name, goal:w.goal, color:hm.c, bg:hm.bg, headLabel:hm.label, headAnim: head==='working'?'animation:dotpulse 1.3s infinite':'',
+        glow: head==='needs'?'rgba(241,168,58,0.18)':(head==='error'?'rgba(224,89,74,0.16)':'transparent'),
+        hostChips: hostIds.map(h=>({icon:this.hostIcon(hById[h].kind), label:hById[h].label})),
+        driverDots: drivers.map(d=>({tint:this.drv(d).tint, label:this.drv(d).label})),
+        sessionLabel: ss.length+(ss.length===1?' session':' sessions'),
+        sessionDots: ss.map(s=>({color:this.stm(s.state).c, anim:s.state==='working'?'animation:dotpulse 1.3s infinite':'', title:s.name})),
+        statusPills, headline, cta,
+        onOpen:()=>this.openWs(w.id),
+        onReview:(e)=>{ this.stop(e); if(gateConn){ this.setState({view:'graph',wsId:w.id}); setTimeout(()=>this.openGateConn(gateConn.id),0); } else if(gateSes){ this.openWs(w.id); setTimeout(()=>this.openGateSession(gateSes.id),0); } else { this.openWs(w.id); } } };
+    };
+    const allWs=st.workstreams.map(wsCard);
+    const attention=allWs.filter(w=>w.headLabel==='Needs you'||w.headLabel==='Error');
+
+    // ---- graph layout ----
+    let gZones=[],gNodes=[],gWires=[],gGates=[],gWs={},canvasStyle='',svgSize='';
+    if(st.view==='graph' && st.wsId){
+      const w=st.workstreams.find(x=>x.id===st.wsId); const ss=this.wsSessions(st.wsId);
+      const wsConns=st.conns.filter(c=>c.ws===st.wsId);
+      const lanes=st.hosts.map(h=>h.id).filter(h=>ss.some(s=>s.host===h));
+      // depth = longest dependency path (downward flow)
+      const incoming={}; ss.forEach(s=>incoming[s.id]=[]);
+      wsConns.forEach(c=>{ if(incoming[c.to]) incoming[c.to].push(c.from); });
+      const dmemo={};
+      const depthOf=(id,g)=>{ if(dmemo[id]!=null)return dmemo[id]; const guard=g||new Set(); if(guard.has(id))return 0; guard.add(id); let d=0; (incoming[id]||[]).forEach(p=>{ d=Math.max(d, depthOf(p,guard)+1); }); dmemo[id]=d; return d; };
+      ss.forEach(s=>depthOf(s.id)); let maxDepth=0; ss.forEach(s=>maxDepth=Math.max(maxDepth,dmemo[s.id]));
+      const flow=st.graphLayout==='flow';
+      const LANE_W=222,GAP=30,X0=36,Y0=142,ROW_H=132,NW=184,NH=66,COL_W=212;
+      const laneX=(hid)=>X0+lanes.indexOf(hid)*(LANE_W+GAP);
+      const pos={}; let canvasW;
+      // layers for ordering
+      const layers={}; ss.forEach(s=>{ (layers[dmemo[s.id]]=layers[dmemo[s.id]]||[]).push(s.id); });
+      if(flow){
+        // free DAG: order each layer by barycenter of parents to reduce crossings
+        const orderIdx={};
+        const maxCols=Math.max.apply(null,Object.values(layers).map(a=>a.length));
+        for(let d=0; d<=maxDepth; d++){ let row=(layers[d]||[]).slice();
+          if(d>0){ row.sort((a,b)=>{ const pa=incoming[a].map(p=>orderIdx[p]).filter(v=>v!=null), pb=incoming[b].map(p=>orderIdx[p]).filter(v=>v!=null); const ma=pa.length?pa.reduce((x,y)=>x+y,0)/pa.length:0, mb=pb.length?pb.reduce((x,y)=>x+y,0)/pb.length:0; return ma-mb; }); }
+          const off=(maxCols-row.length)/2; row.forEach((id,i)=>{ orderIdx[id]=i; pos[id]={x:X0+(i+off)*COL_W, y:Y0+d*ROW_H}; }); }
+        canvasW=X0*2+maxCols*COL_W;
+      } else {
+        // swimlanes: x by host, y by depth; stack collisions at same (host,depth)
+        const _slot={}; ss.forEach(s=>{ const key=s.host+'|'+dmemo[s.id]; const n=(_slot[key]=(_slot[key]||0)+1)-1; pos[s.id]={x:laneX(s.host)+(LANE_W-NW)/2, y:Y0+dmemo[s.id]*ROW_H+n*(NH+22)}; });
+        canvasW=X0+lanes.length*(LANE_W+GAP);
+      }
+      let canvasH=Math.max(Y0+(maxDepth+1)*ROW_H+30,560);
+      // ELK async layout result for this ws+mode overrides positions + routing
+      const elkOk = st.elk && st.elk.sig===(st.wsId+'|'+st.graphLayout);
+      let elkEdges=null, elkZones=null;
+      if(elkOk){ Object.keys(st.elk.nodes).forEach(id=>{ if(pos[id]) pos[id]={x:st.elk.nodes[id].x, y:st.elk.nodes[id].y}; }); canvasW=Math.max(st.elk.w+44,420); canvasH=Math.max(st.elk.h+44,480); elkEdges=st.elk.edges; elkZones=st.elk.zones; }
+      this._cw=canvasW; this._ch=canvasH;
+      canvasStyle=`position:relative;width:${canvasW}px;height:${canvasH}px;background-image:radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px);background-size:26px 26px`;
+      svgSize=`width:${canvasW}px;height:${canvasH}px`;
+      const zoneH=canvasH-92-20;
+      gZones = flow ? [] : ((elkZones && elkZones.length) ? elkZones.map((z)=>{ const h=hById[z.hid]; const conn=h.status==='connected'; return {label:h.label,kind:h.kind,icon:this.hostIcon(h.kind),dot:conn?'var(--done)':'var(--needs)',dotAnim:conn?'':'animation:dotpulse 1s infinite',box:`position:absolute;left:${z.x}px;top:${z.y}px;width:${z.w}px;height:${z.h}px;border:1px solid var(--border);border-radius:16px;background:rgba(21,25,33,0.5);backdrop-filter:blur(10px);overflow:hidden`}; }) : lanes.map((hid)=>{ const h=hById[hid]; const conn=h.status==='connected'; return {label:h.label,kind:h.kind,icon:this.hostIcon(h.kind),dot:conn?'var(--done)':'var(--needs)',dotAnim:conn?'':'animation:dotpulse 1s infinite',box:`position:absolute;left:${laneX(hid)}px;top:92px;width:${LANE_W}px;height:${zoneH}px;border:1px solid var(--border);border-radius:16px;background:rgba(21,25,33,0.5);backdrop-filter:blur(10px);overflow:hidden`}; }));
+      // boundary anchors — distribute multiple edges along a node's bottom (out) / top (in)
+      const ncx=(id)=>pos[id].x+NW/2;
+      const outMap={},inMap={}; ss.forEach(s=>{outMap[s.id]=[];inMap[s.id]=[];});
+      wsConns.forEach(c=>{ if(outMap[c.from])outMap[c.from].push(c); if(inMap[c.to])inMap[c.to].push(c); });
+      Object.keys(outMap).forEach(k=>outMap[k].sort((a,b)=>ncx(a.to)-ncx(b.to)));
+      Object.keys(inMap).forEach(k=>inMap[k].sort((a,b)=>ncx(a.from)-ncx(b.from)));
+      const outA=(c)=>{ const arr=outMap[c.from],i=arr.indexOf(c),p=pos[c.from]; return {x:p.x+NW*((i+1)/(arr.length+1)), y:p.y+NH}; };
+      const inA=(c)=>{ const arr=inMap[c.to],i=arr.indexOf(c),p=pos[c.to]; return {x:p.x+NW*((i+1)/(arr.length+1)), y:p.y}; };
+      // route around nodes sitting on intermediate rows: insert side waypoints
+      const nodesAtDepth=(d)=>ss.filter(s=>dmemo[s.id]===d).map(s=>pos[s.id]);
+      const waypoints=(c,A,B)=>{ const sd=dmemo[c.from],td=dmemo[c.to]; const wps=[]; if(td-sd<2) return wps;
+        for(let d=sd+1; d<td; d++){ const t=(d-sd)/(td-sd); const xi=A.x+(B.x-A.x)*t; const rowY=Y0+d*ROW_H; const blockers=nodesAtDepth(d).filter(p=>xi>p.x-26 && xi<p.x+NW+26);
+          if(blockers.length){ const goRight=B.x>=A.x; const edge=goRight?Math.max.apply(null,blockers.map(p=>p.x+NW))+30:Math.min.apply(null,blockers.map(p=>p.x))-30; wps.push({x:edge,y:rowY+NH/2}); }
+          else { wps.push({x:xi,y:rowY+NH/2}); } }
+        return wps; };
+      const sel=st.nodeSel; let hiN=null,hiC=null;
+      if(sel){ hiN=new Set([sel]); hiC=new Set(); wsConns.forEach(c=>{ if(c.from===sel||c.to===sel){hiC.add(c.id);hiN.add(c.from);hiN.add(c.to);} }); }
+      const designing=st.draftWs===st.wsId;
+      gNodes=ss.map(s=>{ const d=this.drv(s.driver),m=this.stm(s.state); const p=pos[s.id]; const dim=hiN&&!hiN.has(s.id); const selected=sel===s.id;
+        return {id:s.id,name:s.name,status:s.status,color:m.c,dotAnim:s.state==='working'?'animation:dotpulse 1.3s infinite':'',driverShort:d.short,driverTint:d.tint,driverBg:d.bg,showHost:flow,showArrow:!designing,canConnect:designing,hostChip:this.hostIcon(hById[s.host].kind)+' '+hById[s.host].label,onClick:(e)=>{this.stop(e); if(!designing) this.openSession(s.id,true);},onHandleDown:(e)=>this.onHandleDown(s.id,e),
+          box:`position:absolute;left:${p.x}px;top:${p.y}px;width:${NW}px;height:${NH}px;padding:9px 12px;border-radius:13px;cursor:pointer;background:rgba(26,31,41,0.94);border:1px solid ${selected?m.c:'var(--border2)'};border-left:3px solid ${m.c};box-shadow:var(--shadow-sm);opacity:${dim?0.34:1}`}; });
+      wsConns.forEach(c=>{ const dim=hiC&&!hiC.has(c.id); const op=dim?0.16:1; const bi=c.dir==='bi'; const attn=!!(c.gate&&c.gate.state!=='approved');
+        let raw; if(elkEdges && elkEdges[c.id] && elkEdges[c.id].length>=2){ raw=elkEdges[c.id]; } else { const A=outA(c),B=inA(c); raw=[A,...waypoints(c,A,B),B]; }
+        const S=flow?24:40, p0=raw[0], pN=raw[raw.length-1];
+        const mids=raw.slice(1,-1).filter(pt=>Math.hypot(pt.x-p0.x,pt.y-p0.y)>28 && Math.hypot(pt.x-pN.x,pt.y-pN.y)>28);
+        const pts=[p0,{x:p0.x,y:p0.y+S},...mids,{x:pN.x,y:pN.y-S},pN];
+        const d=this.smoothPath(pts);
+        const col=attn?'var(--needs)':(bi?'var(--txt2)':'var(--accent)'), am=attn?'arrN':(bi?'arrG':'arrA');
+        const mk=(id)=>{ let s='marker-end:url(#'+id+')'; if(bi) s+=';marker-start:url(#'+id+')'; return s; };
+        if(c.kind==='command'){ gWires.push({d,style:`fill:none;stroke:${col};stroke-width:2;stroke-dasharray:2 5;stroke-linecap:round;opacity:${op};${mk(am)}`}); }
+        else if(c.kind==='both'){ gWires.push({d,style:`fill:none;stroke:${col};stroke-width:2.6;opacity:${op};${mk(am)}`}); }
+        else { gWires.push({d,style:`fill:none;stroke:${col};stroke-width:${attn?3:2.4};stroke-dasharray:8 7;animation:flow 1.1s linear infinite;opacity:${op};${mk(am)}`}); }
+        if(c.gate&&c.gate.state!=='approved'){ const mid=raw[Math.floor(raw.length/2)]; const gx=raw.length%2?mid.x:(raw[raw.length/2-1].x+raw[raw.length/2].x)/2; const gy=raw.length%2?mid.y:(raw[raw.length/2-1].y+raw[raw.length/2].y)/2; gGates.push({box:`position:absolute;left:${gx}px;top:${gy}px;transform:translate(-50%,-50%);z-index:4;cursor:pointer;opacity:${dim?0.3:1}`,onClick:(e)=>{this.stop(e);this.openGateConn(c.id);}}); } });
+      const need=ss.filter(s=>s.state==='needs').length; const working=ss.filter(s=>s.state==='working').length;
+      const gc=st.conns.find(c=>c.ws===st.wsId&&c.gate&&c.gate.state!=='approved');
+      const _tot=ss.reduce((a,x)=>a+this.sesCost(x),0)||1;
+      const _byHost={}; ss.forEach(x=>{ _byHost[x.host]=(_byHost[x.host]||0)+this.sesCost(x); });
+      const _hcol={local:'var(--accent)',hz:'var(--d-codex)',gpu:'var(--d-gemini)'};
+      gWs={ name:w.name, goal:w.goal, nodeCount:ss.length, working, needs:need, needColor:need?'var(--needs)':'var(--txt3)', needBorder:need?'var(--needs)':'var(--border)', needBg:need?'var(--needs-bg)':'var(--panel)',
+        costTotal:'$'+_tot.toFixed(2),
+        hostCosts:Object.keys(_byHost).map(hid=>({label:hById[hid].label,icon:this.hostIcon(hById[hid].kind),cost:'$'+_byHost[hid].toFixed(2),pct:Math.round(_byHost[hid]/_tot*100),color:_hcol[hid]||'var(--neutral)'})),
+        nodeCosts:ss.map(x=>{const c=this.sesCost(x);const dm=this.drv(x.driver);return{name:x.name,driver:dm.short,dtint:dm.tint,dbg:dm.bg,color:this.stm(x.state).c,anim:x.state==='working'?'animation:dotpulse 1.3s infinite':'',cost:'$'+c.toFixed(2),pct:Math.round(c/_tot*100),onClick:()=>this.openSession(x.id,true)};}).sort((a,b)=>parseFloat(b.cost.slice(1))-parseFloat(a.cost.slice(1))),
+        hasGate:!!gc, gateText: gc?'Build finished on localhost and wants to send its artifact to the test host on hetzner-fra1.':'', onGate:()=>gc&&this.openGateConn(gc.id),
+        sessionList: ss.map(s=>({name:s.name,color:this.stm(s.state).c,anim:s.state==='working'?'animation:dotpulse 1.3s infinite':'',cost:'$'+this.sesCost(s).toFixed(2),onClick:()=>this.openSession(s.id,true)})) };
+    }
+
+    // ---- session ----
+    let ses={},transcript=[],chg={files:[],rows:[]},usage={},cfg={},term={lines:[]},bg={show:false,jobs:[]},ov={open:false};
+    if(st.view==='session' && st.sessionId){
+      const s=sById[st.sessionId]; const d=this.drv(s.driver),m=this.stm(s.state); const h=hById[s.host];
+      const wsObj=st.workstreams.find(x=>x.id===s.ws); const multi=this.wsSessions(s.ws).length>1;
+      ses={ name:s.name, color:m.c, bg:m.bg, stateLabel:m.label, driverLabel:d.label, driverTint:d.tint, driverBg:d.bg, driverMark:d.mark,
+        hostLabel:h.label, hostIcon:this.hostIcon(h.kind), branch:s.branch, contextPct:s.contextPct,
+        backLabel: (st.fromGraph&&multi)?wsObj.name:'Workstreams',
+        onBack:()=>{ if(st.fromGraph&&multi){ this.setState({view:'graph',wsId:s.ws,sessionId:null}); } else { this.goBoard(); } },
+        hasGate:!!s.gate, gateLead: s.gate?('Wants to run a '+(s.gate.kind==='permission'?'command':'action')):'', gateSummary: s.gate?('$ '+s.gate.command):'', onReview:()=>this.openGateSession(s.id),
+        tabs:[['activity','Activity'],['changes','Changes'],['usage','Usage'],['config','Config'],['terminal','Terminal']].map(([k,label])=>({label,onClick:()=>this.setSessTab(k),bd:st.sessTab===k?'var(--accent)':'transparent',fg:st.sessTab===k?'var(--txt)':'var(--txt3)'})),
+        isActivity:st.sessTab==='activity', isChanges:st.sessTab==='changes', isUsage:st.sessTab==='usage', isConfig:st.sessTab==='config', isTerminal:st.sessTab==='terminal' };
+      transcript=(st.transcripts[s.id]||[{type:'response',text:'Session ready.'}]).map((x,idx)=>{ const base={...x,idx,isPrompt:x.type==='prompt',isResponse:x.type==='response',isTool:x.type==='tool',isBash:x.type==='bash',isError:x.type==='error',isWorking:x.type==='working',isSubagents:x.type==='subagents',isQuestions:x.type==='questions',isPermission:x.type==='permission',isPlan:x.type==='plan',isSystem:x.type==='system'};
+        if(x.type==='response'){ base.body=this.mdEl(x.text); }
+        if(x.type==='tool'){ base.open=!!x.open; base.caret=x.open?'▾':'▸'; base.statusColor=(x.toolStatus||'').match(/fail|error/i)?'var(--error)':'var(--done)'; base.onToggle=()=>this.toggleTool(idx); }
+        if(x.type==='subagents'){ base.total=(x.items||[]).length; }
+        if(x.type==='questions'){ base.qPending=!x.answered; base.qResolved=!!x.answered; base.qCount=(x.items||[]).length; base.text=(x.items&&x.items[0]?x.items[0].q:''); base.open=!!x.open; base.caret=x.open?'▾':'▸'; base.onToggle=()=>this.toggleTool(idx); base.onOpen=()=>this.openOverlay('questions',idx); base.qList=(x.items||[]).map((q,qi)=>({q:q.q,opts:(q.options||[]).map(o=>{const pk=o===(x.answers||[])[qi];return{label:o,mark:pk?'✓ ':'',bd:pk?'var(--done)':'var(--border2)',bg:pk?'var(--done-bg)':'var(--panel2)',fg:pk?'var(--done)':'var(--txt3)'};}).concat((x.answers&&x.answers[qi]&&(q.options||[]).indexOf(x.answers[qi])<0)?[{label:x.answers[qi],mark:'✓ ',bd:'var(--done)',bg:'var(--done-bg)',fg:'var(--done)'}]:[])})); }
+        if(x.type==='permission'){ base.gPending=!x.decided; base.gResolved=!!x.decided; base.cmd=x.cmd; base.cmdPreview=(x.cmd||'').split('\n')[0]; base.cmdMeta=((x.cmd||'').indexOf('\n')>=0?'multiline · ':'')+'cwd '+x.cwd; base.risk=x.risk; base.decision=x.decision||''; base.caret=x.open?'▾':'▸'; base.decColor=/pprove/.test(x.decision||'')?'var(--done)':'var(--error)'; base.decMark=/pprove/.test(x.decision||'')?'✓':'✕'; base.onToggle=()=>this.toggleTool(idx); base.onOpen=()=>this.openOverlay('permission',idx); }
+        if(x.type==='plan'){ base.pPending=!x.decided; base.pResolved=!!x.decided; base.decided=!!x.decided; base.decision=x.decision||''; base.short=(x.text||'').slice(0,54); base.stepCount=(x.steps||[]).length; base.open=!!x.open; base.caret=x.open?'▾':'▸'; base.onToggle=()=>this.toggleTool(idx); base.onOpen=()=>this.openOverlay('plan',idx); base.decColor=/pprove/.test(x.decision||'')?'var(--done)':'var(--txt3)'; base.decMark=/pprove/.test(x.decision||'')?'✓':'•'; base.stepList=(x.steps||[]).map((t,i)=>({n:i+1,t})); }
+        return base; });
+      const filesData=this._changes(s.id); const cf=filesData[st.selFile]||filesData[0]||{name:'',diff:[]};
+      const cell=(c)=> c?{ln:c.ln,sig:c.sig,text:c.text,bg:c.sig==='+'?'var(--done-bg)':(c.sig==='-'?'var(--error-bg)':'transparent'),fg:c.sig==='+'?'var(--done)':(c.sig==='-'?'var(--error)':'var(--txt2)'),sc:c.sig==='+'?'var(--done)':(c.sig==='-'?'var(--error)':'var(--txt3)')}:{ln:'',sig:'',text:'',bg:'var(--panel2)',fg:'var(--txt3)',sc:'transparent'};
+      const sxs=(L)=>{ const rows=[]; let i=0; L=L||[]; while(i<L.length){ if(L[i].sig===' '){rows.push({l:cell(L[i]),r:cell(L[i])});i++;continue;} const dels=[];while(i<L.length&&L[i].sig==='-'){dels.push(L[i]);i++;} const adds=[];while(i<L.length&&L[i].sig==='+'){adds.push(L[i]);i++;} const n=Math.max(dels.length,adds.length); for(let k=0;k<n;k++)rows.push({l:cell(dels[k]||null),r:cell(adds[k]||null)});} return rows; };
+      const tAdd=filesData.reduce((a,f)=>a+(f.add||0),0),tDel=filesData.reduce((a,f)=>a+(f.del||0),0);
+      chg={ stat:'+'+tAdd+' −'+tDel, file:cf.name, staged:filesData.length+' file'+(filesData.length===1?'':'s')+' changed', rows:sxs(cf.diff), files:filesData.map((f,i)=>({name:f.name,status:f.status,statusColor:f.status==='A'?'var(--done)':(f.status==='D'?'var(--error)':'var(--accent2)'),add:f.add,del:f.del,sel:i===st.selFile?'background:var(--accent-bg)':'',onSelect:()=>this.setState({selFile:i})})) };
+      const _totCost=s.contextPct*0.035; const _totTok=s.contextPct*1.9;
+      const _dcol={claude:'var(--d-claude)',codex:'var(--d-codex)',gemini:'var(--d-gemini)'};
+      const _mix=(s.role==='lead')?[[s.model,s.driver,0.52],['Codex',(('codex')),0.31],['Gemini 2.5 Pro','gemini',0.17]]:[[s.model,s.driver,1]];
+      usage={ pct:s.contextPct, warn:s.contextPct>=70, ctxColor:s.contextPct>=90?'var(--error)':(s.contextPct>=75?'var(--needs)':'var(--accent)'), tokens:Math.round(_totTok)+'k', cost:'$'+_totCost.toFixed(2), turns:(transcript.filter(x=>x.isPrompt).length)||3,
+        breakdown:_mix.map(([model,drv,frac])=>({ model, driver:this.drv(drv).label, color:_dcol[drv]||'var(--accent)', tokens:Math.round(_totTok*frac)+'k', cost:'$'+(_totCost*frac).toFixed(2), pct:Math.round(frac*100) })) };
+      const modelsByDriver={claude:['Opus 4.6','Sonnet 4.6','Haiku 4'],codex:['GPT-5.2 Codex','GPT-5.1'],gemini:['Gemini 2.5 Pro','Gemini 2.5 Flash']}; const ml=modelsByDriver[s.driver]||['Default'];
+      cfg={ modelNote:'Models available for '+d.label+'.', models:ml.map((label,i)=>{const on=st.sessModel===('m'+i)||(st.sessModel==='opus'&&i===0);return{label,onClick:()=>this.setState({sessModel:'m'+i}),bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}),
+        postures:[['ask','Ask every time','Pause before any side-effecting action'],['auto','Auto-approve safe actions','Reads and edits run freely; commands still ask'],['yolo','Full autonomy','Act without asking — sandboxes only']].map(([k,label,desc])=>{const on=st.sessPosture===k;return{label,desc,onClick:()=>this.setState({sessPosture:k}),bd:on?'var(--accent)':'var(--border)',bg:on?'var(--accent-bg)':'var(--panel2)',ring:on?'var(--accent)':'var(--border2)',dot:on?'var(--accent)':'transparent'};}),
+        tools:Object.keys(st.sessTools).map(k=>{const on=st.sessTools[k];return{label:k,dot:on?'●':'○',onClick:()=>this.setState({sessTools:{...st.sessTools,[k]:!st.sessTools[k]}}),bd:on?'var(--accent)':'var(--border)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt3)'};}) };
+      term={ title:'tmux: marsad-'+s.id+' · '+h.label, lines:st.termLines };
+      // background jobs tray (aggregate subagents across transcript)
+      const jobs={}; (st.transcripts[s.id]||[]).forEach(x=>{ if(x.type==='subagents'){ (x.items||[]).forEach(it=>{ jobs[it.name]=it; }); } });
+      const jobList=Object.keys(jobs).map(k=>{ const it=jobs[k]; const dm=this.drv(it.driver); const run=it.status==='running'; return {name:it.name,driver:dm.short,dtint:dm.tint,dbg:dm.bg,host:h.label,status:it.status,sColor:run?'var(--accent2)':'var(--done)',color:run?'var(--accent)':'var(--done)',anim:run?'animation:dotpulse 1.3s infinite':'',onOpen:()=>{}}; });
+      const running=jobList.filter(j=>j.status==='running').length;
+      bg={ show:jobList.length>0 && st.sessTab==='activity', open:st.bgOpen, jobs:jobList, caret:st.bgOpen?'▾':'▸', onToggle:()=>this.setState({bgOpen:!st.bgOpen}), summary:running+' running · '+jobList.length+' total' };
+      // overlay
+      if(st.overlay){ const it=(st.transcripts[s.id]||[])[st.overlay.idx]; if(it){ const k=st.overlay.kind;
+        if(k==='plan'){ ov={ open:true, isPlan:true, isQuestion:false, isPerm:false, hasText:true, icon:'❑', kind:'Plan mode · review before running', title:'Proposed plan', text:it.text, steps:(it.steps||[]).map((t,i)=>({n:i+1,t})), foot:'Nothing runs until you approve', close:()=>this.closeOverlay(), approve:()=>this.decidePlan(st.overlay.idx,true), reject:()=>this.decidePlan(st.overlay.idx,false) }; }
+        else if(k==='permission'){ ov={ open:true, isPlan:false, isQuestion:false, isPerm:true, hasText:false, icon:'▲', kind:'Permission · needs you', title:'Command needs approval', cmd:it.cmd, cwd:it.cwd, risk:it.risk, foot:'Nothing runs until you approve', close:()=>this.closeOverlay(), approve:()=>this.decidePermission(st.overlay.idx,'approve'), approveAll:()=>this.decidePermission(st.overlay.idx,'all'), reject:()=>this.decidePermission(st.overlay.idx,'reject') }; }
+        else { const items=it.items||[]; const answered=items.filter((q,i)=>st.qDraft[i]).length; ov={ open:true, isPlan:false, isQuestion:true, isPerm:false, hasText:true, icon:'▲', kind:'Questions · needs you', title:answered+' of '+items.length+' answered', text:'Answer each below — pick an option or write your own.', foot:'All answers are sent back together', close:()=>this.closeOverlay(), submit:()=>this.submitQuestions(), answeredLabel:answered+'/'+items.length, submitBg:answered>0?'var(--done)':'var(--border2)', submitFg:answered>0?'#0e1116':'var(--txt3)',
+          questions:items.map((q,qi)=>{ const draft=st.qDraft[qi]; const isCustom=draft&&(q.options||[]).indexOf(draft)<0; return { n:qi+1, q:q.q, customVal:isCustom?draft:'', customBd:isCustom?'var(--done)':'var(--border2)', onCustom:(e)=>this.setQDraft(qi,e.target.value),
+            opts:(q.options||[]).map(o=>{ const pk=draft===o; return {label:o,mark:pk?'✓ ':'',bd:pk?'var(--done)':'var(--border2)',bg:pk?'var(--done-bg)':'var(--panel2)',fg:pk?'var(--done)':'var(--txt2)',onClick:()=>this.setQDraft(qi,o)}; }) }; }) }; }
+      } }
+    }
+
+    // ---- crumbs ----
+    const crumbs=[];
+    if(st.view==='graph'){ const w=st.workstreams.find(x=>x.id===st.wsId); crumbs.push({label:w?w.name:'', color:'var(--txt2)', onClick:()=>{}}); }
+    if(st.view==='session'){ const s=sById[st.sessionId]; const w=st.workstreams.find(x=>x.id===(s?s.ws:null)); const multi=s&&this.wsSessions(s.ws).length>1;
+      if(multi){ crumbs.push({label:w?w.name:'', color:'var(--txt3)', onClick:()=>this.setState({view:'graph',wsId:s.ws})}); }
+      crumbs.push({label:s?s.name:'', color:'var(--txt2)', onClick:()=>{}}); }
+
+    // ---- gate modal ----
+    let gate={};
+    if(st.gateRef){
+      if(st.gateRef.type==='conn'){ const c=st.conns.find(x=>x.id===st.gateRef.id); const a=sById[c.from],b=sById[c.to];
+        gate={ isHandoff:true, icon:'▲', kind:'Governed handoff · cross-host', title:c.gate.title, route:c.from+'@'+a.host+' → '+c.to+'@'+b.host, fromName:a.name, toName:b.name, fromHost:hById[a.host].label, toHost:hById[b.host].label, payloadLabel:'Payload to transfer', payload:c.gate.payload, payloadColor:'var(--txt2)', risk:c.gate.risk, foot:'Approving releases the transfer between hosts', approve:'Approve handoff' }; }
+      else { const s=sById[st.gateRef.id];
+        gate={ isHandoff:false, icon:'⌘', kind:'Permission · '+hById[s.host].label, title:s.gate.title, route:s.id+'@'+s.host, payloadLabel:'Command to run', payload:'$ '+s.gate.command+'\ncwd: '+s.gate.cwd, payloadColor:'var(--accent2)', risk:s.gate.risk, foot:'Decision routes only to this session', approve:'Approve & run' }; }
+    }
+
+    const attCount=attention.length;
+    return {
+      crumbs, goBoard:()=>this.goBoard(),
+      themeVars: st.theme==='light' ? '--bg:#eef1f6;--panel:#ffffff;--panel2:#f4f6fa;--elev:#ffffff;--border:#e2e7ee;--border2:#cfd6e0;--txt:#1a222e;--txt2:#5a6675;--txt3:#8a94a3;--needs:#c07d10;--error:#cf4436;--done:#1f9d6b;--needs-bg:rgba(192,125,16,0.12);--error-bg:rgba(207,68,54,0.10);--done-bg:rgba(31,157,107,0.10);--work-bg:rgba(63,111,214,0.10);--accent-bg:rgba(63,111,214,0.10);--shadow:0 14px 44px rgba(20,30,50,0.16);--shadow-sm:0 2px 10px rgba(20,30,50,0.09)' : '',
+      themeIcon: st.theme==='dark' ? '☀' : '☾', toggleTheme:()=>this.toggleTheme(),
+      openSettings:()=>this.openSettings(), closeSettings:()=>this.closeSettings(), setOpen:st.setOpen,
+      setTabs:[['general','General'],['hosts','Hosts'],['defaults','Session defaults'],['notif','Notifications']].map(([k,label])=>({label,onClick:()=>this.setState({setTab:k}),bg:st.setTab===k?'var(--accent-bg)':'transparent',fg:st.setTab===k?'var(--accent2)':'var(--txt2)'})),
+      setIsGeneral:st.setTab==='general', setIsHosts:st.setTab==='hosts', setIsDefaults:st.setTab==='defaults', setIsNotif:st.setTab==='notif',
+      themeOpts:[['dark','Dark'],['light','Light']].map(([k,label])=>{const on=st.theme===k;return{label,onClick:()=>this.setState({theme:k}),bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}),
+      bgOpts:[['gradient','Gradient'],['image','Custom image'],['desktop','Desktop']].map(([k,label])=>{const on=st.bgSource===k;return{label,onClick:()=>this.setState({bgSource:k}),bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}),
+      bgNote: st.bgSource==='image'?'Upload a photo or brand image — shows through translucent surfaces.':(st.bgSource==='desktop'?'Blurs your live desktop where the compositor supports it; falls back to the gradient otherwise.':'The app-painted gradient backdrop (always available).'),
+      setModelNote:'Models for '+this.drv(st.defDriver).label+'.',
+      setModels:({claude:['Opus 4.6','Sonnet 4.6','Haiku 4'],codex:['GPT-5.2 Codex','GPT-5.1'],gemini:['Gemini 2.5 Pro','Gemini 2.5 Flash']}[st.defDriver]||['Default']).map((label,i)=>{const on=st.defModel===i;return{label,onClick:()=>this.setState({defModel:i}),bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}),
+      setToggles:[['translucency','Translucent surfaces','Frosted glass panels over the backdrop'],['general.startup','Start Marsad on login','Launch automatically and reattach to sessions'],['general.restore','Restore workspace on launch','Reopen sessions and layout from last time'],['general.confirmStop','Confirm before stopping','Ask before any stop or end action']].map(([key,label,desc])=>{const v=key.indexOf('.')<0?st[key]:st.general[key.split('.')[1]];return{label,desc,onToggle:()=>{ if(key.indexOf('.')<0){this.setState({[key]:!st[key]});} else {const kk=key.split('.')[1];this.setState({general:{...st.general,[kk]:!st.general[kk]}});} },track:v?'var(--accent)':'var(--border2)',knob:v?'translateX(17px)':'translateX(0)'};}),
+      setHosts:st.hosts.filter(h=>h.kind!=='local').map(h=>{const conn=h.status==='connected';const open=st.hostExpand===h.id;const env=(h.env||'').trim();return{label:h.label,icon:this.hostIcon(h.kind),sub:h.kind==='wsl'?'WSL':(h.target||'remote · SSH'),dot:conn?'var(--done)':'var(--needs)',anim:conn?'':'animation:dotpulse 1s infinite',status:h.status,sColor:conn?'var(--done)':'var(--needs)',open,caret:open?'▾':'▸',onToggle:()=>this.setState({hostExpand:open?null:h.id}),hasTarget:!!h.target,target:h.target||'',agents:(h.agents||[]).map(a=>({name:a.name,cmd:a.cmd?a.cmd:'(default: '+(a.name==='Claude Code'?'claude':a.name.toLowerCase())+')'})),hasSetup:!!(h.setup&&h.setup.trim()),setup:(h.setup&&h.setup.trim())?h.setup:'Not set',setupColor:(h.setup&&h.setup.trim())?'var(--txt2)':'var(--txt3)',hasEnv:!!env,env:env?env:'Not set',envColor:env?'var(--txt2)':'var(--txt3)'};}),
+      localHost:(()=>{const h=st.hosts.find(x=>x.kind==='local')||{};return{label:h.label||'localhost',icon:this.hostIcon('local'),setup:h.setup||'',env:h.env||'',agentEdits:[{name:'Claude Code',cmd:(h.agents&&(h.agents.find(a=>a.name==='Claude Code')||{}).cmd)||'',ph:'claude'},{name:'Codex',cmd:(h.agents&&(h.agents.find(a=>a.name==='Codex')||{}).cmd)||'',ph:'codex'},{name:'Gemini',cmd:(h.agents&&(h.agents.find(a=>a.name==='Gemini')||{}).cmd)||'',ph:'gemini'}]};})(),
+      addHostOpen:st.addHost, addHostClosed:!st.addHost, toggleAddHost:()=>this.setState({addHost:!st.addHost}), addHostSave:()=>{this.setState({addHost:false});this.toastMsg('⤓','var(--needs)','Connecting to new host over SSH…');},
+      newAgentRows:[{name:'Claude Code',ph:'claude'},{name:'Codex',ph:'codex'},{name:'Gemini',ph:'gemini'}],
+      setDrivers:[['claude','Claude Code'],['codex','Codex'],['gemini','Gemini']].map(([k,label])=>{const on=st.defDriver===k;const dm=this.drv(k);return{label,onClick:()=>this.setState({defDriver:k}),bd:on?dm.tint:'var(--border2)',bg:on?dm.bg:'var(--panel2)',fg:on?dm.tint:'var(--txt2)'};}),
+      setPostures:[['ask','Ask every time','Pause before any side-effecting action'],['auto','Auto-approve safe actions','Reads and edits run freely; commands still ask'],['yolo','Full autonomy','Act without asking — sandboxes only']].map(([k,label,desc])=>{const on=st.defPosture===k;return{label,desc,onClick:()=>this.setState({defPosture:k}),bd:on?'var(--accent)':'var(--border)',bg:on?'var(--accent-bg)':'var(--panel2)',ring:on?'var(--accent)':'var(--border2)',dot:on?'var(--accent)':'transparent'};}),
+      setNotif:[['needs','When a session needs you','Permission gates, questions, plans'],['done','When a session finishes','Task complete or idle'],['error','When a session errors','Crashes and failures'],['sound','Play a sound','Audible chime with each alert'],['group','Group bursts','Collapse many at once into one alert'],['dnd','Do Not Disturb','Silence all desktop alerts']].map(([k,label,desc])=>{const v=st.notif[k];return{label,desc,onToggle:()=>this.setState({notif:{...st.notif,[k]:!st.notif[k]}}),track:v?'var(--accent)':'var(--border2)',knob:v?'translateX(17px)':'translateX(0)'};}),
+      isBoard:st.view==='board', isGraph:st.view==='graph', isSession:st.view==='session',
+      graphEmpty: st.view==='graph' && st.wsId && this.wsSessions(st.wsId).length===0,
+      addNodeHere:()=>this.addNodeHere(), openWsWizard:()=>this.openWsWizard(),
+      wizOpen:!!st.wiz, wizClose:()=>this.wizClose(), wizNameRef:this.wizNameRef, wizGoalRef:this.wizGoalRef,
+      wizPickQuick:()=>this.wizPick('quick'), wizPickBuild:()=>this.wizPick('build'), wizNext:()=>this.wizNext(),
+      wizQuickBd: st.wiz&&st.wiz.mode==='quick'?'var(--accent)':'var(--border2)', wizQuickBg: st.wiz&&st.wiz.mode==='quick'?'var(--accent-bg)':'var(--panel2)',
+      wizBuildBd: st.wiz&&st.wiz.mode==='build'?'var(--accent)':'var(--border2)', wizBuildBg: st.wiz&&st.wiz.mode==='build'?'var(--accent-bg)':'var(--panel2)',
+      wizNextLabel: (st.wiz&&st.wiz.mode==='quick')?'Configure agent →':'Create & build →', wizFoot: (st.wiz&&st.wiz.mode==='quick')?'Opens the agent setup next':'Opens an empty canvas to add agents',
+      nmOpen:!!st.nm, nmClose:()=>this.nmClose(), nmNameRef:this.nmNameRef, nmDirRef:this.nmDirRef, nmPromptRef:this.nmPromptRef,
+      nmShowName: st.nm?!st.nm.firstAndLaunch:true,
+      dragActive: !!st.drag, dragX1: st.drag?st.drag.x0:0, dragY1: st.drag?st.drag.y0:0, dragX2: st.drag?st.drag.x:0, dragY2: st.drag?st.drag.y:0,
+      edgePick: !!st.edge, edgeCancel:()=>this.setState({edge:null}),
+      edgeFrom: st.edge?((st.sessions.find(x=>x.id===st.edge.from)||{}).name||''):'', edgeTo: st.edge?((st.sessions.find(x=>x.id===st.edge.to)||{}).name||''):'',
+      edgeData:()=>this.makeEdge('data'), edgeCommand:()=>this.makeEdge('command'), edgeBoth:()=>this.makeEdge('both'),
+      nmWsName: st.nm?((st.workstreams.find(w=>w.id===st.nm.wsId)||{}).name||'workstream'):'',
+      nmLaunch:()=>this.nmLaunch(), nmLaunchLabel: (st.nm&&st.nm.firstAndLaunch)?'Launch session →':'Add agent →',
+      nmDrivers: st.nm?[['claude','Claude Code'],['codex','Codex'],['gemini','Gemini']].map(([k,label])=>{const on=st.nm.driver===k;const dm=this.drv(k);return{label,onClick:()=>this.nmSet({driver:k,model:0}),bd:on?dm.tint:'var(--border2)',bg:on?dm.bg:'var(--panel2)',fg:on?dm.tint:'var(--txt2)'};}):[],
+      nmHosts: st.nm?st.hosts.map(h=>{const on=st.nm.host===h.id;const conn=h.status==='connected';return{label:h.label,onClick:()=>this.nmSet({host:h.id}),dot:conn?'var(--done)':'var(--needs)',bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}):[],
+      nmModels: st.nm?({claude:['Opus 4.6','Sonnet 4.6','Haiku 4'],codex:['GPT-5.2 Codex','GPT-5.1'],gemini:['Gemini 2.5 Pro','Gemini 2.5 Flash']}[st.nm.driver]||['Default']).map((label,i)=>{const on=st.nm.model===i;return{label,onClick:()=>this.nmSet({model:i}),bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}):[],
+      nmPostures: st.nm?[['ask','Ask each time'],['auto','Auto-approve safe'],['yolo','Full autonomy']].map(([k,label])=>{const on=st.nm.posture===k;return{label,onClick:()=>this.nmSet({posture:k}),bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}):[],
+      nmHasNodes: st.nm?this.wsSessions(st.nm.wsId).length>0:false,
+      nmControllers: st.nm?this.wsSessions(st.nm.wsId).map(x=>{const on=st.nm.controller===x.id;return{label:x.name,onClick:()=>this.nmSet({controller:on?null:x.id}),bd:on?'var(--accent)':'var(--border)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}):[],
+      nmFeeders: st.nm?this.wsSessions(st.nm.wsId).map(x=>{const on=st.nm.feeder===x.id;return{label:x.name,onClick:()=>this.nmSet({feeder:on?null:x.id}),bd:on?'var(--accent)':'var(--border)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}):[],
+      hasAttention:attCount>0, attentionLabel:attCount+(attCount===1?' needs you':' need you'),
+      board:{ count:st.workstreams.length, sessionCount:st.sessions.length, hostCount:st.hosts.length },
+      hostHealth: st.hosts.map(h=>{ const m=({connected:{c:'var(--done)',t:'connected',a:''},reconnecting:{c:'var(--needs)',t:'reconnecting',a:'animation:dotpulse 1s infinite'},down:{c:'var(--error)',t:'unreachable',a:'animation:dotpulse .8s infinite'}})[h.status]||{c:'var(--txt3)',t:h.status,a:''}; return { label:h.label, icon:this.hostIcon(h.kind), color:m.c, anim:m.a, statusText:m.t, border: h.status==='connected'?'var(--border)':m.c }; }),
+      linkIssues: (st.hostLinks||[]).filter(l=>l.status&&l.status!=='ok').map(l=>{ const A=(st.hosts.find(h=>h.id===l.a)||{}).label||l.a, B=(st.hosts.find(h=>h.id===l.b)||{}).label||l.b; return { label:A+' ⇄ '+B+' link '+l.status, note:l.note||'' }; }),
+      attention, allWs,
+      canvasStyle, svgSize, gZones, gNodes, gWires, gGates, gWs, clearNodeSel:()=>this.clearNodeSel(),
+      canvasWrapRef:this.canvasWrapRef, canvasElRef:this.canvasElRef,
+      designing: st.view==='graph' && st.draftWs===st.wsId, notDesigning: !(st.view==='graph' && st.draftWs===st.wsId),
+      confirmDraft:()=>this.confirmDraft(), discardDraft:()=>this.discardDraft(), enterDesign:()=>this.enterDesign(),
+      zoomStyle:`transform:scale(${st.graphZoom});transform-origin:top left`,
+      spacerStyle:`width:${Math.ceil((this._cw||1200)*st.graphZoom)}px;height:${Math.ceil((this._ch||700)*st.graphZoom)}px`,
+      zoomPct:Math.round(st.graphZoom*100)+'%',
+      zoomIn:()=>this.zoomIn(), zoomOut:()=>this.zoomOut(), zoomReset:()=>this.zoomReset(), fitView:()=>this.fitView(),
+      layoutOpts:[['host','By host'],['flow','Flow']].map(([k,label])=>({label,onClick:()=>this.setLayout(k),bg:st.graphLayout===k?'var(--accent)':'transparent',fg:st.graphLayout===k?'#fff':'var(--txt3)'})),
+      ses, transcript, chg, usage, cfg, term, bg, ov, termRef:this.termRef, onTermKey:(e)=>this.onTermKey(e),
+      composerRef:this.composerRef, send:()=>this.send(), onKey:(e)=>this.onKey(e),
+      onComposerInput:(e)=>this.onComposerInput(e), slashOpen:st.slashOpen, bashMode:st.bashMode,
+      composerBorder: st.bashMode?'var(--accent2)':'var(--border2)', sendLabel: st.bashMode?'Run':'Send ↵',
+      composerPlaceholder: st.bashMode?'Shell command…':'Send a prompt…   / for commands · ! for bash',
+      slashCmds: [['/clear','Clear the conversation'],['/compact','Compact the context window'],['/plan','Enter plan mode'],['/agents','Show background subagents'],['/model','Switch model'],['/cost','Show token usage'],['/help','List all commands']].filter(c=>{const q=(st.slashQuery||'').replace(/^\//,'').toLowerCase(); return q===''||c[0].slice(1).toLowerCase().indexOf(q)===0;}).map((c,i)=>({name:c[0],desc:c[1],onClick:()=>this.runSlash(c[0]),sel:i===0?'background:var(--accent-bg)':''})),
+      gateOpen:st.gateOpen, gate, closeGate:()=>this.closeGate(), approveGate:()=>this.approveGate(), rejectGate:()=>this.rejectGate(), stop:(e)=>this.stop(e),
+      hasToast:!!st.toast, toast:st.toast||{icon:'',color:'',text:''}
+    };
+  }
+}
+</script>
+</body>
+</html>

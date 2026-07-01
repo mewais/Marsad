@@ -11,6 +11,7 @@ members = [
     "crates/marsad-transport",
     "crates/marsad-lifecycle",
     "crates/marsad-notify",
+    "crates/marsad-workstream",
     "crates/marsad-viewmodel",
     "crates/marsad-core",
     "crates/marsad-agent",
@@ -54,6 +55,7 @@ marsad-hosts = { path = "crates/marsad-hosts" }
 marsad-transport = { path = "crates/marsad-transport" }
 marsad-lifecycle = { path = "crates/marsad-lifecycle" }
 marsad-notify = { path = "crates/marsad-notify" }
+marsad-workstream = { path = "crates/marsad-workstream" }
 marsad-viewmodel = { path = "crates/marsad-viewmodel" }
 marsad-core = { path = "crates/marsad-core" }
 marsad-agent = { path = "crates/marsad-agent" }
