@@ -362,6 +362,7 @@ dependencies = [
  "marsad-events",
  "marsad-gates",
  "marsad-proto",
+ "marsad-workstream",
  "serde",
  "serde_json",
  "thiserror",
@@ -386,6 +387,7 @@ dependencies = [
  "marsad-gates",
  "marsad-hosts",
  "marsad-proto",
+ "marsad-workstream",
  "serde",
  "serde_json",
 ]
