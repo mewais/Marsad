@@ -10,7 +10,6 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import React from "react";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { Board } from "../src/screens/Board";
 import { MOCK_BOARD } from "../src/bridge/mockBoard";
