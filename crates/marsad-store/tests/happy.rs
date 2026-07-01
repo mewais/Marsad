@@ -346,6 +346,7 @@ fn restored_derives_clone_eq_debug() {
         workstreams: vec![],
         connections: vec![],
         profiles: vec![],
+        membership: std::collections::HashMap::new(),
     };
     let r2 = r.clone();
     assert_eq!(r, r2);

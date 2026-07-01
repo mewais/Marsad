@@ -428,6 +428,9 @@ pub struct Restored {
     pub workstreams: Vec<marsad_workstream::Workstream>,
     pub connections: Vec<marsad_workstream::Connection>,
     pub profiles: Vec<marsad_workstream::Profile>,
+    /// Session→workstream membership map (`session_id` → `ws_id`), core-owned.
+    /// Empty when nothing has been persisted yet.
+    pub membership: HashMap<String, String>,
 }
 
 // ── Versioned blob wrappers ────────────────────────────────────────────────────
@@ -480,6 +483,7 @@ const PREFIX_TRANSCRIPT: &str = "transcript:";
 const PREFIX_TEMPLATE: &str = "template:";
 const KEY_ACTIVE_WS: &str = "meta:active_ws";
 const KEY_SETTINGS: &str = "meta:settings";
+const KEY_MEMBERSHIP: &str = "meta:membership";
 // Workstreams extension (B06 additive): new key prefixes.
 const PREFIX_WORKSTREAM: &str = "workstream:";
 const PREFIX_CONNECTION: &str = "connection:";
@@ -524,6 +528,18 @@ impl Store {
     pub fn upsert_settings(&mut self, s: &PersistedSettings) -> Result<(), StoreError> {
         let bytes = encode(s);
         self.backend.write(KEY_SETTINGS, &bytes)?;
+        Ok(())
+    }
+
+    /// Persist the session→workstream membership map (`session_id` → `ws_id`),
+    /// core-owned, under a single versioned `meta:membership` blob (mirrors
+    /// `upsert_settings`). Overwrites the whole map.
+    pub fn set_membership(
+        &mut self,
+        map: &HashMap<String, String>,
+    ) -> Result<(), StoreError> {
+        let bytes = encode(map);
+        self.backend.write(KEY_MEMBERSHIP, &bytes)?;
         Ok(())
     }
 
@@ -694,6 +710,7 @@ impl Store {
         let mut workstreams: Vec<marsad_workstream::Workstream> = Vec::new();
         let mut connections: Vec<marsad_workstream::Connection> = Vec::new();
         let mut profiles: Vec<marsad_workstream::Profile> = Vec::new();
+        let mut membership: HashMap<String, String> = HashMap::new();
 
         // ONE version-check per versioned blob — Err branch covered by VersionMismatch tests
         // (fires on the session key in those tests; the same code covers all versioned prefixes).
@@ -719,6 +736,9 @@ impl Store {
 
             if key == KEY_SETTINGS {
                 settings = Some(decode_payload(bytes));
+            }
+            if key == KEY_MEMBERSHIP {
+                membership = decode_payload(bytes);
             }
             if key.starts_with(PREFIX_SESSION) {
                 sessions.push(decode_payload(bytes));
@@ -779,6 +799,7 @@ impl Store {
             workstreams,
             connections,
             profiles,
+            membership,
         })
     }
 

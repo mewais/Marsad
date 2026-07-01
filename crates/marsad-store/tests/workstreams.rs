@@ -690,3 +690,44 @@ fn ws10_mixed_store_restores_all_entity_kinds_correctly() {
     assert_eq!(restored.profiles[0].id, "prof-mix");
     assert_eq!(restored.profiles[0].name, "Profile Mix");
 }
+
+// ---------------------------------------------------------------------------
+// WS11: set_membership — round-trip + write-error propagation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ws11_set_membership_round_trips_through_restore() {
+    let mut store = Store::new(Box::new(MemoryBackend::new()));
+    let mut map = std::collections::HashMap::new();
+    map.insert("sess-a".to_string(), "wstream-1".to_string());
+    map.insert("sess-b".to_string(), "wstream-2".to_string());
+    store
+        .set_membership(&map)
+        .expect("set_membership must succeed");
+
+    let restored = store.restore().expect("restore must succeed");
+    assert_eq!(restored.membership, map);
+}
+
+#[test]
+fn ws11_membership_absent_restores_empty_map() {
+    let store = Store::new(Box::new(MemoryBackend::new()));
+    let restored = store.restore().expect("restore must succeed");
+    assert!(
+        restored.membership.is_empty(),
+        "membership must default to empty when never persisted"
+    );
+}
+
+#[test]
+fn ws11_backend_write_failure_propagates_from_set_membership() {
+    let backend = MemoryBackend::new();
+    backend.fail_next(BackendOp::Write);
+    let mut store = Store::new(Box::new(backend));
+    let mut map = std::collections::HashMap::new();
+    map.insert("sess-a".to_string(), "wstream-1".to_string());
+    let err = store
+        .set_membership(&map)
+        .expect_err("write failure must propagate");
+    assert!(matches!(err, StoreError::Backend(_)));
+}
