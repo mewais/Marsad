@@ -27,7 +27,21 @@ import type {
   VmUpdateEvent,
   Workspace,
 } from "./types";
-import { listenVmUpdate, snapshot as fetchSnapshot } from "./api";
+import {
+  listenVmUpdate,
+  snapshot as fetchSnapshot,
+  fetchBoard,
+  fetchGraph,
+  createWorkstream as apiCreateWorkstream,
+  deleteWorkstream as apiDeleteWorkstream,
+  addConnection as apiAddConnection,
+  removeConnection as apiRemoveConnection,
+  createProfile as apiCreateProfile,
+  deleteProfile as apiDeleteProfile,
+  assignSession as apiAssignSession,
+  setActiveProfile as apiSetActiveProfile,
+} from "./api";
+import type { BoardView, ConnKind, GraphView } from "./workstreamTypes";
 
 // ---------------------------------------------------------------------------
 // Screen / nav state (UI only — not in AppSnapshot)
@@ -39,7 +53,9 @@ export type Screen =
   | "gate"
   | "new-session"
   | "settings"
-  | "workspaces";
+  | "workspaces"
+  | "board"
+  | "graph";
 
 // ---------------------------------------------------------------------------
 // Store state
@@ -54,6 +70,12 @@ export interface VmState {
   filter: Filter;
   search: string;
   wsMenuOpen: boolean;
+  // Workstream board/graph nav (U-INT-2)
+  board: BoardView | null;
+  wsId: string | null;
+  graph: GraphView | null;
+  nodeSel: string | null;
+  activeProfile: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +92,13 @@ type Action =
   | { type: "SET_SEARCH"; search: string }
   | { type: "SET_WORKSPACE"; id: string }
   | { type: "TOGGLE_WS_MENU" }
-  | { type: "CLOSE_WS_MENU" };
+  | { type: "CLOSE_WS_MENU" }
+  | { type: "SET_BOARD"; board: BoardView }
+  | { type: "SET_GRAPH"; wsId: string; graph: GraphView | null }
+  | { type: "OPEN_BOARD" }
+  | { type: "OPEN_GRAPH"; wsId: string }
+  | { type: "SELECT_NODE"; id: string | null }
+  | { type: "SET_ACTIVE_PROFILE"; profile: string | null };
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -135,6 +163,14 @@ function reducer(state: VmState, action: Action): VmState {
           snapshot: { ...state.snapshot, workspaces: ev.workspaces },
         };
       }
+      if ((ev as { kind: string }).kind === "board") {
+        return { ...state, board: (ev as unknown as { board: BoardView }).board };
+      }
+      if ((ev as { kind: string }).kind === "workstreams") {
+        // No direct state field beyond board; refresh is handled by the
+        // command helpers that trigger this event. Nothing to do here.
+        return state;
+      }
       return state;
     }
 
@@ -171,6 +207,35 @@ function reducer(state: VmState, action: Action): VmState {
     case "CLOSE_WS_MENU":
       return { ...state, wsMenuOpen: false };
 
+    case "SET_BOARD":
+      return { ...state, board: action.board };
+
+    case "SET_GRAPH":
+      return { ...state, wsId: action.wsId, graph: action.graph };
+
+    case "OPEN_BOARD":
+      return {
+        ...state,
+        screen: "board",
+        wsId: null,
+        graph: null,
+        nodeSel: null,
+      };
+
+    case "OPEN_GRAPH":
+      return {
+        ...state,
+        screen: "graph",
+        wsId: action.wsId,
+        nodeSel: null,
+      };
+
+    case "SELECT_NODE":
+      return { ...state, nodeSel: action.id };
+
+    case "SET_ACTIVE_PROFILE":
+      return { ...state, activeProfile: action.profile };
+
     default:
       return state;
   }
@@ -184,6 +249,11 @@ const initialState: VmState = {
   filter: "All",
   search: "",
   wsMenuOpen: false,
+  board: null,
+  wsId: null,
+  graph: null,
+  nodeSel: null,
+  activeProfile: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -203,6 +273,35 @@ export interface VmContextValue {
   workspaces: Workspace[];
   hosts: Host[];
   activeWs: Workspace | null;
+  // Workstream board/graph command helpers (U-INT-2)
+  openBoard: () => void;
+  openWorkstream: (id: string) => Promise<void>;
+  selectNode: (id: string | null) => void;
+  openNode: (sessionId: string) => void;
+  createWorkstream: (
+    id: string,
+    name: string,
+    goal: string,
+    profile?: string | null
+  ) => Promise<void>;
+  deleteWorkstream: (id: string) => Promise<void>;
+  addConnection: (
+    id: string,
+    ws: string,
+    from: string,
+    to: string,
+    kind: ConnKind,
+    bi: boolean
+  ) => Promise<void>;
+  removeConnection: (id: string) => Promise<void>;
+  createProfile: (id: string, name: string) => Promise<void>;
+  deleteProfile: (id: string) => Promise<void>;
+  assignSession: (
+    sessionId: string,
+    wsId: string,
+    lead: boolean
+  ) => Promise<void>;
+  setActiveProfile: (profile: string | null) => Promise<void>;
 }
 
 const EMPTY_GROUPS: OverviewGroups = { attention: [], active: [], idle: [] };
@@ -500,6 +599,16 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     };
   }, [hasPreloadedSnapshot]);
 
+  // Seed the board on mount, after the snapshot load — skipped when snapshot
+  // pre-injected (tests drive board loading explicitly via openBoard()/the
+  // command helpers so no act() warnings fire on mount).
+  useEffect(() => {
+    if (hasPreloadedSnapshot) return;
+    fetchBoard().then((board) => {
+      dispatch({ type: "SET_BOARD", board });
+    });
+  }, [hasPreloadedSnapshot]);
+
   const sessions = state.snapshot?.sessions ?? [];
   const hosts = state.snapshot?.hosts ?? [];
   const workspaces = state.snapshot?.workspaces ?? [];
@@ -531,6 +640,136 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     [workspaces, state.snapshot?.active_ws]
   );
 
+  // ---------------------------------------------------------------------------
+  // Command helpers (U-INT-2) — call the api.ts wrapper, then refresh board
+  // (and graph, when a workstream is open) so screens dispatch real backend
+  // operations and observe the resulting state.
+  // ---------------------------------------------------------------------------
+
+  const refreshBoard = React.useCallback(async () => {
+    const board = await fetchBoard();
+    dispatch({ type: "SET_BOARD", board });
+  }, []);
+
+  const refreshGraph = React.useCallback(async (wsId: string) => {
+    const graph = await fetchGraph(wsId);
+    dispatch({ type: "SET_GRAPH", wsId, graph });
+  }, []);
+
+  const refreshAfterMutation = React.useCallback(
+    async (openWsId: string | null) => {
+      await refreshBoard();
+      if (openWsId) {
+        await refreshGraph(openWsId);
+      }
+    },
+    [refreshBoard, refreshGraph]
+  );
+
+  const openBoard = React.useCallback(() => {
+    dispatch({ type: "OPEN_BOARD" });
+    refreshBoard();
+  }, [refreshBoard]);
+
+  const openNode = React.useCallback((sessionId: string) => {
+    dispatch({ type: "SELECT_SESSION", id: sessionId });
+  }, []);
+
+  const openWorkstream = React.useCallback(
+    async (id: string) => {
+      const board = state.board ?? (await fetchBoard());
+      const card = board.all.find((c) => c.id === id);
+      if (card?.is_single_node) {
+        const g = await fetchGraph(id);
+        const node = g?.nodes[0];
+        if (node) {
+          dispatch({ type: "SELECT_SESSION", id: node.id });
+        }
+        return;
+      }
+      const graph = await fetchGraph(id);
+      dispatch({ type: "SET_GRAPH", wsId: id, graph });
+      dispatch({ type: "OPEN_GRAPH", wsId: id });
+    },
+    [state.board]
+  );
+
+  const selectNode = React.useCallback((id: string | null) => {
+    dispatch({ type: "SELECT_NODE", id });
+  }, []);
+
+  const createWorkstream = React.useCallback(
+    async (id: string, name: string, goal: string, profile?: string | null) => {
+      await apiCreateWorkstream(id, name, goal, profile);
+      await refreshAfterMutation(state.wsId);
+    },
+    [refreshAfterMutation, state.wsId]
+  );
+
+  const deleteWorkstream = React.useCallback(
+    async (id: string) => {
+      await apiDeleteWorkstream(id);
+      await refreshAfterMutation(state.wsId);
+    },
+    [refreshAfterMutation, state.wsId]
+  );
+
+  const addConnection = React.useCallback(
+    async (
+      id: string,
+      ws: string,
+      from: string,
+      to: string,
+      kind: ConnKind,
+      bi: boolean
+    ) => {
+      await apiAddConnection(id, ws, from, to, kind, bi);
+      await refreshAfterMutation(state.wsId);
+    },
+    [refreshAfterMutation, state.wsId]
+  );
+
+  const removeConnection = React.useCallback(
+    async (id: string) => {
+      await apiRemoveConnection(id);
+      await refreshAfterMutation(state.wsId);
+    },
+    [refreshAfterMutation, state.wsId]
+  );
+
+  const createProfile = React.useCallback(
+    async (id: string, name: string) => {
+      await apiCreateProfile(id, name);
+      await refreshAfterMutation(state.wsId);
+    },
+    [refreshAfterMutation, state.wsId]
+  );
+
+  const deleteProfile = React.useCallback(
+    async (id: string) => {
+      await apiDeleteProfile(id);
+      await refreshAfterMutation(state.wsId);
+    },
+    [refreshAfterMutation, state.wsId]
+  );
+
+  const assignSession = React.useCallback(
+    async (sessionId: string, wsId: string, lead: boolean) => {
+      await apiAssignSession(sessionId, wsId, lead);
+      await refreshAfterMutation(state.wsId);
+    },
+    [refreshAfterMutation, state.wsId]
+  );
+
+  const setActiveProfile = React.useCallback(
+    async (profile: string | null) => {
+      await apiSetActiveProfile(profile);
+      dispatch({ type: "SET_ACTIVE_PROFILE", profile });
+      await refreshAfterMutation(state.wsId);
+    },
+    [refreshAfterMutation, state.wsId]
+  );
+
   const value: VmContextValue = {
     state,
     dispatch,
@@ -543,6 +782,18 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     workspaces,
     hosts,
     activeWs,
+    openBoard,
+    openWorkstream,
+    selectNode,
+    openNode,
+    createWorkstream,
+    deleteWorkstream,
+    addConnection,
+    removeConnection,
+    createProfile,
+    deleteProfile,
+    assignSession,
+    setActiveProfile,
   };
 
   return React.createElement(VmContext.Provider, { value }, children);
