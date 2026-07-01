@@ -1013,9 +1013,18 @@ mod tests {
         );
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
 
+        // Privileged users (e.g. root in a CI/dev container) bypass DAC permission
+        // bits, so a 0o000 file is still readable and this failure mode cannot be
+        // simulated. Detect that and skip the assertion rather than fail spuriously
+        // — the non-privileged path (the real CI gate) still exercises it.
+        let privileged = std::fs::read(&path).is_ok();
+
         let result = list_sessions(tmp.path(), "/perm/test/project");
         // Restore permissions so the TempDir cleanup can remove the file.
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        if privileged {
+            return;
+        }
         assert!(
             result.is_err(),
             "expected I/O error for unreadable .jsonl file"
