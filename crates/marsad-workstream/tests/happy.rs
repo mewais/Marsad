@@ -8,7 +8,7 @@
 
 use marsad_workstream::{
     conns_of, dependency_depth, driver_dots, head_state, host_chips, is_single_node, nodes_of,
-    state_counts, Connection, ConnKind, Driver, Handoff, HeadState, Node, Phase, Profile,
+    state_counts, ConnKind, Connection, Driver, Handoff, HeadState, Node, Phase, Profile,
     StateCounts, Workstream,
 };
 

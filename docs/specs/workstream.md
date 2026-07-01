@@ -154,7 +154,9 @@ order (first failure wins):
    (Direction-sensitive: `(a,b)` and `(b,a)` are not duplicates.)
 4. If adding `conn` to `existing` (restricted to `conn.ws`, **directed**, ignoring `bi`) would create a
    directed cycle → `Cycle`. Note: a `bi` edge is still treated as a single directed `from→to` edge for
-   cycle-detection purposes (the reverse arrow is a UI affordance, not a dependency).
+   cycle-detection purposes (the reverse arrow is a UI affordance, not a dependency). A 2-node mutual pair
+   (`a→b` plus a separate `b→a`) is therefore a directed cycle and is **rejected** — model a two-way
+   relationship as a single `bi` connection, never as two opposing edges.
 On all checks passing → `Ok(())`.
 
 ### 2.9 `is_acyclic(ws_id: &str, conns: &[Connection]) -> bool`
@@ -208,7 +210,9 @@ case below must be a real, running, asserting test — none `#[ignore]`d or stub
 - E2  unknown `from` or `to` → `UnknownEndpoint`.
 - E3  endpoint exists but belongs to another ws, or `conn.ws` disagrees with endpoints → `CrossWorkstream`.
 - E4  missing-endpoint precedence: when an endpoint is both missing AND cross-ws-ish, `UnknownEndpoint` wins.
-- E5  duplicate `(from,to)` in same ws → `Duplicate`; reversed `(to,from)` is **not** a duplicate → `Ok`.
+- E5  duplicate `(from,to)` in same ws → `Duplicate`. Reversed `(to,from)` is **not** a `Duplicate`
+      (direction-sensitive) — but with `a→b` already present it closes the 2-cycle `a→b→a`, so it returns
+      `Cycle`. (A valid `Ok` reverse is impossible while the forward edge exists; that's the intended rule.)
 - E6  adding an edge that closes a directed cycle → `Cycle`.
 - E7  `ConnError` `Display` produces a non-empty distinct string for each variant; `Error` impl present.
 

@@ -1,15 +1,15 @@
 //! B14 `marsad-workstream` — error paths for `validate_connection` + `ConnError`.
 //!
-//! Covers precedence rules (SelfLoop > UnknownEndpoint > CrossWorkstream > Duplicate
-//! > Cycle), direction-sensitivity of Duplicate, and the `Display`/`Error` impls on
-//! `ConnError`.
+//! Covers the `validate_connection` precedence order (SelfLoop, then UnknownEndpoint,
+//! CrossWorkstream, Duplicate, Cycle), direction-sensitivity of Duplicate, and the
+//! `Display`/`Error` impls on `ConnError`.
 //!
 //! Spec: docs/specs/workstream.md — §3 test plan, cases E1-E7.
 
 use std::error::Error as StdError;
 
 use marsad_workstream::{
-    validate_connection, ConnError, Connection, ConnKind, Driver, Node, Phase,
+    validate_connection, ConnError, ConnKind, Connection, Driver, Node, Phase,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -153,16 +153,21 @@ fn duplicate_from_to_in_same_ws_is_rejected() {
 }
 
 #[test]
-fn reversed_direction_is_not_a_duplicate() {
+fn reversed_direction_is_not_duplicate_but_closes_a_cycle() {
     let nodes = vec![
         node("a", "w1", Driver::Claude, "h1", Phase::Working),
         node("b", "w1", Driver::Claude, "h1", Phase::Working),
     ];
     let existing = vec![conn("existing", "w1", "a", "b", ConnKind::Data)];
-    // (b, a) is the reverse of the existing (a, b) — not a Duplicate, and since it
-    // doesn't close a cycle either (only one edge exists total after (a,b)), it's Ok.
+    // (b, a) is the reverse of the existing (a, b): the direction-sensitive Duplicate
+    // check does NOT fire (it's not the same (from,to) pair) — but the reverse edge
+    // closes the 2-cycle a->b->a, so the Cycle check rejects it. Two-way links are
+    // modeled as a single `bi` connection, never as two opposing edges. (spec §2.8/E5)
     let proposed = conn("new", "w1", "b", "a", ConnKind::Data);
-    assert_eq!(validate_connection(&proposed, &nodes, &existing), Ok(()));
+    assert_eq!(
+        validate_connection(&proposed, &nodes, &existing),
+        Err(ConnError::Cycle)
+    );
 }
 
 // ── E6: adding an edge that closes a directed cycle → Cycle ─────────────────

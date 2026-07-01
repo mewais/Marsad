@@ -9,7 +9,7 @@
 
 use marsad_workstream::{
     dependency_depth, driver_dots, head_state, host_chips, is_acyclic, state_counts,
-    validate_connection, Connection, ConnKind, Driver, HeadState, Node, Phase, StateCounts,
+    validate_connection, ConnKind, Connection, Driver, HeadState, Node, Phase, StateCounts,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────────
