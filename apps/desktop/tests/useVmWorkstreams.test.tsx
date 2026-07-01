@@ -26,10 +26,10 @@ import type { BoardView, GraphView } from "../src/bridge/workstreamTypes";
 
 // ---------------------------------------------------------------------------
 // Seed knowledge (from src/bridge/mockWorkstreams.ts seedState()):
-//   - "ws-auth-refactor" has exactly 1 member session (sess-auth-lead)
+//   - "ws-auth-refactor" has exactly 1 member session (s01)
 //     => is_single_node === true.
-//   - "ws-build-pipeline" has 2 member sessions (sess-build-lead,
-//     sess-build-follow) => is_single_node === false (multi-node).
+//   - "ws-build-pipeline" has 2 member sessions (s07,
+//     s06) => is_single_node === false (multi-node).
 // ---------------------------------------------------------------------------
 const SINGLE_NODE_WS_ID = "ws-auth-refactor";
 const MULTI_NODE_WS_ID = "ws-build-pipeline";
@@ -172,9 +172,9 @@ describe("V1: new reducer actions", () => {
     await waitFor(() => expect(getCtx().state.wsId).toBe(MULTI_NODE_WS_ID));
 
     act(() => {
-      getCtx().dispatch({ type: "SELECT_NODE", id: "sess-build-lead" });
+      getCtx().dispatch({ type: "SELECT_NODE", id: "s07" });
     });
-    await waitFor(() => expect(getCtx().state.nodeSel).toBe("sess-build-lead"));
+    await waitFor(() => expect(getCtx().state.nodeSel).toBe("s07"));
 
     act(() => {
       getCtx().dispatch({ type: "OPEN_BOARD" });
@@ -192,11 +192,11 @@ describe("V1: new reducer actions", () => {
     const { getCtx } = renderVm();
 
     act(() => {
-      getCtx().dispatch({ type: "SELECT_NODE", id: "sess-build-follow" });
+      getCtx().dispatch({ type: "SELECT_NODE", id: "s06" });
     });
 
     await waitFor(() => {
-      expect(getCtx().state.nodeSel).toBe("sess-build-follow");
+      expect(getCtx().state.nodeSel).toBe("s06");
     });
   });
 
@@ -204,9 +204,9 @@ describe("V1: new reducer actions", () => {
     const { getCtx } = renderVm();
 
     act(() => {
-      getCtx().dispatch({ type: "SELECT_NODE", id: "sess-build-follow" });
+      getCtx().dispatch({ type: "SELECT_NODE", id: "s06" });
     });
-    await waitFor(() => expect(getCtx().state.nodeSel).toBe("sess-build-follow"));
+    await waitFor(() => expect(getCtx().state.nodeSel).toBe("s06"));
 
     act(() => {
       getCtx().dispatch({ type: "SELECT_NODE", id: null });
@@ -459,8 +459,8 @@ describe("V7: openWorkstream — single-node workstream nav rule", () => {
     await waitFor(() => {
       expect(getCtx().state.screen).toBe("session");
       expect(getCtx().state.screen).not.toBe("graph");
-      // The single member session (sess-auth-lead) must be selected/opened.
-      expect(getCtx().state.selectedId).toBe("sess-auth-lead");
+      // The single member session (s01) must be selected/opened.
+      expect(getCtx().state.selectedId).toBe("s01");
     });
   });
 });
@@ -663,11 +663,11 @@ describe("openBoard / openNode helpers", () => {
     const { getCtx } = renderVm();
 
     act(() => {
-      getCtx().openNode("sess-build-follow");
+      getCtx().openNode("s06");
     });
 
     await waitFor(() => {
-      expect(getCtx().state.selectedId).toBe("sess-build-follow");
+      expect(getCtx().state.selectedId).toBe("s06");
       expect(getCtx().state.screen).toBe("session");
     });
   });

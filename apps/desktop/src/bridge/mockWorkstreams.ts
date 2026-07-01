@@ -70,8 +70,8 @@ function seedState(): MockState {
       {
         id: "conn-seed-1",
         ws: "ws-build-pipeline",
-        from: "sess-build-lead",
-        to: "sess-build-follow",
+        from: "s07",
+        to: "s06",
         kind: "both",
         bi: false,
         has_gate: true,
@@ -79,8 +79,8 @@ function seedState(): MockState {
     ],
     nodes: [
       {
-        id: "sess-auth-lead",
-        name: "Auth refactor",
+        id: "s01",
+        name: "api-auth-refactor",
         driver: "claude",
         host: "localhost",
         state: "Needs",
@@ -90,8 +90,8 @@ function seedState(): MockState {
         depth: 0,
       },
       {
-        id: "sess-build-lead",
-        name: "Build artifact",
+        id: "s07",
+        name: "ci-pipeline-fix",
         driver: "codex",
         host: "localhost",
         state: "Error",
@@ -101,8 +101,8 @@ function seedState(): MockState {
         depth: 0,
       },
       {
-        id: "sess-build-follow",
-        name: "Test host runner",
+        id: "s06",
+        name: "data-ingestion-pipeline",
         driver: "claude",
         host: "build-host",
         state: "Done",
@@ -113,9 +113,9 @@ function seedState(): MockState {
       },
     ],
     membership: {
-      "sess-auth-lead": "ws-auth-refactor",
-      "sess-build-lead": "ws-build-pipeline",
-      "sess-build-follow": "ws-build-pipeline",
+      "s01": "ws-auth-refactor",
+      "s07": "ws-build-pipeline",
+      "s06": "ws-build-pipeline",
     },
     activeProfile: null,
   };
