@@ -4,6 +4,8 @@
  * Phase serializes as the variant name string.
  */
 
+import type { BoardView } from "./workstreamTypes";
+
 // ---------------------------------------------------------------------------
 // Phase (marsad-events)
 // ---------------------------------------------------------------------------
@@ -353,6 +355,40 @@ export interface PersistedTemplate {
 }
 
 // ---------------------------------------------------------------------------
+// Workstream — mirrors marsad-workstream::Workstream (id/name/goal/profile)
+// ---------------------------------------------------------------------------
+
+export interface Workstream {
+  id: string;
+  name: string;
+  goal: string;
+  profile?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Profile — mirrors marsad-workstream::Profile
+// ---------------------------------------------------------------------------
+
+export interface Profile {
+  id: string;
+  name: string;
+}
+
+// ---------------------------------------------------------------------------
+// Connection — mirrors marsad-workstream::Connection
+// ---------------------------------------------------------------------------
+
+export interface Connection {
+  id: string;
+  ws: string;
+  from: string;
+  to: string;
+  kind: "data" | "command" | "both";
+  bi: boolean;
+  has_gate?: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // VmUpdate event from Tauri
 // ---------------------------------------------------------------------------
 
@@ -363,4 +399,6 @@ export type VmUpdateEvent =
   | { kind: "toast"; icon: string; text: string }
   | { kind: "host_health"; host_id: string; status: string }
   | { kind: "hosts"; hosts: Host[] }
-  | { kind: "workspaces"; workspaces: Workspace[] };
+  | { kind: "workspaces"; workspaces: Workspace[] }
+  | { kind: "workstreams"; workstreams: Workstream[] }
+  | { kind: "board"; board: BoardView };

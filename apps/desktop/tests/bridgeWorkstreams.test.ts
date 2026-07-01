@@ -208,7 +208,12 @@ describe("bridge workstream commands (mock backend)", () => {
       if (edge!.has_gate) {
         expect(edge!.status).toBe("needs");
         expect(graphAfter!.inspector.pending_handoff).not.toBeNull();
-        expect(graphAfter!.inspector.pending_handoff!.conn_id).toBe("conn-gated-1");
+        // pending_handoff surfaces the FIRST gated connection of the ws (matching
+        // marsad-viewmodel::graph_view), so it is one of the ws's gated connections
+        // — not necessarily the just-added one.
+        expect(["conn-seed-1", "conn-gated-1"]).toContain(
+          graphAfter!.inspector.pending_handoff!.conn_id,
+        );
       } else {
         // If this particular addConnection call didn't produce a gate under
         // the mock's rules, fall back to the seeded gated connection (the

@@ -7,6 +7,8 @@
 
 import type { AppSnapshot, PersistedTemplate, SessionSummary, Settings, SideRow, SlashCommandInfo } from "./types";
 import { MOCK_SNAPSHOT } from "./mockFixture";
+import { mockWorkstreams } from "./mockWorkstreams";
+import type { BoardView, ConnKind, GraphView } from "./workstreamTypes";
 
 // ---------------------------------------------------------------------------
 // Tauri detection
@@ -490,6 +492,86 @@ export async function listenVmUpdate(
   }
   const { listen } = await import("@tauri-apps/api/event");
   return listen("vm-update", (event) => handler(event.payload));
+}
+
+// ---------------------------------------------------------------------------
+// Workstream commands (U-INT-1) — real invoke in Tauri, mock backend otherwise
+// ---------------------------------------------------------------------------
+
+export async function createWorkstream(
+  id: string,
+  name: string,
+  goal: string,
+  profile?: string | null,
+): Promise<void> {
+  if (!isTauri()) return mockWorkstreams.createWorkstream(id, name, goal, profile);
+  const invoke = await getInvoke();
+  await invoke("create_workstream", { id, name, goal, profile: profile ?? null });
+}
+
+export async function deleteWorkstream(id: string): Promise<void> {
+  if (!isTauri()) return mockWorkstreams.deleteWorkstream(id);
+  const invoke = await getInvoke();
+  await invoke("delete_workstream", { id });
+}
+
+export async function addConnection(
+  id: string,
+  ws: string,
+  from: string,
+  to: string,
+  kind: ConnKind,
+  bi: boolean,
+): Promise<void> {
+  if (!isTauri()) return mockWorkstreams.addConnection(id, ws, from, to, kind, bi);
+  const invoke = await getInvoke();
+  await invoke("add_connection", { id, ws, from, to, kind, bi });
+}
+
+export async function removeConnection(id: string): Promise<void> {
+  if (!isTauri()) return mockWorkstreams.removeConnection(id);
+  const invoke = await getInvoke();
+  await invoke("remove_connection", { id });
+}
+
+export async function createProfile(id: string, name: string): Promise<void> {
+  if (!isTauri()) return mockWorkstreams.createProfile(id, name);
+  const invoke = await getInvoke();
+  await invoke("create_profile", { id, name });
+}
+
+export async function deleteProfile(id: string): Promise<void> {
+  if (!isTauri()) return mockWorkstreams.deleteProfile(id);
+  const invoke = await getInvoke();
+  await invoke("delete_profile", { id });
+}
+
+export async function assignSession(
+  sessionId: string,
+  wsId: string,
+  lead: boolean,
+): Promise<void> {
+  if (!isTauri()) return mockWorkstreams.assignSession(sessionId, wsId, lead);
+  const invoke = await getInvoke();
+  await invoke("assign_session", { session_id: sessionId, ws_id: wsId, lead });
+}
+
+export async function setActiveProfile(profile?: string | null): Promise<void> {
+  if (!isTauri()) return mockWorkstreams.setActiveProfile(profile);
+  const invoke = await getInvoke();
+  await invoke("set_active_profile", { profile: profile ?? null });
+}
+
+export async function fetchBoard(): Promise<BoardView> {
+  if (!isTauri()) return mockWorkstreams.board();
+  const invoke = await getInvoke();
+  return invoke("board", {}) as Promise<BoardView>;
+}
+
+export async function fetchGraph(wsId: string): Promise<GraphView | null> {
+  if (!isTauri()) return mockWorkstreams.graph(wsId);
+  const invoke = await getInvoke();
+  return invoke("graph", { ws_id: wsId }) as Promise<GraphView | null>;
 }
 
 // ---------------------------------------------------------------------------
