@@ -14,6 +14,9 @@ test("wordmark is visible", async ({ page }) => {
 
 test("filter chips are visible", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("All")).toBeVisible();
-  await expect(page.getByText(/Needs you/)).toBeVisible();
+  // Scope to the sidebar filter chips (role="button") — "Needs you" also
+  // appears as a StatTile label and an "Needs your attention" section
+  // heading on the Overview screen, so a plain text locator is ambiguous.
+  await expect(page.getByRole("button", { name: "All" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Needs you/ })).toBeVisible();
 });

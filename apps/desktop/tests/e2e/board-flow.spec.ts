@@ -1,11 +1,11 @@
 /**
  * Golden-path e2e for the desktop app-wiring block (U-WIRE).
  *
- * Mirrors tests/e2e/smoke.spec.ts. Best-effort: runs against a live dev server
- * (`webServer` is a TODO in playwright.config.ts, so this may fail to connect
- * in CI — that's acceptable; the Vitest integration in appWiring.test.tsx is
- * the enforced gate). Nothing is guarded behind `.skip`; only Playwright
- * auto-waiting locators are used (no flaky manual waits).
+ * Mirrors tests/e2e/smoke.spec.ts. Runs against the `vite preview` webServer
+ * configured in playwright.config.ts (built via `pnpm build`); this is an
+ * enforced gate, same as the Vitest integration in appWiring.test.tsx.
+ * Nothing is guarded behind `.skip`; only Playwright auto-waiting locators
+ * are used (no flaky manual waits).
  *
  * Flow: open "/", click the board nav, expect a workstream card; click the
  * multi-node card, expect the graph canvas; click a node, expect the session
