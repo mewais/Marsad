@@ -1,0 +1,534 @@
+//! The blocking real-IO event loop: bind the listener, reconnect sessions that
+//! survived an agent restart, accept clients, and run the agent command loop.
+//! Entirely `#[cfg(not(coverage))]` — see the doc comment on `Agent::serve`.
+
+use marsad_lifecycle::Persisted;
+
+use super::reader::spawn_session_reader;
+use super::remote::{exec_prefix_for, remote_liveness_script, run_remote_script_bounded};
+use super::{Agent, AgentError, ListenSpec, SessionRecord};
+
+impl Agent {
+    /// Blocking event loop — real socket/pipe IO, excluded from the coverage
+    /// build because it requires a live socket/pipe and loops forever.
+    /// Called only from `src/main.rs`; since the binary target is not compiled
+    /// during `cargo llvm-cov` (autobins = false), this function is absent from
+    /// the coverage surface entirely.
+    ///
+    /// # Concurrency model
+    ///
+    /// `Agent` owns non-`Send` trait objects, so it cannot be wrapped in
+    /// `Arc<Mutex<Agent>>` across threads.  Instead we use a **command channel**
+    /// pattern:
+    ///
+    /// - This serve thread is the single owner of `Agent` and processes IPC
+    ///   commands sequentially via `mpsc::Receiver<AgentCmd>`.
+    /// - One short-lived reader thread is spawned per accepted client socket.
+    ///   It reads inbound lines and forwards them as `AgentCmd` values on the
+    ///   shared command sender, blocking on a one-shot reply channel for the
+    ///   response.  While waiting for the reply it holds no locks and does no
+    ///   IO on the agent.
+    /// - Broadcast messages (AgentEvent lines from session FIFO readers) bypass
+    ///   the agent thread and go directly to each client's `mpsc::Sender<String>`
+    ///   in the subscriber list `Arc<Mutex<Vec<mpsc::Sender<String>>>>`.
+    ///
+    /// Deadlock analysis:
+    ///  - The agent thread holds no subscriber-list lock when processing a command.
+    ///  - Session FIFO reader threads lock only the subscriber list (briefly) per
+    ///    line — never the agent command channel.
+    ///  - Client reader threads lock only the subscriber list on disconnect prune,
+    ///    which is also brief.
+    ///  - No lock is held while blocking on socket or FIFO reads.
+    #[cfg(not(coverage))]
+    pub fn serve(mut self) -> Result<(), AgentError> {
+        use marsad_transport::LocalIpcListener;
+        use std::sync::{mpsc, Arc, Mutex};
+
+        // ── Bind ──────────────────────────────────────────────────────────────
+        let socket_path = match &self.config.listen {
+            ListenSpec::UnixSocket(path) => path.clone(),
+            other => {
+                return Err(AgentError::Listen(format!(
+                    "unsupported listen spec: {other:?}"
+                )));
+            }
+        };
+
+        let listener = LocalIpcListener::bind(&socket_path)
+            .map_err(|e| AgentError::Listen(format!("bind {socket_path}: {e}")))?;
+
+        eprintln!("marsad-agent: listening on {socket_path}");
+
+        // ── Command channel ────────────────────────────────────────────────
+        // Each `AgentCmd` carries one inbound IPC line plus a one-shot reply
+        // sender.  The serve thread processes commands sequentially and sends
+        // the reply back through the one-shot channel.
+        //
+        // `AgentReply` carries either the list of outbound lines (success) or
+        // an error string, plus an optional session_id that signals the serve
+        // thread to open a FIFO reader for that session, plus an optional
+        // first_prompt to deliver to claude's stdin immediately after launch.
+        struct AgentCmd {
+            line: String,
+            reply_tx: mpsc::SyncSender<AgentReply>,
+        }
+        struct AgentReply {
+            out_lines: Result<Vec<String>, String>,
+            /// Set when a LaunchSession/ResumeSession produced a session_id and
+            /// a new FIFO reader should be started.
+            new_session_id: Option<String>,
+            /// The first prompt to write to in.fifo right after the FIFO
+            /// connects, so claude receives its initial task without hanging.
+            first_prompt: Option<String>,
+            /// The session's resolved remote target (`None` = local). Tells the
+            /// reader thread whether to open local FIFOs or a remote transport.
+            host_target: Option<String>,
+            /// For a REMOTE session: the run-command body (setup + env + `cd …
+            /// && exec <claude> <args>`) to run as the single piped child. `None`
+            /// for local sessions (which use the platform container).
+            run_command: Option<String>,
+            /// For a REMOTE resume/continue: `(project, claude_uuid)` so the
+            /// reader thread fetches the remote `.jsonl` over the session's own
+            /// connection and broadcasts a TranscriptBackfill. `None` for local
+            /// sessions (core reads their JSONL directly) and fresh sessions
+            /// (no prior history to fetch).
+            transcript_hint: Option<(String, Option<String>)>,
+        }
+
+        // The command sender is cloned into each client thread.
+        let (cmd_tx, cmd_rx) = mpsc::channel::<AgentCmd>();
+
+        // ── Broadcast list ─────────────────────────────────────────────────
+        // Arc<Mutex<Vec<Sender>>> — every connected client has one slot.
+        // Session FIFO reader threads and the client reader thread on disconnect
+        // both hold a clone of this Arc.
+        let subscribers: Arc<Mutex<Vec<mpsc::Sender<String>>>> = Arc::new(Mutex::new(Vec::new()));
+
+        // ── Session writers registry ───────────────────────────────────────
+        // Shared across the serve thread (handle_send_prompt via self) and the
+        // FIFO threads (which register the writer after connect).
+        // `session_writers_arc` is a clone of the same Arc stored in
+        // `self.session_writers.0`, so handle_send_prompt can look up writers
+        // by session_id via `self.session_writers.0` while FIFO threads
+        // insert via `session_writers_for_fifo`.
+        let session_writers_for_fifo = Arc::clone(&self.session_writers.0);
+
+        // ── Session children registry ──────────────────────────────────────
+        // Shared across the serve thread (kill_container via self) and the
+        // reader threads (which insert the spawned remote child after spawn).
+        let session_children_for_reader = Arc::clone(&self.session_children.0);
+
+        // ── Pending-gate registry ──────────────────────────────────────────
+        // Shared across the serve thread (handle_answer_gate via self) and the
+        // FIFO threads (which insert when claude emits a `can_use_tool`).
+        let pending_gates_for_fifo = Arc::clone(&self.pending_gates.0);
+
+        let data_root = self.config.data_root.clone();
+
+        // ── Reconnect sessions that survived an agent restart ──────────────────
+        // The agent is a detached daemon; if it died (e.g. killed on reinstall) but
+        // a session container is still alive, re-attach a reader to each live
+        // session and re-track it so prompt/stop work and the conversation CONTINUES.
+        // `first_prompt: None` and `send_init: false` — the claude is already
+        // running and initialized; we only re-attach to its stream.
+        //
+        // LOCAL sessions: reconcile via tmux/shim container as before.
+        // REMOTE sessions: durable (FIFO + setsid) — probe liveness via
+        // `remote_liveness_script`, then re-attach with writer + tail children.
+        {
+            use marsad_lifecycle::Action;
+            let restored = self
+                .store
+                .0
+                .restore()
+                .map(|r| r.sessions)
+                .unwrap_or_default();
+
+            // Probe ALL remote sessions' liveness in PARALLEL with a bounded wait,
+            // BEFORE touching `self`. The probes are blocking remote calls; doing
+            // them sequentially on this (the serve) thread — as the code used to —
+            // froze the whole agent if any persisted session lived on a host that
+            // blocks (a Duo/MFA host with no live ControlMaster sits at the prompt
+            // forever). That manifested as "no sessions start, nothing appears at
+            // all": the command loop below never ran. Now each probe runs in its own
+            // thread with a hard timeout; any that don't answer in time are treated
+            // DEAD and skipped, so startup completes regardless of one bad host.
+            let mut live_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+            {
+                let remote: Vec<_> = restored
+                    .iter()
+                    .filter(|s| {
+                        s.host_target
+                            .as_deref()
+                            .map(|h| exec_prefix_for(Some(h)).is_some())
+                            .unwrap_or(false)
+                    })
+                    .cloned()
+                    .collect();
+                let n = remote.len();
+                if n > 0 {
+                    let (tx, rx) = mpsc::channel::<(String, bool)>();
+                    for s in &remote {
+                        let host = s.host_target.clone().unwrap_or_default();
+                        let id = s.id.clone();
+                        let tx = tx.clone();
+                        std::thread::spawn(move || {
+                            let live = run_remote_script_bounded(
+                                &host,
+                                &remote_liveness_script(&id),
+                                std::time::Duration::from_secs(6),
+                            )
+                            .map(|out| out.trim() == "LIVE")
+                            .unwrap_or(false);
+                            let _ = tx.send((id, live));
+                        });
+                    }
+                    drop(tx);
+                    // Each bounded probe self-terminates within ~6s, so the whole
+                    // collect finishes in ~6s (parallel) even with many hosts; the
+                    // 8s per-recv cap is a belt-and-suspenders backstop.
+                    for _ in 0..n {
+                        match rx.recv_timeout(std::time::Duration::from_secs(8)) {
+                            Ok((id, live)) => {
+                                eprintln!(
+                                    "marsad-agent: remote session {id} liveness: {}",
+                                    if live { "LIVE" } else { "DEAD" }
+                                );
+                                if live {
+                                    live_ids.insert(id);
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+
+            for s in restored {
+                if let Some(host) = s.host_target.as_deref() {
+                    if exec_prefix_for(Some(host)).is_some() {
+                        // REMOTE session: reconnect if the parallel probe found it live.
+                        let live = live_ids.contains(&s.id);
+                        if live {
+                            self.sessions.insert(
+                                s.id.clone(),
+                                SessionRecord {
+                                    marsad_id: s.id.clone(),
+                                },
+                            );
+                            // On reconnect: no run_command (already running), no
+                            // first_prompt (already initialized), no send_init.
+                            // transcript_hint: supply for resume so backfill fires.
+                            let transcript_hint = s
+                                .session_id
+                                .as_ref()
+                                .filter(|_| true) // always try backfill on reconnect
+                                .map(|uuid| (s.project.clone(), Some(uuid.clone())))
+                                .or_else(|| Some((s.project.clone(), None)));
+                            spawn_session_reader(
+                                s.id.clone(),
+                                s.host_target.clone(),
+                                None,
+                                false, // already initialized
+                                None,  // run_command: already running
+                                transcript_hint,
+                                data_root.clone(),
+                                Arc::clone(&subscribers),
+                                Arc::clone(&self.session_writers.0),
+                                Arc::clone(&self.pending_gates.0),
+                                Arc::clone(&self.session_children.0),
+                            );
+                            eprintln!("marsad-agent: reconnected live remote session {}", s.id);
+                        }
+                        continue;
+                    }
+                }
+
+                // LOCAL session: reconcile via tmux/shim container.
+                let known = Persisted {
+                    session_id: s.session_id.clone(),
+                    container_name: format!("marsad-{}", s.id),
+                    project: s.project.clone(),
+                    model: s.model.clone(),
+                };
+                let action = self.reconcile_one(&known, s.host_target.as_deref()).action;
+                eprintln!(
+                    "marsad-agent: reconcile {} on {:?} -> {action:?}",
+                    s.id, s.host_target
+                );
+                if matches!(action, Action::Adopt) {
+                    self.sessions.insert(
+                        s.id.clone(),
+                        SessionRecord {
+                            marsad_id: s.id.clone(),
+                        },
+                    );
+                    spawn_session_reader(
+                        s.id.clone(),
+                        s.host_target.clone(),
+                        None,
+                        false,
+                        None,
+                        None, // reconnect path is local-only; no remote backfill
+                        data_root.clone(),
+                        Arc::clone(&subscribers),
+                        Arc::clone(&self.session_writers.0),
+                        Arc::clone(&self.pending_gates.0),
+                        Arc::clone(&self.session_children.0),
+                    );
+                    eprintln!("marsad-agent: reconnected live session {}", s.id);
+                }
+            }
+        }
+
+        // ── Accept thread ──────────────────────────────────────────────────
+        // We spin off the accept loop in a separate thread so that the current
+        // thread can run the agent command loop below.  The accept thread
+        // never touches the `Agent`.
+        let subs_accept = Arc::clone(&subscribers);
+        let cmd_tx_accept = cmd_tx.clone();
+
+        std::thread::spawn(move || {
+            loop {
+                let client = match listener.accept() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("marsad-agent: accept error: {e}");
+                        break;
+                    }
+                };
+
+                // Per-client broadcast channel.
+                // bcast_tx_for_reader — given to the reader thread so it can
+                //   route ack/reply lines through the writer thread.
+                // bcast_tx_for_subs   — pushed into the subscriber list so that
+                //   FIFO reader threads can broadcast AgentEvents to this client.
+                // Both are Sender clones of the same channel; bcast_rx is drained
+                // exclusively by the writer thread.
+                let (bcast_tx_for_reader, bcast_rx) = mpsc::channel::<String>();
+                let bcast_tx_for_subs = bcast_tx_for_reader.clone();
+                {
+                    let mut subs = subs_accept.lock().unwrap();
+                    subs.push(bcast_tx_for_subs);
+                }
+
+                let cmd_tx_client = cmd_tx_accept.clone();
+                let subs_client = Arc::clone(&subs_accept);
+                let data_root_client = data_root.clone();
+                let subs_for_fifo = Arc::clone(&subs_accept);
+                let writers_for_fifo = Arc::clone(&session_writers_for_fifo);
+                let pending_for_fifo = Arc::clone(&pending_gates_for_fifo);
+                let children_for_reader = Arc::clone(&session_children_for_reader);
+
+                // Split the client into independent write and read halves so
+                // each thread has exclusive ownership — no Mutex required.
+                // All outbound bytes (acks, SessionLaunched, AgentEvents) flow
+                // through bcast_tx_for_reader → bcast_rx → writer thread, which
+                // is the sole owner of write_half.
+                let (write_half, read_half) = match client.into_split() {
+                    Some(pair) => pair,
+                    None => {
+                        eprintln!("marsad-agent: client socket not connected after accept");
+                        continue;
+                    }
+                };
+
+                // Writer thread: sole owner of write_half; drains bcast_rx.
+                std::thread::spawn(move || {
+                    use std::io::Write;
+                    let mut w = write_half;
+                    for line in bcast_rx {
+                        // Skip empty probe lines used for subscriber-list pruning.
+                        if line.is_empty() {
+                            continue;
+                        }
+                        if w.write_all(line.as_bytes()).is_err()
+                            || w.write_all(b"\n").is_err()
+                            || w.flush().is_err()
+                        {
+                            break;
+                        }
+                    }
+                });
+
+                // Reader thread: sole owner of read_half; pushes all outbound
+                // reply lines via bcast_tx_for_reader so the writer thread
+                // serialises them to the socket.
+                std::thread::spawn(move || {
+                    use std::io::BufRead;
+                    let mut r = read_half;
+                    loop {
+                        let mut raw = String::new();
+                        let line_opt = r.read_line(&mut raw);
+
+                        match line_opt {
+                            Ok(0) | Err(_) => {
+                                // Clean EOF or IO error — disconnect.
+                                // Sessions/tmux are intentionally NOT killed.
+                                break;
+                            }
+                            Ok(_) => {
+                                // Trim the trailing newline.
+                                let line = raw.trim_end_matches('\n').to_string();
+                                if line.is_empty() {
+                                    continue;
+                                }
+
+                                // Send the command to the agent thread and await reply.
+                                let (reply_tx, reply_rx) = mpsc::sync_channel::<AgentReply>(0);
+                                if cmd_tx_client.send(AgentCmd { line, reply_tx }).is_err() {
+                                    // Agent thread gone — daemon shutting down.
+                                    break;
+                                }
+                                let reply = match reply_rx.recv() {
+                                    Ok(r) => r,
+                                    Err(_) => break,
+                                };
+
+                                match reply.out_lines {
+                                    Err(msg) => {
+                                        let err_line = marsad_proto::encode_ipc(
+                                            &marsad_proto::IpcMsg::Error { message: msg },
+                                        );
+                                        // Route error reply through writer thread.
+                                        let _ = bcast_tx_for_reader.send(err_line);
+                                    }
+                                    Ok(out_lines) => {
+                                        // Route ack/reply lines through writer thread.
+                                        for out_line in &out_lines {
+                                            let _ = bcast_tx_for_reader.send(out_line.clone());
+                                        }
+
+                                        // If a new session was launched, start a
+                                        // FIFO reader thread for it.
+                                        if let Some(session_id) = reply.new_session_id {
+                                            spawn_session_reader(
+                                                session_id,
+                                                reply.host_target,
+                                                reply.first_prompt,
+                                                true, // launch: send the initialize handshake
+                                                reply.run_command,
+                                                reply.transcript_hint,
+                                                data_root_client.clone(),
+                                                Arc::clone(&subs_for_fifo),
+                                                Arc::clone(&writers_for_fifo),
+                                                Arc::clone(&pending_for_fifo),
+                                                Arc::clone(&children_for_reader),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // On disconnect: prune dead subscriber senders.
+                    // Sessions/tmux are intentionally left alive (liveness).
+                    let mut subs = subs_client.lock().unwrap();
+                    subs.retain(|s| s.send(String::new()).is_ok());
+                });
+            }
+        });
+
+        // ── Agent command loop (runs on the serve thread) ──────────────────
+        // Owns `self` (the Agent).  Processes one command at a time.
+        for cmd in cmd_rx {
+            let is_launch = cmd.line.contains("\"LaunchSession\"");
+            let is_resume = cmd.line.contains("\"ResumeSession\"");
+
+            // For a launch OR resume, capture the first_prompt BEFORE handle_ipc
+            // consumes the JSON — we pass it to the FIFO thread via AgentReply so
+            // a resumed/continued session can be handed a new prompt on reconnect.
+            let launch_first_prompt: Option<String> = if is_launch || is_resume {
+                serde_json::from_str::<serde_json::Value>(&cmd.line)
+                    .ok()
+                    .and_then(|v| v["first_prompt"].as_str().map(|s| s.to_string()))
+            } else {
+                None
+            };
+
+            let result = self.handle_ipc(&cmd.line);
+
+            let (out_lines, new_session_id, first_prompt) = match result {
+                Err(e) => (Err(format!("{e}")), None, None),
+                Ok(lines) => {
+                    // Extract a new session_id from the response when the
+                    // command was a launch or resume — so the accept thread
+                    // can open the FIFO reader.
+                    let sid = if is_launch || is_resume {
+                        lines.first().and_then(|l| {
+                            serde_json::from_str::<serde_json::Value>(l)
+                                .ok()
+                                .and_then(|v| v["session_id"].as_str().map(|s| s.to_string()))
+                        })
+                    } else {
+                        None
+                    };
+
+                    // Register the session in the writers registry now that we
+                    // know its session_id.  The actual File handle is added by
+                    // the FIFO thread once it connects.  We pass first_prompt
+                    // via AgentReply so the FIFO thread writes it immediately
+                    // after connecting — before the reader loop starts.
+                    // The registry entry itself is created by the FIFO thread
+                    // once it connects, using the Arc clone passed to it.
+                    let prompt = if sid.is_some() {
+                        launch_first_prompt
+                    } else {
+                        None
+                    };
+                    (Ok(lines), sid, prompt)
+                }
+            };
+
+            // Resolve the session's remote target (if any) so the reader thread
+            // picks the right transport. The session was just persisted by
+            // launch_with_id, so the store has its host_target.
+            let host_target = new_session_id
+                .as_deref()
+                .and_then(|s| self.session_host_target(s));
+
+            // Pop the remote run command stashed by launch_with_id (None for a
+            // local session). The reader thread spawns it as the single piped
+            // child. Serve processes commands sequentially, so this never races.
+            let run_command = new_session_id
+                .as_deref()
+                .and_then(|s| self.session_run_cmds.0.lock().unwrap().remove(s));
+
+            // For a REMOTE resume/continue, tell the reader thread to backfill the
+            // transcript from the remote host. `wants_history` is true for a
+            // ResumeSession IPC, or a LaunchSession carrying resume_session_id /
+            // continue (NOT a fresh launch — that has no prior conversation).
+            let wants_history = is_resume
+                || serde_json::from_str::<serde_json::Value>(&cmd.line)
+                    .ok()
+                    .map(|v| {
+                        v["resume_session_id"]
+                            .as_str()
+                            .map(|s| !s.is_empty())
+                            .unwrap_or(false)
+                            || v["continue"].as_bool().unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+            let transcript_hint = if wants_history && host_target.is_some() {
+                new_session_id
+                    .as_deref()
+                    .and_then(|s| self.session_transcript_project_uuid(s))
+            } else {
+                None
+            };
+
+            // Send reply; if the client thread is gone, ignore the error.
+            let _ = cmd.reply_tx.send(AgentReply {
+                out_lines,
+                new_session_id,
+                first_prompt,
+                host_target,
+                run_command,
+                transcript_hint,
+            });
+        }
+
+        Ok(())
+    }
+}
