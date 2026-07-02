@@ -431,8 +431,16 @@ fn streamed_blocks_sharing_a_message_id_all_appear_and_dedup() {
         .transcript
         .iter()
         .any(|e| matches!(e, marsad_events::TranscriptEntry::Tool { name, .. } if name == "Bash"));
-    assert_eq!(text_count, 1, "text block present exactly once: {:?}", sv.transcript);
-    assert!(has_tool, "tool block (same msg id) must also appear: {:?}", sv.transcript);
+    assert_eq!(
+        text_count, 1,
+        "text block present exactly once: {:?}",
+        sv.transcript
+    );
+    assert!(
+        has_tool,
+        "tool block (same msg id) must also appear: {:?}",
+        sv.transcript
+    );
 }
 
 #[test]
@@ -636,7 +644,9 @@ fn answer_gate_edit_gate_outbound_references_gate() {
 #[test]
 fn usage_update_null_usage_field_is_noop() {
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(spec("/p", Posture::Ask)).expect("launch");
+    let id = core
+        .launch_session(spec("/p", Posture::Ask))
+        .expect("launch");
     // `usage` key absent → serde default = None → should return Ok(vec![])
     let line = format!(r#"{{"type":"UsageUpdate","session_id":"{id}"}}"#);
     let updates = core.on_agent_line(&line).expect("null usage is ok");
@@ -647,7 +657,9 @@ fn usage_update_null_usage_field_is_noop() {
 #[test]
 fn usage_update_array_usage_field_is_noop() {
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(spec("/p", Posture::Ask)).expect("launch");
+    let id = core
+        .launch_session(spec("/p", Posture::Ask))
+        .expect("launch");
     // `usage` is an array instead of an object → as_object() returns None → no-op
     let line = format!(r#"{{"type":"UsageUpdate","session_id":"{id}","usage":[1,2,3]}}"#);
     let updates = core.on_agent_line(&line).expect("array usage is ok");

@@ -11,7 +11,10 @@ use marsad_lifecycle::{remote_shell_argv, RemoteTmuxContainer};
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn ssh_prefix() -> Vec<String> {
-    ["ssh", "user@h", "--"].iter().map(|s| s.to_string()).collect()
+    ["ssh", "user@h", "--"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 fn wsl_prefix() -> Vec<String> {
@@ -26,7 +29,10 @@ fn wsl_prefix() -> Vec<String> {
 #[test]
 fn remote_session_dir_joins_with_posix_slashes() {
     let c = RemoteTmuxContainer::new(ssh_prefix(), "~/.marsad");
-    assert_eq!(c.remote_session_dir("marsad-a"), "~/.marsad/sessions/marsad-a");
+    assert_eq!(
+        c.remote_session_dir("marsad-a"),
+        "~/.marsad/sessions/marsad-a"
+    );
 }
 
 #[test]
@@ -58,10 +64,7 @@ fn fifo_paths_live_under_the_session_dir() {
 fn runtime_dir_with_trailing_segment_is_preserved_verbatim() {
     // No std::path normalization: an absolute remote path stays as-is.
     let c = RemoteTmuxContainer::new(ssh_prefix(), "/var/lib/marsad");
-    assert_eq!(
-        c.remote_session_dir("x"),
-        "/var/lib/marsad/sessions/x"
-    );
+    assert_eq!(c.remote_session_dir("x"), "/var/lib/marsad/sessions/x");
 }
 
 // ── exists argv ────────────────────────────────────────────────────────────────
@@ -143,7 +146,10 @@ fn spawn_script_writes_cmd_verbatim_into_run_sh() {
         s.contains("<<'__MARSAD_RUN__'\necho 'hi'\n__MARSAD_RUN__"),
         "cmd must be written verbatim into the run.sh heredoc: {s}"
     );
-    assert!(s.contains("bash -l ~/.marsad/sessions/n/run.sh"), "must run via login shell: {s}");
+    assert!(
+        s.contains("bash -l ~/.marsad/sessions/n/run.sh"),
+        "must run via login shell: {s}"
+    );
 }
 
 // ── remote_shell_argv: ssh re-parses (single token), wsl preserves (sh -c) ──────
@@ -156,13 +162,20 @@ fn remote_shell_argv_ssh_uses_login_shell_single_token() {
     let argv = remote_shell_argv(&ssh_prefix(), "tmux has-session -t s");
     assert_eq!(argv[0], "ssh");
     assert_eq!(argv.last().unwrap(), "bash -lc 'tmux has-session -t s'");
-    assert!(!argv.contains(&"sh".to_string()), "ssh must not use a bare sh -c: {argv:?}");
+    assert!(
+        !argv.contains(&"sh".to_string()),
+        "ssh must not use a bare sh -c: {argv:?}"
+    );
 }
 
 #[test]
 fn remote_shell_argv_plink_uses_login_shell_like_ssh() {
     // plink re-parses its trailing command like ssh → same login-shell single token.
-    let prefix = vec!["plink".to_string(), "-share".to_string(), "user@h".to_string()];
+    let prefix = vec![
+        "plink".to_string(),
+        "-share".to_string(),
+        "user@h".to_string(),
+    ];
     let argv = remote_shell_argv(&prefix, "tmux has-session -t s");
     assert_eq!(argv[0], "plink");
     assert_eq!(argv.last().unwrap(), "bash -lc 'tmux has-session -t s'");

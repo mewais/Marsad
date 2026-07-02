@@ -747,10 +747,13 @@ fn session_view_exposes_tools_mcp_slash_after_init() {
     let updates = core.on_agent_line(&init_line).expect("on_agent_line");
 
     // Find the Session VmUpdate.
-    let sv = updates.iter().find_map(|u| match u {
-        VmUpdate::Session(sv) => Some(sv.clone()),
-        _ => None,
-    }).expect("Session VmUpdate must be emitted");
+    let sv = updates
+        .iter()
+        .find_map(|u| match u {
+            VmUpdate::Session(sv) => Some(sv.clone()),
+            _ => None,
+        })
+        .expect("Session VmUpdate must be emitted");
 
     assert_eq!(sv.tools, vec!["Read", "Bash", "Edit"]);
     assert_eq!(sv.mcp_servers.len(), 2);

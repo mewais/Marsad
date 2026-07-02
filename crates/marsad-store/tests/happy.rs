@@ -33,7 +33,7 @@ fn make_session(id: &str) -> PersistedSession {
         model: "claude-opus-4-5".to_string(),
         last_phase: "Done".to_string(),
         posture: None,
-            disallowed_tools: vec![],
+        disallowed_tools: vec![],
     }
 }
 
@@ -467,7 +467,10 @@ fn make_notif_pref(enabled: bool, priority: &str) -> NotifPref {
 
 fn make_settings() -> PersistedSettings {
     let mut notif_prefs = std::collections::HashMap::new();
-    notif_prefs.insert("gate_needs_you".to_string(), make_notif_pref(true, "urgent"));
+    notif_prefs.insert(
+        "gate_needs_you".to_string(),
+        make_notif_pref(true, "urgent"),
+    );
     notif_prefs.insert("session_done".to_string(), make_notif_pref(false, "normal"));
     PersistedSettings {
         notif_prefs,
@@ -486,9 +489,13 @@ fn make_settings() -> PersistedSettings {
 fn upsert_settings_then_restore_returns_settings() {
     let mut store = fresh_store();
     let s = make_settings();
-    store.upsert_settings(&s).expect("upsert_settings must succeed");
+    store
+        .upsert_settings(&s)
+        .expect("upsert_settings must succeed");
     let restored = store.restore().expect("restore must succeed");
-    let got = restored.settings.expect("settings must be present after upsert");
+    let got = restored
+        .settings
+        .expect("settings must be present after upsert");
     assert_eq!(got, s);
 }
 
@@ -546,7 +553,9 @@ fn make_template(name: &str) -> PersistedTemplate {
 fn upsert_template_then_restore_returns_template() {
     let mut store = fresh_store();
     let t = make_template("fast");
-    store.upsert_template(&t).expect("upsert_template must succeed");
+    store
+        .upsert_template(&t)
+        .expect("upsert_template must succeed");
     let restored = store.restore().expect("restore must succeed");
     assert!(
         restored.templates.iter().any(|tmpl| tmpl.name == "fast"),
@@ -585,7 +594,11 @@ fn upsert_template_overwrites_same_name() {
     };
     store.upsert_template(&t2).expect("second upsert");
     let restored = store.restore().expect("restore");
-    let matches: Vec<_> = restored.templates.iter().filter(|tmpl| tmpl.name == "my-tmpl").collect();
+    let matches: Vec<_> = restored
+        .templates
+        .iter()
+        .filter(|tmpl| tmpl.name == "my-tmpl")
+        .collect();
     assert_eq!(matches.len(), 1, "upsert must overwrite, not duplicate");
     assert_eq!(matches[0].model, "claude-haiku-4-5");
 }
@@ -653,7 +666,11 @@ fn persisted_session_disallowed_tools_round_trips() {
     };
     store.upsert_session(&session).expect("upsert");
     let restored = store.restore().expect("restore");
-    let s = restored.sessions.iter().find(|s| s.id == "sess-dt").expect("session must exist");
+    let s = restored
+        .sessions
+        .iter()
+        .find(|s| s.id == "sess-dt")
+        .expect("session must exist");
     assert_eq!(s.disallowed_tools, vec!["Bash", "Edit"]);
 }
 
@@ -665,9 +682,15 @@ fn persisted_session_missing_disallowed_tools_defaults_empty() {
     let backend = MemoryBackend::new();
     // Write a versioned blob directly through the backend clone — no Store::backend access.
     let old_json = r#"{"version":1,"payload":{"id":"old-sess","session_id":null,"name":"old-sess","host_id":"local","host_target":null,"project":"/p","branch":"main","model":"m","last_phase":"Done","posture":null}}"#;
-    backend.write("session:old-sess", old_json.as_bytes()).expect("write");
+    backend
+        .write("session:old-sess", old_json.as_bytes())
+        .expect("write");
     let store = Store::new(Box::new(backend));
     let restored = store.restore().expect("restore");
-    let s = restored.sessions.iter().find(|s| s.id == "old-sess").expect("session must exist");
+    let s = restored
+        .sessions
+        .iter()
+        .find(|s| s.id == "old-sess")
+        .expect("session must exist");
     assert!(s.disallowed_tools.is_empty());
 }

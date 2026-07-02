@@ -748,10 +748,7 @@ fn ask_user_question_multi_select_builds_question_gate() {
 #[test]
 fn ask_user_question_empty_input_yields_empty_questions() {
     let s0 = reduce(SessionState::initial(), stream(system_init_json_br()));
-    let s1 = reduce(
-        s0,
-        stream(&ask_user_question_no_questions_json("req-aq-3")),
-    );
+    let s1 = reduce(s0, stream(&ask_user_question_no_questions_json("req-aq-3")));
     assert_eq!(s1.phase, Phase::Needs);
     match s1.gate.as_ref().expect("gate must be set") {
         marsad_gates::Gate::Question { questions, .. } => {

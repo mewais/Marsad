@@ -229,7 +229,11 @@ fn elicitation_gate_without_fence_uses_first_nonempty_line() {
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
     let s1 = reduce(
         s0,
-        stream(&elicitation_request_json("eli-2", "srv", "\n  Approve writing to disk?  \nmore")),
+        stream(&elicitation_request_json(
+            "eli-2",
+            "srv",
+            "\n  Approve writing to disk?  \nmore",
+        )),
     );
     let (command, _) = gate_command_explanation(&s1);
     assert_eq!(command, "Approve writing to disk?");
@@ -249,7 +253,11 @@ fn elicitation_gate_unterminated_fence_falls_back_to_line() {
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
     let s1 = reduce(
         s0,
-        stream(&elicitation_request_json("eli-4", "srv", "Run this?\n```\nrm -rf x")),
+        stream(&elicitation_request_json(
+            "eli-4",
+            "srv",
+            "Run this?\n```\nrm -rf x",
+        )),
     );
     let (command, _) = gate_command_explanation(&s1);
     assert_eq!(command, "Run this?");
@@ -261,7 +269,11 @@ fn elicitation_gate_fence_with_only_whitespace_falls_back() {
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
     let s1 = reduce(
         s0,
-        stream(&elicitation_request_json("eli-5", "srv", "Header\n```\n   \n```")),
+        stream(&elicitation_request_json(
+            "eli-5",
+            "srv",
+            "Header\n```\n   \n```",
+        )),
     );
     let (command, _) = gate_command_explanation(&s1);
     assert_eq!(command, "Header");
@@ -273,7 +285,11 @@ fn elicitation_gate_fence_without_following_newline_falls_back() {
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
     let s1 = reduce(
         s0,
-        stream(&elicitation_request_json("eli-6", "srv", "Allow it? ```inline")),
+        stream(&elicitation_request_json(
+            "eli-6",
+            "srv",
+            "Allow it? ```inline",
+        )),
     );
     let (command, _) = gate_command_explanation(&s1);
     assert_eq!(command, "Allow it? ```inline");
@@ -498,13 +514,18 @@ fn result_with_model_usage_populates_state() {
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
     let result_json = r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.268,"usage":{"input_tokens":11,"output_tokens":155,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"num_turns":1,"permission_denials":[],"modelUsage":{"claude-sonnet-4.6[1m]":{"inputTokens":11,"outputTokens":155,"costUSD":0.268}}}"#;
     let s1 = reduce(s0, stream(result_json));
-    assert!(!s1.model_usage.is_empty(), "model_usage must be populated from result");
-    let mu = s1.model_usage.get("claude-sonnet-4.6[1m]").expect("key must exist");
+    assert!(
+        !s1.model_usage.is_empty(),
+        "model_usage must be populated from result"
+    );
+    let mu = s1
+        .model_usage
+        .get("claude-sonnet-4.6[1m]")
+        .expect("key must exist");
     assert_eq!(mu.input_tokens, 11);
     assert_eq!(mu.output_tokens, 155);
     assert!((mu.cost_usd - 0.268).abs() < 1e-9);
 }
-
 
 // ---------------------------------------------------------------------------
 // tools / mcp_servers / slash_commands — populated from system/init
@@ -519,10 +540,29 @@ fn system_init_populates_tools_mcp_servers_slash_commands() {
     let s1 = reduce(s0, stream(json));
     assert_eq!(s1.tools, vec!["Read", "Bash", "Edit"]);
     assert_eq!(s1.mcp_servers.len(), 2);
-    assert_eq!(s1.mcp_servers[0], McpServerInfo { name: "hares".to_string(), status: "failed".to_string() });
-    assert_eq!(s1.mcp_servers[1], McpServerInfo { name: "hub".to_string(), status: "connected".to_string() });
+    assert_eq!(
+        s1.mcp_servers[0],
+        McpServerInfo {
+            name: "hares".to_string(),
+            status: "failed".to_string()
+        }
+    );
+    assert_eq!(
+        s1.mcp_servers[1],
+        McpServerInfo {
+            name: "hub".to_string(),
+            status: "connected".to_string()
+        }
+    );
     assert_eq!(s1.slash_commands.len(), 2);
-    assert_eq!(s1.slash_commands[0], SlashCommandInfo { name: "/clear".to_string(), description: "Clear conversation history".to_string(), argument_hint: "".to_string() });
+    assert_eq!(
+        s1.slash_commands[0],
+        SlashCommandInfo {
+            name: "/clear".to_string(),
+            description: "Clear conversation history".to_string(),
+            argument_hint: "".to_string()
+        }
+    );
     assert_eq!(s1.slash_commands[1].name, "/model");
     assert_eq!(s1.slash_commands[1].argument_hint, "model-name");
 }
@@ -534,7 +574,10 @@ fn initial_state_new_fields_empty() {
     assert!(s.tools.is_empty());
     assert!(s.mcp_servers.is_empty());
     assert!(s.slash_commands.is_empty());
-    assert!(s.permission_mode.is_none(), "initial permission_mode must be None");
+    assert!(
+        s.permission_mode.is_none(),
+        "initial permission_mode must be None"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -618,7 +661,10 @@ fn task_tool_result_json(tool_use_id: &str) -> String {
 #[test]
 fn task_tool_use_marks_subagent_running() {
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&task_tool_use_json("m-task-1", "tu-task-1", "researcher")));
+    let s1 = reduce(
+        s0,
+        stream(&task_tool_use_json("m-task-1", "tu-task-1", "researcher")),
+    );
     assert_eq!(s1.subagents.len(), 1);
     let agent = &s1.subagents[0];
     assert_eq!(agent.name, "researcher");
@@ -629,7 +675,10 @@ fn task_tool_use_marks_subagent_running() {
 #[test]
 fn task_tool_result_marks_subagent_done() {
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&task_tool_use_json("m-task-2", "tu-task-2", "coder")));
+    let s1 = reduce(
+        s0,
+        stream(&task_tool_use_json("m-task-2", "tu-task-2", "coder")),
+    );
     assert_eq!(s1.subagents[0].status, SubagentStatus::Running);
 
     let s2 = reduce(s1, stream(&task_tool_result_json("tu-task-2")));
@@ -695,8 +744,14 @@ fn task_tool_use_uses_default_name_when_input_empty() {
 #[test]
 fn two_task_tool_uses_both_resolve_to_done() {
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&task_tool_use_json("m-t3a", "tu-t3a", "worker-a")));
-    let s2 = reduce(s1, stream(&task_tool_use_json("m-t3b", "tu-t3b", "worker-b")));
+    let s1 = reduce(
+        s0,
+        stream(&task_tool_use_json("m-t3a", "tu-t3a", "worker-a")),
+    );
+    let s2 = reduce(
+        s1,
+        stream(&task_tool_use_json("m-t3b", "tu-t3b", "worker-b")),
+    );
     assert_eq!(s2.subagents.len(), 2);
     assert_eq!(s2.subagents[0].status, SubagentStatus::Running);
     assert_eq!(s2.subagents[1].status, SubagentStatus::Running);

@@ -167,7 +167,11 @@ fn remote_fifo_writer_argv_ssh_prefix() {
     // ssh: single token carrying the redirect; login shell runs it.
     assert_eq!(
         argv,
-        vec!["ssh", "user@host", "cat > $HOME/.marsad/sessions/s1/in.fifo"]
+        vec![
+            "ssh",
+            "user@host",
+            "cat > $HOME/.marsad/sessions/s1/in.fifo"
+        ]
     );
 }
 
@@ -219,14 +223,28 @@ fn remote_fifo_writer_argv_wsl_prefix() {
 #[test]
 fn remote_fifo_argv_plink_is_single_token_like_ssh() {
     use marsad_transport::{remote_fifo_reader_argv, remote_fifo_writer_argv};
-    let prefix = vec!["plink".to_string(), "-share".to_string(), "user@host".to_string()];
+    let prefix = vec![
+        "plink".to_string(),
+        "-share".to_string(),
+        "user@host".to_string(),
+    ];
     // plink re-parses like ssh → single token, no `sh -c`.
     assert_eq!(
         remote_fifo_reader_argv(&prefix, "$HOME/.marsad/sessions/s/out.fifo"),
-        vec!["plink", "-share", "user@host", "cat $HOME/.marsad/sessions/s/out.fifo"]
+        vec![
+            "plink",
+            "-share",
+            "user@host",
+            "cat $HOME/.marsad/sessions/s/out.fifo"
+        ]
     );
     assert_eq!(
         remote_fifo_writer_argv(&prefix, "$HOME/.marsad/sessions/s/in.fifo"),
-        vec!["plink", "-share", "user@host", "cat > $HOME/.marsad/sessions/s/in.fifo"]
+        vec![
+            "plink",
+            "-share",
+            "user@host",
+            "cat > $HOME/.marsad/sessions/s/in.fifo"
+        ]
     );
 }

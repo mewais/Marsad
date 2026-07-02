@@ -3,9 +3,9 @@
 /// These tests WILL fail to compile until the code-agent implements `marsad_proto`.
 /// That is the expected tests-first signal.
 use marsad_proto::{
-    encode_control_response, encode_control_response_elicitation,
-    encode_control_response_question, encode_ipc, encode_user_input, parse_ipc, parse_stream_line,
-    ContentBlock, ControlResponse, IpcMsg, ResultSubtype, StreamMsg, UserInput,
+    encode_control_response, encode_control_response_elicitation, encode_control_response_question,
+    encode_ipc, encode_user_input, parse_ipc, parse_stream_line, ContentBlock, ControlResponse,
+    IpcMsg, ResultSubtype, StreamMsg, UserInput,
 };
 
 // ---------------------------------------------------------------------------
@@ -597,7 +597,10 @@ fn encode_control_response_question_with_answers() {
     assert_eq!(inner["behavior"].as_str(), Some("allow"));
     let updated = &inner["updatedInput"];
     assert!(updated["questions"].is_array());
-    assert_eq!(updated["answers"]["Which approach?"].as_str(), Some("Option A"));
+    assert_eq!(
+        updated["answers"]["Which approach?"].as_str(),
+        Some("Option A")
+    );
 }
 
 #[test]
@@ -676,7 +679,10 @@ fn parse_result_without_model_usage_defaults_empty() {
     let msg = parse_stream_line(line).expect("should parse result without modelUsage");
     match msg {
         StreamMsg::Result(r) => {
-            assert!(r.model_usage.is_empty(), "absent modelUsage must default to empty map");
+            assert!(
+                r.model_usage.is_empty(),
+                "absent modelUsage must default to empty map"
+            );
         }
         other => panic!("expected Result, got {other:?}"),
     }
@@ -777,7 +783,10 @@ fn slash_command_info_serde_roundtrip() {
     let back: SlashCommandInfo = serde_json::from_str(&json).unwrap();
     assert_eq!(s, back);
     // The wire key is "argumentHint" (camelCase rename).
-    assert!(json.contains("argumentHint"), "wire key must be argumentHint; json: {json}");
+    assert!(
+        json.contains("argumentHint"),
+        "wire key must be argumentHint; json: {json}"
+    );
 }
 
 /// `SlashCommandInfo` defaults: description and argumentHint absent → empty.
@@ -803,8 +812,20 @@ fn parse_system_init_with_mcp_servers() {
     match msg {
         StreamMsg::SystemInit(init) => {
             assert_eq!(init.mcp_servers.len(), 2);
-            assert_eq!(init.mcp_servers[0], McpServerInfo { name: "hares".to_string(), status: "failed".to_string() });
-            assert_eq!(init.mcp_servers[1], McpServerInfo { name: "agent-hub".to_string(), status: "connected".to_string() });
+            assert_eq!(
+                init.mcp_servers[0],
+                McpServerInfo {
+                    name: "hares".to_string(),
+                    status: "failed".to_string()
+                }
+            );
+            assert_eq!(
+                init.mcp_servers[1],
+                McpServerInfo {
+                    name: "agent-hub".to_string(),
+                    status: "connected".to_string()
+                }
+            );
         }
         other => panic!("expected SystemInit, got {other:?}"),
     }
@@ -820,7 +841,10 @@ fn parse_system_init_slash_commands_object_array() {
         StreamMsg::SystemInit(init) => {
             assert_eq!(init.slash_commands.len(), 2);
             assert_eq!(init.slash_commands[0].name, "/clear");
-            assert_eq!(init.slash_commands[0].description, "Clear conversation history");
+            assert_eq!(
+                init.slash_commands[0].description,
+                "Clear conversation history"
+            );
             assert_eq!(init.slash_commands[1].name, "/model");
             assert_eq!(init.slash_commands[1].argument_hint, "model-name");
         }
@@ -885,7 +909,7 @@ fn parse_system_init_tools_populated() {
 /// `LaunchSpec.disallowed_tools` defaults to empty when the field is absent.
 #[test]
 fn launch_spec_disallowed_tools_defaults_empty() {
-    use marsad_proto::{LaunchSpec, LaunchMode, Posture};
+    use marsad_proto::{LaunchMode, LaunchSpec, Posture};
     let spec = LaunchSpec {
         project: "/p".to_string(),
         host_id: "local".to_string(),
@@ -906,7 +930,7 @@ fn launch_spec_disallowed_tools_defaults_empty() {
 /// `LaunchSpec.disallowed_tools` with values round-trips through serde.
 #[test]
 fn launch_spec_disallowed_tools_roundtrip() {
-    use marsad_proto::{LaunchSpec, LaunchMode, Posture};
+    use marsad_proto::{LaunchMode, LaunchSpec, Posture};
     let spec = LaunchSpec {
         project: "/p".to_string(),
         host_id: "local".to_string(),

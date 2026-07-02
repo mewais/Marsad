@@ -203,10 +203,10 @@ fn rescope_unknown_workspace_returns_unchanged_snapshot() {
                 changes: vec![],
 
                 model_usage: vec![],
-            tools: vec![],
-            mcp_servers: vec![],
-            slash_commands: vec![],
-            posture: "ask".to_string(),
+                tools: vec![],
+                mcp_servers: vec![],
+                slash_commands: vec![],
+                posture: "ask".to_string(),
             },
             SessionView {
                 id: "s2".to_string(),
@@ -227,10 +227,10 @@ fn rescope_unknown_workspace_returns_unchanged_snapshot() {
                 changes: vec![],
 
                 model_usage: vec![],
-            tools: vec![],
-            mcp_servers: vec![],
-            slash_commands: vec![],
-            posture: "ask".to_string(),
+                tools: vec![],
+                mcp_servers: vec![],
+                slash_commands: vec![],
+                posture: "ask".to_string(),
             },
         ],
         hosts: vec![Host {

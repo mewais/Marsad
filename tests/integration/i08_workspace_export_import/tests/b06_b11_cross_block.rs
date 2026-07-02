@@ -34,7 +34,7 @@ fn make_session(id: &str, name: &str) -> PersistedSession {
         last_phase: "done".to_string(),
 
         posture: None,
-            disallowed_tools: vec![],
+        disallowed_tools: vec![],
     }
 }
 
@@ -68,10 +68,10 @@ fn sv(id: &str, cost: f64, tokens: u64, state: Phase) -> SessionView {
         changes: vec![],
 
         model_usage: vec![],
-            tools: vec![],
-            mcp_servers: vec![],
-            slash_commands: vec![],
-            posture: "ask".to_string(),
+        tools: vec![],
+        mcp_servers: vec![],
+        slash_commands: vec![],
+        posture: "ask".to_string(),
     }
 }
 

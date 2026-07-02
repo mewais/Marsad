@@ -59,7 +59,7 @@ fn representative_snapshot() -> AppSnapshot {
             state: Phase::Needs,
             changed_files: 2,
             subagents: 0,
-        running_subagents: 0,
+            running_subagents: 0,
             cost_usd: 1.00,
             tokens: 1000,
             context_pct: 10.0,
@@ -83,7 +83,7 @@ fn representative_snapshot() -> AppSnapshot {
             state: Phase::Error,
             changed_files: 0,
             subagents: 1,
-        running_subagents: 0,
+            running_subagents: 0,
             cost_usd: 0.50,
             tokens: 2000,
             context_pct: 50.0,
@@ -107,7 +107,7 @@ fn representative_snapshot() -> AppSnapshot {
             state: Phase::Working,
             changed_files: 5,
             subagents: 0,
-        running_subagents: 0,
+            running_subagents: 0,
             cost_usd: 0.25,
             tokens: 500,
             context_pct: 80.0,
@@ -131,7 +131,7 @@ fn representative_snapshot() -> AppSnapshot {
             state: Phase::Starting,
             changed_files: 0,
             subagents: 0,
-        running_subagents: 0,
+            running_subagents: 0,
             cost_usd: 0.00,
             tokens: 0,
             context_pct: 0.0,
@@ -155,7 +155,7 @@ fn representative_snapshot() -> AppSnapshot {
             state: Phase::Done,
             changed_files: 3,
             subagents: 2,
-        running_subagents: 0,
+            running_subagents: 0,
             cost_usd: 2.25,
             tokens: 3500,
             context_pct: 60.0,
@@ -692,8 +692,15 @@ fn session_view_new_fields_populated() {
         changes: vec![],
         model_usage: vec![],
         tools: vec!["Read".to_string(), "Bash".to_string()],
-        mcp_servers: vec![McpServerInfo { name: "hares".to_string(), status: "connected".to_string() }],
-        slash_commands: vec![SlashCommandInfo { name: "/clear".to_string(), description: "Clear".to_string(), argument_hint: "".to_string() }],
+        mcp_servers: vec![McpServerInfo {
+            name: "hares".to_string(),
+            status: "connected".to_string(),
+        }],
+        slash_commands: vec![SlashCommandInfo {
+            name: "/clear".to_string(),
+            description: "Clear".to_string(),
+            argument_hint: "".to_string(),
+        }],
         posture: "auto".to_string(),
     };
     let sv2 = sv.clone();
@@ -746,5 +753,8 @@ fn session_view_posture_defaults_via_serde_when_missing() {
         "tools":[],"mcp_servers":[],"slash_commands":[]
     }"#;
     let sv: SessionView = serde_json::from_str(json).expect("must deserialize");
-    assert_eq!(sv.posture, "ask", "missing posture field must default to 'ask' via serde");
+    assert_eq!(
+        sv.posture, "ask",
+        "missing posture field must default to 'ask' via serde"
+    );
 }

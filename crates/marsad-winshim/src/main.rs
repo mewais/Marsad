@@ -67,8 +67,8 @@ fn windows_main() {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{
-        CloseHandle, BOOL, FALSE, GENERIC_WRITE, HANDLE, HANDLE_FLAG_INHERIT,
-        INVALID_HANDLE_VALUE, TRUE,
+        CloseHandle, BOOL, FALSE, GENERIC_WRITE, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+        TRUE,
     };
     // windows-sys 0.59: the named-pipe ACCESS constants + ConnectNamedPipe live
     // under Storage::FileSystem; CreateNamedPipeW + the type/mode/wait flags are

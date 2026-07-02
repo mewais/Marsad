@@ -427,7 +427,6 @@ impl LocalIpcListener {
     /// crash does not prevent re-binding.  Parent directories are created
     /// automatically if they do not exist.
     pub fn bind(endpoint: &str) -> Result<Self, TransportError> {
-
         // Remove stale socket file if present (best-effort; ignore error).
         std::fs::remove_file(endpoint).ok();
 
@@ -467,12 +466,7 @@ impl LocalIpc {
     /// After splitting, the write half and read half are completely independent
     /// OS handles: the writer thread can own `write_half` exclusively while the
     /// reader thread owns `read_half`, with no `Mutex` required.
-    pub fn into_split(
-        self,
-    ) -> Option<(
-        UnixStream,
-        std::io::BufReader<UnixStream>,
-    )> {
+    pub fn into_split(self) -> Option<(UnixStream, std::io::BufReader<UnixStream>)> {
         match (self.stream, self.reader) {
             (Some(w), Some(r)) => Some((w, r)),
             _ => None,
@@ -705,7 +699,10 @@ fn remote_shell_argv(prefix: &[String], script: &str) -> Vec<String> {
     let mut argv = prefix.to_vec();
     // ssh AND plink both re-parse their trailing command through the remote shell, so
     // the script must be a single token; wsl.exe preserves argv and needs `sh -c`.
-    if matches!(prefix.first().map(String::as_str), Some("ssh") | Some("plink")) {
+    if matches!(
+        prefix.first().map(String::as_str),
+        Some("ssh") | Some("plink")
+    ) {
         argv.push(script.to_string());
     } else {
         argv.push("sh".to_string());
@@ -755,11 +752,7 @@ impl RemoteFifoTransport {
     /// `exec_prefix` is the opaque argv to reach the remote host; the fifo paths
     /// are remote POSIX path strings (the remote shell expands `~`).  Calling
     /// this does NOT spawn anything — call `connect()`.
-    pub fn new(
-        exec_prefix: Vec<String>,
-        remote_in_fifo: String,
-        remote_out_fifo: String,
-    ) -> Self {
+    pub fn new(exec_prefix: Vec<String>, remote_in_fifo: String, remote_out_fifo: String) -> Self {
         Self {
             exec_prefix,
             remote_in_fifo,

@@ -534,10 +534,7 @@ impl Store {
     /// Persist the session→workstream membership map (`session_id` → `ws_id`),
     /// core-owned, under a single versioned `meta:membership` blob (mirrors
     /// `upsert_settings`). Overwrites the whole map.
-    pub fn set_membership(
-        &mut self,
-        map: &HashMap<String, String>,
-    ) -> Result<(), StoreError> {
+    pub fn set_membership(&mut self, map: &HashMap<String, String>) -> Result<(), StoreError> {
         let bytes = encode(map);
         self.backend.write(KEY_MEMBERSHIP, &bytes)?;
         Ok(())

@@ -54,7 +54,7 @@ fn host_session_workspace_round_trip_across_restart() {
                 model: "claude-haiku-4-5-20251001".to_string(),
                 last_phase: "Starting".to_string(),
                 posture: None,
-            disallowed_tools: vec![],
+                disallowed_tools: vec![],
             })
             .expect("persist session");
         store
@@ -86,7 +86,11 @@ fn host_session_workspace_round_trip_across_restart() {
         restored.sessions[0].host_target.as_deref(),
         Some("user@box.example.com")
     );
-    assert_eq!(restored.workspaces.len(), 1, "workspace must survive restart");
+    assert_eq!(
+        restored.workspaces.len(),
+        1,
+        "workspace must survive restart"
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }

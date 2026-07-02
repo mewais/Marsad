@@ -10,7 +10,10 @@
 //! These tests WILL fail to compile until the code-agent implements `marsad_core`.
 //! That is the expected tests-first compile-failure signal.
 
-use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, NotifPref, PersistedSettings, PersistedTemplate, Posture, VmUpdate};
+use marsad_core::{
+    Core, CoreConfig, LaunchMode, LaunchSpec, NotifPref, PersistedSettings, PersistedTemplate,
+    Posture, VmUpdate,
+};
 use marsad_gates::{approve, Gate};
 use marsad_transport::LoopbackFake;
 use marsad_viewmodel::SlashCmd;
@@ -1254,9 +1257,11 @@ fn add_host_appears_in_list_and_snapshot() {
 #[test]
 fn add_host_duplicate_label_errors() {
     let mut core = core_with_backend(MemoryBackend::new());
-    core.add_host("srv", "a@h1", None, None, Vec::new()).expect("first add");
+    core.add_host("srv", "a@h1", None, None, Vec::new())
+        .expect("first add");
     assert!(
-        core.add_host("srv", "b@h2", None, None, Vec::new()).is_err(),
+        core.add_host("srv", "b@h2", None, None, Vec::new())
+            .is_err(),
         "dup label must error"
     );
 }
@@ -1265,7 +1270,9 @@ fn add_host_duplicate_label_errors() {
 fn add_host_malformed_target_errors() {
     let mut core = core_with_backend(MemoryBackend::new());
     // Bare aliases are accepted now; a target with whitespace is still malformed.
-    assert!(core.add_host("x", "has a space", None, None, Vec::new()).is_err());
+    assert!(core
+        .add_host("x", "has a space", None, None, Vec::new())
+        .is_err());
 }
 
 #[test]
@@ -1282,7 +1289,9 @@ fn add_host_store_write_failure_errors() {
 #[test]
 fn remove_host_success_and_localhost_protected() {
     let mut core = core_with_backend(MemoryBackend::new());
-    let u = core.add_host("srv", "a@h", None, None, Vec::new()).expect("add");
+    let u = core
+        .add_host("srv", "a@h", None, None, Vec::new())
+        .expect("add");
     let id = remote_id(&u);
     let u2 = core.remove_host(&id).expect("remove");
     assert!(!hosts_from(&u2).iter().any(|h| h.id == id));
@@ -1296,7 +1305,9 @@ fn remove_host_success_and_localhost_protected() {
 fn remove_host_store_delete_failure_errors() {
     let backend = MemoryBackend::new();
     let mut core = core_with_backend(backend.clone());
-    let u = core.add_host("srv", "a@h", None, None, Vec::new()).expect("add");
+    let u = core
+        .add_host("srv", "a@h", None, None, Vec::new())
+        .expect("add");
     let id = remote_id(&u);
     backend.fail_next(BackendOp::Delete);
     assert!(core.remove_host(&id).is_err(), "delete failure surfaces");
@@ -1305,7 +1316,9 @@ fn remove_host_store_delete_failure_errors() {
 #[test]
 fn set_host_status_updates_the_list() {
     let mut core = core_with_backend(MemoryBackend::new());
-    let u = core.add_host("srv", "a@h", None, None, Vec::new()).expect("add");
+    let u = core
+        .add_host("srv", "a@h", None, None, Vec::new())
+        .expect("add");
     let id = remote_id(&u);
     let u2 = core.set_host_status(&id, HostStatus::Connected);
     let h = hosts_from(&u2).into_iter().find(|h| h.id == id).unwrap();
@@ -1424,7 +1437,9 @@ fn launch_spec_env_overrides_host_env() {
 #[test]
 fn update_host_changes_remote_config() {
     let mut core = core_with_backend(MemoryBackend::new());
-    let u = core.add_host("srv", "a@h", None, None, Vec::new()).expect("add");
+    let u = core
+        .add_host("srv", "a@h", None, None, Vec::new())
+        .expect("add");
     let id = remote_id(&u);
     let u2 = core
         .update_host(
@@ -1481,8 +1496,14 @@ fn update_host_localhost_config_resolves_into_ipc() {
     .expect("launch on localhost");
     let outbound = peer.drain_outbound();
     let line = &outbound[0];
-    assert!(line.contains("\"claude_bin\":\"/opt/claude\""), "got: {line}");
-    assert!(line.contains("\"setup\":\"module load cuda\""), "got: {line}");
+    assert!(
+        line.contains("\"claude_bin\":\"/opt/claude\""),
+        "got: {line}"
+    );
+    assert!(
+        line.contains("\"setup\":\"module load cuda\""),
+        "got: {line}"
+    );
     assert!(line.contains(r#""env":[["FOO","bar"]]"#), "got: {line}");
     // localhost is not remote, so no host_target is injected.
     assert!(!line.contains("host_target"), "got: {line}");
@@ -1493,7 +1514,8 @@ fn update_host_localhost_config_resolves_into_ipc() {
 fn update_host_store_write_failure_errors() {
     let backend = MemoryBackend::new();
     let mut core = core_with_backend(backend.clone());
-    core.add_host("srv", "a@h", None, None, Vec::new()).expect("add");
+    core.add_host("srv", "a@h", None, None, Vec::new())
+        .expect("add");
     backend.fail_next(BackendOp::Write);
     assert!(
         core.update_host("localhost", Some("x".to_string()), None, Vec::new(), None)
@@ -1507,7 +1529,8 @@ fn update_host_store_write_failure_errors() {
 fn update_host_unknown_id_errors() {
     let mut core = core_with_backend(MemoryBackend::new());
     assert!(
-        core.update_host("nope", None, None, Vec::new(), None).is_err(),
+        core.update_host("nope", None, None, Vec::new(), None)
+            .is_err(),
         "unknown id must error"
     );
 }
@@ -1868,9 +1891,12 @@ fn set_session_changes_updates_session_view() {
     assert!(sv.changes.is_empty(), "should start empty");
 
     // Inject two changes (simulating a post-commit re-probe with remaining files).
-    let new_changes = vec![
-        FileChange { path: "remaining.txt".to_string(), status: "M".to_string(), added: 1, removed: 0 },
-    ];
+    let new_changes = vec![FileChange {
+        path: "remaining.txt".to_string(),
+        status: "M".to_string(),
+        added: 1,
+        removed: 0,
+    }];
     let updates = core.set_session_changes(&id, new_changes.clone());
 
     // Must produce exactly Session + Overview.
@@ -1881,11 +1907,17 @@ fn set_session_changes_updates_session_view() {
     assert!(has_overview, "must include Overview update");
 
     // The returned SessionView must carry the new file list.
-    let sv2 = updates.iter().find_map(|u| match u {
-        VmUpdate::Session(s) => Some(s.clone()),
-        _ => None,
-    }).expect("session view");
-    assert_eq!(sv2.changes, new_changes, "session view must reflect the new changes");
+    let sv2 = updates
+        .iter()
+        .find_map(|u| match u {
+            VmUpdate::Session(s) => Some(s.clone()),
+            _ => None,
+        })
+        .expect("session view");
+    assert_eq!(
+        sv2.changes, new_changes,
+        "session view must reflect the new changes"
+    );
     assert_eq!(sv2.changed_files, 1);
 }
 
@@ -2019,12 +2051,21 @@ fn restart_session_emits_stop_then_launch_with_same_id() {
         .expect("restart_session should succeed");
 
     // Must emit a VmUpdate::Session for the same id.
-    let has_session = updates.iter().any(|u| matches!(u, VmUpdate::Session(sv) if sv.id == id));
-    assert!(has_session, "restart must produce a Session update for the same id");
+    let has_session = updates
+        .iter()
+        .any(|u| matches!(u, VmUpdate::Session(sv) if sv.id == id));
+    assert!(
+        has_session,
+        "restart must produce a Session update for the same id"
+    );
 
     // Outbound IPC: StopSession then LaunchSession.
     let outbound = peer.drain_outbound();
-    assert!(outbound.len() >= 2, "restart must emit at least 2 IPC lines, got {}", outbound.len());
+    assert!(
+        outbound.len() >= 2,
+        "restart must emit at least 2 IPC lines, got {}",
+        outbound.len()
+    );
 
     // First line must be StopSession.
     let stop_line = &outbound[0];
@@ -2086,7 +2127,9 @@ fn restart_session_without_uuid_uses_continue_mode() {
         .restart_session(&id, "claude-haiku-4-5", Posture::AutoApproveSafe, vec![])
         .expect("restart without uuid");
 
-    let has_session = updates.iter().any(|u| matches!(u, VmUpdate::Session(sv) if sv.id == id));
+    let has_session = updates
+        .iter()
+        .any(|u| matches!(u, VmUpdate::Session(sv) if sv.id == id));
     assert!(has_session, "restart must produce a Session update");
 
     let outbound = peer.drain_outbound();
@@ -2140,7 +2183,10 @@ fn save_template_preserves_model_and_posture() {
     core.save_template("careful", "claude-opus-4-8", "full")
         .expect("save_template");
     let templates = core.list_templates().expect("list_templates");
-    let t = templates.into_iter().find(|t| t.name == "careful").expect("template");
+    let t = templates
+        .into_iter()
+        .find(|t| t.name == "careful")
+        .expect("template");
     assert_eq!(t.model, "claude-opus-4-8");
     assert_eq!(t.posture, "full");
 }
@@ -2166,8 +2212,10 @@ fn save_template_write_failure_errors() {
 #[test]
 fn save_template_overwrite_updates_model() {
     let mut core = core_with_backend(MemoryBackend::new());
-    core.save_template("tmpl", "claude-sonnet-4-6", "ask").expect("first");
-    core.save_template("tmpl", "claude-opus-4-8", "full").expect("second");
+    core.save_template("tmpl", "claude-sonnet-4-6", "ask")
+        .expect("first");
+    core.save_template("tmpl", "claude-opus-4-8", "full")
+        .expect("second");
     let templates = core.list_templates().expect("list");
     let matches: Vec<_> = templates.iter().filter(|t| t.name == "tmpl").collect();
     assert_eq!(matches.len(), 1, "upsert must overwrite, not duplicate");
@@ -2204,7 +2252,7 @@ fn seed_session(seed: &mut Store, id: &str, host_id: &str, claude_uuid: Option<&
         model: "claude-opus-4-8".to_string(),
         last_phase: "Working".to_string(),
         posture: None,
-            disallowed_tools: vec![],
+        disallowed_tools: vec![],
     })
     .expect("seed session");
 }
@@ -2279,7 +2327,10 @@ fn remove_session_deletes_from_list_and_store() {
     let mut core = core_with_backend(backend);
     core.load_sessions().expect("load_sessions");
     assert!(
-        core.snapshot().sessions.iter().any(|s| s.id == "session-rm-1"),
+        core.snapshot()
+            .sessions
+            .iter()
+            .any(|s| s.id == "session-rm-1"),
         "precondition: session is tracked"
     );
 
@@ -2291,7 +2342,11 @@ fn remove_session_deletes_from_list_and_store() {
         "remove_session must emit SessionRemoved, got: {updates:?}"
     );
     assert!(
-        !core.snapshot().sessions.iter().any(|s| s.id == "session-rm-1"),
+        !core
+            .snapshot()
+            .sessions
+            .iter()
+            .any(|s| s.id == "session-rm-1"),
         "removed session must be gone from the list"
     );
 }
@@ -2428,7 +2483,11 @@ fn inject_shell_output_appends_entries_and_returns_session_update() {
         .expect("inject_shell_output must succeed for known session");
 
     // Must return exactly one Session update.
-    assert_eq!(updates.len(), 1, "inject_shell_output must return one update");
+    assert_eq!(
+        updates.len(),
+        1,
+        "inject_shell_output must return one update"
+    );
     let sv = match &updates[0] {
         VmUpdate::Session(s) => s.clone(),
         other => panic!("expected Session update, got {other:?}"),
@@ -2559,7 +2618,7 @@ fn load_sessions_restores_custom_name() {
         model: "claude-opus-4-8".to_string(),
         last_phase: "Working".to_string(),
         posture: None,
-            disallowed_tools: vec![],
+        disallowed_tools: vec![],
     })
     .expect("seed named session");
 
@@ -2622,11 +2681,7 @@ fn answer_question_sends_ipc() {
 #[test]
 fn answer_question_unknown_session_returns_error() {
     let (mut core, _peer) = make_core();
-    let result = core.answer_question(
-        "no-such-session",
-        "req-q-1",
-        serde_json::json!({}),
-    );
+    let result = core.answer_question("no-such-session", "req-q-1", serde_json::json!({}));
     assert!(
         result.is_err(),
         "answer_question for unknown session must return an error"
@@ -2665,7 +2720,13 @@ fn on_agent_line_changes_update_populates_session_changes() {
     let updates = core.on_agent_line(&line).expect("on_agent_line");
     let sv = updates
         .iter()
-        .find_map(|u| if let VmUpdate::Session(sv) = u { Some(sv) } else { None })
+        .find_map(|u| {
+            if let VmUpdate::Session(sv) = u {
+                Some(sv)
+            } else {
+                None
+            }
+        })
         .expect("must include Session update");
     assert_eq!(sv.changes.len(), 1);
     assert_eq!(sv.changes[0].path, "a.rs");
@@ -2710,7 +2771,12 @@ fn remote_session_changes_survive_result_event() {
 
     let snap = core.snapshot();
     let sv = snap.sessions.iter().find(|s| s.id == id).expect("session");
-    assert_eq!(sv.changes.len(), 1, "remote changes must survive: {:?}", sv.changes);
+    assert_eq!(
+        sv.changes.len(),
+        1,
+        "remote changes must survive: {:?}",
+        sv.changes
+    );
     assert_eq!(sv.changes[0].path, "x.rs");
 }
 
@@ -2719,8 +2785,13 @@ fn remote_session_changes_survive_result_event() {
 fn on_agent_line_changes_update_unknown_session_is_noop() {
     let (mut core, _peer) = make_core();
     let line = r#"{"type":"ChangesUpdate","session_id":"no-such-session","changes":[{"path":"x.rs","status":"A","added":1,"removed":0}]}"#;
-    let updates = core.on_agent_line(line).expect("on_agent_line must not error");
-    assert!(updates.is_empty(), "unknown session must yield empty updates");
+    let updates = core
+        .on_agent_line(line)
+        .expect("on_agent_line must not error");
+    assert!(
+        updates.is_empty(),
+        "unknown session must yield empty updates"
+    );
 }
 
 /// A `ChangesUpdate` with MISSING `session_id` returns a Protocol error.
@@ -2771,7 +2842,13 @@ fn session_view_exposes_model_usage_after_result_with_model_usage() {
     let updates = core.on_agent_line(&result_line).expect("result");
     let sv = updates
         .iter()
-        .find_map(|u| if let VmUpdate::Session(sv) = u { Some(sv) } else { None })
+        .find_map(|u| {
+            if let VmUpdate::Session(sv) = u {
+                Some(sv)
+            } else {
+                None
+            }
+        })
         .expect("must include Session update");
     assert_eq!(sv.model_usage.len(), 2, "must have two model usage rows");
     // Rows are sorted by model name: haiku before sonnet.
@@ -2899,7 +2976,12 @@ fn backfill_model_usage_haiku_pricing() {
         + 500.0 / 1_000_000.0 * 5.0
         + 100.0 / 1_000_000.0 * 0.10
         + 50.0 / 1_000_000.0 * 1.25;
-    assert!((row.cost_usd - expected).abs() < 1e-9, "haiku cost: {} vs {}", row.cost_usd, expected);
+    assert!(
+        (row.cost_usd - expected).abs() < 1e-9,
+        "haiku cost: {} vs {}",
+        row.cost_usd,
+        expected
+    );
 }
 
 /// A backfill JSONL with an unknown model still counts tokens but yields 0 cost.
@@ -3040,7 +3122,11 @@ fn aggregate_model_usage_opus_pricing_correct() {
     // previous hand-written $15 when LiteLLM lookup was wired in.
     let result = discovery::aggregate_model_usage(jsonl);
     let row = result.get("claude-opus-4-5").expect("opus");
-    assert!((row.cost_usd - 5.0).abs() < 1e-6, "opus input cost: {}", row.cost_usd);
+    assert!(
+        (row.cost_usd - 5.0).abs() < 1e-6,
+        "opus input cost: {}",
+        row.cost_usd
+    );
 }
 
 /// aggregate_model_usage with sonnet model applies the sonnet pricing.
@@ -3050,7 +3136,11 @@ fn aggregate_model_usage_sonnet_pricing_correct() {
     // 1M output tokens at $15/Mtok = $15
     let result = discovery::aggregate_model_usage(jsonl);
     let row = result.get("claude-sonnet-4-6").expect("sonnet");
-    assert!((row.cost_usd - 15.0).abs() < 1e-6, "sonnet output cost: {}", row.cost_usd);
+    assert!(
+        (row.cost_usd - 15.0).abs() < 1e-6,
+        "sonnet output cost: {}",
+        row.cost_usd
+    );
 }
 
 /// aggregate_model_usage with haiku model applies the haiku pricing.
@@ -3060,7 +3150,11 @@ fn aggregate_model_usage_haiku_pricing_correct() {
     // 1M cache_read tokens on Haiku 4.5 at $0.10/Mtok = $0.10
     let result = discovery::aggregate_model_usage(jsonl);
     let row = result.get("claude-haiku-4-5").expect("haiku");
-    assert!((row.cost_usd - 0.10).abs() < 1e-9, "haiku cache_read cost: {}", row.cost_usd);
+    assert!(
+        (row.cost_usd - 0.10).abs() < 1e-9,
+        "haiku cache_read cost: {}",
+        row.cost_usd
+    );
 }
 
 /// aggregate_model_usage cache_creation uses the correct per-model rate.
@@ -3070,7 +3164,11 @@ fn aggregate_model_usage_cache_creation_pricing() {
     // 1M cache_creation tokens at $3.75/Mtok = $3.75 (sonnet)
     let result = discovery::aggregate_model_usage(jsonl);
     let row = result.get("claude-sonnet-4-6").expect("sonnet");
-    assert!((row.cost_usd - 3.75).abs() < 1e-9, "sonnet cache_creation cost: {}", row.cost_usd);
+    assert!(
+        (row.cost_usd - 3.75).abs() < 1e-9,
+        "sonnet cache_creation cost: {}",
+        row.cost_usd
+    );
 }
 
 /// aggregate_model_usage with an unknown model gives 0 cost but still counts tokens.
@@ -3105,7 +3203,10 @@ fn aggregate_model_usage_skips_assistant_without_usage() {
 fn aggregate_model_usage_skips_assistant_without_message() {
     let jsonl = r#"{"type":"assistant"}"#;
     let result = discovery::aggregate_model_usage(jsonl);
-    assert!(result.is_empty(), "assistant without message must be skipped");
+    assert!(
+        result.is_empty(),
+        "assistant without message must be skipped"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3143,10 +3244,19 @@ fn session_view_exposes_running_subagents_count() {
     let updates = core.on_agent_line(&task_line).expect("task tool_use");
     let sv = updates
         .iter()
-        .find_map(|u| if let VmUpdate::Session(sv) = u { Some(sv) } else { None })
+        .find_map(|u| {
+            if let VmUpdate::Session(sv) = u {
+                Some(sv)
+            } else {
+                None
+            }
+        })
         .expect("must include Session update");
 
-    assert_eq!(sv.running_subagents, 1, "running_subagents must be 1 after Task tool_use");
+    assert_eq!(
+        sv.running_subagents, 1,
+        "running_subagents must be 1 after Task tool_use"
+    );
 
     // Now feed a tool_result to mark it done.
     let result_line = format!(
@@ -3155,10 +3265,22 @@ fn session_view_exposes_running_subagents_count() {
     let updates2 = core.on_agent_line(&result_line).expect("tool_result");
     let sv2 = updates2
         .iter()
-        .find_map(|u| if let VmUpdate::Session(sv) = u { Some(sv) } else { None })
+        .find_map(|u| {
+            if let VmUpdate::Session(sv) = u {
+                Some(sv)
+            } else {
+                None
+            }
+        })
         .expect("must include Session update");
-    assert_eq!(sv2.running_subagents, 0, "running_subagents must be 0 after tool_result");
-    assert_eq!(sv2.subagents, 1, "subagents count still includes the completed one");
+    assert_eq!(
+        sv2.running_subagents, 0,
+        "running_subagents must be 0 after tool_result"
+    );
+    assert_eq!(
+        sv2.subagents, 1,
+        "subagents count still includes the completed one"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3214,14 +3336,35 @@ fn ipc_agent_event_init_with_mode(session_id: &str, mode: &str) -> String {
 #[test]
 fn session_view_posture_default_maps_to_ask() {
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(LaunchSpec {
-        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
-        claude_bin: None, setup: None, env: vec![],
-        model: "m".to_string(), posture: Posture::Ask, first_prompt: None,
-        mode: Default::default(), name: None, disallowed_tools: vec![],
-    }).expect("launch");
-    let updates = core.on_agent_line(&ipc_agent_event_init_with_mode(&id, "default")).expect("init");
-    let sv = updates.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/p".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "m".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
+    let updates = core
+        .on_agent_line(&ipc_agent_event_init_with_mode(&id, "default"))
+        .expect("init");
+    let sv = updates
+        .iter()
+        .find_map(|u| {
+            if let VmUpdate::Session(s) = u {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .expect("Session");
     assert_eq!(sv.posture, "ask", "permissionMode=default → posture=ask");
 }
 
@@ -3229,60 +3372,142 @@ fn session_view_posture_default_maps_to_ask() {
 #[test]
 fn session_view_posture_accept_edits_maps_to_auto() {
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(LaunchSpec {
-        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
-        claude_bin: None, setup: None, env: vec![],
-        model: "m".to_string(), posture: Posture::AutoApproveSafe, first_prompt: None,
-        mode: Default::default(), name: None, disallowed_tools: vec![],
-    }).expect("launch");
-    let updates = core.on_agent_line(&ipc_agent_event_init_with_mode(&id, "acceptEdits")).expect("init");
-    let sv = updates.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
-    assert_eq!(sv.posture, "auto", "permissionMode=acceptEdits → posture=auto");
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/p".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "m".to_string(),
+            posture: Posture::AutoApproveSafe,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
+    let updates = core
+        .on_agent_line(&ipc_agent_event_init_with_mode(&id, "acceptEdits"))
+        .expect("init");
+    let sv = updates
+        .iter()
+        .find_map(|u| {
+            if let VmUpdate::Session(s) = u {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .expect("Session");
+    assert_eq!(
+        sv.posture, "auto",
+        "permissionMode=acceptEdits → posture=auto"
+    );
 }
 
 /// After system/init with permissionMode "bypassPermissions", posture must be "full".
 #[test]
 fn session_view_posture_bypass_maps_to_full() {
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(LaunchSpec {
-        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
-        claude_bin: None, setup: None, env: vec![],
-        model: "m".to_string(), posture: Posture::FullAutonomy, first_prompt: None,
-        mode: Default::default(), name: None, disallowed_tools: vec![],
-    }).expect("launch");
-    let updates = core.on_agent_line(&ipc_agent_event_init_with_mode(&id, "bypassPermissions")).expect("init");
-    let sv = updates.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
-    assert_eq!(sv.posture, "full", "permissionMode=bypassPermissions → posture=full");
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/p".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "m".to_string(),
+            posture: Posture::FullAutonomy,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
+    let updates = core
+        .on_agent_line(&ipc_agent_event_init_with_mode(&id, "bypassPermissions"))
+        .expect("init");
+    let sv = updates
+        .iter()
+        .find_map(|u| {
+            if let VmUpdate::Session(s) = u {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .expect("Session");
+    assert_eq!(
+        sv.posture, "full",
+        "permissionMode=bypassPermissions → posture=full"
+    );
 }
 
 /// Before system/init, posture defaults to "ask".
 #[test]
 fn session_view_posture_defaults_to_ask_before_init() {
     let (mut core, _peer) = make_core();
-    let _id = core.launch_session(LaunchSpec {
-        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
-        claude_bin: None, setup: None, env: vec![],
-        model: "m".to_string(), posture: Posture::Ask, first_prompt: None,
-        mode: Default::default(), name: None, disallowed_tools: vec![],
-    }).expect("launch");
+    let _id = core
+        .launch_session(LaunchSpec {
+            project: "/p".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "m".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
     // Without any init event, the snapshot's posture must default to "ask".
     let snap = core.snapshot();
     let sv = snap.sessions.first().expect("session in snap");
-    assert_eq!(sv.posture, "ask", "posture must default to 'ask' before system/init");
+    assert_eq!(
+        sv.posture, "ask",
+        "posture must default to 'ask' before system/init"
+    );
 }
 
 /// Unknown permissionMode falls back to "ask".
 #[test]
 fn session_view_posture_unknown_mode_falls_back_to_ask() {
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(LaunchSpec {
-        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
-        claude_bin: None, setup: None, env: vec![],
-        model: "m".to_string(), posture: Posture::Ask, first_prompt: None,
-        mode: Default::default(), name: None, disallowed_tools: vec![],
-    }).expect("launch");
-    let updates = core.on_agent_line(&ipc_agent_event_init_with_mode(&id, "someUnknownMode")).expect("init");
-    let sv = updates.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/p".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "m".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
+    let updates = core
+        .on_agent_line(&ipc_agent_event_init_with_mode(&id, "someUnknownMode"))
+        .expect("init");
+    let sv = updates
+        .iter()
+        .find_map(|u| {
+            if let VmUpdate::Session(s) = u {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .expect("Session");
     assert_eq!(sv.posture, "ask", "unknown permissionMode → posture=ask");
 }
 
@@ -3292,9 +3517,7 @@ fn session_view_posture_unknown_mode_falls_back_to_ask() {
 
 /// Helper: build a UsageUpdate IPC line for tests.
 fn ipc_usage_update(session_id: &str, usage_json: &str) -> String {
-    format!(
-        r#"{{"type":"UsageUpdate","session_id":"{session_id}","usage":{usage_json}}}"#
-    )
+    format!(r#"{{"type":"UsageUpdate","session_id":"{session_id}","usage":{usage_json}}}"#)
 }
 
 /// A UsageUpdate with two real models populates model_usage with correct costs
@@ -3302,39 +3525,83 @@ fn ipc_usage_update(session_id: &str, usage_json: &str) -> String {
 #[test]
 fn usage_update_populates_two_model_rows_with_correct_cost() {
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(LaunchSpec {
-        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
-        claude_bin: None, setup: None, env: vec![],
-        model: "m".to_string(), posture: Posture::Ask, first_prompt: None,
-        mode: Default::default(), name: None, disallowed_tools: vec![],
-    }).expect("launch");
-    core.on_agent_line(&ipc_agent_event_system_init(&id)).expect("init");
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/p".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "m".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
+    core.on_agent_line(&ipc_agent_event_system_init(&id))
+        .expect("init");
 
     // Feed a UsageUpdate with two models (opus + sonnet).
     // 1_000 input tokens on Opus 4.8 = 1000 / 1_000_000 * 5 = $0.005
     // 2_000 output tokens on sonnet  = 2000 / 1_000_000 * 15 = $0.030
     let usage = r#"{"claude-opus-4-8":{"input":1000,"output":0,"cache_read":0,"cache_creation":0},"claude-sonnet-4-6":{"input":0,"output":2000,"cache_read":0,"cache_creation":0}}"#;
-    let updates = core.on_agent_line(&ipc_usage_update(&id, usage)).expect("usage_update");
+    let updates = core
+        .on_agent_line(&ipc_usage_update(&id, usage))
+        .expect("usage_update");
 
-    let sv = updates.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
+    let sv = updates
+        .iter()
+        .find_map(|u| {
+            if let VmUpdate::Session(s) = u {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .expect("Session");
     assert_eq!(sv.model_usage.len(), 2, "must have 2 model rows");
     // Sorted by model name: opus before sonnet alphabetically.
-    let opus = sv.model_usage.iter().find(|r| r.model.contains("opus")).expect("opus row");
-    let sonnet = sv.model_usage.iter().find(|r| r.model.contains("sonnet")).expect("sonnet row");
+    let opus = sv
+        .model_usage
+        .iter()
+        .find(|r| r.model.contains("opus"))
+        .expect("opus row");
+    let sonnet = sv
+        .model_usage
+        .iter()
+        .find(|r| r.model.contains("sonnet"))
+        .expect("sonnet row");
     assert_eq!(opus.input_tokens, 1000);
-    assert!((opus.cost_usd - 0.005).abs() < 1e-6, "opus cost wrong: {}", opus.cost_usd);
+    assert!(
+        (opus.cost_usd - 0.005).abs() < 1e-6,
+        "opus cost wrong: {}",
+        opus.cost_usd
+    );
     assert_eq!(sonnet.output_tokens, 2000);
-    assert!((sonnet.cost_usd - 0.030).abs() < 1e-6, "sonnet cost wrong: {}", sonnet.cost_usd);
+    assert!(
+        (sonnet.cost_usd - 0.030).abs() < 1e-6,
+        "sonnet cost wrong: {}",
+        sonnet.cost_usd
+    );
 }
 
 /// UsageUpdate for an unknown session is a no-op (returns empty vec).
 #[test]
 fn usage_update_unknown_session_is_noop() {
     let (mut core, _peer) = make_core();
-    let updates = core.on_agent_line(
-        &ipc_usage_update("no-such-session", r#"{"claude-opus-4-8":{"input":100,"output":0,"cache_read":0,"cache_creation":0}}"#)
-    ).expect("unknown session is ok (no-op)");
-    assert!(updates.is_empty(), "unknown session must produce no updates");
+    let updates = core
+        .on_agent_line(&ipc_usage_update(
+            "no-such-session",
+            r#"{"claude-opus-4-8":{"input":100,"output":0,"cache_read":0,"cache_creation":0}}"#,
+        ))
+        .expect("unknown session is ok (no-op)");
+    assert!(
+        updates.is_empty(),
+        "unknown session must produce no updates"
+    );
 }
 
 /// UsageUpdate with missing session_id is a Protocol error.
@@ -3343,45 +3610,99 @@ fn usage_update_missing_session_id_is_error() {
     let (mut core, _peer) = make_core();
     let bad_line = r#"{"type":"UsageUpdate","usage":{"claude-opus-4-8":{"input":1,"output":0,"cache_read":0,"cache_creation":0}}}"#;
     let result = core.on_agent_line(bad_line);
-    assert!(result.is_err(), "missing session_id must be a Protocol error");
+    assert!(
+        result.is_err(),
+        "missing session_id must be a Protocol error"
+    );
 }
 
 /// UsageUpdate filters out the <synthetic> pseudo-model.
 #[test]
 fn usage_update_filters_synthetic_model() {
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(LaunchSpec {
-        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
-        claude_bin: None, setup: None, env: vec![],
-        model: "m".to_string(), posture: Posture::Ask, first_prompt: None,
-        mode: Default::default(), name: None, disallowed_tools: vec![],
-    }).expect("launch");
-    core.on_agent_line(&ipc_agent_event_system_init(&id)).expect("init");
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/p".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "m".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
+    core.on_agent_line(&ipc_agent_event_system_init(&id))
+        .expect("init");
 
     // Usage includes synthetic which must be dropped, real model kept.
     let usage = r#"{"<synthetic>":{"input":999,"output":999,"cache_read":0,"cache_creation":0},"claude-haiku-4-5":{"input":500,"output":100,"cache_read":0,"cache_creation":0}}"#;
-    let updates = core.on_agent_line(&ipc_usage_update(&id, usage)).expect("usage_update");
-    let sv = updates.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
+    let updates = core
+        .on_agent_line(&ipc_usage_update(&id, usage))
+        .expect("usage_update");
+    let sv = updates
+        .iter()
+        .find_map(|u| {
+            if let VmUpdate::Session(s) = u {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .expect("Session");
     assert_eq!(sv.model_usage.len(), 1, "synthetic must be filtered out");
-    assert!(sv.model_usage[0].model.contains("haiku"), "only haiku row must remain");
+    assert!(
+        sv.model_usage[0].model.contains("haiku"),
+        "only haiku row must remain"
+    );
 }
 
 /// UsageUpdate filters zero-usage rows.
 #[test]
 fn usage_update_filters_zero_usage_rows() {
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(LaunchSpec {
-        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
-        claude_bin: None, setup: None, env: vec![],
-        model: "m".to_string(), posture: Posture::Ask, first_prompt: None,
-        mode: Default::default(), name: None, disallowed_tools: vec![],
-    }).expect("launch");
-    core.on_agent_line(&ipc_agent_event_system_init(&id)).expect("init");
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/p".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "m".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
+    core.on_agent_line(&ipc_agent_event_system_init(&id))
+        .expect("init");
 
     let usage = r#"{"claude-opus-4-8":{"input":0,"output":0,"cache_read":0,"cache_creation":0},"claude-sonnet-4-6":{"input":100,"output":50,"cache_read":0,"cache_creation":0}}"#;
-    let updates = core.on_agent_line(&ipc_usage_update(&id, usage)).expect("usage_update");
-    let sv = updates.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
-    assert_eq!(sv.model_usage.len(), 1, "zero-usage opus row must be filtered");
+    let updates = core
+        .on_agent_line(&ipc_usage_update(&id, usage))
+        .expect("usage_update");
+    let sv = updates
+        .iter()
+        .find_map(|u| {
+            if let VmUpdate::Session(s) = u {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .expect("Session");
+    assert_eq!(
+        sv.model_usage.len(),
+        1,
+        "zero-usage opus row must be filtered"
+    );
     assert!(sv.model_usage[0].model.contains("sonnet"));
 }
 
@@ -3391,34 +3712,73 @@ fn usage_update_filters_zero_usage_rows() {
 #[test]
 fn usage_update_empty_payload_does_not_clear_existing_model_usage() {
     let (mut core, _peer) = make_core();
-    let id = core.launch_session(LaunchSpec {
-        project: "/p".to_string(), host_id: "local".to_string(), host_target: None,
-        claude_bin: None, setup: None, env: vec![],
-        model: "m".to_string(), posture: Posture::Ask, first_prompt: None,
-        mode: Default::default(), name: None, disallowed_tools: vec![],
-    }).expect("launch");
-    core.on_agent_line(&ipc_agent_event_system_init(&id)).expect("init");
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/p".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "m".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec![],
+        })
+        .expect("launch");
+    core.on_agent_line(&ipc_agent_event_system_init(&id))
+        .expect("init");
 
     // Seed a real usage row via a valid UsageUpdate.
-    let good_usage = r#"{"claude-sonnet-4-6":{"input":1000,"output":500,"cache_read":0,"cache_creation":0}}"#;
-    let u1 = core.on_agent_line(&ipc_usage_update(&id, good_usage)).expect("good usage");
-    let sv1 = u1.iter().find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None }).expect("Session");
-    assert_eq!(sv1.model_usage.len(), 1, "pre-condition: one model row seeded");
+    let good_usage =
+        r#"{"claude-sonnet-4-6":{"input":1000,"output":500,"cache_read":0,"cache_creation":0}}"#;
+    let u1 = core
+        .on_agent_line(&ipc_usage_update(&id, good_usage))
+        .expect("good usage");
+    let sv1 = u1
+        .iter()
+        .find_map(|u| {
+            if let VmUpdate::Session(s) = u {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .expect("Session");
+    assert_eq!(
+        sv1.model_usage.len(),
+        1,
+        "pre-condition: one model row seeded"
+    );
 
     // Now feed an empty UsageUpdate (e.g. an attach-time probe before any turns).
     // This must NOT clear the existing row.
     let line_empty = format!(r#"{{"type":"UsageUpdate","session_id":"{id}","usage":{{}}}}"#);
     let u2 = core.on_agent_line(&line_empty).expect("empty usage is ok");
-    assert!(u2.is_empty(), "empty usage must produce no VmUpdate (no-op)");
+    assert!(
+        u2.is_empty(),
+        "empty usage must produce no VmUpdate (no-op)"
+    );
 
     // The existing model_usage must still be intact.
     let snap = core.snapshot();
-    let sv2 = snap.sessions.iter().find(|s| s.id == id).expect("session still present");
+    let sv2 = snap
+        .sessions
+        .iter()
+        .find(|s| s.id == id)
+        .expect("session still present");
     assert_eq!(
-        sv2.model_usage.len(), 1,
-        "empty UsageUpdate must NOT clear existing model_usage; got {:?}", sv2.model_usage
+        sv2.model_usage.len(),
+        1,
+        "empty UsageUpdate must NOT clear existing model_usage; got {:?}",
+        sv2.model_usage
     );
-    assert!(sv2.model_usage[0].model.contains("sonnet"), "sonnet row must survive");
+    assert!(
+        sv2.model_usage[0].model.contains("sonnet"),
+        "sonnet row must survive"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3533,10 +3893,7 @@ fn load_sessions_none_posture_falls_back_to_ask() {
         .iter()
         .find(|s| s.id == "session-posture-none")
         .expect("restored session present");
-    assert_eq!(
-        sv.posture, "ask",
-        "absent posture must fall back to 'ask'"
-    );
+    assert_eq!(sv.posture, "ask", "absent posture must fall back to 'ask'");
 }
 
 /// RECONNECT: an unrecognised persisted posture string falls back to "ask"
@@ -3545,7 +3902,11 @@ fn load_sessions_none_posture_falls_back_to_ask() {
 fn load_sessions_unrecognised_posture_falls_back_to_ask() {
     let backend = MemoryBackend::new();
     let mut seed = Store::new(Box::new(backend.clone()));
-    seed_session_with_posture(&mut seed, "session-posture-unknown", Some("SomeUnknownPosture"));
+    seed_session_with_posture(
+        &mut seed,
+        "session-posture-unknown",
+        Some("SomeUnknownPosture"),
+    );
 
     let mut core = core_with_backend(backend);
     core.load_sessions().expect("load_sessions");
@@ -3688,7 +4049,11 @@ fn restart_session_carries_persisted_setup_env_claude_bin() {
 
     let outbound = peer.drain_outbound();
     // At least 2 lines: StopSession + LaunchSession.
-    assert!(outbound.len() >= 2, "expected >= 2 IPC lines, got {}", outbound.len());
+    assert!(
+        outbound.len() >= 2,
+        "expected >= 2 IPC lines, got {}",
+        outbound.len()
+    );
 
     let launch_line = &outbound[1];
 
@@ -3744,7 +4109,11 @@ fn restart_session_absent_persisted_record_does_not_panic() {
     );
 
     let outbound = peer.drain_outbound();
-    assert!(outbound.len() >= 2, "must still emit Stop + Launch, got {}", outbound.len());
+    assert!(
+        outbound.len() >= 2,
+        "must still emit Stop + Launch, got {}",
+        outbound.len()
+    );
     let launch_line = &outbound[1];
     // Should NOT carry any claude_bin/setup/env (fell back to None/empty).
     assert!(

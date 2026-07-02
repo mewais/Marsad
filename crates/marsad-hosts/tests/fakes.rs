@@ -109,7 +109,11 @@ fn health_check_unreachable_via_fake_err_unreachable() {
     );
     let runner = Box::new(fake);
     let mut reg = HostRegistry::new(runner);
-    let id = reg.add("gone", "user@gone.example.com", None, None, Vec::new()).unwrap().id.clone();
+    let id = reg
+        .add("gone", "user@gone.example.com", None, None, Vec::new())
+        .unwrap()
+        .id
+        .clone();
     assert_eq!(reg.health_check(&id), HostStatus::Unreachable);
 }
 

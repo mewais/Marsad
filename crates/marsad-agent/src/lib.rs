@@ -126,9 +126,7 @@ impl fmt::Debug for SessionWritersWrap {
 // map still holds writer children so they can be reaped on agent shutdown.
 // Gated out of the coverage build so no uncovered lines appear.
 #[cfg(not(coverage))]
-struct SessionChildrenWrap(
-    std::sync::Arc<std::sync::Mutex<HashMap<String, std::process::Child>>>,
-);
+struct SessionChildrenWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, std::process::Child>>>);
 
 #[cfg(not(coverage))]
 impl fmt::Debug for SessionChildrenWrap {
@@ -426,11 +424,7 @@ impl Agent {
                     prefix.push('\n');
                 }
                 for (k, v) in env {
-                    prefix.push_str(&format!(
-                        "export {}={}\n",
-                        shell_quote(k),
-                        shell_quote(v)
-                    ));
+                    prefix.push_str(&format!("export {}={}\n", shell_quote(k), shell_quote(v)));
                 }
                 format!(
                     "{}cd {} && {} {} < {} > {} 2>{}",
@@ -462,8 +456,8 @@ impl Agent {
                 // Windows paths never contain double-quote characters, so wrapping
                 // in double quotes is always safe and produces correct cmd.exe syntax.
                 let _ = container_name; // suppress unused-variable on Windows
-                // Best-effort env + setup prepend for the cmd.exe shim:
-                //   set K=V& <setup>& cd /d "proj" && <bin> args
+                                        // Best-effort env + setup prepend for the cmd.exe shim:
+                                        //   set K=V& <setup>& cd /d "proj" && <bin> args
                 let bin = argv.first().map(String::as_str).unwrap_or("claude");
                 let claude_args = &argv[1..];
                 let mut prefix = String::new();
@@ -497,7 +491,13 @@ impl Agent {
         spec: &marsad_proto::LaunchSpec,
     ) -> Result<(), AgentError> {
         let argv = claude_argv(spec);
-        let cmd = self.build_spawn_cmd(container_name, &spec.project, &argv, spec.setup.as_deref(), &spec.env);
+        let cmd = self.build_spawn_cmd(
+            container_name,
+            &spec.project,
+            &argv,
+            spec.setup.as_deref(),
+            &spec.env,
+        );
         self.active_container()
             .spawn(container_name, &cmd)
             .map_err(|e| AgentError::Spawn(format!("{e}")))
@@ -519,7 +519,13 @@ impl Agent {
         match exec_prefix_for(spec.host_target.as_deref()) {
             None => {
                 let argv = claude_argv(spec);
-                let cmd = self.build_spawn_cmd(container_name, &spec.project, &argv, spec.setup.as_deref(), &spec.env);
+                let cmd = self.build_spawn_cmd(
+                    container_name,
+                    &spec.project,
+                    &argv,
+                    spec.setup.as_deref(),
+                    &spec.env,
+                );
                 self.active_container()
                     .spawn(container_name, &cmd)
                     .map_err(|e| AgentError::Spawn(format!("{e}")))
@@ -847,9 +853,7 @@ impl Agent {
             posture: persisted
                 .posture
                 .as_deref()
-                .and_then(|s| {
-                    parse_posture_value(&serde_json::Value::String(s.to_string())).ok()
-                })
+                .and_then(|s| parse_posture_value(&serde_json::Value::String(s.to_string())).ok())
                 .unwrap_or(marsad_proto::Posture::Ask),
             first_prompt: value["first_prompt"].as_str().map(|s| s.to_string()),
             mode,
@@ -987,7 +991,9 @@ impl Agent {
                     .and_then(|_| writer.flush());
                 eprintln!("marsad-agent: session {session_id} interrupt sent to claude");
             } else {
-                eprintln!("marsad-agent: session {session_id} interrupt DROPPED — no writer registered");
+                eprintln!(
+                    "marsad-agent: session {session_id} interrupt DROPPED — no writer registered"
+                );
             }
         }
         // If the session is gone, interrupt is a benign no-op.
@@ -1052,7 +1058,10 @@ impl Agent {
         Ok(vec![event.to_string()])
     }
 
-    fn handle_answer_question(&mut self, value: &serde_json::Value) -> Result<Vec<String>, AgentError> {
+    fn handle_answer_question(
+        &mut self,
+        value: &serde_json::Value,
+    ) -> Result<Vec<String>, AgentError> {
         let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
             "AnswerQuestion missing session_id".to_string(),
         ))?;
@@ -1332,7 +1341,12 @@ impl Agent {
         // `remote_liveness_script`, then re-attach with writer + tail children.
         {
             use marsad_lifecycle::Action;
-            let restored = self.store.0.restore().map(|r| r.sessions).unwrap_or_default();
+            let restored = self
+                .store
+                .0
+                .restore()
+                .map(|r| r.sessions)
+                .unwrap_or_default();
 
             // Probe ALL remote sessions' liveness in PARALLEL with a bounded wait,
             // BEFORE touching `self`. The probes are blocking remote calls; doing
@@ -1428,10 +1442,7 @@ impl Agent {
                                 Arc::clone(&self.pending_gates.0),
                                 Arc::clone(&self.session_children.0),
                             );
-                            eprintln!(
-                                "marsad-agent: reconnected live remote session {}",
-                                s.id
-                            );
+                            eprintln!("marsad-agent: reconnected live remote session {}", s.id);
                         }
                         continue;
                     }
@@ -2080,7 +2091,8 @@ pub fn run_remote_script_bounded(
 #[cfg(not(coverage))]
 fn remote_resolve_pid_dir(host_target: &str, sid: &str) -> Option<(String, String)> {
     let dir = remote_session_dir(sid);
-    let script = format!("d={dir}; cd \"$d\" 2>/dev/null && pwd; cat \"$d/claude.pid\" 2>/dev/null");
+    let script =
+        format!("d={dir}; cd \"$d\" 2>/dev/null && pwd; cat \"$d/claude.pid\" 2>/dev/null");
     let out = run_remote_script(host_target, &script)?;
     let mut lines = out.lines();
     let abs_dir = lines.next().unwrap_or("").trim().to_string();
@@ -2135,7 +2147,11 @@ pub fn exec_prefix_for(host_target: Option<&str>) -> Option<Vec<String>> {
         if distro.is_empty() {
             return None;
         }
-        return Some(vec!["wsl.exe".to_string(), "-d".to_string(), distro.to_string()]);
+        return Some(vec![
+            "wsl.exe".to_string(),
+            "-d".to_string(),
+            distro.to_string(),
+        ]);
     }
     // WSL-routed SSH: run `ssh` INSIDE a WSL distro so it gets real ControlMaster
     // (interactive MFA login once → automated connections reuse the master socket),
@@ -2304,7 +2320,9 @@ pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
     let mut argv = vec![
         // argv[0] is the host's configured claude executable (a wrapper like
         // `genie` or an absolute path), defaulting to the bare `claude`.
-        spec.claude_bin.clone().unwrap_or_else(|| "claude".to_string()),
+        spec.claude_bin
+            .clone()
+            .unwrap_or_else(|| "claude".to_string()),
         "--print".to_string(),
         "--input-format".to_string(),
         "stream-json".to_string(),
@@ -2527,12 +2545,11 @@ fn spawn_session_reader(
         // For REMOTE sessions: save the project path so the read loop can probe
         // git after each result event. We extract it from transcript_hint when
         // available; otherwise we have no project path to probe (skip silently).
-        let remote_project: Option<String> =
-            if host_target.is_some() {
-                transcript_hint.as_ref().map(|(p, _)| p.clone())
-            } else {
-                None
-            };
+        let remote_project: Option<String> = if host_target.is_some() {
+            transcript_hint.as_ref().map(|(p, _)| p.clone())
+        } else {
+            None
+        };
 
         // ── Supervising reconnect loop ────────────────────────────────────────
         // For LOCAL sessions this loop runs exactly once (no reconnect logic).
@@ -2555,174 +2572,176 @@ fn spawn_session_reader(
             //   • Reader child: ssh/wsl running `tail -n0 --pid=<cl> -f out.log` (stdout piped).
             // The writer child is stored in `children` so it can be reaped on exit.
             // The reader child is owned entirely by this thread.
-            let (writer, mut reader): marsad_transport::SplitIo =
-                match exec_prefix_for(host_target.as_deref()) {
-                    Some(prefix) => {
-                        use std::process::{Command, Stdio};
+            let (writer, mut reader): marsad_transport::SplitIo = match exec_prefix_for(
+                host_target.as_deref(),
+            ) {
+                Some(prefix) => {
+                    use std::process::{Command, Stdio};
 
-                        // Resolve the session's ABSOLUTE dir + detached claude pid over
-                        // the reliable stdin-pipe path, so the writer/reader commands can
-                        // be built from literals (no $HOME/$()/quotes that Rust→wsl.exe/
-                        // ssh.exe would mangle). If claude isn't running, bail — the
-                        // session reader has nothing to attach to.
-                        let host = host_target.clone().unwrap_or_default();
-                        let (claude_pid, abs_dir) = match remote_resolve_pid_dir(&host, &sid) {
-                            Some(pd) => pd,
-                            None => {
-                                eprintln!(
+                    // Resolve the session's ABSOLUTE dir + detached claude pid over
+                    // the reliable stdin-pipe path, so the writer/reader commands can
+                    // be built from literals (no $HOME/$()/quotes that Rust→wsl.exe/
+                    // ssh.exe would mangle). If claude isn't running, bail — the
+                    // session reader has nothing to attach to.
+                    let host = host_target.clone().unwrap_or_default();
+                    let (claude_pid, abs_dir) = match remote_resolve_pid_dir(&host, &sid) {
+                        Some(pd) => pd,
+                        None => {
+                            eprintln!(
                                     "marsad-agent: session {sid} remote resolve failed (claude not running?) — not attaching"
                                 );
-                                break 'reconnect;
-                            }
-                        };
-
-                        // ── Spawn writer child ─────────────────────────────────────
-                        // Appends everything written to its stdin into the remote FIFO.
-                        let writer_argv = remote_writer_argv(&prefix, &abs_dir);
-                        let w_bin = resolve_remote_bin(&writer_argv[0]);
-                        let mut w_cmd = Command::new(&w_bin);
-                        w_cmd.args(&writer_argv[1..])
-                            .stdin(Stdio::piped())
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null());
-                        #[cfg(windows)]
-                        {
-                            use std::os::windows::process::CommandExt;
-                            w_cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+                            break 'reconnect;
                         }
-                        let mut writer_child = match w_cmd.spawn() {
-                            Ok(c) => c,
-                            Err(e) => {
-                                eprintln!("marsad-agent: remote writer spawn {sid}: {e}");
-                                break 'reconnect;
-                            }
-                        };
-                        let child_stdin = match writer_child.stdin.take() {
-                            Some(s) => s,
-                            None => {
-                                eprintln!("marsad-agent: remote writer child {sid} has no stdin");
-                                let _ = writer_child.kill();
-                                let _ = writer_child.wait();
-                                break 'reconnect;
-                            }
-                        };
-                        // Store writer child so it is reaped on thread exit.
-                        children.lock().unwrap().insert(sid.clone(), writer_child);
+                    };
 
-                        // ── Spawn reader child ─────────────────────────────────────
-                        // Streams only NEW out.log lines (tail -n0 = skip historical).
-                        let reader_argv = remote_reader_argv(&prefix, &claude_pid, &abs_dir);
-                        let r_bin = resolve_remote_bin(&reader_argv[0]);
-                        let mut r_cmd = Command::new(&r_bin);
-                        r_cmd.args(&reader_argv[1..])
-                            .stdin(Stdio::null())
-                            .stdout(Stdio::piped())
-                            .stderr(Stdio::piped());
-                        #[cfg(windows)]
-                        {
-                            use std::os::windows::process::CommandExt;
-                            r_cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-                        }
-                        let mut reader_child = match r_cmd.spawn() {
-                            Ok(c) => c,
-                            Err(e) => {
-                                eprintln!("marsad-agent: remote reader spawn {sid}: {e}");
-                                // Clean up writer child we already stored.
-                                if let Some(mut wc) = children.lock().unwrap().remove(&sid) {
-                                    let _ = wc.kill();
-                                    let _ = wc.wait();
-                                }
-                                break 'reconnect;
-                            }
-                        };
-                        // Stream reader's stderr to agent.log for diagnosis.
-                        if let Some(errpipe) = reader_child.stderr.take() {
-                            let esid = sid.clone();
-                            std::thread::spawn(move || {
-                                use std::io::BufRead;
-                                let r = std::io::BufReader::new(errpipe);
-                                for line in r.lines().map_while(Result::ok) {
-                                    if !line.trim().is_empty() {
-                                        eprintln!("marsad-agent: session {esid} reader-stderr: {line}");
-                                    }
-                                }
-                            });
-                        }
-                        let child_stdout = match reader_child.stdout.take() {
-                            Some(s) => s,
-                            None => {
-                                eprintln!("marsad-agent: remote reader child {sid} has no stdout");
-                                let _ = reader_child.kill();
-                                let _ = reader_child.wait();
-                                if let Some(mut wc) = children.lock().unwrap().remove(&sid) {
-                                    let _ = wc.kill();
-                                    let _ = wc.wait();
-                                }
-                                break 'reconnect;
-                            }
-                        };
-                        // Reader child: store in the session_children registry under a
-                        // distinct key so the read-loop cleanup can reap it.  We use a
-                        // `"reader:<sid>"` key (never used by other code) so the normal
-                        // kill path (keyed by plain sid) is unaffected.
-                        let reader_key = format!("reader:{sid}");
-                        children.lock().unwrap().insert(reader_key, reader_child);
-
-                        let w: Box<dyn std::io::Write + Send> = Box::new(child_stdin);
-                        let r: std::io::BufReader<Box<dyn std::io::Read + Send>> =
-                            std::io::BufReader::new(Box::new(child_stdout));
-                        (w, r)
+                    // ── Spawn writer child ─────────────────────────────────────
+                    // Appends everything written to its stdin into the remote FIFO.
+                    let writer_argv = remote_writer_argv(&prefix, &abs_dir);
+                    let w_bin = resolve_remote_bin(&writer_argv[0]);
+                    let mut w_cmd = Command::new(&w_bin);
+                    w_cmd
+                        .args(&writer_argv[1..])
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null());
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        w_cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
                     }
-                    None => {
-                        #[cfg(unix)]
-                        {
-                            use marsad_transport::ClaudeFifoTransport;
-                            let mut fifo = match ClaudeFifoTransport::open(&session_dir) {
-                                Ok(f) => f,
-                                Err(e) => {
-                                    eprintln!("marsad-agent: fifo open {sid}: {e}");
-                                    break 'reconnect;
-                                }
-                            };
-                            if let Err(e) = fifo.connect() {
-                                eprintln!("marsad-agent: fifo connect {sid}: {e}");
-                                break 'reconnect;
-                            }
-                            match fifo.into_split() {
-                                Some(pair) => pair,
-                                None => {
-                                    eprintln!("marsad-agent: fifo not connected after connect {sid}");
-                                    break 'reconnect;
-                                }
-                            }
+                    let mut writer_child = match w_cmd.spawn() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("marsad-agent: remote writer spawn {sid}: {e}");
+                            break 'reconnect;
                         }
-                        #[cfg(windows)]
-                        {
-                            let _ = &session_dir;
-                            use marsad_transport::ClaudeNamedPipeTransport;
-                            let container_name = format!("marsad-{sid}");
-                            let mut transport = ClaudeNamedPipeTransport::for_session(&container_name);
-                            if let Err(e) = transport.connect() {
-                                eprintln!("marsad-agent: pipe connect {sid}: {e}");
+                    };
+                    let child_stdin = match writer_child.stdin.take() {
+                        Some(s) => s,
+                        None => {
+                            eprintln!("marsad-agent: remote writer child {sid} has no stdin");
+                            let _ = writer_child.kill();
+                            let _ = writer_child.wait();
+                            break 'reconnect;
+                        }
+                    };
+                    // Store writer child so it is reaped on thread exit.
+                    children.lock().unwrap().insert(sid.clone(), writer_child);
+
+                    // ── Spawn reader child ─────────────────────────────────────
+                    // Streams only NEW out.log lines (tail -n0 = skip historical).
+                    let reader_argv = remote_reader_argv(&prefix, &claude_pid, &abs_dir);
+                    let r_bin = resolve_remote_bin(&reader_argv[0]);
+                    let mut r_cmd = Command::new(&r_bin);
+                    r_cmd
+                        .args(&reader_argv[1..])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped());
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        r_cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+                    }
+                    let mut reader_child = match r_cmd.spawn() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("marsad-agent: remote reader spawn {sid}: {e}");
+                            // Clean up writer child we already stored.
+                            if let Some(mut wc) = children.lock().unwrap().remove(&sid) {
+                                let _ = wc.kill();
+                                let _ = wc.wait();
+                            }
+                            break 'reconnect;
+                        }
+                    };
+                    // Stream reader's stderr to agent.log for diagnosis.
+                    if let Some(errpipe) = reader_child.stderr.take() {
+                        let esid = sid.clone();
+                        std::thread::spawn(move || {
+                            use std::io::BufRead;
+                            let r = std::io::BufReader::new(errpipe);
+                            for line in r.lines().map_while(Result::ok) {
+                                if !line.trim().is_empty() {
+                                    eprintln!("marsad-agent: session {esid} reader-stderr: {line}");
+                                }
+                            }
+                        });
+                    }
+                    let child_stdout = match reader_child.stdout.take() {
+                        Some(s) => s,
+                        None => {
+                            eprintln!("marsad-agent: remote reader child {sid} has no stdout");
+                            let _ = reader_child.kill();
+                            let _ = reader_child.wait();
+                            if let Some(mut wc) = children.lock().unwrap().remove(&sid) {
+                                let _ = wc.kill();
+                                let _ = wc.wait();
+                            }
+                            break 'reconnect;
+                        }
+                    };
+                    // Reader child: store in the session_children registry under a
+                    // distinct key so the read-loop cleanup can reap it.  We use a
+                    // `"reader:<sid>"` key (never used by other code) so the normal
+                    // kill path (keyed by plain sid) is unaffected.
+                    let reader_key = format!("reader:{sid}");
+                    children.lock().unwrap().insert(reader_key, reader_child);
+
+                    let w: Box<dyn std::io::Write + Send> = Box::new(child_stdin);
+                    let r: std::io::BufReader<Box<dyn std::io::Read + Send>> =
+                        std::io::BufReader::new(Box::new(child_stdout));
+                    (w, r)
+                }
+                None => {
+                    #[cfg(unix)]
+                    {
+                        use marsad_transport::ClaudeFifoTransport;
+                        let mut fifo = match ClaudeFifoTransport::open(&session_dir) {
+                            Ok(f) => f,
+                            Err(e) => {
+                                eprintln!("marsad-agent: fifo open {sid}: {e}");
                                 break 'reconnect;
                             }
-                            match transport.into_split() {
-                                Some(pair) => pair,
-                                None => {
-                                    eprintln!("marsad-agent: pipe not connected after connect {sid}");
-                                    break 'reconnect;
-                                }
+                        };
+                        if let Err(e) = fifo.connect() {
+                            eprintln!("marsad-agent: fifo connect {sid}: {e}");
+                            break 'reconnect;
+                        }
+                        match fifo.into_split() {
+                            Some(pair) => pair,
+                            None => {
+                                eprintln!("marsad-agent: fifo not connected after connect {sid}");
+                                break 'reconnect;
                             }
                         }
                     }
-                };
+                    #[cfg(windows)]
+                    {
+                        let _ = &session_dir;
+                        use marsad_transport::ClaudeNamedPipeTransport;
+                        let container_name = format!("marsad-{sid}");
+                        let mut transport = ClaudeNamedPipeTransport::for_session(&container_name);
+                        if let Err(e) = transport.connect() {
+                            eprintln!("marsad-agent: pipe connect {sid}: {e}");
+                            break 'reconnect;
+                        }
+                        match transport.into_split() {
+                            Some(pair) => pair,
+                            None => {
+                                eprintln!("marsad-agent: pipe not connected after connect {sid}");
+                                break 'reconnect;
+                            }
+                        }
+                    }
+                }
+            };
 
             // The writer is shared (Arc<Mutex>) between this
             // thread (initialize handshake + first prompt) and
             // the serve thread (handle_send_prompt / answer_gate)
             // — boxed writers can't be try_clone'd like a File.
-            let writer: SharedWriter =
-                std::sync::Arc::new(std::sync::Mutex::new(writer));
+            let writer: SharedWriter = std::sync::Arc::new(std::sync::Mutex::new(writer));
 
             // Send the control-protocol `initialize` handshake first (LAUNCH only,
             // first attach only). It pairs with `--permission-prompt-tool stdio` so
@@ -2732,10 +2751,7 @@ fn spawn_session_reader(
             // `is_first_attach`. Fire-and-forget: the CLI's ack is ignored.
             if send_init && is_first_attach {
                 use std::io::Write;
-                let init =
-                    marsad_proto::encode_control_request_initialize(
-                        "req_1_init",
-                    );
+                let init = marsad_proto::encode_control_request_initialize("req_1_init");
                 let mut w = writer.lock().unwrap();
                 let _ = w.write_all(init.as_bytes());
                 let _ = w.write_all(b"\n");
@@ -2750,9 +2766,7 @@ fn spawn_session_reader(
             // it sees a user message on stdin.
             if is_first_attach {
                 if let Some(ref prompt) = first_prompt {
-                    use marsad_proto::{
-                        encode_user_input, ContentBlock, UserInput,
-                    };
+                    use marsad_proto::{encode_user_input, ContentBlock, UserInput};
                     use std::io::Write;
                     let plen = prompt.len();
                     let encoded = encode_user_input(&UserInput {
@@ -2776,10 +2790,7 @@ fn spawn_session_reader(
             // hold an Arc to the same Mutex<Box<dyn Write>>.
             {
                 let mut registry = writers_fifo.lock().unwrap();
-                registry.insert(
-                    sid.clone(),
-                    std::sync::Arc::clone(&writer),
-                );
+                registry.insert(sid.clone(), std::sync::Arc::clone(&writer));
             }
 
             // For a REMOTE resume/reconnect, fetch the prior conversation from the
@@ -2876,7 +2887,9 @@ fn spawn_session_reader(
                 let mut raw = String::new();
                 match reader.read_line(&mut raw) {
                     Ok(0) => {
-                        eprintln!("marsad-agent: session {sid} reader EOF after {lines_seen} line(s)");
+                        eprintln!(
+                            "marsad-agent: session {sid} reader EOF after {lines_seen} line(s)"
+                        );
                         break;
                     }
                     Err(e) => {
@@ -2893,14 +2906,10 @@ fn spawn_session_reader(
                         // control_response. The event is still
                         // broadcast (below) so the GUI can
                         // render the gate and answer it.
-                        if let Ok(
-                            marsad_proto::StreamMsg::ControlRequest(
-                                cr,
-                            ),
-                        ) = marsad_proto::parse_stream_line(raw)
+                        if let Ok(marsad_proto::StreamMsg::ControlRequest(cr)) =
+                            marsad_proto::parse_stream_line(raw)
                         {
-                            let mut gates =
-                                pending_fifo.lock().unwrap();
+                            let mut gates = pending_fifo.lock().unwrap();
                             // Deduplicate: if the SAME request_id already
                             // sits in the registry (claude re-emitted it),
                             // ignore the duplicate so we don't clobber the
@@ -2908,7 +2917,8 @@ fn spawn_session_reader(
                             // If it's a genuinely NEW request_id while one
                             // is already pending, replace it (the first one
                             // was either answered or abandoned) and warn.
-                            let dup = gates.get(&sid)
+                            let dup = gates
+                                .get(&sid)
                                 .map(|existing| existing.request_id == cr.request_id)
                                 .unwrap_or(false);
                             if dup {
@@ -2933,19 +2943,14 @@ fn spawn_session_reader(
                                     PendingGate {
                                         request_id: cr.request_id,
                                         input: cr.input,
-                                        elicitation: cr
-                                            .elicitation_message
-                                            .is_some(),
+                                        elicitation: cr.elicitation_message.is_some(),
                                     },
                                 );
                             }
                         }
 
-                        let event: serde_json::Value =
-                            serde_json::from_str(raw)
-                                .unwrap_or_else(|_| {
-                                    serde_json::json!({"raw": raw})
-                                });
+                        let event: serde_json::Value = serde_json::from_str(raw)
+                            .unwrap_or_else(|_| serde_json::json!({"raw": raw}));
 
                         // Determine whether this event should trigger a
                         // remote git Changes probe.
@@ -2955,20 +2960,19 @@ fn spawn_session_reader(
                         // `tool_use` block for a file-modifying tool (Bash,
                         // Edit, Write, NotebookEdit, MultiEdit).  Debounced:
                         // at most one probe per CHANGES_PROBE_DEBOUNCE_SECS.
-                        let is_result = event.get("type")
-                            .and_then(|t| t.as_str())
-                            == Some("result");
-                        let is_file_modifying_tool_use =
-                            !is_result
-                            && event.get("type").and_then(|t| t.as_str())
-                                == Some("assistant")
+                        let is_result =
+                            event.get("type").and_then(|t| t.as_str()) == Some("result");
+                        let is_file_modifying_tool_use = !is_result
+                            && event.get("type").and_then(|t| t.as_str()) == Some("assistant")
                             && assistant_has_file_modifying_tool_use(&event);
                         let should_probe_changes = is_result
                             || (is_file_modifying_tool_use && {
                                 let now = std::time::Instant::now();
                                 let elapsed_ok = last_changes_probe
-                                    .map(|t| now.duration_since(t).as_secs()
-                                        >= CHANGES_PROBE_DEBOUNCE_SECS)
+                                    .map(|t| {
+                                        now.duration_since(t).as_secs()
+                                            >= CHANGES_PROBE_DEBOUNCE_SECS
+                                    })
                                     .unwrap_or(true);
                                 if elapsed_ok {
                                     last_changes_probe = Some(now);
@@ -2980,9 +2984,7 @@ fn spawn_session_reader(
                                 (host_target.as_deref(), remote_project.as_deref())
                             {
                                 let script = remote_changes_script(project);
-                                if let Some(stdout) =
-                                    run_remote_script(target, &script)
-                                {
+                                if let Some(stdout) = run_remote_script(target, &script) {
                                     let changes = parse_remote_changes(&stdout);
                                     let cu_line = serde_json::json!({
                                         "type": "ChangesUpdate",
@@ -3004,7 +3006,9 @@ fn spawn_session_reader(
                                 // so it's more expensive than the git probe).
                                 if is_result {
                                     let usage_script = remote_usage_script(project);
-                                    if let Some(usage_out) = run_remote_script(target, &usage_script) {
+                                    if let Some(usage_out) =
+                                        run_remote_script(target, &usage_script)
+                                    {
                                         let trimmed = usage_out.trim();
                                         if !trimmed.is_empty() && trimmed != "{}" {
                                             if let Ok(usage_val) =
@@ -3029,13 +3033,11 @@ fn spawn_session_reader(
                                 }
                             }
                         }
-                        let ipc_msg =
-                            marsad_proto::IpcMsg::AgentEvent {
-                                session_id: sid.clone(),
-                                event,
-                            };
-                        let encoded =
-                            marsad_proto::encode_ipc(&ipc_msg);
+                        let ipc_msg = marsad_proto::IpcMsg::AgentEvent {
+                            session_id: sid.clone(),
+                            event,
+                        };
+                        let encoded = marsad_proto::encode_ipc(&ipc_msg);
                         // Broadcast to all subscribers.
                         let subs = subs_fifo.lock().unwrap();
                         subs.iter().for_each(|s| {
@@ -3116,9 +3118,7 @@ fn spawn_session_reader(
                 }
 
                 // Sleep before the next probe (always, to avoid busy-looping).
-                eprintln!(
-                    "marsad-agent: session {sid} still down, retrying in {backoff_secs}s"
-                );
+                eprintln!("marsad-agent: session {sid} still down, retrying in {backoff_secs}s");
                 std::thread::sleep(std::time::Duration::from_secs(backoff_secs));
                 total_waited_secs = total_waited_secs.saturating_add(backoff_secs);
                 backoff_secs = reconnect_backoff_next(backoff_secs);
@@ -3149,9 +3149,7 @@ fn spawn_session_reader(
                             // Re-attach: continue the outer reconnect loop.
                             continue 'reconnect;
                         } else {
-                            eprintln!(
-                                "marsad-agent: session {sid} claude exited, stopping"
-                            );
+                            eprintln!("marsad-agent: session {sid} claude exited, stopping");
                             break 'reconnect;
                         }
                     }
@@ -3207,7 +3205,8 @@ pub fn reconnect_backoff_next(current: u64) -> u64 {
 pub fn assistant_has_file_modifying_tool_use(event: &serde_json::Value) -> bool {
     // File-modifying tools whose use signals a likely git-visible change.
     const FILE_TOOLS: &[&str] = &["Bash", "Edit", "Write", "NotebookEdit", "MultiEdit"];
-    let content = match event.get("message")
+    let content = match event
+        .get("message")
         .and_then(|m| m.get("content"))
         .and_then(|c| c.as_array())
     {
@@ -3399,4 +3398,3 @@ pub fn remote_reader_argv(prefix: &[String], pid: &str, dir: &str) -> Vec<String
     argv.push(format!("{dir}/out.log"));
     argv
 }
-

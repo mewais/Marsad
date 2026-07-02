@@ -23,7 +23,11 @@ fn none_and_local_aliases_are_local() {
 fn wsl_target_builds_wsl_prefix() {
     assert_eq!(
         exec_prefix_for(Some("wsl:Ubuntu")),
-        Some(vec!["wsl.exe".to_string(), "-d".to_string(), "Ubuntu".to_string()])
+        Some(vec![
+            "wsl.exe".to_string(),
+            "-d".to_string(),
+            "Ubuntu".to_string()
+        ])
     );
 }
 
@@ -99,7 +103,10 @@ fn wslssh_target_builds_wsl_ssh_prefix_with_controlmaster() {
     assert_eq!(p[3], "ssh");
     assert_eq!(p.last().unwrap(), "agent33");
     assert!(p.contains(&"ControlMaster=auto".to_string()), "{p:?}");
-    assert!(p.contains(&"ControlPath=~/.ssh/marsad-cm-%r@%h:%p".to_string()), "{p:?}");
+    assert!(
+        p.contains(&"ControlPath=~/.ssh/marsad-cm-%r@%h:%p".to_string()),
+        "{p:?}"
+    );
     assert!(p.contains(&"BatchMode=yes".to_string()), "{p:?}");
 }
 
@@ -136,7 +143,11 @@ fn remote_spawn_cmd_is_cd_and_exec_claude() {
 #[test]
 fn remote_spawn_cmd_with_bin_setup_and_env() {
     // Exact output for claude_bin=genie + setup + a single env pair.
-    let argv = vec!["genie".to_string(), "--model".to_string(), "haiku".to_string()];
+    let argv = vec![
+        "genie".to_string(),
+        "--model".to_string(),
+        "haiku".to_string(),
+    ];
     let env = vec![("A".to_string(), "b".to_string())];
     let cmd = build_remote_spawn_cmd("/proj", &argv, Some("module load x"), &env);
     assert_eq!(
@@ -150,13 +161,22 @@ fn remote_spawn_cmd_expands_tilde_project() {
     let argv = vec!["claude".to_string()];
     // "~/" → cd "$HOME/" (double-quoted so $HOME expands; `cd '~/'` would fail).
     let home = build_remote_spawn_cmd("~/", &argv, None, &[]);
-    assert!(home.contains("cd \"$HOME/\" && exec"), "tilde-slash → $HOME: {home}");
+    assert!(
+        home.contains("cd \"$HOME/\" && exec"),
+        "tilde-slash → $HOME: {home}"
+    );
     // bare "~" → cd "$HOME"
     let bare = build_remote_spawn_cmd("~", &argv, None, &[]);
-    assert!(bare.contains("cd \"$HOME\" && exec"), "bare tilde → $HOME: {bare}");
+    assert!(
+        bare.contains("cd \"$HOME\" && exec"),
+        "bare tilde → $HOME: {bare}"
+    );
     // "~/proj" → cd "$HOME/proj"
     let sub = build_remote_spawn_cmd("~/proj", &argv, None, &[]);
-    assert!(sub.contains("cd \"$HOME/proj\" && exec"), "tilde subdir: {sub}");
+    assert!(
+        sub.contains("cd \"$HOME/proj\" && exec"),
+        "tilde subdir: {sub}"
+    );
 }
 
 #[test]
@@ -194,12 +214,18 @@ fn remote_session_dir_uses_home_and_quotes_sid() {
     // Session dir should be $HOME/.marsad/<sid>.
     // SIDs with special chars are single-quoted.
     let plain = remote_session_dir("session-1");
-    assert!(plain.contains("$HOME/.marsad/"), "contains base dir: {plain}");
+    assert!(
+        plain.contains("$HOME/.marsad/"),
+        "contains base dir: {plain}"
+    );
     assert!(plain.contains("session-1"), "contains sid: {plain}");
 
     // A sid with a single quote is escaped via remote_shell_quote.
     let weird = remote_session_dir("sid'x");
-    assert!(weird.contains("$HOME/.marsad/"), "contains base dir: {weird}");
+    assert!(
+        weird.contains("$HOME/.marsad/"),
+        "contains base dir: {weird}"
+    );
     // The single quote is escaped: '\''
     assert!(weird.contains(r"'\''"), "single-quote escaped: {weird}");
 }
@@ -249,11 +275,18 @@ fn remote_durable_launch_script_contains_mkfifo_and_nohup_setsid() {
 fn remote_durable_launch_script_setup_and_env_pass_through() {
     // The run_cmd (from build_remote_spawn_cmd) includes setup and env lines.
     // They are embedded verbatim in the launch script.
-    let argv = vec!["genie".to_string(), "--model".to_string(), "haiku".to_string()];
+    let argv = vec![
+        "genie".to_string(),
+        "--model".to_string(),
+        "haiku".to_string(),
+    ];
     let env = vec![("FOO".to_string(), "bar".to_string())];
     let run_cmd = build_remote_spawn_cmd("/proj", &argv, Some("module load x"), &env);
     let script = remote_durable_launch_script("sid-env", &run_cmd);
-    assert!(script.contains("module load x"), "setup in script: {script}");
+    assert!(
+        script.contains("module load x"),
+        "setup in script: {script}"
+    );
     assert!(script.contains("'FOO'"), "env key in script: {script}");
     assert!(script.contains("'bar'"), "env val in script: {script}");
 }
@@ -305,7 +338,10 @@ fn assert_no_shell_or_quotes(argv: &[String]) {
     for a in argv {
         assert!(!a.contains('"'), "no double-quotes allowed: {a:?}");
         assert!(!a.contains("$("), "no command substitution allowed: {a:?}");
-        assert!(!a.contains("$HOME"), "no $HOME (use resolved abs dir): {a:?}");
+        assert!(
+            !a.contains("$HOME"),
+            "no $HOME (use resolved abs dir): {a:?}"
+        );
     }
 }
 
@@ -482,6 +518,9 @@ fn backoff_from_zero_stays_zero() {
 /// Large input saturates to RECONNECT_MAX_BACKOFF_SECS without overflow.
 #[test]
 fn backoff_saturates_without_overflow() {
-    assert_eq!(reconnect_backoff_next(u64::MAX / 2 + 1), RECONNECT_MAX_BACKOFF_SECS);
+    assert_eq!(
+        reconnect_backoff_next(u64::MAX / 2 + 1),
+        RECONNECT_MAX_BACKOFF_SECS
+    );
     assert_eq!(reconnect_backoff_next(u64::MAX), RECONNECT_MAX_BACKOFF_SECS);
 }

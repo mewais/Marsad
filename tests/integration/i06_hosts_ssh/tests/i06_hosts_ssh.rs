@@ -173,7 +173,13 @@ fn part_a_add_and_remove_remote_host() {
 
     let id = {
         let host = reg
-            .add("ci-runner", "ci@ci-runner.example.com", None, None, Vec::new())
+            .add(
+                "ci-runner",
+                "ci@ci-runner.example.com",
+                None,
+                None,
+                Vec::new(),
+            )
             .expect("add must succeed");
         assert_eq!(host.label, "ci-runner");
         assert_eq!(host.target, "ci@ci-runner.example.com");

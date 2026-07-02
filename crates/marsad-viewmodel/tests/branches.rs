@@ -42,10 +42,10 @@ fn make_session(
         changes: vec![],
 
         model_usage: vec![],
-            tools: vec![],
-            mcp_servers: vec![],
-            slash_commands: vec![],
-            posture: "ask".to_string(),
+        tools: vec![],
+        mcp_servers: vec![],
+        slash_commands: vec![],
+        posture: "ask".to_string(),
     }
 }
 

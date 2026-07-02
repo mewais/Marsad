@@ -291,7 +291,10 @@ fn resume_session_restores_persisted_posture() {
     .expect("with_fakes");
 
     let result = agent.handle_ipc(r#"{"type":"ResumeSession","session_id":"posture-sess"}"#);
-    assert!(result.is_ok(), "ResumeSession with persisted posture must succeed; got {result:?}");
+    assert!(
+        result.is_ok(),
+        "ResumeSession with persisted posture must succeed; got {result:?}"
+    );
     // The spawn command should contain bypassPermissions (FullAutonomy's --permission-mode value).
     let last = agent.container_calls().last().expect("spawn").clone();
     assert!(

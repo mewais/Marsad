@@ -47,13 +47,20 @@ impl LiteLlmRate {
     fn from_entry(e: &LiteLlmEntry) -> Self {
         let input = e.input_cost_per_token * 1_000_000.0;
         let output = e.output_cost_per_token * 1_000_000.0;
-        let cache_read = e.cache_read_input_token_cost
+        let cache_read = e
+            .cache_read_input_token_cost
             .map(|v| v * 1_000_000.0)
             .unwrap_or(input * 0.1);
-        let cache_write = e.cache_creation_input_token_cost
+        let cache_write = e
+            .cache_creation_input_token_cost
             .map(|v| v * 1_000_000.0)
             .unwrap_or(input * 1.25);
-        LiteLlmRate { input, output, cache_read, cache_write }
+        LiteLlmRate {
+            input,
+            output,
+            cache_read,
+            cache_write,
+        }
     }
 }
 
@@ -419,7 +426,13 @@ fn pricing_for(model: &str) -> (f64, f64, f64, f64) {
 /// Pricing is per model VERSION (see `pricing_for`): e.g. Opus 4.8 = $5/$25,
 /// older Opus = $15/$75, Sonnet = $3/$15, Haiku 4.5 = $1/$5 (cache_read =
 /// 0.1×input, cache_write = 1.25×input). Unknown model → $0 (not an error).
-pub fn model_cost_usd(model: &str, input: u64, output: u64, cache_read: u64, cache_creation: u64) -> f64 {
+pub fn model_cost_usd(
+    model: &str,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_creation: u64,
+) -> f64 {
     let (ri, ro, rcr, rcc) = pricing_for(model);
     let c_in = input as f64 * ri;
     let c_out = output as f64 * ro;
@@ -427,7 +440,6 @@ pub fn model_cost_usd(model: &str, input: u64, output: u64, cache_read: u64, cac
     let c_cc = cache_creation as f64 * rcc;
     (c_in + c_out + c_cr + c_cc) / 1_000_000.0
 }
-
 
 /// Minimal serde shape for the assistant entries in a JSONL file.
 #[derive(serde::Deserialize)]
@@ -464,9 +476,7 @@ struct AssistantJsonlUsage {
 /// Filters out:
 /// - the `"<synthetic>"` pseudo-model (claude's token-counting placeholder),
 /// - rows where all token counts are zero (no real usage).
-pub fn aggregate_model_usage(
-    jsonl: &str,
-) -> std::collections::HashMap<String, ModelUsageSummary> {
+pub fn aggregate_model_usage(jsonl: &str) -> std::collections::HashMap<String, ModelUsageSummary> {
     let mut out: std::collections::HashMap<String, ModelUsageSummary> =
         std::collections::HashMap::new();
     for line in jsonl.lines() {
@@ -494,14 +504,21 @@ pub fn aggregate_model_usage(
             continue;
         };
         // Skip zero-usage rows (no real tokens consumed).
-        let total_tokens = usage.input_tokens
+        let total_tokens = usage
+            .input_tokens
             .saturating_add(usage.output_tokens)
             .saturating_add(usage.cache_read_input_tokens)
             .saturating_add(usage.cache_creation_input_tokens);
         if total_tokens == 0 {
             continue;
         }
-        let cost = model_cost_usd(&model, usage.input_tokens, usage.output_tokens, usage.cache_read_input_tokens, usage.cache_creation_input_tokens);
+        let cost = model_cost_usd(
+            &model,
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_input_tokens,
+            usage.cache_creation_input_tokens,
+        );
         let entry = out.entry(model).or_insert(ModelUsageSummary {
             input_tokens: 0,
             output_tokens: 0,
@@ -1314,7 +1331,16 @@ mod tests {
 
     #[test]
     fn model_cost_usd_unknown_model_returns_zero() {
-        assert_eq!(model_cost_usd("unknown-model-xyz", 1_000_000, 1_000_000, 1_000_000, 1_000_000), 0.0);
+        assert_eq!(
+            model_cost_usd(
+                "unknown-model-xyz",
+                1_000_000,
+                1_000_000,
+                1_000_000,
+                1_000_000
+            ),
+            0.0
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -1366,18 +1392,28 @@ mod tests {
     #[test]
     fn aggregate_model_usage_skips_all_malformed_and_accumulates() {
         let jsonl = concat!(
-            "\n",                                                                 // empty line → skip
-            "   \n",                                                              // whitespace-only → skip
-            "not json at all\n",                                                  // parse error → skip
-            r#"{"type":"user","message":{"model":"claude-opus-4-8","usage":{"input_tokens":5}}}"#, "\n", // non-assistant → skip
-            r#"{"type":"assistant"}"#, "\n",                                       // no message → skip
-            r#"{"type":"assistant","message":{"usage":{"input_tokens":5}}}"#, "\n", // no model → skip
-            r#"{"type":"assistant","message":{"model":"claude-opus-4-8"}}"#, "\n", // no usage → skip
-            r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#, "\n",
-            r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":20,"output_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#, "\n", // same model → accumulate
+            "\n",                // empty line → skip
+            "   \n",             // whitespace-only → skip
+            "not json at all\n", // parse error → skip
+            r#"{"type":"user","message":{"model":"claude-opus-4-8","usage":{"input_tokens":5}}}"#,
+            "\n", // non-assistant → skip
+            r#"{"type":"assistant"}"#,
+            "\n", // no message → skip
+            r#"{"type":"assistant","message":{"usage":{"input_tokens":5}}}"#,
+            "\n", // no model → skip
+            r#"{"type":"assistant","message":{"model":"claude-opus-4-8"}}"#,
+            "\n", // no usage → skip
+            r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":20,"output_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#,
+            "\n", // same model → accumulate
         );
         let result = aggregate_model_usage(jsonl);
-        assert_eq!(result.len(), 1, "only the two real opus rows count: {result:?}");
+        assert_eq!(
+            result.len(),
+            1,
+            "only the two real opus rows count: {result:?}"
+        );
         let opus = &result["claude-opus-4-8"];
         assert_eq!(opus.input_tokens, 30, "accumulated input");
         assert_eq!(opus.output_tokens, 3, "accumulated output");
@@ -1424,15 +1460,20 @@ mod tests {
     fn litellm_rate_normalized_strip_1m_suffix_sonnet() {
         // "claude-sonnet-4.6[1m]" → normalize → "claude-sonnet-4.6" → still not exact
         // → dashed → "claude-sonnet-4-6" → exact match.
-        let (inp, out, _cr, _cc) = litellm_rate("claude-sonnet-4.6[1m]").expect("must resolve via [1m] strip + dot-dash");
-        assert!((inp - 3.0).abs() < 1e-9, "input $/Mtok after [1m] strip: {inp}");
+        let (inp, out, _cr, _cc) =
+            litellm_rate("claude-sonnet-4.6[1m]").expect("must resolve via [1m] strip + dot-dash");
+        assert!(
+            (inp - 3.0).abs() < 1e-9,
+            "input $/Mtok after [1m] strip: {inp}"
+        );
         assert!((out - 15.0).abs() < 1e-9, "output $/Mtok: {out}");
     }
 
     /// (c) Dots → dashes: "claude-sonnet-4.6" → "claude-sonnet-4-6" is in LiteLLM.
     #[test]
     fn litellm_rate_dotted_model_id_resolved() {
-        let (inp, out, cr, cc) = litellm_rate("claude-sonnet-4.6").expect("must resolve via dot→dash");
+        let (inp, out, cr, cc) =
+            litellm_rate("claude-sonnet-4.6").expect("must resolve via dot→dash");
         assert!((inp - 3.0).abs() < 1e-9, "input $/Mtok: {inp}");
         assert!((out - 15.0).abs() < 1e-9, "output $/Mtok: {out}");
         assert!((cr - 0.3).abs() < 1e-9, "cache_read $/Mtok: {cr}");
@@ -1473,7 +1514,10 @@ mod tests {
     /// Unknown model → model_cost_usd falls through to hand table → $0 for fully unknown.
     #[test]
     fn model_cost_usd_fully_unknown_model_falls_back_to_zero() {
-        assert_eq!(model_cost_usd("totally-unknown-model", 1_000_000, 0, 0, 0), 0.0);
+        assert_eq!(
+            model_cost_usd("totally-unknown-model", 1_000_000, 0, 0, 0),
+            0.0
+        );
     }
 
     /// Older Opus (claude-opus-4-0) not in LiteLLM → falls through to hand table → $15/$75.
@@ -1482,18 +1526,25 @@ mod tests {
     fn litellm_rate_old_opus_4_0_returns_none_hand_table_used() {
         // claude-opus-4-0 is NOT in LiteLLM; litellm_rate must return None so the
         // hand table kicks in and returns the correct $15/$75 rates.
-        assert!(litellm_rate("claude-opus-4-0").is_none(),
-            "claude-opus-4-0 must NOT be found in LiteLLM (would return wrong $5 rate)");
+        assert!(
+            litellm_rate("claude-opus-4-0").is_none(),
+            "claude-opus-4-0 must NOT be found in LiteLLM (would return wrong $5 rate)"
+        );
         let cost = model_cost_usd("claude-opus-4-0", 1_000_000, 0, 0, 0);
-        assert!((cost - 15.0).abs() < 1e-9, "old opus must use hand table $15: {cost}");
+        assert!(
+            (cost - 15.0).abs() < 1e-9,
+            "old opus must use hand table $15: {cost}"
+        );
     }
 
     /// Haiku 3.5 not in LiteLLM (LiteLLM uses a different naming scheme) →
     /// hand table returns $0.80/$4.00.
     #[test]
     fn litellm_rate_haiku_3_5_not_in_litellm_hand_table_used() {
-        assert!(litellm_rate("claude-haiku-3-5").is_none(),
-            "claude-haiku-3-5 must NOT be found in LiteLLM (different naming)");
+        assert!(
+            litellm_rate("claude-haiku-3-5").is_none(),
+            "claude-haiku-3-5 must NOT be found in LiteLLM (different naming)"
+        );
         let cost = model_cost_usd("claude-haiku-3-5", 1_000_000, 0, 0, 0);
         assert!((cost - 0.80).abs() < 1e-9, "haiku 3.5 hand table: {cost}");
     }
@@ -1506,7 +1557,10 @@ mod tests {
         // matches nothing; hand table's sonnet branch fires → $3/$15.
         assert!(litellm_rate("claude-sonnet-future-1").is_none());
         let cost = model_cost_usd("claude-sonnet-future-1", 1_000_000, 0, 0, 0);
-        assert!((cost - 3.0).abs() < 1e-9, "sonnet hand-table fallback: {cost}");
+        assert!(
+            (cost - 3.0).abs() < 1e-9,
+            "sonnet hand-table fallback: {cost}"
+        );
     }
 
     /// The embedded JSON parses correctly (OnceLock init path is exercised).
@@ -1515,9 +1569,18 @@ mod tests {
         let map = litellm_map();
         assert!(!map.is_empty(), "litellm_map must not be empty after parse");
         // Confirm the map contains expected canonical keys.
-        assert!(map.contains_key("claude-opus-4-8"), "must contain claude-opus-4-8");
-        assert!(map.contains_key("claude-sonnet-4-6"), "must contain claude-sonnet-4-6");
-        assert!(map.contains_key("claude-haiku-4-5"), "must contain claude-haiku-4-5");
+        assert!(
+            map.contains_key("claude-opus-4-8"),
+            "must contain claude-opus-4-8"
+        );
+        assert!(
+            map.contains_key("claude-sonnet-4-6"),
+            "must contain claude-sonnet-4-6"
+        );
+        assert!(
+            map.contains_key("claude-haiku-4-5"),
+            "must contain claude-haiku-4-5"
+        );
     }
 
     /// Cache fields absent from LiteLLM entry → defaults applied (0.1×input and 1.25×input).
@@ -1525,12 +1588,18 @@ mod tests {
     #[test]
     fn litellm_rate_missing_cache_fields_default_to_conventions() {
         // anthropic.claude-instant-v1: input=8e-07, output=2.4e-06, no cache fields.
-        let (inp, _out, cr, cc) = litellm_rate("anthropic.claude-instant-v1")
-            .expect("must find exact key");
+        let (inp, _out, cr, cc) =
+            litellm_rate("anthropic.claude-instant-v1").expect("must find exact key");
         // cache_read default = 0.1 × input = 0.1 × 0.8 = 0.08 $/Mtok
-        assert!((cr - inp * 0.1).abs() < 1e-9, "cache_read must default to 0.1×input: cr={cr} inp={inp}");
+        assert!(
+            (cr - inp * 0.1).abs() < 1e-9,
+            "cache_read must default to 0.1×input: cr={cr} inp={inp}"
+        );
         // cache_write default = 1.25 × input = 1.25 × 0.8 = 1.0 $/Mtok
-        assert!((cc - inp * 1.25).abs() < 1e-9, "cache_write must default to 1.25×input: cc={cc} inp={inp}");
+        assert!(
+            (cc - inp * 1.25).abs() < 1e-9,
+            "cache_write must default to 1.25×input: cc={cc} inp={inp}"
+        );
     }
 
     /// Provider-prefixed key lookup: "anthropic/claude-sonnet-4-6" is not an exact key
@@ -1543,7 +1612,10 @@ mod tests {
         // to get "claude-sonnet-4-6" which IS in the map at step (b).
         let result = litellm_rate("anthropic/claude-sonnet-4-6");
         // Must resolve via normalize (strip prefix to "claude-sonnet-4-6").
-        assert!(result.is_some(), "anthropic/ prefix must be stripped to find the model");
+        assert!(
+            result.is_some(),
+            "anthropic/ prefix must be stripped to find the model"
+        );
         let (inp, out, _cr, _cc) = result.unwrap();
         assert!((inp - 3.0).abs() < 1e-9, "input $/Mtok: {inp}");
         assert!((out - 15.0).abs() < 1e-9, "output $/Mtok: {out}");
