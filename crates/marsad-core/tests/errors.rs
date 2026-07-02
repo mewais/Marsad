@@ -355,16 +355,23 @@ fn on_agent_line_truncated_json_returns_protocol_error() {
     );
 }
 
+// SPEC CHANGE (docs/specs/typed-ipc.md §7, "Tests that MUST change"): renamed
+// from `on_agent_line_unknown_ipc_type_returns_protocol_error`. Per §4's
+// unknown-type disposition table, core's `on_agent_line` now treats an
+// unknown inbound IPC type as a tolerant no-op (log to stderr, `Ok(vec![])`)
+// rather than a hard `Protocol` error — a newer agent sending a type this
+// build doesn't know yet must never wedge the reader loop. `parse_ipc` itself
+// is unchanged (still `Err(UnknownDiscriminant)`, per proto.md); only core's
+// disposition of that error changed.
 #[test]
-fn on_agent_line_unknown_ipc_type_returns_protocol_error() {
+fn on_agent_line_unknown_ipc_type_is_tolerant_noop() {
     let (mut core, _peer) = make_core();
-    // IPC is a closed protocol — unknown discriminant is an error (per proto.md)
-    let err = core
+    let updates = core
         .on_agent_line(r#"{"type":"completely_unknown_type","data":{}}"#)
-        .unwrap_err();
+        .expect("unknown IPC type must be a tolerant no-op, not an error");
     assert!(
-        matches!(err, CoreError::Protocol(_)),
-        "expected Protocol for unknown IPC type, got {err:?}"
+        updates.is_empty(),
+        "unknown IPC type must produce no VmUpdates, got {updates:?}"
     );
 }
 
@@ -419,6 +426,73 @@ fn on_agent_line_for_unregistered_session_returns_unknown_session() {
         other => panic!(
             "agent_event for an unlaunched session must return UnknownSession, got: {other:?}"
         ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// on_agent_line — command-ack passthrough (typed-ipc.md §3 item 5): every
+// ack/broadcast type that legitimately arrives inbound on the subscriber
+// connection is a no-op (`Ok(vec![])`), never an error or a VmUpdate.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn on_agent_line_ack_types_are_noops() {
+    let acks: &[&str] = &[
+        r#"{"type":"SessionLaunched","session_id":"s-1"}"#,
+        r#"{"type":"SessionResumed","session_id":"s-1"}"#,
+        r#"{"type":"SessionAttached","session_id":"s-1"}"#,
+        r#"{"type":"SessionStopped","session_id":"s-1"}"#,
+        r#"{"type":"PromptSent","session_id":"s-1"}"#,
+        r#"{"type":"Interrupted","session_id":"s-1"}"#,
+        r#"{"type":"GateAnswered","session_id":"s-1"}"#,
+        r#"{"type":"QuestionAnswered","session_id":"s-1"}"#,
+        r#"{"type":"Subscribed","subscriber_id":"sub-1"}"#,
+        r#"{"type":"Error","message":"unknown IPC type: Bogus"}"#,
+    ];
+    for line in acks {
+        let (mut core, _peer) = make_core();
+        let updates = core
+            .on_agent_line(line)
+            .unwrap_or_else(|e| panic!("ack line {line} must be a no-op, got error {e:?}"));
+        assert!(
+            updates.is_empty(),
+            "ack line {line} must produce no VmUpdates, got {updates:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// on_agent_line — misdirected GUI→agent messages (typed-ipc.md §3 item 5):
+// any message that only makes sense flowing GUI/core → agent is a routing
+// bug if it arrives on the inbound agent channel, and is a hard
+// `CoreError::Protocol` error (never silently dropped).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn on_agent_line_misdirected_gui_to_agent_messages_are_protocol_errors() {
+    let misdirected: &[&str] = &[
+        r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"Ask"}"#,
+        r#"{"type":"ResumeSession","session_id":"s-1"}"#,
+        r#"{"type":"AttachSession","session_id":"s-1"}"#,
+        r#"{"type":"StopSession","session_id":"s-1"}"#,
+        r#"{"type":"SendPrompt","session_id":"s-1","text":"do the thing"}"#,
+        r#"{"type":"Interrupt","session_id":"s-1"}"#,
+        r#"{"type":"AnswerGate","session_id":"s-1","request_id":"req-1","allow":true,"deny_reason":null}"#,
+        r#"{"type":"AnswerQuestion","session_id":"s-1","request_id":"req-q1","answers":{"Which approach?":"Option A"}}"#,
+        r#"{"type":"Subscribe","session_id":""}"#,
+        r#"{"type":"Unsubscribe","subscriber_id":"sub-1"}"#,
+        r#"{"type":"SlashCmd","session_id":"s-1","cmd":"compact"}"#,
+        r#"{"type":"SetWorkspace","workspace_id":"ws-1"}"#,
+    ];
+    for line in misdirected {
+        let (mut core, _peer) = make_core();
+        let err = core
+            .on_agent_line(line)
+            .expect_err(&format!("misdirected line {line} must error, not succeed"));
+        assert!(
+            matches!(err, CoreError::Protocol(_)),
+            "expected Protocol error for misdirected line {line}, got {err:?}"
+        );
     }
 }
 

@@ -8,7 +8,6 @@ use std::fmt;
 use marsad_lifecycle::{FakeContainer, Persisted};
 use marsad_notify::{CaptureNotifier, Notifier};
 use marsad_store::{MemoryBackend, Store};
-use serde::Deserialize;
 
 // ── AgentError ────────────────────────────────────────────────────────────────
 
@@ -760,63 +759,137 @@ impl Agent {
         if line.is_empty() {
             return Err(AgentError::Protocol("empty IPC line".to_string()));
         }
-        let value: serde_json::Value = serde_json::from_str(line)
-            .map_err(|e| AgentError::Protocol(format!("bad json: {e}")))?;
+        let msg = marsad_proto::parse_ipc(line).map_err(|e| AgentError::Protocol(e.to_string()))?;
 
-        let type_str = value
-            .as_object()
-            .and_then(|obj| obj.get("type"))
-            .and_then(|v| v.as_str())
-            .ok_or(AgentError::Protocol(
-                "missing type discriminant".to_string(),
-            ))?;
-
-        match type_str {
-            "LaunchSession" => self.handle_launch_session(&value),
-            "ResumeSession" => self.handle_resume_session(&value),
-            "AttachSession" => self.handle_attach_session(&value),
-            "StopSession" => self.handle_stop_session(&value),
-            "SendPrompt" => self.handle_send_prompt(&value),
-            "Interrupt" => self.handle_interrupt(&value),
-            "AnswerGate" => self.handle_answer_gate(&value),
-            "AnswerQuestion" => self.handle_answer_question(&value),
-            "Subscribe" => self.handle_subscribe(),
-            "Unsubscribe" => Ok(vec![]),
-            other => Err(AgentError::Protocol(format!("unknown IPC type: {other}"))),
+        match msg {
+            marsad_proto::IpcMsg::LaunchSession {
+                session_id: wire_session_id,
+                project,
+                host_id,
+                host_target,
+                claude_bin,
+                setup,
+                env,
+                model,
+                posture,
+                first_prompt,
+                continue_,
+                resume_session_id,
+                name,
+                disallowed_tools,
+                ..
+            } => {
+                // Derive the launch mode from the wire fields (§5 item 3:
+                // replaces the old `parse_launch_mode_value`; mirrors
+                // `IpcMsg::launch_mode()`'s precedence, which is exhaustively
+                // pinned by marsad-proto's own golden test suite: non-empty
+                // `resume_session_id` wins, then `continue_ == true`, else
+                // Fresh — empty-string resume is treated as absent).
+                let mode = match resume_session_id.filter(|id| !id.is_empty()) {
+                    Some(id) => marsad_proto::LaunchMode::Resume(id),
+                    None if continue_ == Some(true) => marsad_proto::LaunchMode::Continue,
+                    None => marsad_proto::LaunchMode::Fresh,
+                };
+                self.handle_launch_session(
+                    wire_session_id,
+                    project,
+                    host_id,
+                    host_target,
+                    claude_bin,
+                    setup,
+                    env,
+                    model,
+                    posture,
+                    first_prompt,
+                    mode,
+                    name,
+                    disallowed_tools,
+                )
+            }
+            marsad_proto::IpcMsg::ResumeSession {
+                session_id,
+                first_prompt,
+            } => self.handle_resume_session(session_id, first_prompt),
+            marsad_proto::IpcMsg::AttachSession { session_id } => {
+                self.handle_attach_session(&session_id)
+            }
+            marsad_proto::IpcMsg::StopSession { session_id } => {
+                self.handle_stop_session(session_id)
+            }
+            marsad_proto::IpcMsg::SendPrompt { session_id, text } => {
+                self.handle_send_prompt(&session_id, &text)
+            }
+            marsad_proto::IpcMsg::Interrupt { session_id } => self.handle_interrupt(&session_id),
+            marsad_proto::IpcMsg::AnswerGate {
+                session_id,
+                allow,
+                deny_reason,
+                ..
+            } => self.handle_answer_gate(&session_id, allow, deny_reason),
+            marsad_proto::IpcMsg::AnswerQuestion {
+                session_id,
+                answers,
+                ..
+            } => self.handle_answer_question(&session_id, answers),
+            marsad_proto::IpcMsg::Subscribe { .. } => self.handle_subscribe(),
+            marsad_proto::IpcMsg::Unsubscribe { .. } => Ok(vec![]),
+            // NEW explicit arms (typed-ipc.md §5 item 3): the agent has no real
+            // handler for either today — same observable reply as before typing
+            // (SlashCmd still errors; SetWorkspace is a silent advisory no-op).
+            marsad_proto::IpcMsg::SlashCmd { .. } => {
+                Err(AgentError::Protocol("SlashCmd not implemented".to_string()))
+            }
+            marsad_proto::IpcMsg::SetWorkspace { .. } => Ok(vec![]),
+            // Every other tag is an agent→GUI/core message (ack/broadcast) that
+            // has no business arriving inbound here — same observable Protocol
+            // error class as an unrecognized type.
+            other => Err(AgentError::Protocol(format!(
+                "misdirected IPC message on GUI channel: {other:?}"
+            ))),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_launch_session(
         &mut self,
-        value: &serde_json::Value,
+        wire_session_id: Option<String>,
+        project: String,
+        host_id: Option<String>,
+        host_target: Option<String>,
+        claude_bin: Option<String>,
+        setup: Option<String>,
+        env: Vec<(String, String)>,
+        model: String,
+        posture: marsad_proto::Posture,
+        first_prompt: Option<String>,
+        mode: marsad_proto::LaunchMode,
+        name: Option<String>,
+        disallowed_tools: Vec<String>,
     ) -> Result<Vec<String>, AgentError> {
-        let msg: LaunchSessionMsg = serde_json::from_value(value.clone())
-            .map_err(|e| AgentError::Protocol(format!("LaunchSession schema error: {e}")))?;
-        let posture = parse_posture_value(&value["posture"]).map_err(AgentError::Protocol)?;
         let spec = marsad_proto::LaunchSpec {
-            project: msg.project,
-            host_id: msg.host_id.unwrap_or("local".to_string()),
-            model: msg.model,
+            project,
+            host_id: host_id.unwrap_or_else(|| "local".to_string()),
+            model,
             posture,
-            first_prompt: msg.first_prompt,
+            first_prompt,
             // Fresh / continue / resume-by-id, from optional IPC fields.
-            mode: parse_launch_mode_value(value),
-            host_target: msg.host_target,
-            claude_bin: msg.claude_bin,
-            setup: msg.setup,
-            env: msg.env,
-            name: msg.name,
-            disallowed_tools: msg.disallowed_tools,
+            mode,
+            host_target,
+            claude_bin,
+            setup,
+            env,
+            name,
+            disallowed_tools,
         };
         // Reuse the caller's session id when supplied (Core generates it so it can
         // navigate immediately and recognise the session's events); otherwise
         // generate one (e.g. a raw client that omits it).
-        let session_id = match value["session_id"].as_str().filter(|s| !s.is_empty()) {
-            Some(id) => self.launch_with_id(id.to_string(), spec)?,
+        let session_id = match wire_session_id.filter(|s| !s.is_empty()) {
+            Some(id) => self.launch_with_id(id, spec)?,
             None => self.launch(spec)?,
         };
-        let event = serde_json::json!({"type": "SessionLaunched", "session_id": session_id});
-        Ok(vec![event.to_string()])
+        let event = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionLaunched { session_id });
+        Ok(vec![event])
     }
 
     /// Resume a Marsad-tracked session by its Marsad id.
@@ -828,15 +901,9 @@ impl Agent {
     /// An optional `first_prompt` is delivered after reconnect.
     fn handle_resume_session(
         &mut self,
-        value: &serde_json::Value,
+        session_id: String,
+        first_prompt: Option<String>,
     ) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"]
-            .as_str()
-            .ok_or(AgentError::Protocol(
-                "ResumeSession missing session_id".to_string(),
-            ))?
-            .to_string();
-
         // Look the session up in the store to recover its project + model.
         let restored = self
             .store
@@ -872,9 +939,14 @@ impl Agent {
             posture: persisted
                 .posture
                 .as_deref()
-                .and_then(|s| parse_posture_value(&serde_json::Value::String(s.to_string())).ok())
+                .and_then(|s| {
+                    serde_json::from_value::<marsad_proto::Posture>(serde_json::Value::String(
+                        s.to_string(),
+                    ))
+                    .ok()
+                })
                 .unwrap_or(marsad_proto::Posture::Ask),
-            first_prompt: value["first_prompt"].as_str().map(|s| s.to_string()),
+            first_prompt,
             mode,
             host_target: persisted.host_target,
             claude_bin: persisted.claude_bin,
@@ -888,36 +960,24 @@ impl Agent {
         // session's stream events were tagged with an id core never tracked, so
         // resume silently did nothing on the dashboard.
         let new_id = self.launch_with_id(session_id.clone(), spec)?;
-        let event = serde_json::json!({"type": "SessionResumed", "session_id": new_id});
-        Ok(vec![event.to_string()])
+        let event =
+            marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionResumed { session_id: new_id });
+        Ok(vec![event])
     }
 
-    fn handle_attach_session(
-        &mut self,
-        value: &serde_json::Value,
-    ) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
-            "AttachSession missing session_id".to_string(),
-        ))?;
+    fn handle_attach_session(&mut self, session_id: &str) -> Result<Vec<String>, AgentError> {
         if !self.sessions.contains_key(session_id) {
             return Err(AgentError::Protocol(format!(
                 "AttachSession: unknown session {session_id}"
             )));
         }
-        let event = serde_json::json!({"type": "SessionAttached", "session_id": session_id});
-        Ok(vec![event.to_string()])
+        let event = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionAttached {
+            session_id: session_id.to_string(),
+        });
+        Ok(vec![event])
     }
 
-    fn handle_stop_session(
-        &mut self,
-        value: &serde_json::Value,
-    ) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"]
-            .as_str()
-            .ok_or(AgentError::Protocol(
-                "StopSession missing session_id".to_string(),
-            ))?
-            .to_string();
+    fn handle_stop_session(&mut self, session_id: String) -> Result<Vec<String>, AgentError> {
         // Kill the container and drop the live tracking entry. We do NOT require the
         // session to be in the live map: after an agent restart a session is persisted
         // but not yet re-tracked (the real cause of "stop did nothing" — the old code
@@ -927,22 +987,20 @@ impl Agent {
         let container_name = format!("marsad-{session_id}");
         self.kill_container(&session_id, &container_name);
         self.sessions.remove(&session_id);
-        let event = serde_json::json!({"type": "SessionStopped", "session_id": session_id});
-        Ok(vec![event.to_string()])
+        let event = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionStopped { session_id });
+        Ok(vec![event])
     }
 
-    fn handle_send_prompt(&mut self, value: &serde_json::Value) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
-            "SendPrompt missing session_id".to_string(),
-        ))?;
+    fn handle_send_prompt(
+        &mut self,
+        session_id: &str,
+        text: &str,
+    ) -> Result<Vec<String>, AgentError> {
         if !self.sessions.contains_key(session_id) {
             return Err(AgentError::Protocol(format!(
                 "SendPrompt: unknown session {session_id}"
             )));
         }
-        let text = value["text"]
-            .as_str()
-            .ok_or(AgentError::Protocol("SendPrompt missing text".to_string()))?;
 
         // In production builds, forward the prompt to the session's in.fifo.
         // The writer is registered when the FIFO thread connects after launch.
@@ -985,14 +1043,13 @@ impl Agent {
         #[cfg(coverage)]
         let _ = text;
 
-        let event = serde_json::json!({"type": "PromptSent", "session_id": session_id});
-        Ok(vec![event.to_string()])
+        let event = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::PromptSent {
+            session_id: session_id.to_string(),
+        });
+        Ok(vec![event])
     }
 
-    fn handle_interrupt(&mut self, value: &serde_json::Value) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
-            "Interrupt missing session_id".to_string(),
-        ))?;
+    fn handle_interrupt(&mut self, session_id: &str) -> Result<Vec<String>, AgentError> {
         // Write an `interrupt` control_request to claude's stdin (via the session
         // writer) to stop the current turn. claude acks + ends the turn with
         // `result: error_during_execution`. Mirrors handle_answer_gate's writer
@@ -1016,15 +1073,18 @@ impl Agent {
             }
         }
         // If the session is gone, interrupt is a benign no-op.
-        let event = serde_json::json!({"type": "Interrupted", "session_id": session_id});
-        Ok(vec![event.to_string()])
+        let event = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::Interrupted {
+            session_id: session_id.to_string(),
+        });
+        Ok(vec![event])
     }
 
-    fn handle_answer_gate(&mut self, value: &serde_json::Value) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
-            "AnswerGate missing session_id".to_string(),
-        ))?;
-
+    fn handle_answer_gate(
+        &mut self,
+        session_id: &str,
+        allow: bool,
+        deny_reason: Option<String>,
+    ) -> Result<Vec<String>, AgentError> {
         // In production builds, translate the answer into a real
         // `control_response` and write it to the session's in.fifo so claude
         // unblocks the gated tool. The `allow` decision pairs the original
@@ -1037,8 +1097,6 @@ impl Agent {
         #[cfg(not(coverage))]
         {
             use std::io::Write;
-            let allow = value["allow"].as_bool().unwrap_or(false);
-            let deny_reason = value["deny_reason"].as_str().map(|s| s.to_string());
 
             // Pull (and clear) the pending gate for this session.
             let pending = {
@@ -1071,27 +1129,29 @@ impl Agent {
                 }
             }
         }
+        // Suppress unused-variable warnings in coverage builds (the fake path
+        // never reads `allow`/`deny_reason` — no writer IO to translate them into).
+        #[cfg(coverage)]
+        let (_, _) = (allow, deny_reason);
 
         // If no pending gate, this is a benign no-op (the tests assert non-Protocol-error).
-        let event = serde_json::json!({"type": "GateAnswered", "session_id": session_id});
-        Ok(vec![event.to_string()])
+        let event = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::GateAnswered {
+            session_id: session_id.to_string(),
+        });
+        Ok(vec![event])
     }
 
     fn handle_answer_question(
         &mut self,
-        value: &serde_json::Value,
+        session_id: &str,
+        answers: serde_json::Value,
     ) -> Result<Vec<String>, AgentError> {
-        let session_id = value["session_id"].as_str().ok_or(AgentError::Protocol(
-            "AnswerQuestion missing session_id".to_string(),
-        ))?;
-
         // In production builds: pull (and clear) the pending gate for this session,
         // then build and write the AskUserQuestion control_response to claude's stdin.
         // Mirrors handle_answer_gate's writer-locking + write/flush pattern.
         #[cfg(not(coverage))]
         {
             use std::io::Write;
-            let answers = value["answers"].clone();
 
             let pending = {
                 let mut gates = self.pending_gates.0.lock().unwrap();
@@ -1115,15 +1175,19 @@ impl Agent {
         }
 
         // Coverage builds: no IO — just return the ack.
-        let event = serde_json::json!({"type": "QuestionAnswered", "session_id": session_id});
-        Ok(vec![event.to_string()])
+        #[cfg(coverage)]
+        let _ = answers;
+        let event = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::QuestionAnswered {
+            session_id: session_id.to_string(),
+        });
+        Ok(vec![event])
     }
 
     fn handle_subscribe(&mut self) -> Result<Vec<String>, AgentError> {
         let subscriber_id = format!("sub-{}", self.next_id);
         self.next_id += 1;
-        let ack = serde_json::json!({"type": "Subscribed", "subscriber_id": subscriber_id});
-        Ok(vec![ack.to_string()])
+        let ack = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::Subscribed { subscriber_id });
+        Ok(vec![ack])
     }
 
     /// Ingest a Claude Code hook payload.
@@ -1610,11 +1674,9 @@ impl Agent {
 
                                 match reply.out_lines {
                                     Err(msg) => {
-                                        let err_line = serde_json::json!({
-                                            "type": "Error",
-                                            "message": msg
-                                        })
-                                        .to_string();
+                                        let err_line = marsad_proto::encode_ipc(
+                                            &marsad_proto::IpcMsg::Error { message: msg },
+                                        );
                                         // Route error reply through writer thread.
                                         let _ = bcast_tx_for_reader.send(err_line);
                                     }
@@ -2396,44 +2458,6 @@ pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
     argv
 }
 
-// ── parse_launch_mode_value ─────────────────────────────────────────────────────
-
-/// Decode the optional start-mode fields of a LaunchSession IPC message.
-///
-/// - `"resume_session_id": "<id>"` (non-empty) → `Resume(id)`
-/// - `"continue": true`                        → `Continue`
-/// - neither                                   → `Fresh`
-///
-/// `resume_session_id` takes precedence over `continue` if both are present.
-fn parse_launch_mode_value(v: &serde_json::Value) -> marsad_proto::LaunchMode {
-    if let Some(id) = v["resume_session_id"].as_str() {
-        if !id.is_empty() {
-            return marsad_proto::LaunchMode::Resume(id.to_string());
-        }
-    }
-    if v["continue"].as_bool() == Some(true) {
-        return marsad_proto::LaunchMode::Continue;
-    }
-    marsad_proto::LaunchMode::Fresh
-}
-
-// ── parse_posture_value ───────────────────────────────────────────────────────
-
-/// Decode the `posture` field of a LaunchSession IPC message.
-/// All arms (three happy + two error) are covered by committed tests.
-fn parse_posture_value(v: &serde_json::Value) -> Result<marsad_proto::Posture, String> {
-    let s = match v.as_str() {
-        Some(s) => s,
-        None => return Err(format!("posture must be a string, got: {v}")),
-    };
-    match s {
-        "Ask" => Ok(marsad_proto::Posture::Ask),
-        "AutoApproveSafe" => Ok(marsad_proto::Posture::AutoApproveSafe),
-        "FullAutonomy" => Ok(marsad_proto::Posture::FullAutonomy),
-        other => Err(format!("unknown posture: {other}")),
-    }
-}
-
 // ── parse_hook_event ──────────────────────────────────────────────────────────
 
 /// Parse a hook payload into a `HookEvent`.
@@ -2465,36 +2489,6 @@ fn parse_hook_event(
         "PreCompact" => Ok(marsad_events::HookEvent::PreCompact),
         other => Err(AgentError::Protocol(format!("unknown hook type: {other}"))),
     }
-}
-
-// ── Internal wire types ───────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct LaunchSessionMsg {
-    project: String,
-    host_id: Option<String>,
-    #[serde(default)]
-    host_target: Option<String>,
-    /// Per-host claude executable (wrapper / absolute path); core injects it.
-    #[serde(default)]
-    claude_bin: Option<String>,
-    /// Per-host setup shell command; core injects it.
-    #[serde(default)]
-    setup: Option<String>,
-    /// Per-host environment, as `[k, v]` pairs; core injects it.
-    #[serde(default)]
-    env: Vec<(String, String)>,
-    model: String,
-    first_prompt: Option<String>,
-    /// Optional human-readable display name for the session; `None` → derived
-    /// from the project directory basename. `#[serde(default)]` keeps older
-    /// callers (no field) working.
-    #[serde(default)]
-    name: Option<String>,
-    /// Tools to disable via `--disallowedTools`. `#[serde(default)]` keeps older
-    /// callers (no field) working — an absent field means no tools are disabled.
-    #[serde(default)]
-    disallowed_tools: Vec<String>,
 }
 
 /// Spawn the per-session reader thread: connect the transport (local FIFO/pipe, or a
@@ -2831,12 +2825,12 @@ fn spawn_session_reader(
                         // CREATE_NO_WINDOW so ssh.exe doesn't flash a console.
                         if let Some(jsonl) = run_remote_script(target, &script) {
                             if !jsonl.trim().is_empty() {
-                                let line = serde_json::json!({
-                                    "type": "TranscriptBackfill",
-                                    "session_id": sid,
-                                    "jsonl": jsonl,
-                                })
-                                .to_string();
+                                let line = marsad_proto::encode_ipc(
+                                    &marsad_proto::IpcMsg::TranscriptBackfill {
+                                        session_id: sid.clone(),
+                                        jsonl: jsonl.clone(),
+                                    },
+                                );
                                 let subs = subs_fifo.lock().unwrap();
                                 for s in subs.iter() {
                                     let _ = s.send(line.clone());
@@ -2870,12 +2864,11 @@ fn spawn_session_reader(
                             if let Ok(usage_val) =
                                 serde_json::from_str::<serde_json::Value>(trimmed)
                             {
-                                let uu_line = serde_json::json!({
-                                    "type": "UsageUpdate",
-                                    "session_id": sid,
-                                    "usage": usage_val,
-                                })
-                                .to_string();
+                                let uu_line =
+                                    marsad_proto::encode_ipc(&marsad_proto::IpcMsg::UsageUpdate {
+                                        session_id: sid.clone(),
+                                        usage: usage_val,
+                                    });
                                 let subs = subs_fifo.lock().unwrap();
                                 subs.iter().for_each(|s| {
                                     let _ = s.send(uu_line.clone());
@@ -3005,12 +2998,12 @@ fn spawn_session_reader(
                                 let script = remote_changes_script(project);
                                 if let Some(stdout) = run_remote_script(target, &script) {
                                     let changes = parse_remote_changes(&stdout);
-                                    let cu_line = serde_json::json!({
-                                        "type": "ChangesUpdate",
-                                        "session_id": sid,
-                                        "changes": changes,
-                                    })
-                                    .to_string();
+                                    let cu_line = marsad_proto::encode_ipc(
+                                        &marsad_proto::IpcMsg::ChangesUpdate {
+                                            session_id: sid.clone(),
+                                            changes,
+                                        },
+                                    );
                                     let subs2 = subs_fifo.lock().unwrap();
                                     subs2.iter().for_each(|s| {
                                         let _ = s.send(cu_line.clone());
@@ -3033,12 +3026,12 @@ fn spawn_session_reader(
                                             if let Ok(usage_val) =
                                                 serde_json::from_str::<serde_json::Value>(trimmed)
                                             {
-                                                let uu_line = serde_json::json!({
-                                                    "type": "UsageUpdate",
-                                                    "session_id": sid,
-                                                    "usage": usage_val,
-                                                })
-                                                .to_string();
+                                                let uu_line = marsad_proto::encode_ipc(
+                                                    &marsad_proto::IpcMsg::UsageUpdate {
+                                                        session_id: sid.clone(),
+                                                        usage: usage_val,
+                                                    },
+                                                );
                                                 let subs3 = subs_fifo.lock().unwrap();
                                                 subs3.iter().for_each(|s| {
                                                     let _ = s.send(uu_line.clone());

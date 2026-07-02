@@ -262,6 +262,74 @@ fn handle_ipc_empty_line_returns_protocol_error() {
     );
 }
 
+// ── typed-ipc.md §5 item 3: explicit SlashCmd / SetWorkspace arms ─────────────
+
+/// `SlashCmd` has an explicit arm now (typed-ipc.md §5 item 3) but real slash
+/// forwarding is U-series work, not M2: the observable behavior is unchanged
+/// from before typing — it still replies with `AgentError::Protocol`.
+#[test]
+fn handle_ipc_slash_cmd_still_errors() {
+    let mut agent = make_agent_with_container(FakeContainer::new());
+
+    let result = agent.handle_ipc(r#"{"type":"SlashCmd","session_id":"s-1","cmd":"compact"}"#);
+    assert!(
+        matches!(result, Err(AgentError::Protocol(_))),
+        "SlashCmd must still return AgentError::Protocol (U-series, not M2); got {result:?}"
+    );
+}
+
+/// `SetWorkspace` is an advisory broadcast the agent has never acted on; typed-ipc.md
+/// §5 item 3 makes it an explicit, silent no-op arm (`Ok(vec![])`) rather than falling
+/// through to the `Error` reply — erroring it would spam every workspace switch.
+#[test]
+fn handle_ipc_set_workspace_is_explicit_noop() {
+    let mut agent = make_agent_with_container(FakeContainer::new());
+
+    let result = agent.handle_ipc(r#"{"type":"SetWorkspace","workspace_id":"ws-1"}"#);
+    match result {
+        Ok(lines) => assert!(
+            lines.is_empty(),
+            "SetWorkspace must be a silent no-op with no outbound lines, got {lines:?}"
+        ),
+        Err(e) => panic!("SetWorkspace must be Ok(vec![]), not an error; got {e:?}"),
+    }
+}
+
+// ── typed-ipc.md §3 item 5 (mirrored on the agent side): misdirected messages ─
+//
+// Every tag below only makes sense flowing agent → GUI/core (acks, broadcasts,
+// the vestigial VmUpdate). Arriving inbound on the agent's own IPC channel is a
+// routing bug: the catch-all `other` arm in `handle_ipc` must reject it with the
+// same observable `AgentError::Protocol` class as an unrecognized type.
+#[test]
+fn handle_ipc_misdirected_agent_to_gui_messages_are_protocol_errors() {
+    let misdirected: &[&str] = &[
+        r#"{"type":"VmUpdate","session_id":"abc-123","update":{}}"#,
+        r#"{"type":"AgentEvent","session_id":"s-1","event":{"type":"result","subtype":"success"}}"#,
+        r#"{"type":"TranscriptBackfill","session_id":"s-1","jsonl":"{\"type\":\"user\"}"}"#,
+        r#"{"type":"ChangesUpdate","session_id":"s-1","changes":[{"path":"a.rs","status":"M","added":3,"removed":1}]}"#,
+        r#"{"type":"UsageUpdate","session_id":"s-1","usage":{"claude-opus-4-8":{"input":100,"output":50,"cache_read":0,"cache_creation":0}}}"#,
+        r#"{"type":"SessionLaunched","session_id":"s-1"}"#,
+        r#"{"type":"SessionResumed","session_id":"s-1"}"#,
+        r#"{"type":"SessionAttached","session_id":"s-1"}"#,
+        r#"{"type":"SessionStopped","session_id":"s-1"}"#,
+        r#"{"type":"PromptSent","session_id":"s-1"}"#,
+        r#"{"type":"Interrupted","session_id":"s-1"}"#,
+        r#"{"type":"GateAnswered","session_id":"s-1"}"#,
+        r#"{"type":"QuestionAnswered","session_id":"s-1"}"#,
+        r#"{"type":"Subscribed","subscriber_id":"sub-1"}"#,
+        r#"{"type":"Error","message":"unknown IPC type: Bogus"}"#,
+    ];
+    for line in misdirected {
+        let mut agent = make_agent_with_container(FakeContainer::new());
+        let result = agent.handle_ipc(line);
+        assert!(
+            matches!(result, Err(AgentError::Protocol(_))),
+            "misdirected line {line} must return AgentError::Protocol; got {result:?}"
+        );
+    }
+}
+
 // ── Protocol error: malformed hook payload ────────────────────────────────────
 
 /// A completely invalid (non-JSON) hook payload must produce `AgentError::Protocol`.

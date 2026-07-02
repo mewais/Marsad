@@ -421,15 +421,49 @@ fn encode_interrupt_request_shape() {
 
 #[test]
 fn parse_ipc_launch_session() {
-    let line = r#"{"type":"LaunchSession","cwd":"/work/proj","model":"claude-opus-4.8","permission_mode":"default"}"#;
-    let msg = parse_ipc(line).expect("should parse LaunchSession");
+    // SPEC CHANGE (docs/specs/typed-ipc.md §7, "Tests that MUST change"): the
+    // original golden here (`cwd`/`model`/`permission_mode` only) never
+    // matched the real wire — the agent has always required `project`+
+    // `posture`. Replaced with the §2 minimal + maximal LaunchSession
+    // goldens (full per-field pinned coverage now lives in
+    // crates/marsad-proto/tests/ipc_typed.rs).
+    let minimal = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"Ask"}"#;
+    let msg = parse_ipc(minimal).expect("should parse minimal LaunchSession");
     match msg {
-        IpcMsg::LaunchSession { .. } => {}
+        IpcMsg::LaunchSession {
+            ref project,
+            ref model,
+            ..
+        } => {
+            assert_eq!(project, "/home/user/proj");
+            assert_eq!(model, "claude-opus-4-5");
+        }
         other => panic!("expected LaunchSession, got {other:?}"),
     }
-    // round-trip
     let encoded = encode_ipc(&msg);
-    let reparsed = parse_ipc(&encoded).expect("round-trip LaunchSession");
+    let reparsed = parse_ipc(&encoded).expect("round-trip minimal LaunchSession");
+    match reparsed {
+        IpcMsg::LaunchSession { .. } => {}
+        other => panic!("expected LaunchSession after round-trip, got {other:?}"),
+    }
+
+    let maximal = r#"{"type":"LaunchSession","session_id":"s-1","project":"/home/u/proj","cwd":"/home/u/proj","host_id":"hpc","host_target":"user@hpc.example.com","claude_bin":"genie","setup":"module load cuda","env":[["FOO","bar"]],"model":"claude-opus-4-8","posture":"Ask","permission_mode":"default","first_prompt":null,"resume_session_id":"uuid-xyz","name":"My run","disallowed_tools":["Bash"]}"#;
+    let msg = parse_ipc(maximal).expect("should parse maximal LaunchSession");
+    match msg {
+        IpcMsg::LaunchSession {
+            ref project,
+            ref model,
+            ref posture,
+            ..
+        } => {
+            assert_eq!(project, "/home/u/proj");
+            assert_eq!(model, "claude-opus-4-8");
+            assert_eq!(*posture, marsad_proto::Posture::Ask);
+        }
+        other => panic!("expected LaunchSession, got {other:?}"),
+    }
+    let encoded = encode_ipc(&msg);
+    let reparsed = parse_ipc(&encoded).expect("round-trip maximal LaunchSession");
     match reparsed {
         IpcMsg::LaunchSession { .. } => {}
         other => panic!("expected LaunchSession after round-trip, got {other:?}"),
@@ -441,7 +475,11 @@ fn parse_ipc_resume_session() {
     let line = r#"{"type":"ResumeSession","session_id":"abc-123"}"#;
     let msg = parse_ipc(line).expect("should parse ResumeSession");
     match msg {
-        IpcMsg::ResumeSession { session_id } => assert_eq!(session_id, "abc-123"),
+        // MECHANICAL FIX (not a semantic edit): `..` added because
+        // `ResumeSession` gained the additive `first_prompt` field
+        // (typed-ipc.md §2); Rust's exhaustive struct-pattern rule (E0027)
+        // requires it. Assertion behavior is unchanged.
+        IpcMsg::ResumeSession { session_id, .. } => assert_eq!(session_id, "abc-123"),
         other => panic!("expected ResumeSession, got {other:?}"),
     }
 }
@@ -530,14 +568,35 @@ fn parse_ipc_agent_event() {
 
 #[test]
 fn encode_ipc_all_variants_produce_valid_json() {
+    // SPEC CHANGE (docs/specs/typed-ipc.md §7, "Tests that MUST change"):
+    // `LaunchSession`'s constructor gains the full §2 field set (this is now
+    // the retyped variant, not the old 3-field stub), and the loop is
+    // extended to cover every one of the 29 `IpcMsg` tags from §2 (10
+    // pre-M2 + 19 new). Full per-variant golden coverage lives in
+    // crates/marsad-proto/tests/ipc_typed.rs; this loop keeps its original
+    // "every variant round-trips + re-encodes stably" smoke-test role.
     let variants: Vec<IpcMsg> = vec![
         IpcMsg::LaunchSession {
-            cwd: "/work".to_string(),
-            model: "claude-opus-4.8".to_string(),
+            session_id: Some("s-1".to_string()),
+            project: "/home/u/proj".to_string(),
+            cwd: "/home/u/proj".to_string(),
+            host_id: Some("hpc".to_string()),
+            host_target: Some("user@hpc.example.com".to_string()),
+            claude_bin: Some("genie".to_string()),
+            setup: Some("module load cuda".to_string()),
+            env: vec![("FOO".to_string(), "bar".to_string())],
+            model: "claude-opus-4-8".to_string(),
+            posture: marsad_proto::Posture::Ask,
             permission_mode: "default".to_string(),
+            first_prompt: None,
+            continue_: None,
+            resume_session_id: Some("uuid-xyz".to_string()),
+            name: Some("My run".to_string()),
+            disallowed_tools: vec!["Bash".to_string()],
         },
         IpcMsg::ResumeSession {
             session_id: "sid-1".to_string(),
+            first_prompt: None,
         },
         IpcMsg::AttachSession {
             session_id: "sid-2".to_string(),
@@ -548,6 +607,9 @@ fn encode_ipc_all_variants_produce_valid_json() {
         IpcMsg::SendPrompt {
             session_id: "sid-4".to_string(),
             text: "prompt text".to_string(),
+        },
+        IpcMsg::Interrupt {
+            session_id: "sid-4b".to_string(),
         },
         IpcMsg::AnswerGate {
             session_id: "sid-5".to_string(),
@@ -562,6 +624,66 @@ fn encode_ipc_all_variants_produce_valid_json() {
         },
         IpcMsg::Subscribe {
             session_id: "sid-5".to_string(),
+        },
+        IpcMsg::Unsubscribe {
+            subscriber_id: "sub-1".to_string(),
+        },
+        IpcMsg::SlashCmd {
+            session_id: "sid-7".to_string(),
+            cmd: "compact".to_string(),
+        },
+        IpcMsg::SetWorkspace {
+            workspace_id: "ws-1".to_string(),
+        },
+        IpcMsg::VmUpdate {
+            session_id: "sid-8".to_string(),
+            update: serde_json::json!({"status":"working"}),
+        },
+        IpcMsg::AgentEvent {
+            session_id: "sid-9".to_string(),
+            event: serde_json::json!({"type":"result"}),
+        },
+        IpcMsg::TranscriptBackfill {
+            session_id: "sid-10".to_string(),
+            jsonl: "{\"type\":\"user\"}".to_string(),
+        },
+        IpcMsg::ChangesUpdate {
+            session_id: "sid-11".to_string(),
+            changes: serde_json::json!([{"path":"a.rs","status":"M"}]),
+        },
+        IpcMsg::UsageUpdate {
+            session_id: "sid-12".to_string(),
+            usage: serde_json::json!({"m":{"input":1}}),
+        },
+        IpcMsg::SessionLaunched {
+            session_id: "sid-13".to_string(),
+        },
+        IpcMsg::SessionResumed {
+            session_id: "sid-14".to_string(),
+        },
+        IpcMsg::SessionAttached {
+            session_id: "sid-15".to_string(),
+        },
+        IpcMsg::SessionStopped {
+            session_id: "sid-16".to_string(),
+        },
+        IpcMsg::PromptSent {
+            session_id: "sid-17".to_string(),
+        },
+        IpcMsg::Interrupted {
+            session_id: "sid-18".to_string(),
+        },
+        IpcMsg::GateAnswered {
+            session_id: "sid-19".to_string(),
+        },
+        IpcMsg::QuestionAnswered {
+            session_id: "sid-20".to_string(),
+        },
+        IpcMsg::Subscribed {
+            subscriber_id: "sub-2".to_string(),
+        },
+        IpcMsg::Error {
+            message: "boom".to_string(),
         },
     ];
     for variant in &variants {

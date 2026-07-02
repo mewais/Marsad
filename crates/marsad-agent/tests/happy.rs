@@ -420,6 +420,40 @@ fn handle_ipc_launch_session_returns_event() {
     );
 }
 
+/// A `LaunchSession` command that OMITS `host_id` (a `#[serde(default,
+/// skip_serializing_if = "Option::is_none")]` field, typed-ipc.md §2) must
+/// default to `"local"` (agent:871's `host_id.unwrap_or_else(|| "local"…)`),
+/// same as if `host_id` had been sent explicitly as `"local"`.
+#[test]
+fn handle_ipc_launch_session_without_host_id_defaults_to_local() {
+    let container = FakeContainer::new();
+    let notifier = CaptureNotifier::new();
+    let backend = MemoryBackend::new();
+
+    let mut agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(container),
+        Box::new(notifier),
+        Box::new(marsad_store::Store::new(Box::new(backend))),
+    )
+    .expect("Agent::with_fakes must succeed");
+
+    // No `host_id` key at all (distinct from the minimal-corpus lines elsewhere,
+    // which always include `"host_id":"local"` explicitly).
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","model":"claude-opus-4-5","posture":"Ask"}"#;
+    let result = agent.handle_ipc(line);
+
+    assert!(
+        result.is_ok(),
+        "LaunchSession without host_id must default to local and return Ok; got {result:?}"
+    );
+    let lines = result.unwrap();
+    assert!(
+        !lines.is_empty(),
+        "LaunchSession without host_id must emit at least one outbound IPC event line"
+    );
+}
+
 /// A `StopSession` command for an existing session must return Ok.
 #[test]
 fn handle_ipc_stop_session_returns_event() {

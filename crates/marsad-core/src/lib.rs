@@ -15,7 +15,6 @@ use marsad_proto::{encode_ipc, IpcMsg};
 use marsad_store::{Backend, PersistedHost, Store, Workspace as StoreWorkspace};
 use marsad_transport::Transport;
 use marsad_viewmodel::{AppSnapshot, FileChange, Filter, SessionView, Tab, Workspace};
-use serde_json::Value;
 use thiserror::Error;
 
 pub mod discovery;
@@ -848,22 +847,10 @@ impl Core {
         spec: LaunchSpec,
     ) -> Result<String, CoreError> {
         let permission_mode = posture_to_permission_mode(&spec.posture);
-        let msg = IpcMsg::LaunchSession {
-            cwd: spec.project.clone(),
-            model: spec.model.clone(),
-            permission_mode: permission_mode.to_string(),
-        };
-        // encode_ipc + serde round-trips on our own structs are infallible.
-        let encoded_str = encode_ipc(&msg);
-        let mut val: Value = serde_json::from_str(&encoded_str).unwrap();
-        let obj = val.as_object_mut().unwrap();
-        obj.insert("session_id".to_string(), Value::String(id.clone()));
-        obj.insert("project".to_string(), Value::String(spec.project.clone()));
         // Forward the host so the agent runs the session on the right machine.
         // Resolve the remote execution target from the host id via the registry
         // (local/unknown hosts → None → the agent runs locally). An explicit
         // `spec.host_target` wins if a caller already set one.
-        obj.insert("host_id".to_string(), Value::String(spec.host_id.clone()));
         let host_target = spec.host_target.clone().or_else(|| {
             self.hosts
                 .list()
@@ -871,65 +858,25 @@ impl Core {
                 .find(|h| h.id == spec.host_id && !h.is_local)
                 .map(|h| h.target.clone())
         });
-        if let Some(target) = host_target {
-            obj.insert("host_target".to_string(), Value::String(target));
-        }
         // Resolve the per-host launch config (claude_bin / setup / env) from the
         // registry by host_id and inject it for the agent. Applies to ALL host
         // types (local, WSL, SSH/plink). An explicit value already on the spec
-        // wins over the registry lookup. `env` is forwarded as a JSON array of
-        // `[k, v]` pairs (the agent parses it back identically).
+        // wins over the registry lookup. `env` is forwarded as `[k, v]` pairs
+        // (the agent parses it back identically).
         let host_cfg = self.hosts.list().iter().find(|h| h.id == spec.host_id);
         let claude_bin = spec
             .claude_bin
             .clone()
             .or_else(|| host_cfg.and_then(|h| h.claude_bin.clone()));
-        if let Some(bin) = claude_bin {
-            obj.insert("claude_bin".to_string(), Value::String(bin));
-        }
         let setup = spec
             .setup
             .clone()
             .or_else(|| host_cfg.and_then(|h| h.setup.clone()));
-        if let Some(s) = setup {
-            obj.insert("setup".to_string(), Value::String(s));
-        }
         let env = if !spec.env.is_empty() {
             spec.env.clone()
         } else {
             host_cfg.map(|h| h.env.clone()).unwrap_or_default()
         };
-        if !env.is_empty() {
-            let env_json: Vec<Value> = env
-                .iter()
-                .map(|(k, v)| {
-                    Value::Array(vec![Value::String(k.clone()), Value::String(v.clone())])
-                })
-                .collect();
-            obj.insert("env".to_string(), Value::Array(env_json));
-        }
-        // The agent decodes posture from `posture` (the enum variant name);
-        // `permission_mode` above is kept for back-compat.
-        obj.insert(
-            "posture".to_string(),
-            serde_json::to_value(&spec.posture).unwrap(),
-        );
-        let fp_val = spec
-            .first_prompt
-            .as_deref()
-            .map_or(Value::Null, |s| Value::String(s.to_string()));
-        obj.insert("first_prompt".to_string(), fp_val);
-        // Forward the start mode so the agent can resume/continue an existing
-        // conversation (claude --resume <id> / --continue). Fresh adds nothing.
-        match &spec.mode {
-            LaunchMode::Continue => {
-                obj.insert("continue".to_string(), Value::Bool(true));
-            }
-            LaunchMode::Resume(sid) => {
-                obj.insert("resume_session_id".to_string(), Value::String(sid.clone()));
-            }
-            LaunchMode::Fresh => {}
-        }
         // Forward the custom name so the agent persists it. Trim and treat
         // whitespace-only as absent (pass nothing rather than a blank name).
         let custom_name: Option<String> = spec
@@ -938,21 +885,29 @@ impl Core {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
-        if let Some(ref n) = custom_name {
-            obj.insert("name".to_string(), Value::String(n.clone()));
-        }
-        // Forward disallowed_tools so the agent passes --disallowedTools to claude.
-        if !spec.disallowed_tools.is_empty() {
-            let tools_json: Vec<Value> = spec
-                .disallowed_tools
-                .iter()
-                .map(|t| Value::String(t.clone()))
-                .collect();
-            obj.insert("disallowed_tools".to_string(), Value::Array(tools_json));
-        }
-        let line = serde_json::to_string(&val).unwrap();
 
-        self.send_raw_line(&line)?;
+        let msg = IpcMsg::LaunchSession {
+            session_id: Some(id.clone()),
+            project: spec.project.clone(),
+            cwd: spec.project.clone(),
+            host_id: Some(spec.host_id.clone()),
+            host_target,
+            claude_bin,
+            setup,
+            env,
+            model: spec.model.clone(),
+            posture: spec.posture.clone(),
+            permission_mode: permission_mode.to_string(),
+            first_prompt: spec.first_prompt.clone(),
+            continue_: matches!(spec.mode, LaunchMode::Continue).then_some(true),
+            resume_session_id: match &spec.mode {
+                LaunchMode::Resume(sid) => Some(sid.clone()),
+                _ => None,
+            },
+            name: custom_name.clone(),
+            disallowed_tools: spec.disallowed_tools.clone(),
+        };
+        self.send_ipc(&msg)?;
 
         // Seed the transcript with prior history when resuming (loaded once — old,
         // fully-flushed JSONL, so no race), then the first prompt as a user turn.
@@ -1130,6 +1085,7 @@ impl Core {
         self.require_session(id)?;
         self.send_ipc(&IpcMsg::ResumeSession {
             session_id: id.to_string(),
+            first_prompt: None,
         })?;
         // require_session above guarantees it exists.
         self.sessions.get_mut(id).unwrap().state.phase = Phase::Starting;
@@ -1258,11 +1214,10 @@ impl Core {
         // Previously this sent a StopSession message with an extra `interrupt`
         // flag, but the agent dispatches purely on `type`: it hit
         // handle_stop_session, which KILLED the durable session AND never stopped
-        // the turn (so the badge stayed "Working"). proto has no Interrupt IpcMsg
-        // variant, so we emit the raw line the agent's dispatch already expects.
-        self.send_raw_line(
-            &serde_json::json!({ "type": "Interrupt", "session_id": id }).to_string(),
-        )
+        // the turn (so the badge stayed "Working").
+        self.send_ipc(&IpcMsg::Interrupt {
+            session_id: id.to_string(),
+        })
     }
 
     /// Answer an `AskUserQuestion` gate by sending the user's chosen answers to
@@ -1311,14 +1266,10 @@ impl Core {
         cmd: marsad_viewmodel::SlashCmd,
     ) -> Result<(), CoreError> {
         self.require_session(id)?;
-        // serde_json::json! + to_string is infallible for literal values.
-        let line = serde_json::to_string(&serde_json::json!({
-            "type": "SlashCmd",
-            "session_id": id,
-            "cmd": slash_cmd_name(&cmd),
-        }))
-        .unwrap();
-        self.send_raw_line(&line)
+        self.send_ipc(&IpcMsg::SlashCmd {
+            session_id: id.to_string(),
+            cmd: slash_cmd_name(&cmd).to_string(),
+        })
     }
 
     pub fn set_workspace(&mut self, id: &str) -> Result<Vec<VmUpdate>, CoreError> {
@@ -1327,13 +1278,10 @@ impl Core {
         if self.workspaces.iter().any(|w| w.id == id) {
             let _ = self.store.set_active_workspace(id);
         }
-        // Best-effort outbound notification (infallible construction).
-        let line = serde_json::to_string(&serde_json::json!({
-            "type": "SetWorkspace",
-            "workspace_id": id,
-        }))
-        .unwrap();
         // Best-effort advisory send; ignore errors.
+        let line = encode_ipc(&IpcMsg::SetWorkspace {
+            workspace_id: id.to_string(),
+        });
         let _ = self.transport.send_line(&line);
         Ok(vec![self.workspaces_update()])
     }
@@ -1653,19 +1601,54 @@ impl Core {
     // -----------------------------------------------------------------------
 
     pub fn on_agent_line(&mut self, line: &str) -> Result<Vec<VmUpdate>, CoreError> {
-        // Parse line as a typed envelope.  serde rejects: empty strings, non-JSON,
-        // truncated JSON, non-objects, missing/wrong-typed "type" or "session_id"
-        // fields — all via a single map_err closure that is exercised by the
-        // existing protocol error tests.
-        let env: IpcEnvelope =
-            serde_json::from_str(line).map_err(|e| CoreError::Protocol(e.to_string()))?;
-
-        match env.r#type.as_str() {
-            "AgentEvent" => self.handle_agent_event(env),
-            "TranscriptBackfill" => self.handle_transcript_backfill(env),
-            "ChangesUpdate" => self.handle_changes_update(env),
-            "UsageUpdate" => self.handle_usage_update(env),
-            other => Err(CoreError::Protocol(format!("unknown IPC type: '{other}'"))),
+        let msg = match marsad_proto::parse_ipc(line) {
+            Ok(m) => m,
+            // Tolerant skip: a FUTURE inbound type (newer agent) must not error
+            // the reader loop. The raw line is preserved via stderr for
+            // observability.
+            //
+            // SPEC CHANGE (docs/specs/typed-ipc.md §7, "Tests that MUST
+            // change"): crates/marsad-core/tests/errors.rs:359-369
+            // (`on_agent_line_unknown_ipc_type_returns_protocol_error`) was
+            // rewritten to `on_agent_line_unknown_ipc_type_is_tolerant_noop`,
+            // asserting `Ok(vec![])` here, per §4's unknown-type disposition
+            // table.
+            Err(marsad_proto::ProtoError::UnknownDiscriminant(t)) => {
+                eprintln!("marsad-core: on_agent_line: skipping unknown IPC type '{t}': {line}");
+                return Ok(vec![]);
+            }
+            // Malformed JSON / missing type / wrong-typed known fields stay
+            // HARD errors.
+            Err(e) => return Err(CoreError::Protocol(e.to_string())),
+        };
+        match msg {
+            IpcMsg::AgentEvent { session_id, event } => self.handle_agent_event(session_id, event),
+            IpcMsg::TranscriptBackfill { session_id, jsonl } => {
+                self.handle_transcript_backfill(session_id, jsonl)
+            }
+            IpcMsg::ChangesUpdate {
+                session_id,
+                changes,
+            } => self.handle_changes_update(session_id, changes),
+            IpcMsg::UsageUpdate { session_id, usage } => {
+                self.handle_usage_update(session_id, usage)
+            }
+            // Command acks legitimately arrive on the subscriber connection.
+            IpcMsg::SessionLaunched { .. }
+            | IpcMsg::SessionResumed { .. }
+            | IpcMsg::SessionAttached { .. }
+            | IpcMsg::SessionStopped { .. }
+            | IpcMsg::PromptSent { .. }
+            | IpcMsg::Interrupted { .. }
+            | IpcMsg::GateAnswered { .. }
+            | IpcMsg::QuestionAnswered { .. }
+            | IpcMsg::Subscribed { .. }
+            | IpcMsg::Error { .. } => Ok(vec![]),
+            // A GUI→agent message arriving inbound is a routing bug: hard error
+            // (same observable class as today's "unknown IPC type" Protocol error).
+            other => Err(CoreError::Protocol(format!(
+                "misdirected IPC message on agent channel: {other:?}"
+            ))),
         }
     }
 
@@ -1678,11 +1661,11 @@ impl Core {
     /// `isSidechain: true` entries in the JSONL) and updates the session's
     /// `model_usage` map so the Usage tab shows a full multi-model breakdown.
     /// Unknown session or empty history+usage → no-op (no update).
-    fn handle_transcript_backfill(&mut self, env: IpcEnvelope) -> Result<Vec<VmUpdate>, CoreError> {
-        let session_id = env.session_id.ok_or_else(|| {
-            CoreError::Protocol("missing session_id in transcript_backfill".to_string())
-        })?;
-        let jsonl_text = env.jsonl.unwrap_or_default();
+    fn handle_transcript_backfill(
+        &mut self,
+        session_id: String,
+        jsonl_text: String,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
         let history = discovery::parse_transcript(&jsonl_text);
         // Aggregate per-model usage from the full JSONL (includes subagent turns).
         let model_usage_agg = discovery::aggregate_model_usage(&jsonl_text);
@@ -1724,11 +1707,11 @@ impl Core {
     /// how a REMOTE session's Changes tab stays populated — the file lives on
     /// the remote host, so the agent probes git after each result event and
     /// ships the file list here. Unknown session or empty list → no-op.
-    fn handle_changes_update(&mut self, env: IpcEnvelope) -> Result<Vec<VmUpdate>, CoreError> {
-        let session_id = env.session_id.ok_or_else(|| {
-            CoreError::Protocol("missing session_id in changes_update".to_string())
-        })?;
-        let changes_val = env.changes.unwrap_or(serde_json::Value::Array(vec![]));
+    fn handle_changes_update(
+        &mut self,
+        session_id: String,
+        changes_val: serde_json::Value,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
         let parsed: Vec<FileChange> = serde_json::from_value(changes_val).unwrap_or_default();
         let record = match self.sessions.get_mut(&session_id) {
             Some(r) => r,
@@ -1746,14 +1729,14 @@ impl Core {
     /// SUPERSEDES whatever the result-event or backfill set before.
     ///
     /// Unknown session or missing session_id → error / no-op.
-    fn handle_usage_update(&mut self, env: IpcEnvelope) -> Result<Vec<VmUpdate>, CoreError> {
-        let session_id = env
-            .session_id
-            .ok_or_else(|| CoreError::Protocol("missing session_id in usage_update".to_string()))?;
-        let usage_val = match env.usage {
-            Some(v) => v,
-            None => return Ok(vec![]), // no usage data → no-op
-        };
+    fn handle_usage_update(
+        &mut self,
+        session_id: String,
+        usage_val: serde_json::Value,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        if usage_val.is_null() {
+            return Ok(vec![]); // no usage data → no-op
+        }
         let usage_obj = match usage_val.as_object() {
             Some(o) => o,
             None => return Ok(vec![]), // malformed → no-op
@@ -1820,16 +1803,11 @@ impl Core {
     // Private helpers
     // -----------------------------------------------------------------------
 
-    fn handle_agent_event(&mut self, env: IpcEnvelope) -> Result<Vec<VmUpdate>, CoreError> {
-        let session_id = match env.session_id {
-            Some(s) => s,
-            None => {
-                return Err(CoreError::Protocol(
-                    "missing session_id in agent_event".to_string(),
-                ))
-            }
-        };
-
+    fn handle_agent_event(
+        &mut self,
+        session_id: String,
+        event: serde_json::Value,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
         // An agent_event for a session this core never registered (e.g. one the
         // agent supervises but we have not launched/adopted) is an UnknownSession,
         // not a panic.
@@ -1837,9 +1815,9 @@ impl Core {
 
         // Parse the event into a StreamMsg; treat unparseable events as Unknown
         // (forward-compat, no error).
-        let event_json = serde_json::to_string(&env.event).unwrap(); // infallible
+        let event_json = serde_json::to_string(&event).unwrap(); // infallible
         let stream_msg = marsad_proto::parse_stream_line(&event_json)
-            .unwrap_or(marsad_proto::StreamMsg::Unknown(env.event));
+            .unwrap_or(marsad_proto::StreamMsg::Unknown(event));
 
         // Extract assistant prose + tool invocations for the transcript (from the
         // live stream — immediate, no JSONL flush race). claude does not echo user
@@ -2012,43 +1990,6 @@ impl Core {
             posture,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// IpcEnvelope — serde-typed wrapper for inbound IPC lines
-// ---------------------------------------------------------------------------
-
-/// Typed representation of an inbound IPC line.
-///
-/// Using serde deserialization here means serde enforces all structural
-/// invariants (correct field types, required fields) in a single `from_str`
-/// call, so all structural Protocol errors go through one `map_err` closure.
-#[derive(serde::Deserialize)]
-struct IpcEnvelope {
-    /// IPC message type discriminant.  Required; must be a string.
-    #[serde(rename = "type")]
-    r#type: String,
-    /// Session id.  Optional at the envelope level; validated in dispatch.
-    session_id: Option<String>,
-    /// Raw event payload for agent_event messages.
-    #[serde(default)]
-    event: Value,
-    /// Raw NDJSON transcript text for `TranscriptBackfill` messages — the agent
-    /// reads a remote session's `.jsonl` over the session's own connection and
-    /// ships it here so resume/restore of a remote session shows prior history.
-    #[serde(default)]
-    jsonl: Option<String>,
-    /// Changed-file list for `ChangesUpdate` messages — the agent probes git on
-    /// the remote after each result event and broadcasts the file list here.
-    /// Each element is `{path, status, added, removed}`.
-    #[serde(default)]
-    changes: Option<serde_json::Value>,
-    /// Project-wide per-model usage map for `UsageUpdate` messages.
-    /// Shape: `{"<model>":{"input":N,"output":N,"cache_read":N,"cache_creation":N}}`.
-    /// Computed by the agent's remote python3 aggregation script across ALL
-    /// `*.jsonl` in the project dir (captures subagent transcripts too).
-    #[serde(default)]
-    usage: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
