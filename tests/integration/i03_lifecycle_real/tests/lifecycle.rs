@@ -9,16 +9,35 @@
 /// Every test wraps resources in a `TeardownGuard` that kills its tmux sessions
 /// and removes its temp dir even on panic, so no orphans leak.
 ///
-/// # FIFO open ordering (critical)
+/// # `cat in.fifo |` instead of `< in.fifo` (found live, real bug)
 /// The tmux shell command is:
-///   `claude ... < in.fifo > out.fifo`
-/// Bash processes redirections left-to-right:
-///   1. Opens in.fifo for **reading** (blocks until a writer appears)
-///   2. Opens out.fifo for **writing** (blocks until a reader appears)
+///   `claude ... < in.fifo > out.fifo`   ← BROKEN against real claude 2.1.198
+///   `cat in.fifo | claude ... > out.fifo`  ← what this test (and production
+///                                             `marsad-agent::build_spawn_cmd`)
+///                                             actually uses
+/// Verified by hand against the real binaries: a process whose stdin is
+/// redirected directly from a *named* FIFO (`< in.fifo`) exits 0 with **zero**
+/// output and no session transcript whenever it has a controlling terminal —
+/// which every tmux pane provides, even fully detached (`tmux new-session -d`)
+/// ones with no client attached. The identical invocation with stdin as an
+/// *anonymous* pipe (`echo ... | claude ...`, or `cat in.fifo | claude ...`)
+/// works correctly in the same tmux pane. Ruled out during diagnosis: PATH,
+/// HOME, CLAUDECODE/CLAUDE_CODE_* env leakage, `setsid` detachment — none of
+/// these changed the outcome; only pipe-vs-named-fifo stdin did. See
+/// `crates/marsad-agent/src/lib.rs`'s `build_spawn_cmd` doc comment and
+/// `docs/specs/realio.md` for the production-side fix.
+///
+/// # FIFO open ordering (critical)
+/// With `cat in.fifo | claude ... > out.fifo`:
+///   1. `cat` opens in.fifo for **reading** (blocks until a writer appears)
+///   2. bash opens out.fifo for **writing** (blocks until a reader appears)
+///
+/// These two blocking opens race concurrently at pipeline setup, exactly as
+/// the old `< in.fifo > out.fifo` two-step did.
 ///
 /// Therefore the agent must open the FIFOs **concurrently in two threads**:
-///   - Thread A opens in.fifo for **writing** → unblocks bash step 1
-///   - Thread B opens out.fifo for **reading** → waits; bash unblocks it in step 2
+///   - Thread A opens in.fifo for **writing** → unblocks `cat`'s open
+///   - Thread B opens out.fifo for **reading** → unblocks bash's open for claude's stdout
 ///
 /// `ClaudeFifoTransport::connect()` opens them sequentially (out then in) which
 /// deadlocks in this scenario.  The test helper `connect_fifos` does the correct
@@ -203,6 +222,11 @@ fn shell_quote(s: &str) -> String {
 }
 
 /// Build the tmux shell command per realio.md.
+///
+/// Uses `cat in.fifo | claude ... > out.fifo` rather than piping claude's
+/// stdin straight from `in.fifo` via shell redirection — see the FIFO OPEN
+/// ORDERING note at the top of this file for why a direct named-FIFO stdin
+/// redirect is broken against the real claude CLI inside tmux.
 fn build_cmd(session_dir: &Path, project: &str, extra_args: &[&str]) -> String {
     let in_fifo = session_dir.join("in.fifo");
     let out_fifo = session_dir.join("out.fifo");
@@ -222,10 +246,10 @@ fn build_cmd(session_dir: &Path, project: &str, extra_args: &[&str]) -> String {
     let all_args: Vec<&str> = base.iter().chain(extra_args.iter()).copied().collect();
 
     format!(
-        "cd {} && claude {} < {} > {} 2>{}",
+        "cd {} && cat {} | claude {} > {} 2>{}",
         shell_quote(project),
-        all_args.join(" "),
         in_fifo.display(),
+        all_args.join(" "),
         out_fifo.display(),
         err_log.display(),
     )
@@ -247,6 +271,17 @@ fn make_session_dir(tmpdir: &Path, session_name: &str) -> PathBuf {
     for name in ["in.fifo", "out.fifo"] {
         Command::new("mkfifo").arg(dir.join(name)).status().unwrap();
     }
+    dir
+}
+
+/// Create (if needed) and return a real, existing directory for claude to `cd`
+/// into.  `--print` mode does not require a git repo or any specific project —
+/// any existing directory works — so a scratch dir under the test's own tmpdir
+/// is used rather than a hardcoded absolute path (which would break on any
+/// machine/CI where the checkout does not live at that exact path).
+fn ensure_project_dir(tmpdir: &Path) -> PathBuf {
+    let dir = tmpdir.join("project");
+    std::fs::create_dir_all(&dir).unwrap();
     dir
 }
 
@@ -394,10 +429,11 @@ fn run_session(
     container: &mut TmuxContainer,
     session_name: &str,
     session_dir: &Path,
+    project: &str,
     extra_args: &[&str],
     prompt: &str,
 ) -> (Option<String>, Vec<StreamMsg>) {
-    let cmd = build_cmd(session_dir, "/work/mewais/Marsad", extra_args);
+    let cmd = build_cmd(session_dir, project, extra_args);
     container
         .spawn(session_name, &cmd)
         .expect("container.spawn");
@@ -528,12 +564,21 @@ fn scenario_1_launch_system_init_check_oom() -> bool {
     let session_name = format!("marsad-it-i03-s1-{id}");
     let tmpdir = std::env::temp_dir().join(format!("marsad-it-i03-s1-{id}"));
     let session_dir = make_session_dir(&tmpdir, &session_name);
+    let project_dir = ensure_project_dir(&tmpdir);
+    let project = project_dir.to_string_lossy().to_string();
 
     let mut guard = TeardownGuard::new(tmpdir.clone());
     guard.register(&session_name);
 
     let mut container = TmuxContainer::new(&tmpdir);
-    let (sid, msgs) = run_session(&mut container, &session_name, &session_dir, &[], "say OK");
+    let (sid, msgs) = run_session(
+        &mut container,
+        &session_name,
+        &session_dir,
+        &project,
+        &[],
+        "say OK",
+    );
 
     eprintln!("[i03/s1] got {} msgs, sid={sid:?}", msgs.len());
 
@@ -602,6 +647,8 @@ fn scenario_2_resume_continuity() {
 
     let s1_dir = make_session_dir(&tmpdir, &s1_name);
     let s2_dir = make_session_dir(&tmpdir, &s2_name);
+    let project_dir = ensure_project_dir(&tmpdir);
+    let project = project_dir.to_string_lossy().to_string();
 
     let mut guard = TeardownGuard::new(tmpdir.clone());
     guard.register(&s1_name);
@@ -610,7 +657,7 @@ fn scenario_2_resume_continuity() {
     let mut container = TmuxContainer::new(&tmpdir);
 
     // ── Step 1: run first session ─────────────────────────────────────────
-    let (sid1_opt, msgs1) = run_session(&mut container, &s1_name, &s1_dir, &[], "say OK");
+    let (sid1_opt, msgs1) = run_session(&mut container, &s1_name, &s1_dir, &project, &[], "say OK");
 
     eprintln!("[i03/s2] Step 1: {} msgs, sid={sid1_opt:?}", msgs1.len());
 
@@ -645,6 +692,7 @@ fn scenario_2_resume_continuity() {
         &mut container,
         &s2_name,
         &s2_dir,
+        &project,
         &[&resume_arg],
         "say RESUMED",
     );
@@ -698,6 +746,8 @@ fn scenario_3_adopt_no_duplication() {
     let session_name = format!("marsad-it-i03-s3-{id}");
     let tmpdir = std::env::temp_dir().join(format!("marsad-it-i03-s3-{id}"));
     let session_dir = make_session_dir(&tmpdir, &session_name);
+    let project_dir = ensure_project_dir(&tmpdir);
+    let project = project_dir.to_string_lossy().to_string();
 
     let mut guard = TeardownGuard::new(tmpdir.clone());
     guard.register(&session_name);
@@ -705,7 +755,7 @@ fn scenario_3_adopt_no_duplication() {
     let mut container = TmuxContainer::new(&tmpdir);
 
     // ── Step 1: first spawn ────────────────────────────────────────────────
-    let cmd = build_cmd(&session_dir, "/work/mewais/Marsad", &[]);
+    let cmd = build_cmd(&session_dir, &project, &[]);
     container.spawn(&session_name, &cmd).expect("first spawn");
     std::thread::sleep(Duration::from_millis(500));
     assert!(
@@ -756,6 +806,8 @@ fn scenario_4_gui_independent_liveness() {
     let session_name = format!("marsad-it-i03-s4-{id}");
     let tmpdir = std::env::temp_dir().join(format!("marsad-it-i03-s4-{id}"));
     let session_dir = make_session_dir(&tmpdir, &session_name);
+    let project_dir = ensure_project_dir(&tmpdir);
+    let project = project_dir.to_string_lossy().to_string();
 
     let mut guard = TeardownGuard::new(tmpdir.clone());
     guard.register(&session_name);
@@ -763,7 +815,7 @@ fn scenario_4_gui_independent_liveness() {
     let mut container = TmuxContainer::new(&tmpdir);
 
     // ── Step 1: spawn session ─────────────────────────────────────────────
-    let cmd = build_cmd(&session_dir, "/work/mewais/Marsad", &[]);
+    let cmd = build_cmd(&session_dir, &project, &[]);
     container.spawn(&session_name, &cmd).expect("spawn");
     std::thread::sleep(Duration::from_millis(800));
     assert!(

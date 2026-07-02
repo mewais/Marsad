@@ -114,9 +114,15 @@ fn spawn_script_ssh_contains_all_stages() {
         "missing run.sh heredoc with verbatim cmd: {s}"
     );
     // ...then tmux runs it via a LOGIN shell (`bash -l run.sh`) with the FIFOs wired,
-    // guarded by has-session for idempotency.
+    // guarded by has-session for idempotency. `in.fifo` is piped in via `cat |`
+    // rather than `bash -l run.sh < in.fifo` — a bare `< named_fifo` redirect makes
+    // claude exit 0 with zero output whenever the process has a controlling
+    // terminal (every tmux pane has one, even fully detached); `cat | bash -l`
+    // gives claude an anonymous-pipe stdin instead, sidestepping the bug
+    // (confirmed live against real tmux 3.1c + claude 2.1.198 — see the doc
+    // comment on `spawn_script`).
     assert!(
-        s.contains(r#"tmux has-session -t marsad-a 2>/dev/null || tmux new-session -d -s marsad-a "bash -l $HOME/.marsad/sessions/marsad-a/run.sh < $HOME/.marsad/sessions/marsad-a/in.fifo > $HOME/.marsad/sessions/marsad-a/out.fifo 2>$HOME/.marsad/sessions/marsad-a/err.log""#),
+        s.contains(r#"tmux has-session -t marsad-a 2>/dev/null || tmux new-session -d -s marsad-a "cat $HOME/.marsad/sessions/marsad-a/in.fifo | bash -l $HOME/.marsad/sessions/marsad-a/run.sh > $HOME/.marsad/sessions/marsad-a/out.fifo 2>$HOME/.marsad/sessions/marsad-a/err.log""#),
         "missing login-shell new-session with fifo wiring: {s}"
     );
 }

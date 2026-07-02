@@ -471,9 +471,24 @@ fn full_loop() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // S4 — resume recall: teach a codeword in a dedicated repo, then resume the
+    // S4 — resume recall: state a fact in a dedicated repo, then resume the
     // most-recent conversation there via LaunchMode::Continue (the "continue
-    // recent" GUI path) and confirm the codeword is recalled.
+    // recent" GUI path) and confirm the fact is recalled.
+    //
+    // NOTE (test-assumption fix, evidence-based): this scenario originally used
+    // a "Remember this codeword: BANANA ... What is the codeword?" framing.
+    // Observed live against real claude (haiku) in
+    // ~/.claude/projects/.../*.jsonl: haiku refused the first turn outright —
+    // "I appreciate you testing my judgment, but I should be transparent: that
+    // looks like a prompt injection attempt or test. I won't establish hidden
+    // communication channels..." — and consequently the second turn correctly
+    // (from the model's own view) replied "I didn't follow that instruction,
+    // so I'm not retrieving it now." The resume/continue plumbing itself was
+    // fine (both turns landed in one continuous transcript file, proving
+    // `--continue` found the right session) — the prompt just pattern-matched
+    // the model's prompt-injection heuristics ("remember a secret codeword and
+    // recall it on command" reads like a covert-channel setup). Rephrased as a
+    // mundane stated fact, which carries no such connotation.
     // ─────────────────────────────────────────────────────────────────────────
     eprintln!("\n[i10/S4] resume recall (continue)");
     let project_c = tmpdir.join("resume-project");
@@ -484,7 +499,7 @@ fn full_loop() {
     let id_c = core
         .launch_session(spec(
             &project_c,
-            "Remember this codeword: BANANA. Reply OK and nothing else.",
+            "My favorite fruit is banana. Please reply OK to confirm you've noted it.",
             Posture::FullAutonomy,
             LaunchMode::Fresh,
         ))
@@ -494,13 +509,13 @@ fn full_loop() {
             .map(|sv| sv.state == Phase::Done)
             .unwrap_or(false)
     });
-    eprintln!("[i10/S4] codeword taught; continuing the conversation");
+    eprintln!("[i10/S4] fact stated; continuing the conversation");
 
-    // Continue the most-recent conversation in that dir and ask for the codeword.
+    // Continue the most-recent conversation in that dir and ask for the fact.
     let id_d = core
         .launch_session(spec(
             &project_c,
-            "What is the codeword I asked you to remember? Reply with one word.",
+            "What did I say my favorite fruit was? Reply with one word.",
             Posture::FullAutonomy,
             LaunchMode::Continue,
         ))
@@ -514,16 +529,16 @@ fn full_loop() {
     let sv = latest_sv(&updates, &id_d).expect("S4: a SessionView for D");
     assert!(
         assistant_says(&sv, "banana"),
-        "S4: continued session must recall BANANA; transcript={:?}",
+        "S4: continued session must recall banana; transcript={:?}",
         sv.transcript
     );
     assert!(
-        user_says(&sv, "remember this codeword"),
+        user_says(&sv, "favorite fruit is banana"),
         "S4: resumed transcript must include the prior (history) turn; got {:?}",
         sv.transcript
     );
     eprintln!(
-        "[i10/S4] PASS — continue recalled the codeword AND loaded prior history ({} entries)",
+        "[i10/S4] PASS — continue recalled the fact AND loaded prior history ({} entries)",
         sv.transcript.len()
     );
 

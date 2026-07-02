@@ -475,6 +475,16 @@ impl RemoteTmuxContainer {
     /// `bash -lc` inside tmux inside `bash -lc`, whose quadruple quoting was mangled so
     /// claude never ran. Paths are `$HOME/.marsad/...` + a safe `marsad-…` name, left
     /// unquoted so the remote shell expands `$HOME`.
+    ///
+    /// `in.fifo` is piped in via `cat {in_fifo} |` rather than `bash -l {run} <
+    /// {in_fifo}` — found live (i03 testing against real tmux 3.1c + claude
+    /// 2.1.198): a process whose stdin is redirected directly from a *named*
+    /// FIFO exits 0 with zero output whenever it has a controlling terminal,
+    /// which every tmux pane provides even fully detached. The identical
+    /// invocation with stdin as an *anonymous* pipe works. `cat | bash -l run`
+    /// gives claude (via `exec` in run.sh) an anonymous-pipe stdin instead,
+    /// side-stepping the bug. See the matching fix + longer note on
+    /// `marsad-agent`'s local `build_spawn_cmd` and docs/specs/realio.md.
     pub fn spawn_script(&self, name: &str, cmd: &str) -> String {
         let dir = self.remote_session_dir(name);
         let in_fifo = self.in_fifo_path(name);
@@ -489,7 +499,7 @@ impl RemoteTmuxContainer {
              {cmd}\n\
              __MARSAD_RUN__\n\
              tmux has-session -t {name} 2>/dev/null || \
-             tmux new-session -d -s {name} \"bash -l {run} < {in_fifo} > {out_fifo} 2>{err_log}\"\n"
+             tmux new-session -d -s {name} \"cat {in_fifo} | bash -l {run} > {out_fifo} 2>{err_log}\"\n"
         )
     }
 }

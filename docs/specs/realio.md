@@ -21,11 +21,22 @@ Launch (spawn):
 ```
 mkfifo in.fifo out.fifo
 tmux new-session -d -s marsad-<id> \
-  'cd <project> && claude --print --input-format stream-json \
+  'cd <project> && cat in.fifo | claude --print --input-format stream-json \
      --output-format stream-json --verbose --model <m> --permission-mode <mode> \
-     [--resume <claude_session_id>] < in.fifo > out.fifo 2>err.log'
+     [--resume <claude_session_id>] > out.fifo 2>err.log'
 ```
 The agent then opens `out.fifo` for reading (its inbound stream) and `in.fifo` for writing.
+
+**`cat in.fifo |` instead of `< in.fifo` (updated after live i03 testing against
+real tmux 3.1c + claude 2.1.198):** redirecting claude's stdin directly from
+the *named* FIFO (`claude ... < in.fifo`) makes claude exit 0 with **zero**
+output and no session transcript whenever the process has a controlling
+terminal — which every tmux pane provides, even fully detached ones with no
+client attached. The identical invocation works when claude's stdin is
+instead an *anonymous* pipe, so `cat in.fifo | claude ...` (which gives
+claude an anonymous-pipe stdin) sidesteps the bug. Verified against the real
+binaries — see `crates/marsad-agent/src/lib.rs`'s `build_spawn_cmd` doc
+comment for the full diagnosis.
 
 ## B09 `marsad-lifecycle` — `TmuxContainer`
 

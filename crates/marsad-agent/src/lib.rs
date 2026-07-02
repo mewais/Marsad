@@ -370,8 +370,24 @@ impl Agent {
     ///   ignores the command body; what matters is that spawn is called).
     /// - Production build: if a real container is active, returns the full
     ///   FIFO-wired tmux invocation per the realio.md spec:
-    ///   `cd <project> && claude <args> < in.fifo > out.fifo 2>err.log`
+    ///   `cd <project> && cat in.fifo | claude <args> > out.fifo 2>err.log`
     ///   Otherwise falls back to `argv.join(" ")`.
+    ///
+    /// NOTE ON `cat in.fifo |` INSTEAD OF `< in.fifo` (found via live i03 testing
+    /// against real tmux 3.1c + claude 2.1.198): redirecting claude's stdin
+    /// directly from a *named* FIFO (`claude ... < in.fifo`) makes claude exit 0
+    /// with **zero** output and no session transcript whenever the process has a
+    /// controlling terminal — which every tmux pane has, even fully detached
+    /// (`tmux new-session -d`) ones with no client attached. The exact same
+    /// invocation works perfectly when claude's stdin is instead an *anonymous*
+    /// pipe (confirmed: `echo ... | claude ...` inside the same tmux pane works;
+    /// only `claude ... < named_fifo` inside tmux is broken). Piping the FIFO
+    /// through `cat` converts claude's stdin fd from a named pipe to an
+    /// anonymous one, sidestepping the bug entirely — verified against the real
+    /// binaries, not simulated.  Ruled out during diagnosis: PATH, HOME,
+    /// CLAUDECODE/CLAUDE_CODE_* env leakage, and controlling-terminal
+    /// detachment via `setsid` (none of these changed the outcome). See
+    /// docs/specs/realio.md for the updated shape.
     #[cfg(coverage)]
     fn build_spawn_cmd(
         &self,
@@ -415,7 +431,10 @@ impl Agent {
                 // We build (with optional setup + env exports prepended):
                 //   <setup>
                 //   export 'K'='V'
-                //   cd <project> && <bin> <args> < in.fifo > out.fifo 2>err.log
+                //   cd <project> && cat in.fifo | <bin> <args> > out.fifo 2>err.log
+                //
+                // `cat in.fifo |` (rather than `< in.fifo`) is load-bearing — see
+                // the NOTE on the doc comment above `build_spawn_cmd`.
                 let bin = argv.first().map(String::as_str).unwrap_or("claude");
                 let claude_args = &argv[1..];
                 let mut prefix = String::new();
@@ -427,16 +446,16 @@ impl Agent {
                     prefix.push_str(&format!("export {}={}\n", shell_quote(k), shell_quote(v)));
                 }
                 format!(
-                    "{}cd {} && {} {} < {} > {} 2>{}",
+                    "{}cd {} && cat {} | {} {} > {} 2>{}",
                     prefix,
                     shell_quote(project),
+                    shell_quote(&in_fifo.display().to_string()),
                     shell_quote(bin),
                     claude_args
                         .iter()
                         .map(|a| shell_quote(a))
                         .collect::<Vec<_>>()
                         .join(" "),
-                    in_fifo.display(),
                     out_fifo.display(),
                     err_log.display(),
                 )
