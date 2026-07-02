@@ -103,11 +103,14 @@ impl LiveSession {
         let out_fifo = self.out_fifo();
         let err_log = self.dir.join("err.log");
 
+        // NOTE: stdin must be an anonymous pipe (`cat fifo |`), not a direct
+        // named-FIFO redirect — claude exits silently with `< fifo` stdin when
+        // a controlling terminal exists (any tmux pane). See fa327cb / realio.md.
         let cmd = format!(
-            "cd '{proj}' && '{claude}' \
+            "cd '{proj}' && cat '{in_f}' | '{claude}' \
              --print --input-format stream-json --output-format stream-json \
-             --verbose --model claude-haiku-4-5 --permission-mode default --bare \
-             < '{in_f}' > '{out_f}' 2>'{err}'",
+             --verbose --model claude-haiku-4-5 --permission-mode default \
+             > '{out_f}' 2>'{err}'",
             proj = self.proj_dir.display(),
             claude = claude_bin.display(),
             in_f = in_fifo.display(),
