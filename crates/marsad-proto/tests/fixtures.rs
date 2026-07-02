@@ -196,11 +196,17 @@ fn qa_fixture_variant_counts() {
 
 /// Parse all lines of the permission fixture, including a ControlRequest.
 ///
-/// IGNORED: fixture not yet captured.
-/// See fixtures/README.md — run `scripts/capture_fixtures.sh` on a toolchain machine
-/// to produce `fixtures/streams/permission.ndjson`, then un-ignore this test.
+/// CAPTURED (real `claude` 2.1.198, a `git push --force` Bash permission gate).
+///
+/// EXPECTED TO FAIL today: real assistant messages in this fixture include a
+/// `{"type":"thinking",...}` content block that `ContentBlock` has no variant
+/// for, and real `system` lines with subtypes other than `init`
+/// (`thinking_tokens`) that `parse_stream_line`'s `"system"` arm unconditionally
+/// tries to deserialize as `SystemInit` (missing required `model`/`cwd`/`tools`
+/// fields). Both are genuine parser/reducer gaps exposed by the real capture —
+/// see fixtures/README.md "Known gaps" for the full contract-mismatch writeup.
+/// This is intentionally left red rather than weakened to hide the mismatch.
 #[test]
-#[ignore = "fixture not yet captured — see fixtures/README.md"]
 fn permission_fixture_parses_all_lines() {
     let path = fixture_path("permission.ndjson");
     let content =
@@ -226,8 +232,10 @@ fn permission_fixture_parses_all_lines() {
 // plan.ndjson — plan-mode gate (TODO fixture)
 // ---------------------------------------------------------------------------
 
+/// CAPTURED (real `claude` 2.1.198, plan-mode `ExitPlanMode` gate).
+/// EXPECTED TO FAIL today: same thinking-block / non-init system-subtype
+/// gaps as `permission_fixture_parses_all_lines` — see fixtures/README.md.
 #[test]
-#[ignore = "fixture not yet captured — see fixtures/README.md"]
 fn plan_fixture_parses_all_lines() {
     let path = fixture_path("plan.ndjson");
     let content =
@@ -244,8 +252,9 @@ fn plan_fixture_parses_all_lines() {
 // edit.ndjson — edit-approval gate (TODO fixture)
 // ---------------------------------------------------------------------------
 
+/// CAPTURED (real `claude` 2.1.198, `Edit` tool permission gate on NOTES.txt).
+/// EXPECTED TO FAIL today: real assistant thinking block — see fixtures/README.md.
 #[test]
-#[ignore = "fixture not yet captured — see fixtures/README.md"]
 fn edit_fixture_parses_all_lines() {
     let path = fixture_path("edit.ndjson");
     let content =
@@ -262,8 +271,12 @@ fn edit_fixture_parses_all_lines() {
 // subagent.ndjson — subagent spawn (TODO fixture)
 // ---------------------------------------------------------------------------
 
+/// CAPTURED (real `claude` 2.1.198, `Agent` tool subagent spawn + completion).
+/// EXPECTED TO FAIL today: thinking block + `system/task_*` non-init subtypes
+/// — see fixtures/README.md. (Also note: the real subagent-spawning tool is
+/// named `"Agent"` here, not `"Task"` as `marsad-events` assumes — a second,
+/// independent contract mismatch documented there.)
 #[test]
-#[ignore = "fixture not yet captured — see fixtures/README.md"]
 fn subagent_fixture_parses_all_lines() {
     let path = fixture_path("subagent.ndjson");
     let content =
@@ -280,8 +293,13 @@ fn subagent_fixture_parses_all_lines() {
 // compaction.ndjson — compaction event (TODO fixture)
 // ---------------------------------------------------------------------------
 
+/// CAPTURED (real `claude` 2.1.198, a successful `/compact` after 4 short
+/// Q&A turns; `compact_result: "success"`).
+/// EXPECTED TO FAIL today: `system/status` + `system/compact_boundary`
+/// non-init subtypes, AND a real `user` message whose `content` is a bare
+/// string (the compaction summary), not `Vec<ContentBlock>` — see
+/// fixtures/README.md "Known gaps".
 #[test]
-#[ignore = "fixture not yet captured — see fixtures/README.md"]
 fn compaction_fixture_parses_all_lines() {
     let path = fixture_path("compaction.ndjson");
     let content =
@@ -304,8 +322,22 @@ fn compaction_fixture_parses_all_lines() {
 // are automatically exercised.
 // ---------------------------------------------------------------------------
 
+/// STILL NOT CAPTURED. Tried twice against a real claude 2.1.198 session with
+/// a temporary hook wired to every event (see fixtures/README.md "Known gaps"):
+/// (1) a normal permission-gated Bash run answered immediately — no
+/// Notification fired; (2) a second run where the `can_use_tool`
+/// control_request was deliberately left unanswered for 65s (the documented
+/// "idle >= 60s" Notification trigger) — still no Notification fired. In this
+/// environment, permission gates are routed entirely through the
+/// `--permission-prompt-tool stdio` control-protocol channel, and the
+/// `Notification` hook (an interactive-TTY nudge) does not appear to fire for
+/// either condition in headless `--print` mode. Left ignored per the capture
+/// task's rule: stop after 2-3 real attempts and report, rather than keep
+/// burning turns chasing a hook that may not exist in this mode.
 #[test]
-#[ignore = "hook fixtures not yet captured — see fixtures/README.md"]
+#[ignore = "hook fixture not captured — Notification did not fire in headless \
+            --print mode after 2 real attempts (immediate-answer + 65s-idle); \
+            see fixtures/README.md"]
 fn hook_notification_is_valid_json() {
     let path = hook_path("Notification.json");
     let content =
@@ -314,8 +346,8 @@ fn hook_notification_is_valid_json() {
         serde_json::from_str(&content).expect("Notification.json must be valid JSON");
 }
 
+/// CAPTURED (real claude 2.1.198 `Stop` hook payload).
 #[test]
-#[ignore = "hook fixtures not yet captured — see fixtures/README.md"]
 fn hook_stop_is_valid_json() {
     let path = hook_path("Stop.json");
     let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
@@ -323,8 +355,8 @@ fn hook_stop_is_valid_json() {
         serde_json::from_str(&content).expect("Stop.json must be valid JSON");
 }
 
+/// CAPTURED (real claude 2.1.198 `PreToolUse` hook payload, a Bash call).
 #[test]
-#[ignore = "hook fixtures not yet captured — see fixtures/README.md"]
 fn hook_pre_tool_use_is_valid_json() {
     let path = hook_path("PreToolUse.json");
     let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
@@ -332,11 +364,54 @@ fn hook_pre_tool_use_is_valid_json() {
         serde_json::from_str(&content).expect("PreToolUse.json must be valid JSON");
 }
 
+/// CAPTURED (real claude 2.1.198 `PostToolUse` hook payload, a Bash call).
 #[test]
-#[ignore = "hook fixtures not yet captured — see fixtures/README.md"]
 fn hook_post_tool_use_is_valid_json() {
     let path = hook_path("PostToolUse.json");
     let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
     let _v: serde_json::Value =
         serde_json::from_str(&content).expect("PostToolUse.json must be valid JSON");
+}
+
+// ---------------------------------------------------------------------------
+// Additional captured hooks (SubagentStop, SessionStart, SessionEnd,
+// PreCompact) — not referenced by a pre-existing #[ignore]-d stub in this
+// file, but captured alongside the others and included here for completeness
+// per fixtures/README.md.
+// ---------------------------------------------------------------------------
+
+/// CAPTURED (real claude 2.1.198 `SubagentStop` hook payload).
+#[test]
+fn hook_subagent_stop_is_valid_json() {
+    let path = hook_path("SubagentStop.json");
+    let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+    let _v: serde_json::Value =
+        serde_json::from_str(&content).expect("SubagentStop.json must be valid JSON");
+}
+
+/// CAPTURED (real claude 2.1.198 `SessionStart` hook payload).
+#[test]
+fn hook_session_start_is_valid_json() {
+    let path = hook_path("SessionStart.json");
+    let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+    let _v: serde_json::Value =
+        serde_json::from_str(&content).expect("SessionStart.json must be valid JSON");
+}
+
+/// CAPTURED (real claude 2.1.198 `SessionEnd` hook payload).
+#[test]
+fn hook_session_end_is_valid_json() {
+    let path = hook_path("SessionEnd.json");
+    let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+    let _v: serde_json::Value =
+        serde_json::from_str(&content).expect("SessionEnd.json must be valid JSON");
+}
+
+/// CAPTURED (real claude 2.1.198 `PreCompact` hook payload).
+#[test]
+fn hook_pre_compact_is_valid_json() {
+    let path = hook_path("PreCompact.json");
+    let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+    let _v: serde_json::Value =
+        serde_json::from_str(&content).expect("PreCompact.json must be valid JSON");
 }
