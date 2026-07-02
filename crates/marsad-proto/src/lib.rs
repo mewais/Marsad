@@ -58,6 +58,18 @@ pub enum ContentBlock {
         #[serde(default)]
         is_error: bool,
     },
+    /// Extended-thinking block. Real accounts with `alwaysThinkingEnabled: true`
+    /// prepend one of these to assistant messages that reasoned before replying
+    /// (`{"type":"thinking","thinking":"...","signature":"..."}`). `signature` is
+    /// an opaque provider-side token (not human-readable reasoning); both fields
+    /// default so absent/empty variants still parse. This is NOT the assistant's
+    /// reply — reducers must not surface `thinking` into transcript/say events.
+    Thinking {
+        #[serde(default)]
+        thinking: String,
+        #[serde(default)]
+        signature: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +117,11 @@ where
         match elem {
             serde_json::Value::String(s) => {
                 // Bare string: normalise to "/name" if it lacks the slash.
-                let name = if s.starts_with('/') { s } else { format!("/{s}") };
+                let name = if s.starts_with('/') {
+                    s
+                } else {
+                    format!("/{s}")
+                };
                 commands.push(SlashCommandInfo {
                     name,
                     ..Default::default()
@@ -164,7 +180,31 @@ pub struct AssistantMsg {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserMessage {
+    #[serde(deserialize_with = "deserialize_user_content")]
     pub content: Vec<ContentBlock>,
+}
+
+/// Deserialize a `user` message's `content` field, which real claude streams
+/// send as EITHER a `Vec<ContentBlock>` (the normal shape) OR a bare string
+/// (post-`/compact` synthesized messages: the compaction summary, and the
+/// `<local-command-stdout>...</local-command-stdout>` marker). A bare string is
+/// wrapped as a single-element `[ContentBlock::Text]` so callers (including
+/// `UserMessage.content.len()`/indexing) keep working unchanged.
+fn deserialize_user_content<'de, D>(deserializer: D) -> Result<Vec<ContentBlock>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ContentShape {
+        Blocks(Vec<ContentBlock>),
+        Bare(String),
+    }
+
+    match ContentShape::deserialize(deserializer)? {
+        ContentShape::Blocks(blocks) => Ok(blocks),
+        ContentShape::Bare(text) => Ok(vec![ContentBlock::Text { text }]),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -458,7 +498,17 @@ pub fn parse_stream_line(line: &str) -> Result<StreamMsg, ProtoError> {
         .ok_or(ProtoError::MissingDiscriminant)?;
 
     match type_str {
-        "system" => from_val("system_init", value).map(StreamMsg::SystemInit),
+        // Only `system/init` carries SystemInit's required fields
+        // (model/cwd/tools/permissionMode). Real live streams emit many other
+        // `system` subtypes (thinking_tokens, status, task_started/progress/
+        // updated/notification, compact_boundary, hook_started/hook_response,
+        // …) that lack them entirely — those are forward-compat `Unknown`
+        // (the full JSON, including `subtype`, is preserved in the `Value` for
+        // observability), not a schema error.
+        "system" if obj.get("subtype").and_then(|v| v.as_str()) == Some("init") => {
+            from_val("system_init", value).map(StreamMsg::SystemInit)
+        }
+        "system" => Ok(StreamMsg::Unknown(value)),
         "assistant" => from_val("assistant", value).map(StreamMsg::Assistant),
         "user" => from_val("user", value).map(StreamMsg::User),
         "result" => from_val("result", value).map(StreamMsg::Result),

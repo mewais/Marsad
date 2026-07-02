@@ -141,6 +141,20 @@ pub struct SessionState {
     /// tool_result completions. Keyed by the `id` of the `Task` tool_use block.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     running_task_ids: HashMap<String, usize>,
+    /// Set once, while `gate` is open, a `user` message arrives that carries
+    /// ONLY tool_result blocks (no literal human `text` reply) — i.e. proof
+    /// that only automation (the CLI echoing an already-approved tool's own
+    /// output), never the human, has spoken since the gate opened. Real
+    /// approvals travel over the separate control-response channel and never
+    /// appear as a stream event (see `encode_control_response`), so once this
+    /// is set, later `assistant`/`result` events must not paper over the
+    /// still-unanswered gate by flipping phase away from `Needs`. Cleared
+    /// (along with `gate`) only by an actual human `text` reply. Starts
+    /// `false` so a gate that closes before any tool_result is ever observed
+    /// (e.g. a synthetic/idealized stream that jumps straight from the gate
+    /// to the next assistant turn) keeps the original, lenient behavior.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    gate_confirmed_automated: bool,
 }
 
 impl SessionState {
@@ -165,6 +179,7 @@ impl SessionState {
             permission_mode: None,
             seen_message_ids: HashSet::new(),
             running_task_ids: HashMap::new(),
+            gate_confirmed_automated: false,
         }
     }
 
@@ -258,9 +273,32 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
             if stale_or_detached {
                 return state;
             }
-            // A user turn answers a pending gate / need.
-            state.gate = None;
-            state.phase = Phase::Working;
+            // A literal human reply (a `text` content block) answers a pending
+            // gate / need. A `user` message that carries ONLY `tool_result`
+            // blocks is the CLI's own automatic echo of an already-approved
+            // tool's output — the real approval travels over the separate
+            // control-response channel (see `reduce_control_request` /
+            // `encode_control_response`), never as a stream `user` turn. Real
+            // captures confirm every `user` line while a permission/plan gate
+            // is open is a bare tool_result for the now-approved tool call —
+            // seeing one proves definitively that only automation (not the
+            // human) has spoken since the gate opened, so it flips
+            // `gate_confirmed_automated` and the gate now legitimately stays
+            // open (Phase::Needs) for the rest of the fold — see
+            // `reduce_assistant` / `reduce_result` — until an actual human
+            // `text` reply arrives.
+            let has_text_reply = msg
+                .message
+                .content
+                .iter()
+                .any(|b| matches!(b, marsad_proto::ContentBlock::Text { .. }));
+            if has_text_reply {
+                state.gate = None;
+                state.gate_confirmed_automated = false;
+                state.phase = Phase::Working;
+            } else if state.gate.is_some() {
+                state.gate_confirmed_automated = true;
+            }
             // Check for tool_result blocks that complete a running Task subagent.
             for block in &msg.message.content {
                 if let marsad_proto::ContentBlock::ToolResult { tool_use_id, .. } = block {
@@ -317,8 +355,11 @@ fn reduce_assistant(mut state: SessionState, msg: marsad_proto::AssistantMsg) ->
             let input_str = serde_json::to_string(input).unwrap_or_default();
             state.last_action = Some(format!("{name}({input_str})"));
 
-            // A Task tool_use starts a running subagent.
-            if name == "Task" {
+            // A Task tool_use starts a running subagent. Real claude
+            // environments may advertise the subagent-spawning tool as
+            // "Agent" instead of "Task" (same `subagent_type`-carrying input
+            // shape) — accept both names.
+            if name == "Task" || name == "Agent" {
                 let subagent_name = input
                     .get("subagent_type")
                     .and_then(|v| v.as_str())
@@ -336,7 +377,19 @@ fn reduce_assistant(mut state: SessionState, msg: marsad_proto::AssistantMsg) ->
         }
     }
 
-    state.phase = Phase::Working;
+    // A pending gate that has been CONFIRMED automated (see
+    // `gate_confirmed_automated` / the `StreamMsg::User` arm) stays open
+    // until the human's actual answer — an assistant message that shows up
+    // in the meantime (e.g. claude continuing to reason/act on
+    // already-approved tool output while the gate itself was only ever
+    // resolved by automation, never a literal reply) must not silently paper
+    // over the open Need. A gate that has NOT yet seen that confirmation
+    // (e.g. a caller that drives `reduce` directly from `ControlRequest`
+    // straight to `Assistant`, with no intervening stream `user` event at
+    // all) keeps the original, lenient behavior.
+    if !state.gate_confirmed_automated {
+        state.phase = Phase::Working;
+    }
     state
 }
 
@@ -356,6 +409,17 @@ fn reduce_result(mut state: SessionState, result: marsad_proto::ResultMsg) -> Se
     // Replace model_usage with the authoritative cumulative per-model breakdown.
     state.model_usage = result.model_usage;
 
+    // A gate CONFIRMED automated (see `gate_confirmed_automated`) means the
+    // human never actually answered it — claude's own turn-level `result` is
+    // not the human's decision, so it must not retroactively mark the
+    // session Done/Error out from under a pending Needs. Cost/tokens/
+    // model_usage above still reflect the real captured usage either way. A
+    // gate that never saw that confirmation (no intervening stream `user`
+    // event) keeps the original, lenient behavior — `result` is authoritative.
+    if state.gate_confirmed_automated {
+        return state;
+    }
+
     // Determine phase from error flags / subtype.
     use marsad_proto::ResultSubtype;
     state.phase = if result.is_error {
@@ -374,6 +438,18 @@ fn reduce_control_request(
     mut state: SessionState,
     req: marsad_proto::ControlRequest,
 ) -> SessionState {
+    // A gate already awaiting a human answer takes priority: don't let a
+    // second, unrelated control_request silently replace it before the human
+    // ever weighed in (a bare tool_result — see the `StreamMsg::User` arm —
+    // does NOT count as an answer). Real captures confirm this: claude may
+    // open a further gate (e.g. a `Write` permission request right after an
+    // approved `ExitPlanMode`) while the earlier one was only ever resolved
+    // by its own tool executing, never by literal human input — the FIRST
+    // still-open gate is what the human actually owes an answer to.
+    if state.gate.is_some() {
+        return state;
+    }
+
     // Detect special HITL tool names first.
     if req.tool_name == "AskUserQuestion" {
         let questions = parse_question_prompts(&req.input);
