@@ -316,10 +316,14 @@ fn fixture_subagent_spawn_recorded_in_state() {
 /// fixtures/streams/compaction.ndjson — a real successful `/compact` run
 /// (four short Q&A turns, then `/compact`; `compact_result: "success"`).
 ///
-/// EXPECTED TO PANIC today: mismatch #2 (`system/status`, `system/compact_boundary`)
-/// and mismatch #3 (`user` message with string `content` after compaction) both
-/// occur in this fixture; `fold_ndjson` fails on the first of these
-/// (`system/status`) well before the final `result` line.
+/// NOTE: this fixture now folds clean end to end (the `system/thinking_tokens`
+/// / bare-string `user.content` gaps mismatch #2/#3 referred to above were
+/// fixed by an earlier change — `ContentBlock::Thinking` and
+/// `deserialize_user_content`'s bare-string branch). The one gap that WAS
+/// still real here — `system/compact_boundary` (and the fixture's top-level
+/// `rate_limit_event` line) parsing to `StreamMsg::Unknown` and the
+/// `StreamMsg::Unknown(_) => state` no-op arm silently dropping them — is
+/// U3b's fix; see `compaction_rate_limit.rs` for the dedicated coverage.
 #[test]
 fn fixture_compaction_context_resets() {
     const NDJSON: &str = include_str!("../../../fixtures/streams/compaction.ndjson");
@@ -328,4 +332,20 @@ fn fixture_compaction_context_resets() {
     // success) with a sane, in-range context_pct after compaction folded in.
     assert_eq!(state.phase, Phase::Done);
     assert!((0.0..=100.0).contains(&state.context_pct));
+
+    // U3b: the real `/compact` in this fixture, and its real rate_limit_event,
+    // must be visible on the final state — not silently dropped.
+    assert_eq!(state.compactions, 1, "one real /compact in this fixture");
+    let compaction = state
+        .last_compaction
+        .as_ref()
+        .expect("compact_boundary must be recorded, not dropped");
+    assert_eq!(compaction.trigger, "manual");
+    assert_eq!(compaction.cumulative_dropped_tokens, 20169);
+    let rl = state
+        .rate_limit
+        .as_ref()
+        .expect("rate_limit_event must be recorded, not dropped");
+    assert_eq!(rl.status, "allowed");
+    assert_eq!(rl.rate_limit_type, "five_hour");
 }

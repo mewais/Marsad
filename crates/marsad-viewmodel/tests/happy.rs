@@ -68,6 +68,14 @@ fn representative_snapshot() -> AppSnapshot {
             changes: vec![],
 
             model_usage: vec![],
+
+            cost_estimated: false,
+
+            compactions: 0,
+
+            last_compaction: None,
+
+            rate_limit: None,
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
@@ -92,6 +100,14 @@ fn representative_snapshot() -> AppSnapshot {
             changes: vec![],
 
             model_usage: vec![],
+
+            cost_estimated: false,
+
+            compactions: 0,
+
+            last_compaction: None,
+
+            rate_limit: None,
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
@@ -116,6 +132,14 @@ fn representative_snapshot() -> AppSnapshot {
             changes: vec![],
 
             model_usage: vec![],
+
+            cost_estimated: false,
+
+            compactions: 0,
+
+            last_compaction: None,
+
+            rate_limit: None,
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
@@ -140,6 +164,14 @@ fn representative_snapshot() -> AppSnapshot {
             changes: vec![],
 
             model_usage: vec![],
+
+            cost_estimated: false,
+
+            compactions: 0,
+
+            last_compaction: None,
+
+            rate_limit: None,
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
@@ -164,6 +196,14 @@ fn representative_snapshot() -> AppSnapshot {
             changes: vec![],
 
             model_usage: vec![],
+
+            cost_estimated: false,
+
+            compactions: 0,
+
+            last_compaction: None,
+
+            rate_limit: None,
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
@@ -687,6 +727,9 @@ fn model_usage_row_derives_and_constructs() {
         input_tokens: 11,
         output_tokens: 155,
         cost_usd: 0.268,
+        // Mechanical compile-fix: `estimated` is U4 cost-truthfulness turf
+        // (concurrent worker); this literal just needs a value to compile.
+        estimated: false,
     };
     let row2 = row.clone();
     assert_eq!(row, row2);
@@ -724,6 +767,10 @@ fn session_view_new_fields_populated() {
         transcript: vec![],
         changes: vec![],
         model_usage: vec![],
+        cost_estimated: false,
+        compactions: 0,
+        last_compaction: None,
+        rate_limit: None,
         tools: vec!["Read".to_string(), "Bash".to_string()],
         mcp_servers: vec![McpServerInfo {
             name: "hares".to_string(),
@@ -764,6 +811,10 @@ fn session_view_new_fields_empty_by_default_in_literal() {
         transcript: vec![],
         changes: vec![],
         model_usage: vec![],
+        cost_estimated: false,
+        compactions: 0,
+        last_compaction: None,
+        rate_limit: None,
         tools: vec![],
         mcp_servers: vec![],
         slash_commands: vec![],

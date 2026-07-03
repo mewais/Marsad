@@ -255,6 +255,26 @@ fn stream_slash_commands_not_a_sequence() {
 }
 
 // ---------------------------------------------------------------------------
+// deserialize_user_content — untagged-enum error path (pre-existing gap,
+// closed here to keep the crate at 100% coverage: neither array nor string
+// content must surface as a SchemaMismatch via the untagged ContentShape
+// deserializer's `?`, not silently succeed or panic).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn user_content_neither_array_nor_string_is_schema_mismatch() {
+    // "content" is a number here — matches neither ContentShape::Blocks
+    // (array) nor ContentShape::Bare (string), so the untagged enum's own
+    // deserialize fails and propagates via `?`.
+    let line = r#"{"type":"user","message":{"content":42}}"#;
+    let err = parse_stream_line(line).expect_err("non-array/string content must be an error");
+    assert!(
+        matches!(err, ProtoError::SchemaMismatch { .. }),
+        "expected SchemaMismatch, got {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // ProtoError derives Debug — confirm we can format it
 // ---------------------------------------------------------------------------
 

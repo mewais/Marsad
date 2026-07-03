@@ -134,6 +134,20 @@ pub struct SessionState {
     /// "bypassPermissions"). `None` before the first system/init.
     #[serde(default)]
     pub permission_mode: Option<String>,
+    /// Number of context-compaction events (`system/compact_boundary`)
+    /// observed this session. Never reset by a reconnect `SystemInit` — this
+    /// is session history, not per-connection state.
+    #[serde(default)]
+    pub compactions: u32,
+    /// Metadata from the MOST RECENT compaction, if any (`None` before the
+    /// first `compact_boundary`). Replaced (not merged) on each new one.
+    #[serde(default)]
+    pub last_compaction: Option<marsad_proto::CompactMetadata>,
+    /// Latest rate-limit status observed (`rate_limit_event`), if any
+    /// (`None` before the first such event this session). Replaced (not
+    /// merged) on each new one.
+    #[serde(default)]
+    pub rate_limit: Option<marsad_proto::RateLimitInfo>,
     /// Message ids already counted for usage DEDUP.
     #[serde(default, skip_serializing_if = "HashSet::is_empty")]
     seen_message_ids: HashSet<String>,
@@ -177,6 +191,9 @@ impl SessionState {
             mcp_servers: Vec::new(),
             slash_commands: Vec::new(),
             permission_mode: None,
+            compactions: 0,
+            last_compaction: None,
+            rate_limit: None,
             seen_message_ids: HashSet::new(),
             running_task_ids: HashMap::new(),
             gate_confirmed_automated: false,
@@ -323,6 +340,33 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
                 return state;
             }
             reduce_control_request(state, req)
+        }
+
+        // U3b: a completed context compaction. Informational only — bumps
+        // the running count and records the latest metadata; does NOT touch
+        // phase/tokens/context_pct (those stay authoritative from
+        // Assistant/Result usage — see docs/specs/events.md). Same
+        // Stale/Detached totality-no-op rule as Assistant/User/Result/
+        // control above: it cannot arrive from a dead/detached container
+        // without a re-init first.
+        StreamMsg::CompactBoundary(cb) => {
+            if stale_or_detached {
+                return state;
+            }
+            state.compactions = state.compactions.saturating_add(1);
+            state.last_compaction = Some(cb.compact_metadata);
+            state
+        }
+
+        // U3b: a rate-limit status notice. Informational only — replaces the
+        // latest observed status; does not touch phase. Same Stale/Detached
+        // totality-no-op rule as above.
+        StreamMsg::RateLimitEvent(rl) => {
+            if stale_or_detached {
+                return state;
+            }
+            state.rate_limit = Some(rl.rate_limit_info);
+            state
         }
 
         // ControlResponse is outbound (no-op); Unknown is forward-compat (no-op).

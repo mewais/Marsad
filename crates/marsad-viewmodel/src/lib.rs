@@ -43,6 +43,26 @@ pub struct SessionView {
     /// Per-model token + cost breakdown, sorted by model name for determinism.
     /// Empty when no `result` event with `modelUsage` has been received.
     pub model_usage: Vec<ModelUsageRow>,
+    /// U4 cost truthfulness: `true` when `cost_usd` has never been set by a
+    /// live agent-reported `result` event and is backed only by the
+    /// litellm/hand pricing table (transcript backfill / usage probe) —
+    /// i.e. every row in `model_usage` is `estimated`. `false` once any live
+    /// `result` has landed (or before any cost data exists at all). Drives
+    /// the Usage tab's "estimated"/"~" affordance on the top Cost tile.
+    #[serde(default)]
+    pub cost_estimated: bool,
+    /// Number of context-compaction events observed this session
+    /// (`marsad_events::SessionState::compactions`).
+    #[serde(default)]
+    pub compactions: u32,
+    /// Metadata from the most recent compaction, if any (`None` before the
+    /// first one).
+    #[serde(default)]
+    pub last_compaction: Option<marsad_proto::CompactMetadata>,
+    /// Latest rate-limit status observed, if any (`None` before the first
+    /// `rate_limit_event`).
+    #[serde(default)]
+    pub rate_limit: Option<marsad_proto::RateLimitInfo>,
     /// Tools available in this session (from the system/init event).
     #[serde(default)]
     pub tools: Vec<String>,
@@ -79,6 +99,12 @@ pub struct ModelUsageRow {
     pub output_tokens: u64,
     /// Cumulative cost in USD for this model.
     pub cost_usd: f64,
+    /// U4 cost truthfulness: `true` when this row's cost was recomputed from
+    /// the local litellm/hand pricing table (transcript backfill / usage
+    /// probe) rather than copied verbatim from a live, agent-reported
+    /// `result.modelUsage` entry. Drives the Usage tab's per-row
+    /// "estimated"/"~" affordance.
+    pub estimated: bool,
 }
 
 // ---------------------------------------------------------------------------

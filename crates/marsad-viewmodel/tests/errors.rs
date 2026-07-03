@@ -47,6 +47,14 @@ fn single_session_snapshot(phase: Phase) -> AppSnapshot {
             changes: vec![],
 
             model_usage: vec![],
+
+            cost_estimated: false,
+
+            compactions: 0,
+
+            last_compaction: None,
+
+            rate_limit: None,
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
@@ -203,6 +211,14 @@ fn rescope_unknown_workspace_returns_unchanged_snapshot() {
                 changes: vec![],
 
                 model_usage: vec![],
+
+                cost_estimated: false,
+
+                compactions: 0,
+
+                last_compaction: None,
+
+                rate_limit: None,
                 tools: vec![],
                 mcp_servers: vec![],
                 slash_commands: vec![],
@@ -227,6 +243,14 @@ fn rescope_unknown_workspace_returns_unchanged_snapshot() {
                 changes: vec![],
 
                 model_usage: vec![],
+
+                cost_estimated: false,
+
+                compactions: 0,
+
+                last_compaction: None,
+
+                rate_limit: None,
                 tools: vec![],
                 mcp_servers: vec![],
                 slash_commands: vec![],
@@ -287,6 +311,14 @@ fn rescope_empty_workspace_session_ids_gives_no_sessions() {
             changes: vec![],
 
             model_usage: vec![],
+
+            cost_estimated: false,
+
+            compactions: 0,
+
+            last_compaction: None,
+
+            rate_limit: None,
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],

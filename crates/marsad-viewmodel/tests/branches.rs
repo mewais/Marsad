@@ -42,6 +42,14 @@ fn make_session(
         changes: vec![],
 
         model_usage: vec![],
+
+        cost_estimated: false,
+
+        compactions: 0,
+
+        last_compaction: None,
+
+        rate_limit: None,
         tools: vec![],
         mcp_servers: vec![],
         slash_commands: vec![],
@@ -337,6 +345,14 @@ fn ctx_warn_false_at_74_pct() {
             changes: vec![],
 
             model_usage: vec![],
+
+            cost_estimated: false,
+
+            compactions: 0,
+
+            last_compaction: None,
+
+            rate_limit: None,
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
@@ -376,6 +392,14 @@ fn ctx_warn_true_at_75_pct() {
             changes: vec![],
 
             model_usage: vec![],
+
+            cost_estimated: false,
+
+            compactions: 0,
+
+            last_compaction: None,
+
+            rate_limit: None,
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
@@ -533,6 +557,14 @@ fn ctx_warn_true_at_100_pct() {
             changes: vec![],
 
             model_usage: vec![],
+
+            cost_estimated: false,
+
+            compactions: 0,
+
+            last_compaction: None,
+
+            rate_limit: None,
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],

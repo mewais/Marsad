@@ -819,6 +819,9 @@ fn model_usage_derives() {
         input_tokens: 10,
         output_tokens: 20,
         cost_usd: 0.5,
+        // Mechanical compile-fix: `estimated` is U4 cost-truthfulness turf
+        // (concurrent worker); this literal just needs a value to compile.
+        estimated: false,
     };
     let m2 = m.clone();
     assert_eq!(m, m2);

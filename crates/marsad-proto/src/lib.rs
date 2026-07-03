@@ -246,6 +246,15 @@ pub struct ModelUsage {
     pub output_tokens: u64,
     #[serde(default, rename = "costUSD")]
     pub cost_usd: f64,
+    /// U4 cost truthfulness: `true` when this row's cost was recomputed from
+    /// the local litellm/hand pricing table (transcript backfill / usage
+    /// probe) rather than copied verbatim from the claude stream's own
+    /// `result.modelUsage`. Absent (defaults `false`) on the wire — a live
+    /// `result` event never carries this key, so parsing one always yields
+    /// `estimated: false`. Backfill/usage-probe code paths in `marsad-core`
+    /// must explicitly set this `true` when constructing an estimated row.
+    #[serde(default)]
+    pub estimated: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -385,6 +394,78 @@ pub struct LaunchSpec {
 }
 
 // ---------------------------------------------------------------------------
+// CompactMetadata / CompactBoundary (U3b — context-compaction events)
+// ---------------------------------------------------------------------------
+
+/// The `compact_metadata` payload of a `system/compact_boundary` event.
+/// Fields default individually (forward-compat with a claude version that
+/// trims this payload down), mirroring `Usage`'s all-fields-default
+/// convention. Extra keys the real CLI also sends (`preserved_segment`,
+/// `preserved_messages` — internal bookkeeping with no UI-facing signal) are
+/// tolerated and ignored (no `deny_unknown_fields`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct CompactMetadata {
+    /// What triggered the compaction, verbatim (real values seen: "manual"
+    /// for an explicit `/compact`; auto-compaction is expected to use a
+    /// different value, never hand-enumerated here).
+    #[serde(default)]
+    pub trigger: String,
+    #[serde(default)]
+    pub pre_tokens: u64,
+    #[serde(default)]
+    pub post_tokens: u64,
+    #[serde(default)]
+    pub cumulative_dropped_tokens: u64,
+    #[serde(default)]
+    pub duration_ms: u64,
+}
+
+/// A `{"type":"system","subtype":"compact_boundary",...}` event — claude
+/// finished a context compaction (`/compact`, manual or automatic).
+/// `session_id` and `compact_metadata` are required: a line missing either
+/// is not a genuine compaction event worth modeling as one (SchemaMismatch,
+/// not a silently empty struct).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompactBoundary {
+    pub session_id: String,
+    pub compact_metadata: CompactMetadata,
+}
+
+// ---------------------------------------------------------------------------
+// RateLimitInfo / RateLimitEvent (U3b — rate-limit notices)
+// ---------------------------------------------------------------------------
+
+/// The `rate_limit_info` payload of a top-level `rate_limit_event` line.
+/// Fields default individually — forward-compat, same rationale as
+/// `CompactMetadata`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct RateLimitInfo {
+    /// Verbatim rate-limit status string (real values seen: "allowed").
+    /// Never hand-enumerated — claude may add statuses over time.
+    #[serde(default)]
+    pub status: String,
+    #[serde(default, rename = "resetsAt")]
+    pub resets_at: u64,
+    #[serde(default, rename = "rateLimitType")]
+    pub rate_limit_type: String,
+    #[serde(default, rename = "overageStatus")]
+    pub overage_status: String,
+    #[serde(default, rename = "isUsingOverage")]
+    pub is_using_overage: bool,
+}
+
+/// A top-level `{"type":"rate_limit_event","rate_limit_info":{...}}` line
+/// (NOT nested under `system` — this is its own top-level stream type).
+/// `session_id` defaults to `""` when absent (best-effort correlation only);
+/// `rate_limit_info` is the load-bearing payload and is required.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RateLimitEvent {
+    #[serde(default)]
+    pub session_id: String,
+    pub rate_limit_info: RateLimitInfo,
+}
+
+// ---------------------------------------------------------------------------
 // StreamMsg
 // ---------------------------------------------------------------------------
 
@@ -397,6 +478,10 @@ pub enum StreamMsg {
     Result(ResultMsg),
     ControlRequest(ControlRequest),
     ControlResponse(ControlResponse),
+    /// U3b: `system/compact_boundary` — a completed context compaction.
+    CompactBoundary(CompactBoundary),
+    /// U3b: top-level `rate_limit_event` — a rate-limit status notice.
+    RateLimitEvent(RateLimitEvent),
     Unknown(serde_json::Value),
 }
 
@@ -933,14 +1018,19 @@ pub fn parse_stream_line(line: &str) -> Result<StreamMsg, ProtoError> {
 
     match type_str {
         // Only `system/init` carries SystemInit's required fields
-        // (model/cwd/tools/permissionMode). Real live streams emit many other
-        // `system` subtypes (thinking_tokens, status, task_started/progress/
-        // updated/notification, compact_boundary, hook_started/hook_response,
-        // …) that lack them entirely — those are forward-compat `Unknown`
-        // (the full JSON, including `subtype`, is preserved in the `Value` for
-        // observability), not a schema error.
+        // (model/cwd/tools/permissionMode); only `system/compact_boundary`
+        // carries CompactBoundary's (session_id/compact_metadata). Real live
+        // streams emit many other `system` subtypes (thinking_tokens, status,
+        // task_started/progress/updated/notification, hook_started/
+        // hook_response, …) that lack both — those STAY forward-compat
+        // `Unknown` (the full JSON, including `subtype`, is preserved in the
+        // `Value` for observability), not a schema error. Don't over-fit:
+        // only these two subtypes graduate to typed variants.
         "system" if obj.get("subtype").and_then(|v| v.as_str()) == Some("init") => {
             from_val("system_init", value).map(StreamMsg::SystemInit)
+        }
+        "system" if obj.get("subtype").and_then(|v| v.as_str()) == Some("compact_boundary") => {
+            from_val("compact_boundary", value).map(StreamMsg::CompactBoundary)
         }
         "system" => Ok(StreamMsg::Unknown(value)),
         "assistant" => from_val("assistant", value).map(StreamMsg::Assistant),
@@ -952,6 +1042,9 @@ pub fn parse_stream_line(line: &str) -> Result<StreamMsg, ProtoError> {
         // The agent sends `initialize` fire-and-forget, so this is a no-op —
         // preserved verbatim for forward-compat, same as `Unknown`.
         "control_response" => Ok(StreamMsg::Unknown(value)),
+        // U3b: a top-level rate-limit status notice — NOT nested under
+        // `system` (its own wire-level `type`).
+        "rate_limit_event" => from_val("rate_limit_event", value).map(StreamMsg::RateLimitEvent),
         _ => Ok(StreamMsg::Unknown(value)),
     }
 }
