@@ -124,3 +124,36 @@ adding a real UniFFI wrapper layer over `marsad-core`. Large; only if the owner 
   workspace green, coverage gates met.
 - **Only genuinely unrun here:** the compiled desktop app (Prompt 1), its live e2e (Prompts 2–3), the
   codex/agy Marsad drivers (Prompt 4), and mobile (Prompt 5).
+
+---
+
+## Wasl known-issues / hardening backlog (from the final review, non-blocking)
+
+These were found by an adversarial final review. The merge-blocking ones (Tier-2 commit could lose an
+approved decision on audit-write failure; operator `gate_decided`-before-`gate_requested` race;
+guessable sequential Tier-2 tokens) were fixed test-first this cycle. The following are real but
+non-blocking — address on the real machine or before a public release:
+
+- **No process-level timeout in any adapter's `ProcessCliInvoker::invoke`** (claude/codex/antigravity).
+  A wedged CLI (e.g. `agy -p` hitting an OAuth prompt on an unauthenticated box) blocks `deliver()`
+  forever. Add a `tokio::time::timeout`/deadline around `wait_with_output`.
+- **Unbounded state growth, no TTL/pruning:** `wasl-gate` `GateLedger.resolved`, `wasl-mcp`
+  `pending_calls`/`decisions`, `wasl-operator` `resolved`. A client that prepares-and-never-commits
+  leaks memory on a long-lived node. Add expiry/caps.
+- **Antigravity puts the whole prompt in one argv element** (`wasl-adapter-antigravity`), unlike
+  claude/codex which stream over stdin. Two consequences: (a) Linux `MAX_ARG_STRLEN` (~128 KiB) makes
+  large deliveries fail with an opaque `E2BIG`, and the blind retry re-sends the same oversized prompt
+  → deterministic double failure; (b) the prompt is visible via `/proc/<pid>/cmdline` for the process
+  lifetime (cross-agent message-body disclosure on a shared host). agy has no verified stdin path, so
+  this needs either an agy stdin/file-input mechanism or a documented size cap + local-host caveat.
+- **Blind Continuation→First retry** in codex + antigravity adapters can double-deliver content if a
+  turn fails *after* the model consumed the input. The specs assume failure is always pre-token-spend;
+  undefended. Consider idempotency/dedup or narrowing the retry trigger.
+- **Low:** default `gate.authority = "elicitation"` silently no-ops an attached `[operator]` for
+  non-elicitation clients (document the trap); `OperatorHub::open_gate` without a matching `wait`
+  leaks the gate past its deadline (latent API gap, not hit today); `scripts/live-verify.sh` uses
+  python `eval()` on loopback JSON (not exploitable; add a justifying comment).
+
+The generic operator API has **no auth in v1** by design (documented) — it binds loopback-only by
+default and cannot be silently widened (no env override, no `0.0.0.0`). Adding auth is a v1.x item if
+the operator surface is ever exposed beyond loopback.
