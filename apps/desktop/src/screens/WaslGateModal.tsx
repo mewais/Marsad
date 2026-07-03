@@ -16,6 +16,7 @@ import { useVm } from "../bridge/useVm";
 export function WaslGateModal() {
   const { waslGates, answerWasl } = useVm();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (waslGates.length === 0) return null;
 
@@ -25,8 +26,16 @@ export function WaslGateModal() {
   async function decide(outcome: "approved" | "denied") {
     if (busy) return;
     setBusy(true);
+    setError(null);
     try {
       await answerWasl(gate.host_id, gate.gate_id, outcome);
+    } catch (e) {
+      // The human MUST know their decision didn't leave the machine — a
+      // silently-dropped relay would let them believe they'd answered a gate
+      // they didn't. Surface it and re-enable the buttons for a retry.
+      setError(
+        `Could not relay your decision: ${e instanceof Error ? e.message : String(e)}. Try again.`
+      );
     } finally {
       setBusy(false);
     }
@@ -97,6 +106,22 @@ export function WaslGateModal() {
         {waslGates.length > 1 && (
           <div style={{ marginTop: 10, color: "var(--txt3)", fontSize: "calc(12px * var(--fs,1))" }}>
             +{waslGates.length - 1} more pending
+          </div>
+        )}
+        {error && (
+          <div
+            data-testid="wasl-gate-error"
+            style={{
+              marginTop: 12,
+              padding: "8px 12px",
+              background: "var(--needs-bg, rgba(220,80,80,0.12))",
+              border: "1px solid var(--needs, #dc5050)",
+              borderRadius: 8,
+              color: "var(--needs, #dc5050)",
+              fontSize: "calc(13px * var(--fs,1))",
+            }}
+          >
+            {error}
           </div>
         )}
         <div style={{ display: "flex", gap: 10, marginTop: 18, justifyContent: "flex-end" }}>

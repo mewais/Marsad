@@ -83,10 +83,17 @@ envelope arm + the `list_sessions` deletion. Mobile apps remain scaffolding.
   replaced by Antigravity `agy`). U1 already discovers codex/agy models + sessions; the launch/supervise
   driver chain is the remaining work. Do not offer a driver in the UI until its full chain is green vs the
   real CLI.
-- ⚠️/❌ **Marsad↔Wasl**: the connector, agent/core/gates wiring, and launch toggle ARE built (see the status
-  update above). NOT yet built: the **X5 Wasl UI** (live graph edges + the real handoff-approval modal that
-  replaces the interim `onOpenGate` placeholder) and the **X6 live end-to-end** (launch a Wasl-enabled
-  workstream from Marsad → session A consults B → gate surfaces in Marsad → human approves → observed).
+- ✅/⚠️ **Marsad↔Wasl**: the connector, agent/core/gates wiring, launch toggle, AND the X5 Wasl UI are built.
+  The **X5 approval modal** (`WaslGateModal`, replacing the interim `onOpenGate` placeholder), the bridge/
+  state layer, and the Overview **activity surface** are done and mock-tested (`X5aWaslBridge`/`X5bWaslModal`/
+  `X5cWaslActivity` suites green). Graph typed-edges specifically were scoped out (observations render on
+  the activity surface instead). NOT yet done: the **X6 live end-to-end** (launch a Wasl-enabled workstream
+  → A consults B → gate surfaces in Marsad → human approves → observed) — needs the real runtime; and two
+  KNOWN correctness gaps found in final review: (a) `Agent::adopt_or_spawn_wasl_mcpd` has no production call
+  site, so a `wasl:true` launch injects `--mcp-config` but never starts the host node (X4 is structurally
+  incomplete, not just unverified); (b) `handle_answer_wasl_gate` does a blocking POST under the connector
+  lock on the single serve thread (a hung operator freezes the agent). Both tracked for fix; see
+  `docs/HANDOFF-OPUS.md`.
 
 ## First things to do on a machine with the real runtime
 1. Actually build `apps/desktop/src-tauri` (`cargo build`, then `cargo tauri dev`); fix any real

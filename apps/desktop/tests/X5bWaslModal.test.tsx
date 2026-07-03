@@ -92,4 +92,15 @@ describe("X5b — Wasl handoff-approval modal", () => {
     renderShell([gate, { ...gate, gate_id: "g2" }]);
     expect(screen.getByTestId("wasl-gate-modal").textContent).toContain("more pending");
   });
+
+  it("surfaces an error (not silently) when the relay fails, and re-enables", async () => {
+    answerWaslGate.mockRejectedValueOnce(new Error("operator unreachable"));
+    renderShell([gate]);
+    fireEvent.click(screen.getByTestId("wasl-gate-approve"));
+    await waitFor(() =>
+      expect(screen.getByTestId("wasl-gate-error").textContent).toContain("operator unreachable")
+    );
+    // Button re-enabled for a retry (the human must not think they answered).
+    expect((screen.getByTestId("wasl-gate-approve") as HTMLButtonElement).disabled).toBe(false);
+  });
 });
