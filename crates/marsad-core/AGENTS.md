@@ -2,7 +2,13 @@
 
 **Purpose:** Facade tying B01-B11 into the desktop/phone API; UniFFI surface; agent client.
 **Tier:** L1 (facade+FFI)
-**Full spec (read this first):** `../../docs/specs/core.md`
+**Full spec (read this first):** `../../docs/specs/core.md`; U1 dynamic capability discovery's
+core-side contract (`capabilities: HashMap<(driver, host_id), Capabilities>` state,
+`VmUpdate::Capabilities`, the `on_agent_line` `CapabilitiesUpdate`/`CapabilitiesRefreshQueued`
+arms, `Core::capabilities()`/`Core::refresh_capabilities()`) is specified in
+`../../docs/specs/dynamic-capabilities.md` §3.5. `VmUpdate::Capabilities` wraps
+`marsad_viewmodel::CapabilitiesView` (§3.6, a sibling block's pure `From<Capabilities>` mirror
+type) — read-only from here.
 **Test plan & coverage regime:** `../../docs/specs/TESTPLAN.md`
 **Design source of truth:** `_extracted/design_handoff_marsad/Marsad.dc.html` and `Marsad Mobile.dc.html` (port `renderVals()` / helper logic; do not invent behavior).
 

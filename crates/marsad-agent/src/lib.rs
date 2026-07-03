@@ -15,6 +15,7 @@ use marsad_lifecycle::{FakeContainer, Persisted};
 use marsad_notify::{CaptureNotifier, Notifier};
 use marsad_store::{MemoryBackend, Store};
 
+pub mod capabilities;
 mod driver;
 mod ipc;
 mod reader;

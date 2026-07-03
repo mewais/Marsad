@@ -99,6 +99,42 @@ pub struct FileChange {
 }
 
 // ---------------------------------------------------------------------------
+// CapabilitiesView — display-ready mirror of marsad_proto::Capabilities
+// (U1 dynamic capability discovery, docs/specs/dynamic-capabilities.md §3.6)
+// ---------------------------------------------------------------------------
+
+/// Display-ready mirror of `marsad_proto::Capabilities`. Ids are verbatim —
+/// no label synthesis (`modelLabel()` has no successor). Pure `From`
+/// mapping; the proto types are already wire/display-ready so the fields are
+/// reused directly rather than duplicated into parallel view types.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CapabilitiesView {
+    pub driver: String,
+    pub host_id: String,
+    pub cli_available: bool,
+    pub models: marsad_proto::ModelCatalog,
+    pub session_scope: Option<marsad_proto::SessionScope>,
+    pub sessions: Vec<marsad_proto::DiscoveredSession>,
+    pub fetched_at_ms: u64,
+    pub errors: Vec<String>,
+}
+
+impl From<marsad_proto::Capabilities> for CapabilitiesView {
+    fn from(c: marsad_proto::Capabilities) -> Self {
+        CapabilitiesView {
+            driver: c.driver,
+            host_id: c.host_id,
+            cli_available: c.cli_available,
+            models: c.models,
+            session_scope: c.session_scope,
+            sessions: c.sessions,
+            fetched_at_ms: c.fetched_at_ms,
+            errors: c.errors,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Workspace
 // ---------------------------------------------------------------------------
 

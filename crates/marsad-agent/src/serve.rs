@@ -4,6 +4,7 @@
 
 use marsad_lifecycle::Persisted;
 
+use super::capabilities::{CapabilityProvider, RealAgyProbe, RealClaudeProbe, RealCodexProbe};
 use super::reader::spawn_session_reader;
 use super::remote::{exec_prefix_for, remote_liveness_script, run_remote_script_bounded};
 use super::{Agent, AgentError, ListenSpec, SessionRecord};
@@ -125,6 +126,22 @@ impl Agent {
 
         let data_root = self.config.data_root.clone();
 
+        // ── U1 dynamic capability discovery ──────────────────────────────────
+        // One provider for the whole daemon lifetime: loads any persisted
+        // <data_root>/capabilities/<host>.json synchronously, then spawns a
+        // background full refresh (§3.2 trigger 1). "local" is the only known
+        // host wired here; remote hosts arrive via explicit RefreshCapabilities
+        // requests (host_id from the registry) once the GUI asks for them.
+        let capability_provider = Arc::new(CapabilityProvider::new(
+            vec![
+                Box::new(RealClaudeProbe),
+                Box::new(RealCodexProbe),
+                Box::new(RealAgyProbe),
+            ],
+            vec!["local".to_string()],
+            std::path::Path::new(&data_root),
+        ));
+
         // ── Reconnect sessions that survived an agent restart ──────────────────
         // The agent is a detached daemon; if it died (e.g. killed on reinstall) but
         // a session container is still alive, re-attach a reader to each live
@@ -237,6 +254,7 @@ impl Agent {
                                 Arc::clone(&self.session_writers.0),
                                 Arc::clone(&self.pending_gates.0),
                                 Arc::clone(&self.session_children.0),
+                                Some(Arc::clone(&capability_provider)),
                             );
                             eprintln!("marsad-agent: reconnected live remote session {}", s.id);
                         }
@@ -275,6 +293,7 @@ impl Agent {
                         Arc::clone(&self.session_writers.0),
                         Arc::clone(&self.pending_gates.0),
                         Arc::clone(&self.session_children.0),
+                        Some(Arc::clone(&capability_provider)),
                     );
                     eprintln!("marsad-agent: reconnected live session {}", s.id);
                 }
@@ -287,6 +306,7 @@ impl Agent {
         // never touches the `Agent`.
         let subs_accept = Arc::clone(&subscribers);
         let cmd_tx_accept = cmd_tx.clone();
+        let capability_provider_accept = Arc::clone(&capability_provider);
 
         std::thread::spawn(move || {
             loop {
@@ -312,6 +332,20 @@ impl Agent {
                     subs.push(bcast_tx_for_subs);
                 }
 
+                // §3.2 trigger 2: replay every cached CapabilitiesUpdate to this
+                // NEW subscriber immediately, then stream live broadcasts —
+                // routed through the same writer-thread channel as every other
+                // outbound line for this client.
+                {
+                    let cap_rx = capability_provider_accept.subscribe();
+                    let cap_tx = bcast_tx_for_reader.clone();
+                    std::thread::spawn(move || {
+                        for line in cap_rx {
+                            let _ = cap_tx.send(line);
+                        }
+                    });
+                }
+
                 let cmd_tx_client = cmd_tx_accept.clone();
                 let subs_client = Arc::clone(&subs_accept);
                 let data_root_client = data_root.clone();
@@ -319,6 +353,7 @@ impl Agent {
                 let writers_for_fifo = Arc::clone(&session_writers_for_fifo);
                 let pending_for_fifo = Arc::clone(&pending_gates_for_fifo);
                 let children_for_reader = Arc::clone(&session_children_for_reader);
+                let capability_provider_for_reader = Arc::clone(&capability_provider_accept);
 
                 // Split the client into independent write and read halves so
                 // each thread has exclusive ownership — no Mutex required.
@@ -414,6 +449,7 @@ impl Agent {
                                                 Arc::clone(&writers_for_fifo),
                                                 Arc::clone(&pending_for_fifo),
                                                 Arc::clone(&children_for_reader),
+                                                Some(Arc::clone(&capability_provider_for_reader)),
                                             );
                                         }
                                     }
@@ -433,6 +469,35 @@ impl Agent {
         // ── Agent command loop (runs on the serve thread) ──────────────────
         // Owns `self` (the Agent).  Processes one command at a time.
         for cmd in cmd_rx {
+            // U1: RefreshCapabilities is handled entirely by the capability
+            // provider, off `self` — the ack returns immediately and matching
+            // probes run on their own background threads (§4), never blocking
+            // this command loop (which every other session's launch/prompt/gate
+            // traffic also depends on).
+            if cmd.line.contains("\"RefreshCapabilities\"") {
+                let v: serde_json::Value =
+                    serde_json::from_str(&cmd.line).unwrap_or(serde_json::Value::Null);
+                let host_id = v
+                    .get("host_id")
+                    .and_then(|s| s.as_str())
+                    .map(str::to_string);
+                let driver = v.get("driver").and_then(|s| s.as_str()).map(str::to_string);
+                let project = v
+                    .get("project")
+                    .and_then(|s| s.as_str())
+                    .map(str::to_string);
+                let ack = capability_provider.handle_refresh(host_id, driver, project);
+                let _ = cmd.reply_tx.send(AgentReply {
+                    out_lines: Ok(vec![ack]),
+                    new_session_id: None,
+                    first_prompt: None,
+                    host_target: None,
+                    run_command: None,
+                    transcript_hint: None,
+                });
+                continue;
+            }
+
             let is_launch = cmd.line.contains("\"LaunchSession\"");
             let is_resume = cmd.line.contains("\"ResumeSession\"");
 

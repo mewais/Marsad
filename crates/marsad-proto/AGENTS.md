@@ -2,7 +2,11 @@
 
 **Purpose:** Wire types + serde for Claude stream-json and the GUI<->agent IPC protocol.
 **Tier:** L0 (pure)
-**Full spec (read this first):** `../../docs/specs/proto.md`
+**Full spec (read this first):** `../../docs/specs/proto.md`; U1 dynamic capability discovery's
+wire surface (`Capabilities`/`ModelCatalog`/`ModelInfo`/`ModelListSource`/`DiscoveredSession`/
+`SessionScope` domain types + the `RefreshCapabilities`/`CapabilitiesRefreshQueued`/
+`CapabilitiesUpdate` `IpcMsg` variants) is specified in
+`../../docs/specs/dynamic-capabilities.md` §1-§2.
 **Test plan & coverage regime:** `../../docs/specs/TESTPLAN.md`
 **Design source of truth:** `_extracted/design_handoff_marsad/Marsad.dc.html` and `Marsad Mobile.dc.html` (port `renderVals()` / helper logic; do not invent behavior).
 

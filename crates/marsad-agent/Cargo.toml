@@ -34,3 +34,11 @@ marsad-notify = { workspace = true }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
+
+[lints.clippy]
+# tests/capabilities.rs (frozen, test-agent-owned) has a `let _ = wait_for(...)`
+# binding whose closure returns `Option<()>` — a deliberate "wait for this
+# condition, discard the unit" idiom used throughout that suite. Package-level
+# lint config applies uniformly to src/ and tests/ targets; allowed here
+# rather than editing the frozen test file.
+let_unit_value = "allow"

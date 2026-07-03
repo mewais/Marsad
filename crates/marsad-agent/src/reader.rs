@@ -126,6 +126,11 @@ pub(crate) fn spawn_session_reader(
     writers_fifo: std::sync::Arc<std::sync::Mutex<HashMap<String, SharedWriter>>>,
     pending_fifo: std::sync::Arc<std::sync::Mutex<HashMap<String, PendingGate>>>,
     children: std::sync::Arc<std::sync::Mutex<HashMap<String, std::process::Child>>>,
+    // U1 (§3.2 trigger 4): passive claude-model observation. `None` for
+    // reconnect paths that don't carry the Arc (never actually passed as
+    // None today — kept Option so a future caller without a provider handy
+    // degrades to a no-op rather than a forced dependency).
+    capability_provider: Option<std::sync::Arc<crate::capabilities::CapabilityProvider>>,
 ) {
     // `run_command` is only used when the caller signals that a launch script
     // was not yet run (i.e. not provided to spawn_container).  For the durable
@@ -141,6 +146,11 @@ pub(crate) fn spawn_session_reader(
         // For REMOTE sessions: save the project path so the read loop can probe
         // git after each result event. We extract it from transcript_hint when
         // available; otherwise we have no project path to probe (skip silently).
+        // U1 (§3.2 trigger 4): the capability-provider host key for this
+        // session — "local" when host_target is unset, mirroring the
+        // provider's own local/remote key convention (capabilities.rs).
+        let capability_host_id = host_target.clone().unwrap_or_else(|| "local".to_string());
+
         let remote_project: Option<String> = if host_target.is_some() {
             transcript_hint.as_ref().map(|(p, _)| p.clone())
         } else {
@@ -547,6 +557,21 @@ pub(crate) fn spawn_session_reader(
 
                         let event: serde_json::Value = serde_json::from_str(raw)
                             .unwrap_or_else(|_| serde_json::json!({"raw": raw}));
+
+                        // U1 (§3.2 trigger 4): a `system:init` line reports the
+                        // model claude actually launched with — the only signal
+                        // that exists for claude's model catalog (§1.1: "no list
+                        // command"). Accumulate it into the host's observed set.
+                        if event.get("type").and_then(|t| t.as_str()) == Some("system")
+                            && event.get("subtype").and_then(|t| t.as_str()) == Some("init")
+                        {
+                            if let (Some(provider), Some(model)) = (
+                                capability_provider.as_ref(),
+                                event.get("model").and_then(|m| m.as_str()),
+                            ) {
+                                provider.observe_claude_model(&capability_host_id, model);
+                            }
+                        }
 
                         // Determine whether this event should trigger a
                         // remote git Changes probe.

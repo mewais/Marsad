@@ -47,18 +47,43 @@ doubt, prefer the file the majority of its callers already live in.
   builders (`remote_writer_argv`/`remote_reader_argv`), and
   `build_remote_spawn_cmd`/`fetch_remote_session_list`.
 - **`serve.rs`** — `Agent::serve`, the blocking real-IO event loop (bind, accept,
-  command loop). Entirely `#[cfg(not(coverage))]`.
+  command loop). Entirely `#[cfg(not(coverage))]`. Also owns the U1 capability
+  provider's production wiring: constructs the daemon-lifetime
+  `CapabilityProvider` (real probes), intercepts `RefreshCapabilities` lines
+  before `handle_ipc`, and forwards each new subscriber's cache-replay + live
+  `CapabilitiesUpdate` broadcasts through the same per-client channel as
+  `AgentEvent`s.
+- **`capabilities.rs`** (`pub mod`, unlike the rest of this map — its seam is
+  independently unit-tested per `tests/capabilities.rs`) — U1 dynamic
+  capability discovery (`docs/specs/dynamic-capabilities.md`): the pure parse
+  functions (`parse_agy_models`, `parse_codex_debug_models`,
+  `parse_codex_rollout_meta`, `agy_snippet_from_transcript`,
+  `parse_remote_claude_session_list`), the temp-dir-rooted scanners
+  (`scan_codex_sessions`, `scan_agy_sessions`), the `CapabilityProbe` trait +
+  `HostProbeCtx`, the `CapabilityProvider` state machine (refresh-on-demand,
+  cache replay, in-flight dedup, persistence to
+  `<data_root>/capabilities/<host_id>.json`, spawned-thread probes with hard
+  deadlines — never blocking the caller), and the real,
+  subprocess/`$HOME`-rooted probe implementations (`RealCodexProbe`/
+  `RealAgyProbe`/`RealClaudeProbe`, `#[cfg(not(coverage))]` — untested by
+  design, no live `codex`/`agy`/`claude` on the test machine; production-only,
+  wired from `serve.rs`). `reader.rs`'s read loop calls
+  `CapabilityProvider::observe_claude_model` on every `system:init` line
+  (§3.2 trigger 4).
 
 Cross-file calls between these use `pub(crate)` where the callee isn't already
 `pub`; nothing in this list is reachable from outside the crate except through
 the `pub use` re-exports in `lib.rs` (or as an `Agent`/`AgentConfig`/`AgentError`/
 `ListenSpec` method or variant, which don't need re-exporting since they're
-defined in `lib.rs` itself).
+defined in `lib.rs` itself), plus `capabilities` itself (a public module).
 
 ## Definition of done
 - The public API in `docs/specs/agent.md` is implemented exactly (names, signatures, semantics).
 - `cargo test -p marsad-agent` is fully green.
-- `cargo llvm-cov -p marsad-agent --fail-under-lines 100 --fail-under-regions 100` passes.
+- `cargo llvm-cov -p marsad-agent --fail-under-lines 100 --fail-under-regions 100
+  --ignore-filename-regex 'src/main\.rs'` passes (the `main.rs` exemption mirrors
+  `ci.yml`'s daemon-entry-point carve-out; `serve.rs` needs no separate
+  exemption — it is compiled out entirely under `cfg(coverage)`, §"Module map").
 - No `unsafe`, no panics on documented inputs, no IO beyond what the spec allows. Run `cargo fmt`
   and `cargo clippy -p marsad-agent -- -D warnings` clean.
 

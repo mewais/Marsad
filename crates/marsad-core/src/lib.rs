@@ -105,6 +105,10 @@ pub enum VmUpdate {
 
     /// The workstreams board recomputed.
     Board(marsad_viewmodel::BoardView),
+
+    /// One (driver, host) capability snapshot changed (U1 dynamic capability
+    /// discovery, docs/specs/dynamic-capabilities.md §3.5).
+    Capabilities(marsad_viewmodel::CapabilitiesView),
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +333,8 @@ pub struct Core {
     membership: HashMap<String, String>,
     ws_leads: HashMap<String, String>,
     active_profile: Option<String>,
+    /// U1 dynamic capability discovery: last known snapshot per (driver, host_id).
+    capabilities: HashMap<(String, String), marsad_proto::Capabilities>,
 }
 
 /// Default persistence backend: real filesystem in production, in-memory under
@@ -411,6 +417,7 @@ impl Core {
             membership: HashMap::new(),
             ws_leads: HashMap::new(),
             active_profile: None,
+            capabilities: HashMap::new(),
         })
     }
 
@@ -1597,6 +1604,36 @@ impl Core {
     }
 
     // -----------------------------------------------------------------------
+    // U1 dynamic capability discovery (docs/specs/dynamic-capabilities.md §3.5)
+    // -----------------------------------------------------------------------
+
+    /// Cloned snapshot of every (driver, host) capability entry seen so far
+    /// (lock-only, no IO — mirrors `board()`).
+    pub fn capabilities(&self) -> Vec<marsad_viewmodel::CapabilitiesView> {
+        self.capabilities
+            .values()
+            .cloned()
+            .map(marsad_viewmodel::CapabilitiesView::from)
+            .collect()
+    }
+
+    /// Ask the agent to (re)probe capabilities: a single IPC line write, same
+    /// cost class as [`Core::interrupt`] — never waits for a reply. Results
+    /// arrive later as `CapabilitiesUpdate` broadcasts via `on_agent_line`.
+    pub fn refresh_capabilities(
+        &mut self,
+        host_id: Option<String>,
+        driver: Option<String>,
+        project: Option<String>,
+    ) {
+        let _ = self.send_ipc(&IpcMsg::RefreshCapabilities {
+            host_id,
+            driver,
+            project,
+        });
+    }
+
+    // -----------------------------------------------------------------------
     // Inbound IPC parsing — central testable seam
     // -----------------------------------------------------------------------
 
@@ -1633,6 +1670,17 @@ impl Core {
             IpcMsg::UsageUpdate { session_id, usage } => {
                 self.handle_usage_update(session_id, usage)
             }
+            // U1: one (driver, host) snapshot — always a COMPLETE replace, never
+            // a merge (dynamic-capabilities.md §2/§3.5).
+            IpcMsg::CapabilitiesUpdate {
+                host_id,
+                driver,
+                capabilities,
+            } => {
+                self.capabilities
+                    .insert((driver, host_id), capabilities.clone());
+                Ok(vec![VmUpdate::Capabilities(capabilities.into())])
+            }
             // Command acks legitimately arrive on the subscriber connection.
             IpcMsg::SessionLaunched { .. }
             | IpcMsg::SessionResumed { .. }
@@ -1643,6 +1691,7 @@ impl Core {
             | IpcMsg::GateAnswered { .. }
             | IpcMsg::QuestionAnswered { .. }
             | IpcMsg::Subscribed { .. }
+            | IpcMsg::CapabilitiesRefreshQueued { .. }
             | IpcMsg::Error { .. } => Ok(vec![]),
             // A GUI→agent message arriving inbound is a routing bug: hard error
             // (same observable class as today's "unknown IPC type" Protocol error).

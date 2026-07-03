@@ -394,6 +394,112 @@ pub enum StreamMsg {
 }
 
 // ---------------------------------------------------------------------------
+// Capabilities (U1 — dynamic capability discovery, docs/specs/dynamic-capabilities.md §1)
+// ---------------------------------------------------------------------------
+
+/// One selectable model, exactly as the driver reports it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelInfo {
+    /// The exact string passed to the CLI's model flag (`--model` / `-m`). Verbatim,
+    /// never normalized: agy model names contain spaces/parens ("Gemini 3.5 Flash (Low)").
+    pub id: String,
+    /// Driver-reported qualifier, verbatim (e.g. codex catalog priority/flagship info).
+    /// NEVER synthesized by Marsad — no hand-written "Most capable" sublabels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotation: Option<String>,
+}
+
+/// Provenance of a model catalog — drives the UI's "unverified list" treatment.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ModelListSource {
+    /// The CLI enumerated it (codex `debug models`, `agy models`).
+    Listed,
+    /// Inferred from observation (claude: models seen in `system:init` + persisted
+    /// last-known). UI MUST label this "unverified" and MUST offer free-text entry.
+    Observed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelCatalog {
+    #[serde(default)]
+    pub models: Vec<ModelInfo>,
+    pub source: ModelListSource,
+    /// UI must additionally offer a free-text model field. true for claude (always)
+    /// and codex (account catalog may lag); false for agy (the CLI accepts exactly
+    /// the `agy models` strings — an unknown model is a designated error case,
+    /// antigravity-research §6#4).
+    #[serde(default)]
+    pub free_text: bool,
+}
+
+impl Default for ModelCatalog {
+    fn default() -> Self {
+        // The honest empty state: nothing observed yet, free text allowed.
+        ModelCatalog {
+            models: vec![],
+            source: ModelListSource::Observed,
+            free_text: true,
+        }
+    }
+}
+
+/// One resumable past session discovered on the host.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveredSession {
+    /// Driver-native resume id (claude UUID stem / codex thread uuid / agy conversation uuid).
+    pub id: String,
+    /// Project/workspace directory. None where the store doesn't record it
+    /// retrievably (agy: only the most-recent conversation per workspace is mapped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// First user prompt, trimmed + truncated (~100 chars), driver-appropriate parse.
+    #[serde(default)]
+    pub snippet: String,
+    /// Last-activity mtime, Unix epoch milliseconds.
+    #[serde(default)]
+    pub modified_ms: u64,
+}
+
+/// What the session scan covered — claude's on-disk project encoding is lossy
+/// (`encode_project_dir`, crates/marsad-core/src/discovery.rs:205 — `/` and `_` both
+/// map to `-`), so claude sessions can only be enumerated per REQUESTED project;
+/// codex/agy stores are globally enumerable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SessionScope {
+    /// Everything the driver's store contains (codex, agy).
+    AllKnown,
+    /// Only these requested project paths (claude). Grows as projects are requested;
+    /// persisted so the cache replays them.
+    Projects(Vec<String>),
+}
+
+/// Discovered capabilities for one (driver, host) pair. The unit of caching,
+/// persistence, wire transfer, and VmUpdate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Capabilities {
+    pub driver: String,
+    pub host_id: String,
+    /// Whether the driver's binary was found/runnable on the host. Discovered
+    /// (`command -v`/probe), never assumed. M7d's driver picker gains its
+    /// ground truth here later.
+    #[serde(default)]
+    pub cli_available: bool,
+    #[serde(default)]
+    pub models: ModelCatalog,
+    #[serde(default)]
+    pub session_scope: Option<SessionScope>,
+    #[serde(default)]
+    pub sessions: Vec<DiscoveredSession>,
+    /// When the last successful probe finished; 0 = never (persisted-cache only /
+    /// first run). UI derives staleness from this — no boolean baked in.
+    #[serde(default)]
+    pub fetched_at_ms: u64,
+    /// Per-probe failures, verbatim, surfaced not swallowed ("agy models: exit 1: …").
+    #[serde(default)]
+    pub errors: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
 // IpcMsg
 // ---------------------------------------------------------------------------
 
@@ -551,6 +657,20 @@ pub enum IpcMsg {
     SetWorkspace {
         workspace_id: String,
     },
+    /// Ask the agent to (re)probe capabilities. Fire-and-forget: the reply is
+    /// the `CapabilitiesRefreshQueued` ack; results arrive later as
+    /// `CapabilitiesUpdate` broadcasts. `None` = all.
+    RefreshCapabilities {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        driver: Option<String>,
+        /// claude sessions need a project scope (dynamic-capabilities.md §1.2);
+        /// adds it to the host's `SessionScope::Projects` set. Ignored by
+        /// `AllKnown` drivers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+    },
 
     // ── agent → GUI/core ────────────────────────────────────────────────────
     VmUpdate {
@@ -626,6 +746,23 @@ pub enum IpcMsg {
     /// The serve loop's error reply.
     Error {
         message: String,
+    },
+    /// Serve-loop ack (house convention: every command line gets a typed
+    /// reply) for `RefreshCapabilities`.
+    CapabilitiesRefreshQueued {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host_id: Option<String>,
+    },
+    /// One (driver, host) snapshot — broadcast to all subscribers on probe
+    /// completion AND replayed from cache to each new subscriber. Always a
+    /// COMPLETE snapshot (replace, not merge, on the receiving side).
+    CapabilitiesUpdate {
+        host_id: String,
+        driver: String,
+        /// Typed — `Capabilities` lives in proto (§1), unlike `ChangesUpdate`'s
+        /// `Value` (whose `FileChange` lives in viewmodel; no such DAG
+        /// constraint here).
+        capabilities: Capabilities,
     },
 }
 
@@ -984,6 +1121,9 @@ pub fn parse_ipc(line: &str) -> Result<IpcMsg, ProtoError> {
         "QuestionAnswered",
         "Subscribed",
         "Error",
+        "RefreshCapabilities",
+        "CapabilitiesRefreshQueued",
+        "CapabilitiesUpdate",
     ];
 
     if !KNOWN.contains(&type_str) {

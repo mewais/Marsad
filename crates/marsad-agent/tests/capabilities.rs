@@ -1,0 +1,1105 @@
+//! capabilities.rs — U1 dynamic capability discovery, `marsad-agent` half.
+//!
+//! Authoritative spec: `docs/specs/dynamic-capabilities.md` §1.1/§1.2 (per-driver
+//! model/session discovery mechanisms), §3 (the `CapabilityProbe` seam, refresh
+//! triggers, staleness policy, persistence), §4 (the non-blocking rule), and §6
+//! ("marsad-agent" test plan).
+//!
+//! Real-world fixtures used (house guardrail — phase2-drivers.md: "capture real
+//! fixtures... never implement a normalizer from docs alone"):
+//! - `fixtures/codex/debug_models.json` — REAL captured `codex debug models`
+//!   stdout, codex-cli 0.142.5 (3 models: `gpt-5.5`/`gpt-5.4-mini` visible,
+//!   `codex-auto-review` hidden).
+//! - The verbatim 8-line `agy models` output and the verbatim 5-line
+//!   `transcript_full.jsonl` sample, both quoted in
+//!   `docs/specs/antigravity-research.md` §0/§3.2 — inlined here as string
+//!   literals per the task instructions (no live `agy` on this machine).
+//!
+//! NOTE(test-agent) — INVENTED API SURFACE: §3.1 pins the `CapabilityProbe`
+//! trait and `HostProbeCtx` struct verbatim, and §3.2/§3.3/§3.4/§4 pin the
+//! agent's *behavior* (background-thread probing, in-flight dedup, TTL-gated
+//! background re-probe with an always-instant cache read, persistence to
+//! `<data_root>/capabilities/<host_id>.json`, non-blocking broadcast) in
+//! prose — but the spec does not name the Rust type that owns this state
+//! machine (only that it lives in a new `crates/marsad-agent/src/capabilities.rs`
+//! module, §3.1). Mirroring the house convention already used in
+//! `tests/happy.rs` (see its top-of-file NOTE on `Agent::with_fakes`), this
+//! file assumes a `CapabilityProvider` type in `marsad_agent::capabilities`,
+//! independently testable (the "provider seam" §6 refers to: "fake probe
+//! injected through the provider seam") without going through the real,
+//! `#[cfg(not(coverage))]`-gated socket serve loop (`serve.rs`) — because the
+//! dedup/TTL/broadcast/persistence LOGIC itself must hit the crate's 100%
+//! coverage bar and therefore cannot live only in the coverage-excluded
+//! real-IO path:
+//!
+//!   CapabilityProvider::new(probes: Vec<Box<dyn CapabilityProbe>>,
+//!                            known_hosts: Vec<String>,
+//!                            data_root: &Path) -> Self
+//!     — loads any persisted `<data_root>/capabilities/<host>.json` files
+//!       synchronously, THEN spawns a background full refresh (§3.2 trigger 1).
+//!   provider.subscribe() -> mpsc::Receiver<String>
+//!     — registers a new subscriber; replays every cached CapabilitiesUpdate
+//!       line to it BEFORE returning (§3.2 trigger 2), then streams live
+//!       broadcasts. Encoded IpcMsg lines, parsed with `parse_ipc` by callers.
+//!   provider.handle_refresh(host_id: Option<String>, driver: Option<String>,
+//!                            project: Option<String>) -> String
+//!     — returns the encoded `CapabilitiesRefreshQueued` ack immediately;
+//!       queues matching probes on background threads (§3.2 trigger 3, §4).
+//!   provider.snapshot(driver: &str, host_id: &str) -> Option<Capabilities>
+//!     — lock-clone-return cache read (no IO), mirrors `Core::capabilities()`.
+//!   provider.observe_claude_model(host_id: &str, model: &str)
+//!     — passive claude-model observation (§3.2 trigger 4): accumulates into
+//!       the host's `Observed` model set, persists, and broadcasts.
+//!
+//! If the code-agent lands a differently-shaped seam (e.g. folding this into
+//! `Agent` directly), it should adjust these call sites — the BEHAVIOR pinned
+//! here (never block on IO, in-flight dedup, instant cache reads, honest
+//! persistence, errors surfaced not swallowed) is the actual contract, not
+//! the exact type/method names.
+//!
+//! This file WILL fail to compile until the code-agent lands the pure parse
+//! functions, the `CapabilityProbe`/`HostProbeCtx`/`CapabilityProvider` seam,
+//! and the scan functions below. That is the expected tests-first
+//! compile-failure signal.
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use marsad_agent::capabilities::{
+    agy_snippet_from_transcript, parse_agy_models, parse_codex_debug_models,
+    parse_codex_rollout_meta, parse_remote_claude_session_list, scan_agy_sessions,
+    scan_codex_sessions, CapabilityProbe, CapabilityProvider, HostProbeCtx,
+};
+use marsad_proto::{
+    parse_ipc, Capabilities, DiscoveredSession, IpcMsg, ModelListSource, SessionScope,
+};
+
+// ---------------------------------------------------------------------------
+// Shared temp-dir + fixture-path helpers (mirrors marsad-core's
+// discovery.rs test idiom — no `tempfile` dev-dependency needed).
+// ---------------------------------------------------------------------------
+
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn tempdir() -> TempDir {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "marsad-agent-capabilities-test-{}-{n}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&path).unwrap();
+    TempDir(path)
+}
+
+/// Set a file's mtime via `touch -d @<epoch>` (GNU coreutils) — same
+/// work-around `marsad-core/src/discovery.rs`'s test suite uses (no mtime
+/// syscall available in stable `std`, no `filetime` dev-dependency).
+fn set_mtime(path: &Path, offset_secs: i64) {
+    let base = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    std::process::Command::new("touch")
+        .arg("-d")
+        .arg(format!("@{}", base + offset_secs))
+        .arg(path)
+        .status()
+        .expect("touch failed");
+}
+
+fn fixture_path(rel: &str) -> PathBuf {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    PathBuf::from(manifest_dir).join("../../fixtures").join(rel)
+}
+
+/// Poll `f` every 20ms until it returns `Some`, or panic after `timeout`.
+/// Used to observe background-thread probe results deterministically without
+/// a fixed sleep (which would be either flaky or needlessly slow).
+fn wait_for<T>(timeout: Duration, mut f: impl FnMut() -> Option<T>) -> T {
+    let start = Instant::now();
+    loop {
+        if let Some(v) = f() {
+            return v;
+        }
+        if start.elapsed() > timeout {
+            panic!("wait_for: condition not met within {timeout:?}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+// ===========================================================================
+// Part 1 — pure parse functions (no IO; §3.1)
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// parse_agy_models — the verbatim 8-line `agy models` output
+// (antigravity-research.md §0)
+// ---------------------------------------------------------------------------
+
+const AGY_MODELS_OUTPUT: &str = "Gemini 3.5 Flash (Medium)\n\
+Gemini 3.5 Flash (High)\n\
+Gemini 3.5 Flash (Low)\n\
+Gemini 3.1 Pro (Low)\n\
+Gemini 3.1 Pro (High)\n\
+Claude Sonnet 4.6 (Thinking)\n\
+Claude Opus 4.6 (Thinking)\n\
+GPT-OSS 120B (Medium)\n";
+
+#[test]
+fn parse_agy_models_verbatim_8_lines() {
+    let models = parse_agy_models(AGY_MODELS_OUTPUT);
+    assert_eq!(
+        models.len(),
+        8,
+        "the real `agy models` output has exactly 8 lines"
+    );
+    let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec![
+            "Gemini 3.5 Flash (Medium)",
+            "Gemini 3.5 Flash (High)",
+            "Gemini 3.5 Flash (Low)",
+            "Gemini 3.1 Pro (Low)",
+            "Gemini 3.1 Pro (High)",
+            "Claude Sonnet 4.6 (Thinking)",
+            "Claude Opus 4.6 (Thinking)",
+            "GPT-OSS 120B (Medium)",
+        ],
+        "ids must be verbatim — spaces/parens/mixed-vendor names untouched (§1.1)"
+    );
+    // §1.1: agy models are `Listed`, `free_text: false` — pass verbatim to --model.
+    for m in &models {
+        assert_eq!(
+            m.annotation, None,
+            "agy has no per-model annotation — one name per line"
+        );
+    }
+}
+
+#[test]
+fn parse_agy_models_tolerates_trailing_whitespace_and_blank_lines() {
+    let noisy = "Gemini 3.5 Flash (Low)\n\n  \nClaude Opus 4.6 (Thinking)  \n\n";
+    let models = parse_agy_models(noisy);
+    let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["Gemini 3.5 Flash (Low)", "Claude Opus 4.6 (Thinking)"]
+    );
+}
+
+#[test]
+fn parse_agy_models_empty_stdout_is_empty_not_error() {
+    assert_eq!(parse_agy_models(""), vec![]);
+    assert_eq!(parse_agy_models("\n\n  \n"), vec![]);
+}
+
+// ---------------------------------------------------------------------------
+// parse_codex_debug_models — REAL captured fixture,
+// fixtures/codex/debug_models.json (codex-cli 0.142.5)
+// ---------------------------------------------------------------------------
+
+fn codex_debug_models_fixture() -> String {
+    let path = fixture_path("codex/debug_models.json");
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read {path:?}: {e}"))
+}
+
+#[test]
+fn parse_codex_debug_models_real_fixture_excludes_hidden_model() {
+    let raw = codex_debug_models_fixture();
+    let models = parse_codex_debug_models(&raw);
+
+    // Real fixture has exactly 3 models: gpt-5.5 (visibility=list, priority=7),
+    // gpt-5.4-mini (visibility=list, priority=23), codex-auto-review
+    // (visibility=hide, priority=43). §1.1: "hidden models... are excluded."
+    let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(
+        ids.len(),
+        2,
+        "exactly the 2 non-hidden models must survive, got: {ids:?}"
+    );
+    assert!(ids.contains(&"gpt-5.5"));
+    assert!(ids.contains(&"gpt-5.4-mini"));
+    assert!(
+        !ids.contains(&"codex-auto-review"),
+        "codex-auto-review has visibility=hide and must be excluded"
+    );
+}
+
+#[test]
+fn parse_codex_debug_models_priority_lands_in_annotation_verbatim() {
+    // §6: "assert hidden models excluded, priority text lands in annotation
+    // verbatim." NOTE(test-agent): the exact string form of "priority text"
+    // is not pinned beyond this phrase; the most literal reading — the
+    // model's numeric `priority` field, stringified, landing unmodified in
+    // `annotation` — is what's asserted here.
+    let raw = codex_debug_models_fixture();
+    let models = parse_codex_debug_models(&raw);
+    let gpt55 = models
+        .iter()
+        .find(|m| m.id == "gpt-5.5")
+        .expect("gpt-5.5 must be present");
+    assert_eq!(
+        gpt55.annotation.as_deref(),
+        Some("7"),
+        "gpt-5.5's real priority is 7"
+    );
+
+    let mini = models
+        .iter()
+        .find(|m| m.id == "gpt-5.4-mini")
+        .expect("gpt-5.4-mini must be present");
+    assert_eq!(
+        mini.annotation.as_deref(),
+        Some("23"),
+        "gpt-5.4-mini's real priority is 23"
+    );
+}
+
+#[test]
+fn parse_codex_debug_models_empty_models_array_is_empty_not_error() {
+    let models = parse_codex_debug_models(r#"{"models":[]}"#);
+    assert_eq!(models, vec![]);
+}
+
+#[test]
+fn parse_codex_debug_models_malformed_json_is_empty_not_panic() {
+    // §3.1: probes never panic; a parse fn facing garbage must degrade to
+    // empty, letting the caller surface the real subprocess exit code /
+    // stderr into `Capabilities.errors` instead.
+    let models = parse_codex_debug_models("not json at all");
+    assert_eq!(models, vec![]);
+}
+
+// ---------------------------------------------------------------------------
+// parse_codex_rollout_meta + scan_codex_sessions
+// (codex-research.md §d: filename pattern + session_meta/response_item shapes)
+// ---------------------------------------------------------------------------
+
+/// A `session_meta` first line built from codex-research.md §d's documented
+/// field set (`session_id, id, timestamp, cwd, originator: "codex_exec",
+/// source: "exec", thread_source: "user", cli_version, model_provider,
+/// base_instructions`), using the SAME thread uuid/timestamp as the doc's
+/// real concretely-captured filename example (§d: "Concretely:
+/// ~/.codex/sessions/2026/07/02/rollout-2026-07-02T11-38-07-019f237a-f03d-7710-ab8f-7af32b222df8.jsonl").
+const CODEX_SESSION_META_LINE: &str = r#"{"timestamp":"2026-07-02T11:38:07.000Z","type":"session_meta","payload":{"session_id":"019f237a-f03d-7710-ab8f-7af32b222df8","id":"019f237a-f03d-7710-ab8f-7af32b222df8","timestamp":"2026-07-02T11:38:07.000Z","cwd":"/work/mewais/OpenSource/Marsad","originator":"codex_exec","source":"exec","thread_source":"user","cli_version":"0.142.5","model_provider":"openai","base_instructions":{"text":"You are Codex..."}}}"#;
+
+const CODEX_ROLLOUT_FILENAME: &str =
+    "rollout-2026-07-02T11-38-07-019f237a-f03d-7710-ab8f-7af32b222df8.jsonl";
+
+/// NOTE(test-agent): codex-research.md §d describes `response_item`'s user
+/// message prose-only ("raw model I/O turned into rollout form: user
+/// `message` (role, content[])") — no literal captured line exists in the
+/// doc (unlike `session_meta`'s field LIST, which this line follows exactly).
+/// This is the most natural encoding of that prose and is what
+/// `scan_codex_sessions` is tested against; if the real wire shape differs
+/// this test (not the implementation) should be revisited against a captured
+/// fixture, per the phase2-drivers.md guardrail.
+const CODEX_USER_RESPONSE_ITEM_LINE: &str = r#"{"timestamp":"2026-07-02T11:38:08.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"add a health check endpoint"}]}}"#;
+
+#[test]
+fn parse_codex_rollout_meta_valid_session_meta_extracts_id_and_project() {
+    let (id, project) = parse_codex_rollout_meta(CODEX_ROLLOUT_FILENAME, CODEX_SESSION_META_LINE)
+        .expect("a well-formed rollout filename must parse");
+    assert_eq!(
+        id, "019f237a-f03d-7710-ab8f-7af32b222df8",
+        "id is the trailing filename uuid"
+    );
+    assert_eq!(
+        project.as_deref(),
+        Some("/work/mewais/OpenSource/Marsad"),
+        "project comes from payload.cwd"
+    );
+}
+
+/// §6: "malformed first line → session listed with empty project/snippet
+/// (skip, don't fail)" — the SESSION is still listed (id survives from the
+/// filename), only `project` degrades to `None`.
+#[test]
+fn parse_codex_rollout_meta_malformed_first_line_yields_id_with_no_project() {
+    let (id, project) = parse_codex_rollout_meta(CODEX_ROLLOUT_FILENAME, "not json")
+        .expect("filename alone must still yield an id even when the first line is garbage");
+    assert_eq!(id, "019f237a-f03d-7710-ab8f-7af32b222df8");
+    assert_eq!(project, None);
+}
+
+#[test]
+fn parse_codex_rollout_meta_non_rollout_filename_is_none() {
+    assert_eq!(
+        parse_codex_rollout_meta("not-a-rollout-file.txt", CODEX_SESSION_META_LINE),
+        None
+    );
+}
+
+fn write_file(dir: &Path, filename: &str, content: &str) -> PathBuf {
+    let path = dir.join(filename);
+    std::fs::write(&path, content).unwrap();
+    path
+}
+
+#[test]
+fn scan_codex_sessions_extracts_id_project_snippet_from_temp_tree() {
+    let tmp = tempdir();
+    let day_dir = tmp.path().join("sessions/2026/07/02");
+    std::fs::create_dir_all(&day_dir).unwrap();
+
+    let body = format!("{CODEX_SESSION_META_LINE}\n{CODEX_USER_RESPONSE_ITEM_LINE}\n");
+    write_file(&day_dir, CODEX_ROLLOUT_FILENAME, &body);
+
+    let sessions = scan_codex_sessions(&tmp.path().join("sessions"), 200);
+    assert_eq!(sessions.len(), 1);
+    let s = &sessions[0];
+    assert_eq!(s.id, "019f237a-f03d-7710-ab8f-7af32b222df8");
+    assert_eq!(s.project.as_deref(), Some("/work/mewais/OpenSource/Marsad"));
+    assert_eq!(s.snippet, "add a health check endpoint");
+}
+
+#[test]
+fn scan_codex_sessions_newest_first_ordering_and_file_cap() {
+    let tmp = tempdir();
+    let day_dir = tmp.path().join("sessions/2026/07/02");
+    std::fs::create_dir_all(&day_dir).unwrap();
+
+    let names = [
+        "rollout-2026-07-02T09-00-00-00000000-0000-0000-0000-000000000001.jsonl",
+        "rollout-2026-07-02T10-00-00-00000000-0000-0000-0000-000000000002.jsonl",
+        "rollout-2026-07-02T11-00-00-00000000-0000-0000-0000-000000000003.jsonl",
+    ];
+    for (i, name) in names.iter().enumerate() {
+        let meta = CODEX_SESSION_META_LINE.replace(
+            "019f237a-f03d-7710-ab8f-7af32b222df8",
+            &format!("00000000-0000-0000-0000-00000000000{}", i + 1),
+        );
+        let path = write_file(&day_dir, name, &format!("{meta}\n"));
+        // Oldest = file 1, newest = file 3 (100s spacing to avoid touch races).
+        set_mtime(&path, (i as i64 - 3) * 100);
+    }
+
+    let all = scan_codex_sessions(&tmp.path().join("sessions"), 200);
+    assert_eq!(all.len(), 3);
+    assert_eq!(
+        all[0].id, "00000000-0000-0000-0000-000000000003",
+        "newest file must be first"
+    );
+    assert_eq!(
+        all[2].id, "00000000-0000-0000-0000-000000000001",
+        "oldest file must be last"
+    );
+
+    let capped = scan_codex_sessions(&tmp.path().join("sessions"), 2);
+    assert_eq!(
+        capped.len(),
+        2,
+        "file cap must be honored (default 200, tested here with 2)"
+    );
+    assert_eq!(capped[0].id, "00000000-0000-0000-0000-000000000003");
+}
+
+#[test]
+fn scan_codex_sessions_empty_root_is_empty_not_error() {
+    let tmp = tempdir();
+    let sessions = scan_codex_sessions(&tmp.path().join("does-not-exist"), 200);
+    assert_eq!(sessions, vec![]);
+}
+
+// ---------------------------------------------------------------------------
+// agy_snippet_from_transcript + scan_agy_sessions
+// (antigravity-research.md §3.2 — the verbatim 5-line transcript_full.jsonl
+// sample, and §5's last_conversations.json shape)
+// ---------------------------------------------------------------------------
+
+/// Verbatim from antigravity-research.md §3.2 ("Real schema, from the actual
+/// 5-line file"). Only content is the smoke-test prompt `"x"`.
+const AGY_TRANSCRIPT_FULL_JSONL: &str = "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-07-02T15:23:36Z\",\"content\":\"<USER_REQUEST>\\nx\\n</USER_REQUEST>\\n<ADDITIONAL_METADATA>\\nThe current local time is: 2026-07-02T11:23:36-04:00.\\n</ADDITIONAL_METADATA>\\n<USER_SETTINGS_CHANGE>\\n...\\n</USER_SETTINGS_CHANGE>\"}\n\
+{\"step_index\":1,\"source\":\"SYSTEM\",\"type\":\"CONVERSATION_HISTORY\",\"status\":\"DONE\",\"created_at\":\"2026-07-02T15:23:36Z\"}\n\
+{\"step_index\":2,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-07-02T15:23:36Z\",\"tool_calls\":[{\"name\":\"list_dir\",\"args\":{\"DirectoryPath\":\"/home/mewais/.gemini/antigravity-cli\",\"toolAction\":\"Listing application directory\",\"toolSummary\":\"List App Data Directory\"}}]}\n\
+{\"step_index\":4,\"source\":\"SYSTEM\",\"type\":\"CHECKPOINT\",\"status\":\"DONE\",\"created_at\":\"2026-07-02T15:23:37Z\",\"content\":\"{{ CHECKPOINT 0 }}\\n **The earlier parts of this conversation have been truncated...**\"}\n\
+{\"step_index\":5,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-07-02T15:23:37Z\",\"content\":\"It looks like your request was just the letter \\\"x\\\". Could you please clarify...\"}\n";
+
+const AGY_CONVERSATION_ID: &str = "97197d46-2091-40e2-b36f-0dcedd34bcc4";
+
+#[test]
+fn agy_snippet_from_transcript_strips_user_request_wrapper() {
+    // §1.2/§3.2: "snippet ... stripping the <USER_REQUEST>...</USER_REQUEST>
+    // wrapper (and sibling injected blocks)." The real fixture's actual
+    // prompt content is the single character "x".
+    let snippet = agy_snippet_from_transcript(AGY_TRANSCRIPT_FULL_JSONL)
+        .expect("the fixture's first USER_INPUT step must yield a snippet");
+    assert_eq!(snippet, "x");
+}
+
+#[test]
+fn agy_snippet_from_transcript_empty_input_is_none() {
+    assert_eq!(agy_snippet_from_transcript(""), None);
+}
+
+#[test]
+fn agy_snippet_from_transcript_no_user_input_step_is_none() {
+    // Only SYSTEM/MODEL steps, no USER_INPUT.
+    let no_user = AGY_TRANSCRIPT_FULL_JSONL
+        .lines()
+        .filter(|l| !l.contains("USER_INPUT"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(agy_snippet_from_transcript(&no_user), None);
+}
+
+#[test]
+fn scan_agy_sessions_brain_dir_tree_with_reverse_mapped_project() {
+    let tmp = tempdir();
+    let brain_root = tmp.path().join("brain");
+    let logs_dir = brain_root
+        .join(AGY_CONVERSATION_ID)
+        .join(".system_generated/logs");
+    std::fs::create_dir_all(&logs_dir).unwrap();
+    write_file(
+        &logs_dir,
+        "transcript_full.jsonl",
+        AGY_TRANSCRIPT_FULL_JSONL,
+    );
+
+    // §5: last_conversations.json is exactly `{"<workspace>": "<conversation-uuid>"}`.
+    let last_conversations =
+        format!(r#"{{"/work/mewais/OpenSource/Marsad":"{AGY_CONVERSATION_ID}"}}"#);
+
+    let sessions = scan_agy_sessions(&brain_root, &last_conversations);
+    assert_eq!(sessions.len(), 1);
+    let s = &sessions[0];
+    assert_eq!(s.id, AGY_CONVERSATION_ID, "id is the brain-dir uuid");
+    assert_eq!(s.snippet, "x");
+    assert_eq!(
+        s.project.as_deref(),
+        Some("/work/mewais/OpenSource/Marsad"),
+        "the reverse-mapped hit must resolve the workspace"
+    );
+}
+
+/// §1.2: "otherwise `None` (the `.db` is raw protobuf — not parsed)" — a
+/// conversation whose id has no reverse-map hit must not fabricate a project.
+#[test]
+fn scan_agy_sessions_no_reverse_map_hit_yields_none_project() {
+    let tmp = tempdir();
+    let brain_root = tmp.path().join("brain");
+    let logs_dir = brain_root
+        .join(AGY_CONVERSATION_ID)
+        .join(".system_generated/logs");
+    std::fs::create_dir_all(&logs_dir).unwrap();
+    write_file(
+        &logs_dir,
+        "transcript_full.jsonl",
+        AGY_TRANSCRIPT_FULL_JSONL,
+    );
+
+    let sessions = scan_agy_sessions(&brain_root, "{}");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].project, None);
+}
+
+/// §1.2: "prefer `transcript_full.jsonl` over `transcript.jsonl` (double-escaping trap)."
+#[test]
+fn scan_agy_sessions_prefers_transcript_full_over_transcript() {
+    let tmp = tempdir();
+    let brain_root = tmp.path().join("brain");
+    let logs_dir = brain_root
+        .join(AGY_CONVERSATION_ID)
+        .join(".system_generated/logs");
+    std::fs::create_dir_all(&logs_dir).unwrap();
+    // A DIFFERENT (double-escaped, per the doc's description of the trap)
+    // sibling file must be ignored when transcript_full.jsonl is present.
+    write_file(
+        &logs_dir,
+        "transcript.jsonl",
+        "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-07-02T15:23:36Z\",\"content\":\"<USER_REQUEST>\\nWRONG\\n</USER_REQUEST>\"}\n",
+    );
+    write_file(
+        &logs_dir,
+        "transcript_full.jsonl",
+        AGY_TRANSCRIPT_FULL_JSONL,
+    );
+
+    let sessions = scan_agy_sessions(&brain_root, "{}");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(
+        sessions[0].snippet, "x",
+        "transcript_full.jsonl must win over transcript.jsonl"
+    );
+}
+
+#[test]
+fn scan_agy_sessions_empty_root_is_empty_not_error() {
+    let tmp = tempdir();
+    let sessions = scan_agy_sessions(&tmp.path().join("does-not-exist"), "{}");
+    assert_eq!(sessions, vec![]);
+}
+
+// ---------------------------------------------------------------------------
+// parse_remote_claude_session_list — moved from
+// apps/desktop/src-tauri/src/bridge.rs:170 (`mtime\tid\tuser-line` records
+// produced by `fetch_remote_session_list`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parse_remote_claude_session_list_normal_record() {
+    let raw_user_line = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"fix the bug"}]}}"#;
+    let stdout = format!("1783100616000\tuuid-abc\t{raw_user_line}\n");
+    let sessions = parse_remote_claude_session_list(&stdout);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, "uuid-abc");
+    assert_eq!(sessions[0].snippet, "fix the bug");
+    assert_eq!(sessions[0].modified_ms, 1783100616000);
+}
+
+/// Bridge's existing cases (ported verbatim, typed-ipc.md §7 house
+/// convention): malformed mtime → record skipped, not a parse error.
+#[test]
+fn parse_remote_claude_session_list_malformed_mtime_is_skipped() {
+    let stdout = "not-a-number\tuuid-abc\t{}\n1783100616000\tuuid-def\t{}\n";
+    let sessions = parse_remote_claude_session_list(stdout);
+    assert_eq!(sessions.len(), 1, "only the well-formed record survives");
+    assert_eq!(sessions[0].id, "uuid-def");
+}
+
+#[test]
+fn parse_remote_claude_session_list_empty_id_is_skipped() {
+    let stdout = "1783100616000\t\t{}\n";
+    let sessions = parse_remote_claude_session_list(stdout);
+    assert_eq!(sessions, vec![]);
+}
+
+#[test]
+fn parse_remote_claude_session_list_missing_third_field_yields_empty_snippet() {
+    let stdout = "1783100616000\tuuid-abc\n";
+    let sessions = parse_remote_claude_session_list(stdout);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].snippet, "");
+}
+
+#[test]
+fn parse_remote_claude_session_list_preserves_emitted_order() {
+    let stdout = "300\tid-c\t{}\n200\tid-b\t{}\n100\tid-a\t{}\n";
+    let sessions = parse_remote_claude_session_list(stdout);
+    let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["id-c", "id-b", "id-a"],
+        "the function must NOT re-sort — the remote `ls -t` already emits newest-first"
+    );
+}
+
+#[test]
+fn parse_remote_claude_session_list_empty_stdout_is_empty() {
+    assert_eq!(parse_remote_claude_session_list(""), vec![]);
+}
+
+// ===========================================================================
+// Part 2 — CapabilityProvider: the fake-driven provider seam (§3, §4, §6)
+// ===========================================================================
+
+/// A fake `CapabilityProbe` for tests: sleeps `delay`, then returns a canned
+/// `Capabilities` (or echoes the requested `SessionScope` back, for the
+/// project-scope-accumulation test) — never touches the real filesystem or a
+/// subprocess. Mirrors `marsad-core`'s injected `GitProbe`/`TranscriptReader`
+/// fakes (`crates/marsad-core/src/lib.rs` `RealGit`/`RealTranscript` seam).
+struct FakeProbe {
+    driver: &'static str,
+    delay: Duration,
+    calls: Arc<AtomicUsize>,
+    errors: Vec<String>,
+    echo_scope: bool,
+}
+
+impl FakeProbe {
+    fn new(driver: &'static str) -> Self {
+        FakeProbe {
+            driver,
+            delay: Duration::from_millis(0),
+            calls: Arc::new(AtomicUsize::new(0)),
+            errors: vec![],
+            echo_scope: false,
+        }
+    }
+
+    fn with_delay(mut self, delay: Duration) -> Self {
+        self.delay = delay;
+        self
+    }
+
+    fn with_errors(mut self, errors: Vec<String>) -> Self {
+        self.errors = errors;
+        self
+    }
+
+    fn echoing_scope(mut self) -> Self {
+        self.echo_scope = true;
+        self
+    }
+
+    fn counter(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.calls)
+    }
+}
+
+impl CapabilityProbe for FakeProbe {
+    fn driver(&self) -> &'static str {
+        self.driver
+    }
+
+    fn probe(&self, ctx: &HostProbeCtx) -> Capabilities {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if !self.delay.is_zero() {
+            std::thread::sleep(self.delay);
+        }
+        Capabilities {
+            driver: self.driver.to_string(),
+            host_id: ctx.host_id.clone(),
+            cli_available: true,
+            models: Default::default(),
+            session_scope: Some(if self.echo_scope {
+                ctx.scope.clone()
+            } else {
+                SessionScope::AllKnown
+            }),
+            sessions: vec![],
+            fetched_at_ms: 1,
+            errors: self.errors.clone(),
+        }
+    }
+}
+
+fn refresh_queued_ack(host_id: Option<&str>) -> IpcMsg {
+    IpcMsg::CapabilitiesRefreshQueued {
+        host_id: host_id.map(str::to_string),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Refresh on demand + eventual broadcast (§3.2 trigger 3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn handle_refresh_returns_ack_and_eventually_broadcasts_capabilities_update() {
+    let tmp = tempdir();
+    let probe = FakeProbe::new("codex");
+    let provider =
+        CapabilityProvider::new(vec![Box::new(probe)], vec!["local".to_string()], tmp.path());
+    let rx = provider.subscribe();
+
+    let ack_line =
+        provider.handle_refresh(Some("local".to_string()), Some("codex".to_string()), None);
+    let ack = parse_ipc(&ack_line).expect("ack must be a valid IpcMsg");
+    assert_eq!(ack, refresh_queued_ack(Some("local")));
+
+    let update_line = wait_for(Duration::from_secs(2), || {
+        while let Ok(line) = rx.try_recv() {
+            if let Ok(IpcMsg::CapabilitiesUpdate { driver, .. }) = parse_ipc(&line) {
+                if driver == "codex" {
+                    return Some(line);
+                }
+            }
+        }
+        None
+    });
+    match parse_ipc(&update_line).unwrap() {
+        IpcMsg::CapabilitiesUpdate {
+            host_id,
+            driver,
+            capabilities,
+        } => {
+            assert_eq!(host_id, "local");
+            assert_eq!(driver, "codex");
+            assert!(capabilities.cli_available);
+        }
+        other => panic!("expected CapabilitiesUpdate, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// New subscriber cache replay (§3.2 trigger 2)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn new_subscriber_receives_cached_replay_before_any_live_event() {
+    let tmp = tempdir();
+    let probe = FakeProbe::new("agy");
+    let provider =
+        CapabilityProvider::new(vec![Box::new(probe)], vec!["local".to_string()], tmp.path());
+
+    // First subscriber drives + observes the first probe completing, so the
+    // result lands in the cache.
+    let rx_a = provider.subscribe();
+    provider.handle_refresh(Some("local".to_string()), Some("agy".to_string()), None);
+    wait_for(Duration::from_secs(2), || {
+        while let Ok(line) = rx_a.try_recv() {
+            if line.contains("agy") {
+                return Some(());
+            }
+        }
+        None
+    });
+
+    // A SECOND subscriber, registered with NO further refresh triggered,
+    // must immediately receive the cached snapshot.
+    let rx_b = provider.subscribe();
+    let replayed = rx_b
+        .recv_timeout(Duration::from_millis(200))
+        .expect("new subscriber must receive the cached CapabilitiesUpdate without a live probe");
+    match parse_ipc(&replayed).expect("must be valid IpcMsg") {
+        IpcMsg::CapabilitiesUpdate { driver, .. } => assert_eq!(driver, "agy"),
+        other => panic!("expected CapabilitiesUpdate replay, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// In-flight dedup (§3.2: "a (driver, host) probe already running skip
+// queuing another")
+// ---------------------------------------------------------------------------
+
+#[test]
+fn in_flight_refresh_for_same_driver_host_is_deduped() {
+    let tmp = tempdir();
+    let probe = FakeProbe::new("codex").with_delay(Duration::from_millis(150));
+    let counter = probe.counter();
+    let provider =
+        CapabilityProvider::new(vec![Box::new(probe)], vec!["local".to_string()], tmp.path());
+
+    // Two rapid refreshes for the SAME (driver, host) while the first is
+    // still sleeping.
+    let _ = provider.handle_refresh(Some("local".to_string()), Some("codex".to_string()), None);
+    let _ = provider.handle_refresh(Some("local".to_string()), Some("codex".to_string()), None);
+
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        1,
+        "two rapid refreshes for the same (driver, host) must execute the probe exactly once"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Failing probe → errors populated and broadcast, not swallowed (§3.1: "never
+// panic/propagate"; §3, table row for a remote gap driver)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn failing_probe_populates_errors_and_still_broadcasts() {
+    let tmp = tempdir();
+    let probe = FakeProbe::new("agy").with_errors(vec!["agy models: exit 1: boom".to_string()]);
+    let provider =
+        CapabilityProvider::new(vec![Box::new(probe)], vec!["local".to_string()], tmp.path());
+    let rx = provider.subscribe();
+
+    let ack = provider.handle_refresh(Some("local".to_string()), Some("agy".to_string()), None);
+    assert!(
+        matches!(parse_ipc(&ack).unwrap(), IpcMsg::CapabilitiesRefreshQueued { .. }),
+        "a probe that will fail must still be ACKED as queued — errors surface later, not as an ack failure"
+    );
+
+    let update_line = wait_for(Duration::from_secs(2), || {
+        while let Ok(line) = rx.try_recv() {
+            if line.contains("agy") {
+                return Some(line);
+            }
+        }
+        None
+    });
+    match parse_ipc(&update_line).unwrap() {
+        IpcMsg::CapabilitiesUpdate { capabilities, .. } => {
+            assert_eq!(
+                capabilities.errors,
+                vec!["agy models: exit 1: boom".to_string()],
+                "the probe's error must be surfaced verbatim, not swallowed"
+            );
+        }
+        other => panic!("expected CapabilitiesUpdate, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Project-scope accumulation (§1: SessionScope::Projects; §2: RefreshCapabilities.project)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn project_scope_accumulates_across_refreshes() {
+    let tmp = tempdir();
+    let probe = FakeProbe::new("claude").echoing_scope();
+    let provider =
+        CapabilityProvider::new(vec![Box::new(probe)], vec!["local".to_string()], tmp.path());
+    let rx = provider.subscribe();
+
+    provider.handle_refresh(
+        Some("local".to_string()),
+        Some("claude".to_string()),
+        Some("/home/u/proj-a".to_string()),
+    );
+    wait_for(Duration::from_secs(2), || {
+        while let Ok(line) = rx.try_recv() {
+            if line.contains("claude") {
+                return Some(());
+            }
+        }
+        None
+    });
+
+    provider.handle_refresh(
+        Some("local".to_string()),
+        Some("claude".to_string()),
+        Some("/home/u/proj-b".to_string()),
+    );
+    let final_scope = wait_for(Duration::from_secs(2), || {
+        while let Ok(line) = rx.try_recv() {
+            if let Ok(IpcMsg::CapabilitiesUpdate { capabilities, .. }) = parse_ipc(&line) {
+                if let Some(SessionScope::Projects(projects)) = &capabilities.session_scope {
+                    if projects.contains(&"/home/u/proj-b".to_string()) {
+                        return Some(capabilities.session_scope.clone().unwrap());
+                    }
+                }
+            }
+        }
+        None
+    });
+
+    match final_scope {
+        SessionScope::Projects(projects) => {
+            assert!(
+                projects.contains(&"/home/u/proj-a".to_string()),
+                "must retain the first requested project"
+            );
+            assert!(
+                projects.contains(&"/home/u/proj-b".to_string()),
+                "must add the second requested project"
+            );
+        }
+        SessionScope::AllKnown => {
+            panic!("claude's scope must accumulate as Projects, not AllKnown")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Persistence: <data_root>/capabilities/<host_id>.json (§3.4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn successful_probe_persists_to_data_root_capabilities_host_json() {
+    let tmp = tempdir();
+    let probe = FakeProbe::new("codex");
+    let provider =
+        CapabilityProvider::new(vec![Box::new(probe)], vec!["local".to_string()], tmp.path());
+    let rx = provider.subscribe();
+    provider.handle_refresh(Some("local".to_string()), Some("codex".to_string()), None);
+    wait_for(Duration::from_secs(2), || {
+        while let Ok(line) = rx.try_recv() {
+            if line.contains("codex") {
+                return Some(());
+            }
+        }
+        None
+    });
+
+    let persisted_path = tmp.path().join("capabilities").join("local.json");
+    let raw = wait_for(Duration::from_secs(2), || {
+        std::fs::read_to_string(&persisted_path).ok()
+    });
+    assert!(
+        raw.contains("codex"),
+        "persisted file must contain the codex driver's snapshot"
+    );
+
+    // §3.4: durability across a daemon restart — a FRESH provider with NO
+    // probes at all (so it CANNOT self-populate) must still serve the
+    // persisted snapshot instantly on construction.
+    let restarted = CapabilityProvider::new(vec![], vec![], tmp.path());
+    let snap = restarted
+        .snapshot("codex", "local")
+        .expect("a restarted provider must load the persisted cache synchronously at construction");
+    assert!(snap.cli_available);
+}
+
+#[test]
+fn corrupt_persisted_file_starts_empty_not_error() {
+    let tmp = tempdir();
+    let dir = tmp.path().join("capabilities");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("local.json"), b"{ not valid json ").unwrap();
+
+    // Construction must not panic even though the persisted file is garbage
+    // (§3.4: "Corrupt/missing file => start empty (never an error)").
+    let provider = CapabilityProvider::new(vec![], vec![], tmp.path());
+    assert_eq!(provider.snapshot("codex", "local"), None);
+}
+
+// ---------------------------------------------------------------------------
+// Passive claude-model observation (§3.2 trigger 4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn observe_claude_model_accumulates_dedupes_and_broadcasts() {
+    let tmp = tempdir();
+    let provider = CapabilityProvider::new(vec![], vec!["local".to_string()], tmp.path());
+    let rx = provider.subscribe();
+
+    provider.observe_claude_model("local", "claude-opus-4-8");
+    provider.observe_claude_model("local", "claude-opus-4-8"); // duplicate — must not double-count
+    provider.observe_claude_model("local", "claude-sonnet-4-6");
+
+    // At least one broadcast for the new-model case must arrive.
+    let _ = wait_for(Duration::from_secs(2), || {
+        while let Ok(line) = rx.try_recv() {
+            if line.contains("claude-sonnet-4-6") {
+                return Some(());
+            }
+        }
+        None
+    });
+
+    let snap = provider
+        .snapshot("claude", "local")
+        .expect("observing a model must create/update the (claude, local) entry");
+    assert_eq!(snap.models.source, ModelListSource::Observed);
+    let ids: std::collections::HashSet<&str> =
+        snap.models.models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        std::collections::HashSet::from(["claude-opus-4-8", "claude-sonnet-4-6"]),
+        "the observed set must be deduped"
+    );
+}
+
+#[test]
+fn observed_claude_models_survive_a_restart() {
+    let tmp = tempdir();
+    let provider = CapabilityProvider::new(vec![], vec!["local".to_string()], tmp.path());
+    provider.observe_claude_model("local", "claude-opus-4-8");
+    let persisted_path = tmp.path().join("capabilities").join("local.json");
+    wait_for(Duration::from_secs(2), || {
+        std::fs::metadata(&persisted_path).ok()
+    });
+
+    let restarted = CapabilityProvider::new(vec![], vec![], tmp.path());
+    let snap = restarted
+        .snapshot("claude", "local")
+        .expect("observed models must persist across a restart");
+    assert!(snap.models.models.iter().any(|m| m.id == "claude-opus-4-8"));
+}
+
+// ===========================================================================
+// Part 3 — THE NON-BLOCKING TEST (§4, §6: "2s-slow fake probe must not block
+// a concurrent Subscribe round-trip (<100ms)")
+// ===========================================================================
+
+#[test]
+fn slow_probe_never_blocks_the_ack_or_a_concurrent_subscribe() {
+    let tmp = tempdir();
+    let slow = FakeProbe::new("slow-driver").with_delay(Duration::from_secs(2));
+    let fast = FakeProbe::new("fast-driver");
+    let provider = CapabilityProvider::new(
+        vec![Box::new(slow), Box::new(fast)],
+        vec!["local".to_string()],
+        tmp.path(),
+    );
+
+    // Send the slow-driver refresh — the ack must return immediately even
+    // though the probe behind it will block a background thread for 2s.
+    let refresh_start = Instant::now();
+    let ack_line = provider.handle_refresh(
+        Some("local".to_string()),
+        Some("slow-driver".to_string()),
+        None,
+    );
+    let refresh_elapsed = refresh_start.elapsed();
+    assert!(
+        refresh_elapsed < Duration::from_millis(100),
+        "handle_refresh must return before the probe completes, took {refresh_elapsed:?}"
+    );
+    assert!(matches!(
+        parse_ipc(&ack_line).unwrap(),
+        IpcMsg::CapabilitiesRefreshQueued { .. }
+    ));
+
+    // Immediately, CONCURRENTLY with the still-sleeping slow probe, drive an
+    // unrelated round-trip: subscribing (the provider-seam analog of a GUI's
+    // `Subscribe` -> `Subscribed` round trip — registering a new listener
+    // must never wait on an in-flight probe).
+    let subscribe_start = Instant::now();
+    let rx = provider.subscribe();
+    let subscribe_elapsed = subscribe_start.elapsed();
+    assert!(
+        subscribe_elapsed < Duration::from_millis(100),
+        "subscribe() must complete instantly regardless of the in-flight slow probe, took {subscribe_elapsed:?}"
+    );
+
+    // And a second, unrelated refresh for a FAST driver must also return —
+    // and its own probe must complete — well before the slow one does.
+    let fast_ack = provider.handle_refresh(
+        Some("local".to_string()),
+        Some("fast-driver".to_string()),
+        None,
+    );
+    assert!(matches!(
+        parse_ipc(&fast_ack).unwrap(),
+        IpcMsg::CapabilitiesRefreshQueued { .. }
+    ));
+    let fast_done_at = wait_for(Duration::from_secs(1), || {
+        while let Ok(line) = rx.try_recv() {
+            if line.contains("fast-driver") {
+                return Some(Instant::now());
+            }
+        }
+        None
+    });
+    assert!(
+        fast_done_at.duration_since(refresh_start) < Duration::from_secs(1),
+        "the fast driver's update must not be queued behind the slow one"
+    );
+
+    // Finally, the slow driver's CapabilitiesUpdate DOES eventually arrive —
+    // proving it actually ran (not silently dropped), just not on the
+    // critical path of anything else.
+    let slow_done_at = wait_for(Duration::from_secs(4), || {
+        while let Ok(line) = rx.try_recv() {
+            if line.contains("slow-driver") {
+                return Some(Instant::now());
+            }
+        }
+        None
+    });
+    assert!(
+        slow_done_at.duration_since(refresh_start) >= Duration::from_millis(1500),
+        "sanity: the slow driver's update must reflect the full ~2s probe delay, not a fast short-circuit"
+    );
+}
+
+/// Companion assertion at the `DiscoveredSession`/type level (keeps this
+/// file's imports honest — `DiscoveredSession` is exercised structurally
+/// above via `scan_codex_sessions`/`scan_agy_sessions`/
+/// `parse_remote_claude_session_list`'s return values; this pins its Default
+/// derive-free field shape directly against §1's struct definition).
+#[test]
+fn discovered_session_field_shape_matches_spec() {
+    let s = DiscoveredSession {
+        id: "id-1".to_string(),
+        project: None,
+        snippet: String::new(),
+        modified_ms: 0,
+    };
+    assert_eq!(s.id, "id-1");
+    assert_eq!(s.project, None);
+    assert_eq!(s.snippet, "");
+    assert_eq!(s.modified_ms, 0);
+}
