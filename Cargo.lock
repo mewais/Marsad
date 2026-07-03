@@ -394,6 +394,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "marsad-wasl"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "marsad-winshim"
 version = "0.1.0"
 dependencies = [

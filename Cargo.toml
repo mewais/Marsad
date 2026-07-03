@@ -9,6 +9,7 @@ members = [
     "crates/marsad-store",
     "crates/marsad-hosts",
     "crates/marsad-transport",
+    "crates/marsad-wasl",
     "crates/marsad-lifecycle",
     "crates/marsad-notify",
     "crates/marsad-workstream",
