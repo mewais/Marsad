@@ -172,6 +172,13 @@ pub struct BufferedResponse {
     pub status: u16,
     pub body: String,
     pub chunked: bool,
+    /// If true: accept the connection, read the request, then never write a
+    /// single byte back and never close — simulates a wedged/dead operator
+    /// that still holds its TCP accept open (as opposed to `drop_after`-style
+    /// tests, which model a clean disconnect). Used to prove the CLIENT-side
+    /// read deadline — not a server-side close — is what bounds a blocking
+    /// call like `post_decision`.
+    pub hang: bool,
 }
 
 impl BufferedResponse {
@@ -180,6 +187,7 @@ impl BufferedResponse {
             status,
             body: body.into(),
             chunked: false,
+            hang: false,
         }
     }
     pub fn empty(status: u16) -> Self {
@@ -187,6 +195,7 @@ impl BufferedResponse {
             status,
             body: String::new(),
             chunked: false,
+            hang: false,
         }
     }
     pub fn chunked_json(status: u16, body: impl Into<String>) -> Self {
@@ -194,6 +203,17 @@ impl BufferedResponse {
             status,
             body: body.into(),
             chunked: true,
+            hang: false,
+        }
+    }
+    /// A peer that accepts the connection and then never responds (see the
+    /// `hang` field doc).
+    pub fn hang() -> Self {
+        BufferedResponse {
+            status: 0,
+            body: String::new(),
+            chunked: false,
+            hang: true,
         }
     }
 }
@@ -392,6 +412,16 @@ fn write_events_response(stream: &mut TcpStream, script: &EventsScript) {
 }
 
 fn write_buffered_response(stream: &mut TcpStream, resp: &BufferedResponse) {
+    if resp.hang {
+        // Never write anything, never close: hold the accepted connection
+        // open indefinitely. The handler thread just parks here for the
+        // remainder of the test process — harmless (it's a background
+        // thread the test binary drops on exit), but it's what makes this
+        // genuinely distinct from a server-side close/EOF.
+        loop {
+            thread::sleep(Duration::from_secs(3600));
+        }
+    }
     let mut headers = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\n",
         resp.status,
@@ -472,6 +502,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<ServerState>>) {
             status: 204,
             body: String::new(),
             chunked: false,
+            hang: false,
         });
         write_buffered_response(&mut stream, &resp);
         return;

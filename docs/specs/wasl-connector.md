@@ -489,20 +489,46 @@ pub fn wasl_event_lines(host_id: &str, ev: &marsad_wasl::WaslEvent) -> Vec<Strin
 
 `IpcMsg::AnswerWaslGate { host_id, gate_id, outcome, reason }`:
 
-1. Look up `host_id` in `wasl_connectors`. Absent (incl. the no-config case, where the map is
-   empty) → `Err(AgentError::Protocol("no wasl operator configured for host '<id>'"))` → the serve
-   loop's standard `Error` reply. **This is the entire no-config surface of the new arm.**
-2. Present → `connector.decide(&gate_id, &outcome, reason.as_deref())`, then reply
-   `IpcMsg::WaslGateAnswered { host_id, gate_id }` regardless of ack value:
+1. Look up `host_id` in `wasl_connectors`, cloning the matching `Arc<dyn WaslConnector>` handle out
+   and dropping the registry lock BEFORE step 2 (fixed 2026-07-03, review finding #1 — see the X4.3
+   amendment below). Absent (incl. the no-config case, where the map is empty) →
+   `Err(AgentError::Protocol("no wasl operator configured for host '<id>'"))` → the serve loop's
+   standard `Error` reply. **This is the entire no-config surface of the new arm.**
+2. Present → `connector.decide(&gate_id, &outcome, reason.as_deref())` (lock already released), then
+   reply `IpcMsg::WaslGateAnswered { host_id, gate_id }` regardless of ack value:
    - `Delivered` — done; the node's `gate_decided` frame is the resolution signal.
    - `AlreadyDecided` (409) — benign race; stderr log; the frame/resnapshot already covers the UI.
    - `UnknownGate` (404) — stderr log (a stale UI answered a dead gate; nothing to do).
-   - `Err(WaslError)` (400/transport) → `Err(AgentError::Protocol(…))` → `Error` reply (the GUI
-     learns the relay itself failed).
+   - `Err(WaslError)` (400/transport, OR the overall read-deadline timeout — see the X4.3 amendment)
+     → `Err(AgentError::Protocol(…))` → `Error` reply (the GUI learns the relay itself failed).
 
-  `decide()` is a short bounded HTTP POST (connect+read timeouts, §2.3); it runs on the serve
-  thread like every other command — acceptable because it is strictly bounded, and command
-  ordering for gate answers is desirable.
+  `decide()` is a bounded HTTP POST; it runs on the serve thread like every other command —
+  acceptable because it is strictly bounded (§X4.3 amendment), and command ordering for gate
+  answers is desirable.
+
+#### X4.3 amendment (fixed 2026-07-03, review finding #1 — CRITICAL)
+
+Found live (adversarial final review): the original §4.3 text said `decide()` was "a short bounded
+HTTP POST (connect+read timeouts, §2.3)" — true for `connect_timeout`, **false** for the read side:
+`marsad-wasl`'s `wire::read_batch` retried a `WouldBlock` read forever with no overall deadline
+(only the per-read `SO_RCVTIMEO` tick, §2.3, was bounded — the retry LOOP around it was not). A Wasl
+operator that accepted a TCP connection and then never responded (wedged process, still listening)
+hung `post_decision` forever. Because `handle_answer_wasl_gate` ran `connector.decide(...)`
+synchronously on the agent's single command-processing serve thread (§4.2/`serve.rs`'s `for cmd in
+cmd_rx` loop — "single owner, sequential"), that hang froze the ENTIRE daemon: every session's
+launches, prompts, and gate answers, not just the one wedged host's. Two fixes, together:
+
+- `marsad-wasl::wire::read_batch` now caps its `WouldBlock` retries (`MAX_READ_RETRIES`, ~5s total)
+  — a peer that accepts a connection and never responds surfaces `WaslError::Io` within a bounded
+  window instead of hanging. Regression test: `crates/marsad-wasl/tests/deadline.rs`.
+- `handle_answer_wasl_gate` (this section) no longer holds the `wasl_connectors` registry lock across
+  the `decide()` call — it clones the connector's `Arc<dyn WaslConnector>` handle out and drops the
+  lock first (§4.2's registry is `Arc<dyn WaslConnector>`-valued for exactly this reason). This is
+  lock hygiene, not a full async fix — the serve loop is still single-threaded, so the bounded
+  deadline above (not this alone) is what keeps a wedged operator's damage bounded rather than
+  permanent. Regression test: `crates/marsad-agent/tests/wasl_lock_safety.rs` (proves — via `Mutex`
+  poisoning — that a `decide()` failure can't leave the registry lock poisoned, which it would if the
+  lock were still held across the call).
 
 The agent never originates a decision: the only call site of `decide()` is this arm (rule 2).
 
@@ -860,11 +886,30 @@ off launch is **byte-identical** to today (the load-bearing optionality invarian
   it provides the four consult/command/message/transfer tools + dispatch to peers only.
 
 ### X4b — adopt-or-spawn the host receive node
-- `Agent::adopt_or_spawn_wasl_mcpd(host_id)` — mirrors `adopt_or_spawn_agent`: reuse a live host
-  wasl-mcpd if reachable, else spawn one; no-op when no session on that host has `wasl`. THIS node is
-  the one that binds `[a2a]` (stable receive endpoint peers reach) + `[operator]` (so Marsad observes,
-  per X1/X2). It is launched by Marsad and **never spoken through** by Marsad (no A2A/consult calls
-  originate from the agent daemon — a verb-whitelist test pins this).
+- `Agent::adopt_or_spawn_wasl_mcpd(&spec: &LaunchSpec) -> bool` — mirrors `adopt_or_spawn_agent`:
+  reuse a live host wasl-mcpd if reachable (`exists` → `attach`), else spawn one (`spawn`); no-op
+  (zero container calls, returns `false`) when `spec.wasl` is false. THIS node is the one that binds
+  `[a2a]` (stable receive endpoint peers reach) + `[operator]` (so Marsad observes, per X1/X2). It is
+  launched by Marsad and **never spoken through** by Marsad (no A2A/consult calls originate from the
+  agent daemon — a verb-whitelist test pins this: `crates/marsad-agent/tests/wasl_launch_attach.rs`'s
+  `adopt_or_spawn_wasl_mcpd_never_speaks_through_it_only_lifecycle_calls`).
+- **Wired call site (fixed 2026-07-03, review finding #2):** `Agent::launch_with_id` calls
+  `adopt_or_spawn_wasl_mcpd(&spec)` unconditionally near the top, before spawning the session's own
+  container — the helper's own `spec.wasl` guard makes this a no-op for every `wasl:false` launch (the
+  optionality invariant holds at the launch-wiring level too, not just in `claude_argv`'s byte-identical
+  argv). Before this fix, `adopt_or_spawn_wasl_mcpd` was implemented and unit-tested in isolation but had
+  **zero production call sites** — a `wasl:true` launch injected `--mcp-config` into claude's argv while
+  nothing ever started the node that config pointed at. Regression-tested in
+  `crates/marsad-agent/tests/wasl_launch_wiring.rs`.
+- **Remote launches (fixed 2026-07-03, review finding #2):** `--mcp-config` resolution
+  (`driver::materialize_wasl_mcp_config`, X4a) is LOCAL-ONLY — a remote host has no path yet to write
+  `wasl-mcp.json` on. Rather than silently launching claude with the unresolved
+  `--mcp-config wasl-mcp.json` literal on a remote host, `launch_with_id` fails fast: a `wasl:true`
+  launch whose `host_target` resolves to a remote exec prefix (`exec_prefix_for(..).is_some()`) is
+  rejected up front with `AgentError::Protocol("wasl:true is not supported for remote launches
+  yet...")`, before any container call. `wasl + remote` support (resolving/writing the MCP config on
+  the remote host, or tunneling to a remote-bound wasl-mcpd) is an explicit non-goal of this fix,
+  scoped as a follow-up — not silently shipped broken.
 
 ### Receive semantics — honest limitation (documented, not hidden)
 A consult TO a Marsad-launched session reaches the host node, whose `ClaudeAdapter` answers by spawning

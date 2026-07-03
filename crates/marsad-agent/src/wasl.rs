@@ -201,11 +201,15 @@ impl Agent {
         host_id: &str,
         connector: Box<dyn marsad_wasl::WaslConnector>,
     ) {
+        // Boxed -> Arc at the registry boundary (review finding #1: see
+        // `WaslConnectorMap`'s doc comment in `lib.rs`) — callers keep
+        // passing an owned `Box` (unchanged call sites/signature); only the
+        // registry's OWN storage needs to be shareable-without-the-map-lock.
         self.wasl_connectors
             .0
             .lock()
             .unwrap()
-            .insert(host_id.to_string(), connector);
+            .insert(host_id.to_string(), std::sync::Arc::from(connector));
     }
 
     /// Additive test seam; default = the real client factory (supplied

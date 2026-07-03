@@ -474,13 +474,21 @@ impl Agent {
         outcome: String,
         reason: Option<String>,
     ) -> Result<Vec<String>, AgentError> {
-        let ack = {
+        // Review finding #1 (docs/specs/wasl-connector.md §X4.3 amendment):
+        // clone the connector handle out and drop the `wasl_connectors`
+        // lock BEFORE calling `decide()` — `decide()` is a blocking network
+        // call (bounded by marsad-wasl's own overall read deadline, but
+        // still potentially slow), and it must never be made while holding
+        // a lock anything else could need. The registry only ever needs the
+        // lock for this quick lookup+clone (an `Arc` clone, not a deep
+        // copy); see `WaslConnectorMap`'s doc comment in `lib.rs`.
+        let connector = {
             let connectors = self.wasl_connectors.0.lock().unwrap();
-            let connector = connectors.get(&host_id).ok_or_else(|| {
+            connectors.get(&host_id).cloned().ok_or_else(|| {
                 AgentError::Protocol(format!("no wasl operator configured for host '{host_id}'"))
-            })?;
-            connector.decide(&gate_id, &outcome, reason.as_deref())
+            })?
         };
+        let ack = connector.decide(&gate_id, &outcome, reason.as_deref());
 
         match ack {
             Ok(marsad_wasl::DecisionAck::Delivered) => {}

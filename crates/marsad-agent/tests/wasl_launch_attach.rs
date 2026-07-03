@@ -583,8 +583,17 @@ fn adopt_or_spawn_wasl_mcpd_never_speaks_through_it_only_lifecycle_calls() {
 fn adopt_or_spawn_wasl_mcpd_does_not_touch_session_containers() {
     // A launched claude session and a wasl-mcpd attach are independent
     // container names — adopt_or_spawn_wasl_mcpd must never spawn/attach the
-    // session's own "marsad-<id>" container, and launch() must never spawn
-    // wasl-mcpd on its own (only the dedicated helper may).
+    // session's own "marsad-<id>" container.
+    //
+    // UPDATED (review finding #2 fix, see tests/wasl_launch_wiring.rs):
+    // `Agent::launch`/`launch_with_id` NOW calls `adopt_or_spawn_wasl_mcpd`
+    // itself for a `wasl:true` local launch (it previously had zero
+    // production call sites — a real bug, not by design). So
+    // `agent.launch(spec.clone())` below already produces its own
+    // wasl-mcpd exists/spawn calls; the second, explicit
+    // `agent.adopt_or_spawn_wasl_mcpd(&spec)` call just re-probes/re-spawns
+    // on top of that. Neither call ever conflates the two container names,
+    // which is what this test actually pins.
     let mut agent = agent_with_container(FakeContainer::new());
     let mut spec = basic_launch_spec();
     spec.wasl = true;

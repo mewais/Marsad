@@ -127,9 +127,39 @@ opaque_debug_wrap!(ContainerWrap(Box<FakeContainer>));
 // Type aliases (rather than inlining these into the `opaque_debug_wrap!`
 // call) so `cargo fmt` can't insert a trailing comma inside the macro's
 // `$inner:ty` capture, which breaks the `)`-terminated matcher.
-type WaslConnectorMap =
-    std::sync::Arc<std::sync::Mutex<HashMap<String, Box<dyn marsad_wasl::WaslConnector>>>>;
+// Values are `Arc<dyn WaslConnector>`, not `Box<dyn WaslConnector>` — X4.3
+// hardening (review finding #1): `handle_answer_wasl_gate` must be able to
+// clone the connector handle out from under the registry lock and drop the
+// lock BEFORE calling the (blocking, network-bound) `decide()` method, so a
+// slow/wedged operator can never hold up any other user of this registry.
+// `register_wasl_connector` converts the `Box` callers still pass in
+// (`Arc::from`) at insertion time; `start()`/`stop()` (which need `&mut
+// self` on the connector) are only ever called on the owned `Box` BEFORE it
+// is registered (see `serve.rs`'s wiring block), so nothing here ever needs
+// mutable access through the `Arc`.
+type WaslConnectorMap = std::sync::Arc<
+    std::sync::Mutex<HashMap<String, std::sync::Arc<dyn marsad_wasl::WaslConnector>>>,
+>;
 opaque_debug_wrap!(WaslConnectorsWrap(WaslConnectorMap));
+
+// `WaslConnector: Send` (not `Send + Sync` — the trait is defined in
+// marsad-wasl, out of this crate's edit scope, and widening it would ripple
+// into the real `WaslOperatorClient`/`FakeWaslConnector` impls for no
+// behavioral benefit), so `dyn WaslConnector` isn't `Sync`, which makes
+// `Arc<dyn WaslConnector>` neither `Send` nor `Sync` on its own — clippy's
+// `arc_with_non_send_sync` flags nesting it inside the (Send+Sync) outer
+// `Arc<Mutex<..>>`. That's a correct observation about the TYPE in the
+// abstract, but not a real hazard here: this whole registry only ever lives
+// on and is touched from the single serve/command thread that owns `Agent`
+// (see `serve.rs`'s "Concurrency model" doc comment — `Agent` itself is
+// deliberately never shared across a real OS thread boundary); the `Arc`
+// wrapping exists purely so `handle_answer_wasl_gate` can clone a handle out
+// and drop the map lock before calling the connector's blocking `decide()`,
+// not for cross-thread sharing of connector instances.
+#[allow(clippy::arc_with_non_send_sync)]
+fn empty_wasl_connector_map() -> WaslConnectorMap {
+    std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))
+}
 
 // Optional connector-factory override (the `set_wasl_connector_factory` test
 // seam, §4.2). `None` = use the real-client factory, which `serve()` supplies
@@ -335,9 +365,7 @@ impl Agent {
             session_run_cmds: SessionRunCmdsWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
-            wasl_connectors: WaslConnectorsWrap(std::sync::Arc::new(std::sync::Mutex::new(
-                HashMap::new(),
-            ))),
+            wasl_connectors: WaslConnectorsWrap(empty_wasl_connector_map()),
             wasl_connector_factory: WaslConnectorFactoryWrap(None),
         })
     }
@@ -396,9 +424,7 @@ impl Agent {
             session_run_cmds: SessionRunCmdsWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
-            wasl_connectors: WaslConnectorsWrap(std::sync::Arc::new(std::sync::Mutex::new(
-                HashMap::new(),
-            ))),
+            wasl_connectors: WaslConnectorsWrap(empty_wasl_connector_map()),
             wasl_connector_factory: WaslConnectorFactoryWrap(None),
         })
     }
@@ -451,6 +477,30 @@ impl Agent {
         session_id: String,
         spec: marsad_proto::LaunchSpec,
     ) -> Result<String, AgentError> {
+        // X4 hardening (review finding #2): a `wasl:true` REMOTE launch has
+        // no way to resolve the `--mcp-config` placeholder `claude_argv`
+        // injects — `driver::materialize_wasl_mcp_config` only rewrites it
+        // to a real path for LOCAL sessions (remote hosts keep the
+        // unresolved `wasl-mcp.json` literal, a documented gap). Launching
+        // anyway would hand claude a broken `--mcp-config wasl-mcp.json`
+        // argument pointing at a file that is never written. Fail fast with
+        // a clear, honest error instead of a silently-broken remote launch.
+        if spec.wasl && exec_prefix_for(spec.host_target.as_deref()).is_some() {
+            return Err(AgentError::Protocol(format!(
+                "wasl:true is not supported for remote launches yet (host_target={:?}): \
+                 the Wasl MCP config can only be resolved for local sessions today",
+                spec.host_target
+            )));
+        }
+
+        // X4b (docs/specs/wasl-connector.md §X4b): a `wasl:true` LOCAL
+        // launch needs the host's `wasl-mcpd` receive node up (adopted if
+        // already live, spawned otherwise) — the very node the injected
+        // `--mcp-config` points claude at. No-op (zero container calls)
+        // when `spec.wasl` is false, per `adopt_or_spawn_wasl_mcpd`'s own
+        // guard.
+        self.adopt_or_spawn_wasl_mcpd(&spec);
+
         let container_name = format!("marsad-{session_id}");
 
         // For a REMOTE session, compute the claude run command now — this is the

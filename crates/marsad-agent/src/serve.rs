@@ -322,20 +322,24 @@ impl Agent {
         // block below is guarded by `Some(cfg)`.
         if let Some(wasl_cfg) = crate::load_wasl_config(&data_root) {
             for entry in wasl_cfg.operators {
-                let connector: Box<dyn marsad_wasl::WaslConnector> =
+                let mut connector: Box<dyn marsad_wasl::WaslConnector> =
                     match self.wasl_connector_factory.0.as_deref() {
                         Some(f) => f(&entry),
                         None => default_wasl_connector_factory(&entry),
                     };
-                self.register_wasl_connector(&entry.host_id, connector);
 
+                // `start()` needs `&mut` on the connector — call it while we
+                // still exclusively own the `Box`, BEFORE registering it.
+                // (Review finding #1: the registry stores `Arc<dyn
+                // WaslConnector>` so `handle_answer_wasl_gate` can clone a
+                // handle out and drop the map lock before the blocking
+                // `decide()` call; `Arc` gives no safe way to get `&mut`
+                // back out once shared, so this ordering — not a
+                // lock-and-`get_mut` dance after insertion — is how `start`
+                // gets its one-time mutable access.)
                 let (wasl_tx, wasl_rx) = mpsc::channel::<marsad_wasl::WaslEvent>();
-                {
-                    let mut guard = self.wasl_connectors.0.lock().unwrap();
-                    if let Some(c) = guard.get_mut(&entry.host_id) {
-                        c.start(wasl_tx);
-                    }
-                }
+                connector.start(wasl_tx);
+                self.register_wasl_connector(&entry.host_id, connector);
 
                 // Forwarder thread: drains the connector's event channel and
                 // pushes the mapped IPC lines into the subscriber broadcast

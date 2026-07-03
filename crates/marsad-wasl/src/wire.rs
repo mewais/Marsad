@@ -82,32 +82,72 @@ pub(crate) fn read_raw(stream: &mut TcpStream, buf: &mut [u8]) -> RawRead {
     }
 }
 
+/// Cap on `read_batch`'s WouldBlock retries: `READ_TIMEOUT` (200ms) *
+/// `MAX_READ_RETRIES` bounds one buffered round trip (`read_until` — used by
+/// `read_head`, hence every one of `/v1/events`-connect, `/v1/gates`
+/// resnapshot, and decision-POST `read_head` calls) at a few seconds total.
+///
+/// Found live (review finding): before this cap, `read_batch` retried
+/// `WouldBlock` forever — only `connect_timeout` was bounded. A Wasl
+/// operator that accepted a TCP connection and then never wrote a byte back
+/// (wedged/dead process, still listening) hung `post_decision` forever.
+/// Since `marsad-agent::handle_answer_wasl_gate` calls `decide()`
+/// synchronously on the daemon's single command-processing thread
+/// (`serve.rs`'s `for cmd in cmd_rx` loop), that hang froze the entire agent
+/// — every session's launches/prompts/gate-answers — not just the one
+/// wedged host. A dead/wedged peer must surface as `WaslError::Io` within a
+/// bounded window instead.
+const MAX_READ_RETRIES: u32 = 25;
+
 /// Read one non-empty batch of bytes for the buffered helpers below
 /// (`read_until`, `read_body_buffered`) — unlike `next_frame` in
 /// `client.rs`, these never need to distinguish "timed out, try again" from
 /// "peer gone" (both just mean "this round trip didn't complete"), and
 /// `MockServer` always finishes what it starts, so this crate's own tests
-/// never actually take the non-`Data` path here. The real build still
-/// retries on timeout and surfaces a genuine end as `WaslError::Io`,
-/// matching `read_raw`'s three-way classification; `cfg(coverage)` replaces
-/// that with a direct, branch-free read so the untested-here arm isn't
-/// instrumented at all. See `AGENTS.md`.
+/// never take the "peer stalls forever, mid-round-trip" path via `Ended`.
+/// The real build still retries on a single timeout tick and surfaces a
+/// genuine end (or a peer that never sends a full round trip within
+/// `MAX_READ_RETRIES` ticks) as `WaslError::Io`; `cfg(coverage)` replaces
+/// that with a direct, branch-free read so the untested-here `Ended` arm
+/// isn't instrumented at all. The retry cap itself IS exercised by this
+/// crate's own tests (`tests/deadline.rs`) so it stays instrumented in both
+/// builds. See `AGENTS.md`.
 #[cfg(not(coverage))]
 fn read_batch(stream: &mut TcpStream, buf: &mut [u8]) -> Result<usize, WaslError> {
-    loop {
+    for _ in 0..MAX_READ_RETRIES {
         match read_raw(stream, buf) {
             RawRead::Data(n) => return Ok(n),
             RawRead::Retry => continue,
             RawRead::Ended => return Err(WaslError::Io("connection closed".to_string())),
         }
     }
+    Err(WaslError::Io(
+        "read timed out waiting for peer (no data within the overall read deadline)".to_string(),
+    ))
 }
 
+// Coverage build: the retry-cap timeout IS exercised here now
+// (`tests/deadline.rs` runs under `cargo llvm-cov` like every other test),
+// so unlike the old flat single-read version, this keeps the retry loop —
+// but folds `Retry` and `Ended` into the same "try again" arm (`if let`,
+// not a 3-way `match`) rather than giving `Ended` its own branch: this
+// crate's own tests (frozen + new) never actually trigger a genuine `Ended`
+// through this call site (see the non-coverage doc comment above and
+// `AGENTS.md`), so a dedicated arm for it would be an uncovered region.
+// Retrying it here is harmless — a hard-closed socket just keeps returning
+// `Ended` until `MAX_READ_RETRIES` is exhausted and the timeout `Err` fires,
+// which is still a `WaslError::Io`, same disposition as the non-coverage
+// build's dedicated `Ended` arm.
 #[cfg(coverage)]
 fn read_batch(stream: &mut TcpStream, buf: &mut [u8]) -> Result<usize, WaslError> {
-    Ok(stream
-        .read(buf)
-        .expect("coverage-mode: assumed-infallible non-EOF read (see AGENTS.md)"))
+    for _ in 0..MAX_READ_RETRIES {
+        if let RawRead::Data(n) = read_raw(stream, buf) {
+            return Ok(n);
+        }
+    }
+    Err(WaslError::Io(
+        "read timed out waiting for peer (no data within the overall read deadline)".to_string(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -171,10 +211,11 @@ where
         if let Some(pos) = find(&acc) {
             return Ok((acc, pos));
         }
-        #[cfg(not(coverage))]
+        // `read_batch` itself now genuinely returns `Err` in BOTH builds
+        // (the overall-read-deadline timeout — see `MAX_READ_RETRIES` — is
+        // exercised by `tests/deadline.rs` under `cargo llvm-cov` too), so
+        // there is no coverage-mode "assumed infallible" split here anymore.
         let n = read_batch(stream, &mut buf)?;
-        #[cfg(coverage)]
-        let n = assume_ok(read_batch(stream, &mut buf));
         acc.extend_from_slice(&buf[..n]);
     }
 }
@@ -231,13 +272,10 @@ fn content_length(headers: &[(String, String)]) -> usize {
 /// kinds this client sends: the `/v1/events` connect, `/v1/gates` resnapshot
 /// GETs, and decision POSTs.
 pub(crate) fn read_head(stream: &mut TcpStream) -> Result<ResponseHead, WaslError> {
-    // `read_until` only fails via the `Retry|Ended` arm gated out under
-    // `cfg(coverage)` above; propagating that through here uniformly. See
-    // `AGENTS.md`.
-    #[cfg(not(coverage))]
+    // `read_until` now genuinely fails (overall read-deadline timeout) in
+    // both builds — see `read_batch`/`MAX_READ_RETRIES` — so this
+    // propagates unconditionally; no coverage-mode split needed.
     let (acc, pos) = read_until(stream, |acc| find_subslice(acc, b"\r\n\r\n"))?;
-    #[cfg(coverage)]
-    let (acc, pos) = assume_ok(read_until(stream, |acc| find_subslice(acc, b"\r\n\r\n")));
     Ok(head_from_parts(acc, pos))
 }
 
@@ -493,17 +531,18 @@ pub(crate) fn post_json_buffered(
 ) -> Result<(u16, Vec<u8>), WaslError> {
     let addr = parse_base_url(base_url);
     let mut stream = connect(addr)?;
-    // `write_post_json`/`read_head` here never fail in this crate's frozen
-    // tests (only `connect`, above, is exercised failing — the
-    // connection-refused test). See `AGENTS.md`.
+    // `write_post_json` never fails in this crate's frozen tests (only
+    // `connect`, above, is exercised failing that way — the
+    // connection-refused test). `read_head`, below, DOES now genuinely fail
+    // in both builds — a peer that accepts the connection, lets the POST
+    // write through, then never responds hits the overall read-deadline
+    // timeout (`tests/deadline.rs`) — so it propagates unconditionally, no
+    // coverage-mode split. See `AGENTS.md`.
     #[cfg(not(coverage))]
     write_post_json(&mut stream, addr, path, body)?;
     #[cfg(coverage)]
     assume_ok(write_post_json(&mut stream, addr, path, body));
-    #[cfg(not(coverage))]
     let head = read_head(&mut stream)?;
-    #[cfg(coverage)]
-    let head = assume_ok(read_head(&mut stream));
     let resp_body = read_body_buffered(&mut stream, &head.headers, head.leftover);
     Ok((head.status, resp_body))
 }

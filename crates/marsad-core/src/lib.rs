@@ -2293,6 +2293,25 @@ impl Core {
         // empty; it defaults to false per the wire contract.
         let cost_estimated =
             !s.model_usage.is_empty() && s.model_usage.values().all(|mu| mu.estimated);
+        // U4 cost-tile consistency (review finding #4): when the session cost
+        // is estimated, `s.cost_usd` is still 0.0 (it is set ONLY by a live
+        // `result` event — `marsad_events::reduce_result` — which never ran
+        // for a backfill-only session), yet the per-model `model_usage` rows
+        // carry real, nonzero estimated dollars. Surfacing the raw 0.0 here
+        // produced a "~ estimated $0.00" headline above a model-breakdown
+        // table showing nonzero estimated dollars (a contradiction), and made
+        // the aggregate "Cost today" tile — which filters/sums on
+        // `cost_usd != 0` — silently drop such sessions. Report the summed
+        // per-model estimated cost instead, so the headline equals the sum of
+        // the breakdown rows below it. A LIVE session (`cost_estimated ==
+        // false`) keeps its authoritative agent-reported `s.cost_usd`
+        // verbatim — never overridden by a table recomputation (pinned by
+        // `tests/u4_cost_truthfulness.rs::session_cost_usd_top_level_survives_backfill`).
+        let cost_usd = if cost_estimated {
+            model_usage.iter().map(|row| row.cost_usd).sum()
+        } else {
+            s.cost_usd
+        };
         let posture = permission_mode_to_posture(s.permission_mode.as_deref());
         SessionView {
             id: id.to_string(),
@@ -2312,7 +2331,7 @@ impl Core {
                 .iter()
                 .filter(|a| a.status == marsad_events::SubagentStatus::Running)
                 .count() as u32,
-            cost_usd: s.cost_usd,
+            cost_usd,
             tokens: s.tokens,
             context_pct: s.context_pct,
             gate: s.gate.clone(),

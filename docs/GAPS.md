@@ -88,12 +88,22 @@ envelope arm + the `list_sessions` deletion. Mobile apps remain scaffolding.
   state layer, and the Overview **activity surface** are done and mock-tested (`X5aWaslBridge`/`X5bWaslModal`/
   `X5cWaslActivity` suites green). Graph typed-edges specifically were scoped out (observations render on
   the activity surface instead). NOT yet done: the **X6 live end-to-end** (launch a Wasl-enabled workstream
-  → A consults B → gate surfaces in Marsad → human approves → observed) — needs the real runtime; and two
-  KNOWN correctness gaps found in final review: (a) `Agent::adopt_or_spawn_wasl_mcpd` has no production call
-  site, so a `wasl:true` launch injects `--mcp-config` but never starts the host node (X4 is structurally
-  incomplete, not just unverified); (b) `handle_answer_wasl_gate` does a blocking POST under the connector
-  lock on the single serve thread (a hung operator freezes the agent). Both tracked for fix; see
-  `docs/HANDOFF-OPUS.md`.
+  → A consults B → gate surfaces in Marsad → human approves → observed) — needs the real runtime.
+  ✅ Two correctness gaps found in the final review are now FIXED (regression-tested; see
+  `crates/marsad-agent/tests/wasl_launch_wiring.rs`, `crates/marsad-agent/tests/wasl_lock_safety.rs`,
+  `crates/marsad-wasl/tests/deadline.rs`): (a) `Agent::launch_with_id` now calls
+  `adopt_or_spawn_wasl_mcpd` for every LOCAL `wasl:true` launch (previously the helper existed +
+  was unit-tested but had zero production call sites, so the host node never actually started); a
+  `wasl:true` REMOTE launch — for which the injected `--mcp-config` placeholder can't be resolved
+  yet (`materialize_wasl_mcp_config` is local-only) — now fails fast with a clear
+  `AgentError::Protocol` instead of silently handing claude a broken, unresolved
+  `--mcp-config wasl-mcp.json` argument; wasl+remote support is a follow-up, not shipped here. (b)
+  `handle_answer_wasl_gate` no longer holds the `wasl_connectors` registry lock across the blocking
+  `decide()` POST (it clones an `Arc<dyn WaslConnector>` handle and drops the lock first), AND
+  `marsad-wasl`'s `post_decision`/`read_head` read loop now has an overall retry-cap deadline (not
+  just `connect_timeout`), so a wedged/dead operator returns `WaslError::Io` within a bounded window
+  instead of hanging the read loop (and therefore the agent's single command-processing thread)
+  forever.
 
 ## First things to do on a machine with the real runtime
 1. Actually build `apps/desktop/src-tauri` (`cargo build`, then `cargo tauri dev`); fix any real

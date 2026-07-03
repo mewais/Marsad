@@ -163,8 +163,14 @@ impl WaslOperatorClient {
                         frame.event
                     )));
                 }
+                // Review finding #3: a malformed frame from a misbehaving/
+                // buggy node must flow into the existing `Err` ->
+                // `Disconnected` -> backoff -> reconnect path, never panic
+                // this thread (a panic bypasses `run()`'s `Err(e) =>
+                // events.send(Disconnected)` arm silently — push updates
+                // stop forever with no signal). See `tests/malformed_frames.rs`.
                 let hello: Hello = serde_json::from_str(&frame.data)
-                    .expect("malformed hello frame from a v1-compliant node");
+                    .map_err(|e| WaslError::Protocol(format!("malformed hello frame: {e}")))?;
                 if hello.api_version != 1 {
                     return Err(WaslError::Protocol(format!(
                         "unsupported api_version {}",
@@ -175,27 +181,28 @@ impl WaslOperatorClient {
                 let _ = events.send(WaslEvent::Connected { hello });
                 *backoff = self.cfg.initial_backoff_ms;
                 // Step 3: mandatory resnapshot on every connect/reconnect.
-                #[cfg(not(coverage))]
+                // Unconditional `?` in both builds: `resnapshot` can now
+                // genuinely fail (a malformed `/v1/gates` body — review
+                // finding #3), and that failure IS exercised by this
+                // crate's own tests (`tests/malformed_frames.rs`), so no
+                // coverage-mode `assume_ok` collapse here anymore.
                 resnapshot(&self.cfg.base_url, known_pending, events)?;
-                #[cfg(coverage)]
-                assume_ok(resnapshot(&self.cfg.base_url, known_pending, events));
                 continue;
             };
             // Step 4: steady-state stream dispatch. Every frame the node
             // sends after `hello` carries `id:` (only `hello` itself is
-            // exempt, per the contract) — trusted-node `expect`, matching
-            // this crate's general "malformed known frame" stance.
-            let id = frame
-                .id
-                .expect("v1 node frames after hello always carry id:");
+            // exempt, per the contract). A node that violates this is
+            // malformed input, not a trusted-input invariant — surfaced as
+            // `Protocol` (review finding #3), same disposition as every
+            // other malformed-frame case here.
+            let id = frame.id.ok_or_else(|| {
+                WaslError::Protocol("v1 node frame after hello missing id:".to_string())
+            })?;
             let is_gap = id != *last_id + 1;
             *last_id = id;
-            dispatch_frame(&frame, known_pending, events);
+            dispatch_frame(&frame, known_pending, events)?;
             if is_gap {
-                #[cfg(not(coverage))]
                 resnapshot(&self.cfg.base_url, known_pending, events)?;
-                #[cfg(coverage)]
-                assume_ok(resnapshot(&self.cfg.base_url, known_pending, events));
             }
         }
     }
@@ -227,15 +234,20 @@ impl WaslOperatorClient {
     }
 }
 
+/// Dispatch one known-event-type SSE frame. A malformed body for a KNOWN
+/// event type (`gate_requested`/`gate_decided`/`audit`) is `Protocol`
+/// error, not a panic (review finding #3) — it flows up through
+/// `run_one_connection`'s `?` into the existing `Disconnected`/reconnect
+/// path, exactly like a bad `hello` or a missing `id:`.
 fn dispatch_frame(
     frame: &SseFrame,
     known_pending: &mut HashSet<String>,
     events: &Sender<WaslEvent>,
-) {
+) -> Result<(), WaslError> {
     match frame.event.as_str() {
         "gate_requested" => {
             let gr: GateRequested = serde_json::from_str(&frame.data)
-                .expect("malformed gate_requested frame from a v1-compliant node");
+                .map_err(|e| WaslError::Protocol(format!("malformed gate_requested frame: {e}")))?;
             if gr.decidable {
                 known_pending.insert(gr.gate_id.clone());
             }
@@ -243,19 +255,20 @@ fn dispatch_frame(
         }
         "gate_decided" => {
             let gd: GateDecided = serde_json::from_str(&frame.data)
-                .expect("malformed gate_decided frame from a v1-compliant node");
+                .map_err(|e| WaslError::Protocol(format!("malformed gate_decided frame: {e}")))?;
             known_pending.remove(&gd.gate_id);
             let _ = events.send(WaslEvent::GateDecided(gd));
         }
         "audit" => {
             let af: AuditFrame = serde_json::from_str(&frame.data)
-                .expect("malformed audit frame from a v1-compliant node");
+                .map_err(|e| WaslError::Protocol(format!("malformed audit frame: {e}")))?;
             let _ = events.send(WaslEvent::Audit(af.entry));
         }
         other => {
             eprintln!("marsad-wasl: skipping unknown SSE event type {other:?}");
         }
     }
+    Ok(())
 }
 
 /// Mandatory resnapshot: `GET /v1/gates`, then reconcile against
@@ -270,8 +283,11 @@ fn resnapshot(
     let (_status, body) = wire::get_buffered(base_url, "/v1/gates")?;
     #[cfg(coverage)]
     let (_status, body) = assume_ok(wire::get_buffered(base_url, "/v1/gates"));
-    let snapshot: GatesSnapshot =
-        serde_json::from_slice(&body).expect("malformed gates snapshot from a v1-compliant node");
+    // Review finding #3: a malformed `/v1/gates` body is `Protocol`, not a
+    // panic — propagated via `?` into the caller's `Disconnected`/reconnect
+    // path (both call sites now use unconditional `?`; see their comments).
+    let snapshot: GatesSnapshot = serde_json::from_slice(&body)
+        .map_err(|e| WaslError::Protocol(format!("malformed gates snapshot: {e}")))?;
 
     let mut seen: HashSet<String> = HashSet::new();
     for gate in &snapshot.gates {
