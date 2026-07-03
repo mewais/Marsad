@@ -276,6 +276,23 @@ export async function answerGate(args: {
   await invoke("answer_gate", args);
 }
 
+/**
+ * X5 — relay the HUMAN's decision on a Wasl handoff gate to the agent daemon,
+ * which POSTs it to the Wasl operator surface. Marsad never auto-answers;
+ * this is only ever called from an explicit Approve/Deny click.
+ * `outcome` is "approved" | "denied" | "dismissed".
+ */
+export async function answerWaslGate(args: {
+  host_id: string;
+  gate_id: string;
+  outcome: string;
+  reason?: string;
+}): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("answer_wasl_gate", args);
+}
+
 export async function answerQuestion(args: {
   session_id: string;
   request_id: string;

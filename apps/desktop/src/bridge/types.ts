@@ -504,4 +504,39 @@ export type VmUpdateEvent =
   | { kind: "workspaces"; workspaces: Workspace[] }
   | { kind: "workstreams"; workstreams: Workstream[] }
   | { kind: "board"; board: BoardView }
-  | { kind: "capabilities"; capabilities: CapabilitiesView };
+  | { kind: "capabilities"; capabilities: CapabilitiesView }
+  | { kind: "wasl_gates"; gates: WaslGateView[] }
+  | {
+      kind: "wasl_gate_decided";
+      host_id: string;
+      gate_id: string;
+      outcome: string;
+      decided_by: string;
+      reason: string | null;
+    }
+  | { kind: "wasl_observation"; host_id: string; entry: WaslAuditEntry };
+
+/**
+ * X5 — a pending Wasl handoff gate surfaced to the human (mirrors
+ * marsad-core WaslGateView). Marsad displays it and RELAYS the human's
+ * approve/deny; it never auto-answers.
+ */
+export interface WaslGateView {
+  host_id: string;
+  gate_id: string;
+  kind: string;
+  from: string;
+  summary: string;
+  preview: string;
+  requested_at: string;
+  deadline: string;
+}
+
+/** One Wasl observation-feed entry (mirrors marsad_wasl::AuditEntry). */
+export interface WaslAuditEntry {
+  seq: number;
+  kind: string;
+  actor: string;
+  targets: string[];
+  summary: string;
+}

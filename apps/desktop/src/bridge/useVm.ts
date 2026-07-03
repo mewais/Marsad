@@ -14,6 +14,8 @@ import React, {
 import type {
   AppSnapshot,
   CapabilitiesView,
+  WaslGateView,
+  WaslAuditEntry,
   Counts,
   Filter,
   GateVM,
@@ -81,6 +83,10 @@ export interface VmState {
   activeProfile: string | null;
   // Capabilities (U2), keyed by capsKey(driver, host_id) — dynamic-capabilities.md §3.6.
   capabilities: Record<string, CapabilitiesView>;
+  // Wasl (X5) — pending handoff gates + the latest observation entries.
+  // Empty/absent when no Wasl node is connected (optionality: no Wasl chrome).
+  waslGates: WaslGateView[];
+  waslObservations: WaslAuditEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +192,25 @@ function reducer(state: VmState, action: Action): VmState {
           capabilities: { ...state.capabilities, [key]: ev.capabilities },
         };
       }
+      if (ev.kind === "wasl_gates") {
+        // Full pending-gate list (X3 Hosts-style semantics) — replace wholesale.
+        return { ...state, waslGates: ev.gates };
+      }
+      if (ev.kind === "wasl_gate_decided") {
+        // A gate resolved — drop it from the pending list (the full-list arm
+        // also re-syncs, but this keeps the UI snappy on the single decision).
+        return {
+          ...state,
+          waslGates: state.waslGates.filter(
+            (g) => !(g.host_id === ev.host_id && g.gate_id === ev.gate_id)
+          ),
+        };
+      }
+      if (ev.kind === "wasl_observation") {
+        // Append to the observation feed (cap to the most recent 200 entries).
+        const next = [...state.waslObservations, ev.entry];
+        return { ...state, waslObservations: next.slice(-200) };
+      }
       return state;
     }
 
@@ -264,7 +289,10 @@ function reducer(state: VmState, action: Action): VmState {
   }
 }
 
-const initialState: VmState = {
+// Exported under stable names for reducer-level unit tests (X5a and later).
+export { reducer as vmReducer };
+
+export const initialVmState: VmState = {
   snapshot: null,
   screen: "overview",
   selectedId: null,
@@ -278,6 +306,8 @@ const initialState: VmState = {
   nodeSel: null,
   activeProfile: null,
   capabilities: {},
+  waslGates: [],
+  waslObservations: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -613,7 +643,7 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
   const hasPreloadedSnapshot = init?.snapshot != null;
 
   const [state, dispatch] = useReducer(reducer, {
-    ...initialState,
+    ...initialVmState,
     ...init,
   });
 
