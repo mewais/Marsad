@@ -34,7 +34,6 @@ marsad-store = { workspace = true }
 marsad-hosts = { workspace = true }
 marsad-transport = { workspace = true }
 marsad-lifecycle = { workspace = true }
-marsad-notify = { workspace = true }
 marsad-viewmodel = { workspace = true }
 marsad-workstream = { workspace = true }
 marsad-wasl = { workspace = true }

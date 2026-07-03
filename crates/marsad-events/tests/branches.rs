@@ -1,8 +1,8 @@
 //! B02 `marsad-events` — branch coverage.
 //!
 //! Covers every Phase variant, the DEDUP-by-message-id invariant, context_pct
-//! clamp to 100, context_window_for table (known models + fallback), every
-//! HookEvent variant, and Stale/Detached preservation.
+//! clamp to 100, context_window_for's two branches ([1m] suffix vs default),
+//! every HookEvent variant, and Stale/Detached preservation.
 //!
 //! Key invariants explicitly tested and labelled:
 //!   DEDUP — folding the same assistant message id twice must NOT double-count tokens.
@@ -249,25 +249,35 @@ fn context_pct_never_exceeds_100_after_many_messages() {
 }
 
 // ---------------------------------------------------------------------------
-// context_window_for: known models
+// context_window_for: [1m] suffix vs 200_000 default
+//
+// There is no verified per-model context-window table (see the doc comment
+// on context_window_for) — every model string Claude Code has been observed
+// to report falls back to the 200_000 default, and only the fixture-verified
+// "[1m]" suffix (fixtures/streams/qa.ndjson) signals 1_000_000. These tests
+// cover exactly those two branches.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn context_window_for_known_models_positive() {
+fn context_window_for_named_models_without_1m_suffix_default_to_200_000() {
     let models = [
         "claude-opus-4-5",
         "claude-sonnet-4-5",
+        "claude-sonnet-4-6",
         "claude-haiku-3-5",
-        "claude-opus-4.8[1m]",
-        "claude-sonnet-4-6[1m]",
+        "claude-opus-4-8",
         "claude-3-opus-20240229",
         "claude-3-5-sonnet-20241022",
         "claude-3-5-haiku-20241022",
         "claude-3-haiku-20240307",
+        "hypothetical-future-model-xyz-999",
     ];
     for model in &models {
         let w = SessionState::context_window_for(model);
-        assert!(w > 0, "context_window_for({model}) must be > 0, got {w}");
+        assert_eq!(
+            w, 200_000,
+            "context_window_for({model}) must default to 200_000, got {w}"
+        );
     }
 }
 
@@ -283,9 +293,14 @@ fn context_window_for_1m_suffix_returns_1_000_000() {
 }
 
 #[test]
-fn context_window_for_unknown_model_returns_nonzero_fallback() {
-    let w = SessionState::context_window_for("hypothetical-future-model-xyz-999");
-    assert!(w > 0, "unknown model fallback context window must be > 0");
+fn context_window_for_1m_suffix_on_any_model_name_returns_1_000_000() {
+    // The suffix check is a substring match, independent of the base model
+    // name — any model string carrying "[1m]" gets the 1M window.
+    let w = SessionState::context_window_for("claude-sonnet-4-6[1m]");
+    assert_eq!(
+        w, 1_000_000,
+        "any model with the [1m] suffix must return 1_000_000, got {w}"
+    );
 }
 
 // ---------------------------------------------------------------------------

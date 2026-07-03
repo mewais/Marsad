@@ -1031,20 +1031,29 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
 
         // Privileged users (e.g. root in a CI/dev container) bypass DAC permission
-        // bits, so a 0o000 file is still readable and this failure mode cannot be
-        // simulated. Detect that and skip the assertion rather than fail spuriously
-        // — the non-privileged path (the real CI gate) still exercises it.
+        // bits, so a 0o000 file is still readable and this failure mode does not
+        // occur under root. Assert whichever outcome actually matches the current
+        // process's privilege instead of early-returning on the privileged branch
+        // — an early return is itself a line that only the *other* environment
+        // (root) ever executes, which made this test permanently short one line
+        // of coverage under the non-root environment the CI gate actually runs
+        // in. Folding both outcomes into one always-executed assertion keeps
+        // `cargo llvm-cov -p marsad-core --fail-under-lines 100
+        // --fail-under-regions 100` genuinely at 100% in both environments,
+        // rather than requiring a documented exemption for this file.
         let privileged = std::fs::read(&path).is_ok();
 
         let result = list_sessions(tmp.path(), "/perm/test/project");
         // Restore permissions so the TempDir cleanup can remove the file.
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        if privileged {
-            return;
-        }
-        assert!(
+        // A static (non-formatted) panic message, unlike one with format
+        // arguments, does not introduce a lazily-evaluated-on-failure region
+        // — keeping every part of this line executed regardless of which
+        // branch the equality check takes.
+        assert_eq!(
             result.is_err(),
-            "expected I/O error for unreadable .jsonl file"
+            !privileged,
+            "list_sessions error state must match privilege"
         );
     }
 

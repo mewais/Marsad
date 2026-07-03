@@ -257,6 +257,33 @@ where
     msgs
 }
 
+// ── recv_subscribed_ack ───────────────────────────────────────────────────────
+
+/// Wait for the `Subscribed` ack on `client`, tolerating (and logging) any
+/// broadcast traffic that arrives interleaved with it.
+///
+/// The agent registers a newly-accepted socket into the broadcast-subscriber
+/// list at `accept()` time — before the client has sent its `Subscribe`
+/// message at all — while the `Subscribed` reply itself round-trips through a
+/// separate, serialized command queue. That means a still-live session's
+/// reader thread can push an `AgentEvent` (or `UsageUpdate` /
+/// `TranscriptBackfill`) into this client's outbound channel at any point
+/// before the `Subscribed` ack lands, racing it. A bare `client.recv_line()`
+/// that assumes the very first line back is the ack is therefore only safe
+/// for the first-ever client of a fresh daemon (nothing exists yet to
+/// broadcast); any later-joining client — e.g. Scenario 3's reconnect while
+/// Scenario 1/2's session may still be alive — must instead scan past
+/// unrelated broadcast lines to find the ack, which is what this helper does.
+fn recv_subscribed_ack(client: &mut LocalIpc, deadline: Instant) -> Option<String> {
+    let msgs = recv_until(client, deadline, |msg| {
+        matches!(msg, IpcMsg::Subscribed { .. })
+    });
+    msgs.iter().find_map(|m| match m {
+        IpcMsg::Subscribed { subscriber_id } => Some(subscriber_id.clone()),
+        _ => None,
+    })
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // Single sequential test: all three scenarios combined to avoid two live claudes.
 // ══════════════════════════════════════════════════════════════════════════════
@@ -318,12 +345,14 @@ fn all_scenarios() {
     let subscribe_line = serde_json::to_string(&subscribe_msg).unwrap();
     client.send_line(&subscribe_line).expect("send Subscribe");
 
-    // Read back the Subscribed ack.
-    let ack_line = client
-        .recv_line()
-        .expect("recv Subscribed ack")
-        .expect("non-empty ack");
-    eprintln!("[i09/s1] ack: {:.120}", ack_line);
+    // Read back the Subscribed ack. This is the first-ever client on a fresh
+    // daemon, so nothing else can be broadcasting yet, but we still scan via
+    // recv_subscribed_ack() for consistency with the reconnect in Scenario 3
+    // (see that helper's doc comment for why a bare recv_line() isn't safe in
+    // general for a subscriber that joins after a session already exists).
+    let subscriber_id = recv_subscribed_ack(&mut client, Instant::now() + Duration::from_secs(10))
+        .expect("[s1] expected a Subscribed ack before launching a session");
+    eprintln!("[i09/s1] ack: subscriber_id={subscriber_id}");
 
     // LaunchSession — send the raw JSON that matches the agent's handler expectations.
     // NOTE: IpcMsg::LaunchSession serde fields are {cwd,model,permission_mode} but
@@ -491,13 +520,18 @@ fn all_scenarios() {
         }
     };
     // Subscribe on the second client just to verify the agent is responsive.
+    //
+    // Session 1's reader thread may still be alive at this point (or its
+    // teardown may still be draining), so client2's broadcast channel can
+    // receive a stray AgentEvent/UsageUpdate/TranscriptBackfill line ahead of
+    // the Subscribed ack — see recv_subscribed_ack()'s doc comment. Scan past
+    // any such traffic instead of assuming the first line back is the ack.
     let sub2 = serde_json::json!({"type": "Subscribe", "session_id": ""});
     let sub2_line = serde_json::to_string(&sub2).unwrap();
     let _ = client2.send_line(&sub2_line);
-    match client2.recv_line() {
-        Ok(Some(line)) => eprintln!("[i09/s3] second client ack: {:.80}", line),
-        Ok(None) => eprintln!("[i09/s3] second client: EOF (agent may be shutting down)"),
-        Err(e) => eprintln!("[i09/s3] second client: recv error: {e}"),
+    match recv_subscribed_ack(&mut client2, Instant::now() + Duration::from_secs(5)) {
+        Some(subscriber_id) => eprintln!("[i09/s3] second client ack: subscriber_id={subscriber_id}"),
+        None => eprintln!("[i09/s3] second client: no Subscribed ack seen before deadline (agent may be shutting down)"),
     }
     let _ = client2.close();
     eprintln!("[i09/s3] PASS — agent accepted second client after first disconnect.");

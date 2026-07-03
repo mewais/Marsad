@@ -202,26 +202,21 @@ impl SessionState {
 
     /// Return the context window size (in tokens) for a given model name.
     ///
-    /// Models whose names contain `[1m]` always return 1_000_000.
-    /// Known named models return their documented window; unknown models fall
-    /// back to 200_000 (the current Claude 3 default).
+    /// Claude Code appends a `[1m]` suffix to the model string reported in
+    /// `SystemInit` when the long-context beta is active for that session
+    /// (see `fixtures/streams/qa.ndjson`, which observes
+    /// `"model":"claude-opus-4.8[1m]"` alongside `"contextWindow":1000000`);
+    /// that suffix is the only reliable, fixture-verified signal we have for
+    /// a non-default window. Every other model string Claude Code has been
+    /// observed to report — Sonnet/Opus 4.x and Haiku alike — uses the
+    /// standard 200_000-token window. There is no verified per-model table
+    /// beyond that, so don't invent one: keep this to the one real signal
+    /// plus the 200_000 default.
     pub fn context_window_for(model: &str) -> u64 {
-        // The [1m] suffix signals a 1M-token context window.
         if model.contains("[1m]") {
-            return 1_000_000;
-        }
-
-        // Named model table; all fall back to 200_000 (current Claude standard).
-        match model {
-            "claude-opus-4-5"
-            | "claude-sonnet-4-5"
-            | "claude-sonnet-4-6"
-            | "claude-3-5-sonnet-20241022"
-            | "claude-3-5-haiku-20241022"
-            | "claude-haiku-3-5"
-            | "claude-3-opus-20240229"
-            | "claude-3-haiku-20240307" => 200_000,
-            _ => 200_000,
+            1_000_000
+        } else {
+            200_000
         }
     }
 
