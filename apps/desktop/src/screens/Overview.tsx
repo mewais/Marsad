@@ -525,6 +525,67 @@ function IdleCard({ card, onClick }: IdleCardProps) {
 // Overview — main export
 // ---------------------------------------------------------------------------
 
+/**
+ * WaslActivityPanel (X5c) — surfaces the Wasl observation feed (agent-to-agent
+ * consult/command/message/transfer activity) so nothing goes unseen. Shows a
+ * live presence chip + the most recent entries. Renders nothing when no Wasl
+ * node is connected (optionality).
+ */
+function WaslActivityPanel() {
+  const { state } = useVm();
+  const obs = state.waslObservations;
+  const pendingGates = state.waslGates.length;
+  if (obs.length === 0 && pendingGates === 0) return null;
+  const recent = obs.slice(-6).reverse();
+  return (
+    <div data-testid="wasl-activity" style={{ marginBottom: 20 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 9,
+          margin: "0 0 12px",
+        }}
+      >
+        <span
+          data-testid="wasl-presence-chip"
+          style={{
+            fontSize: "calc(11px * var(--fs,1))",
+            textTransform: "uppercase",
+            letterSpacing: 1,
+            padding: "3px 9px",
+            borderRadius: 20,
+            background: "var(--accent)",
+            color: "#fff",
+            fontWeight: 700,
+          }}
+        >
+          Wasl active
+        </span>
+        <span style={{ color: "var(--txt3)", fontSize: "calc(13px * var(--fs,1))" }}>
+          {obs.length} connection{obs.length === 1 ? "" : "s"} observed
+          {pendingGates > 0 ? ` · ${pendingGates} awaiting approval` : ""}
+        </span>
+      </div>
+      {recent.map((e, i) => (
+        <div
+          key={`${e.seq}-${i}`}
+          data-testid="wasl-activity-row"
+          className="mono"
+          style={{
+            fontSize: "calc(13px * var(--fs,1))",
+            color: "var(--txt2)",
+            padding: "4px 0",
+          }}
+        >
+          {e.actor} → {e.targets.join(", ")} · {e.kind}
+          {e.summary ? ` · ${e.summary}` : ""}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function Overview() {
   const { counts, overviewGroups, dispatch } = useVm();
   const { attention, active, idle } = overviewGroups;
@@ -712,6 +773,9 @@ export function Overview() {
           </div>
         </div>
       </div>
+
+      {/* ── Wasl activity (agent-to-agent, X5c) ── */}
+      <WaslActivityPanel />
 
       {/* ── Needs your attention ── */}
       {attention.length > 0 && (
