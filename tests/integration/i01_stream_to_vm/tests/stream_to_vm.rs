@@ -119,6 +119,10 @@ fn fold_qa_stream_into_session_state_and_viewmodel() {
         changes: vec![],
 
         model_usage: vec![],
+        cost_estimated: false,
+        compactions: state.compactions,
+        last_compaction: state.last_compaction.clone(),
+        rate_limit: state.rate_limit.clone(),
         tools: vec![],
         mcp_servers: vec![],
         slash_commands: vec![],

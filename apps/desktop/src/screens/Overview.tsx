@@ -688,6 +688,7 @@ export function Overview() {
             Cost today
           </div>
           <div
+            data-testid="overview-cost-value"
             style={{
               fontSize: "calc(37px * var(--fs,1))",
               fontWeight: 800,
@@ -696,6 +697,14 @@ export function Overview() {
               marginTop: 4,
             }}
           >
+            {counts.cost_estimated && (
+              <span
+                style={{ fontSize: "0.4em", fontWeight: 700, color: "var(--txt3)", marginRight: 4 }}
+                title="Estimated from the local pricing table — no agent-reported cost has been received yet"
+              >
+                ~ estimated
+              </span>
+            )}
             {counts.cost}
           </div>
           <div style={{ fontSize: "calc(13.5px * var(--fs,1))", color: "var(--txt2)", marginTop: 2 }}>

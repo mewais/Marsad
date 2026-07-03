@@ -139,6 +139,14 @@ export interface ModelUsageRow {
   input_tokens: number;
   output_tokens: number;
   cost_usd: number;
+  /**
+   * U4 cost truthfulness: `true` when this row's cost was recomputed from
+   * the local litellm/hand pricing table (transcript backfill / usage
+   * probe) rather than copied verbatim from a live, agent-reported
+   * `result.modelUsage` entry. Drives the "estimated"/"~" affordance in the
+   * Usage tab's per-model breakdown table.
+   */
+  estimated: boolean;
 }
 
 export interface SessionView {
@@ -160,6 +168,15 @@ export interface SessionView {
   transcript: TranscriptEntry[];
   changes: FileChange[];
   model_usage: ModelUsageRow[];
+  /**
+   * U4 cost truthfulness: `true` when `cost_usd` has never been set by a
+   * live agent-reported `result` event and is backed only by the
+   * litellm/hand pricing table (transcript backfill / usage probe) — i.e.
+   * every row in `model_usage` is `estimated`. `false` once any live
+   * `result` has landed (or before any cost data exists at all). Drives the
+   * Usage tab's "estimated"/"~" affordance on the top Cost tile.
+   */
+  cost_estimated: boolean;
   /** Tools available in this session (from system/init). Empty before first init. */
   tools: string[];
   /** MCP servers connected in this session (from system/init). */
@@ -215,6 +232,13 @@ export interface Counts {
   errors: number;
   working: number;
   cost: string;
+  /**
+   * U4 cost truthfulness: `true` when every session contributing to `cost`
+   * is backfill-only (`cost_estimated: true`) — i.e. no live agent-reported
+   * cost has landed for ANY of them yet. Drives the "~"/"estimated"
+   * affordance on the Overview "Cost today" tile.
+   */
+  cost_estimated: boolean;
   tokens: string;
   host_count: number;
 }

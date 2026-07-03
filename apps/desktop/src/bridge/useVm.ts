@@ -407,12 +407,19 @@ function computeCounts(sessions: SessionView[], _hosts: Host[]): Counts {
   const costSum = sessions.reduce((a, s) => a + s.cost_usd, 0);
   const tokenSum = sessions.reduce((a, s) => a + s.tokens, 0);
   const seenHosts = new Set(sessions.map((s) => s.host_id));
+  // U4 cost truthfulness: the aggregate "Cost today" figure is only marked
+  // estimated when EVERY session contributing a nonzero cost is itself
+  // backfill-only (no live agent-reported result for any of them yet).
+  const costing = sessions.filter((s) => s.cost_usd !== 0);
+  const costEstimated =
+    costing.length > 0 && costing.every((s) => s.cost_estimated);
   return {
     total,
     needs,
     errors,
     working,
     cost: `$${Math.abs(costSum).toFixed(2)}`,
+    cost_estimated: costEstimated,
     tokens: fmtTokens(tokenSum),
     host_count: seenHosts.size,
   };

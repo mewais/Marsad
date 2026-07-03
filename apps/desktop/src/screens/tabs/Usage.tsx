@@ -172,6 +172,20 @@ export function UsageTab() {
               className="mono"
               style={{ fontSize: "calc(29px * var(--fs,1))", fontWeight: 800, marginTop: 5 }}
             >
+              {selectedSession?.cost_estimated && (
+                <span
+                  style={{
+                    fontSize: "0.55em",
+                    fontWeight: 700,
+                    color: "var(--txt3)",
+                    marginRight: 4,
+                    verticalAlign: "middle",
+                  }}
+                  title="Estimated from the local pricing table — no agent-reported cost has been received yet"
+                >
+                  ~ estimated
+                </span>
+              )}
               {cost_label}
             </div>
           </div>
@@ -281,6 +295,19 @@ export function UsageTab() {
                       style={{ paddingTop: 8, paddingBottom: 8 }}
                     >
                       ${row.cost_usd.toFixed(4)}
+                      {row.estimated && (
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontStyle: "italic",
+                            fontSize: "0.85em",
+                            color: "var(--txt3)",
+                          }}
+                          title="Estimated from the local pricing table — not agent-reported"
+                        >
+                          ~ estimated
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}

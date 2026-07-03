@@ -68,6 +68,10 @@ fn sv(id: &str, cost: f64, tokens: u64, state: Phase) -> SessionView {
         changes: vec![],
 
         model_usage: vec![],
+        cost_estimated: false,
+        compactions: 0,
+        last_compaction: None,
+        rate_limit: None,
         tools: vec![],
         mcp_servers: vec![],
         slash_commands: vec![],

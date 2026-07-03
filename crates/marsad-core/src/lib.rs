@@ -1855,8 +1855,11 @@ impl Core {
     /// session gets its prior conversation — the file lives on the remote host,
     /// so the agent reads it over the session's connection and forwards the text.
     /// Also aggregates per-model token usage (including subagent turns recorded as
-    /// `isSidechain: true` entries in the JSONL) and updates the session's
-    /// `model_usage` map so the Usage tab shows a full multi-model breakdown.
+    /// `isSidechain: true` entries in the JSONL) and merges it into the session's
+    /// `model_usage` map (marked `estimated: true`) so the Usage tab shows a full
+    /// multi-model breakdown. U4: this is a BACKFILL-ONLY estimate — it never
+    /// overwrites or deletes a row a live `result` event already set for the
+    /// same or a different model (see the merge logic below).
     /// Unknown session or empty history+usage → no-op (no update).
     fn handle_transcript_backfill(
         &mut self,
@@ -1880,17 +1883,29 @@ impl Core {
             combined.append(&mut record.transcript);
             record.transcript = combined;
         }
-        // Populate model_usage from JSONL aggregation (supersedes the result-event value
-        // since it includes subagents and is the authoritative source of truth).
+        // Populate model_usage from JSONL aggregation. U4 cost truthfulness: this
+        // is a BACKFILL-ONLY ESTIMATE (recomputed from the local litellm/hand
+        // pricing table by `discovery::aggregate_model_usage`) — it must never
+        // clobber a row a live `result` event already set (agent-reported,
+        // authoritative). So: drop only the PREVIOUSLY estimated rows (a fresh
+        // backfill supersedes a stale one), keep every live row untouched, and
+        // skip inserting an estimated row for any model that still has a live
+        // row after that.
         if !model_usage_agg.is_empty() {
-            record.state.model_usage.clear();
+            record.state.model_usage.retain(|_, mu| !mu.estimated);
             for (model, summary) in model_usage_agg {
+                if record.state.model_usage.contains_key(&model) {
+                    // A live row survived the retain above — never overwrite it
+                    // with an estimate.
+                    continue;
+                }
                 record.state.model_usage.insert(
                     model,
                     marsad_proto::ModelUsage {
                         input_tokens: summary.input_tokens,
                         output_tokens: summary.output_tokens,
                         cost_usd: summary.cost_usd,
+                        estimated: true,
                     },
                 );
             }
@@ -1921,9 +1936,12 @@ impl Core {
 
     /// Apply a project-wide usage update from the agent's python3 aggregation
     /// script.  The `usage` field is a JSON object keyed by model name with
-    /// `{input, output, cache_read, cache_creation}` integer values.  This is
-    /// the authoritative project-wide number (captures subagent transcripts) and
-    /// SUPERSEDES whatever the result-event or backfill set before.
+    /// `{input, output, cache_read, cache_creation}` integer values. U4 cost
+    /// truthfulness: the cost figure here is recomputed via the local
+    /// litellm/hand pricing table (`discovery::model_cost_usd`) — an ESTIMATE,
+    /// not agent-reported. It supersedes any previously ESTIMATED row (backfill
+    /// or an earlier usage probe) but must never overwrite or delete a row a
+    /// live `result` event already set for the same or a different model.
     ///
     /// Unknown session or missing session_id → error / no-op.
     fn handle_usage_update(
@@ -1962,6 +1980,7 @@ impl Core {
                 input_tokens: input,
                 output_tokens: output,
                 cost_usd: cost,
+                estimated: true,
             });
         }
         rows.sort_by(|a, b| a.model.cmp(&b.model));
@@ -1979,15 +1998,24 @@ impl Core {
             Some(r) => r,
             None => return Ok(vec![]), // unknown session → no-op
         };
-        // Replace the in-state model_usage map so make_session_view picks it up.
-        record.state.model_usage.clear();
+        // Merge the estimated rows into the in-state model_usage map so
+        // make_session_view picks it up. U4: drop only the PREVIOUSLY estimated
+        // rows (this probe supersedes a stale one) and never touch — or
+        // overwrite with an estimate — a row a live `result` event set.
+        record.state.model_usage.retain(|_, mu| !mu.estimated);
         for row in &rows {
+            if record.state.model_usage.contains_key(&row.model) {
+                // A live row survived the retain above — never overwrite it
+                // with an estimate.
+                continue;
+            }
             record.state.model_usage.insert(
                 row.model.clone(),
                 marsad_proto::ModelUsage {
                     input_tokens: row.input_tokens,
                     output_tokens: row.output_tokens,
                     cost_usd: row.cost_usd,
+                    estimated: true,
                 },
             );
         }
@@ -2254,9 +2282,17 @@ impl Core {
                 input_tokens: mu.input_tokens,
                 output_tokens: mu.output_tokens,
                 cost_usd: mu.cost_usd,
+                estimated: mu.estimated,
             })
             .collect();
         model_usage.sort_by(|a, b| a.model.cmp(&b.model));
+        // U4 cost truthfulness: the session-level cost is "estimated" only when
+        // there IS model_usage data and every row of it is estimated — i.e. no
+        // live `result` event has ever landed for this session. A session with
+        // no cost data at all (empty model_usage) is not "estimated", it's just
+        // empty; it defaults to false per the wire contract.
+        let cost_estimated =
+            !s.model_usage.is_empty() && s.model_usage.values().all(|mu| mu.estimated);
         let posture = permission_mode_to_posture(s.permission_mode.as_deref());
         SessionView {
             id: id.to_string(),
@@ -2283,6 +2319,10 @@ impl Core {
             transcript: record.transcript.clone(),
             changes: record.changes.clone(),
             model_usage,
+            cost_estimated,
+            compactions: s.compactions,
+            last_compaction: s.last_compaction.clone(),
+            rate_limit: s.rate_limit.clone(),
             tools: s.tools.clone(),
             mcp_servers: s.mcp_servers.clone(),
             slash_commands: s.slash_commands.clone(),
