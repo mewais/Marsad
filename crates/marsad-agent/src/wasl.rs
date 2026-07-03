@@ -11,10 +11,52 @@ use super::Agent;
 // §4.1 — load_wasl_config
 // ---------------------------------------------------------------------------
 
+/// Validate (and normalize) a `WaslOperatorEntry.url` against the exact shape
+/// `marsad_wasl::WaslClientConfig::base_url` requires: `http://ip:port`, no
+/// path, no trailing slash (`marsad-wasl`'s `wire::parse_base_url` `.expect()`s
+/// that shape — a value that fails to parse as `SocketAddr` PANICS the caller,
+/// not returns an `Err`).
+///
+/// Found live (2026-07-03, x6_wasl_live): `docs/specs/node-config.md` pins the
+/// trailing-slash form (`http://127.0.0.1:4242/`) as "the existing convention"
+/// for Wasl peer URLs — exactly the value an operator configuring `wasl.json`
+/// from a node's own `[operator] bind` would naturally copy in. Left
+/// unvalidated, that convention-shaped value sails through `load_wasl_config`
+/// untouched, into `WaslClientConfig.base_url`, and panics the first time it's
+/// actually used. For the streaming connector (`WaslOperatorClient::run`,
+/// started on its own background thread) that only silently kills the
+/// connector — no more Wasl visibility for that host, no crash. For a human
+/// decision (`Core::answer_wasl_gate` -> `handle_answer_wasl_gate` ->
+/// `connector.decide()` -> `post_decision` -> this same parse) it is FAR
+/// worse: `decide()` runs synchronously on the agent's single
+/// command-processing thread, which `main.rs` drives directly on the process's
+/// main thread — an unhandled panic there takes down the entire daemon on the
+/// first Wasl gate a human ever answers, not just the one malformed host.
+///
+/// `marsad-wasl`'s own frozen suite never catches this: it always constructs
+/// `base_url` from `MockServer`'s own precisely-formatted address, never a
+/// hand-typed config value. This is exactly the class of defect `load_wasl_config`
+/// already exists to firewall (see its own "config problems must never take
+/// the agent down" contract for malformed JSON / duplicate host ids) — so a
+/// bad url is normalized (strip one trailing slash, the documented-convention
+/// case) or, if still not `http://ip:port` after that, dropped with a loud
+/// stderr line, the same disposition as every other malformed-entry case
+/// below.
+fn normalize_operator_url(url: &str) -> Option<String> {
+    let trimmed = url.strip_suffix('/').unwrap_or(url);
+    let host_port = trimmed.strip_prefix("http://")?;
+    host_port.parse::<std::net::SocketAddr>().ok()?;
+    Some(trimmed.to_string())
+}
+
 /// Read `<data_root>/wasl.json`. Absent file -> `None` (the inert path).
 /// Malformed JSON / empty `operators` -> `None` + one stderr line (config
 /// problems must never take the agent down). Duplicate `host_id` -> first
-/// entry wins + stderr line.
+/// entry wins + stderr line. A malformed `url` (anything that isn't
+/// `http://ip:port`, allowing one trailing slash) is normalized or, failing
+/// that, dropped + stderr line — see `normalize_operator_url`. If every entry
+/// is filtered out this way, `None` (same "nothing to wire" disposition as an
+/// empty `operators` list).
 pub fn load_wasl_config(data_root: &str) -> Option<marsad_wasl::WaslOperatorsConfig> {
     let path = std::path::Path::new(data_root).join("wasl.json");
     let text = std::fs::read_to_string(&path).ok()?;
@@ -40,16 +82,38 @@ pub fn load_wasl_config(data_root: &str) -> Option<marsad_wasl::WaslOperatorsCon
 
     let mut seen = std::collections::HashSet::new();
     let mut operators = Vec::with_capacity(parsed.operators.len());
-    for entry in parsed.operators {
-        if seen.insert(entry.host_id.clone()) {
-            operators.push(entry);
-        } else {
+    for mut entry in parsed.operators {
+        if !seen.insert(entry.host_id.clone()) {
             eprintln!(
                 "marsad-agent: duplicate wasl operator host_id {:?} in {} — first entry wins",
                 entry.host_id,
                 path.display()
             );
+            continue;
         }
+        match normalize_operator_url(&entry.url) {
+            Some(normalized) => {
+                entry.url = normalized;
+                operators.push(entry);
+            }
+            None => {
+                eprintln!(
+                    "marsad-agent: malformed wasl operator url {:?} for host {:?} in {} \
+                     (must be http://ip:port, e.g. \"http://127.0.0.1:4243\") — operator skipped",
+                    entry.url,
+                    entry.host_id,
+                    path.display()
+                );
+            }
+        }
+    }
+
+    if operators.is_empty() {
+        eprintln!(
+            "marsad-agent: wasl config {} has no usable operators after validation",
+            path.display()
+        );
+        return None;
     }
 
     Some(marsad_wasl::WaslOperatorsConfig { operators })

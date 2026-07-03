@@ -210,6 +210,71 @@ fn load_wasl_config_duplicate_host_id_first_wins() {
     );
 }
 
+#[test]
+fn load_wasl_config_trailing_slash_url_is_normalized() {
+    // docs/specs/node-config.md pins the trailing-slash form as "the existing
+    // convention" for Wasl peer URLs — the exact value an operator would
+    // naturally copy from a node's own `[operator] bind` into `wasl.json`.
+    // `marsad_wasl::WaslClientConfig::base_url` requires the NO-trailing-
+    // slash `http://ip:port` shape (its `wire::parse_base_url` panics
+    // otherwise) — `load_wasl_config` must normalize this before it ever
+    // reaches a connector.
+    let tmp = tempdir();
+    std::fs::write(
+        tmp.path().join("wasl.json"),
+        br#"{"operators":[{"host_id":"local","url":"http://127.0.0.1:8787/"}]}"#,
+    )
+    .unwrap();
+    let cfg = load_wasl_config(tmp.path().to_str().unwrap()).expect("valid file must load");
+    assert_eq!(
+        cfg.operators,
+        vec![WaslOperatorEntry {
+            host_id: "local".to_string(),
+            url: "http://127.0.0.1:8787".to_string(),
+        }],
+        "a trailing slash must be stripped, not left to panic a connector later"
+    );
+}
+
+#[test]
+fn load_wasl_config_malformed_url_entry_is_dropped_valid_entries_survive() {
+    let tmp = tempdir();
+    std::fs::write(
+        tmp.path().join("wasl.json"),
+        br#"{"operators":[
+            {"host_id":"bad-scheme","url":"https://127.0.0.1:8787"},
+            {"host_id":"bad-host","url":"http://not-an-ip:8787"},
+            {"host_id":"bad-shape","url":"not a url at all"},
+            {"host_id":"local","url":"http://127.0.0.1:8787"}
+        ]}"#,
+    )
+    .unwrap();
+    let cfg = load_wasl_config(tmp.path().to_str().unwrap()).expect("one valid entry must load");
+    assert_eq!(
+        cfg.operators,
+        vec![WaslOperatorEntry {
+            host_id: "local".to_string(),
+            url: "http://127.0.0.1:8787".to_string(),
+        }],
+        "only the well-formed http://ip:port entry must survive"
+    );
+}
+
+#[test]
+fn load_wasl_config_all_entries_malformed_url_is_none() {
+    let tmp = tempdir();
+    std::fs::write(
+        tmp.path().join("wasl.json"),
+        br#"{"operators":[{"host_id":"local","url":"not-a-url"}]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        load_wasl_config(tmp.path().to_str().unwrap()),
+        None,
+        "zero usable operators after url validation must be None, same as an empty list"
+    );
+}
+
 // ===========================================================================
 // Part 2 — `wasl_event_lines` (§4.2: pure mapping, `WaslEvent` -> encoded
 // broadcast lines)
