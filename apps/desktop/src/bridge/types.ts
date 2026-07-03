@@ -236,6 +236,10 @@ export interface SessionCard {
   context_pct: number;
   tokens_label: string;
   elapsed_label: string;
+  /** Completed subagent count (mirrors SessionView.subagents). */
+  subagents: number;
+  /** Currently-running subagent count (mirrors SessionView.running_subagents). */
+  running_subagents: number;
 }
 
 export type SessionRow = SessionCard;

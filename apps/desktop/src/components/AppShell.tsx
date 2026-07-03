@@ -28,22 +28,37 @@ function hostStatusLabel(status: HostStatus): string {
   return "unreachable";
 }
 
+/** Display label for a gate_kind string, at a glance in the session list. */
+function gateKindLabel(kind: string): string {
+  if (kind === "permission") return "Permission";
+  if (kind === "plan") return "Plan";
+  if (kind === "edit") return "File change";
+  if (kind === "question") return "Question";
+  return kind;
+}
+
 // ---------------------------------------------------------------------------
 // Sidebar session row
 // ---------------------------------------------------------------------------
 
 function SidebarRow({
+  id,
   name,
   state,
   host_label,
   project,
+  gate_kind,
+  running_subagents,
   selected,
   onSelect,
 }: {
+  id: string;
   name: string;
   state: import("../bridge/types").Phase;
   host_label: string;
   project: string;
+  gate_kind: string | null;
+  running_subagents: number;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -122,6 +137,44 @@ function SidebarRow({
         >
           {project}
         </div>
+        {(gate_kind || running_subagents > 0) && (
+          <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4, flexWrap: "wrap" }}>
+            {gate_kind && (
+              <span
+                data-testid={`gate-badge-${id}`}
+                style={{
+                  fontSize: "calc(11px * var(--fs,1))",
+                  fontWeight: 700,
+                  letterSpacing: 0.3,
+                  padding: "1px 6px",
+                  borderRadius: 5,
+                  color: "var(--needs)",
+                  background: "var(--needs-bg)",
+                  textTransform: "uppercase",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {gateKindLabel(gate_kind)}
+              </span>
+            )}
+            {running_subagents > 0 && (
+              <span
+                data-testid={`subagent-indicator-${id}`}
+                style={{
+                  fontSize: "calc(11px * var(--fs,1))",
+                  fontWeight: 700,
+                  padding: "1px 6px",
+                  borderRadius: 5,
+                  color: "var(--accent2)",
+                  background: "var(--accent-bg)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                ⊟ {running_subagents}
+              </span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -647,10 +700,13 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
             {sidebarList.map((row) => (
               <SidebarRow
                 key={row.id}
+                id={row.id}
                 name={row.name}
                 state={row.state}
                 host_label={row.host_label}
                 project={row.project}
+                gate_kind={row.gate_kind}
+                running_subagents={row.running_subagents}
                 selected={state.selectedId === row.id}
                 onSelect={() =>
                   dispatch({ type: "SELECT_SESSION", id: row.id })

@@ -17,6 +17,12 @@ function gateKindLabel(kind: string | null, state?: string): string {
   if (kind === "permission") return "Permission";
   if (kind === "plan") return "Plan";
   if (kind === "edit") return "File change";
+  if (kind === "question") return "Question";
+  // No gate object at all but the session is Needs — a bare
+  // HookEvent::Notification (crates/marsad-events) sets Phase::Needs without
+  // ever populating `gate`. Label it distinctly instead of the generic
+  // "Gate" fallback so it's clear at a glance this isn't a HITL gate.
+  if (state === "Needs") return "Notice";
   return kind ?? "Gate";
 }
 
@@ -25,8 +31,16 @@ function gateLead(kind: string | null, state?: string): string {
   if (kind === "permission") return "Permission request";
   if (kind === "plan") return "Proposed plan";
   if (kind === "edit") return "Wants to start";
+  if (kind === "question") return "Wants your input";
+  if (state === "Needs") return "Needs your attention";
   return "Gate";
 }
+
+// Fallback summary text for a bare-notification "Needs" session (no gate
+// object at all) so the summary box never renders a blank "—" placeholder
+// with no explanation of why the human is being asked to look.
+const NOTIFICATION_FALLBACK_SUMMARY =
+  "Claude sent a notification and is waiting for you to check the session.";
 
 // ---------------------------------------------------------------------------
 // Context bar color thresholds
@@ -176,9 +190,34 @@ function AttentionCard({ card, onReview, onOpen }: AttentionCardProps) {
             wordBreak: "break-word",
           }}
         >
-          {card.gate_summary ?? "—"}
+          {card.gate_summary ??
+            (card.state === "Needs" ? NOTIFICATION_FALLBACK_SUMMARY : "—")}
         </div>
       </div>
+
+      {/* Subagent activity — only shown when this session actually has
+          subagents (running and/or completed). Nothing rendered otherwise. */}
+      {(card.running_subagents > 0 || card.subagents > 0) && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            marginBottom: 12,
+            fontSize: "calc(13px * var(--fs,1))",
+            color: "var(--txt2)",
+          }}
+        >
+          <span className="mono" style={{ color: "var(--accent2)" }}>⊟</span>
+          <span>
+            {card.running_subagents > 0
+              ? `${card.running_subagents} sub-agent${card.running_subagents > 1 ? "s" : ""} running`
+              : "Sub-agents"}
+            {card.subagents - card.running_subagents > 0 &&
+              ` · ${card.subagents - card.running_subagents} done`}
+          </span>
+        </div>
+      )}
 
       {/* Action buttons */}
       <div style={{ display: "flex", gap: 8 }}>
@@ -283,8 +322,9 @@ function ActiveRow({ card, onClick }: ActiveRowProps) {
           >
             {card.host_label} · {card.branch}
           </span>
-          {/* Subagent chip — SessionCard doesn't carry subagent count, show badge when last_action hints it */}
-          {card.last_action?.startsWith("⊟") && (
+          {/* Subagent chip — visible whenever this session has subagents
+              currently running, so live parallel work isn't hidden. */}
+          {card.running_subagents > 0 && (
             <span
               style={{
                 fontSize: "calc(11.5px * var(--fs,1))",
@@ -297,7 +337,7 @@ function ActiveRow({ card, onClick }: ActiveRowProps) {
                 flexShrink: 0,
               }}
             >
-              {card.last_action}
+              ⊟ {card.running_subagents} sub-agent{card.running_subagents > 1 ? "s" : ""} running
             </span>
           )}
         </div>

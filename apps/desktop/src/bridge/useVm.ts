@@ -362,6 +362,7 @@ function gateKind(sv: SessionView): string | null {
   if ("Permission" in sv.gate) return "permission";
   if ("Plan" in sv.gate) return "plan";
   if ("Edit" in sv.gate) return "edit";
+  if ("Question" in sv.gate) return "question";
   return null;
 }
 
@@ -370,6 +371,12 @@ function gateSummary(sv: SessionView): string | null {
   if ("Permission" in sv.gate) return sv.gate.Permission.command;
   if ("Plan" in sv.gate) return sv.gate.Plan.summary;
   if ("Edit" in sv.gate) return sv.gate.Edit.file;
+  if ("Question" in sv.gate) {
+    const qs = sv.gate.Question.questions;
+    if (qs.length === 0) return null;
+    if (qs.length === 1) return qs[0].question;
+    return `${qs.length} questions pending`;
+  }
   return null;
 }
 
@@ -387,6 +394,8 @@ function toCard(sv: SessionView, hosts: Host[]): SessionCard {
     context_pct: sv.context_pct,
     tokens_label: fmtTokens(sv.tokens),
     elapsed_label: "",
+    subagents: sv.subagents,
+    running_subagents: sv.running_subagents,
   };
 }
 
