@@ -185,6 +185,30 @@ export interface SessionView {
   slash_commands: SlashCommandInfo[];
   /** Permission posture: "ask" | "auto" | "full" (from system/init permissionMode). */
   posture: string;
+  /** Count of context compactions this session (system/compact_boundary events). */
+  compactions: number;
+  /** Metadata of the most recent compaction, if any. */
+  last_compaction: CompactMetadata | null;
+  /** Most recent rate-limit info, if the session has hit one. */
+  rate_limit: RateLimitInfo | null;
+}
+
+/** Mirrors marsad_proto::CompactMetadata — one context-compaction event. */
+export interface CompactMetadata {
+  trigger: string;
+  pre_tokens: number;
+  post_tokens: number;
+  cumulative_dropped_tokens: number;
+  duration_ms: number;
+}
+
+/** Mirrors marsad_proto::RateLimitInfo — a rate_limit_event's payload. */
+export interface RateLimitInfo {
+  status: string;
+  resets_at: number;
+  rate_limit_type: string;
+  overage_status: string;
+  is_using_overage: boolean;
 }
 
 // ---------------------------------------------------------------------------

@@ -15,6 +15,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       changes: [],
       model_usage: [],
       cost_estimated: false,
+      compactions: 0,
+      last_compaction: null,
+      rate_limit: null,
       tools: ["Read", "Bash", "Edit", "Write"],
       mcp_servers: [{ name: "hares", status: "connected" }],
       slash_commands: [
@@ -51,6 +54,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
 
       model_usage: [],
       cost_estimated: false,
+      compactions: 0,
+      last_compaction: null,
+      rate_limit: null,
       tools: [],
       mcp_servers: [],
       slash_commands: [],
@@ -85,6 +91,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
 
       model_usage: [],
       cost_estimated: false,
+      compactions: 0,
+      last_compaction: null,
+      rate_limit: null,
       tools: [],
       mcp_servers: [],
       slash_commands: [],
@@ -121,6 +130,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
 
       model_usage: [],
       cost_estimated: false,
+      compactions: 0,
+      last_compaction: null,
+      rate_limit: null,
       tools: [],
       mcp_servers: [],
       slash_commands: [],
@@ -146,6 +158,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
 
       model_usage: [],
       cost_estimated: false,
+      compactions: 0,
+      last_compaction: null,
+      rate_limit: null,
       tools: [],
       mcp_servers: [],
       slash_commands: [],
@@ -171,6 +186,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
 
       model_usage: [],
       cost_estimated: false,
+      compactions: 0,
+      last_compaction: null,
+      rate_limit: null,
       tools: [],
       mcp_servers: [],
       slash_commands: [],
@@ -196,6 +214,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
 
       model_usage: [],
       cost_estimated: false,
+      compactions: 0,
+      last_compaction: null,
+      rate_limit: null,
       tools: [],
       mcp_servers: [],
       slash_commands: [],
@@ -221,6 +242,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
 
       model_usage: [],
       cost_estimated: false,
+      compactions: 0,
+      last_compaction: null,
+      rate_limit: null,
       tools: [],
       mcp_servers: [],
       slash_commands: [],
@@ -246,6 +270,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
 
       model_usage: [],
       cost_estimated: false,
+      compactions: 0,
+      last_compaction: null,
+      rate_limit: null,
       tools: [],
       mcp_servers: [],
       slash_commands: [],
@@ -271,6 +298,9 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
 
       model_usage: [],
       cost_estimated: false,
+      compactions: 0,
+      last_compaction: null,
+      rate_limit: null,
       tools: [],
       mcp_servers: [],
       slash_commands: [],

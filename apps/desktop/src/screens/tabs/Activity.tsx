@@ -130,6 +130,31 @@ function deriveTranscript(
     });
   }
 
+  // Rate-limit indicator: surface the most recent rate_limit_event so the
+  // user is never surprised by a silent throttle (owner "nothing dropped").
+  if (sv.rate_limit) {
+    msgs.push({
+      id: "ratelimit-0",
+      kind: "system",
+      text: `Rate limit: ${sv.rate_limit.status}${
+        sv.rate_limit.is_using_overage ? " (using overage)" : ""
+      }`,
+    });
+  }
+
+  // Compaction indicator: show that context was compacted, with the trigger
+  // and how many times this session.
+  if (sv.compactions > 0) {
+    const c = sv.last_compaction;
+    msgs.push({
+      id: "compaction-0",
+      kind: "system",
+      text: c
+        ? `Context compacted ${sv.compactions}× (last: ${c.trigger}, ${c.cumulative_dropped_tokens} tokens dropped)`
+        : `Context compacted ${sv.compactions}×`,
+    });
+  }
+
   // If there are running subagents, show a running indicator
   if (sv.running_subagents > 0) {
     msgs.push({
@@ -204,10 +229,11 @@ function PromptBubble({ text }: { text: string }) {
   );
 }
 
-function SystemNote({ text }: { text: string }) {
+function SystemNote({ text, testId }: { text: string; testId?: string }) {
   return (
     <div
       className="mono"
+      data-testid={testId}
       style={{
         alignSelf: "center",
         fontSize: "calc(13px * var(--fs,1))",
@@ -590,7 +616,19 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
               case "prompt":
                 return <PromptBubble key={msg.id} text={msg.text ?? ""} />;
               case "system":
-                return <SystemNote key={msg.id} text={msg.text ?? ""} />;
+                return (
+                  <SystemNote
+                    key={msg.id}
+                    text={msg.text ?? ""}
+                    testId={
+                      msg.id === "compaction-0"
+                        ? "compaction-indicator"
+                        : msg.id === "ratelimit-0"
+                          ? "ratelimit-indicator"
+                          : undefined
+                    }
+                  />
+                );
               case "response":
                 return <ResponseMsg key={msg.id} text={msg.text ?? ""} />;
               case "tool":

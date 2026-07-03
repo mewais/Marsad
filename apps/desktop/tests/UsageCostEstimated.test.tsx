@@ -169,6 +169,9 @@ describe("UsageTab Cost tile — session-level cost provenance (U4)", () => {
       cost_usd: 0.0175,
       // Not yet part of the SessionView TS type — pinned contract.
       cost_estimated: true,
+      compactions: 0,
+      last_compaction: null,
+      rate_limit: null,
     } as unknown as Partial<SessionView>);
 
     const tile = screen.getByTestId("cost-value");
@@ -182,6 +185,9 @@ describe("UsageTab Cost tile — session-level cost provenance (U4)", () => {
     renderUsageTab({
       cost_usd: 0.89,
       cost_estimated: false,
+      compactions: 0,
+      last_compaction: null,
+      rate_limit: null,
     } as unknown as Partial<SessionView>);
 
     const tile = screen.getByTestId("cost-value");
