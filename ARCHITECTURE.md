@@ -46,6 +46,7 @@ Tiers: **L0** pure data/logic; **L1** logic behind mockable traits; **L2** integ
 | B11 | `marsad-viewmodel` | L0 | Dashboard aggregation/grouping/filter/search/slash — port of `renderVals()`. |
 | B12 | `marsad-core` | L1 | Facade tying B01–B11 into the desktop/phone API; UniFFI surface; client of the agent. |
 | B13 | `marsad-agent` | L2 | Detached supervisor daemon: owns `claude` processes, serves IPC, fires hooks. |
+| X1 | `marsad-wasl` | L1 | Wasl operator-API v1 connector: HTTP+SSE client, reconnect/gap/resnapshot, `WaslConnector` trait + fake. No dep on any other marsad crate. |
 
 ### App packages
 
@@ -58,9 +59,13 @@ Tiers: **L0** pure data/logic; **L1** logic behind mockable traits; **L2** integ
 
 **Dependency DAG (acyclic):** `proto ← events,gates,transport`; `format,diff,gates ← viewmodel`;
 `proto,events,transport,lifecycle,store,hosts,notify ← agent`; `everything ← core`;
-`core ← D01/M01/M02`. Shared session-launch types (`LaunchSpec`, `Posture`) live in `marsad-proto`
-(protocol data) and are re-exported by `marsad-core`; `marsad-agent` consumes them from `marsad-proto`
-directly — so there is **no `agent → core` edge** (core is the client of agent, never the reverse).
+`core ← D01/M01/M02`; `wasl ← agent,core` (X1 `marsad-wasl` sits beside `marsad-transport`: no dep
+on any other marsad crate; consumed by both `agent` — the runtime-optional connector, §agent.md/
+`docs/specs/wasl-connector.md` §4 — and `core` — inbound arms + `VmUpdate`s, §5.2 — with **no**
+`agent → core` edge introduced). Shared session-launch types (`LaunchSpec`, `Posture`) live in
+`marsad-proto` (protocol data) and are re-exported by `marsad-core`; `marsad-agent` consumes them
+from `marsad-proto` directly — so there is **no `agent → core` edge** (core is the client of agent,
+never the reverse).
 
 ## Test-first isolation regime
 

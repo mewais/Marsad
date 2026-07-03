@@ -51,6 +51,11 @@ pub enum CoreError {
 
     #[error("connection error: {0}")]
     Connection(String),
+
+    /// X3 (docs/specs/wasl-connector.md §5.2): `answer_wasl_gate` was called
+    /// for a `(host_id, gate_id)` no `WaslGateRequested` ever populated.
+    #[error("unknown wasl gate: {0}")]
+    UnknownWaslGate(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +114,46 @@ pub enum VmUpdate {
     /// One (driver, host) capability snapshot changed (U1 dynamic capability
     /// discovery, docs/specs/dynamic-capabilities.md §3.5).
     Capabilities(marsad_viewmodel::CapabilitiesView),
+
+    /// X3 (docs/specs/wasl-connector.md §5.2): full pending Wasl-gate list
+    /// (Hosts-style full-list semantics — idempotent to re-render,
+    /// resync-friendly: duplicate `WaslGateRequested` collapses to the same
+    /// list).
+    WaslGates(Vec<WaslGateView>),
+    /// One Wasl gate resolved (toast/history material). `outcome`/`decided_by`
+    /// verbatim from the wire (incl. "unknown"/"resync" for lag-resync
+    /// synthesis).
+    WaslGateDecided {
+        host_id: String,
+        gate_id: String,
+        outcome: String,
+        decided_by: String,
+        reason: Option<String>,
+    },
+    /// One Wasl observation-feed entry (typed; graph/feed material for X4).
+    WaslObservation {
+        host_id: String,
+        entry: marsad_wasl::AuditEntry,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// WaslGateView (X3, docs/specs/wasl-connector.md §5.2)
+// ---------------------------------------------------------------------------
+
+/// UI-shaped pending-gate row. `wasl_gates` keys on `(host_id, gate_id)` in a
+/// `BTreeMap` so `VmUpdate::WaslGates` is deterministically ordered.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WaslGateView {
+    pub host_id: String,
+    pub gate_id: String,
+    pub kind: String,
+    pub from: String,
+    pub summary: String,
+    pub preview: String,
+    pub requested_at: String,
+    /// Authoritative for countdown UI (`timeout_ms` may be 0 on resync).
+    pub deadline: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -335,6 +380,12 @@ pub struct Core {
     active_profile: Option<String>,
     /// U1 dynamic capability discovery: last known snapshot per (driver, host_id).
     capabilities: HashMap<(String, String), marsad_proto::Capabilities>,
+    /// X3 (docs/specs/wasl-connector.md §5.2): pending Wasl gates, keyed by
+    /// (host_id, gate_id). Node-authoritative: entries are added by
+    /// `WaslGateRequested` and removed ONLY by `WaslGateDecided` (incl.
+    /// synthesized "unknown"/"resync" ones) — `answer_wasl_gate` does NOT
+    /// optimistically remove.
+    wasl_gates: std::collections::BTreeMap<(String, String), WaslGateView>,
 }
 
 /// Default persistence backend: real filesystem in production, in-memory under
@@ -418,6 +469,7 @@ impl Core {
             ws_leads: HashMap::new(),
             active_profile: None,
             capabilities: HashMap::new(),
+            wasl_gates: std::collections::BTreeMap::new(),
         })
     }
 
@@ -1267,6 +1319,60 @@ impl Core {
         })
     }
 
+    /// X3 (docs/specs/wasl-connector.md §5.2): relay ONE explicit human
+    /// decision on a pending Wasl gate. NO session lookup (Wasl gates are
+    /// host-scoped, not session-scoped — deliberately not `require_session`).
+    pub fn answer_wasl_gate(
+        &mut self,
+        host_id: &str,
+        gate_id: &str,
+        decision: marsad_gates::Decision,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        let view = self
+            .wasl_gates
+            .get(&(host_id.to_string(), gate_id.to_string()))
+            .ok_or_else(|| CoreError::UnknownWaslGate(format!("{host_id}/{gate_id}")))?;
+        let gate = marsad_gates::Gate::Handoff {
+            gate_id: view.gate_id.clone(),
+            kind: view.kind.clone(),
+            from: view.from.clone(),
+            summary: view.summary.clone(),
+            preview: view.preview.clone(),
+        };
+        let scope = format!("wasl:{host_id}");
+        let gd = match &decision {
+            marsad_gates::Decision::Approve => marsad_gates::approve(&scope, &gate),
+            marsad_gates::Decision::Reject { reason } => {
+                marsad_gates::reject(&scope, &gate, reason)
+            }
+        };
+
+        // Idempotency: identical to answer_gate — seen -> silent no-op, no
+        // duplicate IPC. `decision_id` is content-stable over (scope,
+        // gate_id), so approve-then-deny of the same gate is ALSO deduped.
+        if self.ledger.seen(&gd.id) {
+            return Ok(vec![]);
+        }
+        // record() cannot return DuplicateDecision here because seen() is
+        // false. unwrap() is infallible in this code path.
+        self.ledger.record(&gd).unwrap();
+
+        let (outcome, reason) = match gd.decision {
+            marsad_gates::Decision::Approve => ("approved".to_string(), None),
+            marsad_gates::Decision::Reject { reason } => ("denied".to_string(), Some(reason)),
+        };
+        // Node-authoritative: the pending list changes only on WaslGateDecided,
+        // so the success value is always an empty update list; `.map` (rather
+        // than `send_ipc(...)?; Ok(vec![])`) keeps that a single expression.
+        self.send_ipc(&IpcMsg::AnswerWaslGate {
+            host_id: host_id.to_string(),
+            gate_id: gate_id.to_string(),
+            outcome,
+            reason,
+        })
+        .map(|()| vec![])
+    }
+
     pub fn run_slash(
         &mut self,
         id: &str,
@@ -1681,6 +1787,40 @@ impl Core {
                     .insert((driver, host_id), capabilities.clone());
                 Ok(vec![VmUpdate::Capabilities(capabilities.into())])
             }
+            // X3 (docs/specs/wasl-connector.md §5.2): a Wasl gate surfaced (or
+            // re-surfaced via resnapshot reconcile).
+            IpcMsg::WaslGateRequested {
+                host_id,
+                gate_id,
+                decidable,
+                request,
+                requested_at,
+                deadline,
+                ..
+            } => self.handle_wasl_gate_requested(
+                host_id,
+                gate_id,
+                decidable,
+                request,
+                requested_at,
+                deadline,
+            ),
+            // X3: a Wasl gate resolved.
+            IpcMsg::WaslGateDecided {
+                host_id,
+                gate_id,
+                outcome,
+                decided_by,
+                reason,
+                ..
+            } => self.handle_wasl_gate_decided(host_id, gate_id, outcome, decided_by, reason),
+            // X3: one audit-feed entry (the observation feed).
+            IpcMsg::WaslObservation { host_id, entry } => {
+                self.handle_wasl_observation(host_id, entry)
+            }
+            // X3: serve-loop ack for `AnswerWaslGate` — joins the existing
+            // ack no-op list.
+            IpcMsg::WaslGateAnswered { .. } => Ok(vec![]),
             // Command acks legitimately arrive on the subscriber connection.
             IpcMsg::SessionLaunched { .. }
             | IpcMsg::SessionResumed { .. }
@@ -1846,6 +1986,108 @@ impl Core {
 
         let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
         Ok(vec![VmUpdate::Session(sv)])
+    }
+
+    // -----------------------------------------------------------------------
+    // X3 Wasl inbound handlers (docs/specs/wasl-connector.md §5.2)
+    // -----------------------------------------------------------------------
+
+    /// Snapshot `wasl_gates` as a deterministically ordered `Vec` (the
+    /// `BTreeMap` key is `(host_id, gate_id)`, so iteration order is
+    /// lexicographic).
+    fn wasl_gates_list(&self) -> Vec<WaslGateView> {
+        self.wasl_gates.values().cloned().collect()
+    }
+
+    /// A Wasl gate surfaced (or re-surfaced via resnapshot reconcile).
+    /// `decidable == false` (observe-only) is a tolerant no-op — those gates
+    /// are stream-visible but never pending/answerable. A malformed `request`
+    /// Value is also a tolerant skip (observational data must never wedge the
+    /// reader loop, same disposition as `ChangesUpdate`).
+    fn handle_wasl_gate_requested(
+        &mut self,
+        host_id: String,
+        gate_id: String,
+        decidable: bool,
+        request: serde_json::Value,
+        requested_at: String,
+        deadline: String,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        if !decidable {
+            return Ok(vec![]);
+        }
+        let req: marsad_wasl::GateRequest = match serde_json::from_value(request) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!(
+                    "marsad-core: malformed WaslGateRequested.request for {host_id}/{gate_id}: {e}"
+                );
+                return Ok(vec![]);
+            }
+        };
+        self.wasl_gates.insert(
+            (host_id.clone(), gate_id.clone()),
+            WaslGateView {
+                host_id,
+                gate_id,
+                kind: req.kind,
+                from: req.from,
+                summary: req.summary,
+                preview: req.preview,
+                requested_at,
+                deadline,
+            },
+        );
+        Ok(vec![VmUpdate::WaslGates(self.wasl_gates_list())])
+    }
+
+    /// A Wasl gate resolved. Removal is unconditional-attempt: if the gate
+    /// was tracked, the pending list update is also emitted; an
+    /// already-cleared/unknown gate still gets the `WaslGateDecided` event
+    /// (silent-consistent with a race the node itself already resolved).
+    fn handle_wasl_gate_decided(
+        &mut self,
+        host_id: String,
+        gate_id: String,
+        outcome: String,
+        decided_by: String,
+        reason: Option<String>,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        let removed = self
+            .wasl_gates
+            .remove(&(host_id.clone(), gate_id.clone()))
+            .is_some();
+        let mut updates = vec![VmUpdate::WaslGateDecided {
+            host_id,
+            gate_id,
+            outcome,
+            decided_by,
+            reason,
+        }];
+        if removed {
+            updates.push(VmUpdate::WaslGates(self.wasl_gates_list()));
+        }
+        Ok(updates)
+    }
+
+    /// One audit-feed entry. A malformed `entry` Value is a tolerant skip
+    /// (same disposition as the malformed-request case above).
+    fn handle_wasl_observation(
+        &mut self,
+        host_id: String,
+        entry: serde_json::Value,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        let parsed: marsad_wasl::AuditEntry = match serde_json::from_value(entry) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("marsad-core: malformed WaslObservation.entry for {host_id}: {e}");
+                return Ok(vec![]);
+            }
+        };
+        Ok(vec![VmUpdate::WaslObservation {
+            host_id,
+            entry: parsed,
+        }])
     }
 
     // -----------------------------------------------------------------------

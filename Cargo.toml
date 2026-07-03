@@ -54,6 +54,7 @@ marsad-format = { path = "crates/marsad-format" }
 marsad-store = { path = "crates/marsad-store" }
 marsad-hosts = { path = "crates/marsad-hosts" }
 marsad-transport = { path = "crates/marsad-transport" }
+marsad-wasl = { path = "crates/marsad-wasl" }
 marsad-lifecycle = { path = "crates/marsad-lifecycle" }
 marsad-notify = { path = "crates/marsad-notify" }
 marsad-workstream = { path = "crates/marsad-workstream" }

@@ -238,5 +238,27 @@ pub fn gate_meta(gate: &Gate) -> GateMeta {
                 approve_label: "Approve change",
             }
         }
+        // X1/X2 mechanical compile-fix (docs/specs/wasl-connector.md §5.1):
+        // Gate::Handoff is additive in marsad-gates; this arm keeps
+        // gate_meta's exhaustive match compiling. `lead` is a `&'static str`
+        // in this struct (every other arm's `lead` is a literal), so the
+        // spec's per-occurrence "Wasl <kind> from <from>" text — which needs
+        // runtime data — can't be reproduced without widening `GateMeta.lead`
+        // to `String`, a broader change out of this block's scope; a static
+        // lead is used instead. `summary` (preview, falling back to summary
+        // when preview is empty) matches the spec exactly.
+        Gate::Handoff {
+            summary, preview, ..
+        } => GateMeta {
+            kind: "Handoff",
+            icon: "⇄",
+            lead: "Wasl handoff",
+            summary: if preview.is_empty() {
+                summary.clone()
+            } else {
+                preview.clone()
+            },
+            approve_label: "Approve & send",
+        },
     }
 }

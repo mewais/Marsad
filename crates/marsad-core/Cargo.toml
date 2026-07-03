@@ -13,6 +13,14 @@ description = "Facade tying B01-B11 into desktop/phone API; UniFFI surface; agen
 # unexpected_cfg warning without requiring a build script.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 
+[lints.clippy]
+# tests/wasl.rs (frozen, test-agent-owned) has an 8-argument `view(...)`
+# golden-builder helper (docs/specs/wasl-connector.md §7.6's WaslGateView test
+# fixture). Package-level lint config applies uniformly to src/ and tests/
+# targets; allowed here rather than editing the frozen test file (mirrors
+# marsad-agent's Cargo.toml `let_unit_value` precedent for the same reason).
+too_many_arguments = "allow"
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -29,6 +37,7 @@ marsad-lifecycle = { workspace = true }
 marsad-notify = { workspace = true }
 marsad-viewmodel = { workspace = true }
 marsad-workstream = { workspace = true }
+marsad-wasl = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

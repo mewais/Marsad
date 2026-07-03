@@ -9,6 +9,22 @@ use super::reader::spawn_session_reader;
 use super::remote::{exec_prefix_for, remote_liveness_script, run_remote_script_bounded};
 use super::{Agent, AgentError, ListenSpec, SessionRecord};
 
+/// Default `set_wasl_connector_factory` (docs/specs/wasl-connector.md §4.2):
+/// a real `WaslOperatorClient` per operator entry. Only ever reached from
+/// `serve()`'s real-IO block — `WaslOperatorClient`'s `WaslConnector` impl is
+/// itself `cfg(not(coverage))` in marsad-wasl, so this function lives here
+/// rather than in `wasl.rs` (which is compiled under coverage too).
+fn default_wasl_connector_factory(
+    entry: &marsad_wasl::WaslOperatorEntry,
+) -> Box<dyn marsad_wasl::WaslConnector> {
+    Box::new(marsad_wasl::WaslOperatorClient::new(
+        marsad_wasl::WaslClientConfig {
+            base_url: entry.url.clone(),
+            initial_backoff_ms: 1000,
+        },
+    ))
+}
+
 impl Agent {
     /// Blocking event loop — real socket/pipe IO, excluded from the coverage
     /// build because it requires a live socket/pipe and loops forever.
@@ -297,6 +313,51 @@ impl Agent {
                     );
                     eprintln!("marsad-agent: reconnected live session {}", s.id);
                 }
+            }
+        }
+
+        // ── X2 Wasl connector wiring (docs/specs/wasl-connector.md §4.2) ────
+        // Strictly optional (§6): absent `<data_root>/wasl.json` means zero
+        // threads, zero connections, empty `wasl_connectors` map — the whole
+        // block below is guarded by `Some(cfg)`.
+        if let Some(wasl_cfg) = crate::load_wasl_config(&data_root) {
+            for entry in wasl_cfg.operators {
+                let connector: Box<dyn marsad_wasl::WaslConnector> =
+                    match self.wasl_connector_factory.0.as_deref() {
+                        Some(f) => f(&entry),
+                        None => default_wasl_connector_factory(&entry),
+                    };
+                self.register_wasl_connector(&entry.host_id, connector);
+
+                let (wasl_tx, wasl_rx) = mpsc::channel::<marsad_wasl::WaslEvent>();
+                {
+                    let mut guard = self.wasl_connectors.0.lock().unwrap();
+                    if let Some(c) = guard.get_mut(&entry.host_id) {
+                        c.start(wasl_tx);
+                    }
+                }
+
+                // Forwarder thread: drains the connector's event channel and
+                // pushes the mapped IPC lines into the subscriber broadcast
+                // list — byte-identical mechanics to the session FIFO reader
+                // threads (reader.rs's "Broadcast to all subscribers").
+                let host_id = entry.host_id.clone();
+                let subs_for_wasl = Arc::clone(&subscribers);
+                std::thread::spawn(move || {
+                    for event in wasl_rx {
+                        for line in crate::wasl_event_lines(&host_id, &event) {
+                            let subs = subs_for_wasl.lock().unwrap();
+                            subs.iter().for_each(|s| {
+                                let _ = s.send(line.clone());
+                            });
+                        }
+                    }
+                });
+
+                eprintln!(
+                    "marsad-agent: wasl connector started for host {} ({})",
+                    entry.host_id, entry.url
+                );
             }
         }
 

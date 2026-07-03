@@ -6,7 +6,11 @@
 wire surface (`Capabilities`/`ModelCatalog`/`ModelInfo`/`ModelListSource`/`DiscoveredSession`/
 `SessionScope` domain types + the `RefreshCapabilities`/`CapabilitiesRefreshQueued`/
 `CapabilitiesUpdate` `IpcMsg` variants) is specified in
-`../../docs/specs/dynamic-capabilities.md` §1-§2.
+`../../docs/specs/dynamic-capabilities.md` §1-§2. X1/X2 Wasl connector's additive `IpcMsg` surface
+(`AnswerWaslGate`/`WaslGateRequested`/`WaslGateDecided`/`WaslObservation`/`WaslGateAnswered`,
+`KNOWN` grown 29→34) is specified in `../../docs/specs/wasl-connector.md` §3 — `request`/`entry`
+are `serde_json::Value` ON PURPOSE (typed forms live in `marsad-wasl`, which this crate must not
+depend on, DAG); `host_id`/`gate_id` are the only required (non-`#[serde(default)]`) fields.
 **Test plan & coverage regime:** `../../docs/specs/TESTPLAN.md`
 **Design source of truth:** `_extracted/design_handoff_marsad/Marsad.dc.html` and `Marsad Mobile.dc.html` (port `renderVals()` / helper logic; do not invent behavior).
 

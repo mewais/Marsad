@@ -2,7 +2,11 @@
 
 **Purpose:** Detached supervisor daemon owning claude processes; the thing that outlives the GUI.
 **Tier:** L2 (integration-bound)
-**Full spec (read this first):** `../../docs/specs/agent.md`
+**Full spec (read this first):** `../../docs/specs/agent.md`; X2 runtime-optional Wasl connector
+wiring (`load_wasl_config`, `wasl_event_lines`, `Agent::{register_wasl_connector,
+set_wasl_connector_factory}`, the `AnswerWaslGate` `handle_ipc` arm) is specified in
+`../../docs/specs/wasl-connector.md` §4 — strictly optional: absent `<data_root>/wasl.json` means
+zero threads/connections and an empty connector registry (§6).
 **Test plan & coverage regime:** `../../docs/specs/TESTPLAN.md`
 **Design source of truth:** `_extracted/design_handoff_marsad/Marsad.dc.html` and `Marsad Mobile.dc.html` (port `renderVals()` / helper logic; do not invent behavior).
 
@@ -19,16 +23,21 @@ NOT a public module hierarchy (all `mod` declarations are private); the flat
 doubt, prefer the file the majority of its callers already live in.
 
 - **`lib.rs`** — root. `AgentError`/`ListenSpec`/`AgentConfig`, the opaque-Debug
-  wrapper types, the `Agent` struct itself, and its core lifecycle impl
-  (`new`/`with_fakes`/`with_real_io`, `active_container`, `container_calls`,
-  `next_session_id`, `launch`/`launch_with_id`, `reconcile_all`/`reconcile_one`).
-  Also hosts the `mod` declarations and every `pub use` re-export, so this file
-  is the map of the crate's public surface.
+  wrapper types (incl. `WaslConnectorsWrap`/`WaslConnectorFactoryWrap` — X2,
+  always compiled, NOT `#[cfg(not(coverage))]`-gated like the other real-IO
+  registries, since `handle_ipc`'s `AnswerWaslGate` arm must observably branch
+  on registry membership under coverage instrumentation too), the `Agent`
+  struct itself, and its core lifecycle impl (`new`/`with_fakes`/`with_real_io`,
+  `active_container`, `container_calls`, `next_session_id`,
+  `launch`/`launch_with_id`, `reconcile_all`/`reconcile_one`). Also hosts the
+  `mod` declarations and every `pub use` re-export, so this file is the map of
+  the crate's public surface.
 - **`ipc.rs`** — `handle_ipc` (decode + dispatch) and every `handle_*` method it
   routes to (`handle_launch_session`, `handle_resume_session`,
   `handle_attach_session`, `handle_stop_session`, `handle_send_prompt`,
   `handle_interrupt`, `handle_answer_gate`, `handle_answer_question`,
-  `handle_subscribe`), plus hook ingestion (`handle_hook`/`parse_hook_event`).
+  `handle_subscribe`, `handle_answer_wasl_gate` — X2, docs/specs/
+  wasl-connector.md §4.3), plus hook ingestion (`handle_hook`/`parse_hook_event`).
 - **`driver.rs`** — builds the `claude` invocation and drives the session
   container: `claude_argv`/`posture_to_mode`, `build_spawn_cmd`, the
   `spawn_container`/`kill_container` builders (local vs. remote routing), and
@@ -52,7 +61,23 @@ doubt, prefer the file the majority of its callers already live in.
   `CapabilityProvider` (real probes), intercepts `RefreshCapabilities` lines
   before `handle_ipc`, and forwards each new subscriber's cache-replay + live
   `CapabilitiesUpdate` broadcasts through the same per-client channel as
-  `AgentEvent`s.
+  `AgentEvent`s. Also owns X2's Wasl connector production wiring
+  (docs/specs/wasl-connector.md §4.2): guarded by `if let Some(cfg) =
+  load_wasl_config(...)`, builds one connector per operator entry via
+  `default_wasl_connector_factory` (real `WaslOperatorClient`; only reachable
+  here because `WaslOperatorClient`'s `WaslConnector` impl is itself
+  `cfg(not(coverage))` in marsad-wasl) or the `set_wasl_connector_factory`
+  override, registers it, and spawns one forwarder thread per entry that maps
+  `WaslEvent`s to `wasl_event_lines` and pushes them into the same
+  `subscribers` broadcast list as the session FIFO reader threads.
+- **`wasl.rs`** — X2 (docs/specs/wasl-connector.md §4): `load_wasl_config`
+  (reads `<data_root>/wasl.json`; absent/malformed/empty → `None` + stderr
+  log; duplicate `host_id` → first wins) and `wasl_event_lines` (pure
+  `WaslEvent` → `Vec<String>` mapping, both re-exported at the crate root),
+  plus `Agent::register_wasl_connector`/`Agent::set_wasl_connector_factory`
+  (always-compiled test seams — NOT `#[cfg(not(coverage))]`, unlike most of
+  this crate's other real-IO wiring — see `lib.rs`'s `WaslConnectorsWrap` doc
+  comment) and the `WaslConnectorFactoryFn` type alias.
 - **`capabilities.rs`** (`pub mod`, unlike the rest of this map — its seam is
   independently unit-tested per `tests/capabilities.rs`) — U1 dynamic
   capability discovery (`docs/specs/dynamic-capabilities.md`): the pure parse

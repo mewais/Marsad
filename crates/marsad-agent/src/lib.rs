@@ -22,6 +22,7 @@ mod reader;
 mod remote;
 #[cfg(not(coverage))]
 mod serve;
+mod wasl;
 
 #[cfg(not(coverage))]
 use remote::REMOTE_RUNTIME_DIR;
@@ -37,6 +38,7 @@ pub use remote::{
 };
 #[cfg(not(coverage))]
 pub use remote::{fetch_remote_session_list, run_remote_script, run_remote_script_bounded};
+pub use wasl::{load_wasl_config, wasl_event_lines};
 
 // ── AgentError ────────────────────────────────────────────────────────────────
 
@@ -111,6 +113,31 @@ macro_rules! opaque_debug_wrap {
 opaque_debug_wrap!(NotifierWrap(Box<dyn Notifier>));
 opaque_debug_wrap!(StoreWrap(Box<Store>));
 opaque_debug_wrap!(ContainerWrap(Box<FakeContainer>));
+
+// X2 Wasl connector registry (docs/specs/wasl-connector.md §4.2/§4.3) — keyed
+// by host_id. Unlike the other real-IO registries below (session_writers,
+// pending_gates, ...), this is NOT `#[cfg(not(coverage))]`-gated: the
+// `AnswerWaslGate` arm in `handle_ipc` must observably branch on registry
+// membership (present vs. absent) under coverage instrumentation too, and
+// `register_wasl_connector` is a plain always-compiled test seam (see
+// `wasl.rs`). Constructing/registering a connector performs no IO by itself
+// (`WaslOperatorClient::new` is a pure struct literal) — only `start()` does,
+// and that is only ever invoked from `serve()`'s `#[cfg(not(coverage))]` block.
+//
+// Type aliases (rather than inlining these into the `opaque_debug_wrap!`
+// call) so `cargo fmt` can't insert a trailing comma inside the macro's
+// `$inner:ty` capture, which breaks the `)`-terminated matcher.
+type WaslConnectorMap =
+    std::sync::Arc<std::sync::Mutex<HashMap<String, Box<dyn marsad_wasl::WaslConnector>>>>;
+opaque_debug_wrap!(WaslConnectorsWrap(WaslConnectorMap));
+
+// Optional connector-factory override (the `set_wasl_connector_factory` test
+// seam, §4.2). `None` = use the real-client factory, which `serve()` supplies
+// lazily (only reachable from `#[cfg(not(coverage))]` code, since
+// `WaslOperatorClient`'s `WaslConnector` impl itself is `cfg(not(coverage))`
+// in marsad-wasl). Storing the closure here is not IO.
+type WaslConnectorFactory = Option<wasl::WaslConnectorFactoryFn>;
+opaque_debug_wrap!(WaslConnectorFactoryWrap(WaslConnectorFactory));
 
 // Real-IO container wrapper — production builds only.
 // Uses the same opaque Debug pattern so `derive(Debug)` on `Agent` compiles.
@@ -251,6 +278,11 @@ pub struct Agent {
     /// launch and consumed by the serve loop. Production builds only.
     #[cfg(not(coverage))]
     session_run_cmds: SessionRunCmdsWrap,
+    /// Wasl connector registry (X2), keyed by host_id. Always compiled — see
+    /// `WaslConnectorsWrap`'s doc comment.
+    wasl_connectors: WaslConnectorsWrap,
+    /// Wasl connector-factory override test seam (X2). Always compiled.
+    wasl_connector_factory: WaslConnectorFactoryWrap,
 }
 
 impl Agent {
@@ -303,6 +335,10 @@ impl Agent {
             session_run_cmds: SessionRunCmdsWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
+            wasl_connectors: WaslConnectorsWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
+            wasl_connector_factory: WaslConnectorFactoryWrap(None),
         })
     }
 
@@ -360,6 +396,10 @@ impl Agent {
             session_run_cmds: SessionRunCmdsWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
+            wasl_connectors: WaslConnectorsWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
+            wasl_connector_factory: WaslConnectorFactoryWrap(None),
         })
     }
 

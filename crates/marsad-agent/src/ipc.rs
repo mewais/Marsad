@@ -90,6 +90,15 @@ impl Agent {
                 Err(AgentError::Protocol("SlashCmd not implemented".to_string()))
             }
             marsad_proto::IpcMsg::SetWorkspace { .. } => Ok(vec![]),
+            // X2 (docs/specs/wasl-connector.md §4.3): relay ONE explicit human
+            // decision on a Wasl gate to the node's operator endpoint via the
+            // registered connector for `host_id`.
+            marsad_proto::IpcMsg::AnswerWaslGate {
+                host_id,
+                gate_id,
+                outcome,
+                reason,
+            } => self.handle_answer_wasl_gate(host_id, gate_id, outcome, reason),
             // Every other tag is an agent→GUI/core message (ack/broadcast) that
             // has no business arriving inbound here — same observable Protocol
             // error class as an unrecognized type.
@@ -438,6 +447,52 @@ impl Agent {
         self.next_id += 1;
         let ack = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::Subscribed { subscriber_id });
         Ok(vec![ack])
+    }
+
+    /// X2 (docs/specs/wasl-connector.md §4.3): relay one explicit human
+    /// decision on a Wasl gate to the connector registered for `host_id`.
+    ///
+    /// Absent `host_id` in the registry (including the no-config case, where
+    /// the map is empty) is the ENTIRE no-config surface of this arm: a
+    /// `Protocol` error, no side effects. The agent never originates a
+    /// decision — `decide()` is called from nowhere else.
+    fn handle_answer_wasl_gate(
+        &mut self,
+        host_id: String,
+        gate_id: String,
+        outcome: String,
+        reason: Option<String>,
+    ) -> Result<Vec<String>, AgentError> {
+        let ack = {
+            let connectors = self.wasl_connectors.0.lock().unwrap();
+            let connector = connectors.get(&host_id).ok_or_else(|| {
+                AgentError::Protocol(format!("no wasl operator configured for host '{host_id}'"))
+            })?;
+            connector.decide(&gate_id, &outcome, reason.as_deref())
+        };
+
+        match ack {
+            Ok(marsad_wasl::DecisionAck::Delivered) => {}
+            Ok(marsad_wasl::DecisionAck::AlreadyDecided) => {
+                eprintln!(
+                    "marsad-agent: wasl gate {gate_id} on host {host_id} already decided (benign race)"
+                );
+            }
+            Ok(marsad_wasl::DecisionAck::UnknownGate) => {
+                eprintln!(
+                    "marsad-agent: wasl gate {gate_id} on host {host_id} unknown (stale answer)"
+                );
+            }
+            Err(e) => {
+                return Err(AgentError::Protocol(format!(
+                    "wasl decide failed for host {host_id} gate {gate_id}: {e}"
+                )));
+            }
+        }
+
+        let event =
+            marsad_proto::encode_ipc(&marsad_proto::IpcMsg::WaslGateAnswered { host_id, gate_id });
+        Ok(vec![event])
     }
 
     /// Ingest a Claude Code hook payload.

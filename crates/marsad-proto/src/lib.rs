@@ -764,6 +764,75 @@ pub enum IpcMsg {
         /// constraint here).
         capabilities: Capabilities,
     },
+
+    // ── X1 Wasl connector (docs/specs/wasl-connector.md §3) ─────────────────
+    // ── GUI/core → agent ────────────────────────────────────────────────────
+    /// NEW: relay ONE explicit human decision on a Wasl gate to the node's
+    /// operator endpoint. Marsad-originated only — never synthesized (hard rule 2).
+    AnswerWaslGate {
+        host_id: String,
+        gate_id: String,
+        /// Wasl outcome string, relayed verbatim: "approved" | "denied"
+        /// ("dismissed" is wire-valid for forward compat; core never emits it in X1).
+        #[serde(default)]
+        outcome: String,
+        /// Denial reason. ALWAYS serialized (null when absent), like LaunchSession.first_prompt.
+        #[serde(default)]
+        reason: Option<String>,
+    },
+
+    // ── agent → GUI/core ────────────────────────────────────────────────────
+    /// NEW broadcast: a Wasl gate surfaced (or re-surfaced via resnapshot reconcile).
+    WaslGateRequested {
+        host_id: String,
+        gate_id: String,
+        #[serde(default)]
+        mode: String,
+        #[serde(default)]
+        decidable: bool,
+        /// Verbatim Wasl GateRequest object; Value ON PURPOSE (typed form is
+        /// marsad_wasl::GateRequest; core parses leniently — §5.2).
+        #[serde(default)]
+        request: serde_json::Value,
+        #[serde(default)]
+        requested_at: String,
+        #[serde(default)]
+        timeout_ms: u64,
+        #[serde(default)]
+        deadline: String,
+    },
+    /// NEW broadcast: a Wasl gate resolved.
+    WaslGateDecided {
+        host_id: String,
+        gate_id: String,
+        /// Wasl outcome verbatim, PLUS "unknown" for connector-synthesized
+        /// GateVanished (Marsad-wire-only value; never sent to Wasl).
+        #[serde(default)]
+        outcome: String,
+        /// Wasl decided_by verbatim, PLUS "resync" for GateVanished.
+        #[serde(default)]
+        decided_by: String,
+        #[serde(default)]
+        reason: Option<String>, // always serialized, null when absent
+        /// RFC 3339 from the frame; "" for GateVanished (no node timestamp exists).
+        #[serde(default)]
+        decided_at: String,
+    },
+    /// NEW broadcast: one audit-feed entry (the observation feed — EVERY durable
+    /// audit append, including auto-approved sends).
+    WaslObservation {
+        host_id: String,
+        /// Verbatim Wasl AuditEntry; Value ON PURPOSE (same rationale as `request`).
+        #[serde(default)]
+        entry: serde_json::Value,
+    },
+    /// NEW ack (serve-loop reply to AnswerWaslGate): the decision was RELAYED to the
+    /// connector — not that the POST succeeded (the WaslGateDecided broadcast is the
+    /// authoritative resolution signal, mirroring the contract's own 204 semantics).
+    WaslGateAnswered {
+        host_id: String,
+        gate_id: String,
+    },
 }
 
 impl IpcMsg {
@@ -1124,6 +1193,11 @@ pub fn parse_ipc(line: &str) -> Result<IpcMsg, ProtoError> {
         "RefreshCapabilities",
         "CapabilitiesRefreshQueued",
         "CapabilitiesUpdate",
+        "AnswerWaslGate",
+        "WaslGateRequested",
+        "WaslGateDecided",
+        "WaslObservation",
+        "WaslGateAnswered",
     ];
 
     if !KNOWN.contains(&type_str) {

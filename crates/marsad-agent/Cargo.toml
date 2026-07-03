@@ -31,6 +31,7 @@ marsad-lifecycle = { workspace = true }
 marsad-store = { workspace = true }
 marsad-hosts = { workspace = true }
 marsad-notify = { workspace = true }
+marsad-wasl = { workspace = true }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }

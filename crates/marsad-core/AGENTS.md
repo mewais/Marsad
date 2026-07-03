@@ -8,7 +8,14 @@ core-side contract (`capabilities: HashMap<(driver, host_id), Capabilities>` sta
 arms, `Core::capabilities()`/`Core::refresh_capabilities()`) is specified in
 `../../docs/specs/dynamic-capabilities.md` §3.5. `VmUpdate::Capabilities` wraps
 `marsad_viewmodel::CapabilitiesView` (§3.6, a sibling block's pure `From<Capabilities>` mirror
-type) — read-only from here.
+type) — read-only from here. X3's Wasl inbound surface (`wasl_gates:
+BTreeMap<(host_id, gate_id), WaslGateView>` state, `VmUpdate::{WaslGates, WaslGateDecided,
+WaslObservation}`, the `on_agent_line` `WaslGateRequested`/`WaslGateDecided`/`WaslObservation`/
+`WaslGateAnswered` arms, `CoreError::UnknownWaslGate`, `Core::answer_wasl_gate` — host-scoped, NOT
+`require_session`) is specified in `../../docs/specs/wasl-connector.md` §5.2. `answer_wasl_gate`
+routes through `marsad_gates::Gate::Handoff` with `session_id = "wasl:<host_id>"` (§5.1); pending
+gates are node-authoritative (added by `WaslGateRequested`, removed ONLY by `WaslGateDecided` —
+`answer_wasl_gate` never optimistically removes).
 **Test plan & coverage regime:** `../../docs/specs/TESTPLAN.md`
 **Design source of truth:** `_extracted/design_handoff_marsad/Marsad.dc.html` and `Marsad Mobile.dc.html` (port `renderVals()` / helper logic; do not invent behavior).
 

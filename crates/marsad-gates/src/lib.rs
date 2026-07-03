@@ -42,6 +42,17 @@ pub enum Gate {
         request_id: String,
         questions: Vec<QuestionPrompt>,
     },
+    /// An agent-to-agent handoff gate surfaced by an external connector (X1: Wasl).
+    Handoff {
+        /// Connector-scope gate id — THE identity field (Wasl: gate_id, unique for the
+        /// node's process lifetime; NEVER request.id, which may repeat).
+        gate_id: String,
+        /// "consult" | "command" | "message" | "transfer"
+        kind: String,
+        from: String,
+        summary: String,
+        preview: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +200,9 @@ fn gate_canonical(session_id: &str, gate: &Gate) -> String {
         }
         Gate::Question { request_id, .. } => {
             format!("question\x00{session_id}\x00{request_id}")
+        }
+        Gate::Handoff { gate_id, .. } => {
+            format!("handoff\x00{session_id}\x00{gate_id}")
         }
     }
 }

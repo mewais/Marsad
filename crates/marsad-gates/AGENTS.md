@@ -2,7 +2,12 @@
 
 **Purpose:** Permission/plan/edit gate domain with idempotent, single-session-routed decisions.
 **Tier:** L0 (pure)
-**Full spec (read this first):** `../../docs/specs/gates.md`
+**Full spec (read this first):** `../../docs/specs/gates.md`; the additive `Gate::Handoff` variant
+(an agent-to-agent handoff gate first inhabited by Wasl-originated gates) is specified in
+`../../docs/specs/wasl-connector.md` §5.1 — identity is `(session_id, gate_id)` only
+(`kind`/`from`/`summary`/`preview` are display payload, exactly like `Gate::Question`'s
+`request_id`-only identity); the `session_id` slot carries the Wasl scope string
+`wasl:<host_id>` (a marsad-core concern — this crate stays agnostic of the string's shape).
 **Test plan & coverage regime:** `../../docs/specs/TESTPLAN.md`
 **Design source of truth:** `_extracted/design_handoff_marsad/Marsad.dc.html` and `Marsad Mobile.dc.html` (port `renderVals()` / helper logic; do not invent behavior).
 
