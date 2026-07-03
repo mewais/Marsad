@@ -8,9 +8,9 @@
 use std::sync::Mutex;
 use tauri::State;
 
-use marsad_core::{Core, CoreError, GitProbe, LaunchMode, LaunchSpec, PersistedSettings, PersistedTemplate, Posture, SessionSummary};
+use marsad_core::{Core, CoreError, GitProbe, LaunchMode, LaunchSpec, PersistedSettings, PersistedTemplate, Posture};
 use marsad_gates::{Decision, DecisionId, GateDecision};
-use marsad_viewmodel::AppSnapshot;
+use marsad_viewmodel::{AppSnapshot, CapabilitiesView};
 
 // ---------------------------------------------------------------------------
 // AppState — unified managed state for live + mock modes
@@ -117,75 +117,39 @@ pub fn launch_session(
     }
 }
 
-/// `async` is essential here: listing a REMOTE host's sessions runs an ssh/wsl
-/// round-trip that can take seconds. A synchronous Tauri command runs on the main
-/// thread and would FREEZE the whole UI for that time; an async command runs off
-/// it, and the remote fetch is further moved to a blocking pool thread so it never
-/// stalls the async runtime. The state lock is taken + dropped BEFORE any await
-/// (its guard isn't held across the await).
+/// U1/U2 (docs/specs/dynamic-capabilities.md §3.6) — initial snapshot of every
+/// (driver, host) capabilities entry for the `useVm` `capabilities` slice.
+/// Same lock-clone-return pattern as `board()`; the bridge holds no on-disk
+/// client knowledge itself (that lives agent-side, §3.1) — kill-list
+/// replacement for `list_sessions`/`parse_remote_session_list`.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn list_sessions(
-    state: State<'_, ManagedState>,
-    project: String,
-    host_id: String,
-) -> Result<Vec<SessionSummary>, String> {
-    // Resolve the host: a local host's transcripts live on this machine; a remote
-    // host's live on the remote box and must be listed over its own connection.
-    let host_target: Option<String> = {
-        let guard = state.lock().map_err(|e| e.to_string())?;
-        match &*guard {
-            AppState::Live(core) => core
-                .snapshot()
-                .hosts
-                .into_iter()
-                .find(|h| h.id == host_id)
-                .and_then(|h| if h.is_local { None } else { Some(h.target) }),
-            AppState::Mock(_) => None,
-        }
-    }; // guard dropped here — nothing is held across the await below
-    match host_target {
-        None => {
-            let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-            let projects_root = std::path::PathBuf::from(format!("{home}/.claude/projects"));
-            marsad_core::discovery::list_sessions(&projects_root, &project).map_err(|e| e.to_string())
-        }
-        Some(target) => {
-            // Run the blocking ssh/wsl fetch on the blocking pool so it doesn't
-            // stall the async runtime thread.
-            let raw = tauri::async_runtime::spawn_blocking(move || {
-                marsad_agent::fetch_remote_session_list(&target, &project)
-            })
-            .await
-            .map_err(|e| e.to_string())?
-            .unwrap_or_default();
-            Ok(parse_remote_session_list(&raw))
-        }
+pub fn capabilities(state: State<'_, ManagedState>) -> Result<Vec<CapabilitiesView>, String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    match &*guard {
+        AppState::Live(core) => Ok(core.capabilities()),
+        AppState::Mock(_) => Ok(Vec::new()),
     }
 }
 
-/// Parse the `mtime_ms<TAB>uuid<TAB><first user line>` records produced by
-/// `marsad_agent::fetch_remote_session_list` into `SessionSummary` rows (newest
-/// first, as emitted). The snippet is derived from the raw user line via the same
-/// `first_user_prompt` parser the local lister uses.
-fn parse_remote_session_list(stdout: &str) -> Vec<SessionSummary> {
-    stdout
-        .lines()
-        .filter_map(|line| {
-            let mut parts = line.splitn(3, '\t');
-            let modified: u64 = parts.next()?.trim().parse().ok()?;
-            let id = parts.next()?.trim().to_string();
-            if id.is_empty() {
-                return None;
-            }
-            let raw = parts.next().unwrap_or("");
-            let snippet = marsad_core::discovery::first_user_prompt(raw).unwrap_or_default();
-            Some(SessionSummary {
-                id,
-                snippet,
-                modified,
-            })
-        })
-        .collect()
+/// U1/U2 — ask the agent to (re)probe capabilities. Fire-and-forget: forwards
+/// to `Core::refresh_capabilities` and returns immediately (never waits for
+/// the resulting `CapabilitiesUpdate`, which arrives later as a vm-update
+/// event) — the U5 responsiveness rule (§4): no probe IO on this path.
+#[tauri::command(rename_all = "snake_case")]
+pub fn refresh_capabilities(
+    state: State<'_, ManagedState>,
+    host_id: Option<String>,
+    driver: Option<String>,
+    project: Option<String>,
+) -> Result<(), String> {
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    match &mut *guard {
+        AppState::Live(core) => {
+            core.refresh_capabilities(host_id, driver, project);
+            Ok(())
+        }
+        AppState::Mock(_) => Ok(()),
+    }
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -480,7 +444,7 @@ fn default_settings_for_mock() -> PersistedSettings {
         background: "Gradient".to_string(),
         restore_on_launch: true,
         confirm_before_stop: true,
-        default_model: "claude-sonnet-4-6".to_string(),
+        default_model: "claude-sonnet-latest".to_string(),
         default_posture: "ask".to_string(),
     }
 }

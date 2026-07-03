@@ -13,6 +13,7 @@ import React, {
 } from "react";
 import type {
   AppSnapshot,
+  CapabilitiesView,
   Counts,
   Filter,
   GateVM,
@@ -32,6 +33,8 @@ import {
   snapshot as fetchSnapshot,
   fetchBoard,
   fetchGraph,
+  fetchCapabilities,
+  capsKey,
   createWorkstream as apiCreateWorkstream,
   deleteWorkstream as apiDeleteWorkstream,
   addConnection as apiAddConnection,
@@ -76,6 +79,8 @@ export interface VmState {
   graph: GraphView | null;
   nodeSel: string | null;
   activeProfile: string | null;
+  // Capabilities (U2), keyed by capsKey(driver, host_id) — dynamic-capabilities.md §3.6.
+  capabilities: Record<string, CapabilitiesView>;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +90,7 @@ export interface VmState {
 type Action =
   | { type: "SNAPSHOT_LOADED"; payload: AppSnapshot }
   | { type: "VM_UPDATE"; payload: VmUpdateEvent }
+  | { type: "CAPABILITIES_LOADED"; payload: CapabilitiesView[] }
   | { type: "SET_SCREEN"; screen: Screen }
   | { type: "SELECT_SESSION"; id: string | null }
   | { type: "SET_TAB"; tab: Tab }
@@ -171,7 +177,24 @@ function reducer(state: VmState, action: Action): VmState {
         // command helpers that trigger this event. Nothing to do here.
         return state;
       }
+      if (ev.kind === "capabilities") {
+        // Always a COMPLETE snapshot for this (driver, host) — replace, not
+        // merge, on the receiving side (dynamic-capabilities.md §2).
+        const key = capsKey(ev.capabilities.driver, ev.capabilities.host_id);
+        return {
+          ...state,
+          capabilities: { ...state.capabilities, [key]: ev.capabilities },
+        };
+      }
       return state;
+    }
+
+    case "CAPABILITIES_LOADED": {
+      const capabilities: Record<string, CapabilitiesView> = {};
+      for (const c of action.payload) {
+        capabilities[capsKey(c.driver, c.host_id)] = c;
+      }
+      return { ...state, capabilities };
     }
 
     case "SET_SCREEN":
@@ -254,6 +277,7 @@ const initialState: VmState = {
   graph: null,
   nodeSel: null,
   activeProfile: null,
+  capabilities: {},
 };
 
 // ---------------------------------------------------------------------------
@@ -606,6 +630,16 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     if (hasPreloadedSnapshot) return;
     fetchBoard().then((board) => {
       dispatch({ type: "SET_BOARD", board });
+    });
+  }, [hasPreloadedSnapshot]);
+
+  // Seed capabilities on mount — skipped when snapshot pre-injected (tests
+  // inject `capabilities` directly via initialState so no act() warnings fire
+  // on mount). Live updates arrive via VM_UPDATE's "capabilities" arm above.
+  useEffect(() => {
+    if (hasPreloadedSnapshot) return;
+    fetchCapabilities().then((caps) => {
+      dispatch({ type: "CAPABILITIES_LOADED", payload: caps });
     });
   }, [hasPreloadedSnapshot]);
 

@@ -548,9 +548,9 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
       // A bare "!" with no command is silently ignored.
       return;
     }
-    // If text starts with "/" and matches a slash command, run it.
-    // Use the session's live slash_commands list when available (from system/init);
-    // fall back to the static SLASH_CATALOG when the session hasn't received one yet.
+    // If text starts with "/" and matches a slash command, run it. Slash
+    // commands are session-scoped only (sv.slash_commands, from system/init) —
+    // no preset catalog fallback (dynamic-capabilities.md §1.3).
     if (text.startsWith("/")) {
       const matches = filterSlash(text, sv?.slash_commands);
       if (matches.length > 0) {

@@ -25,6 +25,31 @@ import type { AppSnapshot } from "../src/bridge/types";
 // Helper — render SessionDetail with a seeded store
 // ---------------------------------------------------------------------------
 
+// Stand-in for a real capabilities probe (dynamic-capabilities.md §U2) —
+// ConfigTab's model picker reads capabilities[(driver, host)].models for the
+// selected session's host, never a static import. MOCK_SNAPSHOT's sessions
+// all live on "local"/"hetzner"/"gpu", so cover all three.
+function testModelCapabilities(hostId: string) {
+  return {
+    driver: "claude",
+    host_id: hostId,
+    cli_available: true,
+    models: {
+      models: [
+        { id: "claude-haiku-4-5" },
+        { id: "claude-sonnet-4-6" },
+        { id: "claude-opus-4-8" },
+      ],
+      source: "Listed" as const,
+      free_text: true,
+    },
+    session_scope: null,
+    sessions: [],
+    fetched_at_ms: 0,
+    errors: [],
+  };
+}
+
 function renderWith(
   overrides: Partial<AppSnapshot & { selectedId: string | null }> = {}
 ) {
@@ -45,6 +70,11 @@ function renderWith(
     filter: "All",
     search: "",
     wsMenuOpen: false,
+    capabilities: {
+      "claude::local": testModelCapabilities("local"),
+      "claude::hetzner": testModelCapabilities("hetzner"),
+      "claude::gpu": testModelCapabilities("gpu"),
+    },
   };
 
   return render(
@@ -135,7 +165,8 @@ describe("SessionDetail — header", () => {
   it("renders model name in meta row", () => {
     renderWith({ selectedId: "s01" });
     // model appears in header meta row and possibly in activity system note
-    const matches = screen.getAllByText(/claude-sonnet-4-6/);
+    // (s01.model, mockFixture.ts — "claude-sonnet-latest").
+    const matches = screen.getAllByText(/claude-sonnet-latest/);
     expect(matches.length).toBeGreaterThan(0);
   });
 

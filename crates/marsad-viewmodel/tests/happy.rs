@@ -1,5 +1,5 @@
 /// happy.rs — nominal paths for counts, group_overview, sidebar_list, session_detail,
-/// gate_vm, rescope, parse_slash, and slash_catalog on a representative snapshot.
+/// gate_vm, rescope, and parse_slash on a representative snapshot.
 ///
 /// These tests WILL fail to compile until the code-agent implements `marsad_viewmodel`.
 /// That is the expected tests-first signal.
@@ -8,7 +8,7 @@ use marsad_events::Phase;
 use marsad_gates::{Gate, PlanStep};
 use marsad_viewmodel::{
     counts, gate_vm, group_overview, parse_slash, rescope, session_detail, sidebar_list,
-    slash_catalog, AppSnapshot, Filter, Host, HostStatus, SessionView, SlashCmd, Tab, Workspace,
+    AppSnapshot, Filter, Host, HostStatus, SessionView, SlashCmd, Tab, Workspace,
 };
 
 // ---------------------------------------------------------------------------
@@ -501,6 +501,31 @@ fn gate_vm_question_kind_and_icon() {
     assert!(!vm.is_plan);
     assert!(!vm.is_edit);
     assert!(vm.is_question);
+}
+
+/// X1/X2 mechanical compile-fix follow-through (docs/specs/wasl-connector.md
+/// §5.1): `Gate::Handoff` is additive in marsad-gates; `gate_icon`'s
+/// exhaustive match grew a one-line arm for it (lib.rs) that was left
+/// untested by that mechanical fix. Closes the gap.
+#[test]
+fn gate_vm_handoff_kind_and_icon() {
+    let gate = Gate::Handoff {
+        gate_id: "gw-1".to_string(),
+        kind: "consult".to_string(),
+        from: "planner".to_string(),
+        summary: "Needs a second opinion on the migration".to_string(),
+        preview: String::new(),
+    };
+    let mut snap = representative_snapshot();
+    snap.sessions[0].gate = Some(gate);
+    snap.selected_id = Some("s1".to_string());
+    let vm = gate_vm(&snap).unwrap();
+    assert_eq!(vm.kind, "Handoff");
+    assert_eq!(vm.icon, "\u{21c4}"); // ⇄
+    assert!(!vm.is_permission);
+    assert!(!vm.is_plan);
+    assert!(!vm.is_edit);
+    assert!(!vm.is_question);
     assert!(vm.diff_rows.is_empty());
 }
 
@@ -600,45 +625,53 @@ fn parse_slash_help() {
 }
 
 // ---------------------------------------------------------------------------
-// slash_catalog — happy paths
+// CapabilitiesView — From<Capabilities> field mapping (dynamic-capabilities.md
+// §3.6/§6: "From<Capabilities> for CapabilitiesView field mapping (incl.
+// project: None passthrough)"). Pure field-for-field mapping, no renaming.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn slash_catalog_empty_query_returns_all_11_commands() {
-    let catalog = slash_catalog("");
-    assert_eq!(
-        catalog.len(),
-        11,
-        "empty query should return all 11 slash commands"
-    );
-}
+fn capabilities_view_from_capabilities_maps_every_field_verbatim() {
+    use marsad_proto::{
+        Capabilities, DiscoveredSession, ModelCatalog, ModelInfo, ModelListSource, SessionScope,
+    };
+    use marsad_viewmodel::CapabilitiesView;
 
-#[test]
-fn slash_catalog_top_item_is_first_in_list() {
-    // Top item should be the first command in spec order (/clear) for empty query
-    let catalog = slash_catalog("");
-    assert!(!catalog.is_empty());
-    assert_eq!(catalog[0].name, "/clear");
-}
+    let caps = Capabilities {
+        driver: "codex".to_string(),
+        host_id: "hetzner".to_string(),
+        cli_available: true,
+        models: ModelCatalog {
+            models: vec![ModelInfo {
+                id: "gpt-5-codex".to_string(),
+                annotation: Some("flagship".to_string()),
+            }],
+            source: ModelListSource::Listed,
+            free_text: true,
+        },
+        session_scope: Some(SessionScope::AllKnown),
+        sessions: vec![DiscoveredSession {
+            id: "sess-1".to_string(),
+            // project: None passthrough — the store doesn't always record it.
+            project: None,
+            snippet: "fix the thing".to_string(),
+            modified_ms: 42,
+        }],
+        fetched_at_ms: 1_700_000_000_000,
+        errors: vec!["agy models: exit 1".to_string()],
+    };
 
-#[test]
-fn slash_catalog_prefix_match_filters_results() {
-    let catalog = slash_catalog("/co");
-    // matches: /compact, /cost, /config
-    let names: Vec<&str> = catalog.iter().map(|e| e.name.as_str()).collect();
-    assert!(names.contains(&"/compact"));
-    assert!(names.contains(&"/cost"));
-    assert!(names.contains(&"/config"));
-    assert!(!names.contains(&"/clear"), "/co should not match /clear");
-}
+    let view = CapabilitiesView::from(caps.clone());
 
-#[test]
-fn slash_catalog_no_match_returns_empty() {
-    let catalog = slash_catalog("/zzz");
-    assert!(
-        catalog.is_empty(),
-        "no-match query should return empty list"
-    );
+    assert_eq!(view.driver, caps.driver);
+    assert_eq!(view.host_id, caps.host_id);
+    assert_eq!(view.cli_available, caps.cli_available);
+    assert_eq!(view.models, caps.models);
+    assert_eq!(view.session_scope, caps.session_scope);
+    assert_eq!(view.sessions, caps.sessions);
+    assert_eq!(view.sessions[0].project, None);
+    assert_eq!(view.fetched_at_ms, caps.fetched_at_ms);
+    assert_eq!(view.errors, caps.errors);
 }
 
 // ---------------------------------------------------------------------------

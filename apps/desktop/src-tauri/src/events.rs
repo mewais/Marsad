@@ -7,7 +7,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use marsad_core::VmUpdate;
-use marsad_viewmodel::{BoardView, Host, OverviewGroups, SessionView, Workspace};
+use marsad_viewmodel::{BoardView, CapabilitiesView, Host, OverviewGroups, SessionView, Workspace};
 use marsad_workstream::Workstream;
 
 // ---------------------------------------------------------------------------
@@ -32,6 +32,10 @@ pub enum VmUpdateEnvelope {
     Workspaces { workspaces: Vec<Workspace> },
     Workstreams { workstreams: Vec<Workstream> },
     Board { board: BoardView },
+    /// U1/U2 (dynamic-capabilities.md §3.6) — one (driver, host) capabilities
+    /// snapshot; the receiving side replaces (not merges) its `capabilities`
+    /// slice entry for that key.
+    Capabilities { capabilities: CapabilitiesView },
 }
 
 impl From<VmUpdate> for VmUpdateEnvelope {
@@ -55,6 +59,7 @@ impl From<VmUpdate> for VmUpdateEnvelope {
             VmUpdate::Workspaces(workspaces) => VmUpdateEnvelope::Workspaces { workspaces },
             VmUpdate::Workstreams(workstreams) => VmUpdateEnvelope::Workstreams { workstreams },
             VmUpdate::Board(board) => VmUpdateEnvelope::Board { board },
+            VmUpdate::Capabilities(capabilities) => VmUpdateEnvelope::Capabilities { capabilities },
         }
     }
 }

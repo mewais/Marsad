@@ -73,6 +73,30 @@ function renderGate(
   );
 }
 
+// A capability catalog covering the three MOCK_SNAPSHOT hosts, standing in
+// for what a real capabilities probe would report (dynamic-capabilities.md
+// §U2) — NewSession's model picker only ever reads from `state.capabilities`.
+function testModelCapabilities(hostId: string) {
+  return {
+    driver: "claude",
+    host_id: hostId,
+    cli_available: true,
+    models: {
+      models: [
+        { id: "claude-haiku-4-5" },
+        { id: "claude-sonnet-4-6" },
+        { id: "claude-opus-4-8" },
+      ],
+      source: "Listed" as const,
+      free_text: true,
+    },
+    session_scope: null,
+    sessions: [],
+    fetched_at_ms: 0,
+    errors: [],
+  };
+}
+
 /** Render NewSession modal (screen = "new-session"). */
 function renderNewSession(snapshotOverride?: Partial<AppSnapshot>) {
   const snapshot: AppSnapshot = { ...MOCK_SNAPSHOT, ...snapshotOverride };
@@ -84,6 +108,11 @@ function renderNewSession(snapshotOverride?: Partial<AppSnapshot>) {
     filter: "All",
     search: "",
     wsMenuOpen: false,
+    capabilities: {
+      "claude::local": testModelCapabilities("local"),
+      "claude::hetzner": testModelCapabilities("hetzner"),
+      "claude::gpu": testModelCapabilities("gpu"),
+    },
   };
   return render(
     <ThemeProvider initialTheme="dark">

@@ -491,6 +491,11 @@ fn gate_icon(gate: &marsad_gates::Gate) -> &'static str {
         marsad_gates::Gate::Plan { .. } => "\u{25a1}",       // □
         marsad_gates::Gate::Edit { .. } => "\u{00b1}",       // ±
         marsad_gates::Gate::Question { .. } => "\u{2753}",   // ❓
+        // X1/X2 mechanical compile-fix (docs/specs/wasl-connector.md §5.1):
+        // Gate::Handoff is additive in marsad-gates; this one-line arm keeps
+        // gate_icon's exhaustive match compiling. Minimal, single-line touch
+        // only — the rest of this file is owned by a concurrent worker (U2).
+        marsad_gates::Gate::Handoff { .. } => "\u{21c4}", // ⇄
     }
 }
 
@@ -563,83 +568,6 @@ pub fn parse_slash(input: &str) -> SlashCmd {
         "/help" => SlashCmd::Help,
         _ => SlashCmd::Unknown(input.to_string()),
     }
-}
-
-// ---------------------------------------------------------------------------
-// SlashEntry + slash_catalog
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SlashEntry {
-    /// Command name including the leading '/'.
-    pub name: String,
-    /// Human-readable description.
-    pub desc: String,
-}
-
-/// The canonical 11-command catalog in spec order.
-fn all_slash_entries() -> [SlashEntry; 11] {
-    [
-        SlashEntry {
-            name: "/clear".to_string(),
-            desc: "Clear conversation history".to_string(),
-        },
-        SlashEntry {
-            name: "/compact".to_string(),
-            desc: "Compact context to save tokens".to_string(),
-        },
-        SlashEntry {
-            name: "/cost".to_string(),
-            desc: "Show token usage and cost".to_string(),
-        },
-        SlashEntry {
-            name: "/model".to_string(),
-            desc: "Switch the active model".to_string(),
-        },
-        SlashEntry {
-            name: "/config".to_string(),
-            desc: "Open configuration".to_string(),
-        },
-        SlashEntry {
-            name: "/init".to_string(),
-            desc: "Initialize CLAUDE.md for this project".to_string(),
-        },
-        SlashEntry {
-            name: "/review".to_string(),
-            desc: "Review recent changes".to_string(),
-        },
-        SlashEntry {
-            name: "/agents".to_string(),
-            desc: "List running sub-agents".to_string(),
-        },
-        SlashEntry {
-            name: "/resume".to_string(),
-            desc: "Resume a previous conversation".to_string(),
-        },
-        SlashEntry {
-            name: "/terminal".to_string(),
-            desc: "Open integrated terminal".to_string(),
-        },
-        SlashEntry {
-            name: "/help".to_string(),
-            desc: "Show available commands".to_string(),
-        },
-    ]
-}
-
-/// Return a filtered slash catalog matching the given query prefix.
-///
-/// - Empty query → all 11 entries in spec order (top item first).
-/// - Non-empty query → prefix-match on name, preserving spec order.
-pub fn slash_catalog(query: &str) -> Vec<SlashEntry> {
-    let entries = all_slash_entries();
-    if query.is_empty() {
-        return entries.into_iter().collect();
-    }
-    entries
-        .into_iter()
-        .filter(|e| e.name.starts_with(query))
-        .collect()
 }
 
 // ---------------------------------------------------------------------------

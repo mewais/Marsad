@@ -4,10 +4,16 @@ interface SlashPopoverProps {
   entries: SlashEntry[];
   onSelect: (entry: SlashEntry) => void;
   empty?: boolean;
+  /** Message shown when `empty`. Defaults to "no matches for this query"
+   *  wording; callers pass an honest "waiting for the session to report
+   *  commands" hint when the session has reported no commands at all
+   *  (dynamic-capabilities.md §1.3 — the empty state is first-class UX,
+   *  never backfilled from a preset catalog). */
+  emptyMessage?: string;
 }
 
 /** Slash command popover shown above the composer. */
-export function SlashPopover({ entries, onSelect, empty }: SlashPopoverProps) {
+export function SlashPopover({ entries, onSelect, empty, emptyMessage }: SlashPopoverProps) {
   return (
     <div
       style={{
@@ -72,7 +78,7 @@ export function SlashPopover({ entries, onSelect, empty }: SlashPopoverProps) {
       ))}
       {empty && (
         <div style={{ padding: "11px 13px", fontSize: "calc(14px * var(--fs,1))", color: "var(--txt3)" }}>
-          No matching command
+          {emptyMessage ?? "No matching command"}
         </div>
       )}
     </div>

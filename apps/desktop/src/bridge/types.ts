@@ -389,6 +389,56 @@ export interface Connection {
 }
 
 // ---------------------------------------------------------------------------
+// Capabilities — TS mirror of marsad-proto's Capabilities/ModelCatalog/
+// DiscoveredSession/SessionScope + marsad-viewmodel's CapabilitiesView
+// (U1/U2, docs/specs/dynamic-capabilities.md §1/§3.6). Field names/shapes are
+// verbatim mirrors of the Rust serde JSON — no renaming, no label synthesis.
+// ---------------------------------------------------------------------------
+
+/** Provenance of a model catalog — drives the UI's "unverified list" treatment. */
+export type ModelListSource = "Listed" | "Observed";
+
+/** One selectable model, exactly as the driver reports it. Ids are verbatim —
+ *  never normalized (agy model names contain spaces/parens). */
+export interface ModelInfo {
+  id: string;
+  annotation?: string | null;
+}
+
+export interface ModelCatalog {
+  models: ModelInfo[];
+  source: ModelListSource;
+  /** UI must additionally offer a free-text model field when true. */
+  free_text: boolean;
+}
+
+/** One resumable past session discovered on the host. */
+export interface DiscoveredSession {
+  id: string;
+  /** None where the store doesn't record it retrievably (e.g. agy). */
+  project?: string | null;
+  snippet: string;
+  modified_ms: number;
+}
+
+/** Serializes as the bare string `"AllKnown"` or `{"Projects": [...]}`. */
+export type SessionScope = "AllKnown" | { Projects: string[] };
+
+/** Display-ready mirror of `marsad_viewmodel::CapabilitiesView` — the unit of
+ *  caching/wire-transfer/VmUpdate for one (driver, host) pair. */
+export interface CapabilitiesView {
+  driver: string;
+  host_id: string;
+  cli_available: boolean;
+  models: ModelCatalog;
+  session_scope: SessionScope | null;
+  sessions: DiscoveredSession[];
+  /** Unix epoch ms of the last successful probe; 0 = never (honest unknown). */
+  fetched_at_ms: number;
+  errors: string[];
+}
+
+// ---------------------------------------------------------------------------
 // VmUpdate event from Tauri
 // ---------------------------------------------------------------------------
 
@@ -401,4 +451,5 @@ export type VmUpdateEvent =
   | { kind: "hosts"; hosts: Host[] }
   | { kind: "workspaces"; workspaces: Workspace[] }
   | { kind: "workstreams"; workstreams: Workstream[] }
-  | { kind: "board"; board: BoardView };
+  | { kind: "board"; board: BoardView }
+  | { kind: "capabilities"; capabilities: CapabilitiesView };

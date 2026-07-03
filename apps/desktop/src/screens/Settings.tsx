@@ -13,9 +13,8 @@ import { useVm } from "../bridge/useVm";
 import { useTheme } from "../theme/ThemeProvider";
 import { getUiScale, applyUiScale } from "../theme/uiScale";
 import { Toggle } from "../components/Toggle";
-import { MODELS as MODEL_LIST } from "../bridge/models";
-import { getAutostart, setAutostart, addHost, updateHost, removeHost, connectHostInteractive, listWslDistros, getSettings, setSettings, parseEnv, DEFAULT_SETTINGS } from "../bridge/api";
-import type { Settings, NotifPref } from "../bridge/types";
+import { getAutostart, setAutostart, addHost, updateHost, removeHost, connectHostInteractive, listWslDistros, getSettings, setSettings, parseEnv, DEFAULT_SETTINGS, unionModelCatalog } from "../bridge/api";
+import type { ModelInfo, Settings, NotifPref } from "../bridge/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1156,9 +1155,6 @@ function HostsTab() {
 // Session defaults tab
 // ---------------------------------------------------------------------------
 
-// Shared model catalogue, adapted to this tab's `key` field name.
-const MODELS = MODEL_LIST.map((m) => ({ key: m.id, label: m.label }));
-
 const POSTURES: Array<{ key: "ask" | "auto" | "full"; label: string; desc: string }> = [
   {
     key: "ask",
@@ -1182,22 +1178,26 @@ interface SessionDefaultsTabProps {
   onModelChange: (m: string) => void;
   posture: "ask" | "auto" | "full";
   onPostureChange: (p: "ask" | "auto" | "full") => void;
+  /** Union of every known host/driver's models (dynamic-capabilities.md §5:
+   *  "same VM source (union across hosts for the global default picker) +
+   *  free text") — never a static import. */
+  models: ModelInfo[];
 }
 
-function SessionDefaultsTab({ model, onModelChange, posture, onPostureChange }: SessionDefaultsTabProps) {
+function SessionDefaultsTab({ model, onModelChange, posture, onPostureChange, models }: SessionDefaultsTabProps) {
   return (
     <div style={{ maxWidth: 860, display: "flex", flexDirection: "column", gap: 22 }}>
       {/* Default model */}
       <div>
         <div style={S.sectionLabelBold}>Default model</div>
-        <div style={{ display: "flex", gap: 8 }}>
-          {MODELS.map((m) => {
-            const active = model === m.key;
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {models.map((m) => {
+            const active = model === m.id;
             return (
               <button
-                key={m.key}
-                data-testid={`defaults-model-${m.key}`}
-                onClick={() => onModelChange(m.key)}
+                key={m.id}
+                data-testid={`defaults-model-${m.id}`}
+                onClick={() => onModelChange(m.id)}
                 style={{
                   fontFamily: "inherit",
                   fontSize: "calc(14.5px * var(--fs,1))",
@@ -1211,11 +1211,40 @@ function SessionDefaultsTab({ model, onModelChange, posture, onPostureChange }: 
                   transition: "all 0.15s",
                 }}
               >
-                {m.label}
+                {m.id}
+                {m.annotation ? ` — ${m.annotation}` : ""}
               </button>
             );
           })}
         </div>
+        {models.length === 0 && (
+          <div style={{ fontSize: "calc(13.5px * var(--fs,1))", color: "var(--txt3)", fontStyle: "italic" }}>
+            No models observed yet — type one below.
+          </div>
+        )}
+        <input
+          data-testid="defaults-model-freetext"
+          value={model}
+          onChange={(e) => onModelChange(e.target.value)}
+          placeholder="Custom model id"
+          className="mono"
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            background: "var(--panel2)",
+            border: "1px solid var(--border2)",
+            borderRadius: 8,
+            padding: "8px 11px",
+            color: "var(--txt)",
+            fontFamily: "var(--font-mono, monospace)",
+            fontSize: "calc(14px * var(--fs,1))",
+            outline: "none",
+            marginTop: 8,
+          }}
+        />
       </div>
 
       {/* Default permission posture */}
@@ -1619,6 +1648,7 @@ function GeneralTab({
 const TABS: SettingsTab[] = ["Notifications", "Hosts", "Session defaults", "General"];
 
 export function Settings() {
+  const { state: vmState } = useVm();
   const [activeTab, setActiveTab] = useState<SettingsTab>("Notifications");
 
   // All persisted settings state lifted here so we can load once and save on change.
@@ -1746,6 +1776,7 @@ export function Settings() {
               onModelChange={handleDefaultModelChange}
               posture={defaultPosture}
               onPostureChange={handleDefaultPostureChange}
+              models={unionModelCatalog(vmState.capabilities)}
             />
           )}
           {activeTab === "General" && (

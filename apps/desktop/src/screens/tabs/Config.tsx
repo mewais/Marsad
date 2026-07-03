@@ -2,10 +2,9 @@
  * Config tab — model selector buttons, permission posture radios,
  * tools/connectors chips, Apply / Save-as-template actions.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useVm } from "../../bridge/useVm";
-import { MODELS as MODEL_OPTIONS, DEFAULT_MODEL } from "../../bridge/models";
-import { restartSession, saveTemplate, listTemplates } from "../../bridge/api";
+import { restartSession, saveTemplate, listTemplates, capsForHostId } from "../../bridge/api";
 import type { PersistedTemplate } from "../../bridge/types";
 
 // ---------------------------------------------------------------------------
@@ -51,12 +50,21 @@ function mcpStatusColor(status: string): string {
 // ---------------------------------------------------------------------------
 
 export function ConfigTab() {
-  const { selectedSession } = useVm();
+  const { selectedSession, state } = useVm();
+
+  // Model options come ONLY from capabilities[(driver, host)].models for the
+  // session's host (dynamic-capabilities.md §5) — never a static import.
+  const capsForHost = useMemo(
+    () => (selectedSession ? capsForHostId(state.capabilities, selectedSession.host_id) : undefined),
+    [state.capabilities, selectedSession]
+  );
+  const modelOptions = capsForHost?.models.models ?? [];
+  const modelFreeText = capsForHost?.models.free_text ?? true;
 
   // Local state mirrors current session values; Apply restarts the session.
   // Initial values come from the selected session so the tab reflects the
   // session's REAL posture/model rather than a hardcoded default.
-  const initialModel = selectedSession?.model ?? DEFAULT_MODEL;
+  const initialModel = selectedSession?.model ?? "";
   const initialPosture = (selectedSession?.posture as PostureId) ?? "ask";
   const [selectedModel, setSelectedModel] = useState(initialModel);
   const [posture, setPosture] = useState<PostureId>(initialPosture);
@@ -70,7 +78,7 @@ export function ConfigTab() {
   // Re-sync model and posture whenever the selected session changes so each
   // session shows its own real values, not values left over from the previous one.
   useEffect(() => {
-    setSelectedModel(selectedSession?.model ?? DEFAULT_MODEL);
+    setSelectedModel(selectedSession?.model ?? "");
     setPosture((selectedSession?.posture as PostureId) ?? "ask");
     setDisabledTools(new Set()); // reset tool overrides for the new session
   }, [selectedSession?.id]);
@@ -159,8 +167,8 @@ export function ConfigTab() {
           >
             Model
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            {MODEL_OPTIONS.map((mo) => {
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {modelOptions.map((mo) => {
               const active = selectedModel === mo.id;
               return (
                 <button
@@ -181,11 +189,42 @@ export function ConfigTab() {
                     color: active ? "var(--accent2)" : "var(--txt2)",
                   }}
                 >
-                  {mo.label}
+                  {mo.id}
+                  {mo.annotation ? ` — ${mo.annotation}` : ""}
                 </button>
               );
             })}
           </div>
+          {modelOptions.length === 0 && (
+            <div style={{ fontSize: "calc(13.5px * var(--fs,1))", color: "var(--txt3)", fontStyle: "italic" }}>
+              No models observed yet for this host — type one below.
+            </div>
+          )}
+          {modelFreeText && (
+            <input
+              data-testid="config-model-freetext"
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              placeholder="Custom model id"
+              className="mono"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                background: "var(--panel2)",
+                border: "1px solid var(--border2)",
+                borderRadius: 8,
+                padding: "8px 11px",
+                color: "var(--txt)",
+                fontFamily: "var(--font-mono, monospace)",
+                fontSize: "calc(14px * var(--fs,1))",
+                outline: "none",
+                marginTop: 8,
+              }}
+            />
+          )}
         </div>
 
         {/* Permission posture */}

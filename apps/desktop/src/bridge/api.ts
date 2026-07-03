@@ -5,7 +5,7 @@
  * mock fixture so Vitest + Playwright work without the Rust side.
  */
 
-import type { AppSnapshot, PersistedTemplate, SessionSummary, Settings, SideRow, SlashCommandInfo } from "./types";
+import type { AppSnapshot, CapabilitiesView, ModelInfo, PersistedTemplate, SessionSummary, Settings, SideRow, SlashCommandInfo } from "./types";
 import { MOCK_SNAPSHOT } from "./mockFixture";
 import { mockWorkstreams } from "./mockWorkstreams";
 import type { BoardView, ConnKind, GraphView } from "./workstreamTypes";
@@ -58,7 +58,7 @@ export const DEFAULT_SETTINGS: Settings = {
   background: "Gradient",
   restore_on_launch: true,
   confirm_before_stop: true,
-  default_model: "claude-sonnet-4-6",
+  default_model: "claude-sonnet-latest",
   default_posture: "ask",
 };
 
@@ -575,22 +575,10 @@ export async function fetchGraph(wsId: string): Promise<GraphView | null> {
 }
 
 // ---------------------------------------------------------------------------
-// Slash catalog (static — mirrors Rust all_slash_entries())
+// Slash commands — session-scoped only (docs/specs/dynamic-capabilities.md
+// §1.3). No preset catalog: an empty/absent session list is an honest empty
+// state, never backfilled.
 // ---------------------------------------------------------------------------
-
-export const SLASH_CATALOG = [
-  { name: "/clear",    desc: "Clear conversation history" },
-  { name: "/compact",  desc: "Compact context to save tokens" },
-  { name: "/cost",     desc: "Show token usage and cost" },
-  { name: "/model",    desc: "Switch the active model" },
-  { name: "/config",   desc: "Open configuration" },
-  { name: "/init",     desc: "Initialize CLAUDE.md for this project" },
-  { name: "/review",   desc: "Review recent changes" },
-  { name: "/agents",   desc: "List running sub-agents" },
-  { name: "/resume",   desc: "Resume a previous conversation" },
-  { name: "/terminal", desc: "Open integrated terminal" },
-  { name: "/help",     desc: "Show available commands" },
-] as const;
 
 /** Map a `SlashCommandInfo` from the session to the `SlashEntry` shape. */
 function slashInfoToEntry(info: SlashCommandInfo): { name: string; desc: string } {
@@ -598,18 +586,86 @@ function slashInfoToEntry(info: SlashCommandInfo): { name: string; desc: string 
 }
 
 /**
- * Filter slash commands for the given query, using the session's live
- * `slash_commands` list when non-empty, falling back to `SLASH_CATALOG`.
- * `sessionSlash` is optional — pass `undefined` or `[]` to always use the catalog.
+ * Filter slash commands for the given query, using ONLY the session's live
+ * `slash_commands` list. `sessionSlash` absent/empty → `[]` (the empty state
+ * is first-class UX — see Composer's "waiting for the session to report
+ * commands" hint — never a fallback preset catalog).
  */
 export function filterSlash(
   query: string,
   sessionSlash?: SlashCommandInfo[],
 ): { name: string; desc: string }[] {
-  const source: { name: string; desc: string }[] =
-    sessionSlash && sessionSlash.length > 0
-      ? sessionSlash.map(slashInfoToEntry)
-      : [...SLASH_CATALOG];
+  const source: { name: string; desc: string }[] = (sessionSlash ?? []).map(slashInfoToEntry);
   if (!query) return source;
   return source.filter((e) => e.name.startsWith(query));
+}
+
+// ---------------------------------------------------------------------------
+// Capabilities (U2 — dynamic-capabilities.md §3.6) — capabilities()/
+// refresh_capabilities() wrappers + shared lookup helpers used by the
+// NewSession/Config/Settings model + resume pickers.
+// ---------------------------------------------------------------------------
+
+/** Key format for the `capabilities[(driver, host_id)]` useVm slice. */
+export function capsKey(driver: string, hostId: string): string {
+  return `${driver}::${hostId}`;
+}
+
+/**
+ * Find the capabilities entry for a given host, regardless of which driver
+ * reported it. There is no driver picker in the UI yet (M7d, non-goal), so
+ * screens key off host id alone — exactly one entry exists per host today.
+ */
+export function capsForHostId(
+  capabilities: Record<string, CapabilitiesView> | undefined,
+  hostId: string,
+): CapabilitiesView | undefined {
+  if (!capabilities) return undefined;
+  return Object.values(capabilities).find((c) => c.host_id === hostId);
+}
+
+/** Union of every known host/driver's models, deduped by id (verbatim, first
+ *  occurrence wins) — used by the global default-model picker (Settings). */
+export function unionModelCatalog(
+  capabilities: Record<string, CapabilitiesView> | undefined,
+): ModelInfo[] {
+  if (!capabilities) return [];
+  const seen = new Set<string>();
+  const out: ModelInfo[] = [];
+  for (const cap of Object.values(capabilities)) {
+    for (const m of cap.models.models) {
+      if (!seen.has(m.id)) {
+        seen.add(m.id);
+        out.push(m);
+      }
+    }
+  }
+  return out;
+}
+
+/** Initial snapshot of every (driver, host) capabilities entry — same
+ *  lock-clone-return pattern as `fetchBoard()`. Mock mode: honest empty. */
+export async function fetchCapabilities(): Promise<CapabilitiesView[]> {
+  if (!isTauri()) return [];
+  const invoke = await getInvoke();
+  return invoke("capabilities", {}) as Promise<CapabilitiesView[]>;
+}
+
+/**
+ * Ask the agent to (re)probe capabilities. Fire-and-forget: this resolves as
+ * soon as the refresh is QUEUED — results arrive later as `capabilities`
+ * vm-update events, never awaited here (U5 responsiveness rule).
+ */
+export async function refreshCapabilities(args?: {
+  host_id?: string;
+  driver?: string;
+  project?: string;
+}): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("refresh_capabilities", {
+    host_id: args?.host_id ?? null,
+    driver: args?.driver ?? null,
+    project: args?.project ?? null,
+  });
 }

@@ -66,6 +66,30 @@ function getSetWorkspace() {
   return api.setWorkspace as ReturnType<typeof vi.fn>;
 }
 
+// Stand-in for a real capabilities probe (dynamic-capabilities.md §U2) — the
+// Settings "Default model" picker unions capabilities[(driver, host)].models
+// across every known host, never a static import.
+const TEST_CAPABILITIES = {
+  "claude::local": {
+    driver: "claude",
+    host_id: "local",
+    cli_available: true,
+    models: {
+      models: [
+        { id: "claude-haiku-4-5" },
+        { id: "claude-sonnet-4-6" },
+        { id: "claude-opus-4-8" },
+      ],
+      source: "Listed" as const,
+      free_text: true,
+    },
+    session_scope: null,
+    sessions: [],
+    fetched_at_ms: 0,
+    errors: [],
+  },
+};
+
 function renderSettings(snapshotOverride?: Partial<AppSnapshot>) {
   const snapshot: AppSnapshot = { ...MOCK_SNAPSHOT, ...snapshotOverride };
   const preloaded: Partial<VmState> = {
@@ -76,6 +100,7 @@ function renderSettings(snapshotOverride?: Partial<AppSnapshot>) {
     filter: "All",
     search: "",
     wsMenuOpen: false,
+    capabilities: TEST_CAPABILITIES,
   };
   return render(
     <ThemeProvider initialTheme="dark">

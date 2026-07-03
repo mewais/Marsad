@@ -1,14 +1,14 @@
 /// branches.rs — table-driven cases closing remaining regions to 100%.
 /// Covers: each Filter variant; case-insensitive search (name/project/host_label/branch);
 /// empty search vs match vs no-match; full state-sort ordering; each SlashCmd + Unknown;
-/// slash_catalog empty/prefix/no-match; ctx_warn boundary 74 vs 75.
+/// ctx_warn boundary 74 vs 75.
 ///
 /// These tests WILL fail to compile until the code-agent implements `marsad_viewmodel`.
 /// That is the expected tests-first signal.
 use marsad_events::Phase;
 use marsad_viewmodel::{
-    parse_slash, session_detail, sidebar_list, slash_catalog, AppSnapshot, Filter, Host,
-    HostStatus, SessionView, SlashCmd, Tab,
+    parse_slash, session_detail, sidebar_list, AppSnapshot, Filter, Host, HostStatus, SessionView,
+    SlashCmd, Tab,
 };
 
 // ---------------------------------------------------------------------------
@@ -450,117 +450,6 @@ fn parse_slash_unknown_garbage() {
     match parse_slash("/notacommand") {
         SlashCmd::Unknown(_) => {}
         other => panic!("expected Unknown, got {other:?}"),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// slash_catalog — empty query / prefix / no-match / top item
-// ---------------------------------------------------------------------------
-
-#[test]
-fn slash_catalog_empty_query_returns_11_entries() {
-    let entries = slash_catalog("");
-    assert_eq!(entries.len(), 11);
-}
-
-#[test]
-fn slash_catalog_all_entries_have_slash_prefix() {
-    let entries = slash_catalog("");
-    for entry in &entries {
-        assert!(
-            entry.name.starts_with('/'),
-            "slash entry name must start with '/': {:?}",
-            entry.name
-        );
-    }
-}
-
-#[test]
-fn slash_catalog_top_item_first_in_empty_query() {
-    let entries = slash_catalog("");
-    // /clear is the first in spec order
-    assert_eq!(entries[0].name, "/clear");
-}
-
-#[test]
-fn slash_catalog_prefix_co_matches_three() {
-    let entries = slash_catalog("/co");
-    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-    // /compact, /cost, /config all start with /co
-    assert!(names.contains(&"/compact"), "/compact must match /co");
-    assert!(names.contains(&"/cost"), "/cost must match /co");
-    assert!(names.contains(&"/config"), "/config must match /co");
-    // /clear does NOT start with /co
-    assert!(!names.contains(&"/clear"), "/clear must not match /co");
-}
-
-#[test]
-fn slash_catalog_prefix_help_matches_one() {
-    let entries = slash_catalog("/h");
-    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-    assert!(names.contains(&"/help"));
-}
-
-#[test]
-fn slash_catalog_prefix_no_match_empty() {
-    let entries = slash_catalog("/zzz");
-    assert!(
-        entries.is_empty(),
-        "unmatched prefix should return empty list"
-    );
-}
-
-#[test]
-fn slash_catalog_prefix_r_matches_review_resume() {
-    let entries = slash_catalog("/r");
-    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-    assert!(names.contains(&"/review"));
-    assert!(names.contains(&"/resume"));
-}
-
-#[test]
-fn slash_catalog_entry_has_name_and_description() {
-    let entries = slash_catalog("");
-    for entry in &entries {
-        assert!(
-            !entry.name.is_empty(),
-            "every entry must have a non-empty name"
-        );
-        // desc field should exist; we just ensure it's accessible
-        let _desc: &str = &entry.desc;
-    }
-}
-
-#[test]
-fn slash_catalog_exact_slash_clear() {
-    let entries = slash_catalog("/clear");
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].name, "/clear");
-}
-
-#[test]
-fn slash_catalog_order_stable_for_empty_query() {
-    // The 11 commands in spec order:
-    let expected_order = [
-        "/clear",
-        "/compact",
-        "/cost",
-        "/model",
-        "/config",
-        "/init",
-        "/review",
-        "/agents",
-        "/resume",
-        "/terminal",
-        "/help",
-    ];
-    let entries = slash_catalog("");
-    assert_eq!(entries.len(), 11);
-    for (i, expected_name) in expected_order.iter().enumerate() {
-        assert_eq!(
-            entries[i].name, *expected_name,
-            "slash_catalog entry {i} should be {expected_name}"
-        );
     }
 }
 

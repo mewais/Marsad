@@ -21,9 +21,10 @@ interface ComposerProps {
   disabled?: boolean;
   /** Previously sent prompts for this session, oldest first. Used for Up/Down history navigation. */
   history?: string[];
-  /** Live slash commands from the current session's system/init event. When
-   *  provided and non-empty these replace the static SLASH_CATALOG in the
-   *  popover. Falls back to SLASH_CATALOG when empty/absent. */
+  /** Live slash commands from the current session's system/init event — the
+   *  popover's ONLY source. Empty/absent (pre-init, or a driver that reports
+   *  none) renders an honest "waiting for the session to report commands"
+   *  hint, never a preset fallback (dynamic-capabilities.md §1.3). */
   slashCommands?: SlashCommandInfo[];
 }
 
@@ -67,9 +68,11 @@ export function Composer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  // Use the session's live slash commands when available; fall back to the
-  // static SLASH_CATALOG when the session has none (pre-init or empty list).
+  // The slash popover's ONLY source is the session's live slash_commands
+  // (dynamic-capabilities.md §1.3) — no preset catalog fallback. An
+  // empty/absent list is an honest empty state with its own hint below.
   const slashEntries = slashOpen ? filterSlash(text, slashCommands) : [];
+  const hasSessionCommands = Boolean(slashCommands && slashCommands.length > 0);
 
   /** Returns true if the textarea caret is on the first line. */
   function caretOnFirstLine(): boolean {
@@ -241,6 +244,11 @@ export function Composer({
             entries={slashEntries}
             onSelect={handleSlashSelect}
             empty={slashEntries.length === 0}
+            emptyMessage={
+              hasSessionCommands
+                ? "No matching command"
+                : "Waiting for the session to report commands…"
+            }
           />
         </div>
       )}

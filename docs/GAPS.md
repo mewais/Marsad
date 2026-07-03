@@ -23,6 +23,23 @@ Legend: ✅ real + verified here · ⚠️ built but UNVERIFIED here (needs the 
   standalone harness crate — the Tauri macro layer, `invoke` arg wiring, and the real
   frontend→invoke→core→vm-update path have **never run**. There may be Tauri-level compile/wiring errors.
   → "UI 100% hooked to functionality" is TRUE for the mock path, UNVERIFIED for the real desktop app.
+- ⚠️ **src-tauri capabilities command layer** (U2, `docs/specs/dynamic-capabilities.md` §3.6, added on top of
+  the already-landed + Rust-tested U1 backend in `marsad-proto`/`marsad-agent`/`marsad-core`): new Tauri
+  commands `bridge::capabilities` (lock-clone-return `Core::capabilities()`, mirrors `board()`) and
+  `bridge::refresh_capabilities(host_id?, driver?, project?)` (forwards to `Core::refresh_capabilities`,
+  fire-and-forget) registered in `lib.rs`'s `generate_handler!`; the `VmUpdateEnvelope::Capabilities`
+  arm in `events.rs` (`VmUpdate::Capabilities(CapabilitiesView) → {"kind":"capabilities","capabilities":…}`).
+  Hand-written against `Core`'s already-compiling, already-tested signatures
+  (`crates/marsad-core/src/lib.rs:1718,1729`) but, like the rest of src-tauri, **never compiled here** —
+  the `#[tauri::command]` macro expansion, `rename_all = "snake_case"` arg wiring (`host_id`/`driver`/
+  `project` as `Option<String>` invoke args), and the real emit→`vm-update`→`useVm` path are unverified.
+  Kill-list companion change in the same file: `bridge::list_sessions` (Tauri command) and its private
+  `parse_remote_session_list` helper are DELETED — `apps/desktop/tests/DynCapKillList.test.tsx` greps
+  `bridge.rs` source text for their absence (a compile-independent check) and passes, but whether the
+  desktop app still builds with `list_sessions` gone from `generate_handler!` (no dangling references,
+  no now-unused imports) is unverified beyond `grep`/manual read. The mock-mode session-seed literals in
+  `mock.rs` were renamed off the `claude-(opus|sonnet|haiku)-<digit>` pattern (kill-list grep gate #2) —
+  cosmetic only, no behavior change, also unverified by compilation.
 - ⚠️ The Marsad "live/real" integration tests: `tests/integration/i03_lifecycle_real`,
   `i09_gui_agent_live`, `i10_core_e2e_live`, `i11_windows_lifecycle`. They spawn real tmux/claude sessions
   and cannot run headless — not executed here. (One sandbox-only spurious failure in `marsad-core`'s

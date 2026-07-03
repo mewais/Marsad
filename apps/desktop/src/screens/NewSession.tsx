@@ -1,14 +1,27 @@
 /**
  * NewSession modal — project dir, host, model, posture, first prompt, launch.
  */
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useVm } from "../bridge/useVm";
-import { launchSession, listSessions, getSettings } from "../bridge/api";
-import type { SessionSummary } from "../bridge/types";
-import { MODELS, DEFAULT_MODEL } from "../bridge/models";
+import { launchSession, getSettings, capsForHostId, refreshCapabilities } from "../bridge/api";
+import type { CapabilitiesView, DiscoveredSession, ModelCatalog } from "../bridge/types";
 import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
-import { Dropdown } from "../components/Dropdown";
+
+// ---------------------------------------------------------------------------
+// Capabilities helpers (U2 — dynamic-capabilities.md §5)
+// ---------------------------------------------------------------------------
+
+/** The honest empty state — nothing observed yet, free text allowed
+ *  (mirrors `ModelCatalog::default()`, proto §1). */
+const EMPTY_MODEL_CATALOG: ModelCatalog = { models: [], source: "Observed", free_text: true };
+
+/** "as of …" / "not fetched yet" staleness label. `fetched_at_ms: 0` is the
+ *  "never successfully probed" sentinel — never rendered as a 1970 date. */
+function formatStaleness(fetchedAtMs: number): string {
+  if (!fetchedAtMs) return "Not fetched yet";
+  return `as of ${relativeTime(fetchedAtMs)}`;
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -37,8 +50,8 @@ function relativeTime(epochMs: number): string {
   return `${diffDay}d ago`;
 }
 
-function sessionLabel(s: SessionSummary): string {
-  const time = relativeTime(s.modified);
+function sessionLabel(s: DiscoveredSession): string {
+  const time = relativeTime(s.modified_ms);
   const snippet = s.snippet.length > 50 ? s.snippet.slice(0, 50) + "…" : s.snippet;
   return `${time} · ${snippet}`;
 }
@@ -70,19 +83,58 @@ export function NewSession() {
   const [hostId, setHostId] = useState(
     hosts.find((h) => h.is_local)?.id ?? hosts[0]?.id ?? "local"
   );
-  const [model, setModel] = useState<string>(DEFAULT_MODEL);
+  // No `DEFAULT_MODEL` constant anywhere (dynamic-capabilities.md §5) — the
+  // effective default is resolved below once capabilities + settings load.
+  const [model, setModel] = useState<string>("");
+  // True once the user has explicitly picked/typed a model — after that,
+  // switching host must not silently clobber their choice.
+  const [userModifiedModel, setUserModifiedModel] = useState(false);
+  function selectModel(id: string) {
+    setUserModifiedModel(true);
+    setModel(id);
+  }
   const [posture, setPosture] = useState<"ask" | "auto" | "full">("auto");
+  const [defaultModelSetting, setDefaultModelSetting] = useState<string | null>(null);
 
-  // Initialize model + posture from persisted session defaults (once on mount).
+  // Initialize posture + the persisted default-model preference from settings
+  // (once on mount). The model itself is resolved by the effect below, which
+  // also needs the capabilities catalog for the selected host.
   useEffect(() => {
     getSettings()
       .then((s) => {
-        setModel(s.default_model);
+        setDefaultModelSetting(s.default_model);
         const p = s.default_posture as "ask" | "auto" | "full";
         if (p === "ask" || p === "auto" || p === "full") setPosture(p);
       })
       .catch(() => {/* keep defaults on error */});
   }, []);
+
+  // Capabilities for the selected host — options = capabilities[(driver,
+  // host)].models ONLY, never an import (dynamic-capabilities.md §5). There is
+  // no driver picker in the UI yet (M7d, non-goal), so we key off host id
+  // alone; today exactly one driver's capabilities exist per host.
+  const capsForHost: CapabilitiesView | undefined = useMemo(
+    () => capsForHostId(state.capabilities, hostId),
+    [state.capabilities, hostId]
+  );
+  const modelCatalog: ModelCatalog = capsForHost?.models ?? EMPTY_MODEL_CATALOG;
+
+  // Default selection = persisted last-used model from settings if present in
+  // the catalog, else the first catalog entry, else empty (free text). Once
+  // the user has explicitly modified the selection, this stops overriding it
+  // (e.g. switching host must not clobber an explicit pick).
+  useEffect(() => {
+    if (userModifiedModel) return;
+    if (defaultModelSetting !== null && modelCatalog.models.some((m) => m.id === defaultModelSetting)) {
+      setModel(defaultModelSetting);
+    } else if (modelCatalog.models.length > 0) {
+      setModel(modelCatalog.models[0].id);
+    } else {
+      setModel("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultModelSetting, modelCatalog.models, userModifiedModel]);
+
   const [firstPrompt, setFirstPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
@@ -102,39 +154,35 @@ export function NewSession() {
     return dirs.slice(0, 6);
   }, [state.snapshot, hostId]);
 
-  // Resume state
+  // Resume state — sessions come ONLY from capabilities[(driver, host)].sessions
+  // (dynamic-capabilities.md §5), never the kill-listed `listSessions()`.
   const [resume, setResume] = useState(false);
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [selectedResume, setSelectedResume] = useState<string>("continue");
-  const [loadingSessions, setLoadingSessions] = useState(false);
 
-  // Fetch sessions when project, host, or resume toggle changes. The host
-  // matters because a remote host's resumable sessions live on the remote box
-  // (listed over its connection), not on this machine. The fetch is async (the
-  // Tauri command no longer blocks the UI) and we show a spinner while it runs;
-  // a stale-guard drops results from a superseded request.
+  // Opening the picker (or changing project/host while it's open) fires a
+  // fire-and-forget refresh; the cached list (below) renders instantly off
+  // `state.capabilities` regardless — never spinner-blocked (§3.3/§5).
   useEffect(() => {
-    if (!resume || !project.trim()) {
-      setLoadingSessions(false);
-      return;
-    }
-    let cancelled = false;
-    setLoadingSessions(true);
-    setSessions([]);
-    listSessions(project.trim(), hostId)
-      .then((s) => {
-        if (!cancelled) setSessions(s);
-      })
-      .catch(() => {
-        if (!cancelled) setSessions([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingSessions(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [resume, project, hostId]);
+    if (!resume) return;
+    refreshCapabilities({
+      host_id: hostId,
+      driver: capsForHost?.driver ?? "claude",
+      project: project.trim() || undefined,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resume, hostId, project]);
+
+  const projectTrim = project.trim();
+  const allSessions: DiscoveredSession[] = capsForHost?.sessions ?? [];
+  // agy-style `project: null` entries aren't scoped to a requested project —
+  // they always render under "unknown project" (§5). String-project entries
+  // are filtered to the chosen project.
+  const visibleSessions = allSessions.filter(
+    (s) => s.project == null || s.project === projectTrim
+  );
+  const unknownProjectSessions = visibleSessions.filter((s) => s.project == null);
+  const knownProjectSessions = visibleSessions.filter((s) => s.project != null);
+  const fetchedAtMs = capsForHost?.fetched_at_ms ?? 0;
 
   function close() {
     dispatch({ type: "SET_SCREEN", screen: "overview" });
@@ -428,85 +476,167 @@ export function NewSession() {
         {/* ---- Resume ---- */}
         <div>
           <div style={sectionLabel}>Resume</div>
-          {/* Toggle + session picker on one row; the picker is greyed until the
-              toggle is on. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div
-              data-testid="ns-resume-toggle"
-              style={{ display: "flex", alignItems: "center", gap: 10 }}
-            >
+          {/* Whole row toggles resume; the inner Toggle stops propagation so a
+              direct click on it doesn't double-fire. */}
+          <div
+            data-testid="ns-resume-toggle"
+            onClick={() => setResume((r) => !r)}
+            style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
+          >
+            <div onClick={(e) => e.stopPropagation()}>
               <Toggle checked={resume} onChange={setResume} />
-              <span style={{ fontSize: "calc(15px * var(--fs,1))", color: "var(--txt2)", fontWeight: 500 }}>
-                Resume a previous session
-              </span>
             </div>
-            <div style={{ marginLeft: "auto" }}>
-              <Dropdown
-                testId="ns-resume-select"
-                value={selectedResume}
-                onChange={setSelectedResume}
-                disabled={!resume}
-                width={260}
-                align="right"
-                options={[
-                  { value: "continue", label: "Last (continue)" },
-                  ...sessions.map((s) => ({ value: s.id, label: sessionLabel(s) })),
-                ]}
-              />
-            </div>
-          </div>
-          {resume && loadingSessions && (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                fontSize: "calc(14px * var(--fs,1))",
-                color: "var(--txt3)",
-                marginTop: 8,
-              }}
-            >
+            <span style={{ fontSize: "calc(15px * var(--fs,1))", color: "var(--txt2)", fontWeight: 500 }}>
+              Resume a previous session
+            </span>
+            {resume && (
               <span
-                style={{
-                  width: 13,
-                  height: 13,
-                  border: "2px solid var(--border)",
-                  borderTopColor: "var(--accent)",
-                  borderRadius: "50%",
-                  display: "inline-block",
-                  animation: "spin 0.7s linear infinite",
-                }}
-              />
-              Loading sessions…
-            </div>
-          )}
-          {resume && !loadingSessions && sessions.length === 0 && (
+                data-testid="ns-capabilities-staleness"
+                style={{ marginLeft: "auto", fontSize: "calc(12.5px * var(--fs,1))", color: "var(--txt3)" }}
+              >
+                {formatStaleness(fetchedAtMs)}
+              </span>
+            )}
+          </div>
+
+          {resume && (
             <div
               style={{
-                fontSize: "calc(14px * var(--fs,1))",
-                color: "var(--txt3)",
                 marginTop: 8,
-                fontStyle: "italic",
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                maxHeight: 220,
+                overflowY: "auto",
               }}
             >
-              No previous sessions in this directory
+              <div
+                data-testid="ns-resume-continue"
+                onClick={() => setSelectedResume("continue")}
+                style={{
+                  padding: "8px 11px",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  fontSize: "calc(14px * var(--fs,1))",
+                  fontWeight: 600,
+                  border: selectedResume === "continue" ? "1px solid var(--accent)" : "1px solid var(--border2)",
+                  background: selectedResume === "continue" ? "var(--accent-bg)" : "var(--panel2)",
+                  color: selectedResume === "continue" ? "var(--accent2)" : "var(--txt2)",
+                }}
+              >
+                Last (continue)
+              </div>
+
+              {knownProjectSessions.length > 0 &&
+                knownProjectSessions.map((s) => {
+                  const selected = selectedResume === s.id;
+                  return (
+                    <div
+                      key={s.id}
+                      data-testid={`ns-resume-session-${s.id}`}
+                      onClick={() => setSelectedResume(s.id)}
+                      style={{
+                        padding: "8px 11px",
+                        borderRadius: 8,
+                        cursor: "pointer",
+                        fontSize: "calc(14px * var(--fs,1))",
+                        border: selected ? "1px solid var(--accent)" : "1px solid var(--border2)",
+                        background: selected ? "var(--accent-bg)" : "var(--panel2)",
+                        color: selected ? "var(--accent2)" : "var(--txt2)",
+                      }}
+                    >
+                      {sessionLabel(s)}
+                    </div>
+                  );
+                })}
+
+              {unknownProjectSessions.length > 0 && (
+                <>
+                  <div
+                    data-testid="ns-resume-unknown-project"
+                    style={{
+                      marginTop: 4,
+                      fontSize: "calc(12.5px * var(--fs,1))",
+                      fontWeight: 700,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.4,
+                      color: "var(--txt3)",
+                    }}
+                  >
+                    Unknown project
+                  </div>
+                  {unknownProjectSessions.map((s) => {
+                    const selected = selectedResume === s.id;
+                    return (
+                      <div
+                        key={s.id}
+                        data-testid={`ns-resume-session-${s.id}`}
+                        onClick={() => setSelectedResume(s.id)}
+                        style={{
+                          padding: "8px 11px",
+                          borderRadius: 8,
+                          cursor: "pointer",
+                          fontSize: "calc(14px * var(--fs,1))",
+                          border: selected ? "1px solid var(--accent)" : "1px solid var(--border2)",
+                          background: selected ? "var(--accent-bg)" : "var(--panel2)",
+                          color: selected ? "var(--accent2)" : "var(--txt2)",
+                        }}
+                      >
+                        {sessionLabel(s)}
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+
+              {visibleSessions.length === 0 && (
+                <div
+                  data-testid="ns-resume-hint"
+                  style={{
+                    fontSize: "calc(14px * var(--fs,1))",
+                    color: "var(--txt3)",
+                    fontStyle: "italic",
+                  }}
+                >
+                  No previous sessions discovered yet for this project.
+                </div>
+              )}
             </div>
           )}
         </div>
 
         {/* ---- Model + Posture side-by-side ---- */}
         <div style={{ display: "flex", gap: 16 }}>
-          {/* Model picker */}
+          {/* Model picker — options ONLY from capabilities[(driver, host)].models
+              (dynamic-capabilities.md §5); never a static import. */}
           <div style={{ flex: 1 }}>
             <div style={sectionLabel}>Model</div>
+            {modelCatalog.source === "Observed" && modelCatalog.models.length > 0 && (
+              <div
+                data-testid="ns-model-unverified-badge"
+                style={{
+                  fontSize: "calc(12px * var(--fs,1))",
+                  fontWeight: 700,
+                  color: "var(--needs, #d9a441)",
+                  background: "var(--accent-bg)",
+                  border: "1px solid var(--border2)",
+                  borderRadius: 6,
+                  padding: "3px 7px",
+                  display: "inline-block",
+                  marginBottom: 6,
+                }}
+              >
+                Unverified — models seen in past sessions
+              </div>
+            )}
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {MODELS.map((m) => {
+              {modelCatalog.models.map((m) => {
                 const selected = model === m.id;
                 return (
                   <button
                     key={m.id}
                     data-testid={`ns-model-${m.id}`}
-                    onClick={() => setModel(m.id)}
+                    onClick={() => selectModel(m.id)}
                     style={{
                       fontFamily: "inherit",
                       fontSize: "calc(14.5px * var(--fs,1))",
@@ -522,11 +652,50 @@ export function NewSession() {
                       color: selected ? "var(--accent2)" : "var(--txt2)",
                     }}
                   >
-                    {m.label}
+                    {m.id}
+                    {m.annotation ? ` — ${m.annotation}` : ""}
                   </button>
                 );
               })}
             </div>
+            {modelCatalog.models.length === 0 && (
+              <div
+                data-testid="ns-model-empty-hint"
+                style={{
+                  fontSize: "calc(14px * var(--fs,1))",
+                  color: "var(--txt3)",
+                  fontStyle: "italic",
+                }}
+              >
+                No models observed yet for this host — type one below.
+              </div>
+            )}
+            {modelCatalog.free_text && (
+              <input
+                data-testid="ns-model-freetext"
+                value={model}
+                onChange={(e) => selectModel(e.target.value)}
+                placeholder="Custom model id"
+                className="mono"
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
+                name="ns-model-freetext-nofill"
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  background: "var(--panel2)",
+                  border: "1px solid var(--border2)",
+                  borderRadius: 8,
+                  padding: "8px 11px",
+                  color: "var(--txt)",
+                  fontFamily: "var(--font-mono, monospace)",
+                  fontSize: "calc(14px * var(--fs,1))",
+                  outline: "none",
+                  marginTop: 6,
+                }}
+              />
+            )}
           </div>
 
           {/* Permission posture picker */}
