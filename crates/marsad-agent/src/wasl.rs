@@ -150,4 +150,30 @@ impl Agent {
     pub fn set_wasl_connector_factory(&mut self, f: WaslConnectorFactoryFn) {
         self.wasl_connector_factory.0 = Some(f);
     }
+
+    /// X4b (docs/specs/wasl-connector.md §X4b): adopt-or-spawn the HOST's
+    /// receive-side `wasl-mcpd` — the node that binds `[a2a]` (the stable
+    /// endpoint peers reach) + `[operator]` (so Marsad observes it, per
+    /// X1/X2). Mirrors `apps/desktop`'s `adopt_or_spawn_agent` shape
+    /// (try-connect-else-spawn), but reuses the SAME `Container` seam
+    /// `Agent` already uses for claude sessions — no new fake/trait/
+    /// constructor-arg. No-op (zero container calls) when `spec.wasl` is
+    /// false: nothing on this host needs a `wasl-mcpd` for a launch that
+    /// never requested one.
+    ///
+    /// "Marsad launches it, never speaks through it" is structural: the
+    /// `Container` trait exposes only exists/attach/spawn/kill — no query/
+    /// consult method exists to call, so no A2A traffic can originate from
+    /// this fn (or anywhere else in the agent) via this seam.
+    pub fn adopt_or_spawn_wasl_mcpd(&mut self, spec: &marsad_proto::LaunchSpec) -> bool {
+        if !spec.wasl {
+            return false;
+        }
+        let name = format!("wasl-mcpd-{}", spec.host_id);
+        if self.active_container().exists(&name) {
+            self.active_container().attach(&name).is_ok()
+        } else {
+            self.active_container().spawn(&name, "wasl-mcpd").is_ok()
+        }
+    }
 }

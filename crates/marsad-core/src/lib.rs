@@ -965,6 +965,10 @@ impl Core {
             },
             name: custom_name.clone(),
             disallowed_tools: spec.disallowed_tools.clone(),
+            // X4a (docs/specs/wasl-connector.md §X4a): forward the caller's
+            // request verbatim so the agent can inject a Wasl MCP-server
+            // entry at spawn time.
+            wasl: spec.wasl,
         };
         self.send_ipc(&msg)?;
 
@@ -1092,6 +1096,10 @@ impl Core {
             env: persisted_env,
             name: existing_name,
             disallowed_tools,
+            // A restart never re-attaches a Wasl MCP-server entry this cycle
+            // (mirrors the agent's own resume path, `marsad-agent/src/ipc.rs`
+            // — out of X4's scope; start a fresh `wasl:true` launch instead).
+            wasl: false,
         };
         self.launch_session_with_id(id.to_string(), spec)?;
 

@@ -68,6 +68,7 @@ fn launch(core: &mut Core, project: &str) -> String {
         mode: Default::default(),
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     })
     .expect("launch_session")
 }

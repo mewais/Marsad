@@ -27,6 +27,7 @@ impl Agent {
                 resume_session_id,
                 name,
                 disallowed_tools,
+                wasl,
                 ..
             } => {
                 // Derive the launch mode from the wire fields (§5 item 3:
@@ -54,6 +55,7 @@ impl Agent {
                     mode,
                     name,
                     disallowed_tools,
+                    wasl,
                 )
             }
             marsad_proto::IpcMsg::ResumeSession {
@@ -124,6 +126,10 @@ impl Agent {
         mode: marsad_proto::LaunchMode,
         name: Option<String>,
         disallowed_tools: Vec<String>,
+        // X4a (docs/specs/wasl-connector.md §X4a): forwarded verbatim from the
+        // wire so a GUI/core sender can request the agent inject a Wasl
+        // MCP-server entry at launch time (`claude_argv`'s `--mcp-config`).
+        wasl: bool,
     ) -> Result<Vec<String>, AgentError> {
         let spec = marsad_proto::LaunchSpec {
             project,
@@ -139,6 +145,7 @@ impl Agent {
             env,
             name,
             disallowed_tools,
+            wasl,
         };
         // Reuse the caller's session id when supplied (Core generates it so it can
         // navigate immediately and recognise the session's events); otherwise
@@ -213,6 +220,10 @@ impl Agent {
             env: persisted.env,
             name: persisted_name,
             disallowed_tools: persisted.disallowed_tools,
+            // `PersistedSession` carries no `wasl` field (out of X4's scope —
+            // resume never re-attaches a Wasl MCP-server entry this cycle;
+            // start a fresh `wasl:true` launch instead).
+            wasl: false,
         };
         // Reuse the SAME marsad id so the resumed session re-attaches to the
         // existing UI row. Using a fresh id (the old bug) meant the relaunched

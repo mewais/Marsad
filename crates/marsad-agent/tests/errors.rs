@@ -168,6 +168,7 @@ fn launch_spawn_failure_returns_spawn_error() {
         mode: Default::default(),
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     };
 
     // NOTE(test-agent): We need a FakeContainer configured to fail spawns.
@@ -630,6 +631,7 @@ fn launch_spawn_failure_deterministic_container_name() {
         mode: Default::default(),
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     };
     match agent.launch(spec) {
         Err(AgentError::Spawn(_)) => {}
@@ -676,6 +678,7 @@ fn launch_upsert_failure_returns_lifecycle_error() {
         mode: Default::default(),
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     };
     match agent.launch(spec) {
         Err(AgentError::Lifecycle(_)) => {}

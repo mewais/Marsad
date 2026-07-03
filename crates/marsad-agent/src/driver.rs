@@ -185,7 +185,13 @@ impl Agent {
     ) -> Result<(), AgentError> {
         match exec_prefix_for(spec.host_target.as_deref()) {
             None => {
-                let argv = claude_argv(spec);
+                let mut argv = claude_argv(spec);
+                // X4a: resolve the `--mcp-config` placeholder (if `spec.wasl`
+                // added one) to the true session directory now that
+                // `container_name` — hence the session id — is known, and
+                // write the file there. No-op when `wasl:false` (no
+                // placeholder present).
+                self.materialize_wasl_mcp_config(container_name, &mut argv);
                 let cmd = self.build_spawn_cmd(
                     container_name,
                     &spec.project,
@@ -222,6 +228,66 @@ impl Agent {
                     ))
                 })?;
                 Ok(())
+            }
+        }
+    }
+
+    /// X4a (docs/specs/wasl-connector.md §X4a): if `argv` carries the
+    /// `--mcp-config`/`WASL_MCP_CONFIG_FILENAME` placeholder `claude_argv`
+    /// injected for a `wasl:true` launch, rewrite it to the real absolute
+    /// `<session_dir>/wasl-mcp.json` path and write the file there
+    /// (`wasl-mcpd` as a stdio MCP server, keyed to this session). A no-op —
+    /// zero I/O — when no placeholder is present (every `wasl:false` launch,
+    /// the byte-identical baseline). Local sessions only: remote (SSH/WSL)
+    /// launches keep the unresolved placeholder for now — a documented gap,
+    /// not a silent one, mirroring the operator-URL-reachability caveat
+    /// (§9) this same doc already carries for remote hosts.
+    ///
+    /// Best-effort: a write failure is logged, never fatal — config problems
+    /// must never take the agent down (same doctrine as `load_wasl_config`).
+    #[cfg(not(coverage))]
+    fn materialize_wasl_mcp_config(&self, container_name: &str, argv: &mut [String]) {
+        let Some(idx) = argv.iter().position(|a| a == "--mcp-config") else {
+            return;
+        };
+        let Some(value) = argv.get_mut(idx + 1) else {
+            return;
+        };
+        if value != WASL_MCP_CONFIG_FILENAME {
+            // Already resolved (defensive; shouldn't happen — argv is fresh
+            // from `claude_argv` on every launch).
+            return;
+        }
+
+        let session_dir = std::path::PathBuf::from(&self.config.data_root)
+            .join("sessions")
+            .join(container_name);
+        let path = session_dir.join(WASL_MCP_CONFIG_FILENAME);
+        let session_id = container_name
+            .strip_prefix("marsad-")
+            .unwrap_or(container_name);
+        let config = serde_json::json!({
+            "mcpServers": {
+                "wasl": {
+                    "command": "wasl-mcpd",
+                    "args": [],
+                    "env": {
+                        "WASL_CONFIG": format!("{}/wasl.json", self.config.data_root),
+                        "WASL_AGENT_ID": session_id,
+                    }
+                }
+            }
+        });
+
+        let write_result = std::fs::create_dir_all(&session_dir)
+            .and_then(|()| std::fs::write(&path, config.to_string()));
+        match write_result {
+            Ok(()) => *value = path.display().to_string(),
+            Err(e) => {
+                eprintln!(
+                    "marsad-agent: failed to write wasl mcp config {}: {e} — leaving --mcp-config unresolved",
+                    path.display()
+                );
             }
         }
     }
@@ -399,5 +465,32 @@ pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
         argv.push(spec.disallowed_tools.join(","));
     }
 
+    // X4a (docs/specs/wasl-connector.md §X4a): request claude launch the
+    // host's `wasl-mcpd` as a stdio MCP-server subprocess (the session's SEND
+    // node). ADDITIVE ONLY — `wasl:false`/absent produces byte-identical argv
+    // to every pre-X4 launch (the load-bearing optionality proof).
+    //
+    // The VALUE here is a placeholder filename, not an absolute path: this fn
+    // is a pure function of `LaunchSpec` alone (frozen by
+    // `tests/wasl_launch_attach.rs`'s `claude_argv(&spec)` call shape), and
+    // the true per-session directory isn't known until `Agent::launch`
+    // assigns a session id (after this fn runs). `spawn_container`'s real-IO
+    // path (`driver.rs`, `#[cfg(not(coverage))]`) rewrites this placeholder
+    // to the true `<session_dir>/wasl-mcp.json` absolute path — and writes
+    // that file — once the session id is known; see
+    // `materialize_wasl_mcp_config`. UNSPECIFIED/flagged for the owner in the
+    // test file's header: only the flag's presence/singularity and a
+    // non-empty, "wasl"-identifying value are pinned here.
+    if spec.wasl {
+        argv.push("--mcp-config".to_string());
+        argv.push(WASL_MCP_CONFIG_FILENAME.to_string());
+    }
+
     argv
 }
+
+/// Placeholder `--mcp-config` filename `claude_argv` injects for a
+/// `wasl:true` launch; `materialize_wasl_mcp_config` resolves it to an
+/// absolute path once the session directory is known. Shared as a constant
+/// so the two sides can never drift.
+const WASL_MCP_CONFIG_FILENAME: &str = "wasl-mcp.json";

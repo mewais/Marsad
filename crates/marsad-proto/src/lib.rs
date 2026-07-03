@@ -375,6 +375,13 @@ pub struct LaunchSpec {
     /// `#[serde(default)]` keeps older serialized specs (no field) working.
     #[serde(default)]
     pub disallowed_tools: Vec<String>,
+    /// X4a (`docs/specs/wasl-connector.md` §X4a): request the agent make this
+    /// session Wasl-capable by injecting a `--mcp-config` entry for the host's
+    /// `wasl-mcpd` at spawn time. Defaults to `false`; a `false`/absent value
+    /// is byte-identical to pre-X4 behavior (the load-bearing optionality
+    /// invariant). `#[serde(default)]` keeps older serialized specs working.
+    #[serde(default)]
+    pub wasl: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -578,6 +585,12 @@ pub enum IpcMsg {
         /// --disallowedTools list; emitted only when non-empty.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         disallowed_tools: Vec<String>,
+        /// X4a (`docs/specs/wasl-connector.md` §X4a): mirrors `LaunchSpec.wasl`
+        /// on the wire. `skip_serializing_if` keeps every pre-X4 golden
+        /// (`tests/ipc_typed.rs`) byte-identical on encode — `false` is simply
+        /// omitted, exactly like the other optional fields above.
+        #[serde(default, skip_serializing_if = "is_false")]
+        wasl: bool,
     },
     ResumeSession {
         session_id: String,
@@ -883,6 +896,13 @@ fn from_val<T: serde::de::DeserializeOwned>(
     value: serde_json::Value,
 ) -> Result<T, ProtoError> {
     serde_json::from_value(value).map_err(|e| schema_err(field, e))
+}
+
+/// `skip_serializing_if` predicate: true when `b` is `false` (X4a's
+/// `wasl` field — omitted on encode when off, matching every other
+/// optional/default field's "absent means off" wire convention).
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 // ---------------------------------------------------------------------------

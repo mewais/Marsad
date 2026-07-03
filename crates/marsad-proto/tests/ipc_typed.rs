@@ -114,6 +114,7 @@ fn launch_session_maximal() -> IpcMsg {
         resume_session_id: Some("uuid-xyz".to_string()),
         name: Some("My run".to_string()),
         disallowed_tools: vec!["Bash".to_string()],
+        wasl: false,
     }
 }
 
@@ -135,6 +136,7 @@ fn launch_session_minimal() -> IpcMsg {
         resume_session_id: None,
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     }
 }
 
@@ -156,6 +158,7 @@ fn launch_session_continue() -> IpcMsg {
         resume_session_id: None,
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     }
 }
 
@@ -274,6 +277,7 @@ fn launch_with(resume: Option<&str>, cont: Option<bool>) -> IpcMsg {
         resume_session_id: resume.map(|s| s.to_string()),
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     }
 }
 

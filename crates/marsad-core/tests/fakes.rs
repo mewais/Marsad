@@ -88,6 +88,7 @@ fn scripted_full_happy_path_session() {
             mode: Default::default(),
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch_session");
 
@@ -259,6 +260,7 @@ fn scripted_gate_rejection_sends_deny_ipc() {
             mode: Default::default(),
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -316,6 +318,7 @@ fn scripted_agent_error_result_sets_error_phase() {
             mode: Default::default(),
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch");
 
@@ -366,6 +369,7 @@ fn scripted_send_prompt_during_live_session() {
             mode: Default::default(),
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -407,6 +411,7 @@ fn scripted_interrupt_session() {
             mode: Default::default(),
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -448,6 +453,7 @@ fn scripted_two_concurrent_sessions_no_cross_routing() {
             mode: Default::default(),
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch alpha");
 
@@ -465,6 +471,7 @@ fn scripted_two_concurrent_sessions_no_cross_routing() {
             mode: Default::default(),
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch beta");
 
@@ -535,6 +542,7 @@ fn scripted_slash_compact_dispatches_ipc() {
             mode: Default::default(),
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -573,6 +581,7 @@ fn scripted_idempotent_answer_gate_end_to_end() {
             mode: Default::default(),
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -645,6 +654,7 @@ fn scripted_stop_session_after_launch() {
             mode: Default::default(),
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -685,6 +695,7 @@ fn scripted_resume_then_attach() {
             mode: Default::default(),
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -736,6 +747,7 @@ fn session_view_exposes_tools_mcp_slash_after_init() {
             mode: Default::default(),
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch");
     let _ = peer.drain_outbound();

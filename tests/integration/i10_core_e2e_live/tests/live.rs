@@ -263,6 +263,7 @@ fn spec(project: &str, first_prompt: &str, posture: Posture, mode: LaunchMode) -
         mode,
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     }
 }
 

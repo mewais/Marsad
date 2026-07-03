@@ -204,6 +204,7 @@ fn launch_session_transport_failure_returns_transport_error() {
         mode: Default::default(),
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     };
     let result = core.launch_session(spec);
     // Either the launch succeeds (transport failure deferred) or returns Transport error
@@ -232,6 +233,7 @@ fn send_prompt_transport_failure_returns_transport_error() {
         mode: Default::default(),
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     };
     // try launch (may succeed or fail)
     let id_result = core.launch_session(spec);
@@ -274,6 +276,7 @@ fn stop_session_transport_failure_returns_transport_error() {
             mode: LaunchMode::Fresh,
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch");
 
@@ -316,6 +319,7 @@ fn resume_session_transport_failure_returns_transport_error() {
             mode: LaunchMode::Fresh,
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch");
 
@@ -610,6 +614,7 @@ fn restart_session_transport_failure_on_stop_returns_transport_error() {
             mode: LaunchMode::Fresh,
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("launch");
 
@@ -650,6 +655,7 @@ fn restart_session_transport_failure_on_relaunch_returns_transport_error() {
             mode: LaunchMode::Fresh,
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         })
         .expect("send #1 must succeed");
 

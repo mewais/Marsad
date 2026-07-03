@@ -834,3 +834,42 @@ decision (id passthrough). Existing gates tests untouched (existing canonicals u
 - No persistence of Wasl gates/observations (`marsad-store` untouched); pending gates are live
   rendezvous state, rebuilt by resnapshot on every (re)connect — same reasoning as the upstream
   snapshot-over-replay decision.
+
+---
+
+## X4 — Launch-time Wasl attach (authoritative; added 2026-07-03 by the architect)
+
+Owner decision (recorded in memory `marsad-full-experience` / the launch-toggle Q&A): a Marsad
+launch can optionally make its session Wasl-capable. Strictly optional — `wasl` defaults off and an
+off launch is **byte-identical** to today (the load-bearing optionality invariant, pinned by tests).
+
+### X4a — the toggle + `--mcp-config` injection (send side)
+- `LaunchSpec` gains `#[serde(default)] pub wasl: bool` (default `false`). `IpcMsg::LaunchSession`
+  gains the same defaulted field. **Migration note (sanctioned):** adding a field to `LaunchSpec`
+  breaks ~91 struct-literal construction sites (Rust requires every field named; `serde(default)`
+  only helps the wire). The code-agent MUST mechanically add `wasl: false,` (or `..Default::default()`
+  after adding a `Default` derive) to every site — this is a one-time schema migration, NOT a frozen-
+  test violation: it changes zero assertions, and the compiler enforces completeness (a missed site
+  is a build error, uncheatable). The full typed-ipc golden oracle must still pass unchanged.
+- When `wasl == true`, the agent's spawn path writes `<session_dir>/wasl-mcp.json`:
+  `{"mcpServers":{"wasl":{"command":"<wasl-mcpd>","args":[],"env":{"WASL_CONFIG":"<host config>",
+  "WASL_AGENT_ID":"<session id>"}}}}` and appends `--mcp-config <session_dir>/wasl-mcp.json` to the
+  claude argv. When `wasl == false`: argv and spawn command are byte-identical to today (no file, no
+  flag). claude launches wasl-mcpd as its own stdio MCP-server subprocess (the session's SEND node);
+  that per-session node binds NEITHER `[a2a]` NOR `[operator]` (avoids cross-session port conflicts) —
+  it provides the four consult/command/message/transfer tools + dispatch to peers only.
+
+### X4b — adopt-or-spawn the host receive node
+- `Agent::adopt_or_spawn_wasl_mcpd(host_id)` — mirrors `adopt_or_spawn_agent`: reuse a live host
+  wasl-mcpd if reachable, else spawn one; no-op when no session on that host has `wasl`. THIS node is
+  the one that binds `[a2a]` (stable receive endpoint peers reach) + `[operator]` (so Marsad observes,
+  per X1/X2). It is launched by Marsad and **never spoken through** by Marsad (no A2A/consult calls
+  originate from the agent daemon — a verb-whitelist test pins this).
+
+### Receive semantics — honest limitation (documented, not hidden)
+A consult TO a Marsad-launched session reaches the host node, whose `ClaudeAdapter` answers by spawning
+a **headless** `claude -p`/`--resume` turn for that context — it does NOT inject into the live
+interactive Marsad-managed session. This is the same "AgentAdapter last inch" limitation Wasl itself
+carries and the owner already accepted. Full live-session injection (a Marsad-callback AgentAdapter, a
+new generic Wasl adapter kind) is deferred beyond this cycle. So X4 delivers: a Marsad session can
+INITIATE agent-to-agent consults; being consulted is answered by a fresh headless turn.

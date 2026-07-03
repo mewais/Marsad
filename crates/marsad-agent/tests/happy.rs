@@ -48,6 +48,7 @@ fn basic_launch_spec() -> LaunchSpec {
         mode: Default::default(),
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     }
 }
 
@@ -65,6 +66,7 @@ fn launch_spec_with_prompt(prompt: &str) -> LaunchSpec {
         mode: Default::default(),
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     }
 }
 
@@ -269,6 +271,7 @@ fn claude_argv_all_postures_add_permission_prompt_tool() {
             mode: Default::default(),
             name: None,
             disallowed_tools: vec![],
+            wasl: false,
         };
         let argv = claude_argv(&spec);
         let pos = argv.iter().position(|a| a == "--permission-prompt-tool");
@@ -295,6 +298,7 @@ fn claude_argv_permission_mode_auto_approve_safe() {
         mode: Default::default(),
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     };
     let argv = claude_argv(&spec);
     let idx = argv
@@ -324,6 +328,7 @@ fn claude_argv_permission_mode_full_autonomy() {
         mode: Default::default(),
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     };
     let argv = claude_argv(&spec);
     let idx = argv
@@ -795,6 +800,7 @@ fn claude_argv_disallowed_tools_present_when_non_empty() {
         mode: Default::default(),
         name: None,
         disallowed_tools: vec!["Bash".to_string(), "Edit".to_string()],
+        wasl: false,
     };
     let argv = claude_argv(&spec);
     let idx = argv
@@ -824,6 +830,7 @@ fn claude_argv_disallowed_tools_absent_when_empty() {
         mode: Default::default(),
         name: None,
         disallowed_tools: vec![],
+        wasl: false,
     };
     let argv = claude_argv(&spec);
     assert!(
