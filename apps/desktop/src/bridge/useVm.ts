@@ -36,6 +36,7 @@ import {
   fetchBoard,
   fetchGraph,
   fetchCapabilities,
+  answerWaslGate,
   capsKey,
   createWorkstream as apiCreateWorkstream,
   deleteWorkstream as apiDeleteWorkstream,
@@ -327,6 +328,15 @@ export interface VmContextValue {
   workspaces: Workspace[];
   hosts: Host[];
   activeWs: Workspace | null;
+  // Wasl (X5): pending handoff gates + the human-decision relay. Empty ⇒ no
+  // Wasl chrome renders. `answerWasl` is ONLY called from an explicit click.
+  waslGates: WaslGateView[];
+  answerWasl: (
+    hostId: string,
+    gateId: string,
+    outcome: "approved" | "denied",
+    reason?: string
+  ) => Promise<void>;
   // Workstream board/graph command helpers (U-INT-2)
   openBoard: () => void;
   openWorkstream: (id: string) => Promise<void>;
@@ -850,6 +860,32 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     [refreshAfterMutation, state.wsId]
   );
 
+  const answerWasl = React.useCallback(
+    async (
+      hostId: string,
+      gateId: string,
+      outcome: "approved" | "denied",
+      reason?: string
+    ) => {
+      // Relay the human's decision; optimistically drop the gate from the
+      // pending list so the modal closes immediately (the authoritative
+      // wasl_gate_decided event confirms it).
+      await answerWaslGate({ host_id: hostId, gate_id: gateId, outcome, reason });
+      dispatch({
+        type: "VM_UPDATE",
+        payload: {
+          kind: "wasl_gate_decided",
+          host_id: hostId,
+          gate_id: gateId,
+          outcome,
+          decided_by: "operator",
+          reason: reason ?? null,
+        },
+      });
+    },
+    []
+  );
+
   const value: VmContextValue = {
     state,
     dispatch,
@@ -862,6 +898,8 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     workspaces,
     hosts,
     activeWs,
+    waslGates: state.waslGates,
+    answerWasl,
     openBoard,
     openWorkstream,
     selectNode,

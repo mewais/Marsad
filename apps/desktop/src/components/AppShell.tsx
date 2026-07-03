@@ -6,6 +6,7 @@
 import React, { useRef } from "react";
 import type { Filter, HostStatus } from "../bridge/types";
 import { useVm } from "../bridge/useVm";
+import { WaslGateModal } from "../screens/WaslGateModal";
 import { useTheme } from "../theme/ThemeProvider";
 import { Badge } from "./Badge";
 import { StateDot } from "./StateDot";
@@ -777,6 +778,9 @@ export function AppShell({ children, onNewSession, onOpenSettings }: AppShellPro
           {children}
         </main>
       </div>
+      {/* Wasl handoff-approval modal — global overlay, surfaces on any screen
+          when a Wasl node has a pending gate; renders nothing otherwise. */}
+      <WaslGateModal />
     </div>
   );
 }
