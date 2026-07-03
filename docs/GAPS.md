@@ -21,11 +21,15 @@ Landed + verified on a machine with a REAL `claude` (2.1.198) + tmux since the o
 - ✅ **Honest cost**: agent-reported cost is authoritative and no longer clobbered by estimates;
   estimates are backfill-only and UI-labeled `~`.
 - ✅ **Activity surfaces**: subagents, questions, gate kinds, notices, compaction + rate-limit indicators.
-- ✅ **Marsad↔Wasl connector BUILT** (was "not built"): `marsad-wasl` crate (operator-API client, 100/100,
-  contract-tested vs vendored golden fixtures), wired into agent/core/gates (`VmUpdate::Wasl*`,
-  `answer_wasl_gate`, `Gate::Handoff`), plus the launch-time Wasl toggle (`LaunchSpec.wasl` →
-  `--mcp-config`). **Runtime-optional and proven inert when absent.** Remaining: the X5 Wasl UI
-  (graph edges + real approval modal) and the X6 live e2e.
+- ✅ **Marsad↔Wasl FULLY BUILT and LIVE-VERIFIED** (was "not built"): `marsad-wasl` operator-API client
+  (100/100, contract-tested vs vendored golden fixtures), wired into agent/core/gates, the launch-time
+  toggle (`LaunchSpec.wasl` → `--mcp-config`, now actually calling `adopt_or_spawn_wasl_mcpd`; wasl+remote
+  fails fast as unsupported), the **X5 Wasl UI** (approval modal + bridge + Overview activity surface,
+  mock-tested), AND the **X6 live end-to-end** (`marsad-it-x6_wasl_live`): real agent + Core + two real
+  wasl-mcpd nodes + real claude — consult → gate surfaces in Marsad → human approves → real reply flows
+  back → observed, **passing live on this machine (~42s)**. Optionality proven (no wasl.json → zero Wasl
+  activity). The only Wasl piece NOT done: full live verification *through the compiled desktop app*
+  (needs webkit2gtk — see HANDOFF-OPUS.md Prompt 3; the headless loop above already proves the logic).
 
 Still parked (unchanged): **`apps/desktop/src-tauri` has NEVER compiled here** (no webkit2gtk on this OS) —
 every UI feature above is wired to real Tauri commands in code but the real app path is unrun; new

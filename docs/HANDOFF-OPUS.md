@@ -70,7 +70,15 @@ files before touching code. `Marsad/docs/GAPS.md` has the authoritative built-vs
   `i03/i07/i09/i10`; `i11` needs Windows). Add a GUI-level live test if the real invoke path reveals
   gaps the mock path hid.
 
-## Prompt 3 — X6: the Wasl↔Marsad live end-to-end (the acceptance test)
+## Prompt 3 — X6 through the compiled desktop app (the headless loop is ALREADY GREEN)
+
+**Update:** the headless X6 (`tests/integration/x6_wasl_live/`, real agent + Core + two real `wasl-mcpd`
+nodes + real claude) already PASSES on the build machine (~42s, verified repeatedly): consult → Tier-3
+gate surfaces in Marsad → `Core::answer_wasl_gate` Approve → real claude reply flows back → observed;
+optionality proven. So the observe+approve LOGIC is done and live-verified. What remains for you is only
+to re-run that same loop **through the compiled desktop app** — the real `WaslGateModal`, the activity
+surface, and the `answer_wasl_gate` invoke path (the missing src-tauri command from Prompt 1). Original
+scenario, now as a UI-level verification:
 
 This is the one test that proves the whole optional-Wasl loop through the REAL app. Prereqs: a real
 `claude`, and the `wasl-mcpd` binary built from the Wasl repo (`cargo build --release -p wasl-mcp`).
