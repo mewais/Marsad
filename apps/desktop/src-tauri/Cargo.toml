@@ -29,6 +29,8 @@ marsad-viewmodel = { path = "../../../crates/marsad-viewmodel" }
 marsad-workstream = { path = "../../../crates/marsad-workstream" }
 marsad-gates = { path = "../../../crates/marsad-gates" }
 marsad-events = { path = "../../../crates/marsad-events" }
+# Needed to name `marsad_wasl::AuditEntry` in the Wasl observation envelope arm.
+marsad-wasl = { path = "../../../crates/marsad-wasl" }
 marsad-hosts = { path = "../../../crates/marsad-hosts" }
 marsad-diff = { path = "../../../crates/marsad-diff" }
 marsad-transport = { path = "../../../crates/marsad-transport" }

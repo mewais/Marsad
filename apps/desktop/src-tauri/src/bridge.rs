@@ -52,6 +52,18 @@ fn map_err(e: CoreError) -> String {
     e.to_string()
 }
 
+/// Map an approval-modal outcome string to a gate [`Decision`]. Only "approved"
+/// approves; every other outcome ("denied"/"dismissed"/…) rejects, carrying the
+/// human's reason or — when none was given — the outcome word itself, so a
+/// rejection is never a blank string.
+fn wasl_outcome_to_decision(outcome: &str, reason: Option<String>) -> Decision {
+    if outcome == "approved" {
+        Decision::Approve
+    } else {
+        Decision::Reject { reason: reason.unwrap_or_else(|| outcome.to_string()) }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
@@ -77,6 +89,10 @@ pub fn launch_session(
     resume_session_id: Option<String>,
     continue_recent: Option<bool>,
     name: Option<String>,
+    // X4 launch-time Wasl attach: when true the agent injects --mcp-config and
+    // adopt-or-spawns the host wasl-mcpd node. Optional on the wire (absent ⇒
+    // false) so a launch form that omits it stays a plain, Wasl-free session.
+    wasl: Option<bool>,
 ) -> Result<String, String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     match &mut *guard {
@@ -110,6 +126,7 @@ pub fn launch_session(
                 mode,
                 name,
                 disallowed_tools: Vec::new(),
+                wasl: wasl.unwrap_or(false),
             };
             core.launch_session(spec).map_err(map_err)
         }
@@ -275,6 +292,34 @@ pub fn answer_gate(
         }
         AppState::Mock(_) => Ok(()),
     }
+}
+
+/// X5 — relay ONE explicit human decision on a pending Wasl handoff gate.
+/// `outcome` is "approved" | "denied" | "dismissed" (from the approval modal).
+/// Only "approved" maps to `Approve`; everything else is a `Reject` carrying the
+/// human's reason (falling back to the outcome word so denies/dismissals are
+/// never a blank rejection). Wasl gates are host-scoped, not session-scoped.
+#[tauri::command(rename_all = "snake_case")]
+pub fn answer_wasl_gate(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    host_id: String,
+    gate_id: String,
+    outcome: String,
+    reason: Option<String>,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => {
+                let decision = wasl_outcome_to_decision(&outcome, reason);
+                core.answer_wasl_gate(&host_id, &gate_id, decision).map_err(map_err)?
+            }
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -970,6 +1015,7 @@ pub fn run_shell(
     // 1. Briefly lock to resolve the host target (local vs remote), the
     //    session's project dir, and the host's setup+env, so `!cmd` runs in
     //    the SAME environment as the session's claude process.
+    #[allow(clippy::type_complexity)]
     let (host_target, project, host_setup, host_env): (Option<String>, String, Option<String>, Vec<(String, String)>) = {
         let guard = state.lock().map_err(|e| e.to_string())?;
         match &*guard {
@@ -1308,7 +1354,9 @@ pub fn delete_workstream(
 }
 
 /// Add a connection between two sessions in a workstream, then refresh the board.
+// A Tauri command legitimately needs all of these invoke-payload keys.
 #[tauri::command(rename_all = "snake_case")]
+#[allow(clippy::too_many_arguments)]
 pub fn add_connection(
     app: tauri::AppHandle,
     state: State<'_, ManagedState>,
@@ -1447,5 +1495,44 @@ pub fn graph(
     match &*guard {
         AppState::Live(core) => Ok(core.graph(&ws_id)),
         AppState::Mock(_) => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wasl_outcome_approved_maps_to_approve() {
+        assert_eq!(
+            wasl_outcome_to_decision("approved", None),
+            Decision::Approve
+        );
+        // A reason on an approval is ignored — approval carries no reason.
+        assert_eq!(
+            wasl_outcome_to_decision("approved", Some("whatever".into())),
+            Decision::Approve
+        );
+    }
+
+    #[test]
+    fn wasl_outcome_denied_carries_reason() {
+        assert_eq!(
+            wasl_outcome_to_decision("denied", Some("not now".into())),
+            Decision::Reject { reason: "not now".into() }
+        );
+    }
+
+    #[test]
+    fn wasl_outcome_without_reason_falls_back_to_outcome_word() {
+        // A deny/dismiss with no typed reason must never be a blank rejection.
+        assert_eq!(
+            wasl_outcome_to_decision("dismissed", None),
+            Decision::Reject { reason: "dismissed".into() }
+        );
+        assert_eq!(
+            wasl_outcome_to_decision("denied", None),
+            Decision::Reject { reason: "denied".into() }
+        );
     }
 }

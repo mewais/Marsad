@@ -105,6 +105,8 @@ export async function launchSession(args: {
   resume_session_id?: string;
   continue_recent?: boolean;
   name?: string;
+  // X4 launch-time Wasl attach — omitted ⇒ a plain, Wasl-free session.
+  wasl?: boolean;
 }): Promise<string> {
   if (!isTauri()) return "mock-session-new";
   const invoke = await getInvoke();

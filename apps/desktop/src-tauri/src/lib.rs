@@ -220,6 +220,7 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::send_prompt,
             bridge::interrupt,
             bridge::answer_gate,
+            bridge::answer_wasl_gate,
             bridge::answer_question,
             bridge::run_slash,
             bridge::set_workspace,

@@ -143,7 +143,7 @@ pub enum VmUpdate {
 
 /// UI-shaped pending-gate row. `wasl_gates` keys on `(host_id, gate_id)` in a
 /// `BTreeMap` so `VmUpdate::WaslGates` is deterministically ordered.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct WaslGateView {
     pub host_id: String,
     pub gate_id: String,
