@@ -319,6 +319,14 @@ where
     (all, raw)
 }
 
+/// The live model: `MARSAD_LIVE_MODEL` env override, else `haiku` (the cheapest
+/// live model, the original default). An override is needed on gateways where a
+/// given model's deployment rejects fields the CLI sends — e.g. AMD's gateway
+/// 400s `haiku` on `output_config.effort` but accepts `sonnet`.
+fn live_model() -> String {
+    std::env::var("MARSAD_LIVE_MODEL").unwrap_or_else(|_| "haiku".to_string())
+}
+
 fn spec(project: &str, first_prompt: &str) -> LaunchSpec {
     LaunchSpec {
         project: project.to_string(),
@@ -327,7 +335,7 @@ fn spec(project: &str, first_prompt: &str) -> LaunchSpec {
         claude_bin: None,
         setup: None,
         env: Vec::new(),
-        model: "haiku".to_string(),
+        model: live_model(),
         posture: Posture::FullAutonomy,
         first_prompt: Some(first_prompt.to_string()),
         mode: LaunchMode::Fresh,

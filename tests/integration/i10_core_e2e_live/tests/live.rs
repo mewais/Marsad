@@ -249,6 +249,14 @@ fn user_says(sv: &SessionView, needle: &str) -> bool {
     })
 }
 
+/// The live model: `MARSAD_LIVE_MODEL` env override, else `haiku` (cheapest live
+/// model, the original default). Needed on gateways where a model's deployment
+/// rejects fields the CLI sends — e.g. AMD's gateway 400s `haiku` on
+/// `output_config.effort` but accepts `sonnet`.
+fn live_model() -> String {
+    std::env::var("MARSAD_LIVE_MODEL").unwrap_or_else(|_| "haiku".to_string())
+}
+
 fn spec(project: &str, first_prompt: &str, posture: Posture, mode: LaunchMode) -> LaunchSpec {
     LaunchSpec {
         project: project.to_string(),
@@ -257,7 +265,7 @@ fn spec(project: &str, first_prompt: &str, posture: Posture, mode: LaunchMode) -
         claude_bin: None,
         setup: None,
         env: Vec::new(),
-        model: "haiku".to_string(),
+        model: live_model(),
         posture,
         first_prompt: Some(first_prompt.to_string()),
         mode,
