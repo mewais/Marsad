@@ -22,7 +22,7 @@ use bridge::{AppState, ManagedState};
 /// Priority:
 ///   1. $MARSAD_AGENT_ENDPOINT
 ///   2. <data_root>/agent.sock  where data_root = $MARSAD_DATA_ROOT or ~/.local/share/marsad
-fn resolve_socket_path() -> String {
+pub(crate) fn resolve_socket_path() -> String {
     if let Ok(ep) = std::env::var("MARSAD_AGENT_ENDPOINT") {
         if !ep.is_empty() {
             return ep;
@@ -256,6 +256,10 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::set_active_profile,
             bridge::board,
             bridge::graph,
+            bridge::cost_breakdown,
+            bridge::pty_start,
+            bridge::pty_input,
+            bridge::pty_resize,
         ])
 }
 
@@ -503,6 +507,47 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
                 // on_agent_line (which would log an "unknown IPC type").
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
                     let ty = v.get("type").and_then(|t| t.as_str());
+
+                    // WAVE 3b (pty escape-hatch terminal): `PtyOutput`/`PtyExit`
+                    // are agent-originated but have no `Core::on_agent_line` arm
+                    // (marsad-core was deliberately not touched by this wave —
+                    // raw terminal bytes have no session/business meaning for it
+                    // to reduce). Intercept them here — BEFORE the allow-list
+                    // check below would `continue`-skip them as an unrecognized
+                    // type — and forward straight to the webview on the
+                    // dedicated `"pty"` event (see `events::emit_pty_update`'s
+                    // doc comment for why not `"vm-update"`).
+                    if ty == Some("PtyOutput") {
+                        if let (Some(session_id), Some(data)) = (
+                            v.get("session_id").and_then(|s| s.as_str()),
+                            v.get("data").and_then(|s| s.as_str()),
+                        ) {
+                            events::emit_pty_update(
+                                &app,
+                                events::VmUpdateEnvelope::PtyOutput {
+                                    session_id: session_id.to_string(),
+                                    data: data.to_string(),
+                                },
+                            );
+                        }
+                        continue;
+                    }
+                    if ty == Some("PtyExit") {
+                        if let (Some(session_id), Some(code)) = (
+                            v.get("session_id").and_then(|s| s.as_str()),
+                            v.get("code").and_then(|c| c.as_i64()),
+                        ) {
+                            events::emit_pty_update(
+                                &app,
+                                events::VmUpdateEnvelope::PtyExit {
+                                    session_id: session_id.to_string(),
+                                    code: code as i32,
+                                },
+                            );
+                        }
+                        continue;
+                    }
+
                     if ty != Some("AgentEvent")
                         && ty != Some("TranscriptBackfill")
                         && ty != Some("ChangesUpdate")

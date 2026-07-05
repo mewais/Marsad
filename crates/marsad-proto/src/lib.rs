@@ -931,6 +931,57 @@ pub enum IpcMsg {
         host_id: String,
         gate_id: String,
     },
+
+    // ── PTY (WAVE 3b — interactive raw-shell escape hatch, Terminal tab) ────
+    // A SEPARATE channel from the claude driver: this streams a real
+    // interactive shell (local or the session's existing SSH/WSL host), NOT
+    // claude's stream-json protocol. `docs/design/DESIGN_HANDOFF.md`'s
+    // "Terminal tab" (raw escape-hatch terminal, mono, dark).
+    // ── GUI/core → agent ────────────────────────────────────────────────────
+    /// Start (or, if already live, no-op re-attach to) the pty for a session.
+    /// No ack variant — the pty coming alive is observed via `PtyOutput`
+    /// broadcasts, same "fire and forget" disposition as `SetWorkspace`.
+    PtyStart {
+        session_id: String,
+        cols: u16,
+        rows: u16,
+    },
+    /// Raw keystroke bytes typed into the terminal, forwarded verbatim to the
+    /// pty's stdin. Plain UTF-8 text (unlike `PtyOutput.data`): terminal INPUT
+    /// is always a JS string from xterm.js's `onData` — even control
+    /// characters (arrow-key escape sequences, Ctrl-C) are valid Unicode
+    /// scalar values and round-trip through a JSON string with no encoding
+    /// loss, so no base64 is needed here.
+    PtyInput {
+        session_id: String,
+        data: String,
+    },
+    /// The terminal's viewport was resized (e.g. the desktop window resized,
+    /// or `xterm-addon-fit` recomputed cols/rows).
+    PtyResize {
+        session_id: String,
+        cols: u16,
+        rows: u16,
+    },
+    // ── agent → GUI/core ────────────────────────────────────────────────────
+    /// A chunk of raw bytes read from the pty (merged stdout+stderr — a pty
+    /// has exactly one fd for both). `data` is BASE64-encoded (unlike
+    /// `PtyInput.data`): terminal OUTPUT is arbitrary bytes — control
+    /// sequences, and reads that land mid-way through a multi-byte UTF-8
+    /// sequence — so it cannot be carried losslessly as a plain JSON string;
+    /// base64 round-trips it byte-for-byte. The frontend decodes it and feeds
+    /// the raw bytes straight to `xterm.js`'s `Terminal.write`.
+    PtyOutput {
+        session_id: String,
+        data: String,
+    },
+    /// The pty's child process exited (the shell was closed, `exit` was
+    /// typed, or the process crashed). `code` is the process exit code
+    /// (`-1` when the pty could not even be spawned).
+    PtyExit {
+        session_id: String,
+        code: i32,
+    },
 }
 
 impl IpcMsg {
@@ -1311,6 +1362,11 @@ pub fn parse_ipc(line: &str) -> Result<IpcMsg, ProtoError> {
         "WaslGateDecided",
         "WaslObservation",
         "WaslGateAnswered",
+        "PtyStart",
+        "PtyInput",
+        "PtyResize",
+        "PtyOutput",
+        "PtyExit",
     ];
 
     if !KNOWN.contains(&type_str) {

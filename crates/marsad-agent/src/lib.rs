@@ -18,6 +18,7 @@ use marsad_store::{MemoryBackend, Store};
 pub mod capabilities;
 mod driver;
 mod ipc;
+mod pty;
 mod reader;
 mod remote;
 #[cfg(not(coverage))]
@@ -39,6 +40,14 @@ pub use remote::{
 #[cfg(not(coverage))]
 pub use remote::{fetch_remote_session_list, run_remote_script, run_remote_script_bounded};
 pub use wasl::{load_wasl_config, wasl_event_lines};
+
+// WAVE 3b — pty escape-hatch terminal. `default_shell`/`pty_exec_argv` are
+// pure and always compiled; the real spawn/resize API is production-only
+// (real OS IO), re-exported so `crates/marsad-agent/tests/pty.rs` can drive
+// it directly under plain `cargo test` (see `pty.rs`'s module doc).
+pub use pty::{default_shell, pty_exec_argv, shell_for};
+#[cfg(not(coverage))]
+pub use pty::{resize_pty, spawn_pty, PtyEntry, PtyError};
 
 // ── AgentError ────────────────────────────────────────────────────────────────
 
@@ -263,6 +272,19 @@ impl fmt::Debug for PendingGatesWrap {
     }
 }
 
+// WAVE 3b per-session pty registry wrapper — production builds only. Gated
+// out of the coverage build so no uncovered lines appear (mirrors
+// `SessionWritersWrap`). See `pty.rs`'s `PtyRegistry` doc comment.
+#[cfg(not(coverage))]
+struct PtyEntriesWrap(pty::PtyRegistry);
+
+#[cfg(not(coverage))]
+impl fmt::Debug for PtyEntriesWrap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PtyEntriesWrap")
+    }
+}
+
 /// The detached supervisor daemon.
 ///
 /// Always stores a `FakeContainer` — for production use `Agent::new` supplies an
@@ -298,6 +320,10 @@ pub struct Agent {
     /// Production builds only — gated out of the coverage build.
     #[cfg(not(coverage))]
     pending_gates: PendingGatesWrap,
+    /// WAVE 3b: per-session live pty registry (the Terminal tab's escape
+    /// hatch). Production builds only — gated out of the coverage build.
+    #[cfg(not(coverage))]
+    pty_entries: PtyEntriesWrap,
     /// Per-session remote child processes (single-connection ssh/plink/wsl
     /// sessions): keyed by session_id, holds the live `Child` so `kill_container`
     /// can terminate it on stop. Local sessions never populate this map.
@@ -357,6 +383,8 @@ impl Agent {
             pending_gates: PendingGatesWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
+            #[cfg(not(coverage))]
+            pty_entries: PtyEntriesWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
             #[cfg(not(coverage))]
             session_children: SessionChildrenWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
@@ -418,6 +446,7 @@ impl Agent {
             pending_gates: PendingGatesWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
+            pty_entries: PtyEntriesWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
             session_children: SessionChildrenWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),

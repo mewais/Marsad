@@ -101,6 +101,14 @@ vi.mock("../src/bridge/api", async (importOriginal) => {
     runSlash: vi.fn().mockResolvedValue(undefined),
     stopSession: vi.fn().mockResolvedValue(undefined),
     resumeSession: vi.fn().mockResolvedValue(undefined),
+    // WAVE 3b (pty escape-hatch terminal) — spied so TerminalTab's wiring to
+    // the real pty commands/events is exercised; in this happy-dom test
+    // environment `isTauri()` is false so the REAL implementations are also
+    // no-ops, but mocking lets tests assert the call shape.
+    ptyStart: vi.fn().mockResolvedValue(undefined),
+    ptyInput: vi.fn().mockResolvedValue(undefined),
+    ptyResize: vi.fn().mockResolvedValue(undefined),
+    listenPty: vi.fn().mockResolvedValue(() => {}),
   };
 });
 
@@ -108,6 +116,21 @@ import * as api from "../src/bridge/api";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The `afterEach` below (`vi.restoreAllMocks()`) resets bare `vi.fn()`
+  // mocks (created via the `vi.mock` factory above, not `vi.spyOn`) back to
+  // a plain no-implementation mock after the FIRST test in this file runs —
+  // i.e. `mockResolvedValue` stops applying from the second test onward.
+  // Every other command mock here is called fire-and-forget (never
+  // `.then()`-chained), so a stray `undefined` return never surfaces;
+  // `TerminalTab` DOES chain `.then()` on `listenPty(...)`'s return
+  // (production code correctly assumes a real `Promise<UnlistenFn>`, which
+  // it always is outside tests) — re-apply the resolved values before EVERY
+  // test in this file (Terminal tab mounts are reachable from more than one
+  // describe block below) so the mock keeps honoring that contract.
+  vi.mocked(api.listenPty).mockResolvedValue(() => {});
+  vi.mocked(api.ptyStart).mockResolvedValue(undefined);
+  vi.mocked(api.ptyInput).mockResolvedValue(undefined);
+  vi.mocked(api.ptyResize).mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -126,6 +149,9 @@ function getStopSession() {
 }
 function getResumeSession() {
   return api.resumeSession as ReturnType<typeof vi.fn>;
+}
+function getPtyStart() {
+  return api.ptyStart as ReturnType<typeof vi.fn>;
 }
 
 // ---------------------------------------------------------------------------
@@ -446,21 +472,41 @@ describe("TerminalTab", () => {
     expect(screen.getByText(/Escape hatch/i)).toBeTruthy();
   });
 
-  it("renders terminal input", () => {
+  it("mounts a REAL xterm.js terminal (WAVE 3b — no more synthetic lines)", () => {
     renderWith({ selectedId: "s04" });
     fireEvent.click(screen.getByTestId("tab-Terminal"));
-    expect(screen.getByTestId("terminal-input")).toBeTruthy();
+    const container = screen.getByTestId("terminal-output");
+    // xterm.js stamps its own `.xterm` root class into the mount point —
+    // proves a real Terminal instance opened here, not the old stub <div>s.
+    expect(container.querySelector(".xterm")).toBeTruthy();
   });
 
-  it("typing a command + Enter calls sendPrompt", () => {
+  it("starts the session's pty on mount", () => {
     renderWith({ selectedId: "s04" });
     fireEvent.click(screen.getByTestId("tab-Terminal"));
+    expect(getPtyStart()).toHaveBeenCalledWith(
+      "s04",
+      expect.any(Number),
+      expect.any(Number)
+    );
+  });
 
-    const input = screen.getByTestId("terminal-input");
-    fireEvent.change(input, { target: { value: "git status" } });
-    fireEvent.keyDown(input, { key: "Enter" });
+  it("browser/mock mode renders an honestly idle terminal — no fake output", () => {
+    // `ptyStart`/`listenPty` are mocked no-ops here (as they are for real in
+    // browser/mock mode, `isTauri()` false) — the terminal must show nothing
+    // synthetic, unlike the old stub which fabricated lines from SessionView.
+    renderWith({ selectedId: "s04" });
+    fireEvent.click(screen.getByTestId("tab-Terminal"));
+    const container = screen.getByTestId("terminal-output");
+    expect(container.textContent).not.toMatch(/Claude is working|Session complete/i);
+  });
 
-    expect(getSendPrompt()).toHaveBeenCalledWith("s04", "git status");
+  it("switching away from the Terminal tab disposes the terminal without throwing", () => {
+    renderWith({ selectedId: "s04" });
+    fireEvent.click(screen.getByTestId("tab-Terminal"));
+    expect(() =>
+      fireEvent.click(screen.getByTestId("tab-Activity"))
+    ).not.toThrow();
   });
 });
 

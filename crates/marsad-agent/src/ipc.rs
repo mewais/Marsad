@@ -101,6 +101,20 @@ impl Agent {
                 outcome,
                 reason,
             } => self.handle_answer_wasl_gate(host_id, gate_id, outcome, reason),
+            // WAVE 3b (pty escape-hatch terminal). `cols`/`rows` are dropped
+            // here (destructured with `..`): the real spawn happens in
+            // `serve.rs` (needs the `subscribers` broadcast list, which only
+            // that scope owns), which re-parses them straight off the raw
+            // inbound line — see `pty::spawn_pty_session`'s doc comment.
+            marsad_proto::IpcMsg::PtyStart { session_id, .. } => self.handle_pty_start(session_id),
+            marsad_proto::IpcMsg::PtyInput { session_id, data } => {
+                self.handle_pty_input(&session_id, &data)
+            }
+            marsad_proto::IpcMsg::PtyResize {
+                session_id,
+                cols,
+                rows,
+            } => self.handle_pty_resize(&session_id, cols, rows),
             // Every other tag is an agent→GUI/core message (ack/broadcast) that
             // has no business arriving inbound here — same observable Protocol
             // error class as an unrecognized type.
@@ -256,6 +270,13 @@ impl Agent {
         // KEPT so the session remains resumable.
         let container_name = format!("marsad-{session_id}");
         self.kill_container(&session_id, &container_name);
+        // WAVE 3b: a stopped session's pty (if the Terminal tab was ever
+        // opened for it) must not outlive the session — kill + reap it too.
+        // Same "kept for resumability" spirit as the container above: the
+        // pty itself has no resume story (it's a plain shell, not claude),
+        // so it is torn down unconditionally here.
+        #[cfg(not(coverage))]
+        crate::pty::teardown_session(&session_id, &self.pty_entries.0);
         self.sessions.remove(&session_id);
         let event = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionStopped { session_id });
         Ok(vec![event])
@@ -512,6 +533,78 @@ impl Agent {
         let event =
             marsad_proto::encode_ipc(&marsad_proto::IpcMsg::WaslGateAnswered { host_id, gate_id });
         Ok(vec![event])
+    }
+
+    /// WAVE 3b (pty escape-hatch terminal): validate the session exists.
+    /// No ack (fire-and-forget, mirrors `SetWorkspace`) — the pty coming
+    /// alive is observed via `PtyOutput` broadcasts. The actual spawn
+    /// happens in `serve.rs` (see `pty::spawn_pty_session`'s doc comment for
+    /// why it can't happen here).
+    fn handle_pty_start(&mut self, session_id: String) -> Result<Vec<String>, AgentError> {
+        if !self.sessions.contains_key(&session_id) {
+            return Err(AgentError::Protocol(format!(
+                "PtyStart: unknown session {session_id}"
+            )));
+        }
+        Ok(vec![])
+    }
+
+    /// WAVE 3b: forward raw keystroke bytes to the session's live pty stdin.
+    /// In production builds, looks up the pty registry (populated by
+    /// `pty::spawn_pty_session`); under `cfg(coverage)` this is the fake
+    /// no-op path (no registry exists there — see `PtyEntriesWrap`).
+    fn handle_pty_input(
+        &mut self,
+        session_id: &str,
+        data: &str,
+    ) -> Result<Vec<String>, AgentError> {
+        #[cfg(not(coverage))]
+        {
+            let entries = self.pty_entries.0.lock().unwrap();
+            if let Some(entry_arc) = entries.get(session_id) {
+                let mut entry = entry_arc.lock().unwrap();
+                match entry
+                    .writer
+                    .write_all(data.as_bytes())
+                    .and_then(|_| entry.writer.flush())
+                {
+                    Ok(()) => {}
+                    Err(e) => {
+                        eprintln!("marsad-agent: session {session_id} pty input write FAILED: {e}")
+                    }
+                }
+            } else {
+                eprintln!(
+                    "marsad-agent: session {session_id} PtyInput dropped — no live pty (start one first)"
+                );
+            }
+        }
+        #[cfg(coverage)]
+        let _ = data;
+        Ok(vec![])
+    }
+
+    /// WAVE 3b: resize a session's live pty viewport. Same real/coverage
+    /// split as `handle_pty_input`.
+    fn handle_pty_resize(
+        &mut self,
+        session_id: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Vec<String>, AgentError> {
+        #[cfg(not(coverage))]
+        {
+            let entries = self.pty_entries.0.lock().unwrap();
+            if let Some(entry_arc) = entries.get(session_id) {
+                let entry = entry_arc.lock().unwrap();
+                if let Err(e) = crate::pty::resize_pty(&entry, cols, rows) {
+                    eprintln!("marsad-agent: session {session_id} pty resize FAILED: {e}");
+                }
+            }
+        }
+        #[cfg(coverage)]
+        let (_, _) = (cols, rows);
+        Ok(vec![])
     }
 
     /// Ingest a Claude Code hook payload.

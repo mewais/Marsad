@@ -306,6 +306,27 @@ impl Agent {
             .and_then(|s| s.host_target)
     }
 
+    /// WAVE 3b: look up a stored session's `(project, host_target)` for
+    /// `PtyStart` — `project` seeds a local pty's working directory;
+    /// `host_target` selects the pty's command (local shell vs. the
+    /// session's existing SSH/WSL target, via `pty::pty_exec_argv`). Mirrors
+    /// `session_host_target`/`session_transcript_project_uuid`'s lookup
+    /// shape. Real-IO build only.
+    #[cfg(not(coverage))]
+    pub(crate) fn session_project_and_host_target(
+        &mut self,
+        session_id: &str,
+    ) -> Option<(String, Option<String>)> {
+        self.store
+            .0
+            .restore()
+            .ok()?
+            .sessions
+            .into_iter()
+            .find(|s| s.id == session_id)
+            .map(|s| (s.project, s.host_target))
+    }
+
     /// Look up a stored session's `(project, claude_uuid)` so the reader thread
     /// can fetch its remote transcript `.jsonl`. The uuid is `None` for a
     /// `--continue` session (no specific id) — the fetch then picks the most

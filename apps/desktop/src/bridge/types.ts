@@ -4,7 +4,7 @@
  * Phase serializes as the variant name string.
  */
 
-import type { BoardView } from "./workstreamTypes";
+import type { BoardView, Driver } from "./workstreamTypes";
 
 // ---------------------------------------------------------------------------
 // Phase (marsad-events)
@@ -319,6 +319,47 @@ export interface SessionDetailVM {
 }
 
 // ---------------------------------------------------------------------------
+// CostRow / WorkstreamCostBreakdown — mirrors marsad-viewmodel's
+// `CostRow`/`WorkstreamCostBreakdown` (SLICE G, crates/marsad-viewmodel/src/lib.rs).
+// Powers the Usage tab's "Cost breakdown" — By host / By node.
+// ---------------------------------------------------------------------------
+
+/** One row of the workstream cost breakdown ("By host" / "By node"): a
+ *  group's total cost, the distinct drivers contributing to it, its share of
+ *  the workstream total, and whether it is backed only by estimated
+ *  (litellm/hand-table backfill) cost rather than any live, agent-reported
+ *  cost. */
+export interface CostRow {
+  /** Group identity: a host id (`by_host`) or a node/session id (`by_node`). */
+  key: string;
+  /** Display label: the host id (`by_host`) or the node's display name (`by_node`). */
+  label: string;
+  /** Distinct drivers contributing to this group, first-appearance order
+   *  (a `by_node` row is always a single-element array). */
+  driver_dots: Driver[];
+  /** Summed `cost_usd` of every contributing session. */
+  cost_usd: number;
+  /** This group's share of the workstream total, `0..=100`. */
+  pct: number;
+  /** `true` only when this group has at least one contributing session AND
+   *  every one of them is estimated-only (U4 cost truthfulness). */
+  estimated: boolean;
+}
+
+/** The full cost breakdown for one workstream's sessions, grouped by host and
+ *  by node/session (Usage tab's "Cost breakdown" box). */
+export interface WorkstreamCostBreakdown {
+  /** Sum of `cost_usd` across every session in the workstream. */
+  total_cost_usd: number;
+  /** `true` only when every session in the workstream is estimated-only. */
+  total_estimated: boolean;
+  /** Grouped by host id, sorted by cost descending. */
+  by_host: CostRow[];
+  /** One row per node/session, sorted by cost descending. */
+  by_node: CostRow[];
+}
+
+// ---------------------------------------------------------------------------
 // GateVM
 // ---------------------------------------------------------------------------
 
@@ -515,6 +556,23 @@ export type VmUpdateEvent =
       reason: string | null;
     }
   | { kind: "wasl_observation"; host_id: string; entry: WaslAuditEntry };
+
+// ---------------------------------------------------------------------------
+// Pty event from Tauri (WAVE 3b escape-hatch terminal) — a SEPARATE event
+// channel ("pty", not "vm-update"): raw terminal bytes have no business
+// meaning for the board/session/workstream VM the `VmUpdateEvent` union
+// above models, so they are not folded into it (see the Rust
+// `events::emit_pty_update` doc comment for the full rationale).
+// ---------------------------------------------------------------------------
+
+export type PtyEvent =
+  /** `data` is base64 of raw pty output bytes (arbitrary — control
+   *  sequences, mid-multibyte-UTF-8 reads) — decode and feed straight to
+   *  xterm.js's `Terminal.write` (which accepts a `Uint8Array`). */
+  | { kind: "pty_output"; session_id: string; data: string }
+  /** The pty's child process exited; `code` is `-1` if it could not even be
+   *  spawned. */
+  | { kind: "pty_exit"; session_id: string; code: number };
 
 /**
  * X5 — a pending Wasl handoff gate surfaced to the human (mirrors

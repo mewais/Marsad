@@ -110,6 +110,15 @@ impl Agent {
             /// sessions (core reads their JSONL directly) and fresh sessions
             /// (no prior history to fetch).
             transcript_hint: Option<(String, Option<String>)>,
+            /// WAVE 3b: set when this command was a `PtyStart` that
+            /// `handle_ipc` accepted (known session) — `(session_id, cols,
+            /// rows, project, host_target)`, resolved from the raw inbound
+            /// line + a store lookup (only this — the serve — thread has
+            /// `self`). The accept-thread's reply handling spawns the real
+            /// pty from this, mirroring `new_session_id`'s FIFO-reader
+            /// handoff (see `pty::spawn_pty_session`'s doc comment for why
+            /// the spawn can't happen inside `handle_ipc` itself).
+            pty_start: Option<(String, u16, u16, String, Option<String>)>,
         }
 
         // The command sender is cloned into each client thread.
@@ -139,6 +148,13 @@ impl Agent {
         // Shared across the serve thread (handle_answer_gate via self) and the
         // FIFO threads (which insert when claude emits a `can_use_tool`).
         let pending_gates_for_fifo = Arc::clone(&self.pending_gates.0);
+
+        // ── WAVE 3b pty registry ────────────────────────────────────────────
+        // Shared across the serve thread (handle_pty_input/handle_pty_resize
+        // via self, handle_stop_session's teardown via self) and the pty
+        // spawn/pump thread (`pty::spawn_pty_session`, which inserts on
+        // spawn and removes on exit — see `pty.rs`).
+        let pty_entries_for_reader = Arc::clone(&self.pty_entries.0);
 
         let data_root = self.config.data_root.clone();
 
@@ -419,6 +435,7 @@ impl Agent {
                 let pending_for_fifo = Arc::clone(&pending_gates_for_fifo);
                 let children_for_reader = Arc::clone(&session_children_for_reader);
                 let capability_provider_for_reader = Arc::clone(&capability_provider_accept);
+                let pty_entries_for_client = Arc::clone(&pty_entries_for_reader);
 
                 // Split the client into independent write and read halves so
                 // each thread has exclusive ownership — no Mutex required.
@@ -517,6 +534,27 @@ impl Agent {
                                                 Some(Arc::clone(&capability_provider_for_reader)),
                                             );
                                         }
+
+                                        // WAVE 3b: a `PtyStart` accepted by
+                                        // `handle_ipc` — spawn the real pty +
+                                        // its broadcast-pump thread now that
+                                        // we're on a scope that owns
+                                        // `subscribers` (see
+                                        // `pty::spawn_pty_session`'s doc
+                                        // comment).
+                                        if let Some((sid, cols, rows, project, host_target)) =
+                                            reply.pty_start
+                                        {
+                                            crate::pty::spawn_pty_session(
+                                                sid,
+                                                cols,
+                                                rows,
+                                                project,
+                                                host_target,
+                                                Arc::clone(&subs_for_fifo),
+                                                Arc::clone(&pty_entries_for_client),
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -559,6 +597,7 @@ impl Agent {
                     host_target: None,
                     run_command: None,
                     transcript_hint: None,
+                    pty_start: None,
                 });
                 continue;
             }
@@ -648,6 +687,29 @@ impl Agent {
                 None
             };
 
+            // WAVE 3b: a `PtyStart` that `handle_ipc` just accepted (known
+            // session — an error reply here means `out_lines` is `Err`, so
+            // `is_ok()` gates spawning a pty for an unknown session). Parsed
+            // straight off the raw inbound line (mirrors `launch_first_prompt`
+            // above) since `handle_ipc`'s typed match arm drops `cols`/`rows`
+            // (see `ipc.rs::handle_pty_start`'s doc comment) — the project +
+            // host_target are resolved here, the only scope with `self`.
+            let pty_start: Option<(String, u16, u16, String, Option<String>)> =
+                if cmd.line.contains("\"PtyStart\"") && out_lines.is_ok() {
+                    serde_json::from_str::<serde_json::Value>(&cmd.line)
+                        .ok()
+                        .and_then(|v| {
+                            let sid = v.get("session_id")?.as_str()?.to_string();
+                            let cols = v.get("cols")?.as_u64()? as u16;
+                            let rows = v.get("rows")?.as_u64()? as u16;
+                            let (project, host_target) =
+                                self.session_project_and_host_target(&sid)?;
+                            Some((sid, cols, rows, project, host_target))
+                        })
+                } else {
+                    None
+                };
+
             // Send reply; if the client thread is gone, ignore the error.
             let _ = cmd.reply_tx.send(AgentReply {
                 out_lines,
@@ -656,6 +718,7 @@ impl Agent {
                 host_target,
                 run_command,
                 transcript_hint,
+                pty_start,
             });
         }
 

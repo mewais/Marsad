@@ -5,10 +5,10 @@
  * mock fixture so Vitest + Playwright work without the Rust side.
  */
 
-import type { AppSnapshot, CapabilitiesView, ModelInfo, PersistedTemplate, SessionSummary, Settings, SideRow, SlashCommandInfo } from "./types";
+import type { AppSnapshot, CapabilitiesView, CostRow, ModelInfo, PersistedTemplate, PtyEvent, SessionSummary, Settings, SideRow, SlashCommandInfo, WorkstreamCostBreakdown } from "./types";
 import { MOCK_SNAPSHOT } from "./mockFixture";
 import { mockWorkstreams } from "./mockWorkstreams";
-import type { BoardView, ConnKind, GraphView } from "./workstreamTypes";
+import type { BoardView, ConnKind, Driver, GraphView } from "./workstreamTypes";
 
 // ---------------------------------------------------------------------------
 // Tauri detection
@@ -163,6 +163,43 @@ export async function interrupt(id: string): Promise<void> {
   if (!isTauri()) return;
   const invoke = await getInvoke();
   await invoke("interrupt", { id });
+}
+
+// ---------------------------------------------------------------------------
+// WAVE 3b — pty escape-hatch terminal (Terminal tab). No-op in browser/mock
+// mode (there is no backend to talk to — `TerminalTab` shows an honestly
+// idle terminal instead of fake output). Deliberately no `ptyStop`: the pty
+// is torn down by the agent on session stop, not on leaving the Terminal
+// tab — see `bridge.rs`'s WAVE 3b section header for the full rationale.
+// ---------------------------------------------------------------------------
+
+/** Start (or, if already live, no-op re-attach to) a session's interactive pty. */
+export async function ptyStart(
+  sessionId: string,
+  cols: number,
+  rows: number
+): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("pty_start", { session_id: sessionId, cols, rows });
+}
+
+/** Forward raw keystroke bytes (from xterm.js's `onData`) to the pty stdin. */
+export async function ptyInput(sessionId: string, data: string): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("pty_input", { session_id: sessionId, data });
+}
+
+/** Resize the pty viewport (e.g. after `xterm-addon-fit` recomputes cols/rows). */
+export async function ptyResize(
+  sessionId: string,
+  cols: number,
+  rows: number
+): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("pty_resize", { session_id: sessionId, cols, rows });
 }
 
 /** Parse an environment textarea (one `KEY=VALUE` per line) into `[key, value]`
@@ -563,6 +600,25 @@ export async function listenVmUpdate(
   return listen("vm-update", (event) => handler(event.payload));
 }
 
+/**
+ * WAVE 3b (pty escape-hatch terminal) — listen on the SEPARATE `"pty"` Tauri
+ * event channel (not `"vm-update"`): raw terminal bytes have no business
+ * meaning for the board/session/workstream VM `useVm` reduces, so the agent
+ * bridge emits them on their own channel (see `events::emit_pty_update`'s
+ * Rust doc comment). No-op (never-firing) unlisten in browser/mock mode —
+ * `TerminalTab` renders an honestly-idle terminal there instead of fake
+ * output.
+ */
+export async function listenPty(
+  handler: (event: PtyEvent) => void
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    return () => {};
+  }
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<PtyEvent>("pty", (event) => handler(event.payload));
+}
+
 // ---------------------------------------------------------------------------
 // Workstream commands (U-INT-1) — real invoke in Tauri, mock backend otherwise
 // ---------------------------------------------------------------------------
@@ -641,6 +697,124 @@ export async function fetchGraph(wsId: string): Promise<GraphView | null> {
   if (!isTauri()) return mockWorkstreams.graph(wsId);
   const invoke = await getInvoke();
   return invoke("graph", { ws_id: wsId }) as Promise<GraphView | null>;
+}
+
+// ---------------------------------------------------------------------------
+// Cost breakdown (SLICE G / Wave 3a) — Usage tab's "Cost breakdown" (By host /
+// By node). Real mode forwards to `Core::cost_breakdown` via the `cost_breakdown`
+// Tauri command; browser/test mode builds a realistic mock from the same
+// mock-workstream graph `fetchGraph` reads, joined against the mock session
+// fixture's cost fields — mirroring exactly what `workstream_cost_breakdown`
+// does server-side (join nodes_of(ws_id) with SessionView by id).
+// ---------------------------------------------------------------------------
+
+/** `cost / total * 100`, or `0` when `total === 0` (avoids a NaN divide) —
+ *  mirrors `marsad_viewmodel::cost_pct`. */
+function costPct(cost: number, total: number): number {
+  return total === 0 ? 0 : (cost / total) * 100;
+}
+
+/** Sort rows by `cost_usd` descending, ties broken by `key` ascending —
+ *  mirrors `marsad_viewmodel::sort_cost_rows_desc`. */
+function sortCostRowsDesc(rows: CostRow[]): CostRow[] {
+  return [...rows].sort((a, b) => b.cost_usd - a.cost_usd || a.key.localeCompare(b.key));
+}
+
+/** Distinct drivers in first-appearance order — mirrors `marsad_workstream::driver_dots`. */
+function dedupDriversFirstAppearance(drivers: Driver[]): Driver[] {
+  const seen = new Set<Driver>();
+  const out: Driver[] = [];
+  for (const d of drivers) {
+    if (!seen.has(d)) {
+      seen.add(d);
+      out.push(d);
+    }
+  }
+  return out;
+}
+
+/**
+ * Build a realistic mock `WorkstreamCostBreakdown` for browser/test-mode
+ * preview: reads the same mock graph `fetchGraph`/`mockWorkstreams.graph`
+ * exposes (nodes carry `id`/`name`/`driver`/`host`), joins each node's cost
+ * from the mock session fixture (`_mockSnapshot.sessions`, matched by id —
+ * exactly how `Core::cost_breakdown` joins nodes to `SessionView`s), and
+ * marks the single lowest (nonzero) cost contributor "estimated" so the
+ * preview shows the U4 "~ estimated" affordance without lying about which
+ * real session it came from (the mock fixture's sessions are all
+ * `cost_estimated: false` — real live-reported cost — so this flag exists
+ * only in the derived `CostRow`, never mutates the underlying session data).
+ */
+function mockCostBreakdown(wsId: string): WorkstreamCostBreakdown | null {
+  const graph = mockWorkstreams.graph(wsId);
+  if (!graph) return null;
+
+  const contributions = graph.nodes.map((n) => {
+    const sv = _mockSnapshot.sessions.find((s) => s.id === n.id);
+    return { node: n, cost: sv?.cost_usd ?? 0 };
+  });
+
+  // Pick the lowest nonzero contributor as the mock's one "estimated" example
+  // (deterministic: ties broken by node id) — purely a preview affordance,
+  // not a claim about the real session's provenance.
+  const nonZero = contributions.filter((c) => c.cost > 0);
+  const estimatedNodeId = nonZero.length
+    ? nonZero.reduce((min, c) =>
+        c.cost < min.cost || (c.cost === min.cost && c.node.id < min.node.id) ? c : min
+      ).node.id
+    : null;
+
+  const totalCost = contributions.reduce((a, c) => a + c.cost, 0);
+
+  const byNode: CostRow[] = contributions.map(({ node, cost }) => ({
+    key: node.id,
+    label: node.name,
+    driver_dots: [node.driver],
+    cost_usd: cost,
+    pct: costPct(cost, totalCost),
+    estimated: node.id === estimatedNodeId,
+  }));
+
+  const hostOrder: string[] = [];
+  const hostCost = new Map<string, number>();
+  const hostDrivers = new Map<string, Driver[]>();
+  const hostAllEstimated = new Map<string, boolean>();
+  const hostHasAny = new Map<string, boolean>();
+  for (const { node, cost } of contributions) {
+    if (!hostCost.has(node.host)) {
+      hostOrder.push(node.host);
+      hostCost.set(node.host, 0);
+      hostDrivers.set(node.host, []);
+      hostAllEstimated.set(node.host, true);
+      hostHasAny.set(node.host, false);
+    }
+    hostCost.set(node.host, hostCost.get(node.host)! + cost);
+    hostDrivers.get(node.host)!.push(node.driver);
+    hostHasAny.set(node.host, true);
+    if (node.id !== estimatedNodeId) hostAllEstimated.set(node.host, false);
+  }
+
+  const byHost: CostRow[] = hostOrder.map((host) => ({
+    key: host,
+    label: host,
+    driver_dots: dedupDriversFirstAppearance(hostDrivers.get(host) ?? []),
+    cost_usd: hostCost.get(host) ?? 0,
+    pct: costPct(hostCost.get(host) ?? 0, totalCost),
+    estimated: !!hostHasAny.get(host) && !!hostAllEstimated.get(host),
+  }));
+
+  return {
+    total_cost_usd: totalCost,
+    total_estimated: contributions.length > 0 && estimatedNodeId !== null && nonZero.length === 1,
+    by_host: sortCostRowsDesc(byHost),
+    by_node: sortCostRowsDesc(byNode),
+  };
+}
+
+export async function fetchCostBreakdown(wsId: string): Promise<WorkstreamCostBreakdown | null> {
+  if (!isTauri()) return mockCostBreakdown(wsId);
+  const invoke = await getInvoke();
+  return invoke("cost_breakdown", { ws_id: wsId }) as Promise<WorkstreamCostBreakdown | null>;
 }
 
 // ---------------------------------------------------------------------------

@@ -1498,6 +1498,130 @@ pub fn graph(
     }
 }
 
+/// Read the Usage tab's cost breakdown ("By host" / "By node") for one
+/// workstream (None if `ws_id` is unknown). BUILT-NOT-VERIFIED (Wave 3a):
+/// mirrors `board`/`graph` exactly (lock-clone-return, no IO) against
+/// `Core::cost_breakdown`'s already-tested signature
+/// (crates/marsad-core/src/lib.rs) — but, like the rest of src-tauri, this
+/// has never compiled/run here (no webkit2gtk). See docs/GAPS.md.
+#[tauri::command(rename_all = "snake_case")]
+pub fn cost_breakdown(
+    state: State<'_, ManagedState>,
+    ws_id: String,
+) -> Result<Option<marsad_viewmodel::WorkstreamCostBreakdown>, String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    match &*guard {
+        AppState::Live(core) => Ok(core.cost_breakdown(&ws_id)),
+        AppState::Mock(_) => Ok(None),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WAVE 3b — pty escape-hatch terminal (Terminal tab). BUILT-NOT-VERIFIED:
+// like the rest of src-tauri, this has never compiled/run here (no
+// webkit2gtk). See docs/GAPS.md.
+//
+// Deliberately NO `pty_stop` command: the agent tears a session's pty down
+// automatically on `StopSession` (`crates/marsad-agent/src/ipc.rs`'s
+// `handle_stop_session` calls `pty::teardown_session`) — a user merely
+// navigating away from the Terminal tab does NOT kill the shell, mirroring
+// tmux detach/reattach semantics (consistent with the rest of Marsad's
+// "sessions survive GUI exit" philosophy). The frontend just stops
+// listening for `"pty"` events on unmount; the real pty keeps running
+// server-side until the session itself stops.
+// ---------------------------------------------------------------------------
+
+/// Send one `IpcMsg` line directly to the agent over a fresh, one-shot
+/// connection.
+///
+/// NOT routed through `Core` (which has no pty-aware methods — marsad-core
+/// was deliberately not touched by this wave: raw terminal bytes have no
+/// session/business meaning for it to reduce) and NOT reusing the reader
+/// thread's long-lived subscriber connection (`run_reader_thread` in
+/// `lib.rs` owns that one exclusively for its blocking `recv_line` loop; a
+/// second writer on the same socket handle would race it). A dedicated
+/// ephemeral connection per call is the simplest correct option: the
+/// agent's disconnect handling is tolerant BY DESIGN ("Client disconnect
+/// must NOT kill sessions: dropping a core connection only removes a
+/// subscriber", `docs/specs/agent.md`), so sending one line and dropping the
+/// connection is a well-supported pattern — it mirrors how the reader
+/// thread itself opens its OWN separate `LocalIpc` connection just to send
+/// one `Subscribe` line at startup.
+///
+/// Best-effort: connect/send failures are logged, never surfaced as a
+/// command error — a dropped keystroke/resize is far less disruptive to the
+/// user than an error toast on every keypress. (A persistent, reused
+/// connection would cut the per-call connect overhead; deferred as a
+/// follow-up — see `docs/GAPS.md` — to keep this BUILT-NOT-VERIFIED surface
+/// as simple/low-risk as possible.)
+fn send_pty_ipc(msg: &marsad_proto::IpcMsg) {
+    use marsad_transport::Transport;
+    let socket_path = crate::resolve_socket_path();
+    let mut ipc = marsad_transport::LocalIpc::new(&socket_path);
+    if let Err(e) = ipc.connect() {
+        eprintln!("marsad-desktop: pty command: failed to connect to agent: {e}");
+        return;
+    }
+    if let Err(e) = ipc.send_line(&marsad_proto::encode_ipc(msg)) {
+        eprintln!("marsad-desktop: pty command: failed to send: {e}");
+    }
+}
+
+/// Start (or, if already live, no-op re-attach to) a session's interactive
+/// pty. No return payload — the pty coming alive is observed via `PtyOutput`
+/// events on the `"pty"` channel (see `events::emit_pty_update`).
+#[tauri::command(rename_all = "snake_case")]
+pub fn pty_start(
+    state: State<'_, ManagedState>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    if let AppState::Live(_) = &*guard {
+        send_pty_ipc(&marsad_proto::IpcMsg::PtyStart {
+            session_id,
+            cols,
+            rows,
+        });
+    }
+    Ok(())
+}
+
+/// Forward raw keystroke bytes to a session's live pty stdin.
+#[tauri::command(rename_all = "snake_case")]
+pub fn pty_input(
+    state: State<'_, ManagedState>,
+    session_id: String,
+    data: String,
+) -> Result<(), String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    if let AppState::Live(_) = &*guard {
+        send_pty_ipc(&marsad_proto::IpcMsg::PtyInput { session_id, data });
+    }
+    Ok(())
+}
+
+/// Resize a session's live pty viewport (e.g. `xterm-addon-fit` recomputed
+/// cols/rows after the window/pane resized).
+#[tauri::command(rename_all = "snake_case")]
+pub fn pty_resize(
+    state: State<'_, ManagedState>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    if let AppState::Live(_) = &*guard {
+        send_pty_ipc(&marsad_proto::IpcMsg::PtyResize {
+            session_id,
+            cols,
+            rows,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

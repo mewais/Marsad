@@ -21,6 +21,13 @@ Landed + verified on a machine with a REAL `claude` (2.1.198) + tmux since the o
 - ✅ **Honest cost**: agent-reported cost is authoritative and no longer clobbered by estimates;
   estimates are backfill-only and UI-labeled `~`.
 - ✅ **Activity surfaces**: subagents, questions, gate kinds, notices, compaction + rate-limit indicators.
+- ✅/⚠️ **WAVE 3b — interactive PTY escape-hatch terminal** (Session Level 3 "Terminal" tab): a SEPARATE
+  channel from the claude driver — a real interactive shell (local `portable-pty`, or the session's
+  existing SSH/WSL host with real pty allocation requested), not `--print`/stream-json. `marsad-proto`
+  (5 new additive `IpcMsg` variants: `PtyStart`/`PtyInput`/`PtyResize`/`PtyOutput`/`PtyExit`) and
+  `marsad-agent` (the `pty` module + IPC wiring + `StopSession` teardown) are REAL + VERIFIED here —
+  see below. `apps/desktop/src-tauri` (3 new commands + a `"pty"` event channel) and the frontend
+  (`Terminal.tsx` rebuilt on `xterm.js`) are BUILT but UNVERIFIED (see the dedicated entry below).
 - ✅ **Marsad↔Wasl FULLY BUILT and LIVE-VERIFIED** (was "not built"): `marsad-wasl` operator-API client
   (100/100, contract-tested vs vendored golden fixtures), wired into agent/core/gates, the launch-time
   toggle (`LaunchSpec.wasl` → `--mcp-config`, now actually calling `adopt_or_spawn_wasl_mcpd`; wasl+remote
@@ -45,6 +52,42 @@ envelope arm + the `list_sessions` deletion. Mobile apps remain scaffolding.
 - ✅ Desktop **frontend against the MOCK backend**: Board (L1), GraphScreen (L2), graph layout, `useVm`
   state + command helpers, `api.ts` wrappers, app-wiring (connected screens + router + nav). 301 Vitest
   tests pass; `tsc --noEmit` clean. The full board→graph→session flow works **in the test/mock harness**.
+- ✅ **WAVE 3b — pty escape-hatch, `marsad-proto` + `marsad-agent`** (fully REAL + VERIFIED, no mocks/fakes
+  standing in for the OS): `crates/marsad-proto/src/lib.rs` gained 5 additive `IpcMsg` variants
+  (`PtyStart{session_id,cols,rows}`, `PtyInput{session_id,data}` — plain UTF-8 keystrokes,
+  `PtyResize{session_id,cols,rows}`, `PtyOutput{session_id,data}` — base64 raw bytes (arbitrary/partial-UTF-8
+  safe), `PtyExit{session_id,code}`); `parse_ipc`'s closed `KNOWN` list grows 35→40. Golden-JSON contract
+  tests in the new `crates/marsad-proto/tests/pty_ipc.rs` (19 tests) — `cargo test -p marsad-proto` green,
+  100% line+region coverage, all pre-existing frozen suites (`ipc_typed.rs`/`capabilities_ipc.rs`/
+  `wasl_ipc.rs`) untouched and still green.
+  `crates/marsad-agent/src/pty.rs` (new module) spawns a REAL OS pty via the `portable-pty` crate (added
+  dependency) — local: the session's `$SHELL` (or `/bin/sh`/`cmd.exe` fallback); remote: the SAME
+  `remote::exec_prefix_for` argv the agent already uses for that host, with the one-shot script
+  transport's no-pty flags (`-T`) swapped for real-pty-allocation ones (`-tt` for ssh, `-t` for plink) —
+  wired into `handle_ipc` (`PtyStart`/`PtyInput`/`PtyResize`), `handle_stop_session` (pty teardown on
+  session stop), and `serve.rs` (the broadcast-pump thread, mirroring `spawn_session_reader`'s pattern).
+  UNIT-TESTED test-first in this sandbox (no external dependency beyond a pty device + a shell — unlike
+  `TmuxContainer`, which needs a live `tmux`+`claude` and is only exercised by the gated `i03` live test):
+  `crates/marsad-agent/tests/pty.rs` (11 tests, pure argv/shell-selection logic, always compiled — real
+  coverage, not gated) and `crates/marsad-agent/tests/pty_live.rs` (8 tests — spawn a real local shell,
+  write a command, assert the echoed output arrives, resize, exit with both a clean and a non-zero
+  status). `crates/marsad-agent/tests/pty_ipc_dispatch.rs` (6 tests) exercises the `handle_ipc`
+  dispatch/coverage-mode no-op paths through `Agent::with_fakes`. `cargo test -p marsad-agent` green (243
+  tests total incl. the above); `cargo llvm-cov -p marsad-agent --fail-under-lines 100
+  --fail-under-regions 100` passes — the real pty spawn/resize/`PtyError` surface is
+  `#[cfg(not(coverage))]`-gated (same disposition as `TmuxContainer`/`ClaudeFifoTransport`) so it doesn't
+  count toward the coverage number, but IS exercised for real by `pty_live.rs` under plain `cargo test`
+  (that file is `#![cfg(not(coverage))]` at the top so it compiles to zero tests, not a build error,
+  under `cargo llvm-cov`). `cargo clippy --workspace -- -D warnings` and `cargo fmt --check` both clean.
+  Known, deliberate simplifications (not bugs): (a) the REMOTE pty path (ssh/wsl with real pty allocation)
+  is structurally in place but has no live remote host to verify against here — genuinely
+  BUILT-NOT-VERIFIED, unlike the local path; (b) a remote pty starts in the host's login/default
+  directory, not the session's `project` dir (the one-shot transport's `cd` step doesn't compose cleanly
+  with the pty-allocation argv — see `pty::spawn_pty_session`'s doc comment); (c) re-opening the Terminal
+  tab for a session whose pty is already live is a no-op re-attach with NO scrollback replay (unlike
+  claude's `TranscriptBackfill`) — the frontend's xterm starts empty; (d) there is deliberately no
+  `PtyStop` wire message / Tauri command — the agent tears the pty down on `StopSession` only, mirroring
+  tmux detach/reattach (leaving the Terminal tab does not kill the shell).
 
 ## Built but UNVERIFIED here (never compiled/run against the real runtime)
 - ⚠️ **src-tauri workstream command layer** (`apps/desktop/src-tauri`): the 10 Tauri commands the UI invokes
@@ -54,6 +97,55 @@ envelope arm + the `list_sessions` deletion. Mobile apps remain scaffolding.
   standalone harness crate — the Tauri macro layer, `invoke` arg wiring, and the real
   frontend→invoke→core→vm-update path have **never run**. There may be Tauri-level compile/wiring errors.
   → "UI 100% hooked to functionality" is TRUE for the mock path, UNVERIFIED for the real desktop app.
+- ⚠️ **src-tauri `cost_breakdown` command** (Workstreams redesign Wave 3a — Usage tab's "Cost breakdown" By
+  host / By node, `docs/design/DESIGN_HANDOFF.md` §"Usage tab"): new `#[tauri::command] cost_breakdown(ws_id)`
+  in `apps/desktop/src-tauri/src/bridge.rs`, registered in `lib.rs`'s `generate_handler!`. Hand-written to
+  mirror `board`/`graph` exactly (lock-clone-return, `AppState::Mock(_) => Ok(None)`) against the already
+  Rust-tested `Core::cost_breakdown(&self, ws_id: &str) -> Option<marsad_viewmodel::WorkstreamCostBreakdown>`
+  (`crates/marsad-core/src/lib.rs:1723`, landed+tested in commit `92d5029`) — but, like the rest of
+  src-tauri, **never compiled here** (no webkit2gtk). The `#[tauri::command(rename_all = "snake_case")]`
+  macro expansion and the real `invoke("cost_breakdown", { ws_id })` → command → `Core::cost_breakdown` wire
+  path are unverified. The TS side (`bridge/api.ts:fetchCostBreakdown`, `bridge/types.ts:CostRow`/
+  `WorkstreamCostBreakdown`, `screens/tabs/Usage.tsx`'s Cost breakdown section) IS verified — built against
+  a browser-mode mock and covered by Vitest + a served-dist Playwright screenshot (see the Usage tab test
+  suite and `tests/e2e`).
+- ⚠️ **WAVE 3b — pty escape-hatch terminal, `src-tauri` + frontend** (built against the REAL, VERIFIED
+  `marsad-proto`/`marsad-agent` pty surface above, but — like the rest of src-tauri — never
+  compiled/run here, no webkit2gtk): three new Tauri commands in `apps/desktop/src-tauri/src/bridge.rs`
+  (`pty_start(session_id,cols,rows)`, `pty_input(session_id,data)`, `pty_resize(session_id,cols,rows)`,
+  registered in `lib.rs`'s `generate_handler!`) that each open a FRESH, one-shot `LocalIpc` connection to
+  the agent socket (`crate::resolve_socket_path()`, now `pub(crate)`) and send one encoded `IpcMsg` line —
+  deliberately NOT routed through `Core` (no pty-aware methods; `marsad-core` was NOT touched by this
+  wave — raw terminal bytes have no session/business meaning for it to reduce) and NOT reusing the
+  reader thread's long-lived subscriber connection (a second writer on that same socket handle would
+  race its blocking `recv_line` loop). A persistent, reused connection would cut the per-keystroke
+  connect overhead; deferred as a follow-up to keep this unverified surface simple. `events.rs` gained two
+  new `VmUpdateEnvelope` arms (`PtyOutput`/`PtyExit`, constructed directly — NOT via `From<VmUpdate>`,
+  since there is no `VmUpdate::Pty*`) and a NEW `emit_pty_update` helper that emits on a SEPARATE `"pty"`
+  Tauri event (not `"vm-update"`) — `run_reader_thread` (`lib.rs`) intercepts raw `PtyOutput`/`PtyExit`
+  agent lines BEFORE the existing type allow-list would silently `continue`-skip them, and forwards them
+  straight to the webview via `emit_pty_update` instead of `Core::on_agent_line` (which has no arm for
+  either). Two new Rust unit tests in `events.rs` pin the `pty_output`/`pty_exit` envelope wire shape
+  (written, unverified — never compiled). The `#[tauri::command]` macro expansion, the real
+  `invoke("pty_start"/"pty_input"/"pty_resize", …)` → command → one-shot-connection → agent path, and the
+  real `"pty"` event → webview path have **never run**.
+  Frontend: `Terminal.tsx` fully rebuilt on **`xterm.js`** (`@xterm/xterm` + `@xterm/addon-fit`, added
+  deps) — a real dark mono terminal (`term.write` fed base64-decoded `PtyOutput` bytes as a `Uint8Array`,
+  `term.onData`/`term.onResize` wired to `ptyInput`/`ptyResize`, `ResizeObserver` + window-resize
+  re-fitting). `bridge/api.ts` gained `ptyStart`/`ptyInput`/`ptyResize`/`listenPty` wrappers (no-op in
+  browser/mock mode, same convention as every other command) and `bridge/types.ts` a `PtyEvent` union for
+  the `"pty"` channel (kept separate from `VmUpdateEvent` for the same layering reason as the Rust side).
+  THIS part IS verified: `SessionDetail.test.tsx`'s `TerminalTab` suite was rewritten for the real
+  component (asserts a genuine `.xterm` DOM node mounts, `ptyStart` is called with the session id, an
+  honestly-idle terminal in mock mode — no more synthetic "Claude is working…" lines — and clean
+  unmount/dispose); all 421 Vitest tests across all 35 files pass, `tsc --noEmit` is clean, and
+  `pnpm build` (`tsc && vite build`) succeeds with `xterm.css` bundled into the output. (One test-harness
+  wrinkle fixed along the way, unrelated to the pty logic itself: `SessionDetail.test.tsx`'s outer
+  `afterEach(() => vi.restoreAllMocks())` was silently resetting the `vi.mock("../src/bridge/api", …)`
+  factory's `mockResolvedValue`-configured fns back to a bare no-op after the first test in the file —
+  invisible for every pre-existing fire-and-forget command mock, but `TerminalTab` is the first consumer
+  to `.then()`-chain directly on a mocked async call's return; the fix re-applies the pty mocks' resolved
+  values in the file's top-level `beforeEach`.)
 - ⚠️ **src-tauri capabilities command layer** (U2, `docs/specs/dynamic-capabilities.md` §3.6, added on top of
   the already-landed + Rust-tested U1 backend in `marsad-proto`/`marsad-agent`/`marsad-core`): new Tauri
   commands `bridge::capabilities` (lock-clone-return `Core::capabilities()`, mirrors `board()`) and

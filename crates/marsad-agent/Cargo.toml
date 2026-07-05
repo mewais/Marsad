@@ -32,6 +32,12 @@ marsad-store = { workspace = true }
 marsad-hosts = { workspace = true }
 marsad-notify = { workspace = true }
 marsad-wasl = { workspace = true }
+# WAVE 3b — interactive PTY escape-hatch terminal (Terminal tab). Cross-platform
+# pty allocation + child spawning (real OS IO, gated `#[cfg(not(coverage))]` in
+# pty.rs); base64 encodes raw pty output bytes for the IPC wire (see
+# `marsad_proto::IpcMsg::PtyOutput`'s doc comment for why plain UTF-8 isn't safe).
+portable-pty = "0.9"
+base64 = "0.22"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
