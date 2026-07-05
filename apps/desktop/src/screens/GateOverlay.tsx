@@ -4,7 +4,7 @@
  */
 import { useState, useEffect } from "react";
 import { useVm } from "../bridge/useVm";
-import { answerGate, answerQuestion } from "../bridge/api";
+import { answerGate, answerQuestion, restartSession } from "../bridge/api";
 import { DiffView } from "../components/DiffView";
 import { Markdown } from "../components/Markdown";
 
@@ -17,6 +17,14 @@ function approveLabel(kind: string): string {
   if (kind === "edit") return "Approve change";
   if (kind === "question") return "Submit";
   return "Approve & run";
+}
+
+// The reject-with-reason button reads "Keep planning" for a plan gate (the
+// design's wording — rejecting a plan asks the agent to keep planning, not
+// to abandon the turn) and "Reject…" for everything else.
+function rejectLabel(kind: string): string {
+  if (kind === "plan") return "Keep planning";
+  return "Reject…";
 }
 
 function kindBadge(kind: string): string {
@@ -71,6 +79,38 @@ export function GateOverlay() {
       decision_id: selectedGate?.decision_id ?? selectedSession.id,
       allow: true,
     });
+    setBusy(false);
+    close();
+  }
+
+  // "Approve all this session" — a permission-gate-only affordance. This
+  // relays the human's answer for THIS gate exactly like Approve & run, then
+  // additionally switches the underlying agent's own permission posture to
+  // auto-approve for the rest of the session, so the AGENT stops asking —
+  // Marsad still never auto-answers a gate on the human's behalf; the human
+  // clicked once, explicitly, right here.
+  async function handleApproveAllSession() {
+    if (!selectedSession) return;
+    setBusy(true);
+    await answerGate({
+      session_id: selectedSession.id,
+      decision_id: selectedGate?.decision_id ?? selectedSession.id,
+      allow: true,
+    });
+    if (selectedSession.posture !== "full") {
+      try {
+        await restartSession({
+          id: selectedSession.id,
+          model: selectedSession.model,
+          posture: "auto",
+        });
+      } catch (err) {
+        // Best-effort: the gate itself was already answered above, so the
+        // human's immediate request went through even if the posture change
+        // didn't stick.
+        console.error("[GateOverlay] approve-all posture switch failed:", err);
+      }
+    }
     setBusy(false);
     close();
   }
@@ -801,8 +841,31 @@ export function GateOverlay() {
                       opacity: busy ? 0.6 : 1,
                     }}
                   >
-                    Reject…
+                    {rejectLabel(kind)}
                   </button>
+                  {/* Permission-only: approve this action AND stop asking for
+                      the rest of this session. */}
+                  {gate.is_permission && (
+                    <button
+                      data-testid="approve-all-btn"
+                      onClick={handleApproveAllSession}
+                      disabled={busy}
+                      style={{
+                        fontFamily: "inherit",
+                        fontWeight: 600,
+                        fontSize: "calc(15px * var(--fs,1))",
+                        padding: "9px 15px",
+                        borderRadius: 9,
+                        border: "1px solid var(--border2)",
+                        background: "var(--panel2)",
+                        color: "var(--txt2)",
+                        cursor: busy ? "not-allowed" : "pointer",
+                        opacity: busy ? 0.6 : 1,
+                      }}
+                    >
+                      Approve all this session
+                    </button>
+                  )}
                   <button
                     data-testid="approve-btn"
                     onClick={handleApprove}

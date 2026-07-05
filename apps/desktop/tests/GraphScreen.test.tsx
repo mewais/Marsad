@@ -14,7 +14,7 @@
  * code-agent lands `src/screens/graph/GraphScreen.tsx`.
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { GraphScreen } from "../src/screens/graph/GraphScreen";
 import { layoutByHost, NODE_W, LANE_W, LANE_GAP, ROW_H } from "../src/screens/graph/layout";
@@ -448,6 +448,245 @@ describe("GraphScreen — GS7 inspector Sessions list", () => {
 // ---------------------------------------------------------------------------
 // GS8 — pulsing state dot for working/needs nodes, not for done
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// GS9 — layout toggle (By host / Flow)
+// ---------------------------------------------------------------------------
+
+describe("GraphScreen — GS9 layout toggle", () => {
+  it("defaults to By-host mode and switches graph-canvas's mode to flow on click", () => {
+    const g = makeGraph();
+    renderGraph(g);
+    const canvas = screen.getByTestId("graph-canvas");
+    expect(canvas.getAttribute("data-layout-mode")).toBe("host");
+    fireEvent.click(screen.getByTestId("layout-toggle-flow"));
+    expect(canvas.getAttribute("data-layout-mode")).toBe("flow");
+  });
+
+  it("switches back to By-host mode from Flow", () => {
+    const g = makeGraph();
+    renderGraph(g);
+    fireEvent.click(screen.getByTestId("layout-toggle-flow"));
+    fireEvent.click(screen.getByTestId("layout-toggle-host"));
+    expect(screen.getByTestId("graph-canvas").getAttribute("data-layout-mode")).toBe("host");
+  });
+
+  it("shows a host chip on nodes only in Flow mode, not in By-host mode", () => {
+    const g = makeGraph();
+    renderGraph(g);
+    expect(screen.queryByTestId("node-host-chip-n1")).toBeNull();
+    fireEvent.click(screen.getByTestId("layout-toggle-flow"));
+    expect(screen.getByTestId("node-host-chip-n1")).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GS10 — zoom controls
+// ---------------------------------------------------------------------------
+
+describe("GraphScreen — GS10 zoom controls", () => {
+  it("zoom-in increases the displayed percentage, zoom-out decreases it, and the pct label resets to 100% on click", () => {
+    const g = makeGraph();
+    renderGraph(g);
+    const pct = screen.getByTestId("zoom-pct");
+    const before = pct.textContent;
+    fireEvent.click(screen.getByTestId("zoom-in"));
+    expect(pct.textContent).not.toBe(before);
+    const afterIn = parseInt(pct.textContent ?? "0", 10);
+    fireEvent.click(screen.getByTestId("zoom-out"));
+    fireEvent.click(screen.getByTestId("zoom-out"));
+    const afterOut = parseInt(pct.textContent ?? "0", 10);
+    expect(afterOut).toBeLessThan(afterIn);
+    fireEvent.click(pct);
+    expect(pct.textContent).toBe("100%");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GS11 — gate diamond placement matches the routed edge's gate midpoint
+// ---------------------------------------------------------------------------
+
+describe("GraphScreen — GS11 gate diamond placement", () => {
+  it("positions the 30x30 gate diamond centered on the routed edge's gate point", () => {
+    const g = makeGraph();
+    const layout = layoutByHost(g);
+    renderGraph(g);
+    const gateEdge = layout.edges.find((e) => e.id === "e2")!;
+    expect(gateEdge.gate).not.toBeNull();
+    const diamond = screen.getByTestId("gate-diamond-e2");
+    expect(diamond.style.left).toBe(`${gateEdge.gate!.x - 15}px`);
+    expect(diamond.style.top).toBe(`${gateEdge.gate!.y - 15}px`);
+    expect(diamond.style.width).toBe("30px");
+    expect(diamond.style.height).toBe("30px");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GS12 — design mode: connect handles, drag-to-connect, edge-kind picker
+// ---------------------------------------------------------------------------
+
+describe("GraphScreen — GS12 design mode", () => {
+  it("shows connect handles and an Add-agent button in design mode instead of the node-open chevron / Update-workflow button", () => {
+    const g = makeGraph();
+    render(
+      <ThemeProvider initialTheme="dark">
+        <GraphScreen
+          graph={g}
+          selectedNode={null}
+          onSelectNode={vi.fn()}
+          onOpenNode={vi.fn()}
+          onOpenGate={vi.fn()}
+          designMode
+        />
+      </ThemeProvider>
+    );
+    expect(screen.getByTestId("connect-handle-n1")).toBeTruthy();
+    expect(screen.getByTestId("add-agent-btn")).toBeTruthy();
+    expect(screen.queryByTestId("enter-design-btn")).toBeNull();
+    expect(screen.queryByTestId("node-open-n1")).toBeNull();
+  });
+
+  it("shows the Update-workflow button (not Add-agent) when designMode is false/omitted", () => {
+    const g = makeGraph();
+    renderGraph(g);
+    expect(screen.getByTestId("enter-design-btn")).toBeTruthy();
+    expect(screen.queryByTestId("add-agent-btn")).toBeNull();
+  });
+
+  it("clicking Add-agent calls onAddAgent", () => {
+    const g = makeGraph();
+    const onAddAgent = vi.fn();
+    render(
+      <ThemeProvider initialTheme="dark">
+        <GraphScreen
+          graph={g}
+          selectedNode={null}
+          onSelectNode={vi.fn()}
+          onOpenNode={vi.fn()}
+          onOpenGate={vi.fn()}
+          designMode
+          onAddAgent={onAddAgent}
+        />
+      </ThemeProvider>
+    );
+    fireEvent.click(screen.getByTestId("add-agent-btn"));
+    expect(onAddAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("clicking Update-workflow calls onEnterDesign; Confirm/Discard call their handlers in the design inspector panel", () => {
+    const g = makeGraph();
+    const onEnterDesign = vi.fn();
+    const onConfirmDraft = vi.fn();
+    const onDiscardDraft = vi.fn();
+    const { rerender } = render(
+      <ThemeProvider initialTheme="dark">
+        <GraphScreen
+          graph={g}
+          selectedNode={null}
+          onSelectNode={vi.fn()}
+          onOpenNode={vi.fn()}
+          onOpenGate={vi.fn()}
+          onEnterDesign={onEnterDesign}
+        />
+      </ThemeProvider>
+    );
+    fireEvent.click(screen.getByTestId("enter-design-btn"));
+    expect(onEnterDesign).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ThemeProvider initialTheme="dark">
+        <GraphScreen
+          graph={g}
+          selectedNode={null}
+          onSelectNode={vi.fn()}
+          onOpenNode={vi.fn()}
+          onOpenGate={vi.fn()}
+          designMode
+          onConfirmDraft={onConfirmDraft}
+          onDiscardDraft={onDiscardDraft}
+        />
+      </ThemeProvider>
+    );
+    // Design mode inspector: no stats, an Agents(N) list instead.
+    expect(screen.queryByTestId("inspector-working")).toBeNull();
+    expect(screen.getByText(`Agents (${g.nodes.length})`)).toBeTruthy();
+    fireEvent.click(screen.getByTestId("confirm-draft-btn"));
+    expect(onConfirmDraft).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId("discard-draft-btn"));
+    expect(onDiscardDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("drag-connecting from one node's handle to another opens the edge-kind picker, and picking a kind calls onConnect(from, to, kind, false)", () => {
+    const g = makeGraph();
+    const onConnect = vi.fn();
+    render(
+      <ThemeProvider initialTheme="dark">
+        <GraphScreen
+          graph={g}
+          selectedNode={null}
+          onSelectNode={vi.fn()}
+          onOpenNode={vi.fn()}
+          onOpenGate={vi.fn()}
+          designMode
+          onConnect={onConnect}
+        />
+      </ThemeProvider>
+    );
+
+    const canvas = screen.getByTestId("graph-canvas");
+    canvas.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 2000, bottom: 2000, width: 2000, height: 2000, x: 0, y: 0, toJSON() {} } as DOMRect);
+
+    const handle = screen.getByTestId("connect-handle-n1");
+    const targetNode = screen.getByTestId("graph-node-n3");
+    const spy = vi.spyOn(document, "elementFromPoint").mockReturnValue(targetNode);
+
+    fireEvent.mouseDown(handle, { clientX: 10, clientY: 10 });
+    act(() => {
+      window.dispatchEvent(new MouseEvent("mousemove", { clientX: 60, clientY: 90, bubbles: true }));
+    });
+    act(() => {
+      window.dispatchEvent(new MouseEvent("mouseup", { clientX: 60, clientY: 90, bubbles: true }));
+    });
+
+    expect(screen.getByTestId("edge-kind-picker")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("edge-kind-command"));
+    expect(onConnect).toHaveBeenCalledWith("n1", "n3", "command", false);
+    expect(screen.queryByTestId("edge-kind-picker")).toBeNull();
+
+    spy.mockRestore();
+  });
+
+  it("dropping a drag-connect on the SAME node it started from does not open the edge-kind picker", () => {
+    const g = makeGraph();
+    render(
+      <ThemeProvider initialTheme="dark">
+        <GraphScreen
+          graph={g}
+          selectedNode={null}
+          onSelectNode={vi.fn()}
+          onOpenNode={vi.fn()}
+          onOpenGate={vi.fn()}
+          designMode
+        />
+      </ThemeProvider>
+    );
+    const canvas = screen.getByTestId("graph-canvas");
+    canvas.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 2000, bottom: 2000, width: 2000, height: 2000, x: 0, y: 0, toJSON() {} } as DOMRect);
+    const handle = screen.getByTestId("connect-handle-n1");
+    const sameNode = screen.getByTestId("graph-node-n1");
+    const spy = vi.spyOn(document, "elementFromPoint").mockReturnValue(sameNode);
+
+    fireEvent.mouseDown(handle, { clientX: 10, clientY: 10 });
+    act(() => {
+      window.dispatchEvent(new MouseEvent("mouseup", { clientX: 12, clientY: 12, bubbles: true }));
+    });
+
+    expect(screen.queryByTestId("edge-kind-picker")).toBeNull();
+    spy.mockRestore();
+  });
+});
 
 describe("GraphScreen — GS8 pulsing node state dot", () => {
   it("a Working-state node's state dot has data-pulse=\"true\"", () => {

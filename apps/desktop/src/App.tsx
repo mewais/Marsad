@@ -10,6 +10,8 @@ import { AppShell } from "./components/AppShell";
 import { SessionDetail } from "./screens/SessionDetail";
 import { GateOverlay } from "./screens/GateOverlay";
 import { NewSession } from "./screens/NewSession";
+import { NewWorkstreamModal } from "./screens/NewWorkstreamModal";
+import { NodeModal } from "./screens/NodeModal";
 import { Settings } from "./screens/Settings";
 import { BoardScreen } from "./screens/BoardScreen";
 import { GraphScreenConnected } from "./screens/graph/GraphScreenConnected";
@@ -34,6 +36,10 @@ function Router() {
         return <GateOverlay />;
       case "new-session":
         return <NewSession />;
+      case "new-workstream":
+        return <NewWorkstreamModal />;
+      case "node-modal":
+        return <NodeModal />;
       case "settings":
         return <Settings />;
       case "graph":

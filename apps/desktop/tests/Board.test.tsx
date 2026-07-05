@@ -476,3 +476,212 @@ describe("Board — UB9 pulsing state dot", () => {
     expect(dot!.getAttribute("data-pulse")).toBe("true");
   });
 });
+
+// ---------------------------------------------------------------------------
+// UB10 — centering (design §Level 1 Board layout: max content width 1200px,
+// centered, padding 22px 26px 40px)
+// ---------------------------------------------------------------------------
+
+describe("Board — UB10 centering", () => {
+  it("the board root is centered at max-width 1200px with the exact screen padding", () => {
+    renderBoard();
+    const root = screen.getByTestId("board-root");
+    expect(root.style.maxWidth).toBe("1200px");
+    expect(root.style.margin).toBe("0px auto");
+    expect(root.style.padding).toBe("22px 26px 40px");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// UB11 — link-issue chips resolve host labels (not raw ids) and surface the
+// note verbatim (design §Host health strip: "hostA ⇄ hostB link degraded" +
+// a muted note, e.g. "packet loss · 38%").
+// ---------------------------------------------------------------------------
+
+describe("Board — UB11 link-issue chip content", () => {
+  it("resolves host_chips labels for a and b instead of the raw host ids", () => {
+    const board = makeBoard({
+      host_chips: [
+        makeHostChip({ id: "h-a", label: "hetzner", status: "connected" }),
+        makeHostChip({ id: "h-b", label: "gpu-box", status: "reconnecting" }),
+      ],
+      link_chips: [{ a: "h-a", b: "h-b", status: "degraded", note: "packet loss · 38%" }],
+    });
+    renderBoard(board);
+    const chip = screen.getByTestId("link-chip-h-a-h-b");
+    expect(chip.textContent).toContain("hetzner");
+    expect(chip.textContent).toContain("gpu-box");
+    expect(chip.textContent).toContain("link degraded");
+    expect(chip.textContent).toContain("packet loss · 38%");
+    // The raw ids themselves must not leak into the rendered text.
+    expect(chip.textContent).not.toContain("h-a ⇄");
+  });
+
+  it("MOCK_BOARD's link chip carries its note text", () => {
+    renderBoard();
+    const link = MOCK_BOARD.link_chips[0];
+    const chip = screen.getByTestId(`link-chip-${link.a}-${link.b}`);
+    expect(chip.textContent).toContain(link.note ?? "");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// UB12 — head-state priority (needs > error > working > done) is trusted
+// and faithfully rendered by the head-state pill, regardless of which
+// bucket in `counts` has the largest count.
+// ---------------------------------------------------------------------------
+
+describe("Board — UB12 head-state priority reflection", () => {
+  it.each([
+    { head_state: "needs" as const, counts: { working: 5, needs: 1, error: 2, done: 3 } },
+    { head_state: "error" as const, counts: { working: 5, needs: 0, error: 1, done: 3 } },
+    { head_state: "working" as const, counts: { working: 1, needs: 0, error: 0, done: 5 } },
+    { head_state: "done" as const, counts: { working: 0, needs: 0, error: 0, done: 5 } },
+  ])(
+    "a row surfaces head_state=$head_state as its pill even when other buckets outnumber it",
+    ({ head_state, counts }) => {
+      const board = makeBoard({
+        all: [makeCard({ id: "w-priority", head_state, counts })],
+      });
+      renderBoard(board);
+      const row = screen.getByTestId("workstream-row-w-priority");
+      const pill = row.querySelector(`[data-head-state="${head_state}"]`);
+      expect(pill).toBeTruthy();
+      expect(pill!.textContent?.toLowerCase()).toContain(head_state);
+    },
+  );
+
+  it("an attention card with both needs and error sessions present shows needs (highest priority)", () => {
+    const board = makeBoard({
+      attention: [
+        makeCard({
+          id: "w-needs-over-error",
+          head_state: "needs",
+          counts: { working: 0, needs: 1, error: 1, done: 0 },
+          needs_attention: true,
+        }),
+      ],
+    });
+    renderBoard(board);
+    const card = screen.getByTestId("attention-card-w-needs-over-error");
+    expect(card.querySelector('[data-head-state="needs"]')).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// UB13 — attention card headline + contextual CTA (design §Attention card:
+// headline info box + a CTA labelled "Review handoff" / "Review" / "Open").
+// ---------------------------------------------------------------------------
+
+describe("Board — UB13 attention card headline + CTA", () => {
+  it("renders the card's headline verbatim when supplied", () => {
+    const board = makeBoard({
+      attention: [
+        makeCard({
+          id: "w-headline",
+          head_state: "needs",
+          headline: "api-auth-refactor wants to run: npx prisma migrate deploy",
+          needs_attention: true,
+        }),
+      ],
+    });
+    renderBoard(board);
+    const headline = screen.getByTestId("attention-headline-w-headline");
+    expect(headline.textContent).toBe("api-auth-refactor wants to run: npx prisma migrate deploy");
+  });
+
+  it("falls back to the workstream goal when headline is absent", () => {
+    const board = makeBoard({
+      attention: [
+        makeCard({ id: "w-no-headline", head_state: "needs", goal: "test goal", needs_attention: true }),
+      ],
+    });
+    renderBoard(board);
+    const headline = screen.getByTestId("attention-headline-w-no-headline");
+    expect(headline.textContent).toBe("test goal");
+  });
+
+  it("uses the supplied cta_label verbatim ('Review handoff')", () => {
+    const board = makeBoard({
+      attention: [
+        makeCard({
+          id: "w-cta",
+          head_state: "error",
+          cta_label: "Review handoff",
+          needs_attention: true,
+        }),
+      ],
+    });
+    renderBoard(board);
+    expect(screen.getByTestId("attention-cta-w-cta").textContent).toBe("Review handoff");
+  });
+
+  it("falls back to a head-state-derived CTA ('Review' for needs, 'Open' otherwise) when absent", () => {
+    const board = makeBoard({
+      attention: [
+        makeCard({ id: "w-cta-needs", head_state: "needs", needs_attention: true }),
+        makeCard({ id: "w-cta-error", head_state: "error", needs_attention: true }),
+      ],
+    });
+    renderBoard(board);
+    expect(screen.getByTestId("attention-cta-w-cta-needs").textContent).toBe("Review");
+    expect(screen.getByTestId("attention-cta-w-cta-error").textContent).toBe("Open");
+  });
+
+  it("MOCK_BOARD's attention cards carry a headline and cta_label", () => {
+    renderBoard();
+    for (const card of MOCK_BOARD.attention) {
+      expect(card.headline).toBeTruthy();
+      expect(card.cta_label).toBeTruthy();
+      expect(screen.getByTestId(`attention-headline-${card.id}`).textContent).toBe(card.headline);
+      expect(screen.getByTestId(`attention-cta-${card.id}`).textContent).toBe(card.cta_label);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// UB14 — attention card session dots: one dot per session (from `counts`),
+// working ones pulsing.
+// ---------------------------------------------------------------------------
+
+describe("Board — UB14 attention card session dots", () => {
+  it("renders one session-dot per session in `counts`, total matching session_count", () => {
+    const board = makeBoard({
+      attention: [
+        makeCard({
+          id: "w-dots",
+          head_state: "needs",
+          session_count: 4,
+          counts: { working: 2, needs: 1, error: 0, done: 1 },
+          needs_attention: true,
+        }),
+      ],
+    });
+    renderBoard(board);
+    const card = screen.getByTestId("attention-card-w-dots");
+    const dots = card.querySelectorAll('[data-testid="session-dot"]');
+    expect(dots.length).toBe(4);
+  });
+
+  it("marks working session-dots as pulsing and non-working ones as not", () => {
+    const board = makeBoard({
+      attention: [
+        makeCard({
+          id: "w-dots-pulse",
+          head_state: "needs",
+          session_count: 2,
+          counts: { working: 1, needs: 0, error: 0, done: 1 },
+          needs_attention: true,
+        }),
+      ],
+    });
+    renderBoard(board);
+    const card = screen.getByTestId("attention-card-w-dots-pulse");
+    const workingDot = card.querySelector('[data-session-state="working"]');
+    const doneDot = card.querySelector('[data-session-state="done"]');
+    expect(workingDot).toBeTruthy();
+    expect(doneDot).toBeTruthy();
+    expect((workingDot as HTMLElement).style.animation).toContain("dotpulse");
+    expect((doneDot as HTMLElement).style.animation).toBe("");
+  });
+});

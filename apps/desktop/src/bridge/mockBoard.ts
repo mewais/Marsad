@@ -35,6 +35,8 @@ export const MOCK_BOARD: BoardView = {
       counts: { working: 0, needs: 1, error: 0, done: 0 },
       needs_attention: true,
       is_single_node: true,
+      headline: "Refactor auth middleware wants to run: npx prisma migrate deploy",
+      cta_label: "Review",
     },
     {
       id: "ws-build-pipeline",
@@ -47,6 +49,8 @@ export const MOCK_BOARD: BoardView = {
       counts: { working: 0, needs: 0, error: 1, done: 1 },
       needs_attention: true,
       is_single_node: false,
+      headline: "Cross-host handoff waiting — build artifact → test host.",
+      cta_label: "Review handoff",
     },
   ],
 

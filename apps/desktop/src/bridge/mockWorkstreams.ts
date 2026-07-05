@@ -36,6 +36,22 @@ interface MockNode {
   depth: number;
 }
 
+/** A host known to the system, independent of whether a node is on it right now. */
+interface MockHostStatus {
+  id: string;
+  label: string;
+  kind: string; // "local" | "wsl" | "remote"
+  status: string; // "connected" | "reconnecting" | "unreachable"
+}
+
+/** A host<->host connectivity link (Level-1 host-health strip). */
+interface MockHostLink {
+  a: string;
+  b: string;
+  status: string; // "ok" | "degraded" | "down"
+  note?: string;
+}
+
 export interface MockState {
   workstreams: Workstream[];
   profiles: Profile[];
@@ -43,6 +59,10 @@ export interface MockState {
   nodes: MockNode[]; // per-session graph nodes (seed a few)
   membership: Record<string, string>; // session_id -> ws_id
   activeProfile: string | null;
+  // Level-1 board host-health strip — hosts known to the system (a superset
+  // of the hosts any node currently runs on) + their pairwise link health.
+  hostStatuses: MockHostStatus[];
+  hostLinks: MockHostLink[];
 }
 
 // ---------------------------------------------------------------------------
@@ -84,7 +104,7 @@ function seedState(): MockState {
         driver: "claude",
         host: "localhost",
         state: "Needs",
-        status: "needs",
+        status: "npx prisma migrate deploy",
         context_pct: 42,
         is_lead: true,
         depth: 0,
@@ -118,6 +138,24 @@ function seedState(): MockState {
       "s06": "ws-build-pipeline",
     },
     activeProfile: null,
+    // Host-health strip seed: localhost + build-host are actually running
+    // nodes above; wsl-dev is a connected-but-idle host known to the system
+    // (reconnecting right now) so the strip shows real status variety. The
+    // localhost<->build-host link is degraded so the board's link-issue chip
+    // has something real to render (design §Level 1 Host health strip).
+    hostStatuses: [
+      { id: "localhost", label: "localhost", kind: "local", status: "connected" },
+      { id: "wsl-dev", label: "wsl-dev", kind: "wsl", status: "reconnecting" },
+      { id: "build-host", label: "build-host", kind: "remote", status: "connected" },
+    ],
+    hostLinks: [
+      {
+        a: "localhost",
+        b: "build-host",
+        status: "degraded",
+        note: "packet loss · 41%",
+      },
+    ],
   };
 }
 
@@ -206,11 +244,50 @@ function wsHasGatedConnection(wsId: string): boolean {
   return connectionsForWs(wsId).some((c) => c.has_gate);
 }
 
+/**
+ * Attention-card "headline" (the specific blocker) + contextual CTA label —
+ * mirrors the design reference's own derivation (docs/design/"Marsad
+ * Workstreams.dc.html" ~line 972-974): a pending cross-host handoff gate
+ * always wins ("Review handoff"); otherwise a `needs`-state session's
+ * pending command surfaces as "<who> wants to run: <command>" ("Review");
+ * anything else falls back to the erroring session's status, or nothing.
+ */
+function headlineAndCta(
+  ws: Workstream,
+  nodes: MockNode[],
+  headState: HeadState | null,
+  gated: boolean,
+): { headline?: string; cta_label?: string } {
+  if (gated) {
+    return {
+      headline: "Cross-host handoff waiting — build artifact → test host.",
+      cta_label: "Review handoff",
+    };
+  }
+  if (headState === "needs") {
+    const needsNode = nodes.find((n) => n.state === "Needs");
+    if (!needsNode) return { headline: "A session is waiting on your decision.", cta_label: "Review" };
+    const who = nodes.length <= 1 ? ws.name : needsNode.name;
+    return { headline: `${who} wants to run: ${needsNode.status}`, cta_label: "Review" };
+  }
+  if (headState === "error") {
+    const errNode = nodes.find((n) => n.state === "Error");
+    return {
+      headline: errNode ? `${errNode.name}: ${errNode.status}` : "A session errored.",
+      cta_label: "Open",
+    };
+  }
+  return { cta_label: "Open" };
+}
+
 function wsToCard(ws: Workstream): WorkstreamCard {
   const nodes = nodesForWs(ws.id);
   const headState = headStateForWs(ws.id);
   const gated = wsHasGatedConnection(ws.id);
   const needsAttention = headState === "needs" || headState === "error" || gated;
+  const { headline, cta_label } = needsAttention
+    ? headlineAndCta(ws, nodes, headState, gated)
+    : {};
   return {
     id: ws.id,
     name: ws.name,
@@ -222,6 +299,8 @@ function wsToCard(ws: Workstream): WorkstreamCard {
     counts: countsForWs(ws.id),
     needs_attention: needsAttention,
     is_single_node: nodes.length <= 1,
+    headline,
+    cta_label,
   };
 }
 
@@ -344,20 +423,40 @@ export const mockWorkstreams = {
     );
     const cards = filtered.map(wsToCard);
     const attention = cards.filter((c) => c.needs_attention);
-    const hostsSet = new Set(state.nodes.map((n) => n.host));
-    return {
-      summary: {
-        workstreams: cards.length,
-        sessions: Object.keys(state.membership).length,
-        hosts: hostsSet.size,
-      },
-      host_chips: Array.from(hostsSet).map((h) => ({
+
+    // Host-health strip: union of known host-statuses (seeded system hosts)
+    // and any host a node is actually running on that isn't already listed
+    // (e.g. a session assigned ad hoc to a host not in hostStatuses).
+    const knownIds = new Set(state.hostStatuses.map((h) => h.id));
+    const extraNodeHosts = Array.from(new Set(state.nodes.map((n) => n.host))).filter(
+      (h) => !knownIds.has(h),
+    );
+    const hostChips = [
+      ...state.hostStatuses.map((h) => ({
+        id: h.id,
+        label: h.label,
+        kind: h.kind,
+        status: h.status,
+      })),
+      ...extraNodeHosts.map((h) => ({
         id: h,
         label: h,
         kind: h === "localhost" ? "local" : "remote",
         status: "connected",
       })),
-      link_chips: [],
+    ];
+    const linkChips = state.hostLinks
+      .filter((l) => l.status !== "ok")
+      .map((l) => ({ a: l.a, b: l.b, status: l.status, note: l.note ?? null }));
+
+    return {
+      summary: {
+        workstreams: cards.length,
+        sessions: Object.keys(state.membership).length,
+        hosts: hostChips.length,
+      },
+      host_chips: hostChips,
+      link_chips: linkChips,
       attention,
       all: cards,
     };

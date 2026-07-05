@@ -4,6 +4,7 @@
  * Pure/presentational: takes `board: BoardView` and `onOpenWorkstream` as
  * props. No `useVm`, no Tauri, no network — see docs/specs/ui-board.md.
  */
+import type { CSSProperties } from "react";
 import type {
   BoardView,
   Driver,
@@ -48,6 +49,19 @@ const hostStatusColor: Record<string, string> = {
 
 function pulsesFor(state: HeadState | null): boolean {
   return state === "working" || state === "needs";
+}
+
+/** Host-kind glyph (design §Iconography): local `▪`, WSL `⊞`, remote `⤓`. */
+function hostIcon(kind: string): string {
+  if (kind === "wsl") return "⊞";
+  if (kind === "remote") return "⤓";
+  return "▪";
+}
+
+/** Default contextual CTA label when the data source doesn't supply one. */
+function defaultCta(state: HeadState | null): string {
+  if (state === "needs") return "Review";
+  return "Open";
 }
 
 /** Non-zero status buckets from `counts`, in a fixed priority order. */
@@ -115,29 +129,46 @@ function DriverDots({ drivers }: { drivers: Driver[] }) {
 // Host chip cluster (mono "▪ label" pills)
 // ---------------------------------------------------------------------------
 
-function HostChipPills({ hostIds, hostChips }: { hostIds: string[]; hostChips: HostChip[] }) {
+function HostChipPills({
+  hostIds,
+  hostChips,
+  variant = "pill",
+}: {
+  hostIds: string[];
+  hostChips: HostChip[];
+  /** "pill" — panel2 background pill (workstream rows). "plain" — bare mono
+   * text, no background (attention-card header). */
+  variant?: "pill" | "plain";
+}) {
   return (
     <>
       {hostIds.map((id) => {
         const host = hostChips.find((h) => h.id === id);
         const label = host?.label ?? id;
+        const icon = hostIcon(host?.kind ?? "local");
+        const pillStyle: CSSProperties =
+          variant === "pill"
+            ? {
+                color: "var(--txt2)",
+                background: "var(--panel2)",
+                border: "1px solid var(--border)",
+                borderRadius: 5,
+                padding: "2px 7px",
+              }
+            : { color: "var(--txt3)" };
         return (
           <span
             key={id}
             className="mono"
             style={{
-              fontSize: "calc(11.5px * var(--fs,1))",
-              color: "var(--txt2)",
-              background: "var(--panel2)",
-              border: "1px solid var(--border)",
-              borderRadius: 6,
-              padding: "2px 7px",
+              fontSize: "calc(9.5px * var(--fs,1))",
               whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis",
+              ...pillStyle,
             }}
           >
-            ▪ {label}
+            {icon} {label}
           </span>
         );
       })}
@@ -163,16 +194,17 @@ function HostStrip({ board }: { board: BoardView }) {
         flexWrap: "wrap",
         alignItems: "center",
         gap: 9,
-        margin: "14px 0 20px",
+        margin: "0 0 22px",
       }}
     >
       <span
         style={{
-          fontSize: "calc(11.5px * var(--fs,1))",
+          fontSize: "calc(10px * var(--fs,1))",
           fontWeight: 700,
-          letterSpacing: 0.4,
+          letterSpacing: 0.6,
           textTransform: "uppercase",
           color: "var(--txt3)",
+          marginRight: 2,
         }}
       >
         Hosts
@@ -185,17 +217,14 @@ function HostStrip({ board }: { board: BoardView }) {
             key={host.id}
             data-testid={`host-chip-${host.id}`}
             data-status={host.status}
-            className="mono"
             style={{
               display: "inline-flex",
               alignItems: "center",
-              gap: 6,
+              gap: 7,
               padding: "5px 11px",
               borderRadius: 8,
               background: "var(--panel)",
               border: `1px solid ${host.status === "connected" ? "var(--border)" : color}`,
-              fontSize: "calc(12.5px * var(--fs,1))",
-              color: "var(--txt2)",
             }}
           >
             <span
@@ -207,42 +236,49 @@ function HostStrip({ board }: { board: BoardView }) {
                 background: color,
                 display: "inline-block",
                 flexShrink: 0,
-                animation: pulse ? "dotpulse 1s infinite" : undefined,
+                animation: pulse ? `dotpulse ${pulse && host.status === "reconnecting" ? "1s" : "0.8s"} infinite` : undefined,
               }}
             />
-            {host.label}
-            <span style={{ color: "var(--txt3)" }}>{hostStatusLabel(host.status)}</span>
+            <span className="mono" style={{ fontSize: "calc(11px * var(--fs,1))", color: "var(--txt2)" }}>
+              {hostIcon(host.kind)} {host.label}
+            </span>
+            <span style={{ fontSize: "calc(10px * var(--fs,1))", fontWeight: 600, color }}>
+              {hostStatusLabel(host.status)}
+            </span>
           </span>
         );
       })}
       {board.link_chips.map((link) => (
-        <LinkChipPill key={`${link.a}-${link.b}`} link={link} />
+        <LinkChipPill key={`${link.a}-${link.b}`} link={link} hostChips={board.host_chips} />
       ))}
     </div>
   );
 }
 
-function LinkChipPill({ link }: { link: LinkChip }) {
+function LinkChipPill({ link, hostChips }: { link: LinkChip; hostChips: HostChip[] }) {
+  const labelA = hostChips.find((h) => h.id === link.a)?.label ?? link.a;
+  const labelB = hostChips.find((h) => h.id === link.b)?.label ?? link.b;
   return (
     <span
       data-testid={`link-chip-${link.a}-${link.b}`}
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 6,
+        gap: 7,
         padding: "5px 11px",
         borderRadius: 8,
         background: "var(--needs-bg)",
         border: "1px solid var(--needs)",
-        fontSize: "calc(12.5px * var(--fs,1))",
         color: "var(--needs)",
       }}
     >
-      <span>⚠</span>
-      <span className="mono">
-        {link.a} ⇄ {link.b} link {link.status}
+      <span style={{ fontSize: "calc(11px * var(--fs,1))" }}>⚠</span>
+      <span className="mono" style={{ fontSize: "calc(11px * var(--fs,1))" }}>
+        {labelA} ⇄ {labelB} link {link.status}
       </span>
-      {link.note && <span style={{ color: "var(--txt3)" }}>({link.note})</span>}
+      {link.note && (
+        <span style={{ fontSize: "calc(10px * var(--fs,1))", color: "var(--txt2)" }}>{link.note}</span>
+      )}
     </span>
   );
 }
@@ -263,6 +299,8 @@ function AttentionCard({
   const state = card.head_state;
   const color = state ? headStateColor[state] : "var(--border)";
   const bg = state ? headStateBg[state] : "transparent";
+  const headline = card.headline ?? card.goal;
+  const cta = card.cta_label ?? defaultCta(state);
 
   return (
     <div
@@ -273,7 +311,7 @@ function AttentionCard({
         padding: 16,
         background: "var(--panel)",
         border: `1px solid ${color}`,
-        boxShadow: state === "needs" || state === "error" ? `0 0 22px ${bg}` : undefined,
+        boxShadow: `0 0 22px ${bg}`,
         position: "relative",
         overflow: "hidden",
         cursor: "pointer",
@@ -289,14 +327,14 @@ function AttentionCard({
           background: color,
         }}
       />
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
         <span
           data-head-state={state ?? undefined}
           style={{
             display: "inline-flex",
             alignItems: "center",
             gap: 6,
-            fontSize: "calc(11.5px * var(--fs,1))",
+            fontSize: "calc(9px * var(--fs,1))",
             fontWeight: 700,
             letterSpacing: 0.4,
             padding: "2px 7px",
@@ -310,7 +348,9 @@ function AttentionCard({
           {state ?? "unknown"}
         </span>
         <div style={{ flex: 1 }} />
-        <HostChipPills hostIds={card.host_chips} hostChips={hostChips} />
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <HostChipPills hostIds={card.host_chips} hostChips={hostChips} variant="plain" />
+        </div>
       </div>
       <div
         style={{
@@ -330,10 +370,79 @@ function AttentionCard({
       >
         {card.goal}
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 12 }}>
-        <DriverDots drivers={Array.from(new Set(card.driver_dots))} />
+      <div
+        data-testid={`attention-headline-${card.id}`}
+        style={{
+          margin: "12px 0",
+          padding: "10px 12px",
+          borderRadius: 9,
+          background: "var(--panel2)",
+          border: "1px solid var(--border)",
+          fontSize: "calc(12px * var(--fs,1))",
+          color: "var(--txt)",
+        }}
+      >
+        {headline}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+        <button
+          data-testid={`attention-cta-${card.id}`}
+          style={{
+            flex: 1,
+            fontFamily: "inherit",
+            fontWeight: 700,
+            fontSize: "calc(12.5px * var(--fs,1))",
+            padding: 9,
+            borderRadius: 9,
+            border: "none",
+            background: color,
+            color: "#0e1116",
+            cursor: "pointer",
+          }}
+        >
+          {cta}
+        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          <SessionDots counts={card.counts} />
+        </div>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Session status dots (attention card footer) — one 9px dot per session,
+// tinted by that session's state, working ones pulsing (design §Attention
+// card footer). Derived from `counts` (board-level data has no per-session
+// list) in a fixed priority order: working, needs, error, done.
+// ---------------------------------------------------------------------------
+
+function SessionDots({ counts }: { counts: StateCounts }) {
+  const order: (keyof StateCounts)[] = ["working", "needs", "error", "done"];
+  const dots: { key: keyof StateCounts; i: number }[] = [];
+  for (const key of order) {
+    for (let i = 0; i < counts[key]; i++) dots.push({ key, i });
+  }
+  return (
+    <>
+      {dots.map((d) => (
+        <span
+          key={`${d.key}-${d.i}`}
+          data-testid="session-dot"
+          data-session-state={d.key}
+          title={d.key}
+          style={{
+            width: 9,
+            height: 9,
+            borderRadius: "50%",
+            background: headStateColor[d.key as HeadState],
+            display: "inline-block",
+            flexShrink: 0,
+            animation: d.key === "working" ? "dotpulse 1.3s infinite" : undefined,
+          }}
+        />
+      ))}
+    </>
   );
 }
 
@@ -397,29 +506,29 @@ function WorkstreamRow({
         </div>
       </div>
 
-      <div style={{ width: 150, display: "flex", flexWrap: "wrap", gap: 4 }}>
-        <HostChipPills hostIds={card.host_chips} hostChips={hostChips} />
+      <div style={{ width: 150, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+        <HostChipPills hostIds={card.host_chips} hostChips={hostChips} variant="pill" />
       </div>
 
-      <div style={{ width: 88, display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+      <div style={{ width: 88, display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
         <DriverDots drivers={Array.from(new Set(card.driver_dots))} />
         <span
           className="mono"
-          style={{ fontSize: "calc(11.5px * var(--fs,1))", color: "var(--txt3)", marginLeft: 4 }}
+          style={{ fontSize: "calc(10.5px * var(--fs,1))", color: "var(--txt3)", marginLeft: 4 }}
         >
           {card.session_count} sessions
         </span>
       </div>
 
-      <div style={{ flex: 1, display: "flex", flexWrap: "wrap", gap: 6 }}>
+      <div style={{ flex: 1, display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
         {buckets.map((b) => (
           <span
             key={b.key}
             style={{
-              fontSize: "calc(11.5px * var(--fs,1))",
-              fontWeight: 700,
-              padding: "2px 7px",
-              borderRadius: 5,
+              fontSize: "calc(10px * var(--fs,1))",
+              fontWeight: 600,
+              padding: "2px 8px",
+              borderRadius: 6,
               color: headStateColor[b.key as HeadState] ?? "var(--txt2)",
               background: headStateBg[b.key as HeadState] ?? "var(--panel2)",
             }}
@@ -432,11 +541,11 @@ function WorkstreamRow({
       <span
         data-head-state={state ?? undefined}
         style={{
-          fontSize: "calc(11px * var(--fs,1))",
+          fontSize: "calc(9px * var(--fs,1))",
           fontWeight: 700,
-          letterSpacing: 0.4,
-          padding: "2px 7px",
-          borderRadius: 5,
+          letterSpacing: 0.3,
+          padding: "3px 9px",
+          borderRadius: 6,
           color,
           background: bg,
           textTransform: "uppercase",
@@ -445,7 +554,7 @@ function WorkstreamRow({
       >
         {state ?? "—"}
       </span>
-      <span style={{ color: "var(--txt3)" }}>›</span>
+      <span style={{ color: "var(--txt3)", fontSize: "calc(15px * var(--fs,1))", flexShrink: 0 }}>›</span>
     </div>
   );
 }
@@ -464,6 +573,7 @@ export function Board({ board, onOpenWorkstream }: BoardProps) {
 
   return (
     <div
+      data-testid="board-root"
       style={{
         padding: "22px 26px 40px",
         maxWidth: 1200,
@@ -472,7 +582,7 @@ export function Board({ board, onOpenWorkstream }: BoardProps) {
       }}
     >
       {/* Title row */}
-      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 4 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 3 }}>
         <h1
           data-testid="board-title"
           style={{
@@ -492,7 +602,7 @@ export function Board({ board, onOpenWorkstream }: BoardProps) {
         </span>
       </div>
 
-      <p style={{ fontSize: "calc(12.5px * var(--fs,1))", color: "var(--txt3)", margin: "4px 0 0" }}>
+      <p style={{ fontSize: "calc(12.5px * var(--fs,1))", color: "var(--txt3)", margin: "0 0 14px" }}>
         A workstream is one or more sessions across one or more hosts. Open one to inspect its
         graph, or jump straight into a session.
       </p>
@@ -517,7 +627,7 @@ export function Board({ board, onOpenWorkstream }: BoardProps) {
             />
             <h2
               style={{
-                fontSize: "calc(15.5px * var(--fs,1))",
+                fontSize: "calc(13px * var(--fs,1))",
                 fontWeight: 700,
                 letterSpacing: 0.4,
                 textTransform: "uppercase",
@@ -552,7 +662,7 @@ export function Board({ board, onOpenWorkstream }: BoardProps) {
       {/* All workstreams */}
       <h2
         style={{
-          fontSize: "calc(15.5px * var(--fs,1))",
+          fontSize: "calc(13px * var(--fs,1))",
           fontWeight: 700,
           letterSpacing: 0.4,
           textTransform: "uppercase",

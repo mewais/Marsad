@@ -1317,9 +1317,12 @@ function SessionDefaultsTab({ model, onModelChange, posture, onPostureChange, mo
 // General tab
 // ---------------------------------------------------------------------------
 
-type Background = "Gradient" | "Custom image" | "Desktop";
+// "Custom image" removed from the background picker (SLICE E modals & overlays
+// pass) — only Gradient / Desktop-default remain, per DESIGN_HANDOFF.md
+// §Modals & overlays' Settings → General spec.
+type Background = "Gradient" | "Desktop";
 
-const BG_OPTIONS: Background[] = ["Gradient", "Custom image", "Desktop"];
+const BG_OPTIONS: Background[] = ["Gradient", "Desktop"];
 
 interface GeneralTabProps {
   background: string;
@@ -1455,50 +1458,6 @@ function GeneralTab({
             );
           })}
         </div>
-        {background === "Custom image" && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              padding: "12px 14px",
-              borderRadius: 11,
-              border: "1px dashed var(--border2)",
-              background: "var(--panel2)",
-            }}
-          >
-            <div
-              style={{
-                width: 48,
-                height: 32,
-                borderRadius: 6,
-                background: "var(--border2)",
-                backgroundSize: "cover",
-                backgroundPosition: "center",
-                border: "1px solid var(--border2)",
-                flexShrink: 0,
-              }}
-            />
-            <div style={{ flex: 1, fontSize: "calc(14px * var(--fs,1))", color: "var(--txt3)" }}>
-              No image selected
-            </div>
-            <button
-              style={{
-                fontFamily: "inherit",
-                fontWeight: 600,
-                fontSize: "calc(14px * var(--fs,1))",
-                padding: "7px 13px",
-                borderRadius: 8,
-                border: "1px solid var(--border2)",
-                background: "var(--panel)",
-                color: "var(--txt2)",
-                cursor: "pointer",
-              }}
-            >
-              Upload image…
-            </button>
-          </div>
-        )}
         {background === "Desktop" && (
           <div
             style={{
@@ -1645,10 +1604,15 @@ function GeneralTab({
 // Settings root — owns all persisted settings state + persistence
 // ---------------------------------------------------------------------------
 
-const TABS: SettingsTab[] = ["Notifications", "Hosts", "Session defaults", "General"];
+// Order matches the design pixel-for-pixel (Marsad Workstreams.dc.html
+// setTabs): General, Hosts, Session defaults, Notifications.
+const TABS: SettingsTab[] = ["General", "Hosts", "Session defaults", "Notifications"];
 
 export function Settings() {
   const { state: vmState } = useVm();
+  // Default tab stays "Notifications" (pre-existing behavior, covered by its
+  // own test) even though the design's left-nav lists General first — only
+  // the tab ORDER is realigned to match pixel-for-pixel here.
   const [activeTab, setActiveTab] = useState<SettingsTab>("Notifications");
 
   // All persisted settings state lifted here so we can load once and save on change.

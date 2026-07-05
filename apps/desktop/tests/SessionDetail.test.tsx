@@ -14,11 +14,13 @@ import {
   beforeEach,
   afterEach,
 } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
-import { VmProvider, VmState } from "../src/bridge/useVm";
+import type { ReactNode, ContextType } from "react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { VmProvider, VmState, VmContext } from "../src/bridge/useVm";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { SessionDetail } from "../src/screens/SessionDetail";
 import { MOCK_SNAPSHOT } from "../src/bridge/mockFixture";
+import { MOCK_BOARD } from "../src/bridge/mockBoard";
 import type { AppSnapshot } from "../src/bridge/types";
 
 // ---------------------------------------------------------------------------
@@ -459,5 +461,99 @@ describe("TerminalTab", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(getSendPrompt()).toHaveBeenCalledWith("s04", "git status");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. "‹ Back" button (Workstreams redesign SLICE D) — label + nav target
+//    depend on `state.fromGraph`, per docs/design/DESIGN_HANDOFF.md
+//    §"LEVEL 3 — Session".
+// ---------------------------------------------------------------------------
+
+/** Renders <SessionDetail/> with full nav state control (board/wsId/fromGraph),
+ *  capturing the live useVm() context so tests can assert on navigation. */
+function renderWithNav(overrides: Partial<VmState>, onCtx: (ctx: NonNullable<ContextType<typeof VmContext>>) => void) {
+  function Capture({ children }: { children: ReactNode }) {
+    return (
+      <VmContext.Consumer>
+        {(ctx) => {
+          if (ctx) onCtx(ctx);
+          return <>{children}</>;
+        }}
+      </VmContext.Consumer>
+    );
+  }
+  const preloaded: Partial<VmState> = {
+    snapshot: MOCK_SNAPSHOT,
+    screen: "session",
+    selectedId: "s01",
+    tab: "Activity",
+    filter: "All",
+    search: "",
+    wsMenuOpen: false,
+    capabilities: {},
+    board: MOCK_BOARD,
+    ...overrides,
+  };
+  return render(
+    <ThemeProvider initialTheme="dark">
+      <VmProvider initialState={preloaded}>
+        <Capture>
+          <SessionDetail />
+        </Capture>
+      </VmProvider>
+    </ThemeProvider>
+  );
+}
+
+describe("SessionDetail — Back button", () => {
+  it('labels the button "Workstreams" and routes to the board when fromGraph is false', () => {
+    let lastScreen = "";
+    renderWithNav({ fromGraph: false, wsId: "ws-build-pipeline" }, (ctx) => {
+      lastScreen = ctx.state.screen;
+    });
+    const btn = screen.getByTestId("session-back-btn");
+    expect(btn.textContent).toContain("Workstreams");
+
+    fireEvent.click(btn);
+    expect(lastScreen).toBe("board");
+  });
+
+  it("labels the button with the parent workstream's name when fromGraph is true", () => {
+    renderWithNav({ fromGraph: true, wsId: "ws-build-pipeline" }, () => {});
+    const btn = screen.getByTestId("session-back-btn");
+    // MOCK_BOARD's "ws-build-pipeline" card name.
+    expect(btn.textContent).toContain("Build pipeline handoff");
+  });
+
+  it("routes back to the graph (not the board) when fromGraph is true", async () => {
+    let lastScreen = "";
+    let lastWsId: string | null = null;
+    renderWithNav({ fromGraph: true, wsId: "ws-build-pipeline" }, (ctx) => {
+      lastScreen = ctx.state.screen;
+      lastWsId = ctx.state.wsId;
+    });
+    fireEvent.click(screen.getByTestId("session-back-btn"));
+    // goToGraph is async (fetchGraph then two dispatches) — wait for it to land.
+    await waitFor(() => expect(lastScreen).toBe("graph"));
+    expect(lastWsId).toBe("ws-build-pipeline");
+  });
+
+  it('falls back to "Workstreams" when fromGraph is true but no wsId is known', () => {
+    renderWithNav({ fromGraph: true, wsId: null }, () => {});
+    expect(screen.getByTestId("session-back-btn").textContent).toContain("Workstreams");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. Header meta row — driver pill (Workstreams redesign SLICE D)
+// ---------------------------------------------------------------------------
+
+describe("SessionDetail — header driver pill", () => {
+  it("shows the driver reported by capabilities for the session's host", () => {
+    // renderWith() seeds capabilities with driver: "claude" for local/hetzner/gpu.
+    renderWith({ selectedId: "s01" });
+    const pill = screen.getByTestId("session-driver-pill");
+    expect(pill.textContent).toBe("claude");
   });
 });

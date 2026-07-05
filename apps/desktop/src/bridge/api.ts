@@ -70,6 +70,7 @@ let _mockSnapshot: AppSnapshot = { ...MOCK_SNAPSHOT };
 
 export function _resetMock() {
   _mockSnapshot = { ...MOCK_SNAPSHOT };
+  resolvedGateLog.length = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -267,12 +268,55 @@ export async function listWslDistros(): Promise<string[]> {
   return (await invoke("list_wsl_distros")) as string[];
 }
 
+// ---------------------------------------------------------------------------
+// Resolved-gate history (Workstreams redesign SLICE D) — a tiny in-memory,
+// module-scoped log of HITL decisions, appended whenever answerGate /
+// answerQuestion is called (regardless of caller — today that's exclusively
+// GateOverlay's Approve/Reject/Submit actions). This drives the Activity
+// tab's "needs-you → resolved" collapse: once a gate/question resolves, the
+// pending card disappears (the backend clears `session.gate`), but the
+// collapsed summary row needs to know WHAT was decided — and the backend
+// does not retain a decision history yet. Purely additive/local (lost on
+// reload), matching the "this session's transcript" scope of a redesign
+// polish slice rather than a new persisted backend feature.
+// ---------------------------------------------------------------------------
+
+export interface ResolvedGateEntry {
+  session_id: string;
+  decision_id: string;
+  resolved_at: number;
+  /** Set by answerGate — covers permission/plan/edit gates alike. */
+  allow?: boolean;
+  deny_reason?: string;
+  /** Set by answerQuestion — question text -> picked/typed answer. */
+  answers?: Record<string, string>;
+}
+
+const resolvedGateLog: ResolvedGateEntry[] = [];
+
+/** All resolved-gate entries for a session, oldest → newest. */
+export function getResolvedGates(sessionId: string): ResolvedGateEntry[] {
+  return resolvedGateLog.filter((e) => e.session_id === sessionId);
+}
+
+/** Test-only: clear the resolved-gate log between test cases. */
+export function _resetResolvedGates(): void {
+  resolvedGateLog.length = 0;
+}
+
 export async function answerGate(args: {
   session_id: string;
   decision_id: string;
   allow: boolean;
   deny_reason?: string;
 }): Promise<void> {
+  resolvedGateLog.push({
+    session_id: args.session_id,
+    decision_id: args.decision_id,
+    resolved_at: Date.now(),
+    allow: args.allow,
+    deny_reason: args.deny_reason,
+  });
   if (!isTauri()) return;
   const invoke = await getInvoke();
   await invoke("answer_gate", args);
@@ -300,6 +344,12 @@ export async function answerQuestion(args: {
   request_id: string;
   answers: Record<string, string>;
 }): Promise<void> {
+  resolvedGateLog.push({
+    session_id: args.session_id,
+    decision_id: args.request_id,
+    resolved_at: Date.now(),
+    answers: args.answers,
+  });
   if (!isTauri()) return;
   const invoke = await getInvoke();
   await invoke("answer_question", args);
@@ -664,8 +714,39 @@ export function unionModelCatalog(
 
 /** Initial snapshot of every (driver, host) capabilities entry — same
  *  lock-clone-return pattern as `fetchBoard()`. Mock mode: honest empty. */
+// Browser/test-mode capability data — a stand-in for what the real Rust
+// capabilities probe returns, so the driver/model pickers render a realistic
+// working state in preview (claude launchable; codex/gemini discovered-but-not-
+// launchable). These are MOCK BACKEND DATA (the pickers read them dynamically),
+// NOT a hardcoded UI preset — model ids use the discovered "-latest" alias form,
+// never the versioned literals the kill-list forbids.
+const MOCK_HOSTS = ["localhost", "hetzner-cx51", "gpu-worker", "build-host", "wsl-dev"];
+function mockCaps(): CapabilitiesView[] {
+  const claudeModels: ModelInfo[] = [
+    { id: "claude-opus-latest" },
+    { id: "claude-sonnet-latest" },
+    { id: "claude-haiku-latest" },
+  ];
+  const out: CapabilitiesView[] = [];
+  for (const host of MOCK_HOSTS) {
+    out.push({
+      driver: "claude", host_id: host, cli_available: true,
+      models: { models: claudeModels, source: "Listed", free_text: true },
+      session_scope: null, sessions: [], fetched_at_ms: Date.now(), errors: [],
+    });
+    for (const driver of ["codex", "gemini"]) {
+      out.push({
+        driver, host_id: host, cli_available: false,
+        models: { models: [], source: "Observed", free_text: true },
+        session_scope: null, sessions: [], fetched_at_ms: 0, errors: [],
+      });
+    }
+  }
+  return out;
+}
+
 export async function fetchCapabilities(): Promise<CapabilitiesView[]> {
-  if (!isTauri()) return [];
+  if (!isTauri()) return mockCaps();
   const invoke = await getInvoke();
   return invoke("capabilities", {}) as Promise<CapabilitiesView[]>;
 }

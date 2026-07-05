@@ -25,6 +25,7 @@ vi.mock("../src/bridge/api", async (importOriginal) => {
     ...original,
     answerGate: vi.fn().mockResolvedValue(undefined),
     launchSession: vi.fn().mockResolvedValue("mock-session-new"),
+    restartSession: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -47,6 +48,9 @@ function getAnswerGate() {
 }
 function getLaunchSession() {
   return api.launchSession as ReturnType<typeof vi.fn>;
+}
+function getRestartSession() {
+  return api.restartSession as ReturnType<typeof vi.fn>;
 }
 
 /** Render GateOverlay with a seeded store pointing at sessionId. */
@@ -204,6 +208,34 @@ describe("GateOverlay — permission variant", () => {
       .closest("div")!.parentElement!;
     expect(header.textContent).toContain("api-auth-refactor");
   });
+
+  it("does not call answerGate/restartSession until a button is clicked", () => {
+    renderGate("s01");
+    expect(getAnswerGate()).not.toHaveBeenCalled();
+    expect(getRestartSession()).not.toHaveBeenCalled();
+  });
+
+  it("renders an 'Approve all this session' button for a permission gate", () => {
+    renderGate("s01");
+    expect(screen.getByTestId("approve-all-btn").textContent).toContain(
+      "Approve all this session"
+    );
+  });
+
+  it("clicking 'Approve all this session' answers the gate AND switches posture to auto", async () => {
+    renderGate("s01");
+    fireEvent.click(screen.getByTestId("approve-all-btn"));
+    await vi.waitFor(() => {
+      expect(getAnswerGate()).toHaveBeenCalledWith(
+        expect.objectContaining({ allow: true, session_id: "s01" })
+      );
+    });
+    await vi.waitFor(() => {
+      expect(getRestartSession()).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "s01", posture: "auto" })
+      );
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -249,6 +281,16 @@ describe("GateOverlay — plan variant", () => {
       );
     });
   });
+
+  it("the reject button reads 'Keep planning' instead of 'Reject…'", () => {
+    renderGate("s02");
+    expect(screen.getByTestId("reject-btn").textContent).toBe("Keep planning");
+  });
+
+  it("does NOT render 'Approve all this session' for a plan gate", () => {
+    renderGate("s02");
+    expect(screen.queryByTestId("approve-all-btn")).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -279,6 +321,11 @@ describe("GateOverlay — edit variant", () => {
     expect(screen.getByTestId("approve-btn").textContent).toContain(
       "Approve change"
     );
+  });
+
+  it("does NOT render 'Approve all this session' for an edit gate", () => {
+    renderGate("s03");
+    expect(screen.queryByTestId("approve-all-btn")).toBeNull();
   });
 });
 

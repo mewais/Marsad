@@ -6,7 +6,7 @@
  * gate, the working spinner, an error note, sub-agents) are appended after the
  * transcript from the current session state.
  */
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState, type ReactNode } from "react";
 import { useVm } from "../../bridge/useVm";
 import { Composer } from "../../components/Composer";
 import { Markdown } from "../../components/Markdown";
@@ -18,8 +18,121 @@ import {
   runSlash,
   runShellCommand,
   filterSlash,
+  getResolvedGates,
+  type ResolvedGateEntry,
 } from "../../bridge/api";
-import type { SlashEntry, SessionView, GateVM } from "../../bridge/types";
+import type {
+  SlashEntry,
+  SessionView,
+  Gate,
+  PlanStep,
+  QuestionPrompt,
+} from "../../bridge/types";
+
+// ---------------------------------------------------------------------------
+// HITL collapse pattern (Workstreams redesign SLICE D) — "needs-you →
+// resolved" is uniform across questions / permission / plan (and, since this
+// codebase's Gate union also has a 4th kind not in the redesign doc, edit
+// gates get the same treatment for consistency).
+//
+// A pending gate lives on `session.gate` — but once answered, the backend
+// simply clears it; there is no history of past decisions to read back. So
+// this module keeps a tiny, session-scoped log of every gate the UI has ever
+// seen pending (`hitlEpisodes`, keyed by session id) plus every decision made
+// through the GateOverlay modal (`getResolvedGates`, in bridge/api.ts — the
+// ONLY other place that calls answerGate/answerQuestion). Combining "was this
+// the current pending gate" (no) with "do we have a decision on record" (best
+// effort) is enough to render the collapsed summary row. Module-level (not
+// component state) so it survives the ActivityTab unmounting when the user
+// switches tabs and back — same rationale as Composer's per-session draft
+// store.
+// ---------------------------------------------------------------------------
+
+type HitlKind = "permission" | "plan" | "question" | "edit";
+
+interface HitlEpisode {
+  /** Kind-qualified identity, unique per gate OCCURRENCE — used for React
+   *  keys and to dedup repeated sightings of the same pending gate. */
+  id: string;
+  /** The raw decision id this gate resolves under — exactly what GateOverlay
+   *  passes to answerGate/answerQuestion (mirrors computeGate/GateVM in
+   *  bridge/useVm.ts). Used to look up its resolution and to test whether
+   *  it's the session's CURRENT pending gate. */
+  resolutionKey: string;
+  kind: HitlKind;
+  permission?: { command: string; cwd: string; risk: string };
+  plan?: { summary: string; steps: PlanStep[] };
+  question?: { questions: QuestionPrompt[] };
+  edit?: { file: string };
+}
+
+const hitlEpisodes = new Map<string, HitlEpisode[]>();
+
+/** The decision id a gate resolves under (mirrors `computeGate()` in
+ *  bridge/useVm.ts, which is what GateOverlay passes to answerGate). Permission
+ *  and Question gates carry a real request id from the backend; Plan and Edit
+ *  gates don't (yet) and both key by the plain session id — an existing
+ *  backend/GateVM limitation, not new here. Two different gate KINDS in the
+ *  same session could therefore share a resolutionKey; `hitlEpisodeId` below
+ *  still tells them apart for episode identity, but their resolution-log
+ *  entries would collide (see resolvedByDecision in buildHitlMessages). */
+function hitlResolutionKey(sessionId: string, gate: Gate): string {
+  if ("Permission" in gate) return gate.Permission.request_id;
+  if ("Question" in gate) return gate.Question.request_id;
+  return sessionId;
+}
+
+function hitlKind(gate: Gate): HitlKind {
+  if ("Permission" in gate) return "permission";
+  if ("Plan" in gate) return "plan";
+  if ("Question" in gate) return "question";
+  return "edit";
+}
+
+function hitlEpisodeId(sessionId: string, gate: Gate): string {
+  return `${hitlKind(gate)}:${hitlResolutionKey(sessionId, gate)}`;
+}
+
+function recordHitlEpisode(sessionId: string, gate: Gate): void {
+  const id = hitlEpisodeId(sessionId, gate);
+  const list = hitlEpisodes.get(sessionId) ?? [];
+  if (list.some((e) => e.id === id)) return;
+  const resolutionKey = hitlResolutionKey(sessionId, gate);
+  let episode: HitlEpisode;
+  if ("Permission" in gate) {
+    episode = {
+      id,
+      resolutionKey,
+      kind: "permission",
+      permission: {
+        command: gate.Permission.command,
+        cwd: gate.Permission.cwd,
+        risk: gate.Permission.risk,
+      },
+    };
+  } else if ("Plan" in gate) {
+    episode = {
+      id,
+      resolutionKey,
+      kind: "plan",
+      plan: { summary: gate.Plan.summary, steps: gate.Plan.steps },
+    };
+  } else if ("Question" in gate) {
+    episode = {
+      id,
+      resolutionKey,
+      kind: "question",
+      question: { questions: gate.Question.questions },
+    };
+  } else {
+    episode = { id, resolutionKey, kind: "edit", edit: { file: gate.Edit.file } };
+  }
+  hitlEpisodes.set(sessionId, [...list, episode]);
+}
+
+function getHitlEpisodes(sessionId: string): HitlEpisode[] {
+  return hitlEpisodes.get(sessionId) ?? [];
+}
 
 // ---------------------------------------------------------------------------
 // Transcript message types (internal to Activity tab)
@@ -34,7 +147,7 @@ type MsgKind =
   | "result"
   | "error"
   | "working"
-  | "gate"
+  | "hitl"
   | "system"
   | "subagent";
 
@@ -50,9 +163,34 @@ interface TranscriptMsg {
   name?: string;
   model?: string;
   subStatus?: string;
-  // gate fields
-  gateLead?: string;
-  gateSummary?: string;
+  // hitl fields (questions/permission/plan/edit — see HitlEpisode above)
+  episode?: HitlEpisode;
+  pending?: boolean;
+  resolution?: ResolvedGateEntry;
+}
+
+// ---------------------------------------------------------------------------
+// Build the ordered list of HITL transcript entries for a session: every
+// episode this UI has ever seen pending (oldest → newest), each flagged
+// "pending" iff it's the session's CURRENT gate (this data model only ever
+// has 0 or 1 pending gate at a time, so "not current" reliably means
+// "resolved") and paired with its decision, when one was recorded.
+// ---------------------------------------------------------------------------
+
+function buildHitlMessages(sv: SessionView): TranscriptMsg[] {
+  const episodes = getHitlEpisodes(sv.id);
+  const resolved = getResolvedGates(sv.id);
+  const resolutionByDecision = new Map(resolved.map((r) => [r.decision_id, r]));
+  // Kind-qualified so a resolved Plan (say) never reads as "pending" just
+  // because a later Edit gate on the same session shares its resolutionKey.
+  const currentPendingEpisodeId = sv.gate ? hitlEpisodeId(sv.id, sv.gate) : null;
+  return episodes.map((episode) => ({
+    id: `hitl-${episode.id}`,
+    kind: "hitl" as const,
+    episode,
+    pending: episode.id === currentPendingEpisodeId,
+    resolution: resolutionByDecision.get(episode.resolutionKey),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -62,7 +200,7 @@ interface TranscriptMsg {
 
 function deriveTranscript(
   sv: SessionView,
-  gate: GateVM | null
+  hitlMsgs: TranscriptMsg[]
 ): TranscriptMsg[] {
   const msgs: TranscriptMsg[] = [];
 
@@ -99,15 +237,10 @@ function deriveTranscript(
     }
   });
 
-  // If there's an active gate, show it as a pending-gate card
-  if (gate) {
-    msgs.push({
-      id: "gate-0",
-      kind: "gate",
-      gateLead: gate.lead,
-      gateSummary: gate.summary,
-    });
-  }
+  // HITL episodes (questions/permission/plan/edit) — the "needs you →
+  // resolved" collapse. Ordered oldest→newest; each is either the amber
+  // pending card or a muted collapsed summary row (see buildHitlMessages).
+  msgs.push(...hitlMsgs);
 
   // Show a working spinner only while Claude is actually working. A freshly
   // launched session sits idle (claude emits nothing until prompted), so we
@@ -391,14 +524,26 @@ function WorkingSpinner({ text }: { text: string }) {
   );
 }
 
-function GateCard({
+// ---------------------------------------------------------------------------
+// HITL cards — the uniform "needs-you → resolved" collapse pattern.
+// Pending: amber glowing card + Review/Answer CTA (opens the overlay — the
+// Modals slice owns GateOverlay; this just dispatches to open it).
+// Resolved: a muted, optionally `▸`-expandable summary row.
+// ---------------------------------------------------------------------------
+
+/** Shared amber "needs you" card shell — pending questions/permission/plan/edit. */
+function PendingCard({
   lead,
-  summary,
-  onReview,
+  ctaLabel,
+  onCta,
+  meta,
+  children,
 }: {
   lead: string;
-  summary: string;
-  onReview: () => void;
+  ctaLabel: string;
+  onCta: () => void;
+  meta?: string;
+  children?: ReactNode;
 }) {
   return (
     <div
@@ -411,49 +556,426 @@ function GateCard({
         animation: "glow 2.6s ease-in-out infinite",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          marginBottom: 7,
-        }}
-      >
-        <span style={{ fontSize: "calc(14.5px * var(--fs,1))" }}>▲</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+        <span style={{ color: "var(--needs)", fontWeight: 800 }}>▲</span>
         <span
           style={{
             fontWeight: 700,
-            fontSize: "calc(15px * var(--fs,1))",
+            fontSize: "calc(14px * var(--fs,1))",
             color: "var(--needs)",
           }}
         >
           {lead}
         </span>
       </div>
-      <div
-        className="mono"
-        style={{ fontSize: "calc(14.5px * var(--fs,1))", color: "var(--txt)", marginBottom: 11 }}
-      >
-        {summary}
+      {children}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button
+          onClick={onCta}
+          style={{
+            fontFamily: "inherit",
+            fontWeight: 700,
+            fontSize: "calc(14px * var(--fs,1))",
+            padding: "8px 15px",
+            borderRadius: 8,
+            border: "none",
+            background: "var(--needs)",
+            color: "#0e1116",
+            cursor: "pointer",
+          }}
+        >
+          {ctaLabel}
+        </button>
+        {meta && (
+          <span style={{ fontSize: "calc(12px * var(--fs,1))", color: "var(--txt3)" }}>
+            {meta}
+          </span>
+        )}
       </div>
-      <button
-        onClick={onReview}
-        style={{
-          fontFamily: "inherit",
-          fontWeight: 700,
-          fontSize: "calc(14.5px * var(--fs,1))",
-          padding: "8px 15px",
-          borderRadius: 8,
-          border: "none",
-          background: "var(--needs)",
-          color: "#0e1116",
-          cursor: "pointer",
-        }}
-      >
-        Review &amp; decide →
-      </button>
     </div>
   );
+}
+
+interface Decision {
+  mark: string;
+  text: string;
+  color: string;
+}
+
+/** Shared resolved-row shell — a muted, optionally expandable summary. */
+function ResolvedRow({
+  icon,
+  iconColor = "var(--txt2)",
+  label,
+  subtitle,
+  decision,
+  expandable,
+  expanded,
+  onToggle,
+  children,
+}: {
+  icon: string;
+  iconColor?: string;
+  label: string;
+  subtitle: string;
+  decision?: Decision;
+  expandable?: boolean;
+  expanded?: boolean;
+  onToggle?: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        marginLeft: 37,
+        borderRadius: 9,
+        border: "1px solid var(--border)",
+        background: "var(--panel)",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        onClick={expandable ? onToggle : undefined}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 9,
+          padding: "9px 12px",
+          fontSize: "calc(12px * var(--fs,1))",
+          cursor: expandable ? "pointer" : "default",
+        }}
+      >
+        {expandable && (
+          <span style={{ color: "var(--txt3)", fontSize: "calc(9px * var(--fs,1))", width: 9 }}>
+            {expanded ? "▾" : "▸"}
+          </span>
+        )}
+        <span style={{ color: iconColor }}>{icon}</span>
+        <span style={{ fontWeight: 700 }}>{label}</span>
+        <span
+          className="mono"
+          style={{
+            color: "var(--txt3)",
+            flex: 1,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {subtitle}
+        </span>
+        {decision && (
+          <span
+            className="mono"
+            style={{ fontSize: "calc(10.5px * var(--fs,1))", color: decision.color, flexShrink: 0 }}
+          >
+            {decision.mark} {decision.text}
+          </span>
+        )}
+      </div>
+      {expandable && expanded && (
+        <div style={{ padding: "0 13px 12px 30px" }}>{children}</div>
+      )}
+    </div>
+  );
+}
+
+/** A single option chip — used by the Questions resolved-row expansion. */
+function OptionChip({ label, picked }: { label: string; picked: boolean }) {
+  return (
+    <span
+      style={{
+        fontSize: "calc(11px * var(--fs,1))",
+        fontWeight: 600,
+        padding: "4px 10px",
+        borderRadius: 7,
+        border: `1px solid ${picked ? "var(--done)" : "var(--border2)"}`,
+        background: picked ? "var(--done-bg)" : "var(--panel2)",
+        color: picked ? "var(--done)" : "var(--txt3)",
+      }}
+    >
+      {picked ? "✓ " : ""}
+      {label}
+    </span>
+  );
+}
+
+function QuestionsHitl({
+  episode,
+  pending,
+  resolution,
+  onOpenGate,
+}: {
+  episode: HitlEpisode;
+  pending: boolean;
+  resolution?: ResolvedGateEntry;
+  onOpenGate: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const questions = episode.question?.questions ?? [];
+
+  if (pending) {
+    const count = questions.length;
+    return (
+      <PendingCard
+        lead={`${count} question${count === 1 ? "" : "s"} need you`}
+        ctaLabel="Answer →"
+        onCta={onOpenGate}
+      >
+        <div style={{ fontSize: "calc(13px * var(--fs,1))", marginBottom: 11 }}>
+          {questions[0]?.question ?? ""}
+        </div>
+      </PendingCard>
+    );
+  }
+
+  const answers = resolution?.answers;
+  const answeredCount = answers ? Object.keys(answers).length : 0;
+
+  return (
+    <ResolvedRow
+      icon="?"
+      iconColor="var(--accent2)"
+      label="Questions"
+      subtitle={
+        resolution
+          ? `${answeredCount} of ${questions.length} answered`
+          : "resolved"
+      }
+      expandable
+      expanded={expanded}
+      onToggle={() => setExpanded((x) => !x)}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+        {questions.map((q, qi) => {
+          const picked = answers?.[q.question];
+          const extra = picked && !q.options.some((o) => o.label === picked);
+          return (
+            <div key={qi}>
+              <div style={{ fontSize: "calc(12.5px * var(--fs,1))", marginBottom: 6 }}>
+                {q.question}
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {q.options.map((o, oi) => (
+                  <OptionChip key={oi} label={o.label} picked={picked === o.label} />
+                ))}
+                {extra && <OptionChip label={picked!} picked />}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </ResolvedRow>
+  );
+}
+
+function PermissionHitl({
+  episode,
+  pending,
+  resolution,
+  onOpenGate,
+}: {
+  episode: HitlEpisode;
+  pending: boolean;
+  resolution?: ResolvedGateEntry;
+  onOpenGate: () => void;
+}) {
+  const p = episode.permission;
+  if (!p) return null;
+
+  if (pending) {
+    const preview = p.command.split("\n")[0];
+    const meta = `${p.command.includes("\n") ? "multiline · " : ""}cwd ${p.cwd}`;
+    return (
+      <PendingCard lead="Permission needed" ctaLabel="Review →" onCta={onOpenGate} meta={meta}>
+        <div
+          className="mono"
+          style={{
+            fontSize: "calc(12px * var(--fs,1))",
+            color: "var(--accent2)",
+            background: "var(--bg)",
+            border: "1px solid var(--border2)",
+            borderRadius: 8,
+            padding: "8px 12px",
+            marginBottom: 11,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          $ {preview}
+        </div>
+      </PendingCard>
+    );
+  }
+
+  const decision: Decision | undefined = resolution
+    ? {
+        mark: resolution.allow ? "✓" : "•",
+        text: resolution.allow ? "approved" : "rejected",
+        color: resolution.allow ? "var(--done)" : "var(--error)",
+      }
+    : undefined;
+  return (
+    <ResolvedRow
+      icon="▲"
+      iconColor="var(--needs)"
+      label="Permission"
+      subtitle={`$ ${p.command}`}
+      decision={decision}
+    />
+  );
+}
+
+function PlanHitl({
+  episode,
+  pending,
+  resolution,
+  onOpenGate,
+}: {
+  episode: HitlEpisode;
+  pending: boolean;
+  resolution?: ResolvedGateEntry;
+  onOpenGate: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const plan = episode.plan;
+  if (!plan) return null;
+
+  if (pending) {
+    return (
+      <PendingCard
+        lead="Plan mode — needs you"
+        ctaLabel="Review plan →"
+        onCta={onOpenGate}
+        meta={`${plan.steps.length} steps`}
+      >
+        <div style={{ fontSize: "calc(12px * var(--fs,1))", color: "var(--txt2)", marginBottom: 12 }}>
+          {plan.summary}
+        </div>
+      </PendingCard>
+    );
+  }
+
+  const decision: Decision | undefined = resolution
+    ? {
+        mark: resolution.allow ? "✓" : "•",
+        text: resolution.allow ? "Approved — exiting plan mode" : "Kept in plan mode",
+        color: resolution.allow ? "var(--done)" : "var(--txt3)",
+      }
+    : undefined;
+  return (
+    <ResolvedRow
+      icon="❑"
+      label="Plan"
+      subtitle={plan.summary.slice(0, 54)}
+      decision={decision}
+      expandable
+      expanded={expanded}
+      onToggle={() => setExpanded((x) => !x)}
+    >
+      <div style={{ fontSize: "calc(12px * var(--fs,1))", color: "var(--txt2)", marginBottom: 10 }}>
+        {plan.summary}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {plan.steps.map((s, i) => (
+          <div key={i} style={{ display: "flex", gap: 11, fontSize: "calc(12.5px * var(--fs,1))" }}>
+            <span
+              style={{
+                width: 19,
+                height: 19,
+                flexShrink: 0,
+                borderRadius: "50%",
+                background: "var(--accent-bg)",
+                color: "var(--accent2)",
+                fontWeight: 800,
+                fontSize: "calc(10px * var(--fs,1))",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {i + 1}
+            </span>
+            <div>
+              <div style={{ fontWeight: 600 }}>{s.title}</div>
+              <div style={{ color: "var(--txt3)" }}>{s.detail}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </ResolvedRow>
+  );
+}
+
+function EditHitl({
+  episode,
+  pending,
+  resolution,
+  onOpenGate,
+}: {
+  episode: HitlEpisode;
+  pending: boolean;
+  resolution?: ResolvedGateEntry;
+  onOpenGate: () => void;
+}) {
+  const edit = episode.edit;
+  if (!edit) return null;
+
+  if (pending) {
+    return (
+      <PendingCard lead="Edit needs review" ctaLabel="Review →" onCta={onOpenGate}>
+        <div
+          className="mono"
+          style={{ fontSize: "calc(12px * var(--fs,1))", color: "var(--accent2)", marginBottom: 11 }}
+        >
+          {edit.file}
+        </div>
+      </PendingCard>
+    );
+  }
+
+  const decision: Decision | undefined = resolution
+    ? {
+        mark: resolution.allow ? "✓" : "•",
+        text: resolution.allow ? "approved" : "rejected",
+        color: resolution.allow ? "var(--done)" : "var(--error)",
+      }
+    : undefined;
+  return <ResolvedRow icon="±" label="Edit" subtitle={edit.file} decision={decision} />;
+}
+
+function HitlCard({
+  episode,
+  pending,
+  resolution,
+  onOpenGate,
+}: {
+  episode: HitlEpisode;
+  pending: boolean;
+  resolution?: ResolvedGateEntry;
+  onOpenGate: () => void;
+}) {
+  switch (episode.kind) {
+    case "question":
+      return (
+        <QuestionsHitl episode={episode} pending={pending} resolution={resolution} onOpenGate={onOpenGate} />
+      );
+    case "permission":
+      return (
+        <PermissionHitl episode={episode} pending={pending} resolution={resolution} onOpenGate={onOpenGate} />
+      );
+    case "plan":
+      return (
+        <PlanHitl episode={episode} pending={pending} resolution={resolution} onOpenGate={onOpenGate} />
+      );
+    case "edit":
+      return (
+        <EditHitl episode={episode} pending={pending} resolution={resolution} onOpenGate={onOpenGate} />
+      );
+    default:
+      return null;
+  }
 }
 
 function SubagentEntry({
@@ -545,6 +1067,18 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
   ]);
 
   const sv = selectedSession;
+
+  // Record every gate this session shows as pending, so it survives past
+  // resolution as a HITL episode (see the module doc-comment above). Done
+  // directly during render (not a useEffect) — recordHitlEpisode is a
+  // dedup-checked, idempotent write to a module-level cache, and the newly
+  // recorded episode must be visible to THIS render's buildHitlMessages call
+  // below, not just a later one (a useEffect here mutates the cache too late
+  // to affect the transcript on the render that first sees the gate).
+  if (sv?.gate) {
+    recordHitlEpisode(sv.id, sv.gate);
+  }
+
   if (!sv) {
     return (
       <div style={{ padding: 20, color: "var(--txt3)" }}>
@@ -553,7 +1087,7 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
     );
   }
 
-  const messages = deriveTranscript(sv, selectedGate);
+  const messages = deriveTranscript(sv, buildHitlMessages(sv));
 
   // Derive prompt history for the Composer (Up/Down arrow recall).
   // Collect user-typed prompts in arrival order, skipping shell "! " entries.
@@ -652,15 +1186,16 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
                 return (
                   <WorkingSpinner key={msg.id} text={msg.text ?? "Working…"} />
                 );
-              case "gate":
-                return (
-                  <GateCard
+              case "hitl":
+                return msg.episode ? (
+                  <HitlCard
                     key={msg.id}
-                    lead={msg.gateLead ?? ""}
-                    summary={msg.gateSummary ?? ""}
-                    onReview={onOpenGate}
+                    episode={msg.episode}
+                    pending={!!msg.pending}
+                    resolution={msg.resolution}
+                    onOpenGate={onOpenGate}
                   />
-                );
+                ) : null;
               case "subagent":
                 return (
                   <SubagentEntry

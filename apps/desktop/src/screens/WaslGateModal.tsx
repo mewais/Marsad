@@ -49,11 +49,16 @@ export function WaslGateModal() {
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(0,0,0,0.45)",
+        // Matches the shared modal spec (DESIGN_HANDOFF.md §Modals & overlays):
+        // rgba(5,7,10,0.64) + blur(3px). zIndex stays above every other modal
+        // (New workstream/Node/Gate) so a cross-host handoff is never buried.
+        background: "rgba(5,7,10,0.64)",
+        backdropFilter: "blur(3px)",
+        WebkitBackdropFilter: "blur(3px)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        zIndex: 1000,
+        zIndex: 120,
       }}
     >
       <div
@@ -61,10 +66,11 @@ export function WaslGateModal() {
           width: 420,
           maxWidth: "90vw",
           background: "var(--panel)",
-          border: "1px solid var(--border)",
-          borderRadius: 14,
+          border: "1px solid var(--border2)",
+          borderRadius: 18,
           padding: 22,
-          boxShadow: "0 18px 50px rgba(0,0,0,0.4)",
+          boxShadow: "var(--shadow)",
+          animation: "slideup 0.18s ease",
         }}
       >
         <div

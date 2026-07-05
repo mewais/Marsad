@@ -352,12 +352,12 @@ describe("Settings — General tab", () => {
     expect(document.body.classList.contains("glass")).toBe(true);
   });
 
-  it("renders background picker with 3 options", () => {
+  it("renders background picker with 2 options (Custom image removed)", () => {
     renderSettings();
     fireEvent.click(screen.getByTestId("settings-tab-general"));
     expect(screen.getByTestId("general-bg-gradient")).toBeTruthy();
-    expect(screen.getByTestId("general-bg-custom-image")).toBeTruthy();
     expect(screen.getByTestId("general-bg-desktop")).toBeTruthy();
+    expect(screen.queryByTestId("general-bg-custom-image")).toBeNull();
   });
 
   it("renders restore-on-launch and confirm-before-stop toggles", () => {

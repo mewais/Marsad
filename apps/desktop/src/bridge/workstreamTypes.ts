@@ -59,6 +59,20 @@ export interface WorkstreamCard {
   counts: StateCounts;
   needs_attention: boolean;
   is_single_node: boolean;
+  /**
+   * Optional — the attention card's "headline" blocker description (design
+   * §Level 1 Attention card, e.g. "Cross-host handoff waiting — build
+   * artifact → test host."). Additive/optional so a real backend that
+   * doesn't populate it yet degrades gracefully (Board falls back to
+   * `goal`). Populated by the mock bridge for attention cards.
+   */
+  headline?: string;
+  /**
+   * Optional — contextual CTA button label for the attention card
+   * ("Review handoff" / "Review" / "Open"). Additive/optional; Board falls
+   * back to a head-state-derived default when absent.
+   */
+  cta_label?: string;
 }
 
 export interface BoardView {

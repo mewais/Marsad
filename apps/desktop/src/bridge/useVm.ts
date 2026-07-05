@@ -67,7 +67,25 @@ export type Screen =
   | "session"
   | "gate"
   | "new-session"
+  | "new-workstream"
+  | "node-modal"
   | "settings";
+
+// ---------------------------------------------------------------------------
+// Node modal context (SLICE E) — describes WHY the node/add-agent modal is
+// open: which workstream the new agent joins, and whether this is the
+// "single session" fast lane (launch → straight to Level-3, no Controlled-by/
+// Feeds-from section since there's nothing to wire to yet) vs. adding an
+// agent to a workstream that may already have nodes.
+// ---------------------------------------------------------------------------
+
+export interface NodeModalCtx {
+  wsId: string;
+  wsName: string;
+  /** True = the New-workstream "Single session" fast lane: launch routes
+   *  straight to Level-3 and this node becomes the workstream's lead. */
+  isFirstNode: boolean;
+}
 
 // ---------------------------------------------------------------------------
 // Store state
@@ -94,6 +112,10 @@ export interface VmState {
   // slice, and IS consulted by the header breadcrumbs' click targets here.
   fromGraph: boolean;
   activeProfile: string | null;
+  // SLICE E — modals & overlays: context for the node/add-agent modal, set
+  // when opened from the New-workstream "Single session" path (later also
+  // from the graph's design-mode "+ Add agent", a different slice).
+  nodeModalCtx: NodeModalCtx | null;
   // Capabilities (U2), keyed by capsKey(driver, host_id) — dynamic-capabilities.md §3.6.
   capabilities: Record<string, CapabilitiesView>;
   // Wasl (X5) — pending handoff gates + the latest observation entries.
@@ -130,7 +152,9 @@ type Action =
   | { type: "OPEN_BOARD" }
   | { type: "OPEN_GRAPH"; wsId: string }
   | { type: "SELECT_NODE"; id: string | null }
-  | { type: "SET_ACTIVE_PROFILE"; profile: string | null };
+  | { type: "SET_ACTIVE_PROFILE"; profile: string | null }
+  | { type: "OPEN_NEW_WORKSTREAM" }
+  | { type: "OPEN_NODE_MODAL"; ctx: NodeModalCtx };
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -243,7 +267,13 @@ function reducer(state: VmState, action: Action): VmState {
     }
 
     case "SET_SCREEN":
-      return { ...state, screen: action.screen };
+      return {
+        ...state,
+        screen: action.screen,
+        // Leaving the node modal drops its context so a stray re-open (e.g.
+        // browser back / re-render) can't resurrect a stale workstream target.
+        nodeModalCtx: action.screen === "node-modal" ? state.nodeModalCtx : null,
+      };
 
     case "SELECT_SESSION":
       return {
@@ -308,6 +338,12 @@ function reducer(state: VmState, action: Action): VmState {
     case "SET_ACTIVE_PROFILE":
       return { ...state, activeProfile: action.profile };
 
+    case "OPEN_NEW_WORKSTREAM":
+      return { ...state, screen: "new-workstream" };
+
+    case "OPEN_NODE_MODAL":
+      return { ...state, screen: "node-modal", nodeModalCtx: action.ctx };
+
     default:
       return state;
   }
@@ -332,6 +368,7 @@ export const initialVmState: VmState = {
   nodeSel: null,
   fromGraph: false,
   activeProfile: null,
+  nodeModalCtx: null,
   capabilities: {},
   waslGates: [],
   waslObservations: [],
@@ -373,8 +410,17 @@ export interface VmContextValue {
   // Workstream board/graph command helpers (U-INT-2)
   openBoard: () => void;
   openWorkstream: (id: string) => Promise<void>;
+  /** Fetch + open a workstream's graph directly (skips the single-node
+   *  shortcut) — used after creating an empty "Build it out" workstream and
+   *  by the header's parent-workstream crumb. */
+  goToGraph: (id: string) => Promise<void>;
   selectNode: (id: string | null) => void;
   openNode: (sessionId: string) => void;
+  // SLICE E — modals & overlays.
+  /** Open the New-workstream modal (name + goal + two-path choice). */
+  openNewWorkstream: () => void;
+  /** Open the node/add-agent modal for `wsId`. */
+  openNodeModal: (ctx: NodeModalCtx) => void;
   createWorkstream: (
     id: string,
     name: string,
@@ -868,6 +914,14 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     dispatch({ type: "SELECT_NODE", id });
   }, []);
 
+  const openNewWorkstream = React.useCallback(() => {
+    dispatch({ type: "OPEN_NEW_WORKSTREAM" });
+  }, []);
+
+  const openNodeModal = React.useCallback((ctx: NodeModalCtx) => {
+    dispatch({ type: "OPEN_NODE_MODAL", ctx });
+  }, []);
+
   const createWorkstream = React.useCallback(
     async (id: string, name: string, goal: string, profile?: string | null) => {
       await apiCreateWorkstream(id, name, goal, profile);
@@ -983,8 +1037,11 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     crumbs,
     openBoard,
     openWorkstream,
+    goToGraph,
     selectNode,
     openNode,
+    openNewWorkstream,
+    openNodeModal,
     createWorkstream,
     deleteWorkstream,
     addConnection,

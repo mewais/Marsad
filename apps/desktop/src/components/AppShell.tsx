@@ -67,7 +67,7 @@ interface AppShellProps {
 }
 
 export function AppShell({ children, onOpenSettings }: AppShellProps) {
-  const { dispatch, openBoard } = useVm();
+  const { dispatch, openBoard, openNewWorkstream } = useVm();
   const { theme, toggleTheme } = useTheme();
 
   const themeIcon = theme === "dark" ? "☀" : "☾";
@@ -171,12 +171,11 @@ export function AppShell({ children, onOpenSettings }: AppShellProps) {
         {/* Spacer */}
         <div style={{ flex: 1 }} />
 
-        {/* New workstream — stub handler for SLICE A; the new-workstream
-            wizard modal is wired in a later slice. Reuses the existing
-            NewSession modal screen so the control is live, not dead. */}
+        {/* New workstream — opens the New-workstream modal (SLICE E): name +
+            goal, then the Single-session / Build-it-out path choice. */}
         <button
           data-testid="new-workstream-btn"
-          onClick={() => dispatch({ type: "SET_SCREEN", screen: "new-session" })}
+          onClick={openNewWorkstream}
           style={{
             fontFamily: "inherit",
             display: "flex",
