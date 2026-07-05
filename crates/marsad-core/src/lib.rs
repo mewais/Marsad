@@ -1717,6 +1717,27 @@ impl Core {
         marsad_viewmodel::graph_view(ws_id, &self.workstreams, &self.nodes(), &self.connections)
     }
 
+    /// Recompute the Usage tab's cost breakdown ("By host" / "By node") for
+    /// one workstream's sessions, or `None` if `ws_id` does not match any
+    /// workstream.
+    pub fn cost_breakdown(&self, ws_id: &str) -> Option<marsad_viewmodel::WorkstreamCostBreakdown> {
+        let sessions: Vec<marsad_viewmodel::SessionView> = self
+            .session_order
+            .iter()
+            .filter_map(|id| {
+                self.sessions
+                    .get(id)
+                    .map(|record| self.make_session_view(id, record))
+            })
+            .collect();
+        marsad_viewmodel::workstream_cost_breakdown(
+            ws_id,
+            &self.workstreams,
+            &self.nodes(),
+            &sessions,
+        )
+    }
+
     // -----------------------------------------------------------------------
     // U1 dynamic capability discovery (docs/specs/dynamic-capabilities.md §3.5)
     // -----------------------------------------------------------------------
