@@ -31,15 +31,18 @@
  *    `card.last_action?.startsWith("⊟")` — but `toCard()` in
  *    src/bridge/useVm.ts hardcodes `last_action: null` for every card, so
  *    that branch can never fire. Subagent activity is invisible on the
- *    Overview / sidebar at-a-glance surfaces no matter how many are
- *    running. `AttentionCard` doesn't reference subagents at all.
+ *    Overview at-a-glance surface no matter how many are running.
+ *    `AttentionCard` doesn't reference subagents at all.
+ *
+ *  - The former sidebar-row assertions in this file were removed: the
+ *    Workstreams redesign (SLICE A) deletes the sidebar entirely, so there
+ *    is no more session-list row to surface a subagent indicator on.
  */
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { VmProvider, VmState } from "../src/bridge/useVm";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { Overview } from "../src/screens/Overview";
-import { AppShell } from "../src/components/AppShell";
 import { SessionDetail } from "../src/screens/SessionDetail";
 import { MOCK_SNAPSHOT } from "../src/bridge/mockFixture";
 import type { AppSnapshot, SessionView } from "../src/bridge/types";
@@ -97,27 +100,6 @@ function renderOverview(sessions: SessionView[]) {
   );
 }
 
-function renderShell(sessions: SessionView[]) {
-  const preloaded: Partial<VmState> = {
-    snapshot: snapshotWith(sessions),
-    screen: "overview",
-    selectedId: null,
-    tab: "Activity",
-    filter: "All",
-    search: "",
-    wsMenuOpen: false,
-  };
-  return render(
-    <ThemeProvider initialTheme="dark">
-      <VmProvider initialState={preloaded}>
-        <AppShell>
-          <div />
-        </AppShell>
-      </VmProvider>
-    </ThemeProvider>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // 1. Overview "Active now" row — running subagent count, at a glance
 // ---------------------------------------------------------------------------
@@ -139,24 +121,7 @@ describe("U3 — Overview active row surfaces running subagent count", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. Sidebar — subagent activity indicator, at a glance
-// ---------------------------------------------------------------------------
-
-describe("U3 — sidebar surfaces running subagent activity", () => {
-  it("shows a subagent indicator in the session list for a session with running subagents", () => {
-    renderShell([RUNNING_SUBAGENT_SESSION]);
-    const indicator = screen.getByTestId("subagent-indicator-sSub1");
-    expect(indicator.textContent).toMatch(/2/);
-  });
-
-  it("shows NO subagent indicator for a session with none running (absent = nothing)", () => {
-    renderShell([NO_SUBAGENT_SESSION]);
-    expect(screen.queryByTestId("subagent-indicator-sSub0")).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 3. SessionDetail's Activity tab — regression guard for the ALREADY WORKING
+// 2. SessionDetail's Activity tab — regression guard for the ALREADY WORKING
 //    aggregate-count rendering, so any future fix to the surfaces above
 //    doesn't regress this path (expected GREEN today).
 // ---------------------------------------------------------------------------

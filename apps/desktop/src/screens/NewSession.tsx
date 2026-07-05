@@ -185,7 +185,8 @@ export function NewSession() {
   const fetchedAtMs = capsForHost?.fetched_at_ms ?? 0;
 
   function close() {
-    dispatch({ type: "SET_SCREEN", screen: "overview" });
+    // Board is the home screen (Workstreams redesign SLICE A).
+    dispatch({ type: "SET_SCREEN", screen: "board" });
   }
 
   function handleRecentDir(dir: string) {

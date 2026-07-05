@@ -55,16 +55,13 @@ function renderApp() {
 }
 
 /**
- * Boot the app and navigate to the Board by clicking the real `nav-board`
- * control, then wait until the (async-fetched) board has rendered. Returns
- * once a board-only testid is present.
+ * Boot the app. Board is now the home screen (Workstreams redesign SLICE A —
+ * there is no more separate Overview home and no "nav-board" sidebar entry to
+ * click through), so booting IS opening the board; just await the
+ * async-fetched board landmark.
  */
 async function bootAndOpenBoard() {
   renderApp();
-  // The nav-board control lives in the shell chrome and must be present at boot.
-  const navBoard = await screen.findByTestId("nav-board");
-  fireEvent.click(navBoard);
-  // The provider fetches the board; wait for a board-only landmark.
   await screen.findByTestId("board-title");
 }
 
@@ -101,20 +98,15 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// W1 — boot → click nav-board → Board renders
+// W1 — boot → Board renders directly (Board is now the home screen)
 // ---------------------------------------------------------------------------
 
-describe("W1: nav-board button is wired to openBoard() and the board renders", () => {
-  it("boots on the default screen, then clicking nav-board shows the Board", async () => {
+describe("W1: the app boots directly onto the Board (Board is the home screen)", () => {
+  it("boots straight into the Board — no click required", async () => {
     renderApp();
 
-    // At boot we are NOT on the board yet.
-    expect(screen.queryByTestId("board-title")).toBeNull();
-
-    const navBoard = await screen.findByTestId("nav-board");
-    fireEvent.click(navBoard);
-
-    // The provider-fetched board resolves and renders board-only landmarks.
+    // The provider-fetched board resolves and renders board-only landmarks,
+    // with no intermediate nav click (there is no more Overview home).
     const title = await screen.findByTestId("board-title");
     expect(title.textContent).toContain("Workstreams");
     // The seeded workstreams show up as real rows (proves the board data, not
@@ -324,19 +316,20 @@ describe("W7: connected wrappers show loading placeholders for a null slice", ()
 });
 
 // ---------------------------------------------------------------------------
-// W8 — regression: default screen still renders at boot
+// W8 — regression: the shell chrome renders at boot alongside the board
 // ---------------------------------------------------------------------------
 
-describe("W8: existing default router behavior is not regressed", () => {
-  it("the app boots into the existing default screen (wordmark present, board absent)", async () => {
+describe("W8: the shell chrome renders at boot, with Board as home (no Overview/Workspaces)", () => {
+  it("the app boots with the wordmark present and the board as the home screen", async () => {
     renderApp();
 
-    // The shell wordmark (existing chrome) is present at boot.
+    // The shell wordmark is present at boot.
     expect(await screen.findByTestId("wordmark")).toBeTruthy();
-    // The overview entry (existing default screen chrome) is present.
-    expect(screen.getByTestId("overview-entry")).toBeTruthy();
-    // We did NOT boot into the new board/graph screens.
-    expect(screen.queryByTestId("board-title")).toBeNull();
+    // Board — not Overview — is the home screen (Workstreams redesign SLICE A).
+    expect(await screen.findByTestId("board-title")).toBeTruthy();
     expect(screen.queryByTestId("graph-canvas")).toBeNull();
+    // The old sidebar's Overview entry and the Workspaces switcher are gone.
+    expect(screen.queryByTestId("overview-entry")).toBeNull();
+    expect(screen.queryByTestId("ws-switcher")).toBeNull();
   });
 });

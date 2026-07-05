@@ -7,12 +7,10 @@
 import { VmProvider, useVm } from "./bridge/useVm";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import { AppShell } from "./components/AppShell";
-import { Overview } from "./screens/Overview";
 import { SessionDetail } from "./screens/SessionDetail";
 import { GateOverlay } from "./screens/GateOverlay";
 import { NewSession } from "./screens/NewSession";
 import { Settings } from "./screens/Settings";
-import { Workspaces } from "./screens/Workspaces";
 import { BoardScreen } from "./screens/BoardScreen";
 import { GraphScreenConnected } from "./screens/graph/GraphScreenConnected";
 
@@ -20,13 +18,16 @@ import { GraphScreenConnected } from "./screens/graph/GraphScreenConnected";
 // Inner router (uses useVm which requires VmProvider above it)
 // ---------------------------------------------------------------------------
 
+// Workstreams redesign (SLICE A): Board is the home screen. The old Overview
+// screen and the entire Workspaces UI are removed from navigation — Overview
+// as a nav destination is gone (its component file is kept only because
+// several unrelated unit suites render it directly to exercise session-card
+// logic; see src/screens/Overview.tsx). Workspaces.tsx is deleted outright.
 function Router() {
   const { state } = useVm();
 
   function renderScreen() {
     switch (state.screen) {
-      case "overview":
-        return <Overview />;
       case "session":
         return <SessionDetail />;
       case "gate":
@@ -35,14 +36,11 @@ function Router() {
         return <NewSession />;
       case "settings":
         return <Settings />;
-      case "workspaces":
-        return <Workspaces />;
-      case "board":
-        return <BoardScreen />;
       case "graph":
         return <GraphScreenConnected />;
+      case "board":
       default:
-        return <Overview />;
+        return <BoardScreen />;
     }
   }
 

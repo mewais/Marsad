@@ -36,11 +36,13 @@
  *    only place the question is ever shown is inside the full GateOverlay
  *    modal (which a human has to already know to open).
  *
- *  - `SidebarRow` (src/components/AppShell.tsx) doesn't even receive
- *    `gate_kind` / `gate_summary` as props — despite `SessionCard` (which
- *    `sidebarList` is built from) already carrying both fields. So NO gate
- *    kind (Permission/Plan/Question/Edit) is ever visible in the session
- *    list without opening each session individually.
+ *  - `SidebarRow` used to live in src/components/AppShell.tsx and never
+ *    received `gate_kind` / `gate_summary` as props — despite `SessionCard`
+ *    (which `sidebarList` is built from) already carrying both fields. The
+ *    Workstreams redesign (SLICE A) deletes the sidebar entirely (there is
+ *    no more session-list sidebar at all, gate-kind-aware or otherwise), so
+ *    the sidebar-specific tests that used to live in this file were removed
+ *    along with the feature they tested — not a regression.
  */
 import { describe, it, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
@@ -48,7 +50,6 @@ import React from "react";
 import { VmProvider, VmContext, VmState } from "../src/bridge/useVm";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { Overview } from "../src/screens/Overview";
-import { AppShell } from "../src/components/AppShell";
 import { MOCK_SNAPSHOT } from "../src/bridge/mockFixture";
 import type { AppSnapshot, SessionView } from "../src/bridge/types";
 
@@ -110,27 +111,6 @@ function renderOverview(sessions: SessionView[] = []) {
   );
 }
 
-function renderShell(sessions: SessionView[] = []) {
-  const preloaded: Partial<VmState> = {
-    snapshot: snapshotWith(sessions),
-    screen: "overview",
-    selectedId: null,
-    tab: "Activity",
-    filter: "All",
-    search: "",
-    wsMenuOpen: false,
-  };
-  return render(
-    <ThemeProvider initialTheme="dark">
-      <VmProvider initialState={preloaded}>
-        <AppShell>
-          <div />
-        </AppShell>
-      </VmProvider>
-    </ThemeProvider>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // 1. Overview attention card — a pending question must be surfaced distinctly
 // ---------------------------------------------------------------------------
@@ -154,37 +134,7 @@ describe("U3 — Overview attention card surfaces a pending question distinctly"
 });
 
 // ---------------------------------------------------------------------------
-// 2. Sidebar — at-a-glance gate-kind indicator (beyond the state dot)
-// ---------------------------------------------------------------------------
-
-describe("U3 — sidebar surfaces the gate kind at a glance", () => {
-  it("shows a Permission indicator for s01 (Permission gate) in the session list", () => {
-    renderShell();
-    const badge = screen.getByTestId("gate-badge-s01");
-    expect(badge.textContent).toContain("Permission");
-  });
-
-  it("shows a Plan indicator for s02 (Plan gate) in the session list", () => {
-    renderShell();
-    const badge = screen.getByTestId("gate-badge-s02");
-    expect(badge.textContent).toContain("Plan");
-  });
-
-  it("shows a Question indicator for a session with a pending question", () => {
-    renderShell([QUESTION_SESSION]);
-    const badge = screen.getByTestId("gate-badge-sQ1");
-    expect(badge.textContent).toContain("Question");
-  });
-
-  it("shows NO gate indicator for a session with no gate (absent = nothing)", () => {
-    // s04 is Working with gate: null.
-    renderShell();
-    expect(screen.queryByTestId("gate-badge-s04")).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 3. The answering affordance itself (GateOverlay) already works for
+// 2. The answering affordance itself (GateOverlay) already works for
 //    questions — pinned here as a regression guard so a future fix to the
 //    at-a-glance labeling above doesn't accidentally break the modal.
 // ---------------------------------------------------------------------------

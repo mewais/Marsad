@@ -1,5 +1,6 @@
 /**
- * Minimal e2e smoke spec — verifies the app loads and the wordmark is visible.
+ * Minimal e2e smoke spec — verifies the app loads onto the Board (the home
+ * screen since the Workstreams redesign SLICE A) with the glass shell chrome.
  * Requires `pnpm dev` or `pnpm build && pnpm preview` to be running.
  */
 import { test, expect } from "@playwright/test";
@@ -12,11 +13,10 @@ test("wordmark is visible", async ({ page }) => {
   await expect(wordmark).toContainText("Marsad");
 });
 
-test("filter chips are visible", async ({ page }) => {
+test("boots directly onto the Board with the shell controls visible", async ({ page }) => {
   await page.goto("/");
-  // Scope to the sidebar filter chips (role="button") — "Needs you" also
-  // appears as a StatTile label and an "Needs your attention" section
-  // heading on the Overview screen, so a plain text locator is ambiguous.
-  await expect(page.getByRole("button", { name: "All" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Needs you/ })).toBeVisible();
+  // Board is the home screen — no click needed to reach it.
+  await expect(page.getByTestId("board-title")).toBeVisible();
+  await expect(page.getByTestId("new-workstream-btn")).toBeVisible();
+  await expect(page.getByTestId("open-settings-btn")).toBeVisible();
 });

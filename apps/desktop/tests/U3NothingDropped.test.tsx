@@ -22,8 +22,11 @@
  *     Question gate, so the card's kind badge falls back to the literal
  *     "Gate" and its summary box falls back to "—" — the actual question
  *     text is dropped.
- *   - SidebarRow (src/components/AppShell.tsx) never receives gate_kind /
- *     gate_summary / subagent counts as props at all.
+ *   - SidebarRow (formerly src/components/AppShell.tsx) never received
+ *     gate_kind / gate_summary / subagent counts as props at all. The
+ *     Workstreams redesign (SLICE A) has since deleted the sidebar entirely,
+ *     so the sidebar-row assertions that used to live in this file were
+ *     removed along with the feature — not a regression.
  *
  * ---------------------------------------------------------------------
  * EXCLUDED ON PURPOSE — backend gap, not faked here (see final report):
@@ -50,7 +53,6 @@ import { render, screen } from "@testing-library/react";
 import { VmProvider, VmState } from "../src/bridge/useVm";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { Overview } from "../src/screens/Overview";
-import { AppShell } from "../src/components/AppShell";
 import { MOCK_SNAPSHOT } from "../src/bridge/mockFixture";
 import type { AppSnapshot, SessionView } from "../src/bridge/types";
 
@@ -109,27 +111,6 @@ function renderOverview(sessions: SessionView[]) {
   );
 }
 
-function renderShell(sessions: SessionView[]) {
-  const preloaded: Partial<VmState> = {
-    snapshot: snapshotWith(sessions),
-    screen: "overview",
-    selectedId: null,
-    tab: "Activity",
-    filter: "All",
-    search: "",
-    wsMenuOpen: false,
-  };
-  return render(
-    <ThemeProvider initialTheme="dark">
-      <VmProvider initialState={preloaded}>
-        <AppShell>
-          <div />
-        </AppShell>
-      </VmProvider>
-    </ThemeProvider>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Overview attention card — every signal visible on ONE card
 // ---------------------------------------------------------------------------
@@ -155,23 +136,5 @@ describe("U3 — nothing silently dropped: Overview attention card", () => {
     renderOverview([EVERYTHING_SESSION]);
     const card = screen.getByTestId("attention-card-sAll1");
     expect(card.textContent).toMatch(/2/);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Sidebar — every signal visible on ONE row
-// ---------------------------------------------------------------------------
-
-describe("U3 — nothing silently dropped: sidebar row", () => {
-  it("surfaces the gate kind (Question) at a glance", () => {
-    renderShell([EVERYTHING_SESSION]);
-    const gateBadge = screen.getByTestId("gate-badge-sAll1");
-    expect(gateBadge.textContent).toContain("Question");
-  });
-
-  it("surfaces the running-subagent count at a glance", () => {
-    renderShell([EVERYTHING_SESSION]);
-    const subBadge = screen.getByTestId("subagent-indicator-sAll1");
-    expect(subBadge.textContent).toMatch(/1/);
   });
 });

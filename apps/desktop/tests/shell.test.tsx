@@ -1,9 +1,10 @@
 /**
- * Smoke test: AppShell renders from the mock store.
- * Asserts the wordmark and filter chips render.
+ * Smoke test: AppShell renders the Workstreams-redesign shell (SLICE A) —
+ * a glass header (wordmark + breadcrumbs + new-workstream/settings/theme
+ * controls) with NO left sidebar, NO Overview entry, NO Workspaces switcher.
  */
 import { describe, it, expect } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { VmProvider, VmState } from "../src/bridge/useVm";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { AppShell } from "../src/components/AppShell";
@@ -13,15 +14,16 @@ import { MOCK_SNAPSHOT } from "../src/bridge/mockFixture";
 // Helper
 // ---------------------------------------------------------------------------
 
-function renderWithMock(ui: React.ReactNode) {
+function renderWithMock(ui: React.ReactNode, overrides: Partial<VmState> = {}) {
   const preloaded: Partial<VmState> = {
     snapshot: MOCK_SNAPSHOT,
-    screen: "overview",
+    screen: "board",
     selectedId: null,
     tab: "Activity",
     filter: "All",
     search: "",
     wsMenuOpen: false,
+    ...overrides,
   };
   return render(
     <ThemeProvider initialTheme="dark">
@@ -34,41 +36,45 @@ function renderWithMock(ui: React.ReactNode) {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("AppShell smoke test", () => {
+describe("AppShell smoke test (Workstreams redesign SLICE A)", () => {
   it("renders the Marsad wordmark", () => {
     renderWithMock(<AppShell><div /></AppShell>);
     const wordmark = screen.getByTestId("wordmark");
     expect(wordmark.textContent).toContain("Marsad");
   });
 
-  it("renders all four filter chips", () => {
+  it("renders NO left sidebar", () => {
     renderWithMock(<AppShell><div /></AppShell>);
-    // The filter chips are <button> elements inside the sidebar.
-    // Query by role=button with accessible name to avoid collisions with
-    // session badges (which are <span>, not <button>).
-    const sidebar = document.querySelector("aside")!;
-    const buttons = within(sidebar).getAllByRole("button");
-    const buttonTexts = buttons.map((b) => b.textContent ?? "");
-    expect(buttonTexts.some((t) => t.includes("All"))).toBe(true);
-    expect(buttonTexts.some((t) => t.includes("Needs you"))).toBe(true);
-    expect(buttonTexts.some((t) => t.includes("Working"))).toBe(true);
-    expect(buttonTexts.some((t) => t.includes("Errors"))).toBe(true);
+    expect(document.querySelector("aside")).toBeNull();
   });
 
-  it("renders the Overview entry in sidebar", () => {
+  it("renders NO Overview nav entry and NO workspace switcher", () => {
     renderWithMock(<AppShell><div /></AppShell>);
-    expect(screen.getByTestId("overview-entry")).toBeTruthy();
-    expect(screen.getByTestId("overview-entry").textContent).toContain("Overview");
+    expect(screen.queryByTestId("overview-entry")).toBeNull();
+    expect(screen.queryByTestId("ws-switcher")).toBeNull();
+    expect(screen.queryByText(/^Default$/)).toBeNull();
   });
 
-  it("renders host health footer entries", () => {
+  it("renders the '+ New workstream' button", () => {
     renderWithMock(<AppShell><div /></AppShell>);
-    const sidebar = document.querySelector("aside")!;
-    // The footer always has host labels in mono spans
-    const allText = sidebar.textContent ?? "";
-    expect(allText).toContain("localhost");
-    expect(allText).toContain("hetzner-cx51");
-    expect(allText).toContain("gpu-worker");
+    const btn = screen.getByTestId("new-workstream-btn");
+    expect(btn.textContent).toContain("New workstream");
+  });
+
+  it("renders the settings and theme-toggle buttons", () => {
+    renderWithMock(<AppShell><div /></AppShell>);
+    expect(screen.getByTestId("open-settings-btn")).toBeTruthy();
+    expect(screen.getByTitle("Toggle theme")).toBeTruthy();
+  });
+
+  it("renders no breadcrumbs while on the board (home) screen", () => {
+    renderWithMock(<AppShell><div /></AppShell>, { screen: "board" });
+    expect(screen.queryByTestId("crumb-0")).toBeNull();
+  });
+
+  it("renders the wallpaper layer behind the header/body", () => {
+    renderWithMock(<AppShell><div /></AppShell>);
+    expect(screen.getByTestId("wallpaper")).toBeTruthy();
   });
 
   it("renders main slot content", () => {

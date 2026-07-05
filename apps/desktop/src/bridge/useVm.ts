@@ -53,15 +53,21 @@ import type { BoardView, ConnKind, GraphView } from "./workstreamTypes";
 // Screen / nav state (UI only — not in AppSnapshot)
 // ---------------------------------------------------------------------------
 
+// "overview" survives here even though the Overview screen is no longer
+// routed to (Workstreams-redesign SLICE A deletes it as a nav destination —
+// Board is the new home). Several other test suites render `<Overview/>`
+// directly to exercise session-card/cost-aggregation logic and preload this
+// literal as a neutral `state.screen` value; keeping it avoids unrelated
+// collateral breakage. "workspaces" is fully removed — nothing outside the
+// deleted Workspaces screen/test ever depended on it.
 export type Screen =
   | "overview"
+  | "board"
+  | "graph"
   | "session"
   | "gate"
   | "new-session"
-  | "settings"
-  | "workspaces"
-  | "board"
-  | "graph";
+  | "settings";
 
 // ---------------------------------------------------------------------------
 // Store state
@@ -81,6 +87,12 @@ export interface VmState {
   wsId: string | null;
   graph: GraphView | null;
   nodeSel: string | null;
+  // Workstreams-redesign nav model (SLICE A): true when the currently open
+  // session (`screen === "session"`) was reached via a graph node (vs.
+  // straight from the board's single-session shortcut). Drives the Level-3
+  // "‹ Back" label (parent workstream name vs. "Workstreams") in a later
+  // slice, and IS consulted by the header breadcrumbs' click targets here.
+  fromGraph: boolean;
   activeProfile: string | null;
   // Capabilities (U2), keyed by capsKey(driver, host_id) — dynamic-capabilities.md §3.6.
   capabilities: Record<string, CapabilitiesView>;
@@ -99,7 +111,14 @@ type Action =
   | { type: "VM_UPDATE"; payload: VmUpdateEvent }
   | { type: "CAPABILITIES_LOADED"; payload: CapabilitiesView[] }
   | { type: "SET_SCREEN"; screen: Screen }
-  | { type: "SELECT_SESSION"; id: string | null }
+  | {
+      type: "SELECT_SESSION";
+      id: string | null;
+      /** True when navigating in from a graph node (vs. the board shortcut). */
+      fromGraph?: boolean;
+      /** The owning workstream, when known at the call site (board/graph). */
+      wsId?: string;
+    }
   | { type: "SET_TAB"; tab: Tab }
   | { type: "SET_FILTER"; filter: Filter }
   | { type: "SET_SEARCH"; search: string }
@@ -231,6 +250,8 @@ function reducer(state: VmState, action: Action): VmState {
         ...state,
         selectedId: action.id,
         screen: action.id ? "session" : state.screen,
+        fromGraph: action.id ? !!action.fromGraph : state.fromGraph,
+        wsId: action.id ? (action.wsId ?? state.wsId) : state.wsId,
       };
 
     case "SET_TAB":
@@ -269,6 +290,7 @@ function reducer(state: VmState, action: Action): VmState {
         wsId: null,
         graph: null,
         nodeSel: null,
+        fromGraph: false,
       };
 
     case "OPEN_GRAPH":
@@ -277,6 +299,7 @@ function reducer(state: VmState, action: Action): VmState {
         screen: "graph",
         wsId: action.wsId,
         nodeSel: null,
+        fromGraph: false,
       };
 
     case "SELECT_NODE":
@@ -295,7 +318,9 @@ export { reducer as vmReducer };
 
 export const initialVmState: VmState = {
   snapshot: null,
-  screen: "overview",
+  // Board is the home screen (Workstreams redesign SLICE A) — no more
+  // Overview-as-home.
+  screen: "board",
   selectedId: null,
   tab: "Activity",
   filter: "All",
@@ -305,6 +330,7 @@ export const initialVmState: VmState = {
   wsId: null,
   graph: null,
   nodeSel: null,
+  fromGraph: false,
   activeProfile: null,
   capabilities: {},
   waslGates: [],
@@ -337,6 +363,13 @@ export interface VmContextValue {
     outcome: "approved" | "denied",
     reason?: string
   ) => Promise<void>;
+  // Header breadcrumbs (Workstreams redesign SLICE A) — "Marsad / <Workstream>
+  // / <Session>", matching the design's crumbs logic (Marsad Workstreams.dc.html
+  // lines 1125-1130): the graph's own crumb is inert (already there); a
+  // session's parent-workstream crumb only appears (and is clickable, back to
+  // the graph) when the workstream is multi-session; the session's own crumb
+  // is always last and inert.
+  crumbs: { label: string; onClick: (() => void) | null }[];
   // Workstream board/graph command helpers (U-INT-2)
   openBoard: () => void;
   openWorkstream: (id: string) => Promise<void>;
@@ -761,8 +794,21 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     refreshBoard();
   }, [refreshBoard]);
 
+  // Called from the graph screen's node-open affordance — always arrives
+  // FROM a graph, so `fromGraph: true` (drives the Level-3 Back label in a
+  // later slice). `state.wsId` is already set (the graph is open), so it's
+  // left untouched here.
   const openNode = React.useCallback((sessionId: string) => {
-    dispatch({ type: "SELECT_SESSION", id: sessionId });
+    dispatch({ type: "SELECT_SESSION", id: sessionId, fromGraph: true });
+  }, []);
+
+  // Re-fetch + open a workstream's graph directly (used by the single-node
+  // shortcut's "back to graph" crumb — never by the initial board click,
+  // which routes through the single/multi nav rule below).
+  const goToGraph = React.useCallback(async (id: string) => {
+    const graph = await fetchGraph(id);
+    dispatch({ type: "SET_GRAPH", wsId: id, graph });
+    dispatch({ type: "OPEN_GRAPH", wsId: id });
   }, []);
 
   const openWorkstream = React.useCallback(
@@ -773,16 +819,50 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
         const g = await fetchGraph(id);
         const node = g?.nodes[0];
         if (node) {
-          dispatch({ type: "SELECT_SESSION", id: node.id });
+          // Single-session workstream: skip the graph entirely (nav rule).
+          // `wsId` is still recorded so the header breadcrumbs / a later
+          // Back button know which workstream this session belongs to.
+          dispatch({
+            type: "SELECT_SESSION",
+            id: node.id,
+            fromGraph: false,
+            wsId: id,
+          });
         }
         return;
       }
-      const graph = await fetchGraph(id);
-      dispatch({ type: "SET_GRAPH", wsId: id, graph });
-      dispatch({ type: "OPEN_GRAPH", wsId: id });
+      await goToGraph(id);
     },
-    [state.board]
+    [state.board, goToGraph]
   );
+
+  // Header breadcrumbs — see VmContextValue.crumbs doc comment above.
+  const crumbs = useMemo(() => {
+    const list: { label: string; onClick: (() => void) | null }[] = [];
+    if (state.screen === "graph" && state.wsId) {
+      const card = state.board?.all.find((c) => c.id === state.wsId);
+      const name = card?.name ?? state.graph?.name ?? state.wsId;
+      list.push({ label: name, onClick: null });
+      return list;
+    }
+    if (state.screen === "session" && state.selectedId) {
+      const sv = sessions.find((s) => s.id === state.selectedId);
+      const wsIdForSession = state.wsId;
+      const card = wsIdForSession
+        ? state.board?.all.find((c) => c.id === wsIdForSession)
+        : null;
+      const isMulti = card
+        ? card.session_count > 1
+        : state.graph?.ws_id === wsIdForSession &&
+          (state.graph?.nodes.length ?? 0) > 1;
+      if (isMulti && wsIdForSession) {
+        const wsName = card?.name ?? state.graph?.name ?? wsIdForSession;
+        list.push({ label: wsName, onClick: () => void goToGraph(wsIdForSession) });
+      }
+      list.push({ label: sv?.name ?? state.selectedId, onClick: null });
+    }
+    return list;
+  }, [state.screen, state.wsId, state.selectedId, state.board, state.graph, sessions, goToGraph]);
 
   const selectNode = React.useCallback((id: string | null) => {
     dispatch({ type: "SELECT_NODE", id });
@@ -900,6 +980,7 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     activeWs,
     waslGates: state.waslGates,
     answerWasl,
+    crumbs,
     openBoard,
     openWorkstream,
     selectNode,

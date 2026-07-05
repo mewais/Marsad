@@ -7,9 +7,9 @@
  * Nothing is guarded behind `.skip`; only Playwright auto-waiting locators
  * are used (no flaky manual waits).
  *
- * Flow: open "/", click the board nav, expect a workstream card; click the
- * multi-node card, expect the graph canvas; click a node, expect the session
- * view.
+ * Flow: open "/" (Board is the home screen), expect a workstream card; click
+ * the multi-node card, expect the graph canvas; click a node, expect the
+ * session view.
  */
 import { test, expect } from "@playwright/test";
 
@@ -20,10 +20,8 @@ const NODE_ID = "s07";
 test("board → graph → session golden path", async ({ page }) => {
   await page.goto("/");
 
-  // Level 1: the board nav affordance is live in the shell chrome.
-  await page.getByTestId("nav-board").click();
-
-  // The board renders with its seeded workstream rows.
+  // Level 1: Board is the home screen — it renders with its seeded
+  // workstream rows without any nav click.
   await expect(page.getByTestId("board-title")).toBeVisible();
   const multiCard = page.getByTestId(`workstream-row-${MULTI_NODE_WS_ID}`);
   await expect(multiCard).toBeVisible();

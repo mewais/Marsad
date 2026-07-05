@@ -56,7 +56,8 @@ export function GateOverlay() {
     if (selectedSession) {
       dispatch({ type: "SELECT_SESSION", id: selectedSession.id });
     } else {
-      dispatch({ type: "SET_SCREEN", screen: "overview" });
+      // Board is the home screen (Workstreams redesign SLICE A).
+      dispatch({ type: "SET_SCREEN", screen: "board" });
     }
     setRejectOpen(false);
     setReason("");
