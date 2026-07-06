@@ -93,6 +93,8 @@ pub fn launch_session(
     // adopt-or-spawns the host wasl-mcpd node. Optional on the wire (absent ⇒
     // false) so a launch form that omits it stays a plain, Wasl-free session.
     wasl: Option<bool>,
+    // #3 — agent driver override. Absent ⇒ "claude".
+    driver: Option<String>,
 ) -> Result<String, String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     match &mut *guard {
@@ -127,6 +129,7 @@ pub fn launch_session(
                 name,
                 disallowed_tools: Vec::new(),
                 wasl: wasl.unwrap_or(false),
+                driver: driver.filter(|d| !d.is_empty()).unwrap_or_else(|| "claude".to_string()),
             };
             core.launch_session(spec).map_err(map_err)
         }
@@ -491,6 +494,8 @@ fn default_settings_for_mock() -> PersistedSettings {
         confirm_before_stop: true,
         default_model: "claude-sonnet-latest".to_string(),
         default_posture: "ask".to_string(),
+        default_driver: "claude".to_string(),
+        default_models: Vec::new(),
     }
 }
 
@@ -550,6 +555,7 @@ pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String>
 /// Add a remote host (`label`, `user@host`), persist it, and push the updated
 /// host list to the webview. A background worker health-checks it shortly after.
 #[tauri::command(rename_all = "snake_case")]
+#[allow(clippy::too_many_arguments)]
 pub fn add_host(
     app: tauri::AppHandle,
     state: State<'_, ManagedState>,
@@ -558,12 +564,21 @@ pub fn add_host(
     claude_bin: Option<String>,
     setup: Option<String>,
     env: Option<Vec<(String, String)>>,
+    // #1 per-driver command overrides: optional list of (driver, command) pairs.
+    agent_commands: Option<Vec<(String, String)>>,
 ) -> Result<(), String> {
     let updates = {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
         match &mut *guard {
             AppState::Live(core) => core
-                .add_host(&label, &target, claude_bin, setup, env.unwrap_or_default())
+                .add_host(
+                    &label,
+                    &target,
+                    claude_bin,
+                    setup,
+                    env.unwrap_or_default(),
+                    agent_commands.unwrap_or_default(),
+                )
                 .map_err(map_err)?,
             AppState::Mock(_) => vec![],
         }
@@ -573,10 +588,11 @@ pub fn add_host(
 }
 
 /// Update an existing host's launch configuration (`claude_bin` / `setup` /
-/// `env`), and optionally its `target`. Works for any host id INCLUDING the
-/// localhost (whose target is left unchanged when `target` is `None`). Persists
-/// the change and pushes the updated host list to the webview.
+/// `env` / `agent_commands`), and optionally its `target`. Works for any host id
+/// INCLUDING the localhost (whose target is left unchanged when `target` is
+/// `None`). Persists the change and pushes the updated host list to the webview.
 #[tauri::command(rename_all = "snake_case")]
+#[allow(clippy::too_many_arguments)]
 pub fn update_host(
     app: tauri::AppHandle,
     state: State<'_, ManagedState>,
@@ -585,12 +601,21 @@ pub fn update_host(
     setup: Option<String>,
     env: Option<Vec<(String, String)>>,
     target: Option<String>,
+    // #1 per-driver command overrides: optional list of (driver, command) pairs.
+    agent_commands: Option<Vec<(String, String)>>,
 ) -> Result<(), String> {
     let updates = {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
         match &mut *guard {
             AppState::Live(core) => core
-                .update_host(&id, claude_bin, setup, env.unwrap_or_default(), target)
+                .update_host(
+                    &id,
+                    claude_bin,
+                    setup,
+                    env.unwrap_or_default(),
+                    target,
+                    agent_commands.unwrap_or_default(),
+                )
                 .map_err(map_err)?,
             AppState::Mock(_) => vec![],
         }
@@ -639,8 +664,31 @@ pub fn list_wsl_distros() -> Result<Vec<String>, String> {
 ///   automated `plink -share -batch <inner>` connections share it. This is the
 ///   Windows path that works without WSL, since `ssh.exe` lacks ControlMaster.
 #[tauri::command(rename_all = "snake_case")]
-pub fn connect_host_interactive(target: String) -> Result<(), String> {
-    launch_interactive_ssh(&target)
+pub fn connect_host_interactive(
+    state: State<'_, ManagedState>,
+    target: String,
+) -> Result<(), String> {
+    launch_interactive_ssh(&target)?;
+    // Connect-time discovery (deliverable #4b): once the interactive login is
+    // launched for a manual/MFA host, kick off a capabilities refresh for the
+    // host that owns this target. It's fire-and-forget: the ControlMaster/
+    // plink-share upstream is established when the user finishes auth, and the
+    // agent's bounded probe rides it (or honestly reports unreachable if the
+    // user hasn't finished yet — a later frontend refresh re-runs it). Never
+    // blocks: a single IPC send under the lock we already hold, no probe IO.
+    if let Ok(mut guard) = state.lock() {
+        if let AppState::Live(core) = &mut *guard {
+            let host_id = core
+                .hosts_snapshot()
+                .into_iter()
+                .find(|h| h.target == target)
+                .map(|h| h.id);
+            if let Some(host_id) = host_id {
+                core.refresh_capabilities(Some(host_id), None, None);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Build the interactive login argv used by `connect_host_interactive`.
@@ -1335,7 +1383,7 @@ pub fn create_workstream(
     Ok(())
 }
 
-/// Delete a workstream (and cascade its connections), then refresh the board.
+/// Delete a workstream (kills all member sessions, cascades connections), then refresh.
 #[tauri::command(rename_all = "snake_case")]
 pub fn delete_workstream(
     app: tauri::AppHandle,
@@ -1346,6 +1394,45 @@ pub fn delete_workstream(
         let mut guard = state.lock().map_err(|e| e.to_string())?;
         match &mut *guard {
             AppState::Live(core) => core.delete_workstream(&id).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Pause (stop) all sessions in a workstream. Each session's process is killed
+/// (best-effort StopSession IPC) and its phase flips to Stale; they remain
+/// resumable. Returns session + overview updates so the UI refreshes immediately.
+#[tauri::command(rename_all = "snake_case")]
+pub fn pause_workstream(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.pause_workstream(&id).map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
+}
+
+/// Resume all sessions in a workstream (ResumeSession IPC for each; phases flip
+/// to Starting). Returns session + overview updates so the UI refreshes immediately.
+#[tauri::command(rename_all = "snake_case")]
+pub fn resume_workstream(
+    app: tauri::AppHandle,
+    state: State<'_, ManagedState>,
+    id: String,
+) -> Result<(), String> {
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core.resume_workstream(&id).map_err(map_err)?,
             AppState::Mock(_) => vec![],
         }
     };

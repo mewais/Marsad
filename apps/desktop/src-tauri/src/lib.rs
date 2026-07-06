@@ -152,19 +152,27 @@ fn spawn_agent(socket_path: &str, data_root: &str) {
     }
 }
 
-/// Connect to the agent, spawning it first if not running.
+/// Adopt a running agent if one is reachable, else spawn the shipped one.
+///
+/// We do NOT kill-then-spawn on every launch. The NSIS installer's
+/// `NSIS_HOOK_PREINSTALL` already `taskkill`s the old agent before writing
+/// files, so any agent still running at launch is guaranteed to be the current
+/// build — killing it on every launch was needless churn (and tore down the
+/// durable daemon that live sessions depend on). So: if we can already connect
+/// to a running agent, adopt it; otherwise spawn the one shipped with this
+/// build and retry.
 ///
 /// Retries with a short backoff after spawning (up to ~2 s total).
 /// Returns `None` if the agent cannot be reached — caller falls back to
 /// LoopbackFake so the app still launches.
 fn adopt_or_spawn_agent(socket_path: &str) -> Option<marsad_transport::LocalIpc> {
-    // First try: agent may already be running.
+    // Adopt a pre-existing agent if one is already listening on the socket.
     if let Some(ipc) = try_connect(socket_path) {
-        eprintln!("marsad-desktop: connected to existing agent at {socket_path}");
+        eprintln!("marsad-desktop: adopted running agent at {socket_path}");
         return Some(ipc);
     }
 
-    // Agent not running — try to spawn it.
+    // No agent running — spawn the one shipped with this build.
     let data_root = resolve_data_root();
     spawn_agent(socket_path, &data_root);
 
@@ -248,6 +256,8 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::get_file_diff,
             bridge::create_workstream,
             bridge::delete_workstream,
+            bridge::pause_workstream,
+            bridge::resume_workstream,
             bridge::add_connection,
             bridge::remove_connection,
             bridge::create_profile,
@@ -407,11 +417,20 @@ pub fn run() {
                 let (host_updates, ws_updates, session_updates) =
                     match app.state::<ManagedState>().lock() {
                         Ok(mut guard) => match &mut *guard {
-                            AppState::Live(core) => (
-                                core.load_hosts().unwrap_or_default(),
-                                core.load_workspaces().unwrap_or_default(),
-                                core.load_sessions().unwrap_or_default(),
-                            ),
+                            AppState::Live(core) => {
+                                let hosts = core.load_hosts().unwrap_or_default();
+                                let ws = core.load_workspaces().unwrap_or_default();
+                                let sessions = core.load_sessions().unwrap_or_default();
+                                // Connect-time discovery (deliverable #4a): TRULY
+                                // populate capabilities for every known host at
+                                // startup — non-blocking fire-and-forget sends; the
+                                // agent probes on background threads and broadcasts
+                                // `CapabilitiesUpdate`s that the reader thread picks
+                                // up. Done under the same lock as load_hosts so the
+                                // registry is populated first.
+                                core.refresh_capabilities_all_hosts();
+                                (hosts, ws, sessions)
+                            }
                             AppState::Mock(_) => (vec![], vec![], vec![]),
                         },
                         Err(_) => (vec![], vec![], vec![]),
@@ -548,10 +567,21 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
                         continue;
                     }
 
+                    // Forward every agent→core broadcast that `Core::on_agent_line`
+                    // reduces into a VmUpdate. CapabilitiesUpdate (model/session
+                    // discovery, incl. the subscribe-replay) and the Wasl gate/
+                    // observation broadcasts were previously DROPPED here — which
+                    // silently starved the model picker ("No models observed yet")
+                    // and the Wasl surfaces. Acks (Subscribed/SessionLaunched/
+                    // CapabilitiesRefreshQueued/…) and pty (handled above) stay skipped.
                     if ty != Some("AgentEvent")
                         && ty != Some("TranscriptBackfill")
                         && ty != Some("ChangesUpdate")
                         && ty != Some("UsageUpdate")
+                        && ty != Some("CapabilitiesUpdate")
+                        && ty != Some("WaslGateRequested")
+                        && ty != Some("WaslGateDecided")
+                        && ty != Some("WaslObservation")
                     {
                         continue;
                     }

@@ -9,9 +9,14 @@
 !macro NSIS_HOOK_PREINSTALL
   nsExec::Exec 'taskkill /F /IM marsad-agent.exe'
   nsExec::Exec 'taskkill /F /IM marsad-winshim.exe'
+  ; Also kill the desktop window — an open app holds a lock on marsad-desktop.exe
+  ; that would block the installer from overwriting it.
+  nsExec::Exec 'taskkill /F /IM marsad-desktop.exe'
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
   nsExec::Exec 'taskkill /F /IM marsad-agent.exe'
   nsExec::Exec 'taskkill /F /IM marsad-winshim.exe'
+  ; Also kill the desktop window so an open app can't block uninstall.
+  nsExec::Exec 'taskkill /F /IM marsad-desktop.exe'
 !macroend

@@ -47,6 +47,7 @@ pub fn seeded_mock() -> MockState {
             claude_bin: None,
             setup: None,
             env: Vec::new(),
+            agent_commands: Vec::new(),
         },
         Host {
             id: "hetzner".to_string(),
@@ -59,6 +60,7 @@ pub fn seeded_mock() -> MockState {
             claude_bin: None,
             setup: None,
             env: Vec::new(),
+            agent_commands: Vec::new(),
         },
         Host {
             id: "gpu".to_string(),
@@ -71,6 +73,7 @@ pub fn seeded_mock() -> MockState {
             claude_bin: None,
             setup: None,
             env: Vec::new(),
+            agent_commands: Vec::new(),
         },
     ];
 
