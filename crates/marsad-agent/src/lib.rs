@@ -35,8 +35,9 @@ pub use reader::{
     RECONNECT_MAX_BACKOFF_SECS, RECONNECT_MAX_TOTAL_SECS, RECONNECT_PROBE_TIMEOUT_SECS,
 };
 pub use remote::{
-    build_remote_spawn_cmd, exec_prefix_for, remote_durable_launch_script, remote_kill_script,
-    remote_liveness_script, remote_reader_argv, remote_session_dir, remote_writer_argv,
+    build_remote_codex_eval_loop, build_remote_spawn_cmd, exec_prefix_for,
+    remote_durable_launch_script, remote_kill_script, remote_liveness_script, remote_reader_argv,
+    remote_session_dir, remote_writer_argv,
 };
 #[cfg(not(coverage))]
 pub use remote::{fetch_remote_session_list, run_remote_script, run_remote_script_bounded};
@@ -634,24 +635,36 @@ impl Agent {
         // Local sessions stash nothing.
         #[cfg(not(coverage))]
         {
-            // Stage 2: remote codex is an explicit unsupported gap.
-            // Return a clear error rather than silently falling through to the
-            // remote durable launch path (which is wired for claude, not codex).
-            if spec.driver == "codex" && exec_prefix_for(spec.host_target.as_deref()).is_some() {
-                return Err(AgentError::Protocol(format!(
-                    "codex driver is not supported for remote sessions yet \
-                     (host_target={:?}): only local codex sessions are implemented in Stage 2",
-                    spec.host_target
-                )));
-            }
-
             if exec_prefix_for(spec.host_target.as_deref()).is_some() {
-                let run_cmd = build_remote_spawn_cmd(
-                    &spec.project,
-                    &claude_argv(&spec),
-                    spec.setup.as_deref(),
-                    &spec.env,
-                );
+                // For a REMOTE session, compute the run-command body now — this is the
+                // only point with the full LaunchSpec (posture + mode + setup + env) in hand.
+                //
+                // - claude: `cd '<proj>' && exec '<bin>' <args>` — run via a login shell
+                //   with FIFO wired by start.sh (design 2B).
+                // - codex: the eval-loop body `cd '<proj>' && while IFS= read -r __cmd; do
+                //   eval "$__cmd" </dev/null; done` — the long-lived process whose stdin is
+                //   in.fifo (wired by start.sh) and whose stdout is out.log. Per-turn
+                //   codex_turn_cmd output is written into in.fifo by the local writer child;
+                //   the eval-loop runs each command as a `codex exec` subprocess, appending
+                //   JSONL to out.log (captured by start.sh's >> out.log redirection).
+                //   remote_liveness_script / remote_kill_script work byte-identically:
+                //   claude.pid here is the eval-loop's pid, not a codex process, but the
+                //   operational semantics (kill the holder, SIGTERM + rm -rf the dir) are
+                //   the same.
+                let run_cmd = if spec.driver == "codex" {
+                    build_remote_codex_eval_loop(
+                        &spec.project,
+                        spec.setup.as_deref(),
+                        &spec.env,
+                    )
+                } else {
+                    build_remote_spawn_cmd(
+                        &spec.project,
+                        &claude_argv(&spec),
+                        spec.setup.as_deref(),
+                        &spec.env,
+                    )
+                };
                 self.session_run_cmds
                     .0
                     .lock()
@@ -659,7 +672,9 @@ impl Agent {
                     .insert(session_id.clone(), run_cmd);
             }
 
-            // Stage 2: cache codex spec for later turns (handle_send_prompt).
+            // Cache codex spec for later turns (handle_send_prompt): both local and
+            // remote codex sessions need this so follow-up turns can build
+            // codex_turn_cmd with the right model/posture/project/bin.
             if spec.driver == "codex" {
                 let cached = CachedCodexSpec {
                     model: spec.model.clone(),

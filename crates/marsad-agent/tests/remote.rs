@@ -3,8 +3,8 @@
 //! durable session helpers (design 2B: FIFO + setsid + keepalive).
 
 use marsad_agent::{
-    assistant_has_file_modifying_tool_use, build_remote_spawn_cmd, exec_prefix_for,
-    reconnect_backoff_next, remote_durable_launch_script, remote_kill_script,
+    assistant_has_file_modifying_tool_use, build_remote_codex_eval_loop, build_remote_spawn_cmd,
+    exec_prefix_for, reconnect_backoff_next, remote_durable_launch_script, remote_kill_script,
     remote_liveness_script, remote_reader_argv, remote_session_dir, remote_writer_argv,
     RECONNECT_INITIAL_BACKOFF_SECS, RECONNECT_MAX_BACKOFF_SECS,
 };
@@ -523,4 +523,108 @@ fn backoff_saturates_without_overflow() {
         RECONNECT_MAX_BACKOFF_SECS
     );
     assert_eq!(reconnect_backoff_next(u64::MAX), RECONNECT_MAX_BACKOFF_SECS);
+}
+
+// ── build_remote_codex_eval_loop ──────────────────────────────────────────────
+//
+// Pure-logic builder: tested here at 100% coverage.  The eval-loop is the
+// long-lived "process" for a remote codex durable session — it reads one
+// `codex_turn_cmd` line at a time from in.fifo and `eval`s it, producing JSONL
+// on stdout (which start.sh captures via >> out.log).
+
+/// The eval-loop body must cd to the project and run the POSIX while-read loop.
+#[test]
+fn codex_eval_loop_contains_cd_and_while_read() {
+    let body = build_remote_codex_eval_loop("/proj/foo", None, &[]);
+    // Must change into the project directory.
+    assert!(body.contains("cd '/proj/foo'"), "cd: {body}");
+    // Must use the POSIX while-read pattern.
+    assert!(body.contains("while IFS= read -r"), "while read: {body}");
+    // Must eval the command.
+    assert!(body.contains("eval"), "eval: {body}");
+    // Must prevent codex from consuming the loop's stdin.
+    assert!(body.contains("</dev/null"), "</dev/null: {body}");
+}
+
+/// setup is prepended before the loop.
+#[test]
+fn codex_eval_loop_prepends_setup() {
+    let body = build_remote_codex_eval_loop("/p", Some("module load x"), &[]);
+    assert!(
+        body.starts_with("module load x\n"),
+        "setup must be first: {body}"
+    );
+    assert!(body.contains("while IFS= read -r"), "loop still present: {body}");
+}
+
+/// Empty/None setup is omitted entirely.
+#[test]
+fn codex_eval_loop_no_setup_is_clean() {
+    let body_none = build_remote_codex_eval_loop("/p", None, &[]);
+    let body_empty = build_remote_codex_eval_loop("/p", Some(""), &[]);
+    // Neither should start with a blank line.
+    assert!(!body_none.starts_with('\n'), "no leading newline (None): {body_none}");
+    assert!(!body_empty.starts_with('\n'), "no leading newline (empty): {body_empty}");
+    // Both should start with the cd.
+    assert!(body_none.starts_with("cd "), "starts with cd (None): {body_none}");
+    assert!(body_empty.starts_with("cd "), "starts with cd (empty): {body_empty}");
+}
+
+/// env vars are exported between setup and the loop.
+#[test]
+fn codex_eval_loop_exports_env() {
+    let env = vec![
+        ("OPENAI_API_KEY".to_string(), "sk-test".to_string()),
+        ("CODEX_MODEL".to_string(), "o4-mini".to_string()),
+    ];
+    let body = build_remote_codex_eval_loop("/proj", None, &env);
+    assert!(body.contains("export 'OPENAI_API_KEY'='sk-test'"), "key1: {body}");
+    assert!(body.contains("export 'CODEX_MODEL'='o4-mini'"), "key2: {body}");
+    // Env exports come BEFORE the cd + loop.
+    let export_pos = body.find("export").unwrap_or(usize::MAX);
+    let cd_pos = body.find("cd ").unwrap_or(usize::MAX);
+    assert!(export_pos < cd_pos, "env exports must precede cd: {body}");
+}
+
+/// single-quote chars in env values are correctly escaped.
+#[test]
+fn codex_eval_loop_env_single_quote_escaping() {
+    let env = vec![("K".to_string(), "it's".to_string())];
+    let body = build_remote_codex_eval_loop("/p", None, &env);
+    assert!(body.contains(r"'it'\''s'"), "single-quote escaped: {body}");
+}
+
+/// tilde projects expand to $HOME equivalents (mirrors build_remote_spawn_cmd).
+#[test]
+fn codex_eval_loop_tilde_project_expansion() {
+    let bare = build_remote_codex_eval_loop("~", None, &[]);
+    assert!(bare.contains("\"$HOME\""), "bare tilde: {bare}");
+
+    let slash = build_remote_codex_eval_loop("~/repo", None, &[]);
+    assert!(slash.contains("\"$HOME/repo\""), "tilde-slash: {slash}");
+
+    let sub = build_remote_codex_eval_loop("/absolute/path", None, &[]);
+    assert!(sub.contains("'/absolute/path'"), "absolute: {sub}");
+}
+
+/// The eval-loop body can be embedded in remote_durable_launch_script unchanged
+/// (the heredoc marker is single-quoted so no expansion occurs).
+#[test]
+fn codex_eval_loop_round_trips_through_durable_launch_script() {
+    let run_cmd = build_remote_codex_eval_loop("/work/proj", Some("export PATH=/custom:$PATH"), &[
+        ("OPENAI_API_KEY".to_string(), "sk-xxx".to_string()),
+    ]);
+    let script = remote_durable_launch_script("sid-codex", &run_cmd);
+
+    // The script must still have the durable infrastructure.
+    assert!(script.contains("mkfifo"), "mkfifo: {script}");
+    assert!(script.contains("nohup setsid"), "nohup setsid: {script}");
+    assert!(script.contains("claude.pid"), "claude.pid: {script}");
+    assert!(script.contains("ka.pid"), "ka.pid: {script}");
+
+    // The eval-loop body is embedded in run.sh verbatim.
+    assert!(script.contains("while IFS= read -r"), "eval-loop in script: {script}");
+    assert!(script.contains("</dev/null"), "</dev/null in script: {script}");
+    assert!(script.contains("OPENAI_API_KEY"), "env key in script: {script}");
+    assert!(script.contains("/work/proj"), "project in script: {script}");
 }
