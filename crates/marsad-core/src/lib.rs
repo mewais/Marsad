@@ -354,6 +354,10 @@ struct SessionRecord {
     seen_msg_ids: std::collections::HashSet<String>,
     /// User-supplied display name. `None` → derived from the project basename.
     name: Option<String>,
+    /// True while an async `!` shell command is executing off-thread (set by
+    /// `inject_shell_command`, cleared by `inject_shell_result`). Surfaced in the
+    /// SessionView so the UI shows a working indicator without freezing.
+    shell_running: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -652,6 +656,7 @@ impl Core {
                     transcript,
                     seen_msg_ids: std::collections::HashSet::new(),
                     name: restored_name,
+                    shell_running: false,
                 },
             );
             let sv = self.make_session_view(&s.id, self.sessions.get(&s.id).unwrap());
@@ -1073,6 +1078,7 @@ impl Core {
                 transcript,
                 seen_msg_ids: std::collections::HashSet::new(),
                 name: custom_name,
+                shell_running: false,
             },
         );
 
@@ -1298,6 +1304,50 @@ impl Core {
             .push(marsad_events::TranscriptEntry::User {
                 text: format!("! {}", command.trim()),
             });
+        record
+            .transcript
+            .push(marsad_events::TranscriptEntry::Tool {
+                name: "shell".to_string(),
+                input: output.to_string(),
+            });
+        let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
+        Ok(vec![VmUpdate::Session(sv)])
+    }
+
+    /// Step 1 of an ASYNC `!` shell command: append the `! <command>` line to the
+    /// transcript immediately (so it shows the instant the user hits enter) and
+    /// mark a shell command as running, so the UI can show a working indicator
+    /// while the command executes off-thread. Paired with
+    /// [`inject_shell_result`], which appends the output when the command
+    /// finishes. Returns a Session update to render right away.
+    pub fn inject_shell_command(
+        &mut self,
+        id: &str,
+        command: &str,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        self.require_session(id)?;
+        let record = self.sessions.get_mut(id).unwrap();
+        record
+            .transcript
+            .push(marsad_events::TranscriptEntry::User {
+                text: format!("! {}", command.trim()),
+            });
+        record.shell_running = true;
+        let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
+        Ok(vec![VmUpdate::Session(sv)])
+    }
+
+    /// Step 2 of an ASYNC `!` shell command: append the captured output as a
+    /// shell tool row and clear the running flag. The `! <command>` line was
+    /// already appended by [`inject_shell_command`], so only the output is added.
+    pub fn inject_shell_result(
+        &mut self,
+        id: &str,
+        output: &str,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        self.require_session(id)?;
+        let record = self.sessions.get_mut(id).unwrap();
+        record.shell_running = false;
         record
             .transcript
             .push(marsad_events::TranscriptEntry::Tool {
@@ -2642,6 +2692,7 @@ impl Core {
             slash_commands: s.slash_commands.clone(),
             posture,
             subagent_list,
+            shell_running: record.shell_running,
         }
     }
 }

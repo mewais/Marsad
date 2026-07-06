@@ -38,6 +38,8 @@ fn base_session_view() -> SessionView {
         mcp_servers: vec![],
         slash_commands: vec![],
         posture: "ask".to_string(),
+        subagent_list: vec![],
+        shell_running: false,
     }
 }
 

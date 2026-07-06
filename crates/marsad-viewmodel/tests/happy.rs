@@ -82,6 +82,8 @@ fn representative_snapshot() -> AppSnapshot {
             mcp_servers: vec![],
             slash_commands: vec![],
             posture: "ask".to_string(),
+            subagent_list: vec![],
+            shell_running: false,
         },
         SessionView {
             id: "s2".to_string(),
@@ -114,6 +116,8 @@ fn representative_snapshot() -> AppSnapshot {
             mcp_servers: vec![],
             slash_commands: vec![],
             posture: "ask".to_string(),
+            subagent_list: vec![],
+            shell_running: false,
         },
         SessionView {
             id: "s3".to_string(),
@@ -146,6 +150,8 @@ fn representative_snapshot() -> AppSnapshot {
             mcp_servers: vec![],
             slash_commands: vec![],
             posture: "ask".to_string(),
+            subagent_list: vec![],
+            shell_running: false,
         },
         SessionView {
             id: "s4".to_string(),
@@ -178,6 +184,8 @@ fn representative_snapshot() -> AppSnapshot {
             mcp_servers: vec![],
             slash_commands: vec![],
             posture: "ask".to_string(),
+            subagent_list: vec![],
+            shell_running: false,
         },
         SessionView {
             id: "s5".to_string(),
@@ -210,6 +218,8 @@ fn representative_snapshot() -> AppSnapshot {
             mcp_servers: vec![],
             slash_commands: vec![],
             posture: "ask".to_string(),
+            subagent_list: vec![],
+            shell_running: false,
         },
     ];
 
@@ -797,6 +807,8 @@ fn session_view_new_fields_populated() {
             argument_hint: "".to_string(),
         }],
         posture: "auto".to_string(),
+        subagent_list: vec![],
+        shell_running: false,
     };
     let sv2 = sv.clone();
     assert_eq!(sv, sv2);
@@ -834,6 +846,8 @@ fn session_view_new_fields_empty_by_default_in_literal() {
         mcp_servers: vec![],
         slash_commands: vec![],
         posture: "ask".to_string(),
+        subagent_list: vec![],
+        shell_running: false,
     };
     assert!(sv.tools.is_empty());
     assert!(sv.mcp_servers.is_empty());

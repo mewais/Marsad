@@ -76,6 +76,8 @@ fn sv(id: &str, host_id: &str, cost_usd: f64, cost_estimated: bool) -> SessionVi
         mcp_servers: vec![],
         slash_commands: vec![],
         posture: "ask".to_string(),
+        subagent_list: vec![],
+        shell_running: false,
     }
 }
 

@@ -1065,20 +1065,27 @@ pub fn list_templates(state: State<'_, ManagedState>) -> Result<Vec<PersistedTem
 ///
 /// In mock mode, a canned output is injected so the UI renders something
 /// visually correct even without a real agent.
+/// `async` is essential: a `!` command can be long-running, and a SYNCHRONOUS
+/// Tauri command runs on the webview's main thread — it would FREEZE the whole
+/// UI until the command finished, then dump the `!` line + output at once. This
+/// async version instead: (1) injects the `! <cmd>` line + a "shell running"
+/// flag immediately so it shows the instant the user hits enter (with a working
+/// indicator), (2) runs the command on the blocking pool (off the async runtime
+/// and off the main thread), (3) injects the output when it completes. The state
+/// lock is taken + dropped around each step, never held across the await.
 #[tauri::command(rename_all = "snake_case")]
-pub fn run_shell(
+pub async fn run_shell(
     app: tauri::AppHandle,
     state: State<'_, ManagedState>,
     session_id: String,
     command: String,
 ) -> Result<(), String> {
-    // 1. Briefly lock to resolve the host target (local vs remote), the
-    //    session's project dir, and the host's setup+env, so `!cmd` runs in
-    //    the SAME environment as the session's claude process.
+    // 1. Briefly lock to resolve host target/project/setup/env AND inject the
+    //    `! <command>` line + mark the shell running — so it renders immediately.
     #[allow(clippy::type_complexity)]
     let (host_target, project, host_setup, host_env): (Option<String>, String, Option<String>, Vec<(String, String)>) = {
-        let guard = state.lock().map_err(|e| e.to_string())?;
-        match &*guard {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
             AppState::Live(core) => {
                 let snap = core.snapshot();
                 let sv = snap
@@ -1096,23 +1103,24 @@ pub fn run_shell(
                     }
                     None => (None, None, Vec::new()),
                 };
+                // Inject the command line + working flag NOW (before executing).
+                let updates = core
+                    .inject_shell_command(&session_id, &command)
+                    .map_err(map_err)?;
+                crate::events::emit_updates(&app, updates);
                 (target, project, setup, env)
             }
             AppState::Mock(_) => (None, String::new(), None, Vec::new()),
         }
-    }; // lock released
+    }; // lock released before the await below
 
-    // 2. Execute the command OFF the lock, in the session's project dir.
-    //    Prepend the host's setup command + env exports so `!cmd` runs in the
-    //    SAME environment that claude itself gets.
-    let output = match host_target {
+    // 2. Execute the command on the BLOCKING POOL so the UI never freezes.
+    let cmd_for_exec = command.clone();
+    let output = tauri::async_runtime::spawn_blocking(move || match host_target {
         Some(target) => {
-            // Remote: prepend setup + env exports, then cd into the project
-            // (best-effort) and run the command.
-            // `2>&1` folds stderr into stdout — run_remote_script captures stdout
-            // only, so without this an erroring/stderr-only command (e.g. a "not
-            // found") would render as an empty block. Empty result → "(no output)".
-            let script = build_remote_shell_script(&host_setup, &host_env, &project, &command);
+            // Remote: setup + env exports + cd + command; `2>&1` folds stderr in.
+            let script =
+                build_remote_shell_script(&host_setup, &host_env, &project, &cmd_for_exec);
             let out = marsad_agent::run_remote_script(&target, &script).unwrap_or_default();
             if out.trim().is_empty() {
                 "(no output)".to_string()
@@ -1120,26 +1128,21 @@ pub fn run_shell(
                 out
             }
         }
-        None => {
-            // Local execution in the project dir with setup+env prepended.
-            run_shell_locally_with_env(&command, &project, &host_setup, &host_env)
-        }
-    };
+        None => run_shell_locally_with_env(&cmd_for_exec, &project, &host_setup, &host_env),
+    })
+    .await
+    .unwrap_or_else(|e| format!("(shell task failed: {e})"));
 
-    // 3. Inject the result into the transcript (brief lock).
+    // 3. Inject the output (the `! <cmd>` line was already injected in step 1).
     let updates = {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
         match &mut *guard {
             AppState::Live(core) => core
-                .inject_shell_output(&session_id, &command, &output)
+                .inject_shell_result(&session_id, &output)
                 .map_err(map_err)?,
-            AppState::Mock(_) => {
-                // Mock: produce a canned entry so the UI looks correct in dev mode.
-                vec![]
-            }
+            AppState::Mock(_) => vec![],
         }
-    }; // lock released
-
+    };
     crate::events::emit_updates(&app, updates);
     Ok(())
 }

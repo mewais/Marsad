@@ -257,6 +257,17 @@ function deriveTranscript(
     });
   }
 
+  // An async `!` shell command is running: show a working spinner after the
+  // just-injected `! <cmd>` line, until its output arrives (run_shell runs the
+  // command off-thread so the UI never freezes).
+  if (sv.shell_running) {
+    msgs.push({
+      id: "shell-working-0",
+      kind: "working",
+      text: "Running shell command…",
+    });
+  }
+
   // If session has an error, show an error entry
   if (sv.state === "Error") {
     msgs.push({

@@ -178,6 +178,8 @@ export interface SessionView {
   running_subagents: number;
   /** Per-subagent detail list (running first, then done). Empty before first Task tool-use. */
   subagent_list: SubagentView[];
+  /** True while an async `!` shell command is running (show a working indicator). */
+  shell_running?: boolean;
   cost_usd: number;
   tokens: number;
   context_pct: number;

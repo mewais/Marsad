@@ -37,6 +37,11 @@ pub struct SessionView {
     /// collapsible running-subagents strip to show per-agent detail.
     #[serde(default)]
     pub subagent_list: Vec<SubagentView>,
+    /// True while an async `!` shell command is running (the transcript shows the
+    /// `! <cmd>` line and a working indicator until the output arrives). Drives
+    /// the Activity tab's shell "working…" spinner without blocking the UI.
+    #[serde(default)]
+    pub shell_running: bool,
     pub cost_usd: f64,
     pub tokens: u64,
     pub context_pct: f32,

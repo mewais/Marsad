@@ -150,6 +150,7 @@ pub fn seeded_mock() -> MockState {
             ],
             posture: "auto".to_string(),
             subagent_list: vec![],
+            shell_running: false,
         },
         // Needs attention — plan gate
         SessionView {
@@ -180,6 +181,7 @@ pub fn seeded_mock() -> MockState {
             slash_commands: vec![],
             posture: "auto".to_string(),
             subagent_list: vec![],
+            shell_running: false,
         },
         // Error — edit gate shown for reference
         SessionView {
@@ -210,6 +212,7 @@ pub fn seeded_mock() -> MockState {
             slash_commands: vec![],
             posture: "auto".to_string(),
             subagent_list: vec![],
+            shell_running: false,
         },
         // Working sessions
         SessionView {
@@ -240,6 +243,7 @@ pub fn seeded_mock() -> MockState {
             slash_commands: vec![],
             posture: "auto".to_string(),
             subagent_list: vec![],
+            shell_running: false,
         },
         SessionView {
             id: "s05".to_string(),
@@ -269,6 +273,7 @@ pub fn seeded_mock() -> MockState {
             slash_commands: vec![],
             posture: "auto".to_string(),
             subagent_list: vec![],
+            shell_running: false,
         },
         SessionView {
             id: "s06".to_string(),
@@ -298,6 +303,7 @@ pub fn seeded_mock() -> MockState {
             slash_commands: vec![],
             posture: "auto".to_string(),
             subagent_list: vec![],
+            shell_running: false,
         },
         // Done sessions
         SessionView {
@@ -328,6 +334,7 @@ pub fn seeded_mock() -> MockState {
             slash_commands: vec![],
             posture: "auto".to_string(),
             subagent_list: vec![],
+            shell_running: false,
         },
         SessionView {
             id: "s08".to_string(),
@@ -357,6 +364,7 @@ pub fn seeded_mock() -> MockState {
             slash_commands: vec![],
             posture: "auto".to_string(),
             subagent_list: vec![],
+            shell_running: false,
         },
         SessionView {
             id: "s09".to_string(),
@@ -386,6 +394,7 @@ pub fn seeded_mock() -> MockState {
             slash_commands: vec![],
             posture: "auto".to_string(),
             subagent_list: vec![],
+            shell_running: false,
         },
         // Stale session
         SessionView {
@@ -416,6 +425,7 @@ pub fn seeded_mock() -> MockState {
             slash_commands: vec![],
             posture: "auto".to_string(),
             subagent_list: vec![],
+            shell_running: false,
         },
     ];
 
