@@ -311,30 +311,36 @@ fn build_claude_model_catalog_offers_three_families_in_order_no_env() {
 }
 
 #[test]
-fn build_claude_model_catalog_env_resolved_id_lands_in_annotation_verbatim() {
+fn build_claude_model_catalog_env_resolved_id_lands_as_versioned_entry() {
     let mut resolved = HashMap::new();
     resolved.insert("opus", "claude-opus-4-8-20260101".to_string());
     resolved.insert("haiku", "  ".to_string()); // whitespace-only → ignored
     let catalog = build_claude_model_catalog(&resolved, &[]);
+    let ids: Vec<&str> = catalog.iter().map(|m| m.id.as_str()).collect();
 
-    let opus = catalog.iter().find(|m| m.id == "opus").unwrap();
-    assert_eq!(opus.annotation.as_deref(), Some("claude-opus-4-8-20260101"));
-    let haiku = catalog.iter().find(|m| m.id == "haiku").unwrap();
-    assert_eq!(
-        haiku.annotation, None,
-        "whitespace-only env value must not become an annotation"
-    );
+    // A resolved family becomes its CONCRETE versioned entry (annotated with the
+    // family word); the bare "opus" alias is dropped so the picker never shows both.
+    let opus = catalog
+        .iter()
+        .find(|m| m.id == "claude-opus-4-8-20260101")
+        .expect("resolved opus version is a concrete entry");
+    assert_eq!(opus.annotation.as_deref(), Some("opus"));
+    assert!(!ids.contains(&"opus"), "bare opus dropped when versioned present");
+    // haiku (whitespace-only → no version) and sonnet (no env) stay as bare aliases.
+    assert!(ids.contains(&"haiku"));
+    assert!(ids.contains(&"sonnet"));
 }
 
 #[test]
-fn build_claude_model_catalog_merges_observed_dedup_by_id() {
+fn build_claude_model_catalog_prefers_versioned_over_bare_family() {
     let observed = vec![
-        // Already a family word → must NOT duplicate.
+        // A stray bare family word (e.g. from env) → must be dropped in favor of
+        // the versioned entry below.
         ModelInfo {
             id: "sonnet".to_string(),
             annotation: None,
         },
-        // A concrete observed model → appended after the families.
+        // The concrete versioned model.
         ModelInfo {
             id: "claude-sonnet-4-6-20251111".to_string(),
             annotation: None,
@@ -342,11 +348,14 @@ fn build_claude_model_catalog_merges_observed_dedup_by_id() {
     ];
     let catalog = build_claude_model_catalog(&HashMap::new(), &observed);
     let ids: Vec<&str> = catalog.iter().map(|m| m.id.as_str()).collect();
-    assert_eq!(
-        ids,
-        vec!["opus", "sonnet", "haiku", "claude-sonnet-4-6-20251111"],
-        "observed families dedup; concrete observed models append after"
+    assert!(
+        !ids.contains(&"sonnet"),
+        "bare sonnet dropped when claude-sonnet-4-6 is present"
     );
+    assert!(ids.contains(&"claude-sonnet-4-6-20251111"));
+    // The families with no version at all remain pickable as bare aliases.
+    assert!(ids.contains(&"opus"));
+    assert!(ids.contains(&"haiku"));
 }
 
 #[test]
@@ -1078,11 +1087,13 @@ fn build_claude_model_catalog_merges_extra_models_after_families() {
     ];
     let catalog = build_claude_model_catalog(&HashMap::new(), &extra);
     let ids: Vec<&str> = catalog.iter().map(|m| m.id.as_str()).collect();
-    // Families first (opus, sonnet, haiku), then custom ids that aren't families.
+    // Observed ids first (fable, the bare sonnet — kept since no versioned sonnet
+    // exists — and custom-x), then the bare family fallbacks for families with no
+    // entry (opus, haiku). No versioned models here, so no bare family is dropped.
     assert_eq!(
         ids,
-        vec!["opus", "sonnet", "haiku", "fable", "custom-x"],
-        "families stay first; custom ids appended; family-word extra entry deduped"
+        vec!["fable", "sonnet", "custom-x", "opus", "haiku"],
+        "observed ids kept; bare family fallback only for families with no entry"
     );
 }
 
@@ -1133,7 +1144,9 @@ fn claude_discovery_extra_models_roundtrip_pure() {
         resolved.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
     let catalog = build_claude_model_catalog(&resolved_ref, &extra_observed);
     let ids: Vec<&str> = catalog.iter().map(|m| m.id.as_str()).collect();
-    assert_eq!(ids, vec!["opus", "sonnet", "haiku", "fable"]);
+    // No env versions and no versioned observed → fable kept, bare families as
+    // fallback (all three have no concrete version).
+    assert_eq!(ids, vec!["fable", "opus", "sonnet", "haiku"]);
 }
 
 #[test]
@@ -1203,9 +1216,14 @@ fn claude_discovery_roundtrip_pure() {
     let resolved_ref: std::collections::HashMap<&str, String> =
         resolved.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
     let catalog = build_claude_model_catalog(&resolved_ref, &[]);
-    // opus carries the host's resolved version annotation; sonnet/haiku don't.
-    let opus = catalog.iter().find(|m| m.id == "opus").unwrap();
-    assert_eq!(opus.annotation.as_deref(), Some("claude-opus-4-1"));
+    // opus resolves to a concrete versioned entry (annotated with the family);
+    // the bare "opus" alias is dropped. sonnet/haiku (no env) stay as bare aliases.
+    let opus = catalog
+        .iter()
+        .find(|m| m.id == "claude-opus-4-1")
+        .expect("resolved opus version present");
+    assert_eq!(opus.annotation.as_deref(), Some("opus"));
+    assert!(!catalog.iter().any(|m| m.id == "opus"), "bare opus dropped");
     let sonnet = catalog.iter().find(|m| m.id == "sonnet").unwrap();
     assert_eq!(sonnet.annotation, None);
     let sessions = parse_remote_claude_session_list(secs.get("sessions"));

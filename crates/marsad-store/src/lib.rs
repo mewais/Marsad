@@ -264,13 +264,19 @@ impl Backend for FsBackend {
         // alongside our key tree. Reading a socket file (`agent.sock`) errors and would
         // abort restore (→ hosts/sessions silently fail to load). Filter to our own
         // top-level categories so foreign files are never enumerated or read.
-        const STORE_CATEGORIES: [&str; 6] = [
+        const STORE_CATEGORIES: [&str; 9] = [
             "session",
             "host",
             "workspace",
             "transcript",
             "template",
             "meta",
+            // Workstream layer — MUST be listed or restore() silently drops every
+            // workstream/connection/profile, emptying the workstream-centric board
+            // (sessions load but show zero cards).
+            "workstream",
+            "connection",
+            "profile",
         ];
         let mut keys = Vec::new();
         walk(&self.root, &self.root, &mut keys)?;

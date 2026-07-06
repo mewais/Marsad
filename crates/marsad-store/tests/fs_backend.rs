@@ -99,3 +99,59 @@ fn host_session_workspace_round_trip_across_restart() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// Regression: FsBackend::list() must include the workstream-layer categories
+// (workstream/connection/profile). A missing category silently drops them on
+// restore — sessions load but the workstream-centric board shows ZERO cards, so
+// every session "vanishes" from the dashboard after a relaunch. (MemoryBackend
+// has no such filter, so this only reproduces on the real disk path.)
+#[test]
+fn workstream_layer_survives_restart_on_disk() {
+    use marsad_workstream::{Connection, Profile, Workstream};
+
+    let root = temp_root("wslayer");
+    let _ = std::fs::remove_dir_all(&root);
+
+    {
+        let mut store = Store::new(Box::new(FsBackend::new(&root)));
+        store
+            .upsert_workstream(&Workstream {
+                id: "ws-disk-1".to_string(),
+                name: "Disk WS".to_string(),
+                goal: String::new(),
+                profile: None,
+            })
+            .expect("persist workstream");
+        store
+            .upsert_profile(&Profile {
+                id: "prof-1".to_string(),
+                name: "Prof".to_string(),
+            })
+            .expect("persist profile");
+        store
+            .upsert_connection(&Connection {
+                id: "conn-1".to_string(),
+                ws: "ws-disk-1".to_string(),
+                from: "a".to_string(),
+                to: "b".to_string(),
+                kind: marsad_workstream::ConnKind::Command,
+                bi: false,
+                gate: None,
+            })
+            .expect("persist connection");
+    }
+
+    let store2 = Store::new(Box::new(FsBackend::new(&root)));
+    let restored = store2.restore().expect("restore from disk");
+
+    assert_eq!(
+        restored.workstreams.len(),
+        1,
+        "workstream must survive restart (FsBackend::list category allow-list)"
+    );
+    assert_eq!(restored.workstreams[0].id, "ws-disk-1");
+    assert_eq!(restored.profiles.len(), 1, "profile must survive restart");
+    assert_eq!(restored.connections.len(), 1, "connection must survive restart");
+
+    let _ = std::fs::remove_dir_all(&root);
+}

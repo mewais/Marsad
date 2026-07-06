@@ -107,29 +107,39 @@ fn live_local_claude_discovers_availability_and_family_models() {
         caps.errors
     );
     assert!(caps.launchable, "claude has a launch driver");
-    // The three families are offered when claude resolves on the host.
+    // Each of the three families must be OFFERED — but as its concrete versioned
+    // model when one is discovered (env/transcript), else the bare alias. The
+    // picker never shows both the bare alias and its version, so we assert each
+    // family is present either bare OR as a versioned id containing the family word.
     let ids: Vec<&str> = caps.models.models.iter().map(|m| m.id.as_str()).collect();
     for fam in ["opus", "sonnet", "haiku"] {
         assert!(
-            ids.contains(&fam),
-            "claude family `{fam}` must be offered; got {ids:?}"
+            ids.iter().any(|id| id.contains(fam)),
+            "claude family `{fam}` must be offered (bare or versioned); got {ids:?}"
         );
+        // The bare alias must NOT coexist with a versioned sibling.
+        let has_versioned = ids.iter().any(|id| *id != fam && id.contains(fam));
+        if has_versioned {
+            assert!(
+                !ids.contains(&fam),
+                "bare `{fam}` must be dropped when a versioned `{fam}` model exists; got {ids:?}"
+            );
+        }
     }
-    // If ANTHROPIC_DEFAULT_OPUS_MODEL is set on this host, the opus family MUST
-    // carry that resolved version as its annotation (real per-host discovery,
-    // not a static family list).
+    // If ANTHROPIC_DEFAULT_OPUS_MODEL is set on this host, its resolved version
+    // MUST appear as a concrete entry annotated with the "opus" family word.
     if let Ok(opus_env) = std::env::var("ANTHROPIC_DEFAULT_OPUS_MODEL") {
         if !opus_env.trim().is_empty() {
             let opus = caps
                 .models
                 .models
                 .iter()
-                .find(|m| m.id == "opus")
-                .expect("opus family present");
+                .find(|m| m.id == opus_env)
+                .expect("resolved opus version present as a concrete entry");
             assert_eq!(
                 opus.annotation.as_deref(),
-                Some(opus_env.as_str()),
-                "opus family must be annotated with the host's resolved version"
+                Some("opus"),
+                "resolved opus version must be annotated with its family word"
             );
         }
     }

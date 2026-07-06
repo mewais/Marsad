@@ -33,6 +33,18 @@ pub(crate) fn resolve_socket_path() -> String {
 }
 
 /// Resolve the data root directory.
+/// Append a diagnostic line to `<data_root>/desktop.log` (the GUI process has no
+/// visible stderr on Windows, so eprintln is invisible). Best-effort; never fails.
+fn diag_log(msg: &str) {
+    let dr = resolve_data_root();
+    let path = std::path::Path::new(&dr).join("desktop.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        use std::io::Write;
+        let _ = writeln!(f, "{msg}");
+    }
+    eprintln!("{msg}");
+}
+
 fn resolve_data_root() -> String {
     if let Ok(dr) = std::env::var("MARSAD_DATA_ROOT") {
         if !dr.is_empty() {
@@ -420,7 +432,16 @@ pub fn run() {
                             AppState::Live(core) => {
                                 let hosts = core.load_hosts().unwrap_or_default();
                                 let ws = core.load_workspaces().unwrap_or_default();
-                                let sessions = core.load_sessions().unwrap_or_default();
+                                let sessions_res = core.load_sessions();
+                                if let Err(e) = &sessions_res {
+                                    diag_log(&format!("marsad-desktop: STARTUP load_sessions ERROR: {e:?}"));
+                                }
+                                let sessions = sessions_res.unwrap_or_default();
+                                diag_log(&format!(
+                                    "marsad-desktop: STARTUP load_sessions -> {} update(s); core snapshot has {} session(s)",
+                                    sessions.len(),
+                                    core.snapshot().sessions.len()
+                                ));
                                 // Rebuild the workstreams board AFTER sessions load:
                                 // the redesigned dashboard is workstream-centric, and
                                 // load_workstreams auto-assigns every restored session
@@ -430,6 +451,16 @@ pub fn run() {
                                 // coming up empty. Must run after load_sessions so the
                                 // restored sessions exist when memberships are built.
                                 let workstreams = core.load_workstreams().unwrap_or_default();
+                                {
+                                    let b = core.board();
+                                    diag_log(&format!(
+                                        "marsad-desktop: STARTUP load_workstreams -> {} update(s); board has {} attention + {} all card(s); snapshot {} session(s)",
+                                        workstreams.len(),
+                                        b.attention.len(),
+                                        b.all.len(),
+                                        core.snapshot().sessions.len()
+                                    ));
+                                }
                                 // Connect-time discovery (deliverable #4a): TRULY
                                 // populate capabilities for every known host at
                                 // startup — non-blocking fire-and-forget sends; the
@@ -665,6 +696,20 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
                                 .body(&body)
                                 .show();
                         }
+                    }
+                }
+
+                // DIAG (#1 vanishing sessions): log any Board update the reader
+                // forwards post-startup — a later empty/partial board would clobber
+                // the correct startup board in the frontend.
+                for update in &updates {
+                    if let VmUpdate::Board(b) = update {
+                        diag_log(&format!(
+                            "marsad-desktop: reader Board update -> {} attention + {} all card(s) (from line: {})",
+                            b.attention.len(),
+                            b.all.len(),
+                            line.chars().take(80).collect::<String>()
+                        ));
                     }
                 }
 

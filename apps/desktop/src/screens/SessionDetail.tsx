@@ -9,7 +9,7 @@
 import type { CSSProperties } from "react";
 import { useVm } from "../bridge/useVm";
 import type { Tab } from "../bridge/types";
-import { stopSession, resumeSession, removeSession, capsForHostId } from "../bridge/api";
+import { stopSession, resumeSession, removeSession } from "../bridge/api";
 import { Badge } from "../components/Badge";
 import { ActivityTab } from "./tabs/Activity";
 import { ChangesTab } from "./tabs/Changes";
@@ -74,14 +74,15 @@ export function SessionDetail() {
   }
 
   const { name, host_label, branch, context_pct, model } = selectedDetail;
-  const { id: sessionId, state: sessionState, changed_files, host_id } = selectedSession;
+  const { id: sessionId, state: sessionState, changed_files } = selectedSession;
   const activeTab = state.tab;
 
-  // Driver pill — the session's host's capabilities entry carries the
-  // driver that's actually running it (dynamic-capabilities.md §3.6; there's
-  // no driver picker yet so a host maps to exactly one driver today, same
-  // as the board node's driver).
-  const driver = capsForHostId(state.capabilities, host_id)?.driver;
+  // Driver pill — the SESSION carries its own driver (SessionView.driver, from
+  // the persisted record). A host can expose several drivers, so deriving from
+  // the host's capabilities is arbitrary (capsForHostId returns whichever entry
+  // iterates first — codex/gemini/claude non-deterministically). Use the
+  // session's real driver; default to "claude" if an old view lacks the field.
+  const driver = selectedSession.driver ?? "claude";
   const driverColor = driver ? DRIVER_COLOR[driver] : undefined;
 
   // "‹ Back" — label = the parent workstream's name when this session was

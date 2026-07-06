@@ -61,22 +61,53 @@ pub fn build_claude_model_catalog(
     resolved: &HashMap<&str, String>,
     observed: &[ModelInfo],
 ) -> Vec<ModelInfo> {
-    let mut out: Vec<ModelInfo> = ["opus", "sonnet", "haiku"]
-        .iter()
-        .map(|family| ModelInfo {
-            id: family.to_string(),
-            annotation: resolved
-                .get(*family)
-                .filter(|v| !v.trim().is_empty())
-                .cloned(),
-        })
-        .collect();
+    const FAMILIES: [&str; 3] = ["opus", "sonnet", "haiku"];
+    let mut out: Vec<ModelInfo> = Vec::new();
 
+    // 1. Concrete versioned models resolved from the host env (family → version),
+    //    annotated with the family word (picker reads "claude-opus-4-8 (opus)").
+    for family in FAMILIES {
+        if let Some(v) = resolved.get(family).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if !out.iter().any(|m| m.id == v) {
+                out.push(ModelInfo {
+                    id: v.to_string(),
+                    annotation: Some(family.to_string()),
+                });
+            }
+        }
+    }
+
+    // 2. Every observed/discovered model (transcript scan, config, env), deduped.
     for m in observed {
         if !out.iter().any(|existing| existing.id == m.id) {
             out.push(m.clone());
         }
     }
+
+    // 3. Drop the bare family alias (opus/sonnet/haiku) whenever a CONCRETE
+    //    versioned model of that family is present — the picker must not show both
+    //    "opus" AND "claude-opus-4-8". A versioned id contains its family word.
+    //    Precompute which families are versioned to avoid borrowing `out` twice.
+    let versioned: Vec<&str> = FAMILIES
+        .iter()
+        .copied()
+        .filter(|f| out.iter().any(|m| m.id.as_str() != *f && m.id.contains(f)))
+        .collect();
+    out.retain(|m| !(FAMILIES.contains(&m.id.as_str()) && versioned.contains(&m.id.as_str())));
+
+    // 4. Bare family fallback: if a family has NEITHER a version NOR a bare entry
+    //    yet (nothing observed/resolved for it), offer the bare alias so it stays
+    //    pickable (claude accepts "opus"/"sonnet"/"haiku" directly).
+    for family in FAMILIES {
+        let present = out.iter().any(|m| m.id.contains(family));
+        if !present {
+            out.push(ModelInfo {
+                id: family.to_string(),
+                annotation: None,
+            });
+        }
+    }
+
     out
 }
 
