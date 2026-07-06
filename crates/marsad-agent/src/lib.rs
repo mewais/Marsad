@@ -731,6 +731,7 @@ impl Agent {
                 .and_then(|v| v.as_str().map(str::to_string)),
             disallowed_tools: spec.disallowed_tools.clone(),
             driver: spec.driver.clone(),
+            slash_commands: vec![],
         };
         self.store
             .0

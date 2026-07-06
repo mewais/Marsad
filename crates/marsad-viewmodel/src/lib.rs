@@ -32,6 +32,11 @@ pub struct SessionView {
     pub subagents: u32,
     /// Number of currently running (in-progress) subagents.
     pub running_subagents: u32,
+    /// Per-subagent detail list (name, model, status), sorted running first then done.
+    /// Empty before the first Task/Agent tool-use event. Used by the Activity tab's
+    /// collapsible running-subagents strip to show per-agent detail.
+    #[serde(default)]
+    pub subagent_list: Vec<SubagentView>,
     pub cost_usd: f64,
     pub tokens: u64,
     pub context_pct: f32,
@@ -82,6 +87,21 @@ pub struct SessionView {
 
 fn default_posture() -> String {
     "ask".to_string()
+}
+
+// ---------------------------------------------------------------------------
+// SubagentView — one row in the running/done subagents list
+// ---------------------------------------------------------------------------
+
+/// Display-ready view of a single subagent (Task/Agent tool-use).
+/// Serialises as `{"name":"...", "model":"...", "status":"Running"|"Done"}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SubagentView {
+    pub name: String,
+    pub model: Option<String>,
+    /// "Running" while the subagent's tool_result has not yet closed it;
+    /// "Done" once the matching tool_result arrives.
+    pub status: String,
 }
 
 // ---------------------------------------------------------------------------

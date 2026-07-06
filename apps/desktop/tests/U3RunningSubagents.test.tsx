@@ -169,6 +169,7 @@ describe("U3 — Activity tab already renders subagent counts (regression guard)
       </ThemeProvider>
     );
     // subagents=3, running_subagents=2 => 1 completed.
-    expect(screen.getByText(/1 sub-agent$/i)).toBeTruthy();
+    // The entry renders as "1 sub-agent completed" inside the collapsible header.
+    expect(screen.getByText(/1 sub-agent completed/i)).toBeTruthy();
   });
 });

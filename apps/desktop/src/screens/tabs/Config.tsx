@@ -67,6 +67,9 @@ export function ConfigTab() {
   const initialModel = selectedSession?.model ?? "";
   const initialPosture = (selectedSession?.posture as PostureId) ?? "ask";
   const [selectedModel, setSelectedModel] = useState(initialModel);
+  // The currently RUNNING model for this session (from system/init, never
+  // overridden by the UI's "next restart" picker state).
+  const runningModel = selectedSession?.model ?? "";
   const [posture, setPosture] = useState<PostureId>(initialPosture);
   // #1 model free-text — the custom input is ONLY for a model NOT in the
   // catalog. Empty when the selected model matches a catalog entry (a picked
@@ -175,11 +178,15 @@ export function ConfigTab() {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {modelOptions.map((mo) => {
               const active = selectedModel === mo.id;
+              // "current" = the model actually running in this session, which
+              // may differ from the picker's "next restart" selection.
+              const current = runningModel === mo.id && !active;
               return (
                 <button
                   key={mo.id}
                   data-testid={`model-btn-${mo.id}`}
                   onClick={() => setSelectedModel(mo.id)}
+                  title={current ? `Currently running: ${mo.id}` : mo.id}
                   style={{
                     fontFamily: "inherit",
                     fontSize: "calc(14.5px * var(--fs,1))",
@@ -189,13 +196,35 @@ export function ConfigTab() {
                     cursor: "pointer",
                     border: active
                       ? "1px solid var(--accent)"
-                      : "1px solid var(--border2)",
-                    background: active ? "var(--accent-bg)" : "var(--panel2)",
-                    color: active ? "var(--accent2)" : "var(--txt2)",
+                      : current
+                        ? "1px solid var(--done)"
+                        : "1px solid var(--border2)",
+                    background: active
+                      ? "var(--accent-bg)"
+                      : current
+                        ? "var(--done-bg)"
+                        : "var(--panel2)",
+                    color: active
+                      ? "var(--accent2)"
+                      : current
+                        ? "var(--done)"
+                        : "var(--txt2)",
                   }}
                 >
                   {mo.id}
                   {mo.annotation ? ` — ${mo.annotation}` : ""}
+                  {current && (
+                    <span
+                      style={{
+                        marginLeft: 6,
+                        fontSize: "calc(10.5px * var(--fs,1))",
+                        fontWeight: 700,
+                        opacity: 0.8,
+                      }}
+                    >
+                      ● live
+                    </span>
+                  )}
                 </button>
               );
             })}

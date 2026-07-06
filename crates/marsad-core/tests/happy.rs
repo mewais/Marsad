@@ -2318,6 +2318,7 @@ fn seed_session(seed: &mut Store, id: &str, host_id: &str, claude_uuid: Option<&
         posture: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
+        slash_commands: vec![],
     })
     .expect("seed session");
 }
@@ -2687,6 +2688,7 @@ fn load_sessions_restores_custom_name() {
         posture: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
+        slash_commands: vec![],
     })
     .expect("seed named session");
 
@@ -3905,6 +3907,7 @@ fn seed_session_with_posture(seed: &mut Store, id: &str, posture: Option<&str>) 
         posture: posture.map(|s| s.to_string()),
         disallowed_tools: vec![],
         driver: "claude".to_string(),
+        slash_commands: vec![],
     })
     .expect("seed session with posture");
 }
@@ -4125,6 +4128,7 @@ fn restart_session_carries_persisted_setup_env_claude_bin() {
         posture: Some("Ask".to_string()),
         disallowed_tools: vec![],
         driver: "claude".to_string(),
+        slash_commands: vec![],
     })
     .expect("seed session");
 
@@ -4288,4 +4292,156 @@ fn system_init_overrides_launch_posture() {
         sv_after.posture, "full",
         "system/init bypassPermissions must override launch posture to 'full'"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Bug #9 — tokens/context/cost seed-then-accumulate on attach
+//
+// Contract (user-confirmed): when a TranscriptBackfill or UsageUpdate
+// arrives for a session that has never had a live `result` event
+// (tokens == 0), it seeds the token total from the aggregated JSONL data
+// so the UI shows the full accumulated total immediately on attach —
+// not zero. Subsequent live `result` events ADD to that baseline
+// (i.e. replace state.tokens with the authoritative cumulative value;
+// since reduce_result sets tokens = u.total, the result IS the growing
+// accumulated total). context_pct also reflects the seeded token count.
+// ---------------------------------------------------------------------------
+
+/// TranscriptBackfill seeds tokens and context_pct from the JSONL aggregate
+/// when no live result has fired (tokens == 0 before the backfill).
+#[test]
+fn backfill_seeds_tokens_and_context_pct_when_no_live_result() {
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed_session(&mut seed, "session-seed-1", "host-5", Some("uuid-seed-1"));
+    let mut core = core_with_backend(backend);
+    core.load_sessions().expect("load_sessions");
+
+    // Sanity: before backfill, tokens == 0.
+    let sv_before = core
+        .snapshot()
+        .sessions
+        .into_iter()
+        .find(|s| s.id == "session-seed-1")
+        .expect("session");
+    assert_eq!(sv_before.tokens, 0, "tokens must be 0 before backfill");
+
+    // JSONL with 1000 input + 500 output + 200 cache_read on sonnet.
+    // Total counted tokens = 1000 + 500 + 200 = 1700.
+    let jsonl = r#"{"type":"assistant","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":1000,"output_tokens":500,"cache_read_input_tokens":200,"cache_creation_input_tokens":0}}}"#;
+    let updates = core
+        .on_agent_line(&backfill_line("session-seed-1", jsonl))
+        .expect("backfill applies");
+
+    let sv = updates
+        .iter()
+        .find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None })
+        .expect("Session update from backfill");
+
+    // tokens must be seeded from the JSONL aggregate (1000 + 500 + 200 = 1700).
+    assert_eq!(sv.tokens, 1700, "tokens must be seeded from JSONL (1700)");
+    // context_pct must be non-zero (1700 / 200_000 * 100 ≈ 0.85%).
+    assert!(sv.context_pct > 0.0, "context_pct must be > 0 after seeding");
+    // The model_usage row must be present and estimated.
+    assert_eq!(sv.model_usage.len(), 1, "one model_usage row");
+    assert!(sv.model_usage[0].estimated, "backfill row is estimated");
+}
+
+/// A live result event after a backfill replaces (accumulates) the token total
+/// with the authoritative cumulative value from the agent — never resets to 0.
+#[test]
+fn result_after_backfill_accumulates_not_resets() {
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed_session(&mut seed, "session-seed-2", "host-5", Some("uuid-seed-2"));
+    let mut core = core_with_backend(backend);
+    core.load_sessions().expect("load_sessions");
+
+    // 1. Backfill seeds tokens from 800 input + 200 output = 1000 tokens.
+    let jsonl = r#"{"type":"assistant","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":800,"output_tokens":200,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
+    core.on_agent_line(&backfill_line("session-seed-2", jsonl))
+        .expect("backfill");
+    let sv_after_bf = core
+        .snapshot()
+        .sessions
+        .into_iter()
+        .find(|s| s.id == "session-seed-2")
+        .expect("session");
+    assert_eq!(sv_after_bf.tokens, 1000, "backfill seeds 1000 tokens");
+
+    // 2. Feed a system/init (needed to move phase away from Stale before result).
+    core.on_agent_line(&ipc_agent_event_system_init("session-seed-2"))
+        .expect("init");
+
+    // 3. Live result event: cumulative usage from agent = 1200 input + 300 output = 1500.
+    //    This is the authoritative running total — must REPLACE (not reset) the seeded value.
+    let result_line = format!(
+        r#"{{"type":"AgentEvent","session_id":"session-seed-2","event":{{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"usage":{{"input_tokens":1200,"output_tokens":300,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":1,"permission_denials":[]}}}}"#
+    );
+    let result_updates = core.on_agent_line(&result_line).expect("result");
+    let sv_final = result_updates
+        .iter()
+        .find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None })
+        .expect("Session from result");
+
+    // After result, tokens = 1200 + 300 = 1500 (authoritative cumulative from agent).
+    assert_eq!(
+        sv_final.tokens, 1500,
+        "result must set tokens to authoritative cumulative (1500), not reset to 0"
+    );
+    assert!(
+        sv_final.context_pct > 0.0,
+        "context_pct must remain > 0 after result"
+    );
+    // The live result cost must be the one from the result event (authoritative).
+    assert!(sv_final.cost_usd > 0.0, "cost_usd from live result must be non-zero");
+}
+
+/// UsageUpdate seeds tokens from input+output when tokens == 0 (no live result yet).
+#[test]
+fn usage_update_seeds_tokens_when_no_live_result() {
+    let (mut core, _peer) = make_core();
+    let id = core
+        .launch_session(LaunchSpec {
+            project: "/p".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            model: "claude-sonnet-4-6".to_string(),
+            posture: Posture::Ask,
+            first_prompt: None,
+            mode: Default::default(),
+            name: None,
+            disallowed_tools: vec![],
+            wasl: false,
+            driver: "claude".to_string(),
+        })
+        .expect("launch");
+    core.on_agent_line(&ipc_agent_event_system_init(&id))
+        .expect("init");
+
+    // Before UsageUpdate, tokens == 0 (no result event).
+    let sv_before = core
+        .snapshot()
+        .sessions
+        .into_iter()
+        .find(|s| s.id == id)
+        .expect("session");
+    assert_eq!(sv_before.tokens, 0, "tokens 0 before usage update");
+
+    // UsageUpdate: 600 input + 400 output on sonnet → 1000 total input+output.
+    let usage = r#"{"claude-sonnet-4-6":{"input":600,"output":400,"cache_read":0,"cache_creation":0}}"#;
+    let updates = core
+        .on_agent_line(&ipc_usage_update(&id, usage))
+        .expect("usage_update");
+    let sv = updates
+        .iter()
+        .find_map(|u| if let VmUpdate::Session(s) = u { Some(s) } else { None })
+        .expect("Session from usage_update");
+
+    // Tokens seeded: input (600) + output (400) = 1000.
+    assert_eq!(sv.tokens, 1000, "UsageUpdate must seed tokens (600+400=1000)");
+    assert!(sv.context_pct > 0.0, "context_pct seeded from usage update");
 }

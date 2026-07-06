@@ -156,6 +156,14 @@ export interface ModelUsageRow {
   estimated: boolean;
 }
 
+/** One subagent entry from the session's Task/Agent tool-use stream. */
+export interface SubagentView {
+  name: string;
+  model?: string | null;
+  /** "Running" or "Done" */
+  status: string;
+}
+
 export interface SessionView {
   id: string;
   name: string;
@@ -168,6 +176,8 @@ export interface SessionView {
   subagents: number;
   /** Number of currently running (in-progress) subagents. */
   running_subagents: number;
+  /** Per-subagent detail list (running first, then done). Empty before first Task tool-use. */
+  subagent_list: SubagentView[];
   cost_usd: number;
   tokens: number;
   context_pct: number;

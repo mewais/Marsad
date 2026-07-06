@@ -189,6 +189,7 @@ fn resume_session_tracked_with_claude_id_resumes() {
             posture: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
         })
         .expect("upsert");
     let mut agent = Agent::with_fakes(
@@ -230,6 +231,7 @@ fn resume_session_empty_claude_id_continues() {
             posture: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
         })
         .expect("upsert");
     let mut agent = Agent::with_fakes(
@@ -283,6 +285,7 @@ fn resume_session_restores_persisted_posture() {
             posture: Some("FullAutonomy".to_string()),
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
         })
         .expect("upsert");
     let mut agent = Agent::with_fakes(
@@ -503,6 +506,7 @@ fn reconcile_all_adopt_branch() {
             posture: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
         })
         .expect("upsert");
 
@@ -557,6 +561,7 @@ fn reconcile_all_resume_branch() {
             posture: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
         })
         .expect("upsert");
 
@@ -612,6 +617,7 @@ fn reconcile_all_stale_branch() {
             posture: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
         })
         .expect("upsert");
 
@@ -670,6 +676,7 @@ fn reconcile_all_mixed_adopt_resume_stale() {
             posture: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
         })
         .expect("upsert adopt");
     store
@@ -689,6 +696,7 @@ fn reconcile_all_mixed_adopt_resume_stale() {
             posture: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
         })
         .expect("upsert resume");
     store
@@ -708,6 +716,7 @@ fn reconcile_all_mixed_adopt_resume_stale() {
             posture: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
         })
         .expect("upsert stale");
 
@@ -959,6 +968,7 @@ fn reconcile_all_adopt_phase_is_detached() {
             posture: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
         })
         .expect("upsert");
 
@@ -1004,6 +1014,7 @@ fn reconcile_all_resume_phase_is_none() {
             posture: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
         })
         .expect("upsert");
 
@@ -1049,6 +1060,7 @@ fn reconcile_all_stale_phase_is_stale() {
             posture: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
         })
         .expect("upsert");
 

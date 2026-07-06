@@ -27,6 +27,7 @@ import type {
   Gate,
   PlanStep,
   QuestionPrompt,
+  SubagentView,
 } from "../../bridge/types";
 
 // ---------------------------------------------------------------------------
@@ -163,6 +164,8 @@ interface TranscriptMsg {
   name?: string;
   model?: string;
   subStatus?: string;
+  /** Per-subagent detail list for the collapsible expanded view. */
+  subagentList?: SubagentView[];
   // hitl fields (questions/permission/plan/edit — see HitlEpisode above)
   episode?: HitlEpisode;
   pending?: boolean;
@@ -288,7 +291,7 @@ function deriveTranscript(
     });
   }
 
-  // If there are running subagents, show a running indicator
+  // Running subagents: one collapsible entry with the full list.
   if (sv.running_subagents > 0) {
     msgs.push({
       id: "subagent-running-0",
@@ -296,18 +299,21 @@ function deriveTranscript(
       name: `${sv.running_subagents} sub-agent${sv.running_subagents > 1 ? "s" : ""} running`,
       model: sv.model,
       subStatus: "Working",
+      // Pass the full list for the expanded view; filter to running only for the header count.
+      subagentList: sv.subagent_list?.filter(a => a.status === "Running") ?? [],
     });
   }
 
-  // If there are completed subagents, show a summary entry
+  // Completed subagents: summary entry (not collapsible — done is inert).
   const completedSubagents = sv.subagents - sv.running_subagents;
   if (completedSubagents > 0) {
     msgs.push({
       id: "subagent-0",
       kind: "subagent",
-      name: `${completedSubagents} sub-agent${completedSubagents > 1 ? "s" : ""}`,
+      name: `${completedSubagents} sub-agent${completedSubagents > 1 ? "s" : ""} completed`,
       model: sv.model,
       subStatus: "Done",
+      subagentList: sv.subagent_list?.filter(a => a.status === "Done") ?? [],
     });
   }
 
@@ -978,36 +984,114 @@ function HitlCard({
   }
 }
 
+/** One row in the expanded per-subagent detail list. */
+function SubagentDetailRow({ agent }: { agent: SubagentView }) {
+  const isRunning = agent.status === "Running";
+  const statusColor = isRunning ? "var(--accent2)" : "var(--done)";
+  const statusBg = isRunning ? "var(--working-bg)" : "var(--done-bg)";
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 9,
+        padding: "5px 0",
+        borderBottom: "1px solid var(--border)",
+      }}
+    >
+      <span style={{ fontSize: "calc(12px * var(--fs,1))", color: "var(--accent2)" }}>⊟</span>
+      <span
+        style={{
+          flex: 1,
+          fontSize: "calc(13px * var(--fs,1))",
+          fontWeight: 600,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {agent.name || "(unnamed)"}
+      </span>
+      {agent.model && (
+        <span
+          className="mono"
+          style={{
+            fontSize: "calc(11px * var(--fs,1))",
+            color: "var(--txt3)",
+            flexShrink: 0,
+          }}
+        >
+          {agent.model}
+        </span>
+      )}
+      <span
+        style={{
+          fontSize: "calc(10.5px * var(--fs,1))",
+          fontWeight: 700,
+          padding: "1px 6px",
+          borderRadius: 4,
+          textTransform: "uppercase" as const,
+          letterSpacing: 0.3,
+          color: statusColor,
+          background: statusBg,
+          flexShrink: 0,
+        }}
+      >
+        {agent.status}
+      </span>
+    </div>
+  );
+}
+
 function SubagentEntry({
   name,
   model,
   subStatus,
+  subagentList,
 }: {
   name: string;
   model?: string;
   subStatus?: string;
+  subagentList?: SubagentView[];
 }) {
+  const [expanded, setExpanded] = useState(false);
   const isWorking = subStatus === "Working";
   const statusColor = isWorking ? "var(--accent2)" : "var(--done)";
   const statusBg = isWorking ? "var(--working-bg)" : "var(--done-bg)";
+  const hasDetail = subagentList && subagentList.length > 0;
+
   return (
     <div
       style={{
         marginLeft: 37,
-        borderLeft: "2px solid var(--accent)",
-        padding: "3px 0 3px 14px",
-        display: "flex",
-        flexDirection: "column",
-        gap: 7,
+        borderRadius: 9,
+        border: "1px solid var(--border)",
+        background: "var(--panel)",
+        overflow: "hidden",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-        <span style={{ fontSize: "calc(14.5px * var(--fs,1))", color: "var(--accent2)" }}>⊟</span>
-        <span style={{ fontWeight: 700, fontSize: "calc(14.5px * var(--fs,1))" }}>Subagent · {name}</span>
+      {/* Header row — always visible, clickable to toggle */}
+      <div
+        onClick={hasDetail ? () => setExpanded((x) => !x) : undefined}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 9,
+          padding: "8px 12px",
+          cursor: hasDetail ? "pointer" : "default",
+        }}
+      >
+        {hasDetail && (
+          <span style={{ color: "var(--txt3)", fontSize: "calc(9px * var(--fs,1))", width: 9 }}>
+            {expanded ? "▾" : "▸"}
+          </span>
+        )}
+        <span style={{ fontSize: "calc(14px * var(--fs,1))", color: "var(--accent2)" }}>⊟</span>
+        <span style={{ fontWeight: 700, fontSize: "calc(14px * var(--fs,1))", flex: 1 }}>{name}</span>
         {model && (
           <span
             className="mono"
-            style={{ fontSize: "calc(12.5px * var(--fs,1))", color: "var(--txt3)" }}
+            style={{ fontSize: "calc(12px * var(--fs,1))", color: "var(--txt3)", flexShrink: 0 }}
           >
             {model}
           </span>
@@ -1015,7 +1099,7 @@ function SubagentEntry({
         {subStatus && (
           <span
             style={{
-              fontSize: "calc(11.5px * var(--fs,1))",
+              fontSize: "calc(11px * var(--fs,1))",
               fontWeight: 700,
               padding: "1px 7px",
               borderRadius: 5,
@@ -1023,12 +1107,22 @@ function SubagentEntry({
               letterSpacing: 0.3,
               color: statusColor,
               background: statusBg,
+              flexShrink: 0,
             }}
           >
             {subStatus}
           </span>
         )}
       </div>
+
+      {/* Expanded per-agent detail list */}
+      {hasDetail && expanded && (
+        <div style={{ padding: "0 12px 10px 30px", borderTop: "1px solid var(--border)" }}>
+          {subagentList!.map((agent, i) => (
+            <SubagentDetailRow key={`${agent.name}-${i}`} agent={agent} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1203,6 +1297,7 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
                     name={msg.name ?? ""}
                     model={msg.model}
                     subStatus={msg.subStatus}
+                    subagentList={msg.subagentList}
                   />
                 );
               default:

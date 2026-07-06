@@ -340,6 +340,12 @@ pub struct PersistedSession {
     /// the only driver that existed before Stage 1.
     #[serde(default = "default_driver")]
     pub driver: String,
+    /// Slash commands available in this session (from system/init).  Persisted
+    /// so they are immediately available after an attach/reconnect — before a
+    /// fresh system/init fires (which happens only on a LAUNCH, not a reconnect).
+    /// `#[serde(default)]` keeps older records loading as empty vec.
+    #[serde(default)]
+    pub slash_commands: Vec<marsad_proto::SlashCommandInfo>,
 }
 
 fn default_driver() -> String {
@@ -930,6 +936,7 @@ impl Store {
                 posture: None,
                 disallowed_tools: vec![],
                 driver: default_driver(),
+                slash_commands: vec![],
             };
             let _ = self.upsert_session(&sess);
         }

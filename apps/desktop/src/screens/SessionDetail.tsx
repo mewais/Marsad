@@ -6,6 +6,7 @@
  * Workstreams redesign SLICE D — header polish to docs/design/DESIGN_HANDOFF.md
  * §"LEVEL 3 — Session".
  */
+import type { CSSProperties } from "react";
 import { useVm } from "../bridge/useVm";
 import type { Tab } from "../bridge/types";
 import { stopSession, resumeSession, removeSession, capsForHostId } from "../bridge/api";
@@ -72,7 +73,7 @@ export function SessionDetail() {
     );
   }
 
-  const { name, host_label, branch, context_pct } = selectedDetail;
+  const { name, host_label, branch, context_pct, model } = selectedDetail;
   const { id: sessionId, state: sessionState, changed_files, host_id } = selectedSession;
   const activeTab = state.tab;
 
@@ -128,9 +129,32 @@ export function SessionDetail() {
     removeSession(sessionId);
   }
 
-  // A not-live session (user-stopped, restored on relaunch, or process gone) is
-  // surfaced as "Stopped" — it offers Resume + Remove instead of Stop + Restart.
-  const isStopped = sessionState === "Stale" || sessionState === "Detached";
+  // A not-live session (user-stopped, restored on relaunch, process gone, or done)
+  // offers Resume + Delete instead of Pause + Delete.
+  // Running states (Working, Starting, Needs, Error) → Pause.
+  // Stopped states (Stale, Detached, Done) → Resume.
+  const isStopped =
+    sessionState === "Stale" ||
+    sessionState === "Detached" ||
+    sessionState === "Done";
+
+  // Shared button style for all action buttons in the header — ensures uniform
+  // height/padding/font across Back, Answer gate, Pause/Resume, Delete.
+  const headerBtnBase: CSSProperties = {
+    fontFamily: "inherit",
+    fontWeight: 600,
+    fontSize: "calc(14.5px * var(--fs,1))",
+    padding: "7px 13px",
+    borderRadius: 8,
+    cursor: "pointer",
+    minWidth: 84,
+    whiteSpace: "nowrap",
+    height: 34,
+    boxSizing: "border-box",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+  };
 
   return (
     <div
@@ -208,14 +232,22 @@ export function SessionDetail() {
               )}
               <span>▪ {host_label}</span>
               <span>⎇ {branch}</span>
+              {model && (
+                <span
+                  data-testid="session-model"
+                  style={{ color: "var(--txt3)" }}
+                >
+                  {model}
+                </span>
+              )}
               <span style={{ color: context_pct >= 75 ? "var(--needs)" : "var(--txt3)" }}>
                 ctx {Math.round(context_pct)}%
               </span>
             </div>
           </div>
 
-          {/* Action buttons */}
-          <div style={{ display: "flex", gap: 7, flexShrink: 0, alignItems: "flex-start" }}>
+          {/* Action buttons — all use headerBtnBase for uniform height/padding */}
+          <div style={{ display: "flex", gap: 7, flexShrink: 0, alignItems: "center" }}>
             {/* Back — label = parent workstream name when arrived from a
                 multi-session graph, else "Workstreams" (design's Level-3
                 header nav; see docs/design/DESIGN_HANDOFF.md §"LEVEL 3"). */}
@@ -223,16 +255,10 @@ export function SessionDetail() {
               data-testid="session-back-btn"
               onClick={handleBack}
               style={{
-                fontFamily: "inherit",
-                fontWeight: 600,
-                fontSize: "calc(13px * var(--fs,1))",
-                padding: "7px 13px",
-                borderRadius: 8,
+                ...headerBtnBase,
                 border: "1px solid var(--border2)",
                 background: "var(--panel2)",
                 color: "var(--txt2)",
-                cursor: "pointer",
-                whiteSpace: "nowrap",
               }}
             >
               ‹ {backLabel}
@@ -244,15 +270,11 @@ export function SessionDetail() {
                 data-testid="answer-gate-btn"
                 onClick={openGate}
                 style={{
-                  fontFamily: "inherit",
+                  ...headerBtnBase,
                   fontWeight: 700,
-                  fontSize: "calc(14.5px * var(--fs,1))",
-                  padding: "7px 13px",
-                  borderRadius: 8,
                   border: "1px solid var(--needs)",
                   background: "var(--needs-bg)",
                   color: "var(--needs)",
-                  cursor: "pointer",
                 }}
               >
                 Answer gate
@@ -265,15 +287,10 @@ export function SessionDetail() {
                 data-testid="resume-btn"
                 onClick={handleResume}
                 style={{
-                  fontFamily: "inherit",
-                  fontWeight: 600,
-                  fontSize: "calc(14.5px * var(--fs,1))",
-                  padding: "7px 12px",
-                  borderRadius: 8,
-                  border: "1px solid var(--border2)",
-                  background: "var(--panel2)",
-                  color: "var(--txt2)",
-                  cursor: "pointer",
+                  ...headerBtnBase,
+                  border: "1px solid var(--done)",
+                  background: "var(--done-bg)",
+                  color: "var(--done)",
                 }}
               >
                 ▶ Resume
@@ -283,15 +300,10 @@ export function SessionDetail() {
                 data-testid="pause-btn"
                 onClick={handleStop}
                 style={{
-                  fontFamily: "inherit",
-                  fontWeight: 600,
-                  fontSize: "calc(14.5px * var(--fs,1))",
-                  padding: "7px 12px",
-                  borderRadius: 8,
+                  ...headerBtnBase,
                   border: "1px solid var(--border2)",
                   background: "var(--panel2)",
                   color: "var(--txt2)",
-                  cursor: "pointer",
                 }}
               >
                 ⏸ Pause
@@ -302,15 +314,10 @@ export function SessionDetail() {
               data-testid="remove-btn"
               onClick={handleRemove}
               style={{
-                fontFamily: "inherit",
-                fontWeight: 600,
-                fontSize: "calc(14.5px * var(--fs,1))",
-                padding: "7px 12px",
-                borderRadius: 8,
+                ...headerBtnBase,
                 border: "1px solid var(--error)",
                 background: "var(--error-bg)",
                 color: "var(--error)",
-                cursor: "pointer",
               }}
             >
               ✕ Delete

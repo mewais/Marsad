@@ -149,6 +149,7 @@ pub fn seeded_mock() -> MockState {
                 SlashCommandInfo { name: "/compact".to_string(), description: "Compact context to save tokens".to_string(), argument_hint: "".to_string() },
             ],
             posture: "auto".to_string(),
+            subagent_list: vec![],
         },
         // Needs attention — plan gate
         SessionView {
@@ -178,6 +179,7 @@ pub fn seeded_mock() -> MockState {
             mcp_servers: vec![],
             slash_commands: vec![],
             posture: "auto".to_string(),
+            subagent_list: vec![],
         },
         // Error — edit gate shown for reference
         SessionView {
@@ -207,6 +209,7 @@ pub fn seeded_mock() -> MockState {
             mcp_servers: vec![],
             slash_commands: vec![],
             posture: "auto".to_string(),
+            subagent_list: vec![],
         },
         // Working sessions
         SessionView {
@@ -236,6 +239,7 @@ pub fn seeded_mock() -> MockState {
             mcp_servers: vec![],
             slash_commands: vec![],
             posture: "auto".to_string(),
+            subagent_list: vec![],
         },
         SessionView {
             id: "s05".to_string(),
@@ -264,6 +268,7 @@ pub fn seeded_mock() -> MockState {
             mcp_servers: vec![],
             slash_commands: vec![],
             posture: "auto".to_string(),
+            subagent_list: vec![],
         },
         SessionView {
             id: "s06".to_string(),
@@ -292,6 +297,7 @@ pub fn seeded_mock() -> MockState {
             mcp_servers: vec![],
             slash_commands: vec![],
             posture: "auto".to_string(),
+            subagent_list: vec![],
         },
         // Done sessions
         SessionView {
@@ -321,6 +327,7 @@ pub fn seeded_mock() -> MockState {
             mcp_servers: vec![],
             slash_commands: vec![],
             posture: "auto".to_string(),
+            subagent_list: vec![],
         },
         SessionView {
             id: "s08".to_string(),
@@ -349,6 +356,7 @@ pub fn seeded_mock() -> MockState {
             mcp_servers: vec![],
             slash_commands: vec![],
             posture: "auto".to_string(),
+            subagent_list: vec![],
         },
         SessionView {
             id: "s09".to_string(),
@@ -377,6 +385,7 @@ pub fn seeded_mock() -> MockState {
             mcp_servers: vec![],
             slash_commands: vec![],
             posture: "auto".to_string(),
+            subagent_list: vec![],
         },
         // Stale session
         SessionView {
@@ -406,6 +415,7 @@ pub fn seeded_mock() -> MockState {
             mcp_servers: vec![],
             slash_commands: vec![],
             posture: "auto".to_string(),
+            subagent_list: vec![],
         },
     ];
 

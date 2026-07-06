@@ -35,6 +35,7 @@ fn make_session(id: &str) -> PersistedSession {
         posture: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
+        slash_commands: vec![],
     }
 }
 
@@ -713,6 +714,7 @@ fn persisted_session_disallowed_tools_round_trips() {
         posture: None,
         disallowed_tools: vec!["Bash".to_string(), "Edit".to_string()],
         driver: "claude".to_string(),
+        slash_commands: vec![],
     };
     store.upsert_session(&session).expect("upsert");
     let restored = store.restore().expect("restore");

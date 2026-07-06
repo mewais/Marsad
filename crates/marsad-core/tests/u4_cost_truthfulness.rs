@@ -304,3 +304,123 @@ fn result_is_error_true_with_success_subtype_cost_flows_to_session_view() {
         sv.cost_usd
     );
 }
+
+// ---------------------------------------------------------------------------
+// Seed-then-accumulate test (bug #9 — tokens/context/cost reset on attach)
+// ---------------------------------------------------------------------------
+
+/// On attach/reconnect a TranscriptBackfill seeds tokens/context_pct from the
+/// JSONL history so the UI shows the accumulated total immediately rather than
+/// zero. A subsequent live `result` event then ACCUMULATES: it replaces the
+/// seeded baseline with the authoritative agent-reported total (which already
+/// reflects the full session — agent reports cumulative, not per-turn).
+///
+/// The key invariant: after seeding, `tokens > 0`; after the live result,
+/// `tokens` reflects the result's value (which is always the CUMULATIVE total
+/// from the agent's perspective — typically equal to or larger than the backfill
+/// estimate). Neither step should reset to zero.
+#[test]
+fn backfill_seeds_tokens_then_live_result_accumulates() {
+    let (mut core, _peer) = make_core();
+    let id = launch(&mut core);
+    core.on_agent_line(&init_line(&id)).expect("init");
+
+    // Step 1: backfill from the on-disk JSONL. Provides token history from a
+    // prior session that already ran 500 input + 300 output turns.
+    let jsonl = r#"{"type":"assistant","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":500,"output_tokens":300,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
+    let updates = core
+        .on_agent_line(&backfill_line(&id, jsonl))
+        .expect("backfill");
+    let sv_after_backfill = session_view_from(&updates);
+
+    // The backfill MUST seed a non-zero token count (800 = 500 + 300).
+    assert!(
+        sv_after_backfill.tokens > 0,
+        "bug #9: backfill must seed tokens > 0; got {} (counters reset to 0 on attach)",
+        sv_after_backfill.tokens
+    );
+    assert_eq!(
+        sv_after_backfill.tokens, 800,
+        "backfill should seed exactly 800 tokens (500 input + 300 output)"
+    );
+    // context_pct must be non-zero after seeding (sonnet window ~200k; 800 /
+    // 200000 = 0.4% → rounds to at least a tiny positive value).
+    assert!(
+        sv_after_backfill.context_pct > 0.0,
+        "backfill must seed context_pct > 0; got {}",
+        sv_after_backfill.context_pct
+    );
+
+    // Step 2: a live result event fires with a LARGER cumulative total. This
+    // represents the agent's authoritative running total after more turns.
+    // The result carries 1200 input + 600 output = 1800 total, cost $0.123.
+    let updates = core
+        .on_agent_line(&live_result_line(&id, "claude-sonnet-4-6", 1200, 600, 0.123))
+        .expect("live result");
+    let sv_after_result = session_view_from(&updates);
+
+    // After the live result, tokens must reflect the result's authoritative
+    // value — NOT reset to zero and NOT stuck at the backfill value.
+    assert!(
+        sv_after_result.tokens > 0,
+        "bug #9: live result must not reset tokens to 0; got {}",
+        sv_after_result.tokens
+    );
+    assert!(
+        sv_after_result.tokens >= sv_after_backfill.tokens,
+        "bug #9: live result must not DECREASE tokens below backfill baseline; \
+         before={}, after={}",
+        sv_after_backfill.tokens,
+        sv_after_result.tokens
+    );
+    // Agent-reported cost must be surfaced correctly (not zeroed).
+    assert!(
+        sv_after_result.cost_usd > 0.0,
+        "bug #9: live result cost must be > 0; got {}",
+        sv_after_result.cost_usd
+    );
+}
+
+/// Same as above but via `UsageUpdate` (the project-wide usage probe path).
+#[test]
+fn usage_update_seeds_tokens_then_live_result_accumulates() {
+    let (mut core, _peer) = make_core();
+    let id = launch(&mut core);
+    core.on_agent_line(&init_line(&id)).expect("init");
+
+    // Step 1: the attach-time usage probe returns token totals for the project.
+    let usage =
+        r#"{"claude-sonnet-4-6":{"input":400,"output":200,"cache_read":0,"cache_creation":0}}"#;
+    let updates = core
+        .on_agent_line(&usage_update_line(&id, usage))
+        .expect("usage update");
+    let sv_after_probe = session_view_from(&updates);
+
+    // Must seed a non-zero token count (600 = 400 + 200).
+    assert!(
+        sv_after_probe.tokens > 0,
+        "bug #9 (UsageUpdate): probe must seed tokens > 0; got {}",
+        sv_after_probe.tokens
+    );
+    assert_eq!(
+        sv_after_probe.tokens, 600,
+        "usage probe should seed exactly 600 tokens (400 in + 200 out)"
+    );
+
+    // Step 2: a live result fires with a larger cumulative total.
+    let updates = core
+        .on_agent_line(&live_result_line(&id, "claude-sonnet-4-6", 900, 400, 0.055))
+        .expect("live result");
+    let sv_after_result = session_view_from(&updates);
+
+    assert!(
+        sv_after_result.tokens > 0,
+        "bug #9 (UsageUpdate): live result must not reset tokens; got {}",
+        sv_after_result.tokens
+    );
+    assert!(
+        (sv_after_result.cost_usd - 0.055).abs() < 1e-9,
+        "cost must reflect the live result value exactly; got {}",
+        sv_after_result.cost_usd
+    );
+}

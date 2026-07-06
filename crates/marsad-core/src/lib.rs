@@ -619,6 +619,11 @@ impl Core {
                 .as_deref()
                 .and_then(posture_name_to_permission_mode)
                 .map(str::to_string);
+            // Restore slash_commands from the last time system/init fired so the
+            // Composer popover is pre-populated immediately on attach/reconnect —
+            // without waiting for a fresh system/init (which only fires on LAUNCH,
+            // not reconnect when send_init is false).
+            state.slash_commands = s.slash_commands.clone();
             // Restore the custom name: PersistedSession.name is the marsad id
             // when no custom name was set (agent default). Treat that as None so
             // the view falls back to the project basename.
@@ -627,6 +632,15 @@ impl Core {
             } else {
                 None
             };
+            // Probe git changes immediately for LOCAL sessions so the Changes tab
+            // is populated without waiting for the first tool_use/result event.
+            // Remote sessions get their changes from the agent's ChangesUpdate IPC.
+            let is_local = self.host_is_local(&s.host_id);
+            let initial_changes = if is_local {
+                self.git.changes(&s.project)
+            } else {
+                Vec::new()
+            };
             self.session_order.push(s.id.clone());
             self.sessions.insert(
                 s.id.clone(),
@@ -634,7 +648,7 @@ impl Core {
                     project: s.project.clone(),
                     host_id: s.host_id.clone(),
                     state,
-                    changes: Vec::new(),
+                    changes: initial_changes,
                     transcript,
                     seen_msg_ids: std::collections::HashSet::new(),
                     name: restored_name,
@@ -2067,6 +2081,32 @@ impl Core {
         // skip inserting an estimated row for any model that still has a live
         // row after that.
         if !model_usage_agg.is_empty() {
+            // Seed total tokens from the JSONL aggregation if no live `result`
+            // event has set them yet (tokens == 0). This ensures counters show
+            // the accumulated total from the transcript history immediately on
+            // attach/reconnect, and then GROW as new result events arrive
+            // (reduce_result replaces state.tokens with the authoritative value).
+            if record.state.tokens == 0 {
+                let total_tokens: u64 = model_usage_agg.values().map(|s| {
+                    s.input_tokens
+                        .saturating_add(s.output_tokens)
+                        .saturating_add(s.cache_read_input_tokens)
+                        .saturating_add(s.cache_creation_input_tokens)
+                }).sum();
+                if total_tokens > 0 {
+                    record.state.tokens = total_tokens;
+                    // Also seed cost_usd (used directly in make_session_view when
+                    // cost_estimated is false — but here cost_estimated will be true
+                    // since we're only setting estimated rows, so make_session_view
+                    // will sum the model_usage rows instead; leave cost_usd = 0.0).
+                    // Recompute context_pct from the seeded token total.
+                    let window = record.state.model.as_deref()
+                        .map(marsad_events::SessionState::context_window_for)
+                        .unwrap_or(200_000);
+                    let pct = (total_tokens as f64 / window as f64 * 100.0) as f32;
+                    record.state.context_pct = pct.min(100.0);
+                }
+            }
             record.state.model_usage.retain(|_, mu| !mu.estimated);
             for (model, summary) in model_usage_agg {
                 if record.state.model_usage.contains_key(&model) {
@@ -2173,6 +2213,24 @@ impl Core {
             Some(r) => r,
             None => return Ok(vec![]), // unknown session → no-op
         };
+        // Seed total tokens from the usage probe if no live `result` event has
+        // set them yet (tokens == 0). The usage probe gives the CUMULATIVE
+        // per-project total — use it as the token baseline so counters show
+        // the accumulated total on attach rather than starting from zero.
+        // A subsequent live `result` event will authoritatively replace this.
+        if record.state.tokens == 0 {
+            let total_tokens: u64 = rows.iter().map(|r| {
+                r.input_tokens.saturating_add(r.output_tokens)
+            }).sum();
+            if total_tokens > 0 {
+                record.state.tokens = total_tokens;
+                let window = record.state.model.as_deref()
+                    .map(marsad_events::SessionState::context_window_for)
+                    .unwrap_or(200_000);
+                let pct = (total_tokens as f64 / window as f64 * 100.0) as f32;
+                record.state.context_pct = pct.min(100.0);
+            }
+        }
         // Merge the estimated rows into the in-state model_usage map so
         // make_session_view picks it up. U4: drop only the PREVIOUSLY estimated
         // rows (this probe supersedes a stale one) and never touch — or
@@ -2362,6 +2420,10 @@ impl Core {
                 None
             };
 
+        // Detect a SystemInit BEFORE consuming the stream_msg — we need to
+        // know if slash_commands are about to be set so we can persist them.
+        let is_system_init = matches!(stream_msg, marsad_proto::StreamMsg::SystemInit(_));
+
         // Reduce the event, then decide whether the working tree may have changed.
         // Safe: require_session above guarantees the entry exists.
         let (project, host_id, should_probe) = {
@@ -2381,6 +2443,27 @@ impl Core {
                 tool_ran || just_finished,
             )
         };
+
+        // Persist slash_commands to the store after a SystemInit so that on the
+        // next attach/reconnect (when send_init is false), the restored session
+        // shows the same commands without waiting for another system/init.
+        // Best-effort: a store error here must not fail the event processing.
+        if is_system_init {
+            let slash_cmds = self
+                .sessions
+                .get(&session_id)
+                .map(|r| r.state.slash_commands.clone())
+                .unwrap_or_default();
+            if !slash_cmds.is_empty() {
+                // Load the persisted session, update slash_commands, write back.
+                if let Ok(restored) = self.store.restore() {
+                    if let Some(mut ps) = restored.sessions.into_iter().find(|s| s.id == session_id) {
+                        ps.slash_commands = slash_cmds;
+                        let _ = self.store.upsert_session(&ps);
+                    }
+                }
+            }
+        }
 
         // Only probe the LOCAL working tree for LOCAL sessions. REMOTE sessions
         // get their changes from the agent's `ChangesUpdate` IPC — a local `git
@@ -2488,6 +2571,21 @@ impl Core {
             s.cost_usd
         };
         let posture = permission_mode_to_posture(s.permission_mode.as_deref());
+        // Build subagent_list: running subagents first (for prominence), then done.
+        let mut subagent_list: Vec<marsad_viewmodel::SubagentView> = s
+            .subagents
+            .iter()
+            .map(|a| marsad_viewmodel::SubagentView {
+                name: a.name.clone(),
+                model: a.model.clone(),
+                status: match a.status {
+                    marsad_events::SubagentStatus::Running => "Running".to_string(),
+                    marsad_events::SubagentStatus::Done => "Done".to_string(),
+                },
+            })
+            .collect();
+        // Sort: running first (they are most actionable), done last.
+        subagent_list.sort_by_key(|a| if a.status == "Running" { 0u8 } else { 1u8 });
         SessionView {
             id: id.to_string(),
             name: record
@@ -2521,6 +2619,7 @@ impl Core {
             mcp_servers: s.mcp_servers.clone(),
             slash_commands: s.slash_commands.clone(),
             posture,
+            subagent_list,
         }
     }
 }

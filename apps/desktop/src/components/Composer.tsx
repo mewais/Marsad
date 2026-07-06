@@ -65,8 +65,33 @@ export function Composer({
     historyIndexRef.current = null;
     draftRef.current = incoming;
     setText(incoming);
+    // Re-compute textarea height for the incoming draft. We set the DOM value
+    // directly BEFORE React re-renders so scrollHeight is correct. setText
+    // above queues a state update (batched) — the DOM element still has the
+    // old value at this point, so measuring scrollHeight would give the wrong
+    // height. Setting el.value directly gives an accurate scrollHeight
+    // synchronously; React's controlled input behaviour will reconcile it on
+    // the next render without visual flicker.
+    const el = textareaRef.current;
+    if (el) {
+      el.value = incoming;
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 120) + "px";
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
+
+  // Auto-size on initial mount (a pre-populated draft from a previous session
+  // switch or browser restore deserves the same treatment).
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (el && el.value) {
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 120) + "px";
+    }
+    // run once on mount only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // The slash popover's ONLY source is the session's live slash_commands
   // (dynamic-capabilities.md §1.3) — no preset catalog fallback. An

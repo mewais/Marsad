@@ -431,7 +431,10 @@ describe("#5 Session lifecycle (SessionDetail)", () => {
 });
 
 describe("#5 Workstream lifecycle (Board)", () => {
-  const boardWith: BoardView = {
+  // State-appropriate actions: running workstream → Pause button;
+  // stopped/done workstream → Resume button. Each board row shows only one
+  // lifecycle action at a time (not both simultaneously).
+  const workingBoardWith: BoardView = {
     summary: { workstreams: 1, sessions: 2, hosts: 1 },
     host_chips: [{ id: "local", label: "localhost", kind: "local", status: "connected" }],
     link_chips: [],
@@ -452,13 +455,23 @@ describe("#5 Workstream lifecycle (Board)", () => {
     ],
   };
 
-  function renderBoard() {
-    // Post-mutation refresh re-fetches the board; keep the row present.
-    fetchBoard.mockResolvedValue(boardWith);
+  const doneBoardWith: BoardView = {
+    ...workingBoardWith,
+    all: [
+      {
+        ...workingBoardWith.all[0],
+        head_state: "done",
+        counts: { working: 0, needs: 0, error: 0, done: 2 },
+      },
+    ],
+  };
+
+  function renderBoardWith(board: BoardView) {
+    fetchBoard.mockResolvedValue(board);
     const preloaded: Partial<VmState> = {
       snapshot: MOCK_SNAPSHOT,
       screen: "board",
-      board: boardWith,
+      board,
       capabilities: caps("local", ["m-a"]),
     };
     return render(
@@ -470,10 +483,21 @@ describe("#5 Workstream lifecycle (Board)", () => {
     );
   }
 
-  it("Pause all / Resume all call the workstream api fns", async () => {
-    renderBoard();
+  // Keep backward-compat alias for the Delete tests below.
+  function renderBoard() { return renderBoardWith(workingBoardWith); }
+
+  it("running workstream: Pause button calls pauseWorkstream", async () => {
+    renderBoardWith(workingBoardWith);
+    // Working → only Pause visible (no Resume)
+    expect(screen.queryByTestId("ws-resume-ws-1")).toBeNull();
     fireEvent.click(screen.getByTestId("ws-pause-ws-1"));
     await waitFor(() => expect(pauseWorkstream).toHaveBeenCalledWith("ws-1"));
+  });
+
+  it("done workstream: Resume button calls resumeWorkstream", async () => {
+    renderBoardWith(doneBoardWith);
+    // Done → only Resume visible (no Pause)
+    expect(screen.queryByTestId("ws-pause-ws-1")).toBeNull();
     fireEvent.click(screen.getByTestId("ws-resume-ws-1"));
     await waitFor(() => expect(resumeWorkstream).toHaveBeenCalledWith("ws-1"));
   });

@@ -76,15 +76,28 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el);
-    fit.fit();
-    term.focus();
 
     // Guards against a listener/unlisten resolving after unmount (both
     // `listenPty` and the initial `fit()` are async-adjacent races).
     let disposed = false;
     let unlisten: (() => void) | undefined;
 
+    // Initial fit + ptyStart: run synchronously so the pty is started as soon
+    // as the terminal mounts. Also schedule a re-fit after the next layout
+    // pass via RAF so that if the container had zero dimensions on the first
+    // render (e.g. a flex container that hasn't painted yet), we correct the
+    // terminal size without a visible jump — ptyResize fires automatically
+    // from the onResize handler when cols/rows change.
+    fit.fit();
+    term.focus();
     void ptyStart(sessionId, term.cols, term.rows);
+
+    // Post-layout re-fit: gives the browser/webview one paint to measure real
+    // container dimensions before correcting cols/rows. The onResize handler
+    // propagates the change to the server-side pty automatically.
+    const rafHandle = requestAnimationFrame(() => {
+      if (!disposed) fit.fit();
+    });
 
     void listenPty((event: PtyEvent) => {
       if (disposed || event.session_id !== sessionId) return;
@@ -120,6 +133,7 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
 
     return () => {
       disposed = true;
+      cancelAnimationFrame(rafHandle);
       window.removeEventListener("resize", handleWindowResize);
       resizeObserver.disconnect();
       dataSub.dispose();

@@ -598,11 +598,15 @@ function WorkstreamRow({
         {state ?? "—"}
       </span>
 
-      {/* Workstream lifecycle actions (#5) — Pause all / Resume all / Delete.
-          Each stops row-click propagation so it doesn't also open the ws. */}
+      {/* Workstream lifecycle actions — state-appropriate: running → Pause;
+          stopped/idle → Resume. Delete always visible. Each stops row-click
+          propagation so it doesn't also open the workstream. */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-        <WsActionBtn testid={`ws-pause-${card.id}`} label="⏸ Pause" onClick={onPause} />
-        <WsActionBtn testid={`ws-resume-${card.id}`} label="▶ Resume" onClick={onResume} />
+        {(state === "working" || state === "needs" || state === "error") ? (
+          <WsActionBtn testid={`ws-pause-${card.id}`} label="⏸ Pause" onClick={onPause} />
+        ) : (
+          <WsActionBtn testid={`ws-resume-${card.id}`} label="▶ Resume" onClick={onResume} />
+        )}
         <WsActionBtn testid={`ws-delete-${card.id}`} label="✕ Delete" danger onClick={onDelete} />
       </div>
 
