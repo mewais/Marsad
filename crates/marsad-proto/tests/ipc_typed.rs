@@ -115,6 +115,7 @@ fn launch_session_maximal() -> IpcMsg {
         name: Some("My run".to_string()),
         disallowed_tools: vec!["Bash".to_string()],
         wasl: false,
+        driver: "claude".to_string(),
     }
 }
 
@@ -137,6 +138,7 @@ fn launch_session_minimal() -> IpcMsg {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     }
 }
 
@@ -159,6 +161,7 @@ fn launch_session_continue() -> IpcMsg {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     }
 }
 
@@ -278,6 +281,7 @@ fn launch_with(resume: Option<&str>, cont: Option<bool>) -> IpcMsg {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     }
 }
 

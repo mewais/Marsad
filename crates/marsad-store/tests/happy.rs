@@ -34,6 +34,7 @@ fn make_session(id: &str) -> PersistedSession {
         last_phase: "Done".to_string(),
         posture: None,
         disallowed_tools: vec![],
+        driver: "claude".to_string(),
     }
 }
 
@@ -372,6 +373,7 @@ fn make_host(id: &str) -> PersistedHost {
         claude_bin: None,
         setup: None,
         env: Vec::new(),
+        agent_commands: Vec::new(),
     }
 }
 
@@ -382,6 +384,7 @@ fn upsert_host_then_restore_returns_host_with_all_fields() {
     host.claude_bin = Some("genie".to_string());
     host.setup = Some("module load x".to_string());
     host.env = vec![("A".to_string(), "b".to_string())];
+    host.agent_commands = vec![("codex".to_string(), "codex --sandbox".to_string())];
     store.upsert_host(&host).expect("upsert_host");
     let restored: Restored = store.restore().expect("restore");
     let h = restored
@@ -395,6 +398,11 @@ fn upsert_host_then_restore_returns_host_with_all_fields() {
     assert_eq!(h.claude_bin.as_deref(), Some("genie"));
     assert_eq!(h.setup.as_deref(), Some("module load x"));
     assert_eq!(h.env, vec![("A".to_string(), "b".to_string())]);
+    assert_eq!(
+        h.agent_commands,
+        vec![("codex".to_string(), "codex --sandbox".to_string())],
+        "agent_commands must round-trip through persistence (#1)"
+    );
 }
 
 #[test]
@@ -482,6 +490,8 @@ fn make_settings() -> PersistedSettings {
         confirm_before_stop: false,
         default_model: "claude-sonnet-4-6".to_string(),
         default_posture: "ask".to_string(),
+        default_driver: "claude".to_string(),
+        default_models: Vec::new(),
     }
 }
 
@@ -512,6 +522,45 @@ fn upsert_settings_overwrite_updates_fields() {
     let got = restored.settings.expect("settings present");
     assert_eq!(got.default_model, "claude-opus-4-8");
     assert!(!got.do_not_disturb);
+}
+
+/// PERSISTENCE audit (GAP 2): the NEW session-default fields — `default_driver`,
+/// `default_models`, and `default_posture` — must survive a save+reload with
+/// their NON-default values. The `make_settings` round-trip above uses default
+/// values (empty `default_models`, "claude" driver), which would still pass even
+/// if a bug dropped a non-default value. This test uses distinctive non-default
+/// values so a regression that fails to persist them is caught.
+#[test]
+fn upsert_settings_persists_nondefault_new_fields() {
+    let mut store = fresh_store();
+    let mut s = make_settings();
+    s.default_driver = "codex".to_string();
+    s.default_posture = "full".to_string();
+    s.default_models = vec![
+        ("codex".to_string(), "codex-mini-latest".to_string()),
+        ("claude".to_string(), "claude-opus-4-8".to_string()),
+    ];
+    store
+        .upsert_settings(&s)
+        .expect("upsert_settings must succeed");
+    let restored = store.restore().expect("restore must succeed");
+    let got = restored.settings.expect("settings present after upsert");
+    assert_eq!(
+        got.default_driver, "codex",
+        "default_driver must round-trip through persistence"
+    );
+    assert_eq!(
+        got.default_posture, "full",
+        "default_posture must round-trip through persistence"
+    );
+    assert_eq!(
+        got.default_models,
+        vec![
+            ("codex".to_string(), "codex-mini-latest".to_string()),
+            ("claude".to_string(), "claude-opus-4-8".to_string()),
+        ],
+        "default_models must round-trip through persistence"
+    );
 }
 
 #[test]
@@ -663,6 +712,7 @@ fn persisted_session_disallowed_tools_round_trips() {
         last_phase: "Starting".to_string(),
         posture: None,
         disallowed_tools: vec!["Bash".to_string(), "Edit".to_string()],
+        driver: "claude".to_string(),
     };
     store.upsert_session(&session).expect("upsert");
     let restored = store.restore().expect("restore");

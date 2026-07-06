@@ -45,6 +45,7 @@ fn launch(core: &mut Core) -> String {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     })
     .expect("launch")
 }

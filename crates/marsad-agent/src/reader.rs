@@ -131,6 +131,14 @@ pub(crate) fn spawn_session_reader(
     // None today — kept Option so a future caller without a provider handy
     // degrades to a no-op rather than a forced dependency).
     capability_provider: Option<std::sync::Arc<crate::capabilities::CapabilityProvider>>,
+    // Stage 2 codex: driver discriminator ("codex" or "claude").
+    driver: String,
+    // Stage 2 codex: cached spec for building codex_turn_cmd (first_prompt delivery
+    // and translate-and-broadcast). None for claude sessions.
+    codex_spec: Option<crate::CachedCodexSpec>,
+    // Stage 2 codex: shared map for storing the codex thread_id from thread.started.
+    // Shared with handle_send_prompt so follow-up turns use codex exec resume.
+    codex_threads: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
 ) {
     // `run_command` is only used when the caller signals that a launch script
     // was not yet run (i.e. not provided to spawn_container).  For the durable
@@ -303,23 +311,92 @@ pub(crate) fn spawn_session_reader(
                 None => {
                     #[cfg(unix)]
                     {
-                        use marsad_transport::ClaudeFifoTransport;
-                        let mut fifo = match ClaudeFifoTransport::open(&session_dir) {
-                            Ok(f) => f,
-                            Err(e) => {
-                                eprintln!("marsad-agent: fifo open {sid}: {e}");
+                        if driver == "codex" {
+                            // Codex eval-loop transport: open in.fifo for writing
+                            // (prompt delivery) and out.log (a regular file) for
+                            // reading (codex JSONL output).
+                            //
+                            // We cannot use ClaudeFifoTransport here because the
+                            // eval-loop writes to out.log (a regular file) only
+                            // when a command runs — so opening out.fifo for reading
+                            // would deadlock (no writer appears until the first
+                            // codex command, which requires connect() to have
+                            // already completed). Using a regular file avoids
+                            // the circular wait entirely.
+                            //
+                            // Open in.fifo for writing: blocks until the tmux eval-loop
+                            // shell opens it for reading (which it does immediately on
+                            // the `cat in.fifo |` side). We wait for the session dir
+                            // to appear (tmux creates it when the session starts).
+                            let in_fifo = session_dir.join("in.fifo");
+                            let out_log = session_dir.join("out.log");
+
+                            // Wait up to 15s for in.fifo to appear (tmux creates it
+                            // when the session starts).
+                            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                            loop {
+                                if in_fifo.exists() {
+                                    break;
+                                }
+                                if std::time::Instant::now() >= deadline {
+                                    eprintln!("marsad-agent: codex session {sid}: in.fifo not created within 15s");
+                                    break 'reconnect;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                            }
+
+                            // Open in.fifo for writing (non-blocking: the cat in the
+                            // eval-loop is already waiting as a reader).
+                            let in_file = match std::fs::OpenOptions::new()
+                                .write(true)
+                                .open(&in_fifo)
+                            {
+                                Ok(f) => f,
+                                Err(e) => {
+                                    eprintln!("marsad-agent: codex session {sid}: open in.fifo: {e}");
+                                    break 'reconnect;
+                                }
+                            };
+
+                            // Ensure out.log exists (create it if not yet).
+                            if !out_log.exists() {
+                                let _ = std::fs::File::create(&out_log);
+                            }
+
+                            // Open out.log for reading. Since it's a regular file, this
+                            // never blocks.
+                            let out_file = match std::fs::File::open(&out_log) {
+                                Ok(f) => f,
+                                Err(e) => {
+                                    eprintln!("marsad-agent: codex session {sid}: open out.log: {e}");
+                                    break 'reconnect;
+                                }
+                            };
+
+                            eprintln!("marsad-agent: session {sid} codex transport connected (in.fifo + out.log)");
+                            let w: Box<dyn std::io::Write + Send> = Box::new(in_file);
+                            let r: std::io::BufReader<Box<dyn std::io::Read + Send>> =
+                                std::io::BufReader::new(Box::new(out_file));
+                            (w, r)
+                        } else {
+                            use marsad_transport::ClaudeFifoTransport;
+                            let mut fifo = match ClaudeFifoTransport::open(&session_dir) {
+                                Ok(f) => f,
+                                Err(e) => {
+                                    eprintln!("marsad-agent: fifo open {sid}: {e}");
+                                    break 'reconnect;
+                                }
+                            };
+                            if let Err(e) = fifo.connect() {
+                                eprintln!("marsad-agent: fifo connect {sid}: {e}");
                                 break 'reconnect;
                             }
-                        };
-                        if let Err(e) = fifo.connect() {
-                            eprintln!("marsad-agent: fifo connect {sid}: {e}");
-                            break 'reconnect;
-                        }
-                        match fifo.into_split() {
-                            Some(pair) => pair,
-                            None => {
-                                eprintln!("marsad-agent: fifo not connected after connect {sid}");
-                                break 'reconnect;
+                            match fifo.into_split() {
+                                Some(pair) => pair,
+                                None => {
+                                    eprintln!("marsad-agent: fifo not connected after connect {sid}");
+                                    break 'reconnect;
+                                }
                             }
                         }
                     }
@@ -351,12 +428,13 @@ pub(crate) fn spawn_session_reader(
             let writer: SharedWriter = std::sync::Arc::new(std::sync::Mutex::new(writer));
 
             // Send the control-protocol `initialize` handshake first (LAUNCH only,
-            // first attach only). It pairs with `--permission-prompt-tool stdio` so
+            // first attach only, CLAUDE ONLY). It pairs with `--permission-prompt-tool stdio` so
             // claude routes tool-permission prompts back as `can_use_tool`
             // control_requests. On RECONNECT the remote claude is already running +
             // initialized, so re-sending it would be wrong — hence `send_init` and
             // `is_first_attach`. Fire-and-forget: the CLI's ack is ignored.
-            if send_init && is_first_attach {
+            // CODEX: no initialize handshake — codex exec uses no control protocol.
+            if send_init && is_first_attach && driver != "codex" {
                 use std::io::Write;
                 let init = marsad_proto::encode_control_request_initialize("req_1_init");
                 let mut w = writer.lock().unwrap();
@@ -366,28 +444,68 @@ pub(crate) fn spawn_session_reader(
                 eprintln!("marsad-agent: session {sid} sent initialize handshake");
             }
 
-            // Deliver the first_prompt (if any) immediately so claude receives its
-            // initial task.  Only on the very first attach — on reconnect, claude is
-            // already running (a prompt was already sent) and re-sending would be
-            // wrong.  claude in --input-format stream-json mode emits nothing until
-            // it sees a user message on stdin.
+            // Deliver the first_prompt (if any) immediately so the process receives its
+            // initial task.  Only on the very first attach — on reconnect the process is
+            // already running (a prompt was already sent) and re-sending would be wrong.
+            //
+            // CLAUDE: delivers as a stream-json user message on stdin.
+            // CODEX: delivers as a `codex_turn_cmd` eval-loop command on in.fifo;
+            //        the eval-loop container spawns `codex exec …` as a subprocess.
             if is_first_attach {
                 if let Some(ref prompt) = first_prompt {
-                    use marsad_proto::{encode_user_input, ContentBlock, UserInput};
                     use std::io::Write;
                     let plen = prompt.len();
-                    let encoded = encode_user_input(&UserInput {
-                        content: vec![ContentBlock::Text {
-                            text: prompt.clone(),
-                        }],
-                    });
-                    let mut w = writer.lock().unwrap();
-                    let _ = w.write_all(encoded.as_bytes());
-                    let _ = w.write_all(b"\n");
-                    let _ = w.flush();
-                    eprintln!("marsad-agent: session {sid} delivered first_prompt ({plen} chars) to claude stdin");
+
+                    if driver == "codex" {
+                        // Codex first turn: build the eval-loop command and write it.
+                        if let Some(ref cs) = codex_spec {
+                            // Build a LaunchSpec-like value for codex_turn_cmd.
+                            // For first_prompt, thread_id is None (fresh turn).
+                            let spec_for_cmd = marsad_proto::LaunchSpec {
+                                project: cs.project.clone(),
+                                host_id: "local".to_string(),
+                                host_target: None,
+                                claude_bin: cs.claude_bin.clone(),
+                                setup: None,
+                                env: vec![],
+                                model: cs.model.clone(),
+                                posture: cs.posture.clone(),
+                                first_prompt: None,
+                                mode: marsad_proto::LaunchMode::Fresh,
+                                name: None,
+                                disallowed_tools: vec![],
+                                wasl: false,
+                                driver: "codex".to_string(),
+                            };
+                            let cmd = crate::driver::codex_turn_cmd(&spec_for_cmd, None, prompt);
+                            let mut w = writer.lock().unwrap();
+                            let _ = w.write_all(cmd.as_bytes());
+                            let _ = w.write_all(b"\n");
+                            let _ = w.flush();
+                            eprintln!(
+                                "marsad-agent: session {sid} codex delivered first turn cmd ({plen} chars)"
+                            );
+                        } else {
+                            eprintln!(
+                                "marsad-agent: session {sid} codex has no cached spec — first_prompt dropped"
+                            );
+                        }
+                    } else {
+                        // Claude: stream-json user message.
+                        use marsad_proto::{encode_user_input, ContentBlock, UserInput};
+                        let encoded = encode_user_input(&UserInput {
+                            content: vec![ContentBlock::Text {
+                                text: prompt.clone(),
+                            }],
+                        });
+                        let mut w = writer.lock().unwrap();
+                        let _ = w.write_all(encoded.as_bytes());
+                        let _ = w.write_all(b"\n");
+                        let _ = w.flush();
+                        eprintln!("marsad-agent: session {sid} delivered first_prompt ({plen} chars) to claude stdin");
+                    }
                 } else {
-                    eprintln!("marsad-agent: session {sid} no first_prompt — claude idle until a prompt is sent (phase stays Starting)");
+                    eprintln!("marsad-agent: session {sid} no first_prompt — process idle until a prompt is sent (phase stays Starting)");
                 }
             }
 
@@ -493,9 +611,28 @@ pub(crate) fn spawn_session_reader(
                 let mut raw = String::new();
                 match reader.read_line(&mut raw) {
                     Ok(0) => {
-                        eprintln!(
-                            "marsad-agent: session {sid} reader EOF after {lines_seen} line(s)"
-                        );
+                        // For codex sessions reading from out.log (a regular file),
+                        // EOF means "no more data right now" — the eval-loop may be
+                        // between turns, so we poll-sleep rather than breaking.
+                        // We detect session liveness by checking if in.fifo still exists
+                        // (it disappears when the tmux session exits/eval-loop ends).
+                        // For non-codex (FIFO/pipe) sessions, EOF always means done.
+                        if driver == "codex" {
+                            let in_fifo = session_dir.join("in.fifo");
+                            if in_fifo.exists() {
+                                // Eval-loop still running, waiting for next turn.
+                                std::thread::sleep(std::time::Duration::from_millis(200));
+                                continue;
+                            }
+                            // Eval-loop exited (in.fifo gone): real EOF.
+                            eprintln!(
+                                "marsad-agent: session {sid} codex reader done (eval-loop exited) after {lines_seen} line(s)"
+                            );
+                        } else {
+                            eprintln!(
+                                "marsad-agent: session {sid} reader EOF after {lines_seen} line(s)"
+                            );
+                        }
                         break;
                     }
                     Err(e) => {
@@ -555,13 +692,49 @@ pub(crate) fn spawn_session_reader(
                             }
                         }
 
-                        let event: serde_json::Value = serde_json::from_str(raw)
+                        let raw_value: serde_json::Value = serde_json::from_str(raw)
                             .unwrap_or_else(|_| serde_json::json!({"raw": raw}));
+
+                        // Stage 2 codex: translate the raw codex JSONL event into
+                        // a claude-stream-json Value. If translation yields None
+                        // (skip), do NOT broadcast this line (e.g. turn.started,
+                        // reasoning items). For thread.started, also stash the
+                        // thread_id in codex_threads so follow-up turns resume.
+                        let event: serde_json::Value = if driver == "codex" {
+                            // Stash thread_id for follow-up turns.
+                            if raw_value.get("type").and_then(|t| t.as_str()) == Some("thread.started") {
+                                if let Some(tid) = raw_value.get("thread_id").and_then(|v| v.as_str()) {
+                                    codex_threads.lock().unwrap().insert(sid.clone(), tid.to_string());
+                                    eprintln!(
+                                        "marsad-agent: session {sid} codex thread_id={tid} stored"
+                                    );
+                                }
+                            }
+                            // Translate to claude-stream-json shape.
+                            if let Some(cs) = codex_spec.as_ref() {
+                                match crate::codex::codex_event_to_stream_json(
+                                    &raw_value,
+                                    &cs.model,
+                                    &cs.project,
+                                    &cs.posture_mode,
+                                ) {
+                                    Some(translated) => translated,
+                                    None => continue, // skip — do not broadcast
+                                }
+                            } else {
+                                // No spec cached — broadcast raw (fallback, shouldn't happen).
+                                raw_value
+                            }
+                        } else {
+                            raw_value
+                        };
 
                         // U1 (§3.2 trigger 4): a `system:init` line reports the
                         // model claude actually launched with — the only signal
                         // that exists for claude's model catalog (§1.1: "no list
                         // command"). Accumulate it into the host's observed set.
+                        // Also triggered for codex sessions (the synthesized system/init
+                        // from thread.started carries the configured model name).
                         if event.get("type").and_then(|t| t.as_str()) == Some("system")
                             && event.get("subtype").and_then(|t| t.as_str()) == Some("init")
                         {

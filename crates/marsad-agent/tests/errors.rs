@@ -169,6 +169,7 @@ fn launch_spawn_failure_returns_spawn_error() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     };
 
     // NOTE(test-agent): We need a FakeContainer configured to fail spawns.
@@ -423,6 +424,7 @@ fn reconcile_all_lifecycle_error_folds_into_stale() {
             last_phase: "Working".to_string(),
             posture: None,
             disallowed_tools: vec![],
+            driver: "claude".to_string(),
         })
         .expect("upsert");
 
@@ -632,6 +634,7 @@ fn launch_spawn_failure_deterministic_container_name() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     };
     match agent.launch(spec) {
         Err(AgentError::Spawn(_)) => {}
@@ -679,6 +682,7 @@ fn launch_upsert_failure_returns_lifecycle_error() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     };
     match agent.launch(spec) {
         Err(AgentError::Lifecycle(_)) => {}
@@ -738,6 +742,7 @@ fn resume_session_launch_spawn_failure_propagates() {
             last_phase: "Done".to_string(),
             posture: None,
             disallowed_tools: vec![],
+            driver: "claude".to_string(),
         })
         .expect("upsert");
 

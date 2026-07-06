@@ -69,6 +69,7 @@ fn launch(core: &mut Core, project: &str) -> String {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     })
     .expect("launch_session")
 }
@@ -1187,4 +1188,380 @@ fn cw13_load_workstreams_restore_failure_errors() {
     backend.fail_next(BackendOp::List);
     let mut core = core_with_backend(backend);
     assert!(core.load_workstreams().is_err());
+}
+
+// ---------------------------------------------------------------------------
+// New deliverable tests: #4 workstream pause/resume/delete lifecycle
+// ---------------------------------------------------------------------------
+
+/// delete_workstream kills all member sessions (stops + removes from store)
+/// and THEN deletes the workstream record. Sessions must not reappear after restart.
+#[test]
+fn delete_workstream_kills_member_sessions() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let s1 = launch(&mut core, "/proj/a");
+    let s2 = launch(&mut core, "/proj/b");
+
+    // Load workstreams so migration creates fast-lane workstreams for both.
+    let _ = core.load_workstreams().expect("load_workstreams");
+
+    // Both sessions are now in their own workstreams.
+    let nodes = core.nodes();
+    assert_eq!(nodes.len(), 2, "both sessions should be nodes");
+
+    // Assign them to the same workstream for the delete test.
+    let ws_id = "ws-test-delete".to_string();
+    core.create_workstream(
+        ws_id.clone(),
+        "Test WS".to_string(),
+        String::new(),
+        None,
+    )
+    .expect("create_workstream");
+    core.assign_session(&s1, &ws_id, true).expect("assign s1");
+    core.assign_session(&s2, &ws_id, false).expect("assign s2");
+
+    // Delete the workstream — must kill + remove both sessions.
+    let updates = core.delete_workstream(&ws_id).expect("delete_workstream");
+
+    // Both sessions should appear as SessionRemoved in the updates.
+    let removed_ids: Vec<String> = updates
+        .iter()
+        .filter_map(|u| match u {
+            VmUpdate::SessionRemoved { id } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        removed_ids.contains(&s1),
+        "s1 must be removed on workstream delete"
+    );
+    assert!(
+        removed_ids.contains(&s2),
+        "s2 must be removed on workstream delete"
+    );
+
+    // The workstream itself must be gone.
+    let wss: Vec<_> = updates
+        .iter()
+        .filter_map(|u| match u {
+            VmUpdate::Workstreams(ws) => Some(ws.clone()),
+            _ => None,
+        })
+        .next()
+        .unwrap_or_default();
+    assert!(
+        !wss.iter().any(|w| w.id == ws_id),
+        "workstream must be deleted"
+    );
+}
+
+/// pause_workstream stops all member sessions (phase flips to Stale).
+#[test]
+fn pause_workstream_stops_member_sessions() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let s1 = launch(&mut core, "/proj/p1");
+    let s2 = launch(&mut core, "/proj/p2");
+    let _ = core.load_workstreams().expect("load_workstreams");
+
+    let ws_id = "ws-pause-test".to_string();
+    core.create_workstream(ws_id.clone(), "Pause WS".to_string(), String::new(), None)
+        .expect("create");
+    core.assign_session(&s1, &ws_id, true).expect("assign s1");
+    core.assign_session(&s2, &ws_id, false).expect("assign s2");
+
+    let updates = core.pause_workstream(&ws_id).expect("pause_workstream");
+
+    // Both sessions should appear with Stale phase in the updates.
+    let stale_ids: Vec<String> = updates
+        .iter()
+        .filter_map(|u| match u {
+            VmUpdate::Session(sv) if sv.state == Phase::Stale => Some(sv.id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        stale_ids.contains(&s1),
+        "s1 must be Stale after pause_workstream"
+    );
+    assert!(
+        stale_ids.contains(&s2),
+        "s2 must be Stale after pause_workstream"
+    );
+}
+
+/// resume_workstream re-starts all member sessions (phase flips to Starting).
+#[test]
+fn resume_workstream_restarts_member_sessions() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let s1 = launch(&mut core, "/proj/r1");
+    let _ = core.load_workstreams().expect("load_workstreams");
+
+    let ws_id = "ws-resume-test".to_string();
+    core.create_workstream(ws_id.clone(), "Resume WS".to_string(), String::new(), None)
+        .expect("create");
+    core.assign_session(&s1, &ws_id, true).expect("assign");
+
+    // First pause so the session is Stale.
+    core.pause_workstream(&ws_id).expect("pause");
+
+    // Now resume.
+    let updates = core.resume_workstream(&ws_id).expect("resume_workstream");
+
+    let starting_ids: Vec<String> = updates
+        .iter()
+        .filter_map(|u| match u {
+            VmUpdate::Session(sv) if sv.state == Phase::Starting => Some(sv.id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        starting_ids.contains(&s1),
+        "s1 must be Starting after resume_workstream"
+    );
+}
+
+/// pause_workstream on an empty/absent workstream is a no-op Ok.
+#[test]
+fn pause_workstream_absent_is_noop() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let updates = core
+        .pause_workstream("nonexistent-ws")
+        .expect("absent ws must be no-op");
+    assert!(updates.is_empty());
+}
+
+/// resume_workstream on an empty/absent workstream is a no-op Ok.
+#[test]
+fn resume_workstream_absent_is_noop() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let updates = core
+        .resume_workstream("nonexistent-ws")
+        .expect("absent ws must be no-op");
+    assert!(updates.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Deliverable #2: settings round-trip persists default_driver + default_models
+// ---------------------------------------------------------------------------
+
+#[test]
+fn settings_round_trip_persists_new_fields() {
+    use marsad_store::PersistedSettings;
+    let mut core = core_with_backend(MemoryBackend::new());
+
+    let s = PersistedSettings {
+        notif_prefs: std::collections::HashMap::new(),
+        play_sound: true,
+        group_alerts: false,
+        do_not_disturb: false,
+        background: "Gradient".to_string(),
+        restore_on_launch: true,
+        confirm_before_stop: true,
+        default_model: "claude-haiku-latest".to_string(),
+        default_posture: "auto".to_string(),
+        default_driver: "codex".to_string(),
+        default_models: vec![
+            ("codex".to_string(), "codex-mini-latest".to_string()),
+            ("claude".to_string(), "claude-haiku-latest".to_string()),
+        ],
+    };
+    core.set_settings(&s).expect("set_settings");
+    let got = core.get_settings();
+    assert_eq!(got.default_driver, "codex", "default_driver round-trips");
+    assert_eq!(got.default_models.len(), 2, "default_models round-trips");
+    assert!(
+        got.default_models
+            .iter()
+            .any(|(d, m)| d == "codex" && m == "codex-mini-latest"),
+        "codex entry round-trips"
+    );
+}
+
+/// Defaults for new fields are "claude" and empty when nothing persisted.
+#[test]
+fn settings_defaults_for_new_fields() {
+    let core = core_with_backend(MemoryBackend::new());
+    let s = core.get_settings();
+    assert_eq!(s.default_driver, "claude");
+    assert!(s.default_models.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Deliverable #1: per-driver command resolution in launch_session_with_id
+// ---------------------------------------------------------------------------
+
+/// Launch a session on a host that has an agent_commands override for the
+/// requested driver, draining the loopback peer so the outbound LaunchSession
+/// IPC line can be inspected. Returns the joined outbound lines.
+fn launch_with_driver_and_drain(
+    agent_commands: Vec<(String, String)>,
+    claude_bin: Option<String>,
+    driver: &str,
+) -> String {
+    let (a, mut peer) = LoopbackFake::pair();
+    let cfg = CoreConfig {
+        agent_endpoint: "loopback://test".to_string(),
+        data_root: "/tmp/marsad-driver-bin-test".to_string(),
+    };
+    let mut core = Core::with_deps(
+        cfg,
+        Box::new(a),
+        Box::new(marsad_core::RealGit),
+        Box::new(marsad_core::RealTranscript),
+        Box::new(MemoryBackend::new()),
+    )
+    .expect("with_deps");
+
+    core.add_host(
+        "box",
+        "user@box.example.com",
+        claude_bin,
+        None,
+        Vec::new(),
+        agent_commands,
+    )
+    .expect("add host");
+    let _ = peer.drain_outbound(); // clear the Hosts-side chatter (none, but be safe)
+
+    let host_id = core
+        .snapshot()
+        .hosts
+        .into_iter()
+        .find(|h| !h.is_local)
+        .expect("remote host")
+        .id;
+
+    core.launch_session(LaunchSpec {
+        project: "/proj".to_string(),
+        host_id,
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
+        model: "codex-mini-latest".to_string(),
+        posture: Posture::Ask,
+        first_prompt: None,
+        mode: Default::default(),
+        name: None,
+        disallowed_tools: vec![],
+        wasl: false,
+        driver: driver.to_string(),
+    })
+    .expect("launch session");
+
+    peer.drain_outbound().join("\n")
+}
+
+/// When the host has an agent_commands entry for the driver, that command is
+/// used as the driver bin (claude_bin field) in the outbound LaunchSession IPC.
+#[test]
+fn launch_session_uses_agent_commands_for_driver_bin() {
+    let out = launch_with_driver_and_drain(
+        vec![("codex".to_string(), "codex --sandbox".to_string())],
+        None,
+        "codex",
+    );
+    assert!(
+        out.contains("codex --sandbox"),
+        "outbound LaunchSession must carry the agent_commands override 'codex --sandbox'; got: {out}"
+    );
+    assert!(
+        out.contains("\"driver\":\"codex\""),
+        "outbound LaunchSession must carry driver=codex; got: {out}"
+    );
+}
+
+/// claude resolves EXACTLY as before when only claude_bin is set (folded into
+/// the "claude" agent_commands entry): the LaunchSession IPC carries the
+/// wrapper path as the driver bin.
+#[test]
+fn launch_session_claude_bin_still_resolves_for_claude_driver() {
+    let out = launch_with_driver_and_drain(
+        Vec::new(),
+        Some("/opt/genie/claude".to_string()),
+        "claude",
+    );
+    assert!(
+        out.contains("/opt/genie/claude"),
+        "claude_bin must resolve as the claude driver bin; got: {out}"
+    );
+}
+
+/// With no override and no claude_bin, the bare driver name is used — the core
+/// leaves claude_bin absent so the agent falls back to the bare driver name.
+#[test]
+fn launch_session_bare_driver_name_when_no_override() {
+    let out = launch_with_driver_and_drain(Vec::new(), None, "codex");
+    // No wrapper path baked in; the driver discriminator alone tells the agent
+    // which bare binary to spawn.
+    assert!(
+        out.contains("\"driver\":\"codex\""),
+        "outbound must carry driver=codex; got: {out}"
+    );
+    assert!(
+        !out.contains("codex --sandbox"),
+        "no override was set, so no wrapper command must appear; got: {out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Deliverable #2: resume/restart rebuilds from the PERSISTED session model,
+// not the (possibly newer) settings default_model.
+// ---------------------------------------------------------------------------
+
+/// A restarted session must use the model passed to restart_session (which the
+/// bridge/UI sources from the persisted session), NOT any settings default.
+/// This guards against a regression where a settings default_model leaks into
+/// resume/restart.
+#[test]
+fn restart_session_uses_supplied_model_not_settings_default() {
+    let (a, mut peer) = LoopbackFake::pair();
+    let cfg = CoreConfig {
+        agent_endpoint: "loopback://test".to_string(),
+        data_root: "/tmp/marsad-restart-model-test".to_string(),
+    };
+    let mut core = Core::with_deps(
+        cfg,
+        Box::new(a),
+        Box::new(marsad_core::RealGit),
+        Box::new(marsad_core::RealTranscript),
+        Box::new(MemoryBackend::new()),
+    )
+    .expect("with_deps");
+
+    // Persist a settings blob with a DIFFERENT default model, to prove the
+    // restart does not read it.
+    use marsad_store::PersistedSettings;
+    core.set_settings(&PersistedSettings {
+        notif_prefs: std::collections::HashMap::new(),
+        play_sound: true,
+        group_alerts: false,
+        do_not_disturb: false,
+        background: "Gradient".to_string(),
+        restore_on_launch: true,
+        confirm_before_stop: true,
+        default_model: "settings-default-model".to_string(),
+        default_posture: "ask".to_string(),
+        default_driver: "claude".to_string(),
+        default_models: Vec::new(),
+    })
+    .expect("set_settings");
+
+    let id = launch(&mut core, "/proj/restart");
+    let _ = peer.drain_outbound();
+
+    // Restart with an explicit model — the persisted-session model in a real
+    // flow. It must be the one that goes out on the wire.
+    core.restart_session(&id, "session-specific-model", Posture::Ask, vec![])
+        .expect("restart_session");
+    let out = peer.drain_outbound().join("\n");
+    assert!(
+        out.contains("session-specific-model"),
+        "restart must use the supplied (persisted) model; got: {out}"
+    );
+    assert!(
+        !out.contains("settings-default-model"),
+        "restart must NOT leak the settings default_model; got: {out}"
+    );
 }

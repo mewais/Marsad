@@ -27,6 +27,7 @@ fn host_local() -> Host {
         claude_bin: None,
         setup: None,
         env: Vec::new(),
+        agent_commands: Vec::new(),
     }
 }
 
@@ -42,6 +43,7 @@ fn host_remote() -> Host {
         claude_bin: None,
         setup: None,
         env: Vec::new(),
+        agent_commands: Vec::new(),
     }
 }
 
@@ -681,6 +683,9 @@ fn capabilities_view_from_capabilities_maps_every_field_verbatim() {
         driver: "codex".to_string(),
         host_id: "hetzner".to_string(),
         cli_available: true,
+        // launchable is carried verbatim, INDEPENDENT of cli_available (here it
+        // is false while cli_available is true, to prove they map separately).
+        launchable: false,
         models: ModelCatalog {
             models: vec![ModelInfo {
                 id: "gpt-5-codex".to_string(),
@@ -706,12 +711,22 @@ fn capabilities_view_from_capabilities_maps_every_field_verbatim() {
     assert_eq!(view.driver, caps.driver);
     assert_eq!(view.host_id, caps.host_id);
     assert_eq!(view.cli_available, caps.cli_available);
+    assert_eq!(view.launchable, caps.launchable);
     assert_eq!(view.models, caps.models);
     assert_eq!(view.session_scope, caps.session_scope);
     assert_eq!(view.sessions, caps.sessions);
     assert_eq!(view.sessions[0].project, None);
     assert_eq!(view.fetched_at_ms, caps.fetched_at_ms);
     assert_eq!(view.errors, caps.errors);
+
+    // Independently prove launchable:true survives (the launchable case the UI
+    // relies on for claude/codex), while cli_available stays whatever it was.
+    let launchable_caps = Capabilities {
+        launchable: true,
+        ..caps.clone()
+    };
+    let launchable_view = CapabilitiesView::from(launchable_caps);
+    assert!(launchable_view.launchable);
 }
 
 // ---------------------------------------------------------------------------

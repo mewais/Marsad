@@ -45,6 +45,53 @@ pub fn parse_agy_models(raw: &str) -> Vec<ModelInfo> {
         .collect()
 }
 
+/// claude has no `list-models` command (dynamic-capabilities.md §1.1), but the
+/// CLI DOES accept the model FAMILY words `opus`/`sonnet`/`haiku` directly (and
+/// the user's `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` env resolves each
+/// family to a concrete versioned id at launch). This pure builder offers those
+/// three families so the picker isn't stuck on a single observed model.
+///
+/// `resolved` maps a family name → its resolved versioned id (from the env),
+/// used only as a verbatim `annotation` (never a synthesized sublabel — it's
+/// the driver's own configured value). `observed` are models already seen via
+/// `observe_claude_model`; they're MERGED in (appended, de-duplicated by id) so
+/// nothing observed is lost. Family entries come first (stable order:
+/// opus, sonnet, haiku), then any observed model not already listed.
+pub fn build_claude_model_catalog(
+    resolved: &HashMap<&str, String>,
+    observed: &[ModelInfo],
+) -> Vec<ModelInfo> {
+    let mut out: Vec<ModelInfo> = ["opus", "sonnet", "haiku"]
+        .iter()
+        .map(|family| ModelInfo {
+            id: family.to_string(),
+            annotation: resolved
+                .get(*family)
+                .filter(|v| !v.trim().is_empty())
+                .cloned(),
+        })
+        .collect();
+
+    for m in observed {
+        if !out.iter().any(|existing| existing.id == m.id) {
+            out.push(m.clone());
+        }
+    }
+    out
+}
+
+/// Append each `observed` model not already present (by id) onto `catalog`'s
+/// model list, preserving the existing order (family entries stay first). Pure;
+/// mutates the passed `ModelCatalog` in place. Used to re-fold the provider's
+/// observed-model superset back into a freshly-probed claude catalog.
+pub fn merge_observed_into_catalog(catalog: &mut ModelCatalog, observed: &[ModelInfo]) {
+    for m in observed {
+        if !catalog.models.iter().any(|existing| existing.id == m.id) {
+            catalog.models.push(m.clone());
+        }
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct CodexModelsFile {
     #[serde(default)]
@@ -197,6 +244,278 @@ fn extract_user_text(raw_line: &str) -> String {
 }
 
 // ===========================================================================
+// Part 1b — discovery SHELL SCRIPT builders + section parser (all PURE, no IO)
+//
+// Each driver builds ONE discovery script that runs the host's `setup` first
+// (so `command -v`, `codex debug models`, the claude env, etc. see the SAME
+// environment a launched session would), then emits sections delimited by
+// unique sentinel markers. `run_local`/`run_remote_script_bounded` executes the
+// script; `parse_discovery_sections` splits the output back into named sections
+// with NO IO. Every builder + the splitter is unit-tested (the crate's 100% bar
+// stays on this pure layer; the real exec paths are `cfg(not(coverage))`).
+// ===========================================================================
+
+/// Sentinel that opens a named discovery section. The name is a fixed ASCII
+/// keyword (`avail`/`models`/`sessions`/`env`) chosen by the builders — never
+/// user input — so it can never collide with shell metacharacters.
+const SECTION_BEGIN: &str = "@@MARSAD_SEC_BEGIN:";
+/// Sentinel that closes a named discovery section.
+const SECTION_END: &str = "@@MARSAD_SEC_END:";
+
+/// POSIX single-quote a string for safe embedding in a `bash -l -s` script.
+/// (Kept in-crate rather than reused from `remote.rs`, whose `remote_shell_quote`
+/// is `pub(crate)` but lives behind `cfg(not(coverage))`-adjacent code; this one
+/// is always compiled + unit-tested so the pure builders keep the crate's 100%
+/// bar.)
+fn sh_squote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// Emit the shell that prints a section: a BEGIN marker line, the body of
+/// `cmd` (run in a subshell so a failure doesn't abort the outer script), then
+/// an END marker line. `name` is a fixed keyword; `cmd` is verbatim shell.
+fn section(name: &str, cmd: &str) -> String {
+    format!(
+        "echo '{SECTION_BEGIN}{name}'\n{cmd}\necho '{SECTION_END}{name}'\n",
+        SECTION_BEGIN = SECTION_BEGIN,
+        SECTION_END = SECTION_END,
+        name = name,
+        cmd = cmd,
+    )
+}
+
+/// Prepend the host's `setup` (if any) to a discovery script body. The setup runs
+/// in the SAME shell as the sections so its env/PATH mutations are visible to
+/// `command -v` and the models subcommands. A failing setup is tolerated
+/// (`|| true`) so discovery still reports availability honestly rather than
+/// aborting with an empty result.
+fn with_setup(setup: Option<&str>, body: &str) -> String {
+    match setup.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => format!("{{ {s}; }} 2>/dev/null || true\n{body}", s = s, body = body),
+        None => body.to_string(),
+    }
+}
+
+/// The first whitespace-separated token of a resolved command line — the WORD
+/// that `command -v` checks for availability (e.g. `codex --sandbox` → `codex`,
+/// `/opt/genie/genie` → `/opt/genie/genie`). Empty/whitespace-only input yields
+/// an empty string (the caller treats an empty word as "unavailable").
+pub fn command_word(command: &str) -> &str {
+    command.split_whitespace().next().unwrap_or("")
+}
+
+/// Build the claude discovery script: after `setup`, check availability of the
+/// resolved command's first word, then print the three `ANTHROPIC_DEFAULT_*`
+/// env values (the host's real versioned models — claude has no "list models"
+/// command, so the env is the only truthful per-host source). Sessions are
+/// listed per requested `project` (claude stores transcripts under
+/// `~/.claude/projects/<encoded-cwd>/`), newest-first, one
+/// `mtime_ms<TAB>uuid<TAB><first user line json>` record each — the same shape
+/// `parse_remote_claude_session_list` already parses.
+pub fn build_claude_discovery_script(
+    command: &str,
+    setup: Option<&str>,
+    project: Option<&str>,
+) -> String {
+    let word = command_word(command);
+    let avail = section("avail", &format!("command -v {} 2>/dev/null", sh_squote(word)));
+    // Print each family's resolved env value on its own labelled line so the
+    // parser can map family → versioned id.
+    let env = section(
+        "env",
+        "printf 'opus\\t%s\\n' \"${ANTHROPIC_DEFAULT_OPUS_MODEL:-}\"\n\
+         printf 'sonnet\\t%s\\n' \"${ANTHROPIC_DEFAULT_SONNET_MODEL:-}\"\n\
+         printf 'haiku\\t%s\\n' \"${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}\"",
+    );
+    // Sessions: only when a concrete project is in scope (claude's on-disk dir is
+    // the project's real cwd, `/`→non-alnum encoded). Resolve the cwd on the host
+    // and encode it there, matching `encode_project_dir` exactly.
+    let sessions = match project {
+        Some(p) if !p.trim().is_empty() => {
+            let cd = cd_for(p);
+            let body = format!(
+                "base=${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}\n\
+                 cwd=$(cd {cd} 2>/dev/null && pwd -P) || exit 0\n\
+                 enc=$(printf '%s' \"$cwd\" | sed 's/[^a-zA-Z0-9]/-/g')\n\
+                 dir=\"$base/projects/$enc\"\n\
+                 for f in $(ls -t \"$dir\"/*.jsonl 2>/dev/null); do \
+                   u=$(basename \"$f\" .jsonl); \
+                   m=$(stat -c %Y \"$f\" 2>/dev/null || echo 0); \
+                   l=$(grep -m1 '\"type\":\"user\"' \"$f\" 2>/dev/null | head -c 4000); \
+                   printf '%s000\\t%s\\t%s\\n' \"$m\" \"$u\" \"$l\"; \
+                 done",
+                cd = cd
+            );
+            section("sessions", &body)
+        }
+        _ => section("sessions", "true"),
+    };
+    with_setup(setup, &format!("{avail}{env}{sessions}"))
+}
+
+/// Build the codex discovery script: after `setup`, availability of the resolved
+/// command word, then `<command> debug models` (JSON parsed by
+/// `parse_codex_debug_models`), then the newest codex rollout sessions under
+/// `~/.codex/sessions` printed as `mtime_ms<TAB>filename<TAB><first NDJSON line>`
+/// records (parsed by `parse_remote_codex_session_list`).
+pub fn build_codex_discovery_script(command: &str, setup: Option<&str>) -> String {
+    let word = command_word(command);
+    let avail = section("avail", &format!("command -v {} 2>/dev/null", sh_squote(word)));
+    // Run the models subcommand against the RESOLVED command (verbatim, so flags
+    // like `--sandbox` are preserved) only if the word resolves.
+    let models = section(
+        "models",
+        &format!(
+            "command -v {w} >/dev/null 2>&1 && {cmd} debug models 2>/dev/null || true",
+            w = sh_squote(word),
+            cmd = command,
+        ),
+    );
+    let sessions = section(
+        "sessions",
+        "root=\"$HOME/.codex/sessions\"\n\
+         for f in $(ls -t \"$root\"/*/*/*/rollout-*.jsonl 2>/dev/null | head -200); do \
+           b=$(basename \"$f\"); \
+           m=$(stat -c %Y \"$f\" 2>/dev/null || echo 0); \
+           l=$(head -1 \"$f\" 2>/dev/null | head -c 4000); \
+           printf '%s000\\t%s\\t%s\\n' \"$m\" \"$b\" \"$l\"; \
+         done",
+    );
+    with_setup(setup, &format!("{avail}{models}{sessions}"))
+}
+
+/// Build the agy/gemini discovery script: after `setup`, availability of the
+/// resolved command word, then `<command> models` (parsed by `parse_agy_models`).
+/// Sessions are NOT enumerated over the connection (the agy brain-dir layout is
+/// scanned locally only); an empty sessions section keeps the output shape
+/// uniform.
+pub fn build_agy_discovery_script(command: &str, setup: Option<&str>) -> String {
+    let word = command_word(command);
+    let avail = section("avail", &format!("command -v {} 2>/dev/null", sh_squote(word)));
+    let models = section(
+        "models",
+        &format!(
+            "command -v {w} >/dev/null 2>&1 && {cmd} models 2>/dev/null || true",
+            w = sh_squote(word),
+            cmd = command,
+        ),
+    );
+    with_setup(setup, &format!("{avail}{models}"))
+}
+
+/// A parsed discovery output: the named sections extracted between the
+/// BEGIN/END sentinels. Unknown/duplicate section names keep the LAST body
+/// (probes only emit each name once). Text outside any section (setup noise,
+/// login-shell banners) is discarded.
+#[derive(Debug, Default, PartialEq)]
+pub struct DiscoverySections {
+    pub sections: HashMap<String, String>,
+}
+
+impl DiscoverySections {
+    /// Body of `name`, or `""` when absent.
+    pub fn get(&self, name: &str) -> &str {
+        self.sections.get(name).map(String::as_str).unwrap_or("")
+    }
+}
+
+/// Split raw discovery stdout into named sections by the BEGIN/END sentinels.
+/// A BEGIN with no matching END (truncated output / a killed probe) yields
+/// whatever body accumulated up to EOF — honest partial data, never a panic.
+/// Lines outside any open section are ignored.
+pub fn parse_discovery_sections(raw: &str) -> DiscoverySections {
+    let mut sections: HashMap<String, String> = HashMap::new();
+    let mut current: Option<(String, Vec<String>)> = None;
+    for line in raw.lines() {
+        if let Some(name) = line.strip_prefix(SECTION_BEGIN) {
+            // A new BEGIN closes any dangling open section first.
+            if let Some((n, body)) = current.take() {
+                sections.insert(n, body.join("\n"));
+            }
+            current = Some((name.trim().to_string(), Vec::new()));
+        } else if let Some(name) = line.strip_prefix(SECTION_END) {
+            if let Some((n, body)) = current.take() {
+                // Only close if the END names the open section; a mismatched END
+                // still closes (defensive) — the name recorded is the OPEN one.
+                let _ = name;
+                sections.insert(n, body.join("\n"));
+            }
+        } else if let Some((_, body)) = current.as_mut() {
+            body.push(line.to_string());
+        }
+    }
+    // A truncated output: flush the still-open section.
+    if let Some((n, body)) = current.take() {
+        sections.insert(n, body.join("\n"));
+    }
+    DiscoverySections { sections }
+}
+
+/// Interpret an `avail` section body: availability is "the resolved command word
+/// printed a non-empty path" (`command -v` prints the resolved path on success,
+/// nothing on failure). Trims; any non-empty line means available.
+pub fn parse_avail(body: &str) -> bool {
+    body.lines().any(|l| !l.trim().is_empty())
+}
+
+/// Parse the claude `env` section (`family<TAB>value` lines) into the
+/// family→resolved-id map `build_claude_model_catalog` consumes. Empty values
+/// (env unset) are dropped so a family with no host env carries no annotation.
+pub fn parse_claude_env_models(body: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for line in body.lines() {
+        let mut parts = line.splitn(2, '\t');
+        let family = parts.next().unwrap_or("").trim();
+        let value = parts.next().unwrap_or("").trim();
+        if !family.is_empty() && !value.is_empty() {
+            out.insert(family.to_string(), value.to_string());
+        }
+    }
+    out
+}
+
+/// Parse the codex `sessions` section: one
+/// `mtime_ms<TAB>filename<TAB><first NDJSON line>` record per line (newest-first,
+/// as emitted). Reuses `parse_codex_rollout_meta` (filename → id+project) and
+/// `extract_codex_user_snippet` for the snippet. A malformed mtime or a non-
+/// rollout filename skips the record. Order is preserved.
+pub fn parse_remote_codex_session_list(raw: &str) -> Vec<DiscoveredSession> {
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let mtime_str = parts.next().unwrap_or("");
+        let filename = parts.next().unwrap_or("");
+        let first_line = parts.next().unwrap_or("");
+        let modified_ms: u64 = match mtime_str.parse() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Some((id, project)) = parse_codex_rollout_meta(filename, first_line) {
+            out.push(DiscoveredSession {
+                id,
+                project,
+                snippet: extract_codex_user_snippet(first_line),
+                modified_ms,
+            });
+        }
+    }
+    out
+}
+
+/// `cd` target for a discovery script's project path, expanding a leading `~`
+/// (mirrors `remote.rs::cd_target`; kept in-crate + tested so the pure builders
+/// stay in the coverage layer).
+fn cd_for(project: &str) -> String {
+    if project == "~" {
+        "\"$HOME\"".to_string()
+    } else if let Some(rest) = project.strip_prefix("~/") {
+        format!("\"$HOME/{rest}\"")
+    } else {
+        sh_squote(project)
+    }
+}
+
+// ===========================================================================
 // Part 2 — temp-dir-parameterized scanners (real filesystem IO, rooted at a
 // caller-supplied &Path so unit tests can point them at a temp tree)
 // ===========================================================================
@@ -319,6 +638,94 @@ pub fn scan_agy_sessions(
     out
 }
 
+/// Encode a project's absolute path into claude's on-disk directory name:
+/// every `/` becomes `-` (claude stores sessions at
+/// `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`). Pure; no IO.
+pub fn encode_claude_project_dir(project_abs: &str) -> String {
+    project_abs.replace('/', "-")
+}
+
+/// Extract the first user-message text from a claude session `.jsonl` body.
+/// claude's transcript lines are `{"type":"user","message":{"role":"user",
+/// "content":...}}` where content is either a plain string or an array of
+/// content blocks. Returns an empty string when nothing is cheaply
+/// extractable (never a parse error).
+fn claude_snippet_from_body(body: &str) -> String {
+    for line in body.lines() {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap_or(serde_json::Value::Null);
+        if v.get("type").and_then(|t| t.as_str()) != Some("user") {
+            continue;
+        }
+        let content = match v.get("message").and_then(|m| m.get("content")) {
+            Some(c) => c,
+            None => continue,
+        };
+        // Plain-string content.
+        if let Some(s) = content.as_str() {
+            return s.trim().to_string();
+        }
+        // Array-of-blocks content: first block with a `text` field.
+        if let Some(arr) = content.as_array() {
+            for block in arr {
+                if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                    return t.trim().to_string();
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+/// List claude resumable sessions for one `project` under `projects_root`
+/// (`~/.claude/projects`). Sessions live at
+/// `<projects_root>/<encoded-cwd>/<uuid>.jsonl` — the encoded dir is the
+/// project abs path with `/`→`-`. Returns each `*.jsonl` newest-first, capped
+/// at `cap`, as `DiscoveredSession { id = filename stem (uuid), project,
+/// snippet = first user message text, modified }`. An absent/empty project
+/// directory yields an empty list — never an error.
+pub fn scan_claude_sessions(
+    projects_root: &Path,
+    project: &str,
+    cap: usize,
+) -> Vec<DiscoveredSession> {
+    let dir = projects_root.join(encode_claude_project_dir(project));
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut files: Vec<(PathBuf, std::time::SystemTime)> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file() && p.extension().and_then(|x| x.to_str()) == Some("jsonl")
+        })
+        .filter_map(|p| {
+            let mtime = std::fs::metadata(&p).and_then(|m| m.modified()).ok()?;
+            Some((p, mtime))
+        })
+        .collect();
+    files.sort_by_key(|(_, mtime)| std::cmp::Reverse(*mtime));
+
+    files
+        .into_iter()
+        .take(cap)
+        .filter_map(|(path, mtime)| {
+            let id = path.file_stem().and_then(|s| s.to_str())?.to_string();
+            if id.is_empty() {
+                return None;
+            }
+            let body = std::fs::read_to_string(&path).unwrap_or_default();
+            Some(DiscoveredSession {
+                id,
+                project: Some(project.to_string()),
+                snippet: claude_snippet_from_body(&body),
+                modified_ms: system_time_to_ms(mtime),
+            })
+        })
+        .collect()
+}
+
 // ===========================================================================
 // Part 3 — the CapabilityProbe seam (§3.1)
 // ===========================================================================
@@ -328,21 +735,93 @@ pub fn scan_agy_sessions(
 /// under any agent mutex.
 pub trait CapabilityProbe: Send + Sync + 'static {
     fn driver(&self) -> &'static str;
+    /// Whether Marsad has a real LAUNCH DRIVER for this agent — a static,
+    /// per-driver fact, NOT a probe of the host. Defaults to `false`; drivers
+    /// Marsad can actually spawn (claude/codex) override it to `true`. This is
+    /// what the launch UI gates on (a launchable driver is offered on every
+    /// host; bad host setup surfaces as a launch error, not a greyed button),
+    /// distinct from `cli_available` (a best-effort local `which`).
+    fn launchable(&self) -> bool {
+        false
+    }
     /// Full probe for one host: availability + models + sessions for the given
     /// scope. Must respect `ctx.deadline` internally; errors go into
     /// `Capabilities::errors`, never panic/propagate.
     fn probe(&self, ctx: &HostProbeCtx) -> Capabilities;
 }
 
+/// A host's launch configuration, carried from core's registry into the probe so
+/// discovery runs setup-first over the right connection with the exact per-driver
+/// command a launch would use (deliverable #1). `Default` = the local host with no
+/// setup and no overrides (bare `claude`/`codex`/`agy`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct HostLaunchCfg {
+    /// The remote execution target (`user@host`, `wsl:<distro>`, …). `None` = the
+    /// agent's LOCAL machine (discovery runs in-process; setup still honored).
+    pub host_target: Option<String>,
+    /// A shell pre-command run BEFORE every discovery probe on this host.
+    pub setup: Option<String>,
+    /// Per-driver command overrides (`(driver, command)`).
+    pub agent_commands: Vec<(String, String)>,
+    /// The `claude` executable override (fallback for the `claude` driver).
+    pub claude_bin: Option<String>,
+}
+
+impl HostLaunchCfg {
+    /// Resolve the concrete command line for `driver`: `agent_commands[driver]`
+    /// first, then `claude_bin` for the claude driver, else the bare driver name.
+    /// Mirrors `marsad_hosts::resolve_driver_bin` (kept in-crate to avoid a new
+    /// dependency edge, and unit-tested here).
+    pub fn resolve_command(&self, driver: &str) -> String {
+        if let Some((_, cmd)) = self.agent_commands.iter().find(|(d, _)| d == driver) {
+            return cmd.clone();
+        }
+        if driver == "claude" {
+            if let Some(bin) = &self.claude_bin {
+                return bin.clone();
+            }
+        }
+        driver.to_string()
+    }
+}
+
 pub struct HostProbeCtx {
     pub host_id: String,
     /// None = local; Some = SSH/WSL target (exec via run_remote_script_bounded).
     pub host_target: Option<String>,
+    /// The host's pre-command, run FIRST in every discovery script (real env).
+    pub setup: Option<String>,
+    /// The host's per-driver command overrides (`(driver, command)`), used to
+    /// resolve the exact command each probe discovers against.
+    pub agent_commands: Vec<(String, String)>,
+    /// The host's `claude` executable override (fallback for the claude driver).
+    pub claude_bin: Option<String>,
     /// Session scope to scan (claude: accumulated requested projects).
     pub scope: SessionScope,
+    /// The SPECIFIC project this refresh was requested for (claude session
+    /// enumeration scopes to exactly one `<encoded-cwd>` directory). `None` for
+    /// AllKnown drivers / a project-less refresh. Distinct from `scope`, which
+    /// is the accumulated superset across every refresh for this (driver,host).
+    pub project: Option<String>,
     /// Hard wall-clock budget (default 6s — matches the existing bounded-probe
     /// convention, agent/src/lib.rs:1440-1490).
     pub deadline: Duration,
+}
+
+impl HostProbeCtx {
+    /// Resolve the concrete command line a probe discovers against for `driver`
+    /// (see `HostLaunchCfg::resolve_command`).
+    pub fn resolve_command(&self, driver: &str) -> String {
+        if let Some((_, cmd)) = self.agent_commands.iter().find(|(d, _)| d == driver) {
+            return cmd.clone();
+        }
+        if driver == "claude" {
+            if let Some(bin) = &self.claude_bin {
+                return bin.clone();
+            }
+        }
+        driver.to_string()
+    }
 }
 
 // ===========================================================================
@@ -428,7 +907,11 @@ impl CapabilityProvider {
         let provider = CapabilityProvider { inner };
 
         for host in known_hosts {
-            provider.handle_refresh(Some(host), None, None);
+            // Startup refresh for known hosts. `known_hosts` here is only ever the
+            // local host (serve.rs wires `["local"]`); remote hosts arrive with
+            // their full launch config via explicit RefreshCapabilities. So the
+            // local startup probe uses the default (local, no-setup) config.
+            provider.handle_refresh(Some(host), None, None, HostLaunchCfg::default());
         }
 
         provider
@@ -462,6 +945,7 @@ impl CapabilityProvider {
         host_id: Option<String>,
         driver: Option<String>,
         project: Option<String>,
+        cfg: HostLaunchCfg,
     ) -> String {
         let host = host_id.as_deref().unwrap_or("local").to_string();
         let drivers: Vec<String> = match &driver {
@@ -475,7 +959,7 @@ impl CapabilityProvider {
         };
 
         for d in drivers {
-            self.queue_probe(host.clone(), d, project.clone());
+            self.queue_probe(host.clone(), d, project.clone(), cfg.clone());
         }
 
         encode_ipc(&IpcMsg::CapabilitiesRefreshQueued { host_id })
@@ -486,7 +970,13 @@ impl CapabilityProvider {
     /// AllKnown driver's probe simply ignores the accumulated scope). A probe
     /// already running for this (driver, host), or a driver with no registered
     /// probe, is skipped — the imminent broadcast (if any) serves the requester.
-    fn queue_probe(&self, host_id: String, driver: String, project: Option<String>) {
+    fn queue_probe(
+        &self,
+        host_id: String,
+        driver: String,
+        project: Option<String>,
+        cfg: HostLaunchCfg,
+    ) {
         let key = (driver.clone(), host_id.clone());
 
         let scope = {
@@ -523,13 +1013,43 @@ impl CapabilityProvider {
 
         let inner = Arc::clone(&self.inner);
         std::thread::spawn(move || {
+            // `host_target` comes from the launch config (the real shell target),
+            // NOT from `host_id` (an opaque registry key). A `None` target means
+            // the agent's local machine — discovery runs in-process (setup still
+            // honored). Back-compat: if no target was threaded but the host_id is
+            // itself a usable target (the old convention: host_id == target for a
+            // non-"local" host), fall back to it so a caller that only sent a
+            // host_id still probes the right machine.
+            let host_target = cfg
+                .host_target
+                .clone()
+                .or_else(|| Some(host_id.clone()).filter(|h| h != "local"));
             let ctx = HostProbeCtx {
                 host_id: host_id.clone(),
-                host_target: Some(host_id.clone()).filter(|h| h != "local"),
+                host_target,
+                setup: cfg.setup.clone(),
+                agent_commands: cfg.agent_commands.clone(),
+                claude_bin: cfg.claude_bin.clone(),
                 scope,
+                project,
                 deadline: DEFAULT_PROBE_DEADLINE,
             };
-            let caps = inner.probes[probe_idx].probe(&ctx);
+            let mut caps = inner.probes[probe_idx].probe(&ctx);
+
+            // §3.4: the claude probe builds a family catalog, but the passively
+            // observed-model superset lives in the provider — merge it in so a
+            // probe never DROPS a model the user has actually run (append,
+            // dedup by id, family entries stay first).
+            if driver == "claude" {
+                let observed = inner
+                    .observed_models
+                    .lock()
+                    .unwrap()
+                    .get(&host_id)
+                    .cloned()
+                    .unwrap_or_default();
+                merge_observed_into_catalog(&mut caps.models, &observed);
+            }
 
             inner
                 .cache
@@ -576,12 +1096,21 @@ impl CapabilityProvider {
                 driver: "claude".to_string(),
                 host_id: host_id.to_string(),
                 cli_available: false,
+                // claude has a launch driver — static truth, independent of any
+                // host probe (mirrors RealClaudeProbe::launchable()).
+                launchable: true,
                 models: ModelCatalog::default(),
                 session_scope: None,
                 sessions: vec![],
                 fetched_at_ms: 0,
                 errors: vec![],
             });
+            // Observed-only set (contract: this is the passively-observed
+            // superset, persisted across restarts). The family list
+            // (opus/sonnet/haiku) is contributed by `RealClaudeProbe` and
+            // re-merged with this observed set on every refresh (queue_probe),
+            // which the launch modals trigger on open — so the picker always
+            // shows families PLUS anything ever observed.
             caps.models = ModelCatalog {
                 models: models_vec,
                 source: ModelListSource::Observed,
@@ -644,62 +1173,91 @@ fn persist_host(inner: &Inner, host_id: &str) {
 // pattern").
 // ===========================================================================
 
+/// Run a discovery SCRIPT over the host connection, setup-first, and return its
+/// raw stdout — or `Err` on an unreachable host / a timeout / a spawn failure.
+///
+/// - Remote host (`Some(target)`): `run_remote_script_bounded` pipes the script
+///   to `bash -l -s` over ssh/wsl/plink (login shell so `$HOME`/PATH/setup env
+///   resolve), bounded by `deadline`. `None` back from it = host unreachable /
+///   the bounded probe timed out.
+/// - Local host (`None`): the SAME script is fed to a LOCAL `bash -l -s` (so
+///   `setup` runs identically), bounded by the same deadline. This is what makes
+///   local discovery real (setup honored) rather than a bare `which`.
 #[cfg(not(coverage))]
-fn home_dir() -> Option<PathBuf> {
-    std::env::var("HOME").ok().map(PathBuf::from)
+fn run_discovery(
+    host_target: Option<&str>,
+    script: &str,
+    deadline: Duration,
+) -> Result<String, String> {
+    match host_target {
+        Some(target) => crate::remote::run_remote_script_bounded(target, script, deadline)
+            .ok_or_else(|| format!("host '{target}' unreachable or probe timed out")),
+        None => run_local_script(script, deadline),
+    }
 }
 
+/// Run a shell `script` on the LOCAL machine via `bash -l -s` (login shell,
+/// script on stdin), bounded by `deadline`. Mirrors `run_remote_script_bounded`
+/// applied to a local child so `setup` + section markers behave identically to
+/// the remote path.
 #[cfg(not(coverage))]
-fn cli_available(bin: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(bin)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-#[cfg(not(coverage))]
-fn run_local(bin: &str, args: &[&str], deadline: Duration) -> Result<String, String> {
-    // A simple bounded wait: spawn, then poll for exit within the deadline
-    // rather than blocking forever (mirrors the `run_remote_script_bounded`
-    // convention, agent/src/lib.rs:1440-1490, applied to a LOCAL child).
-    let mut child = std::process::Command::new(bin)
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+fn run_local_script(script: &str, deadline: Duration) -> Result<String, String> {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("bash")
+        .arg("-l")
+        .arg("-s")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("{bin}: spawn failed: {e}"))?;
+        .map_err(|e| format!("bash spawn failed: {e}"))?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "bash: no stdin".to_string())?;
+        stdin
+            .write_all(script.as_bytes())
+            .map_err(|e| format!("bash: write failed: {e}"))?;
+    } // stdin dropped → EOF so `bash -s` runs and exits.
+
+    // Drain stdout on a dedicated thread so a LARGE output (e.g. `codex debug
+    // models` is ~200 KB JSON) can never fill the OS pipe buffer and DEADLOCK
+    // the child — the child would block on write, never exit, and the poll below
+    // would falsely time out. Reading concurrently keeps the pipe flowing.
+    let stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut out = String::new();
+        if let Some(mut so) = stdout {
+            let _ = so.read_to_string(&mut out);
+        }
+        out
+    });
 
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => {
-                let mut stdout = String::new();
-                if let Some(mut out) = child.stdout.take() {
-                    use std::io::Read;
-                    let _ = out.read_to_string(&mut stdout);
-                }
-                if status.success() {
-                    return Ok(stdout);
-                }
-                return Err(format!("{bin}: exit {status}"));
+            Ok(Some(_)) => {
+                return Ok(reader.join().unwrap_or_default());
             }
             Ok(None) => {
-                if start.elapsed() > deadline {
+                if start.elapsed() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!("{bin}: timed out"));
+                    let _ = reader.join();
+                    return Err("local discovery: timed out".to_string());
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(e) => return Err(format!("{bin}: wait failed: {e}")),
+            Err(e) => return Err(format!("bash: wait failed: {e}")),
         }
     }
 }
 
-/// Real `codex debug models` + `~/.codex/sessions` probe.
+/// Real codex probe: setup-first `command -v` + `<cmd> debug models` +
+/// `~/.codex/sessions` listing, run over the host connection (remote) or locally
+/// (setup honored). No `which`; no local-only optimism.
 #[cfg(not(coverage))]
 pub struct RealCodexProbe;
 
@@ -709,27 +1267,34 @@ impl CapabilityProbe for RealCodexProbe {
         "codex"
     }
 
+    fn launchable(&self) -> bool {
+        true
+    }
+
     fn probe(&self, ctx: &HostProbeCtx) -> Capabilities {
+        let command = ctx.resolve_command("codex");
+        let script = build_codex_discovery_script(&command, ctx.setup.as_deref());
         let mut errors = Vec::new();
-        let available = cli_available("codex");
-        let models = if available {
-            match run_local("codex", &["debug", "models"], ctx.deadline) {
-                Ok(out) => parse_codex_debug_models(&out),
-                Err(e) => {
-                    errors.push(format!("codex debug models: {e}"));
-                    vec![]
+        let (cli_available, models, sessions) =
+            match run_discovery(ctx.host_target.as_deref(), &script, ctx.deadline) {
+                Ok(out) => {
+                    let secs = parse_discovery_sections(&out);
+                    (
+                        parse_avail(secs.get("avail")),
+                        parse_codex_debug_models(secs.get("models")),
+                        parse_remote_codex_session_list(secs.get("sessions")),
+                    )
                 }
-            }
-        } else {
-            vec![]
-        };
-        let sessions = home_dir()
-            .map(|h| scan_codex_sessions(&h.join(".codex").join("sessions"), 200))
-            .unwrap_or_default();
+                Err(e) => {
+                    errors.push(format!("codex discovery: {e}"));
+                    (false, vec![], vec![])
+                }
+            };
         Capabilities {
             driver: "codex".to_string(),
             host_id: ctx.host_id.clone(),
-            cli_available: available,
+            cli_available,
+            launchable: self.launchable(),
             models: ModelCatalog {
                 models,
                 source: ModelListSource::Listed,
@@ -743,7 +1308,8 @@ impl CapabilityProbe for RealCodexProbe {
     }
 }
 
-/// Real `agy models` + `~/.gemini/antigravity-cli/brain` probe.
+/// Real agy/gemini probe: setup-first `command -v` + `<cmd> models`, run over
+/// the host connection (remote) or locally (setup honored).
 #[cfg(not(coverage))]
 pub struct RealAgyProbe;
 
@@ -754,56 +1320,50 @@ impl CapabilityProbe for RealAgyProbe {
     }
 
     fn probe(&self, ctx: &HostProbeCtx) -> Capabilities {
+        let command = ctx.resolve_command("gemini");
+        let script = build_agy_discovery_script(&command, ctx.setup.as_deref());
         let mut errors = Vec::new();
-        let available = cli_available("agy");
-        let models = if available {
-            match run_local("agy", &["models"], ctx.deadline) {
-                Ok(out) => parse_agy_models(&out),
-                Err(e) => {
-                    errors.push(format!("agy models: {e}"));
-                    vec![]
+        let (cli_available, models) =
+            match run_discovery(ctx.host_target.as_deref(), &script, ctx.deadline) {
+                Ok(out) => {
+                    let secs = parse_discovery_sections(&out);
+                    (
+                        parse_avail(secs.get("avail")),
+                        parse_agy_models(secs.get("models")),
+                    )
                 }
-            }
-        } else {
-            vec![]
-        };
-        let root = home_dir().map(|h| h.join(".gemini").join("antigravity-cli"));
-        let sessions = root
-            .as_ref()
-            .map(|root| {
-                let last_conversations =
-                    std::fs::read_to_string(root.join("cache").join("last_conversations.json"))
-                        .unwrap_or_else(|_| "{}".to_string());
-                scan_agy_sessions(&root.join("brain"), &last_conversations)
-            })
-            .unwrap_or_default();
+                Err(e) => {
+                    errors.push(format!("gemini discovery: {e}"));
+                    (false, vec![])
+                }
+            };
         Capabilities {
             driver: "gemini".to_string(),
             host_id: ctx.host_id.clone(),
-            cli_available: available,
+            cli_available,
+            // gemini (agy) has NO launch driver in Marsad — the launch UI greys
+            // it with the "not yet launchable" note. Uses the trait default.
+            launchable: self.launchable(),
             models: ModelCatalog {
                 models,
                 source: ModelListSource::Listed,
                 free_text: false,
             },
             session_scope: Some(SessionScope::AllKnown),
-            sessions,
+            sessions: vec![],
             fetched_at_ms: now_ms(),
             errors,
         }
     }
 }
 
-/// claude has no list command (§1.1) — this probe only establishes
-/// `cli_available` + tracks the requested project scope; the model catalog
-/// comes entirely from `observe_claude_model` (passive `system:init`
-/// observation, §3.2 trigger 4). Local `~/.claude/projects` session
-/// enumeration reuses `marsad_core::discovery::{list_sessions,
-/// first_user_prompt}` per §1.2 — NOT wired here (would add a new
-/// marsad-agent -> marsad-core crate dependency, out of U1's edit scope);
-/// an explicit gap is surfaced rather than a fabricated list, per §1.2's
-/// disposition for known-but-unimplemented probe legs. Remote (SSH/WSL)
-/// hosts are the same explicit-gap disposition (§1.2).
+/// Real claude probe: setup-first `command -v` (real availability, local AND
+/// remote) + the host's `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` env
+/// (claude has no "list models" command — the env is the only truthful per-host
+/// source), offered as the pickable `opus/sonnet/haiku` families annotated with
+/// the host's resolved versions where set (`free_text: true`). Sessions are
+/// enumerated per requested project over the connection. The provider re-merges
+/// the passively-observed model superset afterward (§3.4).
 #[cfg(not(coverage))]
 pub struct RealClaudeProbe;
 
@@ -813,16 +1373,58 @@ impl CapabilityProbe for RealClaudeProbe {
         "claude"
     }
 
+    fn launchable(&self) -> bool {
+        true
+    }
+
     fn probe(&self, ctx: &HostProbeCtx) -> Capabilities {
+        let command = ctx.resolve_command("claude");
+        let script =
+            build_claude_discovery_script(&command, ctx.setup.as_deref(), ctx.project.as_deref());
+        let mut errors = Vec::new();
+        let (cli_available, models, sessions) =
+            match run_discovery(ctx.host_target.as_deref(), &script, ctx.deadline) {
+                Ok(out) => {
+                    let secs = parse_discovery_sections(&out);
+                    // Family catalog annotated with the host's REAL resolved
+                    // versions from the env section (families are only offered
+                    // when claude actually resolved on the host).
+                    let resolved = parse_claude_env_models(secs.get("env"));
+                    let models = if parse_avail(secs.get("avail")) {
+                        let resolved_ref: HashMap<&str, String> =
+                            resolved.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+                        build_claude_model_catalog(&resolved_ref, &[])
+                    } else {
+                        // claude didn't resolve on the host: no families offered
+                        // (the passively-observed superset is still merged by the
+                        // provider afterward, so nothing ever run is lost).
+                        vec![]
+                    };
+                    (
+                        parse_avail(secs.get("avail")),
+                        models,
+                        parse_remote_claude_session_list(secs.get("sessions")),
+                    )
+                }
+                Err(e) => {
+                    errors.push(format!("claude discovery: {e}"));
+                    (false, vec![], vec![])
+                }
+            };
         Capabilities {
             driver: "claude".to_string(),
             host_id: ctx.host_id.clone(),
-            cli_available: cli_available("claude"),
-            models: ModelCatalog::default(),
+            cli_available,
+            launchable: self.launchable(),
+            models: ModelCatalog {
+                models,
+                source: ModelListSource::Observed,
+                free_text: true,
+            },
             session_scope: Some(ctx.scope.clone()),
-            sessions: vec![],
+            sessions,
             fetched_at_ms: now_ms(),
-            errors: vec!["claude session enumeration not yet wired (M7b follow-up)".to_string()],
+            errors,
         }
     }
 }

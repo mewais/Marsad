@@ -71,6 +71,7 @@ fn single_session_snapshot(phase: Phase) -> AppSnapshot {
             claude_bin: None,
             setup: None,
             env: Vec::new(),
+            agent_commands: Vec::new(),
         }],
         workspaces: vec![],
         active_ws: None,
@@ -268,6 +269,7 @@ fn rescope_unknown_workspace_returns_unchanged_snapshot() {
             claude_bin: None,
             setup: None,
             env: Vec::new(),
+            agent_commands: Vec::new(),
         }],
         workspaces: vec![Workspace {
             id: "ws-real".to_string(),

@@ -334,6 +334,16 @@ pub struct PersistedSession {
     /// `#[serde(default)]` keeps older records loading as empty (no tools disabled).
     #[serde(default)]
     pub disallowed_tools: Vec<String>,
+    /// Agent driver for this session (`"claude"` / `"codex"`).  Persisted so a
+    /// restart / resume re-uses the same driver. `#[serde(default = "default_driver")]`
+    /// keeps pre-Stage-1 session JSON (no `driver` key) loading as `"claude"` —
+    /// the only driver that existed before Stage 1.
+    #[serde(default = "default_driver")]
+    pub driver: String,
+}
+
+fn default_driver() -> String {
+    "claude".to_string()
 }
 
 /// A single transcript event.
@@ -363,6 +373,11 @@ pub struct PersistedHost {
     /// `(key, value)` pairs. `#[serde(default)]` keeps older records loading.
     #[serde(default)]
     pub env: Vec<(String, String)>,
+    /// Per-driver command overrides for this host, as `(driver, command)` pairs.
+    /// E.g. `[("codex", "codex --sandbox")]`. `#[serde(default)]` keeps older
+    /// records loading (empty = no overrides).
+    #[serde(default)]
+    pub agent_commands: Vec<(String, String)>,
 }
 
 /// A named group of sessions.
@@ -401,6 +416,19 @@ pub struct PersistedSettings {
     // Session defaults.
     pub default_model: String,
     pub default_posture: String, // "ask" | "auto" | "full"
+    /// Default driver for new sessions ("claude" | "codex" | "gemini").
+    /// `#[serde(default)]` keeps older records loading as "claude".
+    #[serde(default = "default_driver_str")]
+    pub default_driver: String,
+    /// Per-driver default models, as `(driver, model_slug)` pairs.
+    /// E.g. `[("codex", "codex-mini-latest"), ("claude", "claude-sonnet-latest")]`.
+    /// `#[serde(default)]` keeps older records loading as empty (falls back to `default_model`).
+    #[serde(default)]
+    pub default_models: Vec<(String, String)>,
+}
+
+fn default_driver_str() -> String {
+    "claude".to_string()
 }
 
 /// A named config template (model + posture) for quick session configuration.
@@ -901,6 +929,7 @@ impl Store {
                 last_phase: es.last_phase.clone(),
                 posture: None,
                 disallowed_tools: vec![],
+                driver: default_driver(),
             };
             let _ = self.upsert_session(&sess);
         }

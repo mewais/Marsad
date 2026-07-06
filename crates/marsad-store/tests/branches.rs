@@ -13,7 +13,8 @@
 //! - All phases of a PersistedSession last_phase field survive round-trip
 
 use marsad_store::{
-    Backend, MemoryBackend, PersistedSession, Store, StoreError, TranscriptEntry, Workspace,
+    Backend, MemoryBackend, PersistedSession, PersistedSettings, Store, StoreError,
+    TranscriptEntry, Workspace,
 };
 use std::collections::HashSet;
 
@@ -37,6 +38,7 @@ fn session(id: &str) -> PersistedSession {
         last_phase: "Done".to_string(),
         posture: None,
         disallowed_tools: vec![],
+        driver: "claude".to_string(),
     }
 }
 
@@ -350,6 +352,7 @@ fn session_with_none_session_id_round_trips() {
         last_phase: "Starting".to_string(),
         posture: None,
         disallowed_tools: vec![],
+        driver: "claude".to_string(),
     };
     store.upsert_session(&sess).expect("upsert");
     let r = store.restore().expect("restore");
@@ -431,6 +434,7 @@ fn last_phase_all_values_round_trip() {
             last_phase: phase.to_string(),
             posture: None,
             disallowed_tools: vec![],
+            driver: "claude".to_string(),
         };
         store.upsert_session(&sess).expect("upsert");
     }
@@ -446,4 +450,41 @@ fn last_phase_all_values_round_trip() {
             "last_phase '{phase}' must survive round-trip"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Back-compat: PersistedSettings without the new default_driver / default_models
+// fields (serde default path for the new fields added by deliverable #2).
+// ---------------------------------------------------------------------------
+
+/// Deserializing an old-format PersistedSettings JSON (no `default_driver` or
+/// `default_models` keys) must use the serde defaults: "claude" and [].
+/// This exercises the `default_driver_str()` function which is only called by
+/// the `#[serde(default = "default_driver_str")]` attribute when the field is
+/// absent from the stored JSON.
+#[test]
+fn persisted_settings_missing_default_driver_falls_back_to_claude() {
+    // A raw JSON blob as an old (pre-deliverable-#2) settings record would have
+    // stored — deliberately omitting "default_driver" and "default_models".
+    let old_json = r#"{
+        "notif_prefs": {},
+        "play_sound": true,
+        "group_alerts": false,
+        "do_not_disturb": false,
+        "background": "Gradient",
+        "restore_on_launch": true,
+        "confirm_before_stop": true,
+        "default_model": "claude-sonnet-4-6",
+        "default_posture": "ask"
+    }"#;
+    let s: PersistedSettings =
+        serde_json::from_str(old_json).expect("old settings JSON must deserialize");
+    assert_eq!(
+        s.default_driver, "claude",
+        "absent default_driver must fall back to 'claude' via default_driver_str()"
+    );
+    assert!(
+        s.default_models.is_empty(),
+        "absent default_models must fall back to empty vec"
+    );
 }

@@ -58,6 +58,7 @@ fn full_launch_spec(wasl: bool) -> LaunchSpec {
         name: None,
         disallowed_tools: vec![],
         wasl,
+        driver: "claude".to_string(),
     }
 }
 
@@ -241,6 +242,7 @@ fn launch_session_constructed_with_wasl_true_round_trips() {
         name: None,
         disallowed_tools: vec![],
         wasl: true,
+        driver: "claude".to_string(),
     };
     let encoded = encode_ipc(&msg);
     let reparsed = parse_ipc(&encoded).expect("encoded wasl:true LaunchSession must reparse");

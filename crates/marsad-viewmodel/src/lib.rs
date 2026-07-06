@@ -138,6 +138,10 @@ pub struct CapabilitiesView {
     pub driver: String,
     pub host_id: String,
     pub cli_available: bool,
+    /// Whether Marsad has a launch driver for this agent (static per-driver
+    /// truth: claude/codex → true, gemini → false). What the launch UI gates
+    /// on — carried verbatim from `marsad_proto::Capabilities::launchable`.
+    pub launchable: bool,
     pub models: marsad_proto::ModelCatalog,
     pub session_scope: Option<marsad_proto::SessionScope>,
     pub sessions: Vec<marsad_proto::DiscoveredSession>,
@@ -151,6 +155,7 @@ impl From<marsad_proto::Capabilities> for CapabilitiesView {
             driver: c.driver,
             host_id: c.host_id,
             cli_available: c.cli_available,
+            launchable: c.launchable,
             models: c.models,
             session_scope: c.session_scope,
             sessions: c.sessions,

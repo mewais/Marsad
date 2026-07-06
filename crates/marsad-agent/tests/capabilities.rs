@@ -67,13 +67,20 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use std::collections::HashMap;
+
 use marsad_agent::capabilities::{
-    agy_snippet_from_transcript, parse_agy_models, parse_codex_debug_models,
-    parse_codex_rollout_meta, parse_remote_claude_session_list, scan_agy_sessions,
-    scan_codex_sessions, CapabilityProbe, CapabilityProvider, HostProbeCtx,
+    agy_snippet_from_transcript, build_agy_discovery_script, build_claude_discovery_script,
+    build_claude_model_catalog, build_codex_discovery_script, command_word,
+    encode_claude_project_dir, merge_observed_into_catalog, parse_agy_models, parse_avail,
+    parse_claude_env_models, parse_codex_debug_models, parse_codex_rollout_meta,
+    parse_discovery_sections, parse_remote_claude_session_list, parse_remote_codex_session_list,
+    scan_agy_sessions, scan_claude_sessions, scan_codex_sessions, CapabilityProbe,
+    CapabilityProvider, HostLaunchCfg, HostProbeCtx,
 };
 use marsad_proto::{
-    parse_ipc, Capabilities, DiscoveredSession, IpcMsg, ModelListSource, SessionScope,
+    parse_ipc, Capabilities, DiscoveredSession, IpcMsg, ModelCatalog, ModelInfo, ModelListSource,
+    SessionScope,
 };
 
 // ---------------------------------------------------------------------------
@@ -285,6 +292,248 @@ fn parse_codex_debug_models_malformed_json_is_empty_not_panic() {
     // stderr into `Capabilities.errors` instead.
     let models = parse_codex_debug_models("not json at all");
     assert_eq!(models, vec![]);
+}
+
+// ---------------------------------------------------------------------------
+// build_claude_model_catalog — the claude FAMILY list (opus/sonnet/haiku),
+// env-resolved annotations, observed-model merge (§1.1/§3.4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn build_claude_model_catalog_offers_three_families_in_order_no_env() {
+    let catalog = build_claude_model_catalog(&HashMap::new(), &[]);
+    let ids: Vec<&str> = catalog.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, vec!["opus", "sonnet", "haiku"]);
+    // No env resolution → no annotation (never a synthesized sublabel).
+    for m in &catalog {
+        assert_eq!(m.annotation, None);
+    }
+}
+
+#[test]
+fn build_claude_model_catalog_env_resolved_id_lands_in_annotation_verbatim() {
+    let mut resolved = HashMap::new();
+    resolved.insert("opus", "claude-opus-4-8-20260101".to_string());
+    resolved.insert("haiku", "  ".to_string()); // whitespace-only → ignored
+    let catalog = build_claude_model_catalog(&resolved, &[]);
+
+    let opus = catalog.iter().find(|m| m.id == "opus").unwrap();
+    assert_eq!(opus.annotation.as_deref(), Some("claude-opus-4-8-20260101"));
+    let haiku = catalog.iter().find(|m| m.id == "haiku").unwrap();
+    assert_eq!(
+        haiku.annotation, None,
+        "whitespace-only env value must not become an annotation"
+    );
+}
+
+#[test]
+fn build_claude_model_catalog_merges_observed_dedup_by_id() {
+    let observed = vec![
+        // Already a family word → must NOT duplicate.
+        ModelInfo {
+            id: "sonnet".to_string(),
+            annotation: None,
+        },
+        // A concrete observed model → appended after the families.
+        ModelInfo {
+            id: "claude-sonnet-4-6-20251111".to_string(),
+            annotation: None,
+        },
+    ];
+    let catalog = build_claude_model_catalog(&HashMap::new(), &observed);
+    let ids: Vec<&str> = catalog.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["opus", "sonnet", "haiku", "claude-sonnet-4-6-20251111"],
+        "observed families dedup; concrete observed models append after"
+    );
+}
+
+#[test]
+fn merge_observed_into_catalog_appends_missing_preserves_order() {
+    let mut catalog = ModelCatalog {
+        models: vec![ModelInfo {
+            id: "opus".to_string(),
+            annotation: None,
+        }],
+        source: ModelListSource::Observed,
+        free_text: true,
+    };
+    merge_observed_into_catalog(
+        &mut catalog,
+        &[
+            ModelInfo {
+                id: "opus".to_string(),
+                annotation: None,
+            },
+            ModelInfo {
+                id: "some-observed".to_string(),
+                annotation: None,
+            },
+        ],
+    );
+    let ids: Vec<&str> = catalog.models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, vec!["opus", "some-observed"]);
+}
+
+// ---------------------------------------------------------------------------
+// encode_claude_project_dir + scan_claude_sessions
+// (~/.claude/projects/<encoded-cwd>/<uuid>.jsonl; encoding = abs path /→-)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn encode_claude_project_dir_slashes_become_dashes() {
+    assert_eq!(
+        encode_claude_project_dir("/work/mewais/Marsad"),
+        "-work-mewais-Marsad"
+    );
+}
+
+#[test]
+fn scan_claude_sessions_lists_uuid_jsonl_with_snippet_and_project() {
+    let tmp = tempdir();
+    let project = "/work/mewais/Marsad";
+    let proj_dir = tmp.path().join(encode_claude_project_dir(project));
+    std::fs::create_dir_all(&proj_dir).unwrap();
+
+    // A session file with a plain-string user content block.
+    let uuid = "019f237a-f03d-7710-ab8f-7af32b222df8";
+    let body = format!(
+        "{}\n{}\n",
+        r#"{"type":"user","message":{"role":"user","content":"add a health check endpoint"}}"#,
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}"#,
+    );
+    std::fs::write(proj_dir.join(format!("{uuid}.jsonl")), body).unwrap();
+
+    let sessions = scan_claude_sessions(tmp.path(), project, 200);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, uuid);
+    assert_eq!(sessions[0].project.as_deref(), Some(project));
+    assert_eq!(sessions[0].snippet, "add a health check endpoint");
+}
+
+#[test]
+fn scan_claude_sessions_array_content_first_text_block() {
+    let tmp = tempdir();
+    let project = "/p";
+    let proj_dir = tmp.path().join(encode_claude_project_dir(project));
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    let body = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello world"}]}}"#;
+    std::fs::write(proj_dir.join("aaa.jsonl"), body).unwrap();
+
+    let sessions = scan_claude_sessions(tmp.path(), project, 200);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].snippet, "hello world");
+}
+
+#[test]
+fn scan_claude_sessions_newest_first_and_cap() {
+    let tmp = tempdir();
+    let project = "/p";
+    let proj_dir = tmp.path().join(encode_claude_project_dir(project));
+    std::fs::create_dir_all(&proj_dir).unwrap();
+
+    for (i, offset) in [("old", -300i64), ("mid", -200), ("new", -100)] {
+        let path = proj_dir.join(format!("{i}.jsonl"));
+        std::fs::write(&path, r#"{"type":"user","message":{"role":"user","content":"x"}}"#)
+            .unwrap();
+        set_mtime(&path, offset);
+    }
+
+    let all = scan_claude_sessions(tmp.path(), project, 200);
+    assert_eq!(
+        all.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+        vec!["new", "mid", "old"],
+        "newest-first"
+    );
+
+    let capped = scan_claude_sessions(tmp.path(), project, 2);
+    assert_eq!(
+        capped.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+        vec!["new", "mid"],
+        "cap honored, newest kept"
+    );
+}
+
+#[test]
+fn scan_claude_sessions_absent_project_dir_is_empty_not_error() {
+    let tmp = tempdir();
+    assert_eq!(
+        scan_claude_sessions(tmp.path(), "/never/created", 200),
+        vec![]
+    );
+}
+
+#[test]
+fn scan_claude_sessions_ignores_non_jsonl_files() {
+    let tmp = tempdir();
+    let project = "/p";
+    let proj_dir = tmp.path().join(encode_claude_project_dir(project));
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    std::fs::write(proj_dir.join("readme.txt"), "not a session").unwrap();
+    std::fs::write(
+        proj_dir.join("real.jsonl"),
+        r#"{"type":"user","message":{"role":"user","content":"hi"}}"#,
+    )
+    .unwrap();
+
+    let sessions = scan_claude_sessions(tmp.path(), project, 200);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, "real");
+}
+
+/// Snippet extraction skips non-`user` lines, tolerates a `user` line with no
+/// `content`, and falls through to an empty snippet when a `user` line's array
+/// content has no `text` block — covering `claude_snippet_from_body`'s skip
+/// arms (never a parse error / panic).
+#[test]
+fn scan_claude_sessions_snippet_skips_non_user_and_empty_content() {
+    let tmp = tempdir();
+    let project = "/p";
+    let proj_dir = tmp.path().join(encode_claude_project_dir(project));
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    // First line is a non-user event (skipped), then a `user` line whose message
+    // has NO content key (skipped), then a `user` line with an array content
+    // that has NO text block (falls through) → empty snippet, but the session is
+    // still listed with its id.
+    let body = format!(
+        "{}\n{}\n{}\n",
+        r#"{"type":"system","subtype":"init"}"#,
+        r#"{"type":"user","message":{"role":"user"}}"#,
+        r#"{"type":"user","message":{"role":"user","content":[{"type":"image"}]}}"#,
+    );
+    std::fs::write(proj_dir.join("sess-1.jsonl"), body).unwrap();
+
+    let sessions = scan_claude_sessions(tmp.path(), project, 200);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, "sess-1");
+    assert_eq!(sessions[0].snippet, "", "no extractable text → empty snippet");
+}
+
+/// A `.jsonl` whose file stem is empty (`.jsonl`) is skipped (empty id → None),
+/// covering `scan_claude_sessions`'s empty-id guard.
+#[test]
+fn scan_claude_sessions_empty_stem_is_skipped() {
+    let tmp = tempdir();
+    let project = "/p";
+    let proj_dir = tmp.path().join(encode_claude_project_dir(project));
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    // A file literally named ".jsonl" has an empty file stem.
+    std::fs::write(
+        proj_dir.join(".jsonl"),
+        r#"{"type":"user","message":{"role":"user","content":"x"}}"#,
+    )
+    .unwrap();
+    // Plus one valid file so the dir isn't empty.
+    std::fs::write(
+        proj_dir.join("good.jsonl"),
+        r#"{"type":"user","message":{"role":"user","content":"y"}}"#,
+    )
+    .unwrap();
+
+    let sessions = scan_claude_sessions(tmp.path(), project, 200);
+    assert_eq!(sessions.len(), 1, "empty-stem file skipped");
+    assert_eq!(sessions[0].id, "good");
 }
 
 // ---------------------------------------------------------------------------
@@ -608,6 +857,282 @@ fn parse_remote_claude_session_list_empty_stdout_is_empty() {
 }
 
 // ===========================================================================
+// Part 1b — discovery script builders + section parser (all pure, no IO)
+// ===========================================================================
+
+#[test]
+fn command_word_first_token() {
+    assert_eq!(command_word("codex --sandbox danger"), "codex");
+    assert_eq!(command_word("/opt/genie/genie"), "/opt/genie/genie");
+    assert_eq!(command_word("  claude  "), "claude");
+    assert_eq!(command_word(""), "");
+    assert_eq!(command_word("   "), "");
+}
+
+#[test]
+fn build_codex_discovery_script_has_setup_and_all_sections() {
+    let script =
+        build_codex_discovery_script("codex --sandbox", Some("module load cuda"));
+    // Setup runs first, tolerated on failure.
+    assert!(script.contains("module load cuda"));
+    assert!(script.contains("|| true"));
+    // Availability checks the FIRST WORD of the resolved command.
+    assert!(script.contains("command -v 'codex'"));
+    // The models subcommand uses the FULL resolved command (flags preserved).
+    assert!(script.contains("codex --sandbox debug models"));
+    // All three sections are present with begin/end markers.
+    for name in ["avail", "models", "sessions"] {
+        assert!(
+            script.contains(&format!("@@MARSAD_SEC_BEGIN:{name}")),
+            "missing begin marker for {name}"
+        );
+        assert!(
+            script.contains(&format!("@@MARSAD_SEC_END:{name}")),
+            "missing end marker for {name}"
+        );
+    }
+}
+
+#[test]
+fn build_codex_discovery_script_no_setup_omits_setup_line() {
+    let script = build_codex_discovery_script("codex", None);
+    assert!(!script.contains("|| true\n@@") || !script.contains("module"));
+    assert!(script.contains("command -v 'codex'"));
+    assert!(script.contains("codex debug models"));
+}
+
+#[test]
+fn build_agy_discovery_script_avail_and_models_only() {
+    let script = build_agy_discovery_script("agy", Some("source ~/.gemrc"));
+    assert!(script.contains("source ~/.gemrc"));
+    assert!(script.contains("command -v 'agy'"));
+    assert!(script.contains("agy models"));
+    assert!(script.contains("@@MARSAD_SEC_BEGIN:avail"));
+    assert!(script.contains("@@MARSAD_SEC_BEGIN:models"));
+    // agy has no over-the-wire session enumeration.
+    assert!(!script.contains("@@MARSAD_SEC_BEGIN:sessions"));
+}
+
+#[test]
+fn build_claude_discovery_script_env_and_sessions_for_project() {
+    let script =
+        build_claude_discovery_script("genie", Some("module load cuda"), Some("/home/u/proj"));
+    assert!(script.contains("module load cuda"));
+    assert!(script.contains("command -v 'genie'"));
+    // The env section prints all three families.
+    assert!(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL"));
+    assert!(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL"));
+    assert!(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL"));
+    // Sessions resolve + encode the project's real cwd.
+    assert!(script.contains("cd '/home/u/proj'"));
+    assert!(script.contains("projects/$enc"));
+    for name in ["avail", "env", "sessions"] {
+        assert!(script.contains(&format!("@@MARSAD_SEC_BEGIN:{name}")));
+    }
+}
+
+#[test]
+fn build_claude_discovery_script_no_project_empty_sessions_section() {
+    let script = build_claude_discovery_script("claude", None, None);
+    assert!(script.contains("command -v 'claude'"));
+    // Sessions section still present but a no-op (no ls loop).
+    assert!(script.contains("@@MARSAD_SEC_BEGIN:sessions"));
+    assert!(!script.contains("ls -t"));
+}
+
+#[test]
+fn build_claude_discovery_script_tilde_project_expands_home() {
+    let script = build_claude_discovery_script("claude", None, Some("~/work"));
+    assert!(script.contains("cd \"$HOME/work\""));
+    let root = build_claude_discovery_script("claude", None, Some("~"));
+    assert!(root.contains("cd \"$HOME\""));
+}
+
+#[test]
+fn parse_discovery_sections_splits_named_sections() {
+    let raw = "login banner noise\n\
+        @@MARSAD_SEC_BEGIN:avail\n\
+        /usr/bin/codex\n\
+        @@MARSAD_SEC_END:avail\n\
+        @@MARSAD_SEC_BEGIN:models\n\
+        {\"models\":[]}\n\
+        @@MARSAD_SEC_END:models\n";
+    let secs = parse_discovery_sections(raw);
+    assert_eq!(secs.get("avail"), "/usr/bin/codex");
+    assert_eq!(secs.get("models"), "{\"models\":[]}");
+    assert_eq!(secs.get("missing"), "");
+}
+
+#[test]
+fn parse_discovery_sections_truncated_flushes_open_section() {
+    // A killed probe (no END) still yields the partial body — honest, no panic.
+    let raw = "@@MARSAD_SEC_BEGIN:avail\n/usr/bin/claude\n";
+    let secs = parse_discovery_sections(raw);
+    assert_eq!(secs.get("avail"), "/usr/bin/claude");
+}
+
+#[test]
+fn parse_discovery_sections_new_begin_closes_dangling_section() {
+    let raw = "@@MARSAD_SEC_BEGIN:avail\nx\n@@MARSAD_SEC_BEGIN:models\ny\n@@MARSAD_SEC_END:models\n";
+    let secs = parse_discovery_sections(raw);
+    assert_eq!(secs.get("avail"), "x");
+    assert_eq!(secs.get("models"), "y");
+}
+
+#[test]
+fn parse_avail_nonempty_means_available() {
+    assert!(parse_avail("/usr/bin/codex"));
+    assert!(parse_avail("  /opt/genie/genie  "));
+    assert!(!parse_avail(""));
+    assert!(!parse_avail("\n   \n"));
+}
+
+#[test]
+fn parse_claude_env_models_maps_families_dropping_empty() {
+    let body = "opus\tclaude-opus-4-1-20250805\nsonnet\tclaude-sonnet-4-5\nhaiku\t";
+    let map = parse_claude_env_models(body);
+    assert_eq!(map.get("opus").map(String::as_str), Some("claude-opus-4-1-20250805"));
+    assert_eq!(map.get("sonnet").map(String::as_str), Some("claude-sonnet-4-5"));
+    // haiku has an empty value → dropped, not stored as "".
+    assert_eq!(map.get("haiku"), None);
+}
+
+#[test]
+fn parse_claude_env_models_empty_is_empty() {
+    assert!(parse_claude_env_models("").is_empty());
+    assert!(parse_claude_env_models("\n\n").is_empty());
+}
+
+#[test]
+fn parse_remote_codex_session_list_extracts_id_project_from_records() {
+    let meta = r#"{"type":"session_meta","payload":{"cwd":"/home/u/proj"}}"#;
+    let record = format!(
+        "1783100616000\trollout-2025-06-01T12-00-00-11111111-2222-3333-4444-555555555555.jsonl\t{meta}"
+    );
+    let sessions = parse_remote_codex_session_list(&record);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, "11111111-2222-3333-4444-555555555555");
+    assert_eq!(sessions[0].project.as_deref(), Some("/home/u/proj"));
+    assert_eq!(sessions[0].modified_ms, 1783100616000);
+}
+
+#[test]
+fn parse_remote_codex_session_list_skips_bad_mtime_and_non_rollout() {
+    let bad_mtime = "notanumber\trollout-x-11111111-2222-3333-4444-555555555555.jsonl\t{}";
+    assert_eq!(parse_remote_codex_session_list(bad_mtime), vec![]);
+    let non_rollout = "1783100616000\tnot-a-rollout.txt\t{}";
+    assert_eq!(parse_remote_codex_session_list(non_rollout), vec![]);
+}
+
+#[test]
+fn parse_remote_codex_session_list_empty_is_empty() {
+    assert_eq!(parse_remote_codex_session_list(""), vec![]);
+}
+
+/// End-to-end pure roundtrip: a codex discovery script's output (as the shell
+/// WOULD produce it) parses back into availability + models + sessions, proving
+/// the builder's section names + the parsers agree without any IO.
+#[test]
+fn codex_discovery_roundtrip_pure() {
+    let _script = build_codex_discovery_script("codex", None);
+    // Simulate what running that script prints.
+    let meta = r#"{"type":"session_meta","payload":{"cwd":"/p"}}"#;
+    let out = format!(
+        "@@MARSAD_SEC_BEGIN:avail\n/usr/bin/codex\n@@MARSAD_SEC_END:avail\n\
+         @@MARSAD_SEC_BEGIN:models\n{{\"models\":[{{\"slug\":\"gpt-5\",\"visibility\":\"show\",\"priority\":1}}]}}\n@@MARSAD_SEC_END:models\n\
+         @@MARSAD_SEC_BEGIN:sessions\n1783100616000\trollout-t-11111111-2222-3333-4444-555555555555.jsonl\t{meta}\n@@MARSAD_SEC_END:sessions\n"
+    );
+    let secs = parse_discovery_sections(&out);
+    assert!(parse_avail(secs.get("avail")));
+    let models = parse_codex_debug_models(secs.get("models"));
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].id, "gpt-5");
+    let sessions = parse_remote_codex_session_list(secs.get("sessions"));
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, "11111111-2222-3333-4444-555555555555");
+    assert_eq!(sessions[0].project.as_deref(), Some("/p"));
+}
+
+/// End-to-end pure roundtrip for claude: env section → annotated families,
+/// availability, and remote session records.
+#[test]
+fn claude_discovery_roundtrip_pure() {
+    let _script = build_claude_discovery_script("claude", None, Some("/p"));
+    let user = r#"{"type":"user","message":{"content":[{"text":"hello"}]}}"#;
+    let out = format!(
+        "@@MARSAD_SEC_BEGIN:avail\n/usr/local/bin/claude\n@@MARSAD_SEC_END:avail\n\
+         @@MARSAD_SEC_BEGIN:env\nopus\tclaude-opus-4-1\nsonnet\t\nhaiku\t\n@@MARSAD_SEC_END:env\n\
+         @@MARSAD_SEC_BEGIN:sessions\n1783100616000\taaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\t{user}\n@@MARSAD_SEC_END:sessions\n"
+    );
+    let secs = parse_discovery_sections(&out);
+    assert!(parse_avail(secs.get("avail")));
+    let resolved = parse_claude_env_models(secs.get("env"));
+    let resolved_ref: std::collections::HashMap<&str, String> =
+        resolved.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+    let catalog = build_claude_model_catalog(&resolved_ref, &[]);
+    // opus carries the host's resolved version annotation; sonnet/haiku don't.
+    let opus = catalog.iter().find(|m| m.id == "opus").unwrap();
+    assert_eq!(opus.annotation.as_deref(), Some("claude-opus-4-1"));
+    let sonnet = catalog.iter().find(|m| m.id == "sonnet").unwrap();
+    assert_eq!(sonnet.annotation, None);
+    let sessions = parse_remote_claude_session_list(secs.get("sessions"));
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+    assert_eq!(sessions[0].snippet, "hello");
+}
+
+#[test]
+fn host_launch_cfg_resolve_command() {
+    let cfg = HostLaunchCfg {
+        host_target: Some("user@box".to_string()),
+        setup: Some("setup".to_string()),
+        agent_commands: vec![("codex".to_string(), "codex --sandbox".to_string())],
+        claude_bin: Some("genie".to_string()),
+    };
+    // agent_commands wins.
+    assert_eq!(cfg.resolve_command("codex"), "codex --sandbox");
+    // claude falls back to claude_bin.
+    assert_eq!(cfg.resolve_command("claude"), "genie");
+    // unknown driver → bare name.
+    assert_eq!(cfg.resolve_command("gemini"), "gemini");
+    // default cfg → bare names.
+    let d = HostLaunchCfg::default();
+    assert_eq!(d.resolve_command("claude"), "claude");
+    assert_eq!(d.resolve_command("codex"), "codex");
+}
+
+#[test]
+fn host_probe_ctx_resolve_command_matches_cfg() {
+    let ctx = HostProbeCtx {
+        host_id: "h".to_string(),
+        host_target: None,
+        setup: None,
+        agent_commands: vec![("gemini".to_string(), "/opt/g".to_string())],
+        claude_bin: Some("genie".to_string()),
+        scope: SessionScope::AllKnown,
+        project: None,
+        deadline: Duration::from_secs(1),
+    };
+    assert_eq!(ctx.resolve_command("gemini"), "/opt/g");
+    assert_eq!(ctx.resolve_command("claude"), "genie");
+    assert_eq!(ctx.resolve_command("codex"), "codex");
+
+    // claude with NO claude_bin set (and no agent_commands entry) → bare name,
+    // covering the `claude_bin: None` arm of the claude fallback.
+    let ctx_no_bin = HostProbeCtx {
+        host_id: "h".to_string(),
+        host_target: None,
+        setup: None,
+        agent_commands: vec![],
+        claude_bin: None,
+        scope: SessionScope::AllKnown,
+        project: None,
+        deadline: Duration::from_secs(1),
+    };
+    assert_eq!(ctx_no_bin.resolve_command("claude"), "claude");
+}
+
+// ===========================================================================
 // Part 2 — CapabilityProvider: the fake-driven provider seam (§3, §4, §6)
 // ===========================================================================
 
@@ -669,6 +1194,7 @@ impl CapabilityProbe for FakeProbe {
             driver: self.driver.to_string(),
             host_id: ctx.host_id.clone(),
             cli_available: true,
+            launchable: self.launchable(),
             models: Default::default(),
             session_scope: Some(if self.echo_scope {
                 ctx.scope.clone()
@@ -701,7 +1227,7 @@ fn handle_refresh_returns_ack_and_eventually_broadcasts_capabilities_update() {
     let rx = provider.subscribe();
 
     let ack_line =
-        provider.handle_refresh(Some("local".to_string()), Some("codex".to_string()), None);
+        provider.handle_refresh(Some("local".to_string()), Some("codex".to_string()), None, HostLaunchCfg::default());
     let ack = parse_ipc(&ack_line).expect("ack must be a valid IpcMsg");
     assert_eq!(ack, refresh_queued_ack(Some("local")));
 
@@ -743,7 +1269,7 @@ fn new_subscriber_receives_cached_replay_before_any_live_event() {
     // First subscriber drives + observes the first probe completing, so the
     // result lands in the cache.
     let rx_a = provider.subscribe();
-    provider.handle_refresh(Some("local".to_string()), Some("agy".to_string()), None);
+    provider.handle_refresh(Some("local".to_string()), Some("agy".to_string()), None, HostLaunchCfg::default());
     wait_for(Duration::from_secs(2), || {
         while let Ok(line) = rx_a.try_recv() {
             if line.contains("agy") {
@@ -780,8 +1306,8 @@ fn in_flight_refresh_for_same_driver_host_is_deduped() {
 
     // Two rapid refreshes for the SAME (driver, host) while the first is
     // still sleeping.
-    let _ = provider.handle_refresh(Some("local".to_string()), Some("codex".to_string()), None);
-    let _ = provider.handle_refresh(Some("local".to_string()), Some("codex".to_string()), None);
+    let _ = provider.handle_refresh(Some("local".to_string()), Some("codex".to_string()), None, HostLaunchCfg::default());
+    let _ = provider.handle_refresh(Some("local".to_string()), Some("codex".to_string()), None, HostLaunchCfg::default());
 
     std::thread::sleep(Duration::from_millis(400));
     assert_eq!(
@@ -804,7 +1330,7 @@ fn failing_probe_populates_errors_and_still_broadcasts() {
         CapabilityProvider::new(vec![Box::new(probe)], vec!["local".to_string()], tmp.path());
     let rx = provider.subscribe();
 
-    let ack = provider.handle_refresh(Some("local".to_string()), Some("agy".to_string()), None);
+    let ack = provider.handle_refresh(Some("local".to_string()), Some("agy".to_string()), None, HostLaunchCfg::default());
     assert!(
         matches!(parse_ipc(&ack).unwrap(), IpcMsg::CapabilitiesRefreshQueued { .. }),
         "a probe that will fail must still be ACKED as queued — errors surface later, not as an ack failure"
@@ -846,6 +1372,7 @@ fn project_scope_accumulates_across_refreshes() {
         Some("local".to_string()),
         Some("claude".to_string()),
         Some("/home/u/proj-a".to_string()),
+        HostLaunchCfg::default(),
     );
     wait_for(Duration::from_secs(2), || {
         while let Ok(line) = rx.try_recv() {
@@ -860,6 +1387,7 @@ fn project_scope_accumulates_across_refreshes() {
         Some("local".to_string()),
         Some("claude".to_string()),
         Some("/home/u/proj-b".to_string()),
+        HostLaunchCfg::default(),
     );
     let final_scope = wait_for(Duration::from_secs(2), || {
         while let Ok(line) = rx.try_recv() {
@@ -902,7 +1430,7 @@ fn successful_probe_persists_to_data_root_capabilities_host_json() {
     let provider =
         CapabilityProvider::new(vec![Box::new(probe)], vec!["local".to_string()], tmp.path());
     let rx = provider.subscribe();
-    provider.handle_refresh(Some("local".to_string()), Some("codex".to_string()), None);
+    provider.handle_refresh(Some("local".to_string()), Some("codex".to_string()), None, HostLaunchCfg::default());
     wait_for(Duration::from_secs(2), || {
         while let Ok(line) = rx.try_recv() {
             if line.contains("codex") {
@@ -929,6 +1457,27 @@ fn successful_probe_persists_to_data_root_capabilities_host_json() {
         .snapshot("codex", "local")
         .expect("a restarted provider must load the persisted cache synchronously at construction");
     assert!(snap.cli_available);
+}
+
+// ---------------------------------------------------------------------------
+// launchable — static per-driver launch-driver truth (NOT a host probe)
+// ---------------------------------------------------------------------------
+
+/// The real probes report `launchable()` from a static per-driver fact: claude
+/// and codex have launch drivers (true); gemini (agy) does not (false). This is
+/// the ground truth the launch UI gates on, independent of any host `which`.
+/// Real probes are `#[cfg(not(coverage))]`; this assertion only runs in the
+/// normal (non-coverage) test build, matching the crate's guardrail.
+#[cfg(not(coverage))]
+#[test]
+fn real_probes_report_correct_launchable() {
+    use marsad_agent::capabilities::{RealAgyProbe, RealClaudeProbe, RealCodexProbe};
+    assert!(RealClaudeProbe.launchable(), "claude has a launch driver");
+    assert!(RealCodexProbe.launchable(), "codex has a launch driver");
+    assert!(
+        !RealAgyProbe.launchable(),
+        "gemini (agy) has no launch driver"
+    );
 }
 
 #[test]
@@ -1021,6 +1570,7 @@ fn slow_probe_never_blocks_the_ack_or_a_concurrent_subscribe() {
         Some("local".to_string()),
         Some("slow-driver".to_string()),
         None,
+        HostLaunchCfg::default(),
     );
     let refresh_elapsed = refresh_start.elapsed();
     assert!(
@@ -1050,6 +1600,7 @@ fn slow_probe_never_blocks_the_ack_or_a_concurrent_subscribe() {
         Some("local".to_string()),
         Some("fast-driver".to_string()),
         None,
+        HostLaunchCfg::default(),
     );
     assert!(matches!(
         parse_ipc(&fast_ack).unwrap(),

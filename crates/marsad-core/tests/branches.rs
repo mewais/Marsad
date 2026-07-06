@@ -50,6 +50,7 @@ fn spec(project: &str, posture: Posture) -> LaunchSpec {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     }
 }
 

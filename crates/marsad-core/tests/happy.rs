@@ -107,6 +107,7 @@ fn launch_session_returns_id_and_sends_ipc() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     };
     let id = core
         .launch_session(spec)
@@ -134,7 +135,7 @@ fn launch_session_returns_id_and_sends_ipc() {
 #[test]
 fn launch_session_on_remote_host_forwards_host_target() {
     let (mut core, mut peer) = make_core();
-    core.add_host("box", "user@box.example.com", None, None, Vec::new())
+    core.add_host("box", "user@box.example.com", None, None, Vec::new(), Vec::new())
         .expect("add remote host");
     let host_id = core
         .snapshot()
@@ -158,6 +159,7 @@ fn launch_session_on_remote_host_forwards_host_target() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     })
     .expect("launch on remote host");
 
@@ -187,6 +189,7 @@ fn launch_session_forwards_mode_and_posture() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     })
     .expect("launch continue");
     let out = peer.drain_outbound();
@@ -215,6 +218,7 @@ fn launch_session_forwards_mode_and_posture() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     })
     .expect("launch resume");
     let out2 = peer.drain_outbound();
@@ -246,6 +250,7 @@ fn launch_session_with_first_prompt_includes_prompt_in_ipc() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     };
     let _id = core.launch_session(spec).expect("launch");
     let outbound = peer.drain_outbound();
@@ -285,6 +290,7 @@ fn resume_session_sends_ipc() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     let _ = peer.drain_outbound(); // consume launch IPC
@@ -341,6 +347,7 @@ fn attach_session_sends_ipc() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -381,6 +388,7 @@ fn stop_session_sends_ipc() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -421,6 +429,7 @@ fn send_prompt_sends_ipc() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -461,6 +470,7 @@ fn interrupt_sends_ipc() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -500,6 +510,7 @@ fn answer_gate_sends_ipc_and_routes_to_one_session() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -552,6 +563,7 @@ fn run_slash_sends_ipc() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -595,6 +607,7 @@ fn set_workspace_sends_ipc() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -629,6 +642,7 @@ fn on_agent_line_init_yields_session_vm_update() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -667,6 +681,7 @@ fn session_name_derives_from_project_basename_with_id_fallback() {
                 name: None,
                 disallowed_tools: vec![],
                 wasl: false,
+                driver: "claude".to_string(),
             })
             .expect("launch");
         let updates = core
@@ -709,6 +724,7 @@ fn on_agent_line_assistant_yields_session_vm_update() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -744,6 +760,7 @@ fn on_agent_line_control_request_yields_session_needs_update() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -778,6 +795,7 @@ fn on_agent_line_result_success_yields_done_update() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -813,6 +831,7 @@ fn on_agent_line_full_lifecycle_produces_overview_updates() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -915,6 +934,7 @@ fn launch_spec_fields_all_postures() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         };
         let _ = spec;
     }
@@ -976,6 +996,7 @@ fn git_changes_flow_into_session_view_after_tool_runs() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -1060,6 +1081,7 @@ fn launch_t(core: &mut Core, first_prompt: Option<&str>, mode: LaunchMode) -> St
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     })
     .expect("launch")
 }
@@ -1268,7 +1290,7 @@ fn remote_id(updates: &[VmUpdate]) -> String {
 fn add_host_appears_in_list_and_snapshot() {
     let mut core = core_with_backend(MemoryBackend::new());
     let u = core
-        .add_host("srv", "alice@srv.example.com", None, None, Vec::new())
+        .add_host("srv", "alice@srv.example.com", None, None, Vec::new(), Vec::new())
         .expect("add_host");
     let hosts = hosts_from(&u);
     assert!(hosts.iter().any(|h| h.label == "srv" && !h.is_local));
@@ -1279,10 +1301,10 @@ fn add_host_appears_in_list_and_snapshot() {
 #[test]
 fn add_host_duplicate_label_errors() {
     let mut core = core_with_backend(MemoryBackend::new());
-    core.add_host("srv", "a@h1", None, None, Vec::new())
+    core.add_host("srv", "a@h1", None, None, Vec::new(), Vec::new())
         .expect("first add");
     assert!(
-        core.add_host("srv", "b@h2", None, None, Vec::new())
+        core.add_host("srv", "b@h2", None, None, Vec::new(), Vec::new())
             .is_err(),
         "dup label must error"
     );
@@ -1293,7 +1315,7 @@ fn add_host_malformed_target_errors() {
     let mut core = core_with_backend(MemoryBackend::new());
     // Bare aliases are accepted now; a target with whitespace is still malformed.
     assert!(core
-        .add_host("x", "has a space", None, None, Vec::new())
+        .add_host("x", "has a space", None, None, Vec::new(), Vec::new())
         .is_err());
 }
 
@@ -1303,7 +1325,7 @@ fn add_host_store_write_failure_errors() {
     backend.fail_next(BackendOp::Write);
     let mut core = core_with_backend(backend);
     assert!(
-        core.add_host("srv", "a@h", None, None, Vec::new()).is_err(),
+        core.add_host("srv", "a@h", None, None, Vec::new(), Vec::new()).is_err(),
         "persist failure surfaces"
     );
 }
@@ -1312,7 +1334,7 @@ fn add_host_store_write_failure_errors() {
 fn remove_host_success_and_localhost_protected() {
     let mut core = core_with_backend(MemoryBackend::new());
     let u = core
-        .add_host("srv", "a@h", None, None, Vec::new())
+        .add_host("srv", "a@h", None, None, Vec::new(), Vec::new())
         .expect("add");
     let id = remote_id(&u);
     let u2 = core.remove_host(&id).expect("remove");
@@ -1328,7 +1350,7 @@ fn remove_host_store_delete_failure_errors() {
     let backend = MemoryBackend::new();
     let mut core = core_with_backend(backend.clone());
     let u = core
-        .add_host("srv", "a@h", None, None, Vec::new())
+        .add_host("srv", "a@h", None, None, Vec::new(), Vec::new())
         .expect("add");
     let id = remote_id(&u);
     backend.fail_next(BackendOp::Delete);
@@ -1339,7 +1361,7 @@ fn remove_host_store_delete_failure_errors() {
 fn set_host_status_updates_the_list() {
     let mut core = core_with_backend(MemoryBackend::new());
     let u = core
-        .add_host("srv", "a@h", None, None, Vec::new())
+        .add_host("srv", "a@h", None, None, Vec::new(), Vec::new())
         .expect("add");
     let id = remote_id(&u);
     let u2 = core.set_host_status(&id, HostStatus::Connected);
@@ -1360,6 +1382,7 @@ fn load_hosts_restores_persisted_hosts() {
         claude_bin: None,
         setup: None,
         env: Vec::new(),
+        agent_commands: Vec::new(),
     })
     .expect("seed");
     let mut core = core_with_backend(backend);
@@ -1388,6 +1411,7 @@ fn add_host_with_launch_config_resolves_into_ipc() {
         Some("genie".to_string()),
         Some("module load x".to_string()),
         vec![("A".to_string(), "b".to_string())],
+        Vec::new(),
     )
     .expect("add remote host with config");
     let host_id = core
@@ -1412,6 +1436,7 @@ fn add_host_with_launch_config_resolves_into_ipc() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     })
     .expect("launch on remote host");
 
@@ -1433,6 +1458,7 @@ fn launch_spec_env_overrides_host_env() {
         None,
         vec![("HOST".to_string(), "x".to_string())],
         None,
+        Vec::new(),
     )
     .expect("seed localhost env");
     core.launch_session(LaunchSpec {
@@ -1449,6 +1475,7 @@ fn launch_spec_env_overrides_host_env() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     })
     .expect("launch with explicit env");
     let outbound = peer.drain_outbound();
@@ -1462,7 +1489,7 @@ fn launch_spec_env_overrides_host_env() {
 fn update_host_changes_remote_config() {
     let mut core = core_with_backend(MemoryBackend::new());
     let u = core
-        .add_host("srv", "a@h", None, None, Vec::new())
+        .add_host("srv", "a@h", None, None, Vec::new(), Vec::new())
         .expect("add");
     let id = remote_id(&u);
     let u2 = core
@@ -1472,6 +1499,7 @@ fn update_host_changes_remote_config() {
             Some("setup.sh".to_string()),
             vec![("K".to_string(), "V".to_string())],
             Some("a@h2".to_string()),
+            Vec::new(),
         )
         .expect("update_host");
     let host = hosts_from(&u2).into_iter().find(|h| h.id == id).unwrap();
@@ -1492,6 +1520,7 @@ fn update_host_localhost_config_resolves_into_ipc() {
         Some("module load cuda".to_string()),
         vec![("FOO".to_string(), "bar".to_string())],
         None,
+        Vec::new(),
     )
     .expect("update localhost");
     // localhost target stays "this machine".
@@ -1517,6 +1546,7 @@ fn update_host_localhost_config_resolves_into_ipc() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     })
     .expect("launch on localhost");
     let outbound = peer.drain_outbound();
@@ -1539,11 +1569,11 @@ fn update_host_localhost_config_resolves_into_ipc() {
 fn update_host_store_write_failure_errors() {
     let backend = MemoryBackend::new();
     let mut core = core_with_backend(backend.clone());
-    core.add_host("srv", "a@h", None, None, Vec::new())
+    core.add_host("srv", "a@h", None, None, Vec::new(), Vec::new())
         .expect("add");
     backend.fail_next(BackendOp::Write);
     assert!(
-        core.update_host("localhost", Some("x".to_string()), None, Vec::new(), None)
+        core.update_host("localhost", Some("x".to_string()), None, Vec::new(), None, Vec::new())
             .is_err(),
         "persist failure surfaces"
     );
@@ -1554,7 +1584,7 @@ fn update_host_store_write_failure_errors() {
 fn update_host_unknown_id_errors() {
     let mut core = core_with_backend(MemoryBackend::new());
     assert!(
-        core.update_host("nope", None, None, Vec::new(), None)
+        core.update_host("nope", None, None, Vec::new(), None, Vec::new())
             .is_err(),
         "unknown id must error"
     );
@@ -1573,6 +1603,7 @@ fn load_hosts_restores_localhost_config() {
         claude_bin: Some("genie".to_string()),
         setup: Some("module load x".to_string()),
         env: vec![("A".to_string(), "b".to_string())],
+        agent_commands: Vec::new(),
     })
     .expect("seed localhost config");
     let mut core = core_with_backend(backend);
@@ -1908,6 +1939,7 @@ fn set_session_changes_updates_session_view() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -1981,6 +2013,8 @@ fn make_settings() -> PersistedSettings {
         confirm_before_stop: true,
         default_model: "claude-sonnet-4-6".to_string(),
         default_posture: "ask".to_string(),
+        default_driver: "claude".to_string(),
+        default_models: Vec::new(),
     }
 }
 
@@ -2063,6 +2097,7 @@ fn restart_session_emits_stop_then_launch_with_same_id() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     };
     let id = core.launch_session(spec).expect("launch");
     let _ = peer.drain_outbound(); // consume the initial LaunchSession IPC
@@ -2146,6 +2181,7 @@ fn restart_session_without_uuid_uses_continue_mode() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     };
     let id = core.launch_session(spec).expect("launch");
     let _ = peer.drain_outbound();
@@ -2281,6 +2317,7 @@ fn seed_session(seed: &mut Store, id: &str, host_id: &str, claude_uuid: Option<&
         last_phase: "Working".to_string(),
         posture: None,
         disallowed_tools: vec![],
+        driver: "claude".to_string(),
     })
     .expect("seed session");
 }
@@ -2599,6 +2636,7 @@ fn launch_session_with_custom_name_uses_name_in_view() {
         name: Some("My Named Session".to_string()),
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     };
     let id = core.launch_session(spec).expect("launch_session with name");
 
@@ -2648,6 +2686,7 @@ fn load_sessions_restores_custom_name() {
         last_phase: "Working".to_string(),
         posture: None,
         disallowed_tools: vec![],
+        driver: "claude".to_string(),
     })
     .expect("seed named session");
 
@@ -2688,6 +2727,7 @@ fn answer_question_sends_ipc() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -2742,6 +2782,7 @@ fn on_agent_line_changes_update_populates_session_changes() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -2787,6 +2828,7 @@ fn remote_session_changes_survive_result_event() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -2861,6 +2903,7 @@ fn session_view_exposes_model_usage_after_result_with_model_usage() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -3265,6 +3308,7 @@ fn session_view_exposes_running_subagents_count() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -3342,6 +3386,7 @@ fn launch_session_with_disallowed_tools_includes_field_in_ipc() {
             name: None,
             disallowed_tools: vec!["Bash".to_string(), "Edit".to_string()],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     assert!(!id.is_empty());
@@ -3386,6 +3431,7 @@ fn session_view_posture_default_maps_to_ask() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     let updates = core
@@ -3423,6 +3469,7 @@ fn session_view_posture_accept_edits_maps_to_auto() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     let updates = core
@@ -3463,6 +3510,7 @@ fn session_view_posture_bypass_maps_to_full() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     let updates = core
@@ -3503,6 +3551,7 @@ fn session_view_posture_defaults_to_ask_before_init() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     // Without any init event, the snapshot's posture must default to "ask".
@@ -3533,6 +3582,7 @@ fn session_view_posture_unknown_mode_falls_back_to_ask() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     let updates = core
@@ -3580,6 +3630,7 @@ fn usage_update_populates_two_model_rows_with_correct_cost() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     core.on_agent_line(&ipc_agent_event_system_init(&id))
@@ -3676,6 +3727,7 @@ fn usage_update_filters_synthetic_model() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     core.on_agent_line(&ipc_agent_event_system_init(&id))
@@ -3722,6 +3774,7 @@ fn usage_update_filters_zero_usage_rows() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     core.on_agent_line(&ipc_agent_event_system_init(&id))
@@ -3770,6 +3823,7 @@ fn usage_update_empty_payload_does_not_clear_existing_model_usage() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     core.on_agent_line(&ipc_agent_event_system_init(&id))
@@ -3850,6 +3904,7 @@ fn seed_session_with_posture(seed: &mut Store, id: &str, posture: Option<&str>) 
         last_phase: "Done".to_string(),
         posture: posture.map(|s| s.to_string()),
         disallowed_tools: vec![],
+        driver: "claude".to_string(),
     })
     .expect("seed session with posture");
 }
@@ -3987,6 +4042,7 @@ fn launch_session_auto_approve_safe_posture_visible_before_init() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -4023,6 +4079,7 @@ fn launch_session_full_autonomy_posture_visible_before_init() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -4067,6 +4124,7 @@ fn restart_session_carries_persisted_setup_env_claude_bin() {
         last_phase: "Working".to_string(),
         posture: Some("Ask".to_string()),
         disallowed_tools: vec![],
+        driver: "claude".to_string(),
     })
     .expect("seed session");
 
@@ -4142,6 +4200,7 @@ fn restart_session_absent_persisted_record_does_not_panic() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
     let _ = peer.drain_outbound();
@@ -4198,6 +4257,7 @@ fn system_init_overrides_launch_posture() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 

@@ -125,6 +125,14 @@ pub struct Host {
     /// pairs. `#[serde(default)]` keeps older serialized hosts working.
     #[serde(default)]
     pub env: Vec<(String, String)>,
+    /// Per-driver command overrides for this host, as `(driver, command)` pairs.
+    /// E.g. `[("codex", "codex --sandbox"), ("gemini", "/opt/gemini/bin/gemini")]`.
+    /// When launching a session with a given driver, `agent_commands` is checked first;
+    /// if the driver has no entry, falls back to `claude_bin` (for the `"claude"` driver)
+    /// or the bare driver name otherwise.
+    /// `#[serde(default)]` keeps older serialized hosts working (empty = no overrides).
+    #[serde(default)]
+    pub agent_commands: Vec<(String, String)>,
 }
 
 impl Host {
@@ -152,6 +160,47 @@ fn wsl_distro(target: &str) -> Option<&str> {
     target
         .strip_prefix("wsl:")
         .filter(|distro| !distro.is_empty())
+}
+
+/// Resolve the driver binary for a session launch from the host's `agent_commands`
+/// map, with fallbacks:
+///   1. `agent_commands[driver]` if present.
+///   2. `claude_bin` if driver == "claude" and `claude_bin` is set.
+///   3. The bare driver name otherwise.
+pub fn resolve_driver_bin(
+    driver: &str,
+    claude_bin: Option<&str>,
+    agent_commands: &[(String, String)],
+) -> String {
+    // Check agent_commands first (highest priority).
+    if let Some((_, cmd)) = agent_commands.iter().find(|(d, _)| d == driver) {
+        return cmd.clone();
+    }
+    // Fall back to claude_bin for the "claude" driver.
+    if driver == "claude" {
+        if let Some(bin) = claude_bin {
+            return bin.to_string();
+        }
+    }
+    // Default: bare driver name.
+    driver.to_string()
+}
+
+/// Fold `claude_bin` into `agent_commands["claude"]` if `claude_bin` is set and
+/// `agent_commands` does not already have a "claude" entry. Returns the
+/// (possibly extended) `agent_commands` list. This keeps both fields consistent
+/// without losing either: old configs that only set `claude_bin` still work;
+/// new configs can set `agent_commands` and `claude_bin` is kept for back-compat.
+fn fold_claude_bin(
+    claude_bin: Option<String>,
+    mut agent_commands: Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    if let Some(bin) = claude_bin {
+        if !agent_commands.iter().any(|(d, _)| d == "claude") {
+            agent_commands.push(("claude".to_string(), bin));
+        }
+    }
+    agent_commands
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +430,7 @@ impl HostRegistry {
             claude_bin: None,
             setup: None,
             env: Vec::new(),
+            agent_commands: Vec::new(),
         };
         Self {
             hosts: vec![localhost],
@@ -398,6 +448,7 @@ impl HostRegistry {
     /// # Errors
     /// - [`HostError::MalformedTarget`] — `target` is not valid `user@host`.
     /// - [`HostError::DuplicateLabel`] — a host with that label already exists.
+    #[allow(clippy::too_many_arguments)]
     pub fn add(
         &mut self,
         label: &str,
@@ -405,6 +456,7 @@ impl HostRegistry {
         claude_bin: Option<String>,
         setup: Option<String>,
         env: Vec<(String, String)>,
+        agent_commands: Vec<(String, String)>,
     ) -> Result<&Host, HostError> {
         // A valid target is one of:
         //   - `wsl:<distro>`  — a WSL distro (distro must be non-empty),
@@ -430,6 +482,9 @@ impl HostRegistry {
         let id = format!("host-{}", self.next_id);
         self.next_id += 1;
 
+        // If claude_bin is set and agent_commands has no "claude" entry, fold it in.
+        let agent_commands = fold_claude_bin(claude_bin.clone(), agent_commands);
+
         self.hosts.push(Host {
             id,
             label: label.to_string(),
@@ -441,6 +496,7 @@ impl HostRegistry {
             claude_bin,
             setup,
             env,
+            agent_commands,
         });
 
         Ok(self.hosts.last().unwrap())
@@ -483,12 +539,15 @@ impl HostRegistry {
         claude_bin: Option<String>,
         setup: Option<String>,
         env: Vec<(String, String)>,
+        agent_commands: Vec<(String, String)>,
     ) {
         if let Some(n) = id.strip_prefix("host-").and_then(|s| s.parse::<u64>().ok()) {
             if n >= self.next_id {
                 self.next_id = n + 1;
             }
         }
+        // If claude_bin is set and agent_commands has no "claude" entry, fold it in.
+        let agent_commands = fold_claude_bin(claude_bin.clone(), agent_commands);
         self.hosts.push(Host {
             id: id.to_string(),
             label: label.to_string(),
@@ -500,17 +559,19 @@ impl HostRegistry {
             claude_bin,
             setup,
             env,
+            agent_commands,
         });
     }
 
     /// Update an existing host's launch configuration (`claude_bin` / `setup` /
-    /// `env`), and optionally its `target`. Works for ANY host id, including the
-    /// protected localhost (whose `target` stays `"this machine"` — pass `None`
-    /// for `target` to leave it unchanged). Returns a mutable reference to the
-    /// updated host.
+    /// `env` / `agent_commands`), and optionally its `target`. Works for ANY host
+    /// id, including the protected localhost (whose `target` stays `"this machine"`
+    /// — pass `None` for `target` to leave it unchanged). Returns a mutable
+    /// reference to the updated host.
     ///
     /// # Errors
     /// - [`HostError::NotFound`] — no host with that id.
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         id: &str,
@@ -518,15 +579,17 @@ impl HostRegistry {
         setup: Option<String>,
         env: Vec<(String, String)>,
         target: Option<String>,
+        agent_commands: Vec<(String, String)>,
     ) -> Result<&Host, HostError> {
         let host = self
             .hosts
             .iter_mut()
             .find(|h| h.id == id)
             .ok_or_else(|| HostError::NotFound(id.to_string()))?;
-        host.claude_bin = claude_bin;
+        host.claude_bin = claude_bin.clone();
         host.setup = setup;
         host.env = env;
+        host.agent_commands = fold_claude_bin(claude_bin, agent_commands);
         if let Some(t) = target {
             host.target = t;
         }

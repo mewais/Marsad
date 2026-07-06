@@ -272,6 +272,7 @@ fn spec(project: &str, first_prompt: &str, posture: Posture, mode: LaunchMode) -
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     }
 }
 

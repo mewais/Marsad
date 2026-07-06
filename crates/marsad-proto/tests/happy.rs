@@ -594,6 +594,7 @@ fn encode_ipc_all_variants_produce_valid_json() {
             name: Some("My run".to_string()),
             disallowed_tools: vec!["Bash".to_string()],
             wasl: false,
+            driver: "claude".to_string(),
         },
         IpcMsg::ResumeSession {
             session_id: "sid-1".to_string(),
@@ -1050,6 +1051,7 @@ fn launch_spec_disallowed_tools_defaults_empty() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     };
     assert!(spec.disallowed_tools.is_empty());
 }
@@ -1072,6 +1074,7 @@ fn launch_spec_disallowed_tools_roundtrip() {
         name: None,
         disallowed_tools: vec!["Bash".to_string(), "Edit".to_string()],
         wasl: false,
+        driver: "claude".to_string(),
     };
     let json = serde_json::to_string(&spec).unwrap();
     let back: LaunchSpec = serde_json::from_str(&json).unwrap();

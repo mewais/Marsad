@@ -205,6 +205,7 @@ fn launch_session_transport_failure_returns_transport_error() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     };
     let result = core.launch_session(spec);
     // Either the launch succeeds (transport failure deferred) or returns Transport error
@@ -234,6 +235,7 @@ fn send_prompt_transport_failure_returns_transport_error() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     };
     // try launch (may succeed or fail)
     let id_result = core.launch_session(spec);
@@ -277,6 +279,7 @@ fn stop_session_transport_failure_returns_transport_error() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -320,6 +323,7 @@ fn resume_session_transport_failure_returns_transport_error() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -615,6 +619,7 @@ fn restart_session_transport_failure_on_stop_returns_transport_error() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("launch");
 
@@ -656,6 +661,7 @@ fn restart_session_transport_failure_on_relaunch_returns_transport_error() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+            driver: "claude".to_string(),
         })
         .expect("send #1 must succeed");
 

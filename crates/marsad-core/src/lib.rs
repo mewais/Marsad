@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use marsad_events::{reduce, Event, Phase, SessionState};
 use marsad_gates::{DecisionLedger, GateDecision};
-use marsad_hosts::{HostError, HostRegistry, SshRunner};
+use marsad_hosts::{resolve_driver_bin, HostError, HostRegistry, SshRunner};
 use marsad_proto::{encode_ipc, IpcMsg};
 use marsad_store::{Backend, PersistedHost, Store, Workspace as StoreWorkspace};
 use marsad_transport::Transport;
@@ -538,10 +538,19 @@ impl Core {
             // (claude_bin/setup/env) is applied via update so the seeded entry
             // carries it, rather than appending a duplicate.
             if h.is_local {
-                let _ = self.hosts.update(&h.id, h.claude_bin, h.setup, h.env, None);
+                let _ = self
+                    .hosts
+                    .update(&h.id, h.claude_bin, h.setup, h.env, None, h.agent_commands);
             } else {
-                self.hosts
-                    .load_remote(&h.id, &h.label, &h.target, h.claude_bin, h.setup, h.env);
+                self.hosts.load_remote(
+                    &h.id,
+                    &h.label,
+                    &h.target,
+                    h.claude_bin,
+                    h.setup,
+                    h.env,
+                    h.agent_commands,
+                );
             }
         }
         Ok(vec![VmUpdate::Hosts(self.hosts.list().to_vec())])
@@ -729,6 +738,7 @@ impl Core {
 
     /// Add a remote host (`label`, `user@host`), persist it, and return the
     /// updated host list. The host starts `Reconnecting` until a health check.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_host(
         &mut self,
         label: &str,
@@ -736,10 +746,11 @@ impl Core {
         claude_bin: Option<String>,
         setup: Option<String>,
         env: Vec<(String, String)>,
+        agent_commands: Vec<(String, String)>,
     ) -> Result<Vec<VmUpdate>, CoreError> {
         let host = self
             .hosts
-            .add(label, target, claude_bin, setup, env)
+            .add(label, target, claude_bin, setup, env, agent_commands)
             .map_err(|e| CoreError::Host(e.to_string()))?
             .clone();
         let persisted = PersistedHost {
@@ -750,6 +761,7 @@ impl Core {
             claude_bin: host.claude_bin,
             setup: host.setup,
             env: host.env,
+            agent_commands: host.agent_commands,
         };
         self.store
             .upsert_host(&persisted)
@@ -758,10 +770,11 @@ impl Core {
     }
 
     /// Update an existing host's launch configuration (`claude_bin` / `setup` /
-    /// `env`), and optionally its `target`. Works for any host id INCLUDING the
-    /// protected `localhost` (pass `None` for `target` to leave the target
-    /// unchanged — localhost's stays `"this machine"`). Persists the change and
-    /// returns the updated host list.
+    /// `env` / `agent_commands`), and optionally its `target`. Works for any host
+    /// id INCLUDING the protected `localhost` (pass `None` for `target` to leave
+    /// the target unchanged — localhost's stays `"this machine"`). Persists the
+    /// change and returns the updated host list.
+    #[allow(clippy::too_many_arguments)]
     pub fn update_host(
         &mut self,
         id: &str,
@@ -769,10 +782,11 @@ impl Core {
         setup: Option<String>,
         env: Vec<(String, String)>,
         target: Option<String>,
+        agent_commands: Vec<(String, String)>,
     ) -> Result<Vec<VmUpdate>, CoreError> {
         let host = self
             .hosts
-            .update(id, claude_bin, setup, env, target)
+            .update(id, claude_bin, setup, env, target, agent_commands)
             .map_err(|e| CoreError::Host(e.to_string()))?
             .clone();
         let persisted = PersistedHost {
@@ -783,6 +797,7 @@ impl Core {
             claude_bin: host.claude_bin,
             setup: host.setup,
             env: host.env,
+            agent_commands: host.agent_commands,
         };
         self.store
             .upsert_host(&persisted)
@@ -846,6 +861,8 @@ impl Core {
             confirm_before_stop: true,
             default_model: "claude-sonnet-4-6".to_string(),
             default_posture: "ask".to_string(),
+            default_driver: "claude".to_string(),
+            default_models: Vec::new(),
         }
     }
 
@@ -922,11 +939,30 @@ impl Core {
         // types (local, WSL, SSH/plink). An explicit value already on the spec
         // wins over the registry lookup. `env` is forwarded as `[k, v]` pairs
         // (the agent parses it back identically).
+        //
+        // Driver-aware bin resolution (deliverable #1): look up `spec.driver` in
+        // `host.agent_commands`; fall back to `claude_bin` for "claude"; else bare
+        // driver name. An explicit `spec.claude_bin` still wins (preserves the
+        // restart path's persisted-value passthrough).
         let host_cfg = self.hosts.list().iter().find(|h| h.id == spec.host_id);
-        let claude_bin = spec
-            .claude_bin
-            .clone()
-            .or_else(|| host_cfg.and_then(|h| h.claude_bin.clone()));
+        let claude_bin = if spec.claude_bin.is_some() {
+            spec.claude_bin.clone()
+        } else if let Some(host) = host_cfg {
+            let resolved = resolve_driver_bin(
+                &spec.driver,
+                host.claude_bin.as_deref(),
+                &host.agent_commands,
+            );
+            // Only set it when the resolved value differs from the bare driver name
+            // (i.e., there IS an override); the agent defaults to the bare name too.
+            if resolved != spec.driver {
+                Some(resolved)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let setup = spec
             .setup
             .clone()
@@ -969,6 +1005,10 @@ impl Core {
             // request verbatim so the agent can inject a Wasl MCP-server
             // entry at spawn time.
             wasl: spec.wasl,
+            // Stage 1 codex launch: forward the driver discriminator so the
+            // agent spawns the right binary. Defaults to "claude" on older
+            // wire messages (handled by `default_driver` in marsad-proto).
+            driver: spec.driver.clone(),
         };
         self.send_ipc(&msg)?;
 
@@ -1075,13 +1115,13 @@ impl Core {
         // is absent (e.g. session was never persisted, or was already deleted),
         // fall back to None/empty so launch_session_with_id re-resolves from
         // the registry as before.
-        let (persisted_setup, persisted_env, persisted_claude_bin) = self
+        let (persisted_setup, persisted_env, persisted_claude_bin, persisted_driver) = self
             .store
             .restore()
             .ok()
             .and_then(|r| r.sessions.into_iter().find(|s| s.id == id))
-            .map(|s| (s.setup, s.env, s.claude_bin))
-            .unwrap_or((None, Vec::new(), None));
+            .map(|s| (s.setup, s.env, s.claude_bin, s.driver))
+            .unwrap_or((None, Vec::new(), None, "claude".to_string()));
 
         let spec = LaunchSpec {
             project,
@@ -1100,6 +1140,9 @@ impl Core {
             // (mirrors the agent's own resume path, `marsad-agent/src/ipc.rs`
             // — out of X4's scope; start a fresh `wasl:true` launch instead).
             wasl: false,
+            // Preserve the original driver so a restart uses the same agent
+            // binary. Defaults to "claude" for pre-Stage-1 persisted records.
+            driver: persisted_driver,
         };
         self.launch_session_with_id(id.to_string(), spec)?;
 
@@ -1552,9 +1595,67 @@ impl Core {
         ])
     }
 
-    /// Delete a workstream, cascading its connections and membership/lead
-    /// entries. Deleting an absent id is a no-op `Ok`.
+    /// Pause (stop) all sessions in a workstream. Mirrors `stop_session` for
+    /// each member: sends `StopSession` IPC + marks phase Stale in memory.
+    /// Sessions remain resumable. Absent workstream or no members → no-op `Ok`.
+    pub fn pause_workstream(&mut self, ws_id: &str) -> Result<Vec<VmUpdate>, CoreError> {
+        // Collect member session ids (cloned to avoid borrowing self).
+        let session_ids: Vec<String> = self
+            .membership
+            .iter()
+            .filter(|(_, ws)| ws.as_str() == ws_id)
+            .map(|(sid, _)| sid.clone())
+            .collect();
+        let mut all_updates: Vec<VmUpdate> = Vec::new();
+        for sid in session_ids {
+            // stop_session is require_session-guarded: skip unknown sessions gracefully.
+            if let Ok(updates) = self.stop_session(&sid) {
+                all_updates.extend(updates);
+            }
+        }
+        Ok(all_updates)
+    }
+
+    /// Resume all sessions in a workstream. Mirrors `resume_session` for each
+    /// member. Absent workstream or no members → no-op `Ok`.
+    pub fn resume_workstream(&mut self, ws_id: &str) -> Result<Vec<VmUpdate>, CoreError> {
+        let session_ids: Vec<String> = self
+            .membership
+            .iter()
+            .filter(|(_, ws)| ws.as_str() == ws_id)
+            .map(|(sid, _)| sid.clone())
+            .collect();
+        let mut all_updates: Vec<VmUpdate> = Vec::new();
+        for sid in session_ids {
+            if let Ok(updates) = self.resume_session(&sid) {
+                all_updates.extend(updates);
+            }
+        }
+        Ok(all_updates)
+    }
+
+    /// Delete a workstream: first kills all member sessions (remove_session for
+    /// each — StopSession IPC + drops record + removes from store so they don't
+    /// reappear on relaunch), THEN deletes the workstream record, cascades its
+    /// connections and membership/lead entries. Deleting an absent id is a no-op `Ok`.
     pub fn delete_workstream(&mut self, id: &str) -> Result<Vec<VmUpdate>, CoreError> {
+        // 1. Kill + remove all member sessions first (so they don't orphan a
+        //    running process, and so deleted sessions vanish from the dashboard).
+        let session_ids: Vec<String> = self
+            .membership
+            .iter()
+            .filter(|(_, ws)| ws.as_str() == id)
+            .map(|(sid, _)| sid.clone())
+            .collect();
+        let mut session_updates: Vec<VmUpdate> = Vec::new();
+        for sid in session_ids {
+            // remove_session is require_session-guarded: skip unknown sessions gracefully.
+            if let Ok(updates) = self.remove_session(&sid) {
+                session_updates.extend(updates);
+            }
+        }
+
+        // 2. Delete the workstream record and its connections.
         let _ = self.store.delete_workstream(id);
         self.workstreams.retain(|w| w.id != id);
 
@@ -1573,10 +1674,11 @@ impl Core {
         let _ = self.store.set_membership(&self.membership);
         self.ws_leads.remove(id);
 
-        Ok(vec![
-            self.workstreams_update(),
-            VmUpdate::Board(self.board()),
-        ])
+        // 3. Return session-removed events + board updates so the UI stays consistent.
+        let mut updates = session_updates;
+        updates.push(self.workstreams_update());
+        updates.push(VmUpdate::Board(self.board()));
+        Ok(updates)
     }
 
     /// Validate and add a connection between two nodes in the same workstream.
@@ -1761,11 +1863,63 @@ impl Core {
         driver: Option<String>,
         project: Option<String>,
     ) {
+        // Resolve the host's launch config from the registry so the agent's probe
+        // runs setup-first over the RIGHT connection with the EXACT per-driver
+        // command a launch would use (real discovery, not a local guess). A
+        // missing host / the local host resolves to empty config + `None` target
+        // (the agent then discovers locally, setup still honored). An unknown
+        // host id (never registered) leaves everything defaulted — honest.
+        let (host_target, setup, agent_commands, claude_bin) = host_id
+            .as_deref()
+            .and_then(|hid| self.hosts.list().iter().find(|h| h.id == hid))
+            .map(|h| {
+                (
+                    // Only remote hosts carry a shell target; the local host runs
+                    // discovery in-process (target `None`).
+                    if h.is_local {
+                        None
+                    } else {
+                        Some(h.target.clone())
+                    },
+                    h.setup.clone(),
+                    h.agent_commands.clone(),
+                    h.claude_bin.clone(),
+                )
+            })
+            .unwrap_or((None, None, vec![], None));
         let _ = self.send_ipc(&IpcMsg::RefreshCapabilities {
             host_id,
             driver,
             project,
+            host_target,
+            setup,
+            agent_commands,
+            claude_bin,
         });
+    }
+
+    /// Connect-time discovery (deliverable #4a): kick off a full capabilities
+    /// refresh (all drivers) for EVERY registered host, so capabilities are
+    /// TRULY populated the moment Marsad comes up — not only when the frontend
+    /// asks. Called once at startup after `load_hosts`. Each host is a single
+    /// fire-and-forget `RefreshCapabilities` line (no probe IO on this path —
+    /// the agent runs the probes on background threads, §4), so this is O(hosts)
+    /// cheap sends with no blocking on the Core/agent lock. The agent's own
+    /// bounded-probe deadline handles an unreachable host (reports
+    /// `cli_available:false` + an error, never a hang).
+    pub fn refresh_capabilities_all_hosts(&mut self) {
+        let host_ids: Vec<String> = self.hosts.list().iter().map(|h| h.id.clone()).collect();
+        for host_id in host_ids {
+            self.refresh_capabilities(Some(host_id), None, None);
+        }
+    }
+
+    /// A clone of the current host registry (read-only snapshot). Lets callers
+    /// map a host `target` back to its `id` (e.g. the desktop's
+    /// `connect_host_interactive` resolving which host to discover after an
+    /// interactive login) without exposing the registry itself.
+    pub fn hosts_snapshot(&self) -> Vec<marsad_hosts::Host> {
+        self.hosts.list().to_vec()
     }
 
     // -----------------------------------------------------------------------

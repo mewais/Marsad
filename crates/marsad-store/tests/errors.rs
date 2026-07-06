@@ -35,6 +35,7 @@ fn make_session(id: &str) -> PersistedSession {
         last_phase: "Done".to_string(),
         posture: None,
         disallowed_tools: vec![],
+        driver: "claude".to_string(),
     }
 }
 
@@ -441,6 +442,7 @@ fn backend_write_failure_propagates_from_upsert_host() {
         claude_bin: None,
         setup: None,
         env: Vec::new(),
+        agent_commands: Vec::new(),
     };
     match store.upsert_host(&host) {
         Err(StoreError::Backend(_)) => {}
@@ -496,6 +498,8 @@ fn backend_write_failure_propagates_from_upsert_settings() {
         confirm_before_stop: true,
         default_model: "claude-sonnet-4-6".to_string(),
         default_posture: "ask".to_string(),
+        default_driver: "claude".to_string(),
+        default_models: Vec::new(),
     };
     match store.upsert_settings(&settings) {
         Err(StoreError::Backend(_)) => {}
@@ -542,6 +546,8 @@ fn notif_pref_and_persisted_settings_are_debug() {
         confirm_before_stop: true,
         default_model: "claude-opus-4-8".to_string(),
         default_posture: "full".to_string(),
+        default_driver: "claude".to_string(),
+        default_models: Vec::new(),
     };
     let _ = format!("{s:?}");
 }

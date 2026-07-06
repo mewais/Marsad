@@ -28,6 +28,7 @@ impl Agent {
                 name,
                 disallowed_tools,
                 wasl,
+                driver,
                 ..
             } => {
                 // Derive the launch mode from the wire fields (§5 item 3:
@@ -56,6 +57,7 @@ impl Agent {
                     name,
                     disallowed_tools,
                     wasl,
+                    driver,
                 )
             }
             marsad_proto::IpcMsg::ResumeSession {
@@ -144,6 +146,10 @@ impl Agent {
         // wire so a GUI/core sender can request the agent inject a Wasl
         // MCP-server entry at launch time (`claude_argv`'s `--mcp-config`).
         wasl: bool,
+        // Stage 1 codex launch: driver discriminator.  Forwarded verbatim from
+        // the wire (`IpcMsg::LaunchSession.driver`); defaults to `"claude"` on
+        // old wire messages (handled by `default_driver` in marsad-proto).
+        driver: String,
     ) -> Result<Vec<String>, AgentError> {
         let spec = marsad_proto::LaunchSpec {
             project,
@@ -160,6 +166,7 @@ impl Agent {
             name,
             disallowed_tools,
             wasl,
+            driver,
         };
         // Reuse the caller's session id when supplied (Core generates it so it can
         // navigate immediately and recognise the session's events); otherwise
@@ -238,6 +245,10 @@ impl Agent {
             // resume never re-attaches a Wasl MCP-server entry this cycle;
             // start a fresh `wasl:true` launch instead).
             wasl: false,
+            // Stage 1: carry the persisted driver so a resume re-uses the same
+            // agent binary. Defaults to "claude" for pre-Stage-1 records (the
+            // `#[serde(default = "default_driver")]` on PersistedSession).
+            driver: persisted.driver,
         };
         // Reuse the SAME marsad id so the resumed session re-attaches to the
         // existing UI row. Using a fresh id (the old bug) meant the relaunched
@@ -299,35 +310,104 @@ impl Agent {
         // without IO, which is correct for unit tests.
         #[cfg(not(coverage))]
         {
-            use marsad_proto::{encode_user_input, ContentBlock, UserInput};
             use std::io::Write;
-            let encoded = encode_user_input(&UserInput {
-                content: vec![ContentBlock::Text {
-                    text: text.to_string(),
-                }],
-            });
-            let writers = self.session_writers.0.lock().unwrap();
-            if let Some(shared) = writers.get(session_id) {
-                let mut writer = shared.lock().unwrap();
-                match writer
-                    .write_all(encoded.as_bytes())
-                    .and_then(|_| writer.write_all(b"\n"))
-                    .and_then(|_| writer.flush())
-                {
-                    Ok(()) => eprintln!(
-                        "marsad-agent: session {session_id} send_prompt delivered ({} chars) to claude stdin",
-                        text.len()
-                    ),
-                    Err(e) => eprintln!(
-                        "marsad-agent: session {session_id} send_prompt WRITE FAILED: {e}"
-                    ),
+
+            // Look up the session's driver from the persisted store.
+            let driver = self
+                .store
+                .0
+                .restore()
+                .ok()
+                .and_then(|r| r.sessions.into_iter().find(|s| s.id == session_id))
+                .map(|s| s.driver)
+                .unwrap_or_else(|| "claude".to_string());
+
+            if driver == "codex" {
+                // Codex follow-up turn: build the eval-loop command via codex_turn_cmd.
+                // Look up the cached spec and the stored thread_id (from thread.started).
+                let spec_opt = self.codex_specs.0.lock().unwrap().get(session_id).cloned();
+                let thread_id_opt = self.codex_threads.0.lock().unwrap().get(session_id).cloned();
+
+                if let Some(cs) = spec_opt {
+                    // Build a minimal LaunchSpec for codex_turn_cmd.
+                    let spec_for_cmd = marsad_proto::LaunchSpec {
+                        project: cs.project.clone(),
+                        host_id: "local".to_string(),
+                        host_target: None,
+                        claude_bin: cs.claude_bin.clone(),
+                        setup: None,
+                        env: vec![],
+                        model: cs.model.clone(),
+                        posture: cs.posture.clone(),
+                        first_prompt: None,
+                        mode: marsad_proto::LaunchMode::Fresh,
+                        name: None,
+                        disallowed_tools: vec![],
+                        wasl: false,
+                        driver: "codex".to_string(),
+                    };
+                    let cmd = crate::driver::codex_turn_cmd(
+                        &spec_for_cmd,
+                        thread_id_opt.as_deref(),
+                        text,
+                    );
+                    let writers = self.session_writers.0.lock().unwrap();
+                    if let Some(shared) = writers.get(session_id) {
+                        let mut writer = shared.lock().unwrap();
+                        match writer
+                            .write_all(cmd.as_bytes())
+                            .and_then(|_| writer.write_all(b"\n"))
+                            .and_then(|_| writer.flush())
+                        {
+                            Ok(()) => eprintln!(
+                                "marsad-agent: session {session_id} codex send_prompt delivered ({} chars) via eval-loop",
+                                text.len()
+                            ),
+                            Err(e) => eprintln!(
+                                "marsad-agent: session {session_id} codex send_prompt WRITE FAILED: {e}"
+                            ),
+                        }
+                    } else {
+                        eprintln!(
+                            "marsad-agent: session {session_id} codex send_prompt DROPPED — no writer registered"
+                        );
+                    }
+                } else {
+                    eprintln!(
+                        "marsad-agent: session {session_id} codex send_prompt DROPPED — no cached spec (session launched before Stage 2?)"
+                    );
                 }
             } else {
-                // No registered writer — the prompt is dropped on the floor and
-                // the UI shows nothing. Surface it instead of failing silently.
-                eprintln!(
-                    "marsad-agent: session {session_id} send_prompt DROPPED — no writer registered (session not connected?)"
-                );
+                // Claude: stream-json user message.
+                use marsad_proto::{encode_user_input, ContentBlock, UserInput};
+                let encoded = encode_user_input(&UserInput {
+                    content: vec![ContentBlock::Text {
+                        text: text.to_string(),
+                    }],
+                });
+                let writers = self.session_writers.0.lock().unwrap();
+                if let Some(shared) = writers.get(session_id) {
+                    let mut writer = shared.lock().unwrap();
+                    match writer
+                        .write_all(encoded.as_bytes())
+                        .and_then(|_| writer.write_all(b"\n"))
+                        .and_then(|_| writer.flush())
+                    {
+                        Ok(()) => eprintln!(
+                            "marsad-agent: session {session_id} send_prompt delivered ({} chars) to claude stdin",
+                            text.len()
+                        ),
+                        Err(e) => eprintln!(
+                            "marsad-agent: session {session_id} send_prompt WRITE FAILED: {e}"
+                        ),
+                    }
+                } else {
+                    // No registered writer — the prompt is dropped on the floor and
+                    // the UI shows nothing. Surface it instead of failing silently.
+                    eprintln!(
+                        "marsad-agent: session {session_id} send_prompt DROPPED — no writer registered (session not connected?)"
+                    );
+                }
             }
         }
         // Suppress unused-variable warning in coverage builds.
@@ -345,22 +425,47 @@ impl Agent {
         // writer) to stop the current turn. claude acks + ends the turn with
         // `result: error_during_execution`. Mirrors handle_answer_gate's writer
         // use. Under cfg(coverage) the IO block is absent (fake path = no-op ack).
+        // CODEX: `codex exec` turns are one-shot; there is no per-turn interrupt
+        // control message. This is a documented no-op for codex sessions — the
+        // turn runs to completion or failure. We log it but do not write anything
+        // to the eval-loop writer (sending a random line would corrupt the
+        // eval-loop's command sequence).
         #[cfg(not(coverage))]
         {
             use std::io::Write;
-            let encoded = marsad_proto::encode_control_request_interrupt("req_interrupt");
-            let writers = self.session_writers.0.lock().unwrap();
-            if let Some(shared) = writers.get(session_id) {
-                let mut writer = shared.lock().unwrap();
-                let _ = writer
-                    .write_all(encoded.as_bytes())
-                    .and_then(|_| writer.write_all(b"\n"))
-                    .and_then(|_| writer.flush());
-                eprintln!("marsad-agent: session {session_id} interrupt sent to claude");
-            } else {
+
+            // Look up the session's driver.
+            let driver = self
+                .store
+                .0
+                .restore()
+                .ok()
+                .and_then(|r| r.sessions.into_iter().find(|s| s.id == session_id))
+                .map(|s| s.driver)
+                .unwrap_or_else(|| "claude".to_string());
+
+            if driver == "codex" {
+                // Codex: interrupt is a documented no-op. Log and return ack.
                 eprintln!(
-                    "marsad-agent: session {session_id} interrupt DROPPED — no writer registered"
+                    "marsad-agent: session {session_id} interrupt NO-OP for codex \
+                     (codex exec turns are one-shot; no interrupt protocol exists)"
                 );
+            } else {
+                // Claude: send the interrupt control_request.
+                let encoded = marsad_proto::encode_control_request_interrupt("req_interrupt");
+                let writers = self.session_writers.0.lock().unwrap();
+                if let Some(shared) = writers.get(session_id) {
+                    let mut writer = shared.lock().unwrap();
+                    let _ = writer
+                        .write_all(encoded.as_bytes())
+                        .and_then(|_| writer.write_all(b"\n"))
+                        .and_then(|_| writer.flush());
+                    eprintln!("marsad-agent: session {session_id} interrupt sent to claude");
+                } else {
+                    eprintln!(
+                        "marsad-agent: session {session_id} interrupt DROPPED — no writer registered"
+                    );
+                }
             }
         }
         // If the session is gone, interrupt is a benign no-op.

@@ -342,6 +342,7 @@ fn spec(project: &str, first_prompt: &str) -> LaunchSpec {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     }
 }
 

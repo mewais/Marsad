@@ -92,6 +92,7 @@ fn add_remote_host_returns_host_ref() {
         None,
         None,
         Vec::new(),
+        Vec::new(),
     );
     let host = result.expect("add should succeed");
     assert_eq!(host.label, "myserver");
@@ -110,7 +111,7 @@ fn add_remote_host_returns_host_ref() {
 fn list_includes_localhost_and_added_remote() {
     let runner = Box::new(FakeSshRunner::new());
     let mut reg = HostRegistry::new(runner);
-    reg.add("remote1", "bob@remote1.example.com", None, None, Vec::new())
+    reg.add("remote1", "bob@remote1.example.com", None, None, Vec::new(), Vec::new())
         .unwrap();
     let hosts = reg.list();
     assert!(hosts.len() >= 2);
@@ -139,6 +140,7 @@ fn remove_remote_host_succeeds() {
                 "charlie@toremove.example.com",
                 None,
                 None,
+                Vec::new(),
                 Vec::new(),
             )
             .unwrap();
@@ -171,6 +173,7 @@ fn health_check_returns_connected_on_ok_response() {
                 "alice@healthy.example.com",
                 None,
                 None,
+                Vec::new(),
                 Vec::new(),
             )
             .unwrap();
@@ -225,6 +228,7 @@ fn host_derives_debug_clone_partialeq() {
         None,
         None,
         Vec::new(),
+        Vec::new(),
     )
     .unwrap();
     let hosts = reg.list();
@@ -242,7 +246,7 @@ fn host_derives_debug_clone_partialeq() {
 fn set_status_updates_existing_host() {
     let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
     let id = reg
-        .add("s", "u@h", None, None, Vec::new())
+        .add("s", "u@h", None, None, Vec::new(), Vec::new())
         .unwrap()
         .id
         .clone();
@@ -273,13 +277,14 @@ fn load_remote_preserves_id_and_starts_reconnecting() {
         None,
         None,
         Vec::new(),
+        Vec::new(),
     );
     let h = reg.list().iter().find(|h| h.id == "host-7").unwrap();
     assert_eq!(h.label, "saved");
     assert!(!h.is_local && h.removable);
     assert_eq!(h.status, HostStatus::Connecting);
     // next_id must advance past 7 so a fresh add does not collide.
-    let added = reg.add("fresh", "u@fresh", None, None, Vec::new()).unwrap();
+    let added = reg.add("fresh", "u@fresh", None, None, Vec::new(), Vec::new()).unwrap();
     assert_eq!(added.id, "host-8");
 }
 
@@ -291,7 +296,7 @@ fn load_remote_preserves_id_and_starts_reconnecting() {
 fn add_wsl_target_is_accepted_and_flagged() {
     let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
     let host = reg
-        .add("ubuntu", "wsl:Ubuntu", None, None, Vec::new())
+        .add("ubuntu", "wsl:Ubuntu", None, None, Vec::new(), Vec::new())
         .expect("wsl target must be accepted");
     assert_eq!(host.target, "wsl:Ubuntu");
     assert!(host.is_wsl(), "wsl:<distro> host must report is_wsl()");
@@ -302,7 +307,7 @@ fn add_wsl_target_is_accepted_and_flagged() {
 fn non_wsl_hosts_are_not_flagged_wsl() {
     let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
     let ssh = reg
-        .add("box", "user@box.example.com", None, None, Vec::new())
+        .add("box", "user@box.example.com", None, None, Vec::new(), Vec::new())
         .unwrap();
     assert!(!ssh.is_wsl());
     assert_eq!(ssh.wsl_distro(), None);
@@ -347,9 +352,9 @@ fn fake_wsl_runner_implements_trait_and_real_runner_constructs() {
 #[test]
 fn load_remote_non_numeric_id_leaves_next_id() {
     let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
-    reg.load_remote("custom-id", "x", "u@x", None, None, Vec::new()); // unparseable suffix
-    reg.load_remote("host-0", "y", "u@y", None, None, Vec::new()); // n (0) < next_id (1)
-    let added = reg.add("z", "u@z", None, None, Vec::new()).unwrap();
+    reg.load_remote("custom-id", "x", "u@x", None, None, Vec::new(), Vec::new()); // unparseable suffix
+    reg.load_remote("host-0", "y", "u@y", None, None, Vec::new(), Vec::new()); // n (0) < next_id (1)
+    let added = reg.add("z", "u@z", None, None, Vec::new(), Vec::new()).unwrap();
     assert_eq!(added.id, "host-1"); // next_id untouched by either load
 }
 
@@ -361,7 +366,7 @@ fn load_remote_non_numeric_id_leaves_next_id() {
 fn update_sets_launch_config_on_remote_host() {
     let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
     let id = reg
-        .add("box", "u@h", None, None, Vec::new())
+        .add("box", "u@h", None, None, Vec::new(), Vec::new())
         .unwrap()
         .id
         .clone();
@@ -372,6 +377,7 @@ fn update_sets_launch_config_on_remote_host() {
             Some("module load x".to_string()),
             vec![("A".to_string(), "b".to_string())],
             Some("u@h2".to_string()),
+            Vec::new(),
         )
         .expect("update existing host");
     assert_eq!(updated.claude_bin.as_deref(), Some("genie"));
@@ -392,9 +398,103 @@ fn update_localhost_keeps_target_when_none() {
             None,
             Vec::new(),
             None,
+            Vec::new(),
         )
         .expect("update localhost");
     assert_eq!(updated.claude_bin.as_deref(), Some("/opt/claude"));
     assert_eq!(updated.target, "this machine");
     assert!(updated.is_local);
+}
+
+// ---------------------------------------------------------------------------
+// resolve_driver_bin — per-driver command resolution (#1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn resolve_driver_bin_picks_agent_commands_over_claude_bin() {
+    use marsad_hosts::resolve_driver_bin;
+    let cmds = vec![
+        ("codex".to_string(), "codex --sandbox".to_string()),
+        ("claude".to_string(), "/custom/claude".to_string()),
+    ];
+    // codex entry wins
+    assert_eq!(
+        resolve_driver_bin("codex", Some("genie"), &cmds),
+        "codex --sandbox"
+    );
+    // claude entry in agent_commands wins over claude_bin
+    assert_eq!(
+        resolve_driver_bin("claude", Some("genie"), &cmds),
+        "/custom/claude"
+    );
+}
+
+#[test]
+fn resolve_driver_bin_falls_back_to_claude_bin_for_claude() {
+    use marsad_hosts::resolve_driver_bin;
+    let cmds: Vec<(String, String)> = vec![];
+    // No agent_commands entry → fall back to claude_bin
+    assert_eq!(
+        resolve_driver_bin("claude", Some("genie"), &cmds),
+        "genie"
+    );
+}
+
+#[test]
+fn resolve_driver_bin_falls_back_to_bare_driver_name() {
+    use marsad_hosts::resolve_driver_bin;
+    let cmds: Vec<(String, String)> = vec![];
+    // No entry, no claude_bin, driver is "codex" → bare name
+    assert_eq!(resolve_driver_bin("codex", None, &cmds), "codex");
+    // claude with no claude_bin → bare "claude"
+    assert_eq!(resolve_driver_bin("claude", None, &cmds), "claude");
+}
+
+#[test]
+fn add_host_folds_claude_bin_into_agent_commands() {
+    let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
+    let host = reg
+        .add(
+            "srv",
+            "user@srv.example.com",
+            Some("genie".to_string()),
+            None,
+            Vec::new(),
+            Vec::new(), // no explicit agent_commands
+        )
+        .expect("add host");
+    // claude_bin should be folded into agent_commands as ("claude", "genie")
+    assert!(
+        host.agent_commands
+            .iter()
+            .any(|(d, c)| d == "claude" && c == "genie"),
+        "claude_bin should be folded into agent_commands"
+    );
+}
+
+#[test]
+fn add_host_explicit_agent_commands_take_precedence_over_claude_bin_fold() {
+    let mut reg = HostRegistry::new(Box::new(FakeSshRunner::new()));
+    let host = reg
+        .add(
+            "srv",
+            "user@srv.example.com",
+            Some("genie".to_string()),
+            None,
+            Vec::new(),
+            vec![("claude".to_string(), "/custom/claude".to_string())],
+        )
+        .expect("add host");
+    // agent_commands already has "claude" → fold does not add a second entry
+    let claude_entries: Vec<_> = host
+        .agent_commands
+        .iter()
+        .filter(|(d, _)| d == "claude")
+        .collect();
+    assert_eq!(
+        claude_entries.len(),
+        1,
+        "only one claude entry in agent_commands"
+    );
+    assert_eq!(claude_entries[0].1, "/custom/claude");
 }

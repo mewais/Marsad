@@ -84,7 +84,7 @@ fn assert_variant_contract(golden: &str, expected: &IpcMsg) {
 
 const REFRESH_CAPABILITIES_MINIMAL: &str = r#"{"type":"RefreshCapabilities"}"#;
 
-const REFRESH_CAPABILITIES_MAXIMAL: &str = r#"{"type":"RefreshCapabilities","host_id":"local","driver":"claude","project":"/work/mewais/OpenSource/Marsad"}"#;
+const REFRESH_CAPABILITIES_MAXIMAL: &str = r#"{"type":"RefreshCapabilities","host_id":"h1","driver":"claude","project":"/work/mewais/OpenSource/Marsad","host_target":"user@box","setup":"module load cuda","agent_commands":[["codex","codex --sandbox"]],"claude_bin":"genie"}"#;
 
 #[test]
 fn refresh_capabilities_minimal_golden_contract() {
@@ -94,6 +94,10 @@ fn refresh_capabilities_minimal_golden_contract() {
             host_id: None,
             driver: None,
             project: None,
+            host_target: None,
+            setup: None,
+            agent_commands: vec![],
+            claude_bin: None,
         },
     );
 }
@@ -106,10 +110,18 @@ fn refresh_capabilities_minimal_parses_to_all_none() {
             host_id,
             driver,
             project,
+            host_target,
+            setup,
+            agent_commands,
+            claude_bin,
         } => {
             assert_eq!(host_id, None);
             assert_eq!(driver, None);
             assert_eq!(project, None);
+            assert_eq!(host_target, None);
+            assert_eq!(setup, None);
+            assert_eq!(agent_commands, Vec::<(String, String)>::new());
+            assert_eq!(claude_bin, None);
         }
         other => panic!("expected RefreshCapabilities, got {other:?}"),
     }
@@ -120,9 +132,13 @@ fn refresh_capabilities_maximal_golden_contract() {
     assert_variant_contract(
         REFRESH_CAPABILITIES_MAXIMAL,
         &IpcMsg::RefreshCapabilities {
-            host_id: Some("local".to_string()),
+            host_id: Some("h1".to_string()),
             driver: Some("claude".to_string()),
             project: Some("/work/mewais/OpenSource/Marsad".to_string()),
+            host_target: Some("user@box".to_string()),
+            setup: Some("module load cuda".to_string()),
+            agent_commands: vec![("codex".to_string(), "codex --sandbox".to_string())],
+            claude_bin: Some("genie".to_string()),
         },
     );
 }
@@ -137,10 +153,22 @@ fn refresh_capabilities_minimal_reencode_omits_all_optionals() {
         host_id: None,
         driver: None,
         project: None,
+        host_target: None,
+        setup: None,
+        agent_commands: vec![],
+        claude_bin: None,
     });
     let obj = val(&encoded);
     let obj = obj.as_object().expect("must be a JSON object");
-    for key in ["host_id", "driver", "project"] {
+    for key in [
+        "host_id",
+        "driver",
+        "project",
+        "host_target",
+        "setup",
+        "agent_commands",
+        "claude_bin",
+    ] {
         assert!(
             !obj.contains_key(key),
             "minimal RefreshCapabilities must omit `{key}` on re-encode, got: {encoded}"
@@ -179,9 +207,9 @@ fn capabilities_refresh_queued_absent_host_id_parses_to_none_and_omits_on_reenco
 // CapabilitiesUpdate (§2 golden forms — "gemini"/AllKnown and "claude"/Projects)
 // ---------------------------------------------------------------------------
 
-const CAPABILITIES_UPDATE_AGY: &str = r#"{"type":"CapabilitiesUpdate","host_id":"local","driver":"gemini","capabilities":{"driver":"gemini","host_id":"local","cli_available":true,"models":{"models":[{"id":"Gemini 3.5 Flash (Low)"}],"source":"Listed","free_text":false},"session_scope":"AllKnown","sessions":[{"id":"97197d46-2091-40e2-b36f-0dcedd34bcc4","project":"/work/mewais/OpenSource/Marsad","snippet":"x","modified_ms":1783100616000}],"fetched_at_ms":1783100620000,"errors":[]}}"#;
+const CAPABILITIES_UPDATE_AGY: &str = r#"{"type":"CapabilitiesUpdate","host_id":"local","driver":"gemini","capabilities":{"driver":"gemini","host_id":"local","cli_available":true,"launchable":false,"models":{"models":[{"id":"Gemini 3.5 Flash (Low)"}],"source":"Listed","free_text":false},"session_scope":"AllKnown","sessions":[{"id":"97197d46-2091-40e2-b36f-0dcedd34bcc4","project":"/work/mewais/OpenSource/Marsad","snippet":"x","modified_ms":1783100616000}],"fetched_at_ms":1783100620000,"errors":[]}}"#;
 
-const CAPABILITIES_UPDATE_CLAUDE: &str = r#"{"type":"CapabilitiesUpdate","host_id":"hpc","driver":"claude","capabilities":{"driver":"claude","host_id":"hpc","cli_available":true,"models":{"models":[{"id":"claude-opus-4-8"}],"source":"Observed","free_text":true},"session_scope":{"Projects":["/home/u/proj"]},"sessions":[],"fetched_at_ms":0,"errors":[]}}"#;
+const CAPABILITIES_UPDATE_CLAUDE: &str = r#"{"type":"CapabilitiesUpdate","host_id":"hpc","driver":"claude","capabilities":{"driver":"claude","host_id":"hpc","cli_available":true,"launchable":true,"models":{"models":[{"id":"claude-opus-4-8"}],"source":"Observed","free_text":true},"session_scope":{"Projects":["/home/u/proj"]},"sessions":[],"fetched_at_ms":0,"errors":[]}}"#;
 
 fn capabilities_update_agy() -> IpcMsg {
     IpcMsg::CapabilitiesUpdate {
@@ -191,6 +219,7 @@ fn capabilities_update_agy() -> IpcMsg {
             driver: "gemini".to_string(),
             host_id: "local".to_string(),
             cli_available: true,
+            launchable: false,
             models: ModelCatalog {
                 models: vec![ModelInfo {
                     id: "Gemini 3.5 Flash (Low)".to_string(),
@@ -220,6 +249,7 @@ fn capabilities_update_claude() -> IpcMsg {
             driver: "claude".to_string(),
             host_id: "hpc".to_string(),
             cli_available: true,
+            launchable: true,
             models: ModelCatalog {
                 models: vec![ModelInfo {
                     id: "claude-opus-4-8".to_string(),
@@ -277,15 +307,23 @@ fn all_new_goldens() -> Vec<(&'static str, &'static str, IpcMsg)> {
                 host_id: None,
                 driver: None,
                 project: None,
+                host_target: None,
+                setup: None,
+                agent_commands: vec![],
+                claude_bin: None,
             },
         ),
         (
             "RefreshCapabilities (maximal)",
             REFRESH_CAPABILITIES_MAXIMAL,
             IpcMsg::RefreshCapabilities {
-                host_id: Some("local".to_string()),
+                host_id: Some("h1".to_string()),
                 driver: Some("claude".to_string()),
                 project: Some("/work/mewais/OpenSource/Marsad".to_string()),
+                host_target: Some("user@box".to_string()),
+                setup: Some("module load cuda".to_string()),
+                agent_commands: vec![("codex".to_string(), "codex --sandbox".to_string())],
+                claude_bin: Some("genie".to_string()),
             },
         ),
         (

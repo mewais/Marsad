@@ -37,6 +37,7 @@ fn host_session_workspace_round_trip_across_restart() {
                 claude_bin: None,
                 setup: None,
                 env: Vec::new(),
+                agent_commands: Vec::new(),
             })
             .expect("persist host");
         store
@@ -55,6 +56,7 @@ fn host_session_workspace_round_trip_across_restart() {
                 last_phase: "Starting".to_string(),
                 posture: None,
                 disallowed_tools: vec![],
+                driver: "claude".to_string(),
             })
             .expect("persist session");
         store

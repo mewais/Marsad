@@ -391,6 +391,12 @@ pub struct LaunchSpec {
     /// invariant). `#[serde(default)]` keeps older serialized specs working.
     #[serde(default)]
     pub wasl: bool,
+    /// Agent driver to use for this session (`"claude"` / `"codex"`).
+    /// Defaults to `"claude"` so older callers and serialized specs without
+    /// this field keep working. `#[serde(default = "default_driver")]` keeps
+    /// older serialized specs working.
+    #[serde(default = "default_driver")]
+    pub driver: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -571,11 +577,21 @@ pub enum SessionScope {
 pub struct Capabilities {
     pub driver: String,
     pub host_id: String,
-    /// Whether the driver's binary was found/runnable on the host. Discovered
-    /// (`command -v`/probe), never assumed. M7d's driver picker gains its
-    /// ground truth here later.
+    /// Whether the driver's binary was detected on the AGENT'S LOCAL machine
+    /// (a plain `which`). Informational only — meaningful for the local host,
+    /// best-effort otherwise (a remote host's PATH is not probed here). This is
+    /// NOT used to gate launchability; see `launchable`. `#[serde(default)]` so
+    /// old cached snapshots without the field still load.
     #[serde(default)]
     pub cli_available: bool,
+    /// Whether Marsad has a real LAUNCH DRIVER for this agent — a static,
+    /// per-driver fact (claude/codex → true, gemini → false), NOT a probe of
+    /// the host. This is what the launch UI gates on: a driver Marsad can
+    /// actually spawn is launchable on every host; a bad host setup surfaces as
+    /// a session error at launch, never a permanently greyed button.
+    /// `#[serde(default)]` so old cached snapshots (no field) load as `false`.
+    #[serde(default)]
+    pub launchable: bool,
     #[serde(default)]
     pub models: ModelCatalog,
     #[serde(default)]
@@ -676,6 +692,12 @@ pub enum IpcMsg {
         /// omitted, exactly like the other optional fields above.
         #[serde(default, skip_serializing_if = "is_false")]
         wasl: bool,
+        /// Agent driver discriminator.  Defaults to `"claude"` when absent so
+        /// older wire messages and test fixtures keep parsing unchanged.
+        /// `skip_serializing_if = "is_claude"` keeps every pre-Stage-1 golden
+        /// byte-identical on encode — `"claude"` is simply omitted.
+        #[serde(default = "default_driver", skip_serializing_if = "is_claude")]
+        driver: String,
     },
     ResumeSession {
         session_id: String,
@@ -768,6 +790,32 @@ pub enum IpcMsg {
         /// `AllKnown` drivers.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project: Option<String>,
+        /// The host's remote execution target (`user@host`, `wsl:<distro>`,
+        /// `plink:<inner>`, …), resolved from the registry by core. `None` = the
+        /// AGENT'S LOCAL machine — discovery runs locally (setup still runs). A
+        /// remote target makes the probe run its discovery script over that
+        /// host's connection (`run_remote_script_bounded`). Distinct from
+        /// `host_id` (an opaque registry key that is NOT a shell target).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host_target: Option<String>,
+        /// The host's pre-command run BEFORE any discovery on this host (e.g.
+        /// `module load cuda`, `source ~/.env`) so `command -v`, `codex debug
+        /// models`, etc. see the same environment a launched session would.
+        /// `None` = no setup.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        setup: Option<String>,
+        /// The host's per-driver command overrides (`(driver, command)` pairs),
+        /// so the probe resolves the EXACT command a launch would use (the first
+        /// token becomes the `command -v` word, the whole command runs models
+        /// subcommands). Empty = no overrides (fall back to `claude_bin`/bare
+        /// name).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        agent_commands: Vec<(String, String)>,
+        /// The host's `claude` executable override (wrapper like `genie` / an
+        /// absolute path). Fallback for the `claude` driver when `agent_commands`
+        /// has no `"claude"` entry. `None` = bare `claude`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        claude_bin: Option<String>,
     },
 
     // ── agent → GUI/core ────────────────────────────────────────────────────
@@ -1039,6 +1087,23 @@ fn from_val<T: serde::de::DeserializeOwned>(
 /// optional/default field's "absent means off" wire convention).
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// Default driver string for `LaunchSpec.driver` and `IpcMsg::LaunchSession`'s
+/// `driver` field.  Returned by `#[serde(default = "default_driver")]` so
+/// older serialized specs (no `driver` key) and pre-Stage-1 wire messages
+/// transparently load as `"claude"` — the only driver in production before
+/// Stage 1.
+pub fn default_driver() -> String {
+    "claude".to_string()
+}
+
+/// `skip_serializing_if` predicate for the `driver` field in
+/// `IpcMsg::LaunchSession`: omits the field when the driver is `"claude"`
+/// (the default) so older wire readers keep parsing byte-identically.
+/// Non-`"claude"` drivers (e.g. `"codex"`) are always emitted.
+fn is_claude(s: &str) -> bool {
+    s == "claude"
 }
 
 // ---------------------------------------------------------------------------

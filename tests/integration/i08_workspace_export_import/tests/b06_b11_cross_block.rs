@@ -35,6 +35,7 @@ fn make_session(id: &str, name: &str) -> PersistedSession {
 
         posture: None,
         disallowed_tools: vec![],
+        driver: "claude".to_string(),
     }
 }
 

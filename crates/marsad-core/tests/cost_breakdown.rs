@@ -52,6 +52,7 @@ fn launch(core: &mut Core, project: &str, host_id: &str) -> String {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     })
     .expect("launch_session")
 }

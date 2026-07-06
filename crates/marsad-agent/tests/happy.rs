@@ -49,6 +49,7 @@ fn basic_launch_spec() -> LaunchSpec {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     }
 }
 
@@ -67,6 +68,7 @@ fn launch_spec_with_prompt(prompt: &str) -> LaunchSpec {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     }
 }
 
@@ -272,6 +274,7 @@ fn claude_argv_all_postures_add_permission_prompt_tool() {
             name: None,
             disallowed_tools: vec![],
             wasl: false,
+        driver: "claude".to_string(),
         };
         let argv = claude_argv(&spec);
         let pos = argv.iter().position(|a| a == "--permission-prompt-tool");
@@ -299,6 +302,7 @@ fn claude_argv_permission_mode_auto_approve_safe() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     };
     let argv = claude_argv(&spec);
     let idx = argv
@@ -329,6 +333,7 @@ fn claude_argv_permission_mode_full_autonomy() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     };
     let argv = claude_argv(&spec);
     let idx = argv
@@ -687,6 +692,7 @@ fn reconcile_all_adopt_does_not_spawn() {
             last_phase: "Done".to_string(),
             posture: None,
             disallowed_tools: vec![],
+            driver: "claude".to_string(),
         })
         .expect("upsert_session must succeed");
 
@@ -801,6 +807,7 @@ fn claude_argv_disallowed_tools_present_when_non_empty() {
         name: None,
         disallowed_tools: vec!["Bash".to_string(), "Edit".to_string()],
         wasl: false,
+        driver: "claude".to_string(),
     };
     let argv = claude_argv(&spec);
     let idx = argv
@@ -831,6 +838,7 @@ fn claude_argv_disallowed_tools_absent_when_empty() {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     };
     let argv = claude_argv(&spec);
     assert!(

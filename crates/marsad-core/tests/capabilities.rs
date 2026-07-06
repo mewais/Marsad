@@ -189,7 +189,131 @@ fn refresh_capabilities_emits_exact_typed_line_all_fields() {
             host_id: Some("hpc".to_string()),
             driver: Some("codex".to_string()),
             project: Some("/work/mewais/OpenSource/Marsad".to_string()),
+            // "hpc" is not a registered host here, so the launch config resolves
+            // to defaults (the agent then discovers on its local machine).
+            host_target: None,
+            setup: None,
+            agent_commands: vec![],
+            claude_bin: None,
         }
+    );
+}
+
+/// A registered remote host's launch config (target / setup / agent_commands /
+/// claude_bin) must be RESOLVED from the registry and threaded into the outbound
+/// `RefreshCapabilities` line — this is what lets the agent's probe run
+/// setup-first over the right connection with the exact per-driver command
+/// (deliverable #1). Proves the resolution is live, not defaulted.
+#[test]
+fn refresh_capabilities_threads_registered_host_launch_config() {
+    let (mut core, mut peer) = make_core();
+    // Register a remote host carrying a full launch config.
+    let updates = core
+        .add_host(
+            "HPC",
+            "user@hpc.example",
+            Some("genie".to_string()),
+            Some("module load cuda".to_string()),
+            vec![("PATH".to_string(), "/opt/bin".to_string())],
+            vec![("codex".to_string(), "codex --sandbox".to_string())],
+        )
+        .expect("add_host");
+    // Recover the generated host id from the returned Hosts update.
+    let host_id = match updates.into_iter().find_map(|u| match u {
+        VmUpdate::Hosts(list) => Some(list),
+        _ => None,
+    }) {
+        Some(list) => list
+            .into_iter()
+            .find(|h| h.target == "user@hpc.example")
+            .expect("added host present")
+            .id,
+        None => panic!("add_host must return a Hosts update"),
+    };
+    let _ = peer.drain_outbound();
+
+    core.refresh_capabilities(Some(host_id.clone()), None, None);
+
+    let outbound = peer.drain_outbound();
+    assert_eq!(outbound.len(), 1);
+    let parsed = parse_ipc(&outbound[0]).expect("outbound line must be valid IpcMsg");
+    assert_eq!(
+        parsed,
+        IpcMsg::RefreshCapabilities {
+            host_id: Some(host_id),
+            driver: None,
+            project: None,
+            host_target: Some("user@hpc.example".to_string()),
+            setup: Some("module load cuda".to_string()),
+            // The registry folds `claude_bin` into `agent_commands["claude"]`
+            // (marsad_hosts::fold_claude_bin), so both survive: the codex
+            // override AND the resolved claude entry.
+            agent_commands: vec![
+                ("codex".to_string(), "codex --sandbox".to_string()),
+                ("claude".to_string(), "genie".to_string()),
+            ],
+            claude_bin: Some("genie".to_string()),
+        }
+    );
+}
+
+/// Connect-time discovery (deliverable #4a): `refresh_capabilities_all_hosts()`
+/// must emit ONE `RefreshCapabilities` line per registered host (all drivers,
+/// `driver:None`), each carrying that host's resolved launch config. Proves the
+/// startup trigger truly fans out over every host, not just the frontend's
+/// explicit target.
+#[test]
+fn refresh_capabilities_all_hosts_emits_one_line_per_registered_host() {
+    let (mut core, mut peer) = make_core();
+    // Register two remote hosts; localhost is seeded automatically → 3 total.
+    let _ = core
+        .add_host("A", "user@a", None, None, vec![], vec![])
+        .expect("add A");
+    let _ = core
+        .add_host(
+            "B",
+            "user@b",
+            Some("genie".to_string()),
+            Some("setup-b".to_string()),
+            vec![],
+            vec![],
+        )
+        .expect("add B");
+    let _ = peer.drain_outbound();
+
+    core.refresh_capabilities_all_hosts();
+
+    let outbound = peer.drain_outbound();
+    assert_eq!(
+        outbound.len(),
+        3,
+        "one RefreshCapabilities per host (localhost + A + B)"
+    );
+    // Every line is a driver-None (all-drivers) RefreshCapabilities.
+    let mut targets: Vec<Option<String>> = outbound
+        .iter()
+        .map(|l| match parse_ipc(l).expect("valid IpcMsg") {
+            IpcMsg::RefreshCapabilities {
+                driver,
+                host_target,
+                ..
+            } => {
+                assert_eq!(driver, None, "all-hosts refresh must probe all drivers");
+                host_target
+            }
+            other => panic!("expected RefreshCapabilities, got {other:?}"),
+        })
+        .collect();
+    targets.sort();
+    // localhost resolves to host_target None (discovered locally); the two
+    // remote hosts carry their real targets.
+    assert_eq!(
+        targets,
+        vec![
+            None,
+            Some("user@a".to_string()),
+            Some("user@b".to_string())
+        ]
     );
 }
 
@@ -210,6 +334,10 @@ fn refresh_capabilities_emits_exact_typed_line_all_none() {
             host_id: None,
             driver: None,
             project: None,
+            host_target: None,
+            setup: None,
+            agent_commands: vec![],
+            claude_bin: None,
         }
     );
 }

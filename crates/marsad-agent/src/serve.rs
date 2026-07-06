@@ -119,6 +119,15 @@ impl Agent {
             /// handoff (see `pty::spawn_pty_session`'s doc comment for why
             /// the spawn can't happen inside `handle_ipc` itself).
             pty_start: Option<(String, u16, u16, String, Option<String>)>,
+            /// Stage 2 codex: driver string for the new session ("codex"/"claude").
+            #[allow(dead_code)]
+            driver: String,
+            /// Stage 2 codex: cached spec for the reader thread's first-prompt delivery.
+            #[allow(dead_code)]
+            codex_spec: Option<super::CachedCodexSpec>,
+            /// Stage 2 codex: shared thread_id map (Arc clone from Agent).
+            #[allow(dead_code)]
+            codex_threads: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
         }
 
         // The command sender is cloned into each client thread.
@@ -148,6 +157,12 @@ impl Agent {
         // Shared across the serve thread (handle_answer_gate via self) and the
         // FIFO threads (which insert when claude emits a `can_use_tool`).
         let pending_gates_for_fifo = Arc::clone(&self.pending_gates.0);
+
+        // ── Stage 2 codex thread_id registry ───────────────────────────────
+        // Shared across the serve thread (handle_send_prompt, which reads
+        // thread_id to build resume commands) and the FIFO reader threads
+        // (which insert thread_id when thread.started arrives from codex).
+        let codex_threads_for_reader = Arc::clone(&self.codex_threads.0);
 
         // ── WAVE 3b pty registry ────────────────────────────────────────────
         // Shared across the serve thread (handle_pty_input/handle_pty_resize
@@ -274,6 +289,29 @@ impl Agent {
                                 .filter(|_| true) // always try backfill on reconnect
                                 .map(|uuid| (s.project.clone(), Some(uuid.clone())))
                                 .or_else(|| Some((s.project.clone(), None)));
+                            // For a reconnected CODEX session, rebuild the
+                            // `CachedCodexSpec` from the persisted record (the
+                            // in-memory `codex_specs` map is empty after a
+                            // restart) so a follow-up prompt can build a
+                            // resume turn command. Insert it into `self.codex_specs`
+                            // (read by `handle_send_prompt`) AND pass it to the
+                            // reader. Claude reconnect is unchanged (spec = None).
+                            let reconnect_codex_spec = if s.driver == "codex" {
+                                let spec = super::cached_codex_spec_from_persisted(
+                                    s.model.clone(),
+                                    s.project.clone(),
+                                    s.claude_bin.clone(),
+                                    s.posture.as_deref(),
+                                );
+                                self.codex_specs
+                                    .0
+                                    .lock()
+                                    .unwrap()
+                                    .insert(s.id.clone(), spec.clone());
+                                Some(spec)
+                            } else {
+                                None
+                            };
                             spawn_session_reader(
                                 s.id.clone(),
                                 s.host_target.clone(),
@@ -287,6 +325,9 @@ impl Agent {
                                 Arc::clone(&self.pending_gates.0),
                                 Arc::clone(&self.session_children.0),
                                 Some(Arc::clone(&capability_provider)),
+                                s.driver.clone(),
+                                reconnect_codex_spec, // rebuilt for codex, None for claude
+                                Arc::clone(&codex_threads_for_reader),
                             );
                             eprintln!("marsad-agent: reconnected live remote session {}", s.id);
                         }
@@ -313,6 +354,26 @@ impl Agent {
                             marsad_id: s.id.clone(),
                         },
                     );
+                    // Reconnected CODEX session: rebuild + register the cached
+                    // spec from the persisted record so `handle_send_prompt` can
+                    // build a resume turn command for the next prompt (the
+                    // in-memory map is empty after a restart). Claude unchanged.
+                    let reconnect_codex_spec = if s.driver == "codex" {
+                        let spec = super::cached_codex_spec_from_persisted(
+                            s.model.clone(),
+                            s.project.clone(),
+                            s.claude_bin.clone(),
+                            s.posture.as_deref(),
+                        );
+                        self.codex_specs
+                            .0
+                            .lock()
+                            .unwrap()
+                            .insert(s.id.clone(), spec.clone());
+                        Some(spec)
+                    } else {
+                        None
+                    };
                     spawn_session_reader(
                         s.id.clone(),
                         s.host_target.clone(),
@@ -326,6 +387,9 @@ impl Agent {
                         Arc::clone(&self.pending_gates.0),
                         Arc::clone(&self.session_children.0),
                         Some(Arc::clone(&capability_provider)),
+                        s.driver.clone(),
+                        reconnect_codex_spec, // rebuilt for codex, None for claude
+                        Arc::clone(&codex_threads_for_reader),
                     );
                     eprintln!("marsad-agent: reconnected live session {}", s.id);
                 }
@@ -436,6 +500,7 @@ impl Agent {
                 let children_for_reader = Arc::clone(&session_children_for_reader);
                 let capability_provider_for_reader = Arc::clone(&capability_provider_accept);
                 let pty_entries_for_client = Arc::clone(&pty_entries_for_reader);
+                let codex_threads_for_client = Arc::clone(&codex_threads_for_reader);
 
                 // Split the client into independent write and read halves so
                 // each thread has exclusive ownership — no Mutex required.
@@ -532,6 +597,9 @@ impl Agent {
                                                 Arc::clone(&pending_for_fifo),
                                                 Arc::clone(&children_for_reader),
                                                 Some(Arc::clone(&capability_provider_for_reader)),
+                                                reply.driver,
+                                                reply.codex_spec,
+                                                Arc::clone(&codex_threads_for_client),
                                             );
                                         }
 
@@ -589,7 +657,39 @@ impl Agent {
                     .get("project")
                     .and_then(|s| s.as_str())
                     .map(str::to_string);
-                let ack = capability_provider.handle_refresh(host_id, driver, project);
+                // Host launch config (deliverable #1): the remote target + the
+                // pre-command + the per-driver command overrides, so the probe
+                // runs setup-first over the RIGHT connection with the EXACT
+                // command a launch would use. All optional (absent → local,
+                // no-setup, bare command names).
+                let host_target = v
+                    .get("host_target")
+                    .and_then(|s| s.as_str())
+                    .map(str::to_string);
+                let setup = v.get("setup").and_then(|s| s.as_str()).map(str::to_string);
+                let claude_bin = v
+                    .get("claude_bin")
+                    .and_then(|s| s.as_str())
+                    .map(str::to_string);
+                let agent_commands: Vec<(String, String)> = v
+                    .get("agent_commands")
+                    .and_then(|a| a.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|pair| {
+                                let p = pair.as_array()?;
+                                Some((p.first()?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let cfg = crate::capabilities::HostLaunchCfg {
+                    host_target,
+                    setup,
+                    agent_commands,
+                    claude_bin,
+                };
+                let ack = capability_provider.handle_refresh(host_id, driver, project, cfg);
                 let _ = cmd.reply_tx.send(AgentReply {
                     out_lines: Ok(vec![ack]),
                     new_session_id: None,
@@ -598,6 +698,9 @@ impl Agent {
                     run_command: None,
                     transcript_hint: None,
                     pty_start: None,
+                    driver: "claude".to_string(),
+                    codex_spec: None,
+                    codex_threads: Arc::clone(&self.codex_threads.0),
                 });
                 continue;
             }
@@ -710,6 +813,27 @@ impl Agent {
                     None
                 };
 
+            // Stage 2 codex: look up driver + cached spec for the new session
+            // so the reader thread can build first-turn commands + translate events.
+            let (session_driver, session_codex_spec) = if let Some(ref sid) = new_session_id {
+                let drv = self
+                    .store
+                    .0
+                    .restore()
+                    .ok()
+                    .and_then(|r| r.sessions.into_iter().find(|s| &s.id == sid))
+                    .map(|s| s.driver)
+                    .unwrap_or_else(|| "claude".to_string());
+                let cs = if drv == "codex" {
+                    self.codex_specs.0.lock().unwrap().get(sid.as_str()).cloned()
+                } else {
+                    None
+                };
+                (drv, cs)
+            } else {
+                ("claude".to_string(), None)
+            };
+
             // Send reply; if the client thread is gone, ignore the error.
             let _ = cmd.reply_tx.send(AgentReply {
                 out_lines,
@@ -719,6 +843,9 @@ impl Agent {
                 run_command,
                 transcript_hint,
                 pty_start,
+                driver: session_driver,
+                codex_spec: session_codex_spec,
+                codex_threads: Arc::clone(&self.codex_threads.0),
             });
         }
 

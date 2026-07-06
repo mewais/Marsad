@@ -44,6 +44,7 @@ impl Agent {
         argv: &[String],
         _setup: Option<&str>,
         _env: &[(String, String)],
+        _driver: &str,
     ) -> String {
         argv.join(" ")
     }
@@ -56,6 +57,7 @@ impl Agent {
         argv: &[String],
         setup: Option<&str>,
         env: &[(String, String)],
+        driver: &str,
     ) -> String {
         if self.real_container.0.is_some() {
             // Platform-specific command construction.
@@ -75,38 +77,86 @@ impl Agent {
                 let in_fifo = session_dir.join("in.fifo");
                 let out_fifo = session_dir.join("out.fifo");
                 let err_log = session_dir.join("err.log");
-                // argv[0] is the configured claude bin; the rest are its arguments.
-                // We build (with optional setup + env exports prepended):
-                //   <setup>
-                //   export 'K'='V'
-                //   cd <project> && cat in.fifo | <bin> <args> > out.fifo 2>err.log
-                //
-                // `cat in.fifo |` (rather than `< in.fifo`) is load-bearing — see
-                // the NOTE on the doc comment above `build_spawn_cmd`.
-                let bin = argv.first().map(String::as_str).unwrap_or("claude");
-                let claude_args = &argv[1..];
+
                 let mut prefix = String::new();
                 if let Some(s) = setup.filter(|s| !s.is_empty()) {
                     prefix.push_str(s);
                     prefix.push('\n');
                 }
                 for (k, v) in env {
-                    prefix.push_str(&format!("export {}={}\n", shell_quote(k), shell_quote(v)));
+                    prefix.push_str(&format!(
+                        "export {}={}\n",
+                        shell_quote(k),
+                        shell_quote(v)
+                    ));
                 }
-                format!(
-                    "{}cd {} && cat {} | {} {} > {} 2>{}",
-                    prefix,
-                    shell_quote(project),
-                    shell_quote(&in_fifo.display().to_string()),
-                    shell_quote(bin),
-                    claude_args
-                        .iter()
-                        .map(|a| shell_quote(a))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                    out_fifo.display(),
-                    err_log.display(),
-                )
+
+                if driver == "codex" {
+                    // Codex eval-loop container command:
+                    //   <setup>
+                    //   export 'K'='V'
+                    //   cd <project> && cat <in.fifo> | \
+                    //     while IFS= read -r __cmd; do
+                    //       eval "$__cmd" </dev/null >> <out.log> 2>><err.log>
+                    //     done
+                    //
+                    // KEY: we write to `out.log` (a REGULAR FILE), NOT `out.fifo`.
+                    // A named FIFO blocks on open() until a reader appears; with the
+                    // eval-loop the first write only happens when the first codex
+                    // command runs — which requires the connect() to have completed
+                    // first, creating a circular wait (deadlock). A regular file
+                    // never blocks on open() and never requires a paired reader,
+                    // so the reader thread can open it independently at any time.
+                    // The reader thread polls out.log with read_line, sleeping a
+                    // short interval on EOF (while the eval-loop is running a turn)
+                    // and exiting when the eval-loop's in.fifo closes.
+                    //
+                    // `cat in.fifo |` is load-bearing (same named-FIFO/anonymous-pipe
+                    // reason as claude's path — see the build_spawn_cmd doc comment).
+                    //
+                    // `</dev/null` on the eval prevents codex from consuming the
+                    // eval-loop's stdin (the loop itself reads commands from in.fifo
+                    // via the `cat` piped through the `while read`; codex MUST NOT
+                    // see that stream or it will gobble the next command line).
+                    //
+                    // `>>` (append): multiple turns append to the same log file so
+                    // the reader thread sees events from all turns in sequence.
+                    let out_log = session_dir.join("out.log");
+                    format!(
+                        "{}cd {} && cat {} | while IFS= read -r __cmd; do eval \"$__cmd\" </dev/null >> {} 2>>{}; done",
+                        prefix,
+                        shell_quote(project),
+                        shell_quote(&in_fifo.display().to_string()),
+                        out_log.display(),
+                        err_log.display(),
+                    )
+                } else {
+                    // Claude (and any other driver): the original single-invocation shape.
+                    // argv[0] is the configured claude bin; the rest are its arguments.
+                    // We build (with optional setup + env exports prepended):
+                    //   <setup>
+                    //   export 'K'='V'
+                    //   cd <project> && cat in.fifo | <bin> <args> > out.fifo 2>err.log
+                    //
+                    // `cat in.fifo |` (rather than `< in.fifo`) is load-bearing — see
+                    // the NOTE on the doc comment above `build_spawn_cmd`.
+                    let bin = argv.first().map(String::as_str).unwrap_or("claude");
+                    let claude_args = &argv[1..];
+                    format!(
+                        "{}cd {} && cat {} | {} {} > {} 2>{}",
+                        prefix,
+                        shell_quote(project),
+                        shell_quote(&in_fifo.display().to_string()),
+                        shell_quote(bin),
+                        claude_args
+                            .iter()
+                            .map(|a| shell_quote(a))
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                        out_fifo.display(),
+                        err_log.display(),
+                    )
+                }
             }
 
             #[cfg(windows)]
@@ -122,9 +172,14 @@ impl Agent {
                 // which cmd.exe interprets as literal double-backslashes.
                 // Windows paths never contain double-quote characters, so wrapping
                 // in double quotes is always safe and produces correct cmd.exe syntax.
+                //
+                // Codex on Windows uses the same shim path for now (codex is not
+                // currently supported on Windows in Stage 2 — the shim would need
+                // a separate eval-loop container command, which is a documented gap).
                 let _ = container_name; // suppress unused-variable on Windows
-                                        // Best-effort env + setup prepend for the cmd.exe shim:
-                                        //   set K=V& <setup>& cd /d "proj" && <bin> args
+                let _ = driver;
+                // Best-effort env + setup prepend for the cmd.exe shim:
+                //   set K=V& <setup>& cd /d "proj" && <bin> args
                 let bin = argv.first().map(String::as_str).unwrap_or("claude");
                 let claude_args = &argv[1..];
                 let mut prefix = String::new();
@@ -157,13 +212,14 @@ impl Agent {
         container_name: &str,
         spec: &marsad_proto::LaunchSpec,
     ) -> Result<(), AgentError> {
-        let argv = claude_argv(spec);
+        let argv = session_argv(spec);
         let cmd = self.build_spawn_cmd(
             container_name,
             &spec.project,
             &argv,
             spec.setup.as_deref(),
             &spec.env,
+            &spec.driver,
         );
         self.active_container()
             .spawn(container_name, &cmd)
@@ -185,12 +241,13 @@ impl Agent {
     ) -> Result<(), AgentError> {
         match exec_prefix_for(spec.host_target.as_deref()) {
             None => {
-                let mut argv = claude_argv(spec);
+                let mut argv = session_argv(spec);
                 // X4a: resolve the `--mcp-config` placeholder (if `spec.wasl`
                 // added one) to the true session directory now that
                 // `container_name` — hence the session id — is known, and
                 // write the file there. No-op when `wasl:false` (no
-                // placeholder present).
+                // placeholder present). Also a no-op for codex sessions
+                // (codex_argv never injects --mcp-config).
                 self.materialize_wasl_mcp_config(container_name, &mut argv);
                 let cmd = self.build_spawn_cmd(
                     container_name,
@@ -198,6 +255,7 @@ impl Agent {
                     &argv,
                     spec.setup.as_deref(),
                     &spec.env,
+                    &spec.driver,
                 );
                 self.active_container()
                     .spawn(container_name, &cmd)
@@ -405,8 +463,9 @@ fn shell_quote(s: &str) -> String {
 
 // ── claude_argv ───────────────────────────────────────────────────────────────
 
-/// Map a `Posture` to the `--permission-mode` value passed to `claude`.
-fn posture_to_mode(posture: &marsad_proto::Posture) -> &'static str {
+/// Map a `Posture` to the `--permission-mode` value passed to `claude`, and to
+/// the `permissionMode` field in synthesized `system/init` events for codex.
+pub fn posture_to_mode(posture: &marsad_proto::Posture) -> &'static str {
     match posture {
         marsad_proto::Posture::Ask => "default",
         marsad_proto::Posture::AutoApproveSafe => "acceptEdits",
@@ -515,3 +574,391 @@ pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
 /// absolute path once the session directory is known. Shared as a constant
 /// so the two sides can never drift.
 const WASL_MCP_CONFIG_FILENAME: &str = "wasl-mcp.json";
+
+// ── codex_argv ────────────────────────────────────────────────────────────────
+
+/// Build the exact `codex exec` (or `codex exec resume`) invocation for a session
+/// launch.
+///
+/// ## Verified shape (docs/specs/codex-research.md §a)
+///
+/// First-turn (Fresh):
+/// ```text
+/// codex exec --json --skip-git-repo-check -m <model> [--sandbox <tier>|--dangerously-bypass-approvals-and-sandbox]
+/// ```
+///
+/// Resume (Resume(id)):
+/// ```text
+/// codex exec resume <id> --json --skip-git-repo-check -m <model>
+/// ```
+/// Note: `codex exec resume` rejects `--sandbox` (arg-parse error, verified live in
+/// docs/specs/codex-research.md §a) — the sandbox flag is OMITTED on resume regardless
+/// of posture. Sandbox is fixed by the original thread's config on resume.
+///
+/// Continue (most recent session):
+/// ```text
+/// codex exec resume --last --json --skip-git-repo-check -m <model>
+/// ```
+/// Same sandbox omission rule as Resume.
+///
+/// ## Posture → sandbox mapping
+///
+/// | Posture          | Flag                                               |
+/// |------------------|-----------------------------------------------------|
+/// | `FullAutonomy`   | `--dangerously-bypass-approvals-and-sandbox`       |
+/// | `AutoApproveSafe`| `--sandbox workspace-write`                        |
+/// | `Ask`            | `--sandbox read-only`                              |
+///
+/// ## KEY LIMITATION
+///
+/// `codex exec` has NO interactive approval channel — `turn_context.approval_policy`
+/// is always `"never"` regardless of posture (verified live in §a). The `--sandbox`
+/// flag is the ONLY pre-turn risk control available in `codex exec` mode.
+/// Interactive approvals-as-protocol-messages only exist in `codex app-server` mode.
+/// This is a deliberate Stage 1 simplification; app-server integration is Stage 3+.
+///
+/// ## No prompt in argv
+///
+/// The prompt is NOT appended here — it is delivered per-turn via stdin.
+pub fn codex_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
+    // argv[0]: the configured binary override (same field as claude_bin) or the bare "codex" default.
+    let bin = spec
+        .claude_bin
+        .clone()
+        .unwrap_or_else(|| "codex".to_string());
+
+    // Determine whether this is a resume/continue (sandbox flag is omitted) or fresh.
+    let is_resume = !matches!(spec.mode, marsad_proto::LaunchMode::Fresh);
+
+    let mut argv = vec![bin, "exec".to_string()];
+
+    // For Resume(id) / Continue, insert the subcommand positionally right after "exec".
+    match &spec.mode {
+        marsad_proto::LaunchMode::Resume(id) => {
+            argv.push("resume".to_string());
+            argv.push(id.clone());
+        }
+        marsad_proto::LaunchMode::Continue => {
+            argv.push("resume".to_string());
+            argv.push("--last".to_string());
+        }
+        marsad_proto::LaunchMode::Fresh => {}
+    }
+
+    // Universal flags (always present for every mode).
+    argv.push("--json".to_string());
+    argv.push("--skip-git-repo-check".to_string());
+    argv.push("-m".to_string());
+    argv.push(spec.model.clone());
+
+    // Posture → sandbox/bypass, ONLY for Fresh (resume rejects --sandbox per §a).
+    if !is_resume {
+        match spec.posture {
+            marsad_proto::Posture::FullAutonomy => {
+                argv.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+            }
+            marsad_proto::Posture::AutoApproveSafe => {
+                argv.push("--sandbox".to_string());
+                argv.push("workspace-write".to_string());
+            }
+            marsad_proto::Posture::Ask => {
+                argv.push("--sandbox".to_string());
+                argv.push("read-only".to_string());
+            }
+        }
+    }
+
+    argv
+}
+
+/// Dispatch to the correct argv builder based on `spec.driver`.
+///
+/// - `"codex"` → [`codex_argv`]
+/// - anything else (including `"claude"`, the default) → [`claude_argv`]
+pub fn session_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
+    match spec.driver.as_str() {
+        "codex" => codex_argv(spec),
+        _ => claude_argv(spec),
+    }
+}
+
+// ── codex sandbox helper ──────────────────────────────────────────────────────
+
+/// Return the sandbox CLI fragment for a posture, ONLY for fresh (first-turn)
+/// invocations. Resumes must NOT include a sandbox flag (`codex exec resume`
+/// rejects `--sandbox` — verified live in docs/specs/codex-research.md §a).
+///
+/// Returns a `Vec` so it can be `.extend()`d into any argv or command string.
+pub fn codex_sandbox_flags(posture: &marsad_proto::Posture) -> Vec<&'static str> {
+    match posture {
+        marsad_proto::Posture::FullAutonomy => {
+            vec!["--dangerously-bypass-approvals-and-sandbox"]
+        }
+        marsad_proto::Posture::AutoApproveSafe => vec!["--sandbox", "workspace-write"],
+        marsad_proto::Posture::Ask => vec!["--sandbox", "read-only"],
+    }
+}
+
+// ── codex_turn_cmd ────────────────────────────────────────────────────────────
+
+/// Build one shell line to `eval` in the session's eval-loop container for a
+/// single codex turn.
+///
+/// ## Prompt encoding
+///
+/// The prompt is base64-encoded (no newlines) and decoded via
+/// `$(printf %s '<b64>' | base64 -d)` as the positional argument.
+/// This lets multi-line prompts survive the line-based FIFO protocol without
+/// quoting issues.
+///
+/// ## Fresh vs resume
+///
+/// - `thread_id = None` (first turn / fresh): builds
+///   `codex exec --json --skip-git-repo-check -m <model> <sandbox-flags> "$(...)"`.
+/// - `thread_id = Some(id)` (follow-up turn / resume): builds
+///   `codex exec resume <id> --json --skip-git-repo-check -m <model> "$(...)"`.
+///   The sandbox flag is intentionally OMITTED on resume — `codex exec resume`
+///   rejects it (docs/specs/codex-research.md §a).
+pub fn codex_turn_cmd(
+    spec: &marsad_proto::LaunchSpec,
+    thread_id: Option<&str>,
+    prompt: &str,
+) -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let bin = spec
+        .claude_bin
+        .as_deref()
+        .unwrap_or("codex")
+        .to_string();
+    let bin_q = posix_shell_quote(&bin);
+    let model_q = posix_shell_quote(&spec.model);
+
+    // Base64-encode the prompt (no line-wrap) so newlines survive the FIFO.
+    let b64 = STANDARD.encode(prompt.as_bytes());
+    // The decoded-prompt shell fragment wrapped in double-quotes so the shell
+    // passes the entire decoded string as ONE argument to codex.
+    let decoded = format!("\"$(printf %s '{}' | base64 -d)\"", b64);
+
+    match thread_id {
+        None => {
+            // Fresh / first turn: sandbox flags apply.
+            let sandbox_parts: Vec<String> = codex_sandbox_flags(&spec.posture)
+                .iter()
+                .map(|s| posix_shell_quote(s))
+                .collect();
+            let sandbox_str = format!(" {}", sandbox_parts.join(" "));
+            format!(
+                "{} exec --json --skip-git-repo-check -m {}{} {}",
+                bin_q, model_q, sandbox_str, decoded
+            )
+        }
+        Some(tid) => {
+            // Resume turn: NO sandbox flag (codex exec resume rejects --sandbox).
+            let tid_q = posix_shell_quote(tid);
+            format!(
+                "{} exec resume {} --json --skip-git-repo-check -m {} {}",
+                bin_q, tid_q, model_q, decoded
+            )
+        }
+    }
+}
+
+/// POSIX single-quote a string: wrap in `'...'`, replacing any embedded `'`
+/// with `'\''`. Used to safely embed arbitrary strings in shell eval lines.
+///
+/// Compiled in all build modes (used by `codex_turn_cmd`, which is always
+/// compiled so it can be unit-tested under coverage).
+pub fn posix_shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use marsad_proto::{LaunchMode, LaunchSpec, Posture};
+
+    fn base_spec(posture: Posture, mode: LaunchMode, driver: &str) -> LaunchSpec {
+        LaunchSpec {
+            project: "/proj".to_string(),
+            host_id: "local".to_string(),
+            model: "gpt-5-codex".to_string(),
+            posture,
+            first_prompt: None,
+            mode,
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: vec![],
+            name: None,
+            disallowed_tools: vec![],
+            wasl: false,
+            driver: driver.to_string(),
+        }
+    }
+
+    // ── posix_shell_quote ─────────────────────────────────────────────────────
+
+    #[test]
+    fn posix_shell_quote_plain() {
+        assert_eq!(posix_shell_quote("hello"), "'hello'");
+    }
+
+    #[test]
+    fn posix_shell_quote_with_single_quote() {
+        assert_eq!(posix_shell_quote("it's"), r"'it'\''s'");
+    }
+
+    #[test]
+    fn posix_shell_quote_empty() {
+        assert_eq!(posix_shell_quote(""), "''");
+    }
+
+    // ── codex_sandbox_flags ───────────────────────────────────────────────────
+
+    #[test]
+    fn sandbox_full_autonomy() {
+        let flags = codex_sandbox_flags(&Posture::FullAutonomy);
+        assert_eq!(flags, vec!["--dangerously-bypass-approvals-and-sandbox"]);
+    }
+
+    #[test]
+    fn sandbox_auto_approve_safe() {
+        let flags = codex_sandbox_flags(&Posture::AutoApproveSafe);
+        assert_eq!(flags, vec!["--sandbox", "workspace-write"]);
+    }
+
+    #[test]
+    fn sandbox_ask() {
+        let flags = codex_sandbox_flags(&Posture::Ask);
+        assert_eq!(flags, vec!["--sandbox", "read-only"]);
+    }
+
+    // ── codex_argv ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn codex_argv_fresh_full_autonomy() {
+        let spec = base_spec(Posture::FullAutonomy, LaunchMode::Fresh, "codex");
+        let argv = codex_argv(&spec);
+        assert_eq!(argv[0], "codex");
+        assert_eq!(argv[1], "exec");
+        assert!(argv.contains(&"--json".to_string()));
+        assert!(argv.contains(&"--skip-git-repo-check".to_string()));
+        assert!(argv.contains(&"-m".to_string()));
+        assert!(argv.contains(&"gpt-5-codex".to_string()));
+        assert!(argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
+        // No resume/--sandbox read-only
+        assert!(!argv.contains(&"resume".to_string()));
+        assert!(!argv.contains(&"read-only".to_string()));
+    }
+
+    #[test]
+    fn codex_argv_fresh_auto_approve_safe() {
+        let spec = base_spec(Posture::AutoApproveSafe, LaunchMode::Fresh, "codex");
+        let argv = codex_argv(&spec);
+        assert!(argv.contains(&"--sandbox".to_string()));
+        assert!(argv.contains(&"workspace-write".to_string()));
+    }
+
+    #[test]
+    fn codex_argv_fresh_ask() {
+        let spec = base_spec(Posture::Ask, LaunchMode::Fresh, "codex");
+        let argv = codex_argv(&spec);
+        assert!(argv.contains(&"--sandbox".to_string()));
+        assert!(argv.contains(&"read-only".to_string()));
+    }
+
+    #[test]
+    fn codex_argv_resume_no_sandbox() {
+        let spec = base_spec(Posture::FullAutonomy, LaunchMode::Resume("tid-123".to_string()), "codex");
+        let argv = codex_argv(&spec);
+        assert_eq!(argv[2], "resume");
+        assert_eq!(argv[3], "tid-123");
+        assert!(!argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
+        assert!(!argv.contains(&"--sandbox".to_string()));
+    }
+
+    #[test]
+    fn codex_argv_continue_no_sandbox() {
+        let spec = base_spec(Posture::FullAutonomy, LaunchMode::Continue, "codex");
+        let argv = codex_argv(&spec);
+        assert!(argv.contains(&"resume".to_string()));
+        assert!(argv.contains(&"--last".to_string()));
+        assert!(!argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
+    }
+
+    #[test]
+    fn codex_argv_custom_bin() {
+        let mut spec = base_spec(Posture::Ask, LaunchMode::Fresh, "codex");
+        spec.claude_bin = Some("/usr/local/bin/codex".to_string());
+        let argv = codex_argv(&spec);
+        assert_eq!(argv[0], "/usr/local/bin/codex");
+    }
+
+    // ── session_argv dispatch ─────────────────────────────────────────────────
+
+    #[test]
+    fn session_argv_codex_driver_uses_codex_argv() {
+        let spec = base_spec(Posture::FullAutonomy, LaunchMode::Fresh, "codex");
+        let argv = session_argv(&spec);
+        assert_eq!(argv[0], "codex");
+        assert_eq!(argv[1], "exec");
+    }
+
+    #[test]
+    fn session_argv_claude_driver_uses_claude_argv() {
+        let spec = base_spec(Posture::Ask, LaunchMode::Fresh, "claude");
+        let argv = session_argv(&spec);
+        assert_eq!(argv[0], "claude");
+        assert!(argv.contains(&"--print".to_string()));
+    }
+
+    #[test]
+    fn session_argv_unknown_driver_falls_back_to_claude() {
+        let spec = base_spec(Posture::Ask, LaunchMode::Fresh, "unknown_driver");
+        let argv = session_argv(&spec);
+        assert_eq!(argv[0], "claude");
+    }
+
+    // ── codex_turn_cmd ────────────────────────────────────────────────────────
+
+    #[test]
+    fn codex_turn_cmd_fresh_includes_sandbox() {
+        let spec = base_spec(Posture::FullAutonomy, LaunchMode::Fresh, "codex");
+        let cmd = codex_turn_cmd(&spec, None, "hello world");
+        assert!(cmd.contains("exec"));
+        assert!(cmd.contains("--dangerously-bypass-approvals-and-sandbox"));
+        assert!(cmd.contains("base64"));
+        assert!(!cmd.contains("resume"));
+    }
+
+    #[test]
+    fn codex_turn_cmd_resume_no_sandbox() {
+        let spec = base_spec(Posture::FullAutonomy, LaunchMode::Fresh, "codex");
+        let cmd = codex_turn_cmd(&spec, Some("thread-abc"), "follow up");
+        assert!(cmd.contains("resume"));
+        assert!(cmd.contains("thread-abc"));
+        assert!(!cmd.contains("--dangerously-bypass-approvals-and-sandbox"));
+        assert!(!cmd.contains("--sandbox"));
+    }
+
+    #[test]
+    fn codex_turn_cmd_multiline_prompt_encoded() {
+        let spec = base_spec(Posture::Ask, LaunchMode::Fresh, "codex");
+        let cmd = codex_turn_cmd(&spec, None, "line1\nline2");
+        // Base64-encoded so no raw newline in the command line
+        assert!(!cmd.contains('\n'));
+        assert!(cmd.contains("base64 -d"));
+    }
+
+    #[test]
+    fn codex_turn_cmd_custom_bin() {
+        let mut spec = base_spec(Posture::Ask, LaunchMode::Fresh, "codex");
+        spec.claude_bin = Some("my-codex".to_string());
+        let cmd = codex_turn_cmd(&spec, None, "hi");
+        assert!(cmd.starts_with("'my-codex'"));
+    }
+}
+

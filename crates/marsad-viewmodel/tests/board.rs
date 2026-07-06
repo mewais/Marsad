@@ -60,6 +60,7 @@ fn host(id: &str, label: &str, target: &str, status: HostStatus, is_local: bool)
         claude_bin: None,
         setup: None,
         env: Vec::new(),
+        agent_commands: Vec::new(),
     }
 }
 

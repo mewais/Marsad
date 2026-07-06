@@ -313,20 +313,33 @@ pub fn run_remote_script_bounded(
         let mut stdin = child.stdin.take()?;
         stdin.write_all(script.as_bytes()).ok()?;
     } // stdin dropped → EOF so `bash -s` runs and exits.
+
+    // Drain stdout on a dedicated thread so a LARGE output can never fill the OS
+    // pipe buffer and DEADLOCK the child (it would block on write, never exit,
+    // and the poll below would falsely time out). This used to be safe only
+    // because callers shipped SMALL outputs — but capability discovery now runs
+    // `codex debug models` (~200 KB JSON) over this path, which WOULD deadlock a
+    // read-after-exit reader. Reading concurrently keeps the pipe flowing.
+    let stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut out = String::new();
+        if let Some(mut so) = stdout {
+            let _ = so.read_to_string(&mut out);
+        }
+        out
+    });
+
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(_)) => {
-                let mut out = String::new();
-                if let Some(mut so) = child.stdout.take() {
-                    let _ = so.read_to_string(&mut out);
-                }
-                return Some(out);
+                return Some(reader.join().unwrap_or_default());
             }
             Ok(None) => {
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
+                    let _ = reader.join();
                     return None;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));

@@ -93,6 +93,7 @@ fn basic_launch_spec() -> LaunchSpec {
         name: None,
         disallowed_tools: vec![],
         wasl: false,
+        driver: "claude".to_string(),
     }
 }
 

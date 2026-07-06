@@ -16,6 +16,7 @@ use marsad_notify::{CaptureNotifier, Notifier};
 use marsad_store::{MemoryBackend, Store};
 
 pub mod capabilities;
+pub mod codex;
 mod driver;
 mod ipc;
 mod pty;
@@ -28,7 +29,7 @@ mod wasl;
 #[cfg(not(coverage))]
 use remote::REMOTE_RUNTIME_DIR;
 
-pub use driver::claude_argv;
+pub use driver::{claude_argv, posture_to_mode};
 pub use reader::{
     assistant_has_file_modifying_tool_use, reconnect_backoff_next, RECONNECT_INITIAL_BACKOFF_SECS,
     RECONNECT_MAX_BACKOFF_SECS, RECONNECT_MAX_TOTAL_SECS, RECONNECT_PROBE_TIMEOUT_SECS,
@@ -245,6 +246,84 @@ impl fmt::Debug for SessionRunCmdsWrap {
     }
 }
 
+/// Minimal per-session spec cache for codex sessions — holds everything
+/// `codex_turn_cmd` needs to build follow-up turn commands, keyed by session_id.
+/// Inserted at launch, read by `handle_send_prompt`, never cleared (small footprint).
+/// Production builds only — gated out of coverage.
+#[cfg(not(coverage))]
+#[derive(Clone, Debug)]
+pub(crate) struct CachedCodexSpec {
+    pub model: String,
+    pub project: String,
+    pub posture_mode: String,
+    pub claude_bin: Option<String>,
+    pub posture: marsad_proto::Posture,
+}
+
+/// Rebuild a `CachedCodexSpec` from the persisted fields of a codex session.
+///
+/// On a process restart the in-memory `codex_specs` map (populated at launch in
+/// `launch_with_id`) is empty, so a reconnected codex session cannot build a
+/// follow-up/resume turn command in `handle_send_prompt` — the prompt is
+/// silently DROPPED. The reconnect path in `serve.rs` calls this to reconstruct
+/// the spec from the persisted `PersistedSession` record (the same fields
+/// `launch_with_id` cached) so codex sessions can take new prompts after a
+/// restart.
+///
+/// `posture_str` is the persisted `PersistedSession::posture` string (`"Ask"` /
+/// `"AutoApproveSafe"` / `"FullAutonomy"`); it is parsed the same way `handle_resume`
+/// parses it (serde on the string), defaulting to `Ask` for missing/unknown
+/// values. Pure (no IO, no `self`) so it is unit-testable.
+#[cfg(not(coverage))]
+pub(crate) fn cached_codex_spec_from_persisted(
+    model: String,
+    project: String,
+    claude_bin: Option<String>,
+    posture_str: Option<&str>,
+) -> CachedCodexSpec {
+    let posture = posture_str
+        .and_then(|s| {
+            serde_json::from_value::<marsad_proto::Posture>(serde_json::Value::String(
+                s.to_string(),
+            ))
+            .ok()
+        })
+        .unwrap_or(marsad_proto::Posture::Ask);
+    CachedCodexSpec {
+        model,
+        project,
+        posture_mode: driver::posture_to_mode(&posture).to_string(),
+        claude_bin,
+        posture,
+    }
+}
+
+/// Per-session codex spec cache wrapper (production builds only).
+#[cfg(not(coverage))]
+struct CodexSpecsWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, CachedCodexSpec>>>);
+
+#[cfg(not(coverage))]
+impl fmt::Debug for CodexSpecsWrap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("CodexSpecsWrap")
+    }
+}
+
+/// Per-session codex thread_id registry — keyed by session_id, holds the
+/// `thread_id` from codex's `thread.started` event so subsequent turns can
+/// `codex exec resume <id>` instead of fresh. Shared between the FIFO reader
+/// thread (which inserts the thread_id when it arrives) and `handle_send_prompt`
+/// (which reads it to build the turn command). Production builds only.
+#[cfg(not(coverage))]
+struct CodexThreadsWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>);
+
+#[cfg(not(coverage))]
+impl fmt::Debug for CodexThreadsWrap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("CodexThreadsWrap")
+    }
+}
+
 /// A `can_use_tool` permission request claude is blocked on, awaiting an answer.
 /// Keyed by session_id (claude asks one tool at a time per session and blocks
 /// until the control_response arrives).
@@ -334,6 +413,15 @@ pub struct Agent {
     /// launch and consumed by the serve loop. Production builds only.
     #[cfg(not(coverage))]
     session_run_cmds: SessionRunCmdsWrap,
+    /// Per-session codex spec cache: model/project/posture for building
+    /// `codex_turn_cmd` in `handle_send_prompt`. Production builds only.
+    #[cfg(not(coverage))]
+    codex_specs: CodexSpecsWrap,
+    /// Per-session codex thread_id map: populated by the reader when
+    /// `thread.started` arrives, read by `handle_send_prompt` for resume.
+    /// Production builds only.
+    #[cfg(not(coverage))]
+    codex_threads: CodexThreadsWrap,
     /// Wasl connector registry (X2), keyed by host_id. Always compiled — see
     /// `WaslConnectorsWrap`'s doc comment.
     wasl_connectors: WaslConnectorsWrap,
@@ -393,6 +481,10 @@ impl Agent {
             session_run_cmds: SessionRunCmdsWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
+            #[cfg(not(coverage))]
+            codex_specs: CodexSpecsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
+            #[cfg(not(coverage))]
+            codex_threads: CodexThreadsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
             wasl_connectors: WaslConnectorsWrap(empty_wasl_connector_map()),
             wasl_connector_factory: WaslConnectorFactoryWrap(None),
         })
@@ -453,6 +545,8 @@ impl Agent {
             session_run_cmds: SessionRunCmdsWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
+            codex_specs: CodexSpecsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
+            codex_threads: CodexThreadsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
             wasl_connectors: WaslConnectorsWrap(empty_wasl_connector_map()),
             wasl_connector_factory: WaslConnectorFactoryWrap(None),
         })
@@ -540,6 +634,17 @@ impl Agent {
         // Local sessions stash nothing.
         #[cfg(not(coverage))]
         {
+            // Stage 2: remote codex is an explicit unsupported gap.
+            // Return a clear error rather than silently falling through to the
+            // remote durable launch path (which is wired for claude, not codex).
+            if spec.driver == "codex" && exec_prefix_for(spec.host_target.as_deref()).is_some() {
+                return Err(AgentError::Protocol(format!(
+                    "codex driver is not supported for remote sessions yet \
+                     (host_target={:?}): only local codex sessions are implemented in Stage 2",
+                    spec.host_target
+                )));
+            }
+
             if exec_prefix_for(spec.host_target.as_deref()).is_some() {
                 let run_cmd = build_remote_spawn_cmd(
                     &spec.project,
@@ -552,6 +657,22 @@ impl Agent {
                     .lock()
                     .unwrap()
                     .insert(session_id.clone(), run_cmd);
+            }
+
+            // Stage 2: cache codex spec for later turns (handle_send_prompt).
+            if spec.driver == "codex" {
+                let cached = CachedCodexSpec {
+                    model: spec.model.clone(),
+                    project: spec.project.clone(),
+                    posture_mode: driver::posture_to_mode(&spec.posture).to_string(),
+                    claude_bin: spec.claude_bin.clone(),
+                    posture: spec.posture.clone(),
+                };
+                self.codex_specs
+                    .0
+                    .lock()
+                    .unwrap()
+                    .insert(session_id.clone(), cached);
             }
         }
 
@@ -594,6 +715,7 @@ impl Agent {
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_string)),
             disallowed_tools: spec.disallowed_tools.clone(),
+            driver: spec.driver.clone(),
         };
         self.store
             .0
@@ -683,5 +805,73 @@ impl Agent {
                 marsad_lifecycle::reconcile(known, &mut c).unwrap_or(fallback)
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests for the pure reconnect helpers (production build only — the
+// helpers they cover are `#[cfg(not(coverage))]`, so these run under the
+// normal `cargo test`, not the coverage build).
+// ---------------------------------------------------------------------------
+#[cfg(all(test, not(coverage)))]
+mod reconnect_spec_tests {
+    use super::*;
+
+    #[test]
+    fn rebuilds_full_autonomy_spec_from_persisted() {
+        let spec = cached_codex_spec_from_persisted(
+            "codex-mini-latest".to_string(),
+            "/tmp/proj".to_string(),
+            Some("codex".to_string()),
+            Some("FullAutonomy"),
+        );
+        assert_eq!(spec.model, "codex-mini-latest");
+        assert_eq!(spec.project, "/tmp/proj");
+        assert_eq!(spec.claude_bin.as_deref(), Some("codex"));
+        assert_eq!(spec.posture, marsad_proto::Posture::FullAutonomy);
+        // posture_mode is the codex/claude permission-mode string.
+        assert_eq!(spec.posture_mode, driver::posture_to_mode(&spec.posture));
+        assert_eq!(spec.posture_mode, "bypassPermissions");
+    }
+
+    #[test]
+    fn rebuilds_auto_approve_safe_spec() {
+        let spec = cached_codex_spec_from_persisted(
+            "m".to_string(),
+            "p".to_string(),
+            None,
+            Some("AutoApproveSafe"),
+        );
+        assert_eq!(spec.posture, marsad_proto::Posture::AutoApproveSafe);
+        assert_eq!(spec.posture_mode, "acceptEdits");
+        assert!(spec.claude_bin.is_none());
+    }
+
+    #[test]
+    fn ask_posture_round_trips() {
+        let spec =
+            cached_codex_spec_from_persisted("m".into(), "p".into(), None, Some("Ask"));
+        assert_eq!(spec.posture, marsad_proto::Posture::Ask);
+        assert_eq!(spec.posture_mode, "default");
+    }
+
+    #[test]
+    fn missing_posture_defaults_to_ask() {
+        // A pre-posture persisted record (posture: None) must not panic and must
+        // default to Ask — mirroring how `handle_resume` parses the field.
+        let spec = cached_codex_spec_from_persisted("m".into(), "p".into(), None, None);
+        assert_eq!(spec.posture, marsad_proto::Posture::Ask);
+        assert_eq!(spec.posture_mode, "default");
+    }
+
+    #[test]
+    fn unknown_posture_string_defaults_to_ask() {
+        let spec = cached_codex_spec_from_persisted(
+            "m".into(),
+            "p".into(),
+            None,
+            Some("NotARealPosture"),
+        );
+        assert_eq!(spec.posture, marsad_proto::Posture::Ask);
     }
 }

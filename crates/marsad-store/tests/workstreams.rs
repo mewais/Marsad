@@ -78,6 +78,7 @@ fn make_session(id: &str) -> PersistedSession {
         last_phase: "Done".to_string(),
         posture: None,
         disallowed_tools: vec![],
+        driver: "claude".to_string(),
     }
 }
 
@@ -90,6 +91,7 @@ fn make_host(id: &str) -> PersistedHost {
         claude_bin: None,
         setup: None,
         env: Vec::new(),
+        agent_commands: Vec::new(),
     }
 }
 
