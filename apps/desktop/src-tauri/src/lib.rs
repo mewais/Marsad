@@ -414,13 +414,22 @@ pub fn run() {
             // up empty.
             {
                 use tauri::Manager;
-                let (host_updates, ws_updates, session_updates) =
+                let (host_updates, ws_updates, session_updates, workstream_updates) =
                     match app.state::<ManagedState>().lock() {
                         Ok(mut guard) => match &mut *guard {
                             AppState::Live(core) => {
                                 let hosts = core.load_hosts().unwrap_or_default();
                                 let ws = core.load_workspaces().unwrap_or_default();
                                 let sessions = core.load_sessions().unwrap_or_default();
+                                // Rebuild the workstreams board AFTER sessions load:
+                                // the redesigned dashboard is workstream-centric, and
+                                // load_workstreams auto-assigns every restored session
+                                // (with no membership) into a single-node workstream —
+                                // so a full app exit + relaunch shows the restored
+                                // (Stale/resumable) sessions on the Board instead of
+                                // coming up empty. Must run after load_sessions so the
+                                // restored sessions exist when memberships are built.
+                                let workstreams = core.load_workstreams().unwrap_or_default();
                                 // Connect-time discovery (deliverable #4a): TRULY
                                 // populate capabilities for every known host at
                                 // startup — non-blocking fire-and-forget sends; the
@@ -429,15 +438,16 @@ pub fn run() {
                                 // up. Done under the same lock as load_hosts so the
                                 // registry is populated first.
                                 core.refresh_capabilities_all_hosts();
-                                (hosts, ws, sessions)
+                                (hosts, ws, sessions, workstreams)
                             }
-                            AppState::Mock(_) => (vec![], vec![], vec![]),
+                            AppState::Mock(_) => (vec![], vec![], vec![], vec![]),
                         },
-                        Err(_) => (vec![], vec![], vec![]),
+                        Err(_) => (vec![], vec![], vec![], vec![]),
                     };
                 events::emit_updates(&app.handle().clone(), host_updates);
                 events::emit_updates(&app.handle().clone(), ws_updates);
                 events::emit_updates(&app.handle().clone(), session_updates);
+                events::emit_updates(&app.handle().clone(), workstream_updates);
             }
 
             let app_handle = app.handle().clone();
