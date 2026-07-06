@@ -1,0 +1,15 @@
+[package]
+name = "marsad-it-i13_remote_codex_live"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Marsad integration scenario i13 — headless live remote codex launch: Agent drives codex via the durable eval-loop (in.fifo + out.log) on a WSL/SSH remote host"
+
+[dependencies]
+serde_json = { workspace = true }
+marsad-proto = { workspace = true }
+marsad-transport = { workspace = true }
+marsad-agent = { workspace = true }
+marsad-core = { workspace = true }
+marsad-events = { workspace = true }
+marsad-viewmodel = { workspace = true }
