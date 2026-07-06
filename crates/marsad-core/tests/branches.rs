@@ -306,7 +306,7 @@ fn answer_gate_idempotent_second_call_is_noop() {
     let second_outbound = peer.drain_outbound();
     // Key assertion: no duplicate outbound command was sent
     match result {
-        Ok(()) => {
+        Ok(_) => {
             // Idempotent no-op: accepted but no duplicate IPC
             assert!(
                 second_outbound.is_empty(),
@@ -349,7 +349,7 @@ fn answer_gate_different_decisions_are_not_idempotent() {
     let result = core.answer_gate(d2);
     let out2 = peer.drain_outbound();
     // DuplicateDecision error is acceptable; if Ok, output must be empty.
-    if let Ok(()) = result {
+    if let Ok(_) = result {
         assert!(
             out2.is_empty(),
             "reject on same gate after approve must be no-op, got: {out2:?}"
@@ -600,6 +600,52 @@ fn answer_gate_permission_gate_outbound_references_gate() {
     core.answer_gate(d).expect("answer_gate permission");
     let out = peer.drain_outbound();
     assert!(!out.is_empty(), "answer_gate(Permission) must emit IPC");
+}
+
+#[test]
+fn answer_gate_clears_pending_gate_and_emits_session_update() {
+    // Regression: after the human answers a permission gate, the session's gate
+    // must be cleared immediately (via a returned Session VmUpdate) so the card
+    // disappears — it must NOT linger until a later stream message arrives.
+    let (mut core, mut peer) = make_core();
+    let id = core
+        .launch_session(spec("gate-clear", Posture::Ask))
+        .expect("launch");
+    let _ = peer.drain_outbound();
+
+    // Drive a real permission gate onto the session via the stream (system/init
+    // then a can_use_tool control_request), so state.gate is Some(...).
+    let _ = core.on_agent_line(&ipc_init(&id));
+    let _ = core.on_agent_line(&ipc_control_request(&id, "req-clear"));
+    let _ = peer.drain_outbound();
+    // Sanity: the session view now carries a pending gate.
+    let sv_before = core
+        .snapshot()
+        .sessions
+        .into_iter()
+        .find(|s| s.id == id)
+        .expect("session present");
+    assert!(sv_before.gate.is_some(), "gate must be pending before answer");
+
+    let gate = Gate::Permission {
+        request_id: "req-clear".to_string(),
+        command: "ls".to_string(),
+        cwd: "/app".to_string(),
+        risk: "low".to_string(),
+        explanation: "list".to_string(),
+    };
+    let updates = core
+        .answer_gate(approve(&id, &gate))
+        .expect("answer_gate");
+
+    // A Session VmUpdate with gate == None must be emitted immediately.
+    let session_update_clears = updates.iter().any(|u| {
+        matches!(u, marsad_core::VmUpdate::Session(sv) if sv.id == id && sv.gate.is_none())
+    });
+    assert!(
+        session_update_clears,
+        "answer_gate must emit a Session update with the gate cleared; got {updates:?}"
+    );
 }
 
 #[test]

@@ -256,45 +256,57 @@ pub fn interrupt(state: State<'_, ManagedState>, id: String) -> Result<(), Strin
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn answer_question(
+    app: tauri::AppHandle,
     state: State<'_, ManagedState>,
     session_id: String,
     request_id: String,
     answers: serde_json::Value,
 ) -> Result<(), String> {
-    let mut guard = state.lock().map_err(|e| e.to_string())?;
-    match &mut *guard {
-        AppState::Live(core) => core
-            .answer_question(&session_id, &request_id, answers)
-            .map_err(map_err),
-        AppState::Mock(_) => Ok(()),
-    }
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => core
+                .answer_question(&session_id, &request_id, answers)
+                .map_err(map_err)?,
+            AppState::Mock(_) => vec![],
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn answer_gate(
+    app: tauri::AppHandle,
     state: State<'_, ManagedState>,
     session_id: String,
     decision_id: String,
     allow: bool,
     deny_reason: Option<String>,
 ) -> Result<(), String> {
-    let mut guard = state.lock().map_err(|e| e.to_string())?;
-    match &mut *guard {
-        AppState::Live(core) => {
-            let decision = if allow {
-                Decision::Approve
-            } else {
-                Decision::Reject { reason: deny_reason.unwrap_or_default() }
-            };
-            let gate_decision = GateDecision {
-                id: DecisionId(decision_id),
-                session_id,
-                decision,
-            };
-            core.answer_gate(gate_decision).map_err(map_err)
+    let updates = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => {
+                let decision = if allow {
+                    Decision::Approve
+                } else {
+                    Decision::Reject { reason: deny_reason.unwrap_or_default() }
+                };
+                let gate_decision = GateDecision {
+                    id: DecisionId(decision_id),
+                    session_id,
+                    decision,
+                };
+                // Emits Session+Overview updates that clear the answered gate so
+                // the card disappears immediately (see Core::answer_gate).
+                core.answer_gate(gate_decision).map_err(map_err)?
+            }
+            AppState::Mock(_) => vec![],
         }
-        AppState::Mock(_) => Ok(()),
-    }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(())
 }
 
 /// X5 — relay ONE explicit human decision on a pending Wasl handoff gate.

@@ -1354,22 +1354,31 @@ impl Core {
         id: &str,
         request_id: &str,
         answers: serde_json::Value,
-    ) -> Result<(), CoreError> {
+    ) -> Result<Vec<VmUpdate>, CoreError> {
         self.require_session(id)?;
         self.send_ipc(&marsad_proto::IpcMsg::AnswerQuestion {
             session_id: id.to_string(),
             request_id: request_id.to_string(),
             answers,
-        })
+        })?;
+        // Clear the answered question gate immediately (same rationale as
+        // answer_gate) so its card disappears on answer.
+        if let Some(record) = self.sessions.get_mut(id) {
+            record.state.clear_gate_on_answer();
+        }
+        let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
+        let snap = self.snapshot();
+        let groups = marsad_viewmodel::group_overview(&snap);
+        Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
     }
 
-    pub fn answer_gate(&mut self, decision: GateDecision) -> Result<(), CoreError> {
+    pub fn answer_gate(&mut self, decision: GateDecision) -> Result<Vec<VmUpdate>, CoreError> {
         let session_id = marsad_gates::route(&decision).to_string();
         self.require_session(&session_id)?;
 
         // Idempotency: already recorded → silent no-op (no duplicate IPC).
         if self.ledger.seen(&decision.id) {
-            return Ok(());
+            return Ok(vec![]);
         }
         // record() cannot return DuplicateDecision here because seen() is false.
         // unwrap() is infallible in this code path.
@@ -1377,11 +1386,24 @@ impl Core {
 
         let ctrl = marsad_gates::to_control_response(&decision);
         self.send_ipc(&IpcMsg::AnswerGate {
-            session_id,
+            session_id: session_id.clone(),
             request_id: ctrl.request_id,
             allow: ctrl.allow,
             deny_reason: ctrl.deny_reason,
-        })
+        })?;
+
+        // Optimistically clear the pending gate NOW so the card disappears the
+        // instant the human answers — don't wait for a later stream message
+        // (a bare permission approval may not emit one that clears it, leaving
+        // the answered gate stuck on screen). The claude stream stays the source
+        // of truth: its next messages re-drive phase/gate as usual.
+        if let Some(record) = self.sessions.get_mut(&session_id) {
+            record.state.clear_gate_on_answer();
+        }
+        let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
+        let snap = self.snapshot();
+        let groups = marsad_viewmodel::group_overview(&snap);
+        Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
     }
 
     /// X3 (docs/specs/wasl-connector.md §5.2): relay ONE explicit human

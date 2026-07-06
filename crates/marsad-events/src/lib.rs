@@ -200,6 +200,19 @@ impl SessionState {
         }
     }
 
+    /// Clear a pending gate the instant the human answers it (optimistic — the
+    /// GUI card must disappear immediately, not wait for the next stream message,
+    /// which a bare permission-approval may never emit). Flips a lingering
+    /// `Needs` phase back to `Working`. The claude stream remains the source of
+    /// truth: its subsequent messages re-drive phase/gate as usual.
+    pub fn clear_gate_on_answer(&mut self) {
+        self.gate = None;
+        self.gate_confirmed_automated = false;
+        if matches!(self.phase, Phase::Needs) {
+            self.phase = Phase::Working;
+        }
+    }
+
     /// Return the context window size (in tokens) for a given model name.
     ///
     /// Claude Code appends a `[1m]` suffix to the model string reported in

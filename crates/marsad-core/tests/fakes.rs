@@ -624,7 +624,7 @@ fn scripted_idempotent_answer_gate_end_to_end() {
     let second_out = peer.drain_outbound();
 
     match second_result {
-        Ok(()) => {
+        Ok(_) => {
             assert_eq!(
                 second_out.len(),
                 0,
