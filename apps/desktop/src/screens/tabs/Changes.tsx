@@ -313,8 +313,8 @@ export function ChangesTab() {
           overflow: "hidden",
         }}
       >
-        {/* Diff view */}
-        <div style={{ flex: 1, overflow: "auto" }}>
+        {/* Diff view — darker glass pane matching terminal aesthetic */}
+        <div style={{ flex: 1, overflow: "auto", background: "var(--panel-dark)", backdropFilter: "blur(22px)" }}>
           {(() => {
             if (!activeFile) {
               return (

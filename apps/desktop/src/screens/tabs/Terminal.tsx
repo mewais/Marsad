@@ -66,8 +66,11 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
       fontSize: 13,
       lineHeight: 1.4,
       cursorBlink: true,
+      // allowTransparency lets the xterm canvas be transparent so the --panel-dark
+      // glass background on the wrapping div shows through (BUG 2).
+      allowTransparency: true,
       theme: {
-        background: "#0a0d12",
+        background: "transparent",
         foreground: "#e8ecf1",
         cursor: "#e8ecf1",
         selectionBackground: "rgba(91,141,239,0.25)",
@@ -82,21 +85,22 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
     let disposed = false;
     let unlisten: (() => void) | undefined;
 
-    // Initial fit + ptyStart: run synchronously so the pty is started as soon
-    // as the terminal mounts. Also schedule a re-fit after the next layout
-    // pass via RAF so that if the container had zero dimensions on the first
-    // render (e.g. a flex container that hasn't painted yet), we correct the
-    // terminal size without a visible jump — ptyResize fires automatically
-    // from the onResize handler when cols/rows change.
+    // Defer ptyStart until after the post-layout RAF: flex containers measure
+    // zero clientHeight synchronously on mount (before the browser has painted).
+    // fit.fit() here sets cols/rows from those 0-height dims; ptyStart called
+    // with cols=0/rows=0 would spawn a mis-sized pty. The RAF re-fit below runs
+    // after the first paint, when the container has real dimensions — call
+    // ptyStart only then so the initial pty size is correct.
     fit.fit();
     term.focus();
-    void ptyStart(sessionId, term.cols, term.rows);
 
-    // Post-layout re-fit: gives the browser/webview one paint to measure real
-    // container dimensions before correcting cols/rows. The onResize handler
-    // propagates the change to the server-side pty automatically.
+    // Post-layout re-fit + deferred ptyStart: one paint pass lets the flex
+    // container measure its real height before we start the pty.
     const rafHandle = requestAnimationFrame(() => {
-      if (!disposed) fit.fit();
+      if (!disposed) {
+        fit.fit();
+        void ptyStart(sessionId, term.cols, term.rows);
+      }
     });
 
     void listenPty((event: PtyEvent) => {
@@ -160,7 +164,8 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
-        background: "#0a0d12",
+        background: "var(--panel-dark)",
+        backdropFilter: "blur(22px)",
       }}
     >
       {/* Header bar */}
@@ -194,11 +199,17 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
       </div>
 
       {/* xterm.js mount point — clicking anywhere in it focuses the terminal
-          natively (xterm.js's own textarea capture), no handler needed. */}
+          natively (xterm.js's own textarea capture), no handler needed.
+          background here shows through the xterm canvas (allowTransparency: true). */}
       <div
         ref={containerRef}
         data-testid="terminal-output"
-        style={{ flex: 1, overflow: "hidden", padding: "8px 12px" }}
+        style={{
+          flex: 1,
+          overflow: "hidden",
+          padding: "8px 12px",
+          background: "var(--panel-dark)",
+        }}
       />
     </div>
   );

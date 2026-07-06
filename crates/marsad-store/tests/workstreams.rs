@@ -80,6 +80,8 @@ fn make_session(id: &str) -> PersistedSession {
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         slash_commands: vec![],
+        tools: vec![],
+        mcp_servers: vec![],
     }
 }
 

@@ -44,6 +44,7 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
           cwd: "/app",
           risk: "medium",
           explanation: "Runs pending database migrations against the production schema.",
+          is_elicitation: false,
         },
       },
     },
@@ -76,6 +77,7 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       context_pct: 62.0,
       gate: {
         Plan: {
+          request_id: "req-mock-plan-s02",
           summary: "Refactor the job queue to use async workers with backpressure",
           steps: [
             { title: "Extract queue interface", detail: "Move JobQueue trait to its own module" },
@@ -114,6 +116,7 @@ export const MOCK_SNAPSHOT: AppSnapshot = {
       context_pct: 44.0,
       gate: {
         Edit: {
+          request_id: "req-mock-edit-s03",
           file: "src/features.py",
           diff: [
             { sig: "Context", ln: "1", text: "def compute_features(df):" },

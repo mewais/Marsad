@@ -88,10 +88,19 @@ pub struct SessionView {
     /// the first system/init event.
     #[serde(default = "default_posture")]
     pub posture: String,
+    /// The agent driver actually running THIS session ("claude"/"codex"/…).
+    /// The header must label the session by its own driver, not the host's
+    /// first-discovered capability driver (a host can offer several).
+    #[serde(default = "default_driver")]
+    pub driver: String,
 }
 
 fn default_posture() -> String {
     "ask".to_string()
+}
+
+fn default_driver() -> String {
+    "claude".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -530,6 +539,7 @@ pub struct GateVM {
     pub lead: String,
     pub summary: String,
     pub is_permission: bool,
+    pub is_elicitation: bool,
     pub is_plan: bool,
     pub is_edit: bool,
     pub is_question: bool,
@@ -565,6 +575,7 @@ pub fn gate_vm(s: &AppSnapshot) -> Option<GateVM> {
 
     let meta = marsad_format::gate_meta(gate);
     let is_permission = matches!(gate, marsad_gates::Gate::Permission { .. });
+    let is_elicitation = matches!(gate, marsad_gates::Gate::Permission { is_elicitation: true, .. });
     let is_plan = matches!(gate, marsad_gates::Gate::Plan { .. });
     let is_edit = matches!(gate, marsad_gates::Gate::Edit { .. });
     let is_question = matches!(gate, marsad_gates::Gate::Question { .. });
@@ -581,6 +592,7 @@ pub fn gate_vm(s: &AppSnapshot) -> Option<GateVM> {
         lead: meta.lead.to_string(),
         summary: meta.summary,
         is_permission,
+        is_elicitation,
         is_plan,
         is_edit,
         is_question,
@@ -705,6 +717,13 @@ pub struct WorkstreamCard {
     pub counts: StateCounts,
     pub needs_attention: bool,
     pub is_single_node: bool,
+    /// Attention-card blocker headline — the pending gate's summary when a node
+    /// needs the human. `None` → the UI falls back to `goal`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headline: Option<String>,
+    /// Attention-card CTA label. `None` → the UI derives one from head_state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cta_label: Option<String>,
 }
 
 /// Lowercase status string for a host, matching `marsad_hosts::HostStatus`.
@@ -750,10 +769,33 @@ fn workstream_card(ws: &Workstream, nodes: &[Node], connections: &[Connection]) 
     let needs_attention = matches!(hs, Some(HeadState::Needs) | Some(HeadState::Error))
         || ws_conns.iter().any(|c| c.gate.is_some());
 
+    // For a single-node workstream with no explicit goal, fall back to the
+    // node's name so the card headline is never blank.
+    let goal = if ws.goal.is_empty() && owned_nodes.len() == 1 {
+        owned_nodes[0].name.clone()
+    } else {
+        ws.goal.clone()
+    };
+
+    // When a node needs the human, surface its gate summary (carried on the
+    // node's `status` by core::node_of) as the card's headline + an Answer CTA
+    // so the attention card shows WHAT is asked, not just the workstream name.
+    let (headline, cta_label) = if matches!(hs, Some(HeadState::Needs)) {
+        match owned_nodes
+            .iter()
+            .find(|n| matches!(n.state, Phase::Needs) && !n.status.is_empty())
+        {
+            Some(n) => (Some(n.status.clone()), Some("Answer".to_string())),
+            None => (None, None),
+        }
+    } else {
+        (None, None)
+    };
+
     WorkstreamCard {
         id: ws.id.clone(),
         name: ws.name.clone(),
-        goal: ws.goal.clone(),
+        goal,
         head_state: hs,
         driver_dots: driver_dots(&owned_nodes),
         host_chips: host_chips(&owned_nodes),
@@ -761,6 +803,8 @@ fn workstream_card(ws: &Workstream, nodes: &[Node], connections: &[Connection]) 
         counts: state_counts(&owned_nodes),
         needs_attention,
         is_single_node: owned_nodes.len() == 1,
+        headline,
+        cta_label,
     }
 }
 

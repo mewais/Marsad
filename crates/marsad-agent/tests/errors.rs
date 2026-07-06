@@ -425,6 +425,9 @@ fn reconcile_all_lifecycle_error_folds_into_stale() {
             posture: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
         })
         .expect("upsert");
 
@@ -743,6 +746,9 @@ fn resume_session_launch_spawn_failure_propagates() {
             posture: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
         })
         .expect("upsert");
 

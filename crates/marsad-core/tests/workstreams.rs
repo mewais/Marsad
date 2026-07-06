@@ -320,6 +320,67 @@ fn cw3_add_connection_persists_and_survives_reload() {
 }
 
 // ---------------------------------------------------------------------------
+// Regression: a persisted session (as the agent writes it) must reappear on
+// the board after a fresh Core runs the real startup sequence
+// (load_sessions → load_workstreams). This reproduces "sessions vanished after
+// reinstall": the agent persists PersistedSession records; a relaunched desktop
+// Core must restore them AND surface them on the workstream-centric board.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn persisted_session_reappears_on_board_after_reload() {
+    use marsad_store::{PersistedSession, Store};
+
+    let backend = MemoryBackend::new();
+    // Simulate the agent having persisted a session (what survives an app/agent
+    // restart). The desktop Core's launch() does NOT persist; the agent does.
+    {
+        let mut store = Store::new(Box::new(backend.clone()));
+        store
+            .upsert_session(&PersistedSession {
+                id: "sess-restore-1".to_string(),
+                session_id: Some("claude-uuid-restore".to_string()),
+                name: "sess-restore-1".to_string(),
+                host_id: "local".to_string(),
+                host_target: None,
+                claude_bin: None,
+                setup: None,
+                env: Vec::new(),
+                project: "/tmp/restore-proj".to_string(),
+                branch: "main".to_string(),
+                model: "claude-opus-4-5".to_string(),
+                last_phase: "Done".to_string(),
+                posture: None,
+                disallowed_tools: vec![],
+                driver: "claude".to_string(),
+                slash_commands: vec![],
+                tools: vec![],
+                mcp_servers: vec![],
+            })
+            .expect("agent persists session");
+    }
+
+    // Fresh Core over the SAME backend runs the exact desktop startup order.
+    let mut core = core_with_backend(backend);
+    core.load_sessions().expect("load_sessions");
+    let updates = core.load_workstreams().expect("load_workstreams");
+
+    // The restored session must be present on the board (auto-assigned to a
+    // single-node workstream by the migration).
+    let board = board_from(&updates);
+    let total_sessions: usize = board.all.iter().map(|c| c.session_count).sum();
+    assert_eq!(
+        total_sessions, 1,
+        "restored session must appear on the board after reload, got board.all={:?}",
+        board.all.iter().map(|c| (&c.id, c.session_count)).collect::<Vec<_>>()
+    );
+    assert!(
+        core.snapshot().sessions.iter().any(|s| s.id == "sess-restore-1"),
+        "restored session must be in the snapshot"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // CW4 — add_connection invalid cases -> CoreError::Connection, nothing persisted
 // ---------------------------------------------------------------------------
 
@@ -792,14 +853,12 @@ fn cw9_nodes_only_sessions_with_membership_in_session_order() {
 
     let nodes = core.nodes();
     let ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+    // launch_session now auto-creates a membership for every session, so all
+    // three appear in nodes(); the order must follow session_order.
     assert_eq!(
         ids,
-        vec![s1.as_str(), s2.as_str()],
-        "nodes() must follow session_order (s1 before s2), not assignment order"
-    );
-    assert!(
-        !ids.contains(&s3.as_str()),
-        "s3 has no membership, excluded"
+        vec![s1.as_str(), s2.as_str(), s3.as_str()],
+        "nodes() must follow session_order, including auto-workstream sessions"
     );
 
     let n1 = nodes.iter().find(|n| n.id == s1).unwrap();
@@ -811,6 +870,10 @@ fn cw9_nodes_only_sessions_with_membership_in_session_order() {
     let n2 = nodes.iter().find(|n| n.id == s2).unwrap();
     assert!(!n2.lead);
     assert_eq!(n2.host, "local");
+
+    // s3 is in its auto-created single-node workstream, not ws-nodes.
+    let n3 = nodes.iter().find(|n| n.id == s3).unwrap();
+    assert_eq!(n3.ws, format!("ws-{s3}"), "s3 in its auto workstream");
 }
 
 // ---------------------------------------------------------------------------
@@ -1563,5 +1626,70 @@ fn restart_session_uses_supplied_model_not_settings_default() {
     assert!(
         !out.contains("settings-default-model"),
         "restart must NOT leak the settings default_model; got: {out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// launch_session auto-creates single-node workstream + membership
+// ---------------------------------------------------------------------------
+
+/// Launching a session via launch_session must immediately create a ws-<id>
+/// workstream and populate membership so nodes() / board() show the card.
+#[test]
+fn launch_session_auto_creates_workstream_and_membership() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let sid = launch(&mut core, "/home/user/project");
+
+    let nodes = core.nodes();
+    assert_eq!(nodes.len(), 1, "session must appear as a node");
+    assert_eq!(nodes[0].id, sid);
+    assert_eq!(nodes[0].ws, format!("ws-{sid}"), "in its auto workstream");
+
+    let board = core.board();
+    let card = board.all.iter().find(|c| c.id == format!("ws-{sid}"));
+    assert!(card.is_some(), "auto workstream must appear in board");
+    let card = card.unwrap();
+    assert_eq!(card.session_count, 1);
+    // goal fallback: empty ws.goal → node name used as headline
+    assert!(!card.goal.is_empty(), "goal must not be blank");
+}
+
+// ---------------------------------------------------------------------------
+// remove_session drops session + membership + auto workstream
+// ---------------------------------------------------------------------------
+
+/// remove_session must drop the session record, its membership, and the
+/// auto-created single-node workstream so the board shows no ghost card.
+#[test]
+fn remove_session_drops_session_membership_and_auto_workstream() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let sid = launch(&mut core, "/home/user/myproj");
+
+    // Precondition: session is in the board.
+    let board_before = core.board();
+    assert!(
+        board_before.all.iter().any(|c| c.id == format!("ws-{sid}")),
+        "workstream present before remove"
+    );
+
+    let updates = core.remove_session(&sid).expect("remove_session");
+
+    // Session removed event in updates.
+    let removed = updates
+        .iter()
+        .any(|u| matches!(u, VmUpdate::SessionRemoved { id } if id == &sid));
+    assert!(removed, "SessionRemoved event must be in updates");
+
+    // nodes() no longer includes the session.
+    assert!(
+        core.nodes().is_empty(),
+        "nodes() must be empty after remove"
+    );
+
+    // board() no longer includes the auto workstream.
+    let board_after = core.board();
+    assert!(
+        !board_after.all.iter().any(|c| c.id == format!("ws-{sid}")),
+        "ghost workstream card must be gone after remove"
     );
 }

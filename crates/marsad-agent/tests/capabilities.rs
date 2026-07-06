@@ -73,10 +73,10 @@ use marsad_agent::capabilities::{
     agy_snippet_from_transcript, build_agy_discovery_script, build_claude_discovery_script,
     build_claude_model_catalog, build_codex_discovery_script, command_word,
     encode_claude_project_dir, merge_observed_into_catalog, parse_agy_models, parse_avail,
-    parse_claude_env_models, parse_codex_debug_models, parse_codex_rollout_meta,
-    parse_discovery_sections, parse_remote_claude_session_list, parse_remote_codex_session_list,
-    scan_agy_sessions, scan_claude_sessions, scan_codex_sessions, CapabilityProbe,
-    CapabilityProvider, HostLaunchCfg, HostProbeCtx,
+    parse_claude_env_models, parse_claude_extra_models, parse_codex_debug_models,
+    parse_codex_rollout_meta, parse_discovery_sections, parse_remote_claude_session_list,
+    parse_remote_codex_session_list, scan_agy_sessions, scan_claude_sessions, scan_codex_sessions,
+    CapabilityProbe, CapabilityProvider, HostLaunchCfg, HostProbeCtx,
 };
 use marsad_proto::{
     parse_ipc, Capabilities, DiscoveredSession, IpcMsg, ModelCatalog, ModelInfo, ModelListSource,
@@ -926,7 +926,7 @@ fn build_claude_discovery_script_env_and_sessions_for_project() {
     // Sessions resolve + encode the project's real cwd.
     assert!(script.contains("cd '/home/u/proj'"));
     assert!(script.contains("projects/$enc"));
-    for name in ["avail", "env", "sessions"] {
+    for name in ["avail", "env", "extra_models", "sessions"] {
         assert!(script.contains(&format!("@@MARSAD_SEC_BEGIN:{name}")));
     }
 }
@@ -935,9 +935,12 @@ fn build_claude_discovery_script_env_and_sessions_for_project() {
 fn build_claude_discovery_script_no_project_empty_sessions_section() {
     let script = build_claude_discovery_script("claude", None, None);
     assert!(script.contains("command -v 'claude'"));
-    // Sessions section still present but a no-op (no ls loop).
+    // Sessions section still present but a no-op (no project-dir ls loop).
     assert!(script.contains("@@MARSAD_SEC_BEGIN:sessions"));
-    assert!(!script.contains("ls -t"));
+    // The sessions section's ls loop only appears when a project is given; it
+    // uses "$dir"/*.jsonl — check that the literal project-dir pattern is absent.
+    assert!(!script.contains("ls -t \"$dir\""),
+        "sessions section must not contain the project-dir ls loop when no project given");
 }
 
 #[test]
@@ -1001,6 +1004,136 @@ fn parse_claude_env_models_maps_families_dropping_empty() {
 fn parse_claude_env_models_empty_is_empty() {
     assert!(parse_claude_env_models("").is_empty());
     assert!(parse_claude_env_models("\n\n").is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// parse_claude_extra_models — custom/subscription model ids from the
+// extra_models section (`model\t<value>` lines)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parse_claude_extra_models_extracts_custom_model_ids() {
+    let body = "model\tfable\nmodel\tclaude-custom-123\n";
+    let extra = parse_claude_extra_models(body);
+    assert_eq!(extra, vec!["fable", "claude-custom-123"]);
+}
+
+#[test]
+fn parse_claude_extra_models_drops_family_words() {
+    // A "model" line that equals a family name must not create a duplicate
+    // in the catalog (families are already first).
+    let body = "model\topus\nmodel\tsonnet\nmodel\thaiku\nmodel\tfable\n";
+    let extra = parse_claude_extra_models(body);
+    assert_eq!(extra, vec!["fable"], "family words must be excluded");
+}
+
+#[test]
+fn parse_claude_extra_models_drops_empty_and_blank_values() {
+    let body = "model\t\nmodel\t   \nmodel\tfable\n";
+    // Blank/empty tab values are dropped; only "fable" survives.
+    // Note: "   " is treated as non-empty after trim but contains no visible content;
+    // the shell emits truly empty strings for unset vars, but let's handle whitespace-only too.
+    // The parser uses `.trim()` so "   " → "" → dropped.
+    let extra = parse_claude_extra_models(body);
+    assert_eq!(extra, vec!["fable"]);
+}
+
+#[test]
+fn parse_claude_extra_models_deduplicates() {
+    let body = "model\tfable\nmodel\tfable\nmodel\tcustom-x\nmodel\tfable\n";
+    let extra = parse_claude_extra_models(body);
+    assert_eq!(extra, vec!["fable", "custom-x"], "duplicates removed, order preserved");
+}
+
+#[test]
+fn parse_claude_extra_models_drops_synthetic_placeholders() {
+    // Values containing '<' are synthetic/placeholder (e.g. "<none>", "<synthetic>").
+    let body = "model\t<none>\nmodel\t<synthetic>\nmodel\tfable\n";
+    let extra = parse_claude_extra_models(body);
+    assert_eq!(extra, vec!["fable"]);
+}
+
+#[test]
+fn parse_claude_extra_models_ignores_non_model_keys() {
+    // Only "model\t..." lines are parsed; other keys (like "opus\t...") are ignored.
+    let body = "opus\tclaude-opus-4-1\nmodel\tfable\nsonnet\t\n";
+    let extra = parse_claude_extra_models(body);
+    assert_eq!(extra, vec!["fable"]);
+}
+
+#[test]
+fn parse_claude_extra_models_empty_body_is_empty() {
+    assert!(parse_claude_extra_models("").is_empty());
+    assert!(parse_claude_extra_models("\n\n").is_empty());
+}
+
+/// End-to-end: extra model ids merge into catalog after families, no duplicates.
+#[test]
+fn build_claude_model_catalog_merges_extra_models_after_families() {
+    let extra = vec![
+        ModelInfo { id: "fable".to_string(), annotation: None },
+        // A family word passed as extra must not duplicate the family entry.
+        ModelInfo { id: "sonnet".to_string(), annotation: None },
+        ModelInfo { id: "custom-x".to_string(), annotation: None },
+    ];
+    let catalog = build_claude_model_catalog(&HashMap::new(), &extra);
+    let ids: Vec<&str> = catalog.iter().map(|m| m.id.as_str()).collect();
+    // Families first (opus, sonnet, haiku), then custom ids that aren't families.
+    assert_eq!(
+        ids,
+        vec!["opus", "sonnet", "haiku", "fable", "custom-x"],
+        "families stay first; custom ids appended; family-word extra entry deduped"
+    );
+}
+
+/// The script includes the extra_models section.
+#[test]
+fn build_claude_discovery_script_has_extra_models_section() {
+    let script = build_claude_discovery_script("claude", None, None);
+    assert!(
+        script.contains("@@MARSAD_SEC_BEGIN:extra_models"),
+        "extra_models section must be present"
+    );
+    assert!(
+        script.contains("ANTHROPIC_MODEL"),
+        "ANTHROPIC_MODEL env must be probed"
+    );
+    assert!(
+        script.contains("settings.json"),
+        "claude settings.json must be scanned"
+    );
+    assert!(
+        script.contains(".claude.json"),
+        ".claude.json must be scanned"
+    );
+    assert!(
+        script.contains("projects"),
+        "transcript scan must reference projects dir"
+    );
+}
+
+/// End-to-end pure roundtrip for extra_models section → catalog merge.
+#[test]
+fn claude_discovery_extra_models_roundtrip_pure() {
+    let out = "@@MARSAD_SEC_BEGIN:avail\n/usr/local/bin/claude\n@@MARSAD_SEC_END:avail\n\
+               @@MARSAD_SEC_BEGIN:env\nopus\t\nsonnet\t\nhaiku\t\n@@MARSAD_SEC_END:env\n\
+               @@MARSAD_SEC_BEGIN:extra_models\nmodel\tfable\nmodel\t\nmodel\topus\nmodel\tfable\n@@MARSAD_SEC_END:extra_models\n\
+               @@MARSAD_SEC_BEGIN:sessions\n@@MARSAD_SEC_END:sessions\n";
+    let secs = parse_discovery_sections(out);
+    let extra_ids = parse_claude_extra_models(secs.get("extra_models"));
+    // "fable" survives; empty dropped; "opus" family dropped; duplicate "fable" deduped.
+    assert_eq!(extra_ids, vec!["fable"]);
+
+    let extra_observed: Vec<ModelInfo> = extra_ids
+        .into_iter()
+        .map(|id| ModelInfo { id, annotation: None })
+        .collect();
+    let resolved = parse_claude_env_models(secs.get("env"));
+    let resolved_ref: std::collections::HashMap<&str, String> =
+        resolved.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+    let catalog = build_claude_model_catalog(&resolved_ref, &extra_observed);
+    let ids: Vec<&str> = catalog.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, vec!["opus", "sonnet", "haiku", "fable"]);
 }
 
 #[test]

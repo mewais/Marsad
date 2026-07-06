@@ -181,7 +181,7 @@ pub fn gate_meta(gate: &Gate) -> GateMeta {
             summary: format!("$ {command}"),
             approve_label: "Approve & run",
         },
-        Gate::Plan { summary, steps } => {
+        Gate::Plan { summary, steps, .. } => {
             let n = steps.len();
             let plan_summary = if n == 0 {
                 // Derive a summary from the plan markdown body: first non-empty line.
@@ -223,7 +223,7 @@ pub fn gate_meta(gate: &Gate) -> GateMeta {
                 approve_label: "Submit",
             }
         }
-        Gate::Edit { file, diff } => {
+        Gate::Edit { file, diff, .. } => {
             let basename = std::path::Path::new(file)
                 .file_name()
                 .and_then(|s| s.to_str())

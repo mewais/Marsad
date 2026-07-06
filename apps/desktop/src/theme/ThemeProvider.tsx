@@ -100,6 +100,8 @@ export function ThemeProvider({
       root.style.setProperty("--bg", canvasVeil);
       root.style.setProperty("--panel", withAlpha(tokens.panel, SURFACE_ALPHA));
       root.style.setProperty("--panel2", withAlpha(tokens.panel2, SURFACE_ALPHA * 0.8));
+      // --panel-dark: darker than --panel even in glass mode (terminal/diff panes).
+      root.style.setProperty("--panel-dark", withAlpha(tokens.panel, SURFACE_ALPHA * 0.55));
       root.style.setProperty("--elev", withAlpha(tokens.elev, SURFACE_ALPHA + 0.22));
       document.body.style.background = "transparent";
     } else {

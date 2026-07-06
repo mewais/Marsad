@@ -346,6 +346,15 @@ pub struct PersistedSession {
     /// `#[serde(default)]` keeps older records loading as empty vec.
     #[serde(default)]
     pub slash_commands: Vec<marsad_proto::SlashCommandInfo>,
+    /// Tool names available in this session (from system/init). Persisted so
+    /// the Config tab shows them immediately after restart, before a fresh
+    /// system/init fires. `#[serde(default)]` keeps older records loading.
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// MCP servers available in this session (from system/init). Persisted for
+    /// the same reason as `tools`. `#[serde(default)]` keeps older records loading.
+    #[serde(default)]
+    pub mcp_servers: Vec<marsad_proto::McpServerInfo>,
 }
 
 fn default_driver() -> String {
@@ -937,6 +946,8 @@ impl Store {
                 disallowed_tools: vec![],
                 driver: default_driver(),
                 slash_commands: vec![],
+                tools: vec![],
+                mcp_servers: vec![],
             };
             let _ = self.upsert_session(&sess);
         }

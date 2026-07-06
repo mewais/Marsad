@@ -779,7 +779,7 @@ fn exit_plan_mode_builds_plan_gate_with_markdown() {
     let s1 = reduce(s0, stream(&exit_plan_mode_json("req-ep-1")));
     assert_eq!(s1.phase, Phase::Needs);
     match s1.gate.as_ref().expect("gate must be set") {
-        marsad_gates::Gate::Plan { summary, steps } => {
+        marsad_gates::Gate::Plan { summary, steps, .. } => {
             assert!(summary.contains("Step one"), "summary: {summary}");
             assert!(steps.is_empty());
         }
@@ -793,7 +793,7 @@ fn exit_plan_mode_no_plan_field_yields_empty_summary() {
     let s1 = reduce(s0, stream(&exit_plan_mode_no_plan_json("req-ep-2")));
     assert_eq!(s1.phase, Phase::Needs);
     match s1.gate.as_ref().expect("gate must be set") {
-        marsad_gates::Gate::Plan { summary, steps } => {
+        marsad_gates::Gate::Plan { summary, steps, .. } => {
             assert!(summary.is_empty());
             assert!(steps.is_empty());
         }

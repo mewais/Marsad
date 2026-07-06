@@ -182,6 +182,7 @@ fn gate_meta_permission() {
         cwd: String::from("/repo"),
         risk: String::from("medium"),
         explanation: String::from("push to remote"),
+        is_elicitation: false,
     };
     let gm = gate_meta(&gate);
     assert_eq!(gm.kind, "Permission");
@@ -194,6 +195,7 @@ fn gate_meta_permission() {
 #[test]
 fn gate_meta_plan_with_steps() {
     let gate = Gate::Plan {
+        request_id: "req-plan-steps".to_string(),
         summary: String::from("Refactor"),
         steps: vec![
             PlanStep {
@@ -225,6 +227,7 @@ fn gate_meta_plan_with_single_step() {
     // NOTE: The spec copies the JS prototype literally (n+" steps") with no
     // singular/plural logic; we match that exactly.
     let gate = Gate::Plan {
+        request_id: "req-plan-single-step".to_string(),
         summary: String::from("Fix bug"),
         steps: vec![PlanStep {
             title: String::from("Patch file"),
@@ -241,6 +244,7 @@ fn gate_meta_plan_empty_steps() {
     // must handle this gracefully. With 0 steps the summary is derived from the
     // plan markdown body (first non-empty line), not "0 steps".
     let gate = Gate::Plan {
+        request_id: "req-plan-empty-steps".to_string(),
         summary: String::from("Empty plan"),
         steps: vec![],
     };
@@ -255,6 +259,7 @@ fn gate_meta_plan_empty_steps() {
 fn gate_meta_edit_basename_and_counts() {
     use marsad_gates::{DiffLine, Sig};
     let gate = Gate::Edit {
+        request_id: "req-edit-basename".to_string(),
         file: String::from("/home/user/project/src/lib.rs"),
         diff: vec![
             DiffLine {
@@ -293,6 +298,7 @@ fn gate_meta_edit_zero_adds_zero_dels() {
     use marsad_gates::{DiffLine, Sig};
     // All-context diff: +0 −0
     let gate = Gate::Edit {
+        request_id: "req-edit-zero".to_string(),
         file: String::from("plain.txt"),
         diff: vec![DiffLine {
             sig: Sig::Context,
@@ -307,6 +313,7 @@ fn gate_meta_edit_zero_adds_zero_dels() {
 #[test]
 fn gate_meta_edit_empty_diff() {
     let gate = Gate::Edit {
+        request_id: "req-edit-empty".to_string(),
         file: String::from("empty.rs"),
         diff: vec![],
     };
@@ -384,6 +391,7 @@ fn gate_meta_question_multiple_questions() {
 fn gate_meta_plan_whitespace_only_summary() {
     use marsad_gates::Gate;
     let gate = Gate::Plan {
+        request_id: "req-plan-whitespace".to_string(),
         summary: String::from("   \n  "),
         steps: vec![],
     };
@@ -401,6 +409,7 @@ fn gate_meta_plan_long_summary_truncated() {
     // A first line of exactly 65 characters.
     let long_line = "A".repeat(65);
     let gate = Gate::Plan {
+        request_id: "req-plan-long".to_string(),
         summary: long_line.clone(),
         steps: vec![],
     };

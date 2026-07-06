@@ -564,6 +564,7 @@ fn answer_gate_unknown_session_returns_unknown_session_error() {
         cwd: "/".to_string(),
         risk: "high".to_string(),
         explanation: "destructive".to_string(),
+        is_elicitation: false,
     };
     let decision = approve(UNKNOWN, &gate);
     let err = core.answer_gate(decision).unwrap_err();

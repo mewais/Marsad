@@ -273,6 +273,16 @@ pub trait TranscriptReader {
     ) -> Vec<marsad_events::TranscriptEntry>;
     /// History of the most-recent session in `project` (continue-most-recent).
     fn most_recent(&self, project: &str) -> Vec<marsad_events::TranscriptEntry>;
+    /// Aggregated per-model usage from a specific session's JSONL — used to seed
+    /// token/cost totals for LOCAL sessions on attach. Default: empty (fakes
+    /// need not override unless testing usage seeding specifically).
+    fn session_usage(
+        &self,
+        _project: &str,
+        _claude_session_id: &str,
+    ) -> std::collections::HashMap<String, discovery::ModelUsageSummary> {
+        std::collections::HashMap::new()
+    }
 }
 
 /// Production `TranscriptReader`: reads `<claude config>/projects/<enc>/<id>.jsonl`.
@@ -329,6 +339,18 @@ impl TranscriptReader for RealTranscript {
             None => Vec::new(),
         }
     }
+
+    #[cfg(not(coverage))]
+    fn session_usage(
+        &self,
+        project: &str,
+        id: &str,
+    ) -> std::collections::HashMap<String, discovery::ModelUsageSummary> {
+        let Some(root) = Self::projects_root() else {
+            return std::collections::HashMap::new();
+        };
+        discovery::session_usage(&root, project, id)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +380,10 @@ struct SessionRecord {
     /// `inject_shell_command`, cleared by `inject_shell_result`). Surfaced in the
     /// SessionView so the UI shows a working indicator without freezing.
     shell_running: bool,
+    /// Agent driver for this session ("claude" / "codex" / …). Stored so
+    /// node_of() can expose the real driver on the workstream board instead of
+    /// always reporting Claude.
+    driver: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -623,11 +649,12 @@ impl Core {
                 .as_deref()
                 .and_then(posture_name_to_permission_mode)
                 .map(str::to_string);
-            // Restore slash_commands from the last time system/init fired so the
-            // Composer popover is pre-populated immediately on attach/reconnect —
-            // without waiting for a fresh system/init (which only fires on LAUNCH,
-            // not reconnect when send_init is false).
+            // Restore slash_commands, tools, and mcp_servers from the last
+            // system/init so Config/Composer are pre-populated on attach/reconnect
+            // without waiting for a fresh system/init.
             state.slash_commands = s.slash_commands.clone();
+            state.tools = s.tools.clone();
+            state.mcp_servers = s.mcp_servers.clone();
             // Restore the custom name: PersistedSession.name is the marsad id
             // when no custom name was set (agent default). Treat that as None so
             // the view falls back to the project basename.
@@ -645,6 +672,43 @@ impl Core {
             } else {
                 Vec::new()
             };
+            // Seed token/cost totals for LOCAL sessions from the session JSONL so
+            // the Usage tab shows the whole-conversation total immediately on attach
+            // rather than zero. Remote sessions get their usage from the agent's
+            // UsageUpdate IPC (remote_usage_script). The first live `result` event
+            // will authoritatively replace these estimates via reduce_result.
+            if is_local {
+                if let Some(sid) = s.session_id.as_deref().filter(|s| !s.is_empty()) {
+                    let usage_agg = self.transcript.session_usage(&s.project, sid);
+                    if !usage_agg.is_empty() {
+                        let total_tokens: u64 = usage_agg.values().map(|u| {
+                            u.input_tokens
+                                .saturating_add(u.output_tokens)
+                                .saturating_add(u.cache_read_input_tokens)
+                                .saturating_add(u.cache_creation_input_tokens)
+                        }).sum();
+                        if total_tokens > 0 {
+                            state.tokens = total_tokens;
+                            let window = state.model.as_deref()
+                                .map(marsad_events::SessionState::context_window_for)
+                                .unwrap_or(200_000);
+                            let pct = (total_tokens as f64 / window as f64 * 100.0) as f32;
+                            state.context_pct = pct.min(100.0);
+                        }
+                        for (model, summary) in usage_agg {
+                            state.model_usage.insert(
+                                model,
+                                marsad_proto::ModelUsage {
+                                    input_tokens: summary.input_tokens,
+                                    output_tokens: summary.output_tokens,
+                                    cost_usd: summary.cost_usd,
+                                    estimated: true,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
             self.session_order.push(s.id.clone());
             self.sessions.insert(
                 s.id.clone(),
@@ -657,6 +721,7 @@ impl Core {
                     seen_msg_ids: std::collections::HashSet::new(),
                     name: restored_name,
                     shell_running: false,
+                    driver: s.driver.clone(),
                 },
             );
             let sv = self.make_session_view(&s.id, self.sessions.get(&s.id).unwrap());
@@ -1068,6 +1133,7 @@ impl Core {
         });
         let mut initial_state = SessionState::initial();
         initial_state.permission_mode = display_permission_mode.map(str::to_string);
+        let driver = spec.driver.clone();
         self.sessions.insert(
             id.clone(),
             SessionRecord {
@@ -1079,8 +1145,32 @@ impl Core {
                 seen_msg_ids: std::collections::HashSet::new(),
                 name: custom_name,
                 shell_running: false,
+                driver,
             },
         );
+
+        // Auto-create a single-node fast-lane workstream for newly launched sessions
+        // that have no existing membership (fresh launches from NewSession; NodeModal
+        // calls assign_session separately so those sessions already have a workstream).
+        if !self.membership.contains_key(&id) {
+            let record = self.sessions.get(&id).unwrap();
+            let ws_name = record
+                .name
+                .clone()
+                .unwrap_or_else(|| session_display_name(&record.project, &id));
+            let ws_id = format!("ws-{id}");
+            let ws = marsad_workstream::Workstream {
+                id: ws_id.clone(),
+                name: ws_name,
+                goal: String::new(),
+                profile: None,
+            };
+            let _ = self.store.upsert_workstream(&ws);
+            self.workstreams.push(ws);
+            self.membership.insert(id.clone(), ws_id.clone());
+            self.ws_leads.insert(ws_id, id.clone());
+            let _ = self.store.set_membership(&self.membership);
+        }
 
         Ok(id)
     }
@@ -1222,7 +1312,12 @@ impl Core {
         let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
         let snap = self.snapshot();
         let groups = marsad_viewmodel::group_overview(&snap);
-        Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
+        // Resuming moves the session from Paused → live on the board.
+        Ok(vec![
+            VmUpdate::Session(sv),
+            VmUpdate::Overview(groups),
+            VmUpdate::Board(self.board()),
+        ])
     }
 
     pub fn attach_session(&mut self, id: &str) -> Result<(), CoreError> {
@@ -1249,7 +1344,12 @@ impl Core {
         let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
         let snap = self.snapshot();
         let groups = marsad_viewmodel::group_overview(&snap);
-        Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
+        // Stopping moves the session into the board's Paused group.
+        Ok(vec![
+            VmUpdate::Session(sv),
+            VmUpdate::Overview(groups),
+            VmUpdate::Board(self.board()),
+        ])
     }
 
     /// Remove a session entirely (the user's explicit declutter action). Stops
@@ -1271,6 +1371,20 @@ impl Core {
             .map_err(|e| CoreError::Agent(format!("delete session: {e:?}")))?;
         self.sessions.remove(id);
         self.session_order.retain(|s| s != id);
+
+        // Clean up membership and the auto-created single-node workstream (ws-<id>)
+        // so the board doesn't keep a ghost card after deletion from SessionDetail.
+        // We do NOT emit a Workstreams update here — callers that need one (bridge
+        // remove_session, delete_workstream) emit it themselves after we return.
+        let auto_ws_id = format!("ws-{id}");
+        if self.workstreams.iter().any(|w| w.id == auto_ws_id) {
+            let _ = self.store.delete_workstream(&auto_ws_id);
+            self.workstreams.retain(|w| w.id != auto_ws_id);
+        }
+        self.membership.remove(id);
+        self.ws_leads.remove(&auto_ws_id);
+        let _ = self.store.set_membership(&self.membership);
+
         let snap = self.snapshot();
         let groups = marsad_viewmodel::group_overview(&snap);
         Ok(vec![
@@ -1419,7 +1533,12 @@ impl Core {
         let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
         let snap = self.snapshot();
         let groups = marsad_viewmodel::group_overview(&snap);
-        Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
+        // Refresh the board too so the answered question's needs-you card clears.
+        Ok(vec![
+            VmUpdate::Session(sv),
+            VmUpdate::Overview(groups),
+            VmUpdate::Board(self.board()),
+        ])
     }
 
     pub fn answer_gate(&mut self, decision: GateDecision) -> Result<Vec<VmUpdate>, CoreError> {
@@ -1453,7 +1572,13 @@ impl Core {
         let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
         let snap = self.snapshot();
         let groups = marsad_viewmodel::group_overview(&snap);
-        Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
+        // Refresh the board too: clearing the gate removes the attention card's
+        // needs-you headline, so the dashboard card must update immediately.
+        Ok(vec![
+            VmUpdate::Session(sv),
+            VmUpdate::Overview(groups),
+            VmUpdate::Board(self.board()),
+        ])
     }
 
     /// X3 (docs/specs/wasl-connector.md §5.2): relay ONE explicit human
@@ -1540,11 +1665,18 @@ impl Core {
     // Workstream commands (B12 — additive)
     // -----------------------------------------------------------------------
 
+    // (gate_headline is a free fn — see below node projection helpers.)
+
     /// Project one session into a `marsad_workstream::Node`, mirroring
     /// `make_session_view`. Caller guarantees `id` has a membership entry.
     fn node_of(&self, id: &str, record: &SessionRecord) -> marsad_workstream::Node {
         let ws = self.membership.get(id).cloned().unwrap_or_default();
         let lead = self.ws_leads.get(&ws).map(String::as_str) == Some(id);
+        let driver = match record.driver.as_str() {
+            "codex" => marsad_workstream::Driver::Codex,
+            "gemini" => marsad_workstream::Driver::Gemini,
+            _ => marsad_workstream::Driver::Claude,
+        };
         marsad_workstream::Node {
             id: id.to_string(),
             ws,
@@ -1552,13 +1684,20 @@ impl Core {
                 .name
                 .clone()
                 .unwrap_or_else(|| session_display_name(&record.project, id)),
-            driver: marsad_workstream::Driver::Claude,
+            driver,
             host: record.host_id.clone(),
             state: record.state.phase.clone(),
             lead,
             branch: String::new(),
             context_pct: record.state.context_pct.round().clamp(0.0, 100.0) as u8,
-            status: String::new(),
+            // Surface a concise pending-gate summary so the workstream board's
+            // attention card can show WHAT needs the human, not just the name.
+            status: record
+                .state
+                .gate
+                .as_ref()
+                .map(gate_headline)
+                .unwrap_or_default(),
         }
     }
 
@@ -1573,6 +1712,12 @@ impl Core {
 
     fn workstreams_update(&self) -> VmUpdate {
         VmUpdate::Workstreams(self.workstreams.clone())
+    }
+
+    /// Current workstream list for bridge commands that need to push a
+    /// Workstreams VmUpdate after mutating state (e.g. remove_session).
+    pub fn workstreams(&self) -> &[marsad_workstream::Workstream] {
+        &self.workstreams
     }
 
     /// Restore workstream state from the store, then run the (idempotent)
@@ -1866,6 +2011,17 @@ impl Core {
             return Err(CoreError::Connection(format!(
                 "unknown workstream: {ws_id}"
             )));
+        }
+        // `launch_session_with_id` auto-creates a single-node fast-lane
+        // workstream `ws-<id>` for every fresh launch. When the caller (NodeModal
+        // build-it-out) then assigns the session to a DIFFERENT workstream, that
+        // auto one is orphaned — it would linger as an empty second card on the
+        // board. Remove it here so a build-it-out launch shows exactly one card.
+        let auto_ws_id = format!("ws-{session_id}");
+        if auto_ws_id != ws_id && self.workstreams.iter().any(|w| w.id == auto_ws_id) {
+            let _ = self.store.delete_workstream(&auto_ws_id);
+            self.workstreams.retain(|w| w.id != auto_ws_id);
+            self.ws_leads.remove(&auto_ws_id);
         }
         self.membership
             .insert(session_id.to_string(), ws_id.to_string());
@@ -2492,46 +2648,119 @@ impl Core {
                 None
             };
 
+        // Capture compaction metadata BEFORE stream_msg is consumed by reduce, so
+        // the live transcript gets an in-sequence Compaction entry (mirrors what
+        // parse_transcript does for the backfill/JSONL path).
+        let compact_entry: Option<marsad_events::TranscriptEntry> =
+            if let marsad_proto::StreamMsg::CompactBoundary(cb) = &stream_msg {
+                Some(marsad_events::TranscriptEntry::Compaction {
+                    trigger: cb.compact_metadata.trigger.clone(),
+                    dropped_tokens: cb.compact_metadata.cumulative_dropped_tokens,
+                })
+            } else {
+                None
+            };
+
         // Detect a SystemInit BEFORE consuming the stream_msg — we need to
         // know if slash_commands are about to be set so we can persist them.
         let is_system_init = matches!(stream_msg, marsad_proto::StreamMsg::SystemInit(_));
+        // Detect a Result BEFORE consuming stream_msg — after reduce we re-aggregate
+        // usage from the full JSONL for LOCAL sessions so the displayed total reflects
+        // the whole conversation, not just the current run (which is all result.total_cost_usd
+        // contains for a resumed session).
+        let is_result = matches!(stream_msg, marsad_proto::StreamMsg::Result(_));
 
         // Reduce the event, then decide whether the working tree may have changed.
         // Safe: require_session above guarantees the entry exists.
-        let (project, host_id, should_probe) = {
+        let (project, host_id, should_probe, board_changed) = {
             let record = self.sessions.get_mut(&session_id).unwrap();
             let old_state = record.state.clone();
             let old_last_action = old_state.last_action.clone();
             let was_finished = matches!(old_state.phase, Phase::Done | Phase::Error);
+            let old_phase = old_state.phase.clone();
+            let old_gate_present = old_state.gate.is_some();
             record.state = reduce(old_state, Event::Stream(stream_msg));
             // Re-probe git when a tool just ran (files may have changed) or the
             // session just reached a terminal phase — not on every token.
             let tool_ran = record.state.last_action != old_last_action;
             let just_finished =
                 matches!(record.state.phase, Phase::Done | Phase::Error) && !was_finished;
+            // The workstream board's attention card derives from phase + pending
+            // gate; refresh it only when one of those actually changed (a gate
+            // appeared/cleared or the phase moved) — never on every token.
+            let board_changed = record.state.phase != old_phase
+                || record.state.gate.is_some() != old_gate_present;
             (
                 record.project.clone(),
                 record.host_id.clone(),
                 tool_ran || just_finished,
+                board_changed,
             )
         };
 
-        // Persist slash_commands to the store after a SystemInit so that on the
-        // next attach/reconnect (when send_init is false), the restored session
-        // shows the same commands without waiting for another system/init.
+        // Persist slash_commands, tools, and mcp_servers after a SystemInit so
+        // that on the next attach/reconnect (when send_init is false) the restored
+        // session shows them without waiting for another system/init.
         // Best-effort: a store error here must not fail the event processing.
         if is_system_init {
-            let slash_cmds = self
+            let (slash_cmds, tools, mcp_servers) = self
                 .sessions
                 .get(&session_id)
-                .map(|r| r.state.slash_commands.clone())
+                .map(|r| (
+                    r.state.slash_commands.clone(),
+                    r.state.tools.clone(),
+                    r.state.mcp_servers.clone(),
+                ))
                 .unwrap_or_default();
-            if !slash_cmds.is_empty() {
-                // Load the persisted session, update slash_commands, write back.
+            if !slash_cmds.is_empty() || !tools.is_empty() || !mcp_servers.is_empty() {
+                // Load the persisted session, update fields, write back.
                 if let Ok(restored) = self.store.restore() {
                     if let Some(mut ps) = restored.sessions.into_iter().find(|s| s.id == session_id) {
                         ps.slash_commands = slash_cmds;
+                        ps.tools = tools;
+                        ps.mcp_servers = mcp_servers;
                         let _ = self.store.upsert_session(&ps);
+                    }
+                }
+            }
+        }
+
+        // After a Result event, re-aggregate usage from the full session JSONL for
+        // LOCAL sessions. reduce_result sets cost/tokens from result.total_cost_usd
+        // which covers only the CURRENT run, not prior resumed runs — re-aggregating
+        // here ensures the displayed total reflects the whole conversation history.
+        // Remote sessions are left untouched (they seed via UsageUpdate IPC).
+        if is_result && self.host_is_local(&host_id) {
+            let record = self.sessions.get_mut(&session_id).unwrap();
+            if let Some(sid) = record.state.session_id.as_deref().filter(|s| !s.is_empty()) {
+                let usage_agg = self.transcript.session_usage(&project, sid);
+                if !usage_agg.is_empty() {
+                    let total_tokens: u64 = usage_agg.values().map(|u| {
+                        u.input_tokens
+                            .saturating_add(u.output_tokens)
+                            .saturating_add(u.cache_read_input_tokens)
+                            .saturating_add(u.cache_creation_input_tokens)
+                    }).sum();
+                    if total_tokens > 0 {
+                        record.state.tokens = total_tokens;
+                        let window = record.state.model.as_deref()
+                            .map(marsad_events::SessionState::context_window_for)
+                            .unwrap_or(200_000);
+                        let pct = (total_tokens as f64 / window as f64 * 100.0) as f32;
+                        record.state.context_pct = pct.min(100.0);
+                        record.state.cost_usd = usage_agg.values().map(|u| u.cost_usd).sum();
+                        record.state.model_usage.clear();
+                        for (model, summary) in usage_agg {
+                            record.state.model_usage.insert(
+                                model,
+                                marsad_proto::ModelUsage {
+                                    input_tokens: summary.input_tokens,
+                                    output_tokens: summary.output_tokens,
+                                    cost_usd: summary.cost_usd,
+                                    estimated: true,
+                                },
+                            );
+                        }
                     }
                 }
             }
@@ -2563,10 +2792,28 @@ impl Core {
             }
         }
 
+        // Append a Compaction entry in sequence for a live compact_boundary event
+        // so the transcript reflects the chronological position (mirrors what
+        // parse_transcript does for the JSONL backfill path).
+        if let Some(entry) = compact_entry {
+            self.sessions
+                .get_mut(&session_id)
+                .unwrap()
+                .transcript
+                .push(entry);
+        }
+
         let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
         let snap = self.snapshot();
         let groups = marsad_viewmodel::group_overview(&snap);
-        Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
+        let mut updates = vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)];
+        // Refresh the workstream board's attention card when this event changed a
+        // board-relevant field (gate appeared/cleared, phase moved) so a needs-you
+        // card shows the pending gate live instead of staying stale from startup.
+        if board_changed {
+            updates.push(VmUpdate::Board(self.board()));
+        }
+        Ok(updates)
     }
 
     /// Whether a session's host runs on this machine (so a local `git` probe is
@@ -2693,6 +2940,7 @@ impl Core {
             posture,
             subagent_list,
             shell_running: record.shell_running,
+            driver: record.driver.clone(),
         }
     }
 }
@@ -2740,6 +2988,22 @@ fn session_display_name(project: &str, id: &str) -> String {
     match project.trim_end_matches('/').rsplit('/').next() {
         Some(base) if !base.is_empty() => base.to_string(),
         _ => id.to_string(),
+    }
+}
+
+/// Concise one-line summary of a pending gate, for the workstream board's
+/// attention card (so a needs-you card shows WHAT is asked, not just the name).
+fn gate_headline(gate: &marsad_gates::Gate) -> String {
+    use marsad_gates::Gate;
+    match gate {
+        Gate::Permission { command, .. } => format!("Wants to run: {command}"),
+        Gate::Plan { .. } => "Plan ready for your approval".to_string(),
+        Gate::Edit { file, .. } => format!("Wants to edit {file}"),
+        Gate::Question { questions, .. } => questions
+            .first()
+            .map(|q| q.question.clone())
+            .unwrap_or_else(|| "Wants your input".to_string()),
+        Gate::Handoff { summary, .. } => summary.clone(),
     }
 }
 

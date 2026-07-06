@@ -28,12 +28,19 @@ pub enum Gate {
         cwd: String,
         risk: String,
         explanation: String,
+        /// True when this permission gate came from an MCP elicitation (answered with {action}),
+        /// not a claude can_use_tool request — the UI hides "Approve all this session" for these.
+        is_elicitation: bool,
     },
     Plan {
+        /// The control-request id this gate answers. Unique per gate occurrence.
+        request_id: String,
         summary: String,
         steps: Vec<PlanStep>,
     },
     Edit {
+        /// The control-request id this gate answers. Unique per gate occurrence.
+        request_id: String,
         file: String,
         diff: Vec<DiffLine>,
     },
@@ -192,11 +199,11 @@ fn gate_canonical(session_id: &str, gate: &Gate) -> String {
             // Use variant tag + session + command + cwd as the identity.
             format!("permission\x00{session_id}\x00{command}\x00{cwd}")
         }
-        Gate::Plan { summary, .. } => {
-            format!("plan\x00{session_id}\x00{summary}")
+        Gate::Plan { request_id, .. } => {
+            format!("plan\x00{session_id}\x00{request_id}")
         }
-        Gate::Edit { file, .. } => {
-            format!("edit\x00{session_id}\x00{file}")
+        Gate::Edit { request_id, .. } => {
+            format!("edit\x00{session_id}\x00{request_id}")
         }
         Gate::Question { request_id, .. } => {
             format!("question\x00{session_id}\x00{request_id}")

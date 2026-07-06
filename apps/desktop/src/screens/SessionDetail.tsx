@@ -80,7 +80,7 @@ export function SessionDetail() {
   // Driver pill — the session's host's capabilities entry carries the
   // driver that's actually running it (dynamic-capabilities.md §3.6; there's
   // no driver picker yet so a host maps to exactly one driver today, same
-  // assumption Config.tsx's model picker already makes).
+  // as the board node's driver).
   const driver = capsForHostId(state.capabilities, host_id)?.driver;
   const driverColor = driver ? DRIVER_COLOR[driver] : undefined;
 
@@ -118,7 +118,7 @@ export function SessionDetail() {
     resumeSession(sessionId);
   }
 
-  function handleRemove() {
+  async function handleRemove() {
     // Delete kills the session (backend removes it). Confirm first — it's
     // destructive and can't be undone.
     const ok =
@@ -126,17 +126,20 @@ export function SessionDetail() {
         ? true
         : window.confirm(`Delete session "${name}"? This cannot be undone.`);
     if (!ok) return;
-    removeSession(sessionId);
+    await removeSession(sessionId);
+    // Navigate away so we don't stay on a dead session screen.
+    openBoard();
   }
 
   // A not-live session (user-stopped, restored on relaunch, process gone, or done)
   // offers Resume + Delete instead of Pause + Delete.
-  // Running states (Working, Starting, Needs, Error) → Pause.
-  // Stopped states (Stale, Detached, Done) → Resume.
+  // Running states (Working, Starting, Needs) → Pause.
+  // Stopped/terminal states (Stale, Detached, Done, Error) → Resume.
   const isStopped =
     sessionState === "Stale" ||
     sessionState === "Detached" ||
-    sessionState === "Done";
+    sessionState === "Done" ||
+    sessionState === "Error";
 
   // Shared button style for all action buttons in the header — ensures uniform
   // height/padding/font across Back, Answer gate, Pause/Resume, Delete.

@@ -307,11 +307,13 @@ pub fn command_word(command: &str) -> &str {
 /// Build the claude discovery script: after `setup`, check availability of the
 /// resolved command's first word, then print the three `ANTHROPIC_DEFAULT_*`
 /// env values (the host's real versioned models — claude has no "list models"
-/// command, so the env is the only truthful per-host source). Sessions are
-/// listed per requested `project` (claude stores transcripts under
-/// `~/.claude/projects/<encoded-cwd>/`), newest-first, one
-/// `mtime_ms<TAB>uuid<TAB><first user line json>` record each — the same shape
-/// `parse_remote_claude_session_list` already parses.
+/// command, so the env is the only truthful per-host source). Three additional
+/// sections surface custom/subscription models: `ANTHROPIC_MODEL` env override,
+/// `"model"` fields in the claude config JSON files, and `"model":"..."` values
+/// observed in recent transcript JSONL files. Sessions are listed per requested
+/// `project` (claude stores transcripts under `~/.claude/projects/<encoded-cwd>/`),
+/// newest-first, one `mtime_ms<TAB>uuid<TAB><first user line json>` record each —
+/// the same shape `parse_remote_claude_session_list` already parses.
 pub fn build_claude_discovery_script(
     command: &str,
     setup: Option<&str>,
@@ -326,6 +328,32 @@ pub fn build_claude_discovery_script(
         "printf 'opus\\t%s\\n' \"${ANTHROPIC_DEFAULT_OPUS_MODEL:-}\"\n\
          printf 'sonnet\\t%s\\n' \"${ANTHROPIC_DEFAULT_SONNET_MODEL:-}\"\n\
          printf 'haiku\\t%s\\n' \"${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}\"",
+    );
+    // Surface any custom/subscription model from three host sources.
+    //
+    // Source 1: ANTHROPIC_MODEL env — the primary single-model override used by
+    // subscription and custom setups (e.g. "fable" pinned this way).
+    // ANTHROPIC_SMALL_FAST_MODEL is a secondary fast-path override.
+    let extra_models = section(
+        "extra_models",
+        "base=${CLAUDE_CONFIG_DIR:-$HOME/.claude}\n\
+         printf 'model\\t%s\\n' \"${ANTHROPIC_MODEL:-}\"\n\
+         printf 'model\\t%s\\n' \"${ANTHROPIC_SMALL_FAST_MODEL:-}\"\n\
+         \n\
+         # Source 2: \"model\" fields in claude config JSON files (no jq dependency).\n\
+         grep -ho '\"model\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' \
+           \"$base/settings.json\" \"$HOME/.claude.json\" 2>/dev/null \
+           | sed 's/.*\"\\([^\"]*\\)\"$/\\1/' \
+           | while IFS= read -r m; do printf 'model\\t%s\\n' \"$m\"; done\n\
+         \n\
+         # Source 3: models observed in recent transcripts — most likely to surface\n\
+         # a subscription model like \"fable\" that is only stored in session history.\n\
+         ls -t \"$base\"/projects/*/*.jsonl 2>/dev/null \
+           | head -20 \
+           | xargs grep -h -o '\"model\":\"[^\"]*\"' 2>/dev/null \
+           | sed 's/\"model\":\"\\([^\"]*\\)\"/\\1/' \
+           | sort -u | head -50 \
+           | while IFS= read -r m; do printf 'model\\t%s\\n' \"$m\"; done",
     );
     // Sessions: only when a concrete project is in scope (claude's on-disk dir is
     // the project's real cwd, `/`→non-alnum encoded). Resolve the cwd on the host
@@ -350,7 +378,7 @@ pub fn build_claude_discovery_script(
         }
         _ => section("sessions", "true"),
     };
-    with_setup(setup, &format!("{avail}{env}{sessions}"))
+    with_setup(setup, &format!("{avail}{env}{extra_models}{sessions}"))
 }
 
 /// Build the codex discovery script: after `setup`, availability of the resolved
@@ -469,6 +497,32 @@ pub fn parse_claude_env_models(body: &str) -> HashMap<String, String> {
         let value = parts.next().unwrap_or("").trim();
         if !family.is_empty() && !value.is_empty() {
             out.insert(family.to_string(), value.to_string());
+        }
+    }
+    out
+}
+
+/// Parse the claude `extra_models` section (`model<TAB>value` lines) into a
+/// deduplicated list of extra model ids. Empty values, family words
+/// (opus/sonnet/haiku), and synthetic placeholders (empty or containing `<`)
+/// are dropped. The order is preserved; dedup removes later duplicates.
+pub fn parse_claude_extra_models(body: &str) -> Vec<String> {
+    const FAMILIES: &[&str] = &["opus", "sonnet", "haiku"];
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let mut parts = line.splitn(2, '\t');
+        let key = parts.next().unwrap_or("").trim();
+        let value = parts.next().unwrap_or("").trim();
+        if key != "model" {
+            continue;
+        }
+        // Drop empties, synthetic placeholders, and known family words.
+        if value.is_empty() || value.contains('<') || FAMILIES.contains(&value) {
+            continue;
+        }
+        if seen.insert(value.to_string()) {
+            out.push(value.to_string());
         }
     }
     out
@@ -1390,10 +1444,16 @@ impl CapabilityProbe for RealClaudeProbe {
                     // versions from the env section (families are only offered
                     // when claude actually resolved on the host).
                     let resolved = parse_claude_env_models(secs.get("env"));
+                    // Extra models from env overrides, config files, and transcripts.
+                    let extra_ids = parse_claude_extra_models(secs.get("extra_models"));
+                    let extra_observed: Vec<ModelInfo> = extra_ids
+                        .into_iter()
+                        .map(|id| ModelInfo { id, annotation: None })
+                        .collect();
                     let models = if parse_avail(secs.get("avail")) {
                         let resolved_ref: HashMap<&str, String> =
                             resolved.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
-                        build_claude_model_catalog(&resolved_ref, &[])
+                        build_claude_model_catalog(&resolved_ref, &extra_observed)
                     } else {
                         // claude didn't resolve on the host: no families offered
                         // (the passively-observed superset is still merged by the

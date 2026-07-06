@@ -119,6 +119,7 @@ fn gate_meta_permission_fields() {
         cwd: String::from("/tmp"),
         risk: String::from("low"),
         explanation: String::from("list files"),
+        is_elicitation: false,
     };
     let gm: GateMeta = gate_meta(&gate);
     assert_eq!(gm.kind, "Permission");
@@ -133,6 +134,7 @@ fn gate_meta_permission_fields() {
 #[test]
 fn gate_meta_plan_fields() {
     let gate = Gate::Plan {
+        request_id: "req-plan-happy".to_string(),
         summary: String::from("Refactor module"),
         steps: vec![
             PlanStep {
@@ -159,6 +161,7 @@ fn gate_meta_plan_fields() {
 fn gate_meta_edit_fields() {
     use marsad_gates::{DiffLine, Sig};
     let gate = Gate::Edit {
+        request_id: "req-edit-happy".to_string(),
         file: String::from("/home/user/project/src/main.rs"),
         diff: vec![
             DiffLine {

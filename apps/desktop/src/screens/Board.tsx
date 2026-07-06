@@ -4,6 +4,7 @@
  * Pure/presentational: takes `board: BoardView` and `onOpenWorkstream` as
  * props. No `useVm`, no Tauri, no network — see docs/specs/ui-board.md.
  */
+import { Fragment } from "react";
 import type { CSSProperties } from "react";
 import type {
   BoardView,
@@ -640,6 +641,15 @@ export function Board({
 }: BoardProps) {
   const { summary } = board;
 
+  // Group the dashboard into Live / Done / Paused so active work sits on top.
+  // Live = working/needs/error; Done = finished; Paused = null head_state (every
+  // node Stale/Detached). Stable order preserved within each group.
+  const liveCards = board.all.filter(
+    (c) => c.head_state === "working" || c.head_state === "needs" || c.head_state === "error"
+  );
+  const doneCards = board.all.filter((c) => c.head_state === "done");
+  const pausedCards = board.all.filter((c) => c.head_state === null);
+
   return (
     <div
       data-testid="board-root"
@@ -742,17 +752,46 @@ export function Board({
         All workstreams
       </h2>
       <div data-testid="all-section" style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-        {board.all.map((card) => (
-          <WorkstreamRow
-            key={card.id}
-            card={card}
-            hostChips={board.host_chips}
-            onOpen={() => onOpenWorkstream(card.id)}
-            onPause={() => onPauseWorkstream?.(card.id)}
-            onResume={() => onResumeWorkstream?.(card.id)}
-            onDelete={() => onDeleteWorkstream?.(card.id)}
-          />
-        ))}
+        {([
+          { key: "live", label: null, cards: liveCards },
+          { key: "done", label: "Done", cards: doneCards },
+          { key: "paused", label: "Paused", cards: pausedCards },
+        ] as const)
+          .filter((g) => g.cards.length > 0)
+          .map((g, gi) => (
+            <Fragment key={g.key}>
+              {g.label && (
+                <div
+                  data-testid={`${g.key}-divider`}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 9,
+                    margin: gi > 0 ? "10px 0 3px" : "0 0 3px",
+                    fontSize: "calc(10.5px * var(--fs,1))",
+                    fontWeight: 700,
+                    letterSpacing: 0.5,
+                    textTransform: "uppercase",
+                    color: "var(--txt3)",
+                  }}
+                >
+                  {g.label}
+                  <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
+                </div>
+              )}
+              {g.cards.map((card) => (
+                <WorkstreamRow
+                  key={card.id}
+                  card={card}
+                  hostChips={board.host_chips}
+                  onOpen={() => onOpenWorkstream(card.id)}
+                  onPause={() => onPauseWorkstream?.(card.id)}
+                  onResume={() => onResumeWorkstream?.(card.id)}
+                  onDelete={() => onDeleteWorkstream?.(card.id)}
+                />
+              ))}
+            </Fragment>
+          ))}
       </div>
     </div>
   );

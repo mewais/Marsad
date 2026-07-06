@@ -21,11 +21,13 @@ fn make_permission_gate() -> Gate {
         cwd: "/home/user/project".to_string(),
         risk: "high".to_string(),
         explanation: "Removes temporary files".to_string(),
+        is_elicitation: false,
     }
 }
 
 fn make_plan_gate() -> Gate {
     Gate::Plan {
+        request_id: "req-plan-test".to_string(),
         summary: "Refactor the auth module".to_string(),
         steps: vec![
             PlanStep {
@@ -42,6 +44,7 @@ fn make_plan_gate() -> Gate {
 
 fn make_edit_gate() -> Gate {
     Gate::Edit {
+        request_id: "req-edit-test".to_string(),
         file: "src/main.rs".to_string(),
         diff: vec![
             DiffLine {

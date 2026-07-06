@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 use tauri::State;
 
-use marsad_core::{Core, CoreError, GitProbe, LaunchMode, LaunchSpec, PersistedSettings, PersistedTemplate, Posture};
+use marsad_core::{Core, CoreError, GitProbe, LaunchMode, LaunchSpec, PersistedSettings, PersistedTemplate, Posture, VmUpdate};
 use marsad_gates::{Decision, DecisionId, GateDecision};
 use marsad_viewmodel::{AppSnapshot, CapabilitiesView};
 
@@ -224,7 +224,13 @@ pub fn remove_session(
     let updates = {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
         match &mut *guard {
-            AppState::Live(core) => core.remove_session(&id).map_err(map_err)?,
+            AppState::Live(core) => {
+                let mut u = core.remove_session(&id).map_err(map_err)?;
+                // Append Workstreams + Board so the board drops the ghost card.
+                u.push(VmUpdate::Workstreams(core.workstreams().to_vec()));
+                u.push(VmUpdate::Board(core.board()));
+                u
+            }
             AppState::Mock(_) => vec![],
         }
     };

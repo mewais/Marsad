@@ -31,11 +31,13 @@ fn permission_gate() -> Gate {
         cwd: "/tmp".to_string(),
         risk: "low".to_string(),
         explanation: "list temp files".to_string(),
+        is_elicitation: false,
     }
 }
 
 fn plan_gate() -> Gate {
     Gate::Plan {
+        request_id: "req-plan-i02".to_string(),
         summary: "Refactor module".to_string(),
         steps: vec![
             PlanStep {
@@ -52,6 +54,7 @@ fn plan_gate() -> Gate {
 
 fn edit_gate() -> Gate {
     Gate::Edit {
+        request_id: "req-edit-i02".to_string(),
         file: "src/main.rs".to_string(),
         diff: vec![
             DiffLine {
@@ -224,6 +227,7 @@ fn decision_id_differs_by_gate_content() {
         cwd: "/tmp".to_string(),
         risk: "low".to_string(),
         explanation: "".to_string(),
+        is_elicitation: false,
     };
     let gate_b = Gate::Permission {
         request_id: "req-test".to_string(),
@@ -231,6 +235,7 @@ fn decision_id_differs_by_gate_content() {
         cwd: "/etc".to_string(),
         risk: "high".to_string(),
         explanation: "".to_string(),
+        is_elicitation: false,
     };
     assert_ne!(
         decision_id(sid, &gate_a),

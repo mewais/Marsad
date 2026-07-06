@@ -9,6 +9,8 @@ export interface ColorTokens {
   bg: string;
   panel: string;
   panel2: string;
+  /** Darker translucent surface for terminal + diff panes — one shade below --panel. */
+  panelDark: string;
   elev: string;
   border: string;
   border2: string;
@@ -54,6 +56,7 @@ export const darkTokens: Tokens = {
   bg: "#0e1116",
   panel: "#151921",
   panel2: "#1a1f29",
+  panelDark: "rgba(8,10,14,0.82)",
   elev: "#1e2530",
   border: "#242b37",
   border2: "#313a48",
@@ -89,6 +92,7 @@ export const lightTokens: Tokens = {
   bg: "#eef1f6",
   panel: "#ffffff",
   panel2: "#f4f6fa",
+  panelDark: "rgba(210,215,225,0.72)",
   elev: "#ffffff",
   border: "#e2e7ee",
   border2: "#cfd6e0",
@@ -146,6 +150,7 @@ export function tokensToCssVars(t: Tokens): Record<string, string> {
     "--bg": t.bg,
     "--panel": t.panel,
     "--panel2": t.panel2,
+    "--panel-dark": t.panelDark,
     "--elev": t.elev,
     "--border": t.border,
     "--border2": t.border2,

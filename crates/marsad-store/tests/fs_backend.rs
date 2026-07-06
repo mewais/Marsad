@@ -58,6 +58,8 @@ fn host_session_workspace_round_trip_across_restart() {
                 disallowed_tools: vec![],
                 driver: "claude".to_string(),
                 slash_commands: vec![],
+                tools: vec![],
+                mcp_servers: vec![],
             })
             .expect("persist session");
         store

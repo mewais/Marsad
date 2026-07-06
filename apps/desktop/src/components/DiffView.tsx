@@ -8,7 +8,7 @@ interface DiffViewProps {
 /** Side-by-side diff view faithful to the .dc.html design. */
 export function DiffView({ rows, filename }: DiffViewProps) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--panel-dark)", backdropFilter: "blur(22px)" }}>
       {/* Header bar */}
       <div
         className="mono"

@@ -219,6 +219,19 @@ struct JsonlLine {
     #[serde(rename = "type")]
     line_type: Option<String>,
     message: Option<JsonlMessage>,
+    // Present on `system/compact_boundary` lines.
+    #[serde(default)]
+    subtype: Option<String>,
+    #[serde(default, rename = "compact_metadata")]
+    compact_metadata: Option<JsonlCompactMetadata>,
+}
+
+#[derive(Deserialize)]
+struct JsonlCompactMetadata {
+    #[serde(default)]
+    trigger: String,
+    #[serde(default)]
+    cumulative_dropped_tokens: u64,
 }
 
 #[derive(Deserialize)]
@@ -311,6 +324,21 @@ pub fn parse_transcript(jsonl: &str) -> Vec<TranscriptEntry> {
             continue;
         };
         let role = parsed.line_type.as_deref();
+
+        // A `system/compact_boundary` line inserts a Compaction entry in sequence
+        // so the UI shows it at the chronological point where compaction occurred.
+        if role == Some("system")
+            && parsed.subtype.as_deref() == Some("compact_boundary")
+        {
+            if let Some(cm) = parsed.compact_metadata {
+                out.push(TranscriptEntry::Compaction {
+                    trigger: cm.trigger,
+                    dropped_tokens: cm.cumulative_dropped_tokens,
+                });
+            }
+            continue;
+        }
+
         let Some(message) = parsed.message else {
             continue;
         };
@@ -557,6 +585,24 @@ pub fn session_transcript(
     }
     let contents = std::fs::read_to_string(&path)?;
     Ok(parse_transcript(&contents))
+}
+
+/// Aggregate per-model token usage from one Claude session's JSONL file.
+/// Returns empty map when the file does not exist or cannot be read.
+/// Used to seed usage on attach for LOCAL sessions (remote sessions use the
+/// agent-side python aggregation script which covers all *.jsonl in the project).
+pub fn session_usage(
+    projects_root: &Path,
+    cwd: &str,
+    session_id: &str,
+) -> std::collections::HashMap<String, ModelUsageSummary> {
+    let path = projects_root
+        .join(encode_project_dir(cwd))
+        .join(format!("{session_id}.jsonl"));
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => aggregate_model_usage(&contents),
+        Err(_) => std::collections::HashMap::new(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1185,6 +1231,44 @@ mod tests {
                 TranscriptEntry::User { text: "q2".into() },
             ]
         );
+    }
+
+    #[test]
+    fn transcript_compact_boundary_inserted_in_sequence() {
+        // A compact_boundary line between two turns must produce a Compaction
+        // entry at the correct position — not appended at the end.
+        let jsonl = concat!(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"before"}]}}"#,
+            "\n",
+            r#"{"type":"system","subtype":"compact_boundary","session_id":"s1","compact_metadata":{"trigger":"manual","pre_tokens":1000,"post_tokens":200,"cumulative_dropped_tokens":800,"duration_ms":500}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"after"}]}}"#,
+        );
+        let t = parse_transcript(jsonl);
+        assert_eq!(
+            t,
+            vec![
+                TranscriptEntry::User { text: "before".into() },
+                TranscriptEntry::Compaction {
+                    trigger: "manual".into(),
+                    dropped_tokens: 800,
+                },
+                TranscriptEntry::Assistant { text: "after".into() },
+            ],
+            "Compaction must appear between user and assistant, not at the end"
+        );
+    }
+
+    #[test]
+    fn transcript_compact_boundary_without_metadata_skipped() {
+        // A compact_boundary line with no compact_metadata is skipped gracefully.
+        let jsonl = concat!(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+            "\n",
+            r#"{"type":"system","subtype":"compact_boundary","session_id":"s1"}"#,
+        );
+        let t = parse_transcript(jsonl);
+        assert_eq!(t, vec![TranscriptEntry::User { text: "hi".into() }]);
     }
 
     // -------------------------------------------------------------------------

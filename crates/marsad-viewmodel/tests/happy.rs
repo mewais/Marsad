@@ -84,6 +84,7 @@ fn representative_snapshot() -> AppSnapshot {
             posture: "ask".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
         SessionView {
             id: "s2".to_string(),
@@ -118,6 +119,7 @@ fn representative_snapshot() -> AppSnapshot {
             posture: "ask".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
         SessionView {
             id: "s3".to_string(),
@@ -152,6 +154,7 @@ fn representative_snapshot() -> AppSnapshot {
             posture: "ask".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
         SessionView {
             id: "s4".to_string(),
@@ -186,6 +189,7 @@ fn representative_snapshot() -> AppSnapshot {
             posture: "ask".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
         SessionView {
             id: "s5".to_string(),
@@ -220,6 +224,7 @@ fn representative_snapshot() -> AppSnapshot {
             posture: "ask".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
     ];
 
@@ -416,6 +421,7 @@ fn gate_vm_returns_some_for_permission_gate() {
         cwd: "/work".to_string(),
         risk: "medium".to_string(),
         explanation: "needs DB access".to_string(),
+        is_elicitation: false,
     };
     let mut snap = representative_snapshot();
     snap.sessions[0].gate = Some(gate);
@@ -435,6 +441,7 @@ fn gate_vm_permission_kind_and_icon() {
         cwd: "/".to_string(),
         risk: "low".to_string(),
         explanation: "directory listing".to_string(),
+        is_elicitation: false,
     };
     let mut snap = representative_snapshot();
     snap.sessions[0].gate = Some(gate);
@@ -450,6 +457,7 @@ fn gate_vm_permission_kind_and_icon() {
 #[test]
 fn gate_vm_plan_kind_and_icon() {
     let gate = Gate::Plan {
+        request_id: "req-plan-vm".to_string(),
         summary: "Refactor auth module".to_string(),
         steps: vec![
             PlanStep {
@@ -488,6 +496,7 @@ fn gate_vm_edit_kind_and_icon() {
         },
     ];
     let gate = Gate::Edit {
+        request_id: "req-edit-vm".to_string(),
         file: "src/lib.rs".to_string(),
         diff: diff_lines,
     };
@@ -517,6 +526,7 @@ fn gate_vm_edit_has_diff_rows() {
         },
     ];
     let gate = Gate::Edit {
+        request_id: "req-edit-diff-rows".to_string(),
         file: "foo.rs".to_string(),
         diff: diff_lines,
     };
@@ -809,6 +819,7 @@ fn session_view_new_fields_populated() {
         posture: "auto".to_string(),
         subagent_list: vec![],
         shell_running: false,
+        driver: "claude".to_string(),
     };
     let sv2 = sv.clone();
     assert_eq!(sv, sv2);
@@ -848,6 +859,7 @@ fn session_view_new_fields_empty_by_default_in_literal() {
         posture: "ask".to_string(),
         subagent_list: vec![],
         shell_running: false,
+        driver: "claude".to_string(),
     };
     assert!(sv.tools.is_empty());
     assert!(sv.mcp_servers.is_empty());

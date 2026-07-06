@@ -67,6 +67,11 @@
       .md th,.md td{border:1px solid var(--border,#2a323d);padding:5px 9px;text-align:left}
       .md th{background:var(--panel2,#1a1f27);font-weight:650}
       .md img{max-width:100%}
+      /* Copy button on code/command blocks — hover-reveal (GitHub-style) */
+      .copy-wrap{position:relative}
+      .copy-btn{opacity:0;transition:opacity .12s ease}
+      .copy-wrap:hover .copy-btn{opacity:.8}
+      .copy-btn:hover{opacity:1 !important;background:var(--panel2,#1a1f27) !important}
       /* Prompt bubble overrides: white text on accent background */
       .md-bubble .md a{color:rgba(255,255,255,0.85);text-decoration:underline}
       .md-bubble .md a:hover{color:#fff}

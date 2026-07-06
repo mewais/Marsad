@@ -56,10 +56,11 @@ export type Gate =
         cwd: string;
         risk: string;
         explanation: string;
+        is_elicitation: boolean;
       };
     }
-  | { Plan: { summary: string; steps: PlanStep[] } }
-  | { Edit: { file: string; diff: DiffLine[] } }
+  | { Plan: { request_id: string; summary: string; steps: PlanStep[] } }
+  | { Edit: { request_id: string; file: string; diff: DiffLine[] } }
   | {
       Question: {
         request_id: string;
@@ -204,6 +205,9 @@ export interface SessionView {
   slash_commands: SlashCommandInfo[];
   /** Permission posture: "ask" | "auto" | "full" (from system/init permissionMode). */
   posture: string;
+  /** The agent driver running THIS session ("claude"/"codex"/…). The header
+   *  labels the session by this, not the host's first capability driver. */
+  driver?: string;
   /** Count of context compactions this session (system/compact_boundary events). */
   compactions: number;
   /** Metadata of the most recent compaction, if any. */
@@ -237,7 +241,8 @@ export interface RateLimitInfo {
 export type TranscriptEntry =
   | { role: "assistant"; text: string }
   | { role: "user"; text: string }
-  | { role: "tool"; name: string; input: string };
+  | { role: "tool"; name: string; input: string }
+  | { role: "compaction"; trigger: string; dropped_tokens: number };
 
 // ---------------------------------------------------------------------------
 // FileChange — one changed file from the git probe
@@ -406,6 +411,10 @@ export interface GateVM {
    *  aren't collapsed by idempotency dedup. */
   decision_id: string;
   is_permission: boolean;
+  /** True when this permission gate came from an MCP elicitation — the UI hides
+   *  "Approve all this session" for these (the button flips claude's posture,
+   *  which does not stop the MCP server from re-asking). */
+  is_elicitation: boolean;
   is_plan: boolean;
   is_edit: boolean;
   is_question: boolean;

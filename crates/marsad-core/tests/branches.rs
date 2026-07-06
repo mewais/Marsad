@@ -142,6 +142,53 @@ fn vm_update_session_variant_reachable() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Regression: a single NewSession launch must produce EXACTLY ONE board card
+// (its auto-created single-node workstream), not two (empty ws + bare node).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn assign_to_other_workstream_removes_orphaned_auto_ws() {
+    let (mut core, _peer) = make_core();
+    // Build-it-out path: create a named workstream, launch a session (which
+    // auto-creates ws-<id>), then assign the session to the named workstream.
+    core.create_workstream("ws-named".into(), "Named".into(), "goal".into(), None)
+        .expect("create ws");
+    let id = core
+        .launch_session(spec("proj-node", Posture::Ask))
+        .expect("launch");
+    // Before assign: the auto ws AND the named ws both exist.
+    assert!(core.board().all.iter().any(|c| c.id == format!("ws-{id}")));
+    core.assign_session(&id, "ws-named", true).expect("assign");
+    let board = core.board();
+    // The orphaned auto ws-<id> must be gone; only the named ws remains.
+    assert!(
+        !board.all.iter().any(|c| c.id == format!("ws-{id}")),
+        "orphaned auto workstream ws-{id} must be removed after reassignment"
+    );
+    let named = board.all.iter().find(|c| c.id == "ws-named").expect("named ws");
+    assert_eq!(named.session_count, 1, "session moved to the named ws");
+}
+
+#[test]
+fn single_launch_produces_one_board_card() {
+    let (mut core, _peer) = make_core();
+    let id = core
+        .launch_session(spec("proj-solo", Posture::Ask))
+        .expect("launch");
+    let board = core.board();
+    assert_eq!(
+        board.all.len(),
+        1,
+        "one launched session must yield exactly one workstream card, got {}: {:?}",
+        board.all.len(),
+        board.all.iter().map(|c| (&c.id, &c.name)).collect::<Vec<_>>()
+    );
+    let card = &board.all[0];
+    assert_eq!(card.session_count, 1, "the card must own its one session");
+    assert_eq!(card.id, format!("ws-{id}"), "card is the auto fast-lane ws");
+}
+
 #[test]
 fn vm_update_toast_variant_is_constructible() {
     let t = VmUpdate::Toast {
@@ -288,6 +335,7 @@ fn answer_gate_idempotent_second_call_is_noop() {
         cwd: "/".to_string(),
         risk: "low".to_string(),
         explanation: "read only".to_string(),
+        is_elicitation: false,
     };
 
     // First answer — should succeed and emit one outbound IPC
@@ -332,6 +380,7 @@ fn answer_gate_different_decisions_are_not_idempotent() {
     let _ = peer.drain_outbound();
 
     let gate = Gate::Plan {
+        request_id: "req-plan-core-branch".to_string(),
         summary: "Refactor auth".to_string(),
         steps: vec![],
     };
@@ -595,6 +644,7 @@ fn answer_gate_permission_gate_outbound_references_gate() {
         cwd: "/app".to_string(),
         risk: "medium".to_string(),
         explanation: "run container".to_string(),
+        is_elicitation: false,
     };
     let d = approve(&id, &gate);
     core.answer_gate(d).expect("answer_gate permission");
@@ -633,6 +683,7 @@ fn answer_gate_clears_pending_gate_and_emits_session_update() {
         cwd: "/app".to_string(),
         risk: "low".to_string(),
         explanation: "list".to_string(),
+        is_elicitation: false,
     };
     let updates = core
         .answer_gate(approve(&id, &gate))
@@ -657,6 +708,7 @@ fn answer_gate_plan_gate_outbound_references_gate() {
     let _ = peer.drain_outbound();
 
     let gate = Gate::Plan {
+        request_id: "req-plan-core-plan".to_string(),
         summary: "migrate DB schema".to_string(),
         steps: vec![],
     };
@@ -675,6 +727,7 @@ fn answer_gate_edit_gate_outbound_references_gate() {
     let _ = peer.drain_outbound();
 
     let gate = Gate::Edit {
+        request_id: "req-edit-core-edit".to_string(),
         file: "src/lib.rs".to_string(),
         diff: vec![],
     };

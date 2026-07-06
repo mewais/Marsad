@@ -12,6 +12,7 @@ import { Composer } from "../../components/Composer";
 import { Markdown } from "../../components/Markdown";
 import { ToolUse } from "../../components/ToolUse";
 import { Watchtower } from "../../components/Watchtower";
+import { CopyButton } from "../../components/CopyButton";
 import {
   sendPrompt,
   interrupt,
@@ -61,6 +62,10 @@ interface HitlEpisode {
    *  it's the session's CURRENT pending gate. */
   resolutionKey: string;
   kind: HitlKind;
+  /** Transcript length at the moment this episode was first recorded — used as
+   *  the insertion index so the HITL card appears chronologically in the stream
+   *  rather than always at the end (Bug #2). */
+  transcriptIndexHint: number;
   permission?: { command: string; cwd: string; risk: string };
   plan?: { summary: string; steps: PlanStep[] };
   question?: { questions: QuestionPrompt[] };
@@ -94,7 +99,7 @@ function hitlEpisodeId(sessionId: string, gate: Gate): string {
   return `${hitlKind(gate)}:${hitlResolutionKey(sessionId, gate)}`;
 }
 
-function recordHitlEpisode(sessionId: string, gate: Gate): void {
+function recordHitlEpisode(sessionId: string, gate: Gate, transcriptLen: number): void {
   const id = hitlEpisodeId(sessionId, gate);
   const list = hitlEpisodes.get(sessionId) ?? [];
   if (list.some((e) => e.id === id)) return;
@@ -105,6 +110,7 @@ function recordHitlEpisode(sessionId: string, gate: Gate): void {
       id,
       resolutionKey,
       kind: "permission",
+      transcriptIndexHint: transcriptLen,
       permission: {
         command: gate.Permission.command,
         cwd: gate.Permission.cwd,
@@ -116,6 +122,7 @@ function recordHitlEpisode(sessionId: string, gate: Gate): void {
       id,
       resolutionKey,
       kind: "plan",
+      transcriptIndexHint: transcriptLen,
       plan: { summary: gate.Plan.summary, steps: gate.Plan.steps },
     };
   } else if ("Question" in gate) {
@@ -123,10 +130,11 @@ function recordHitlEpisode(sessionId: string, gate: Gate): void {
       id,
       resolutionKey,
       kind: "question",
+      transcriptIndexHint: transcriptLen,
       question: { questions: gate.Question.questions },
     };
   } else {
-    episode = { id, resolutionKey, kind: "edit", edit: { file: gate.Edit.file } };
+    episode = { id, resolutionKey, kind: "edit", transcriptIndexHint: transcriptLen, edit: { file: gate.Edit.file } };
   }
   hitlEpisodes.set(sessionId, [...list, episode]);
 }
@@ -214,6 +222,25 @@ function deriveTranscript(
     text: `Session "${sv.name}" · ${sv.model}${sv.branch ? ` · ${sv.branch}` : ""}`,
   });
 
+  // Build a lookup: transcript index → HITL messages to insert AFTER that entry.
+  // transcriptIndexHint is sv.transcript.length at first-sighting of the gate.
+  // hint=N means N entries existed; insert after entry[N-1] (0-based index N-1).
+  // hint=0 means the gate appeared before any transcript → use sentinel key -1
+  // to flush before the transcript loop output.
+  const hitlByIndex = new Map<number, TranscriptMsg[]>();
+  for (const hm of hitlMsgs) {
+    const hint = hm.episode?.transcriptIndexHint ?? 0;
+    // hint=0 → no transcript yet → sentinel -1; hint=N → after entry[N-1]
+    const key = hint === 0 ? -1 : hint - 1;
+    const bucket = hitlByIndex.get(key) ?? [];
+    bucket.push(hm);
+    hitlByIndex.set(key, bucket);
+  }
+
+  // HITL cards whose gate appeared before any transcript entries.
+  const preTranscript = hitlByIndex.get(-1);
+  if (preTranscript) msgs.push(...preTranscript);
+
   // The real conversation, in arrival order.
   sv.transcript.forEach((entry, i) => {
     if (entry.role === "assistant") {
@@ -226,6 +253,13 @@ function deriveTranscript(
       } else {
         msgs.push({ id: `t-${i}`, kind: "prompt", text: entry.text });
       }
+    } else if (entry.role === "compaction") {
+      // Compaction entry: render inline at its chronological position.
+      msgs.push({
+        id: `t-${i}`,
+        kind: "system",
+        text: `Context compacted (${entry.trigger}, ${entry.dropped_tokens} tokens dropped)`,
+      });
     } else if (entry.name === "shell") {
       // Shell output from "!" commands: render as a pre-formatted output block.
       msgs.push({ id: `t-${i}`, kind: "shell_out", text: entry.input });
@@ -238,12 +272,17 @@ function deriveTranscript(
         toolStatus: "done",
       });
     }
+    // Insert HITL cards immediately after the transcript entry that was the last
+    // one present when the gate first appeared (Bug #2: chronological placement).
+    const after = hitlByIndex.get(i);
+    if (after) msgs.push(...after);
   });
 
-  // HITL episodes (questions/permission/plan/edit) — the "needs you →
-  // resolved" collapse. Ordered oldest→newest; each is either the amber
-  // pending card or a muted collapsed summary row (see buildHitlMessages).
-  msgs.push(...hitlMsgs);
+  // Flush any HITL cards whose hint exceeds the current transcript length
+  // (gate appeared at a point beyond what's now in sv.transcript — safe fallback).
+  for (const [idx, bucket] of hitlByIndex) {
+    if (idx >= sv.transcript.length) msgs.push(...bucket);
+  }
 
   // Show a working spinner only while Claude is actually working. A freshly
   // launched session sits idle (claude emits nothing until prompted), so we
@@ -289,26 +328,12 @@ function deriveTranscript(
     });
   }
 
-  // Compaction indicator: show that context was compacted, with the trigger
-  // and how many times this session.
-  if (sv.compactions > 0) {
-    const c = sv.last_compaction;
-    msgs.push({
-      id: "compaction-0",
-      kind: "system",
-      text: c
-        ? `Context compacted ${sv.compactions}× (last: ${c.trigger}, ${c.cumulative_dropped_tokens} tokens dropped)`
-        : `Context compacted ${sv.compactions}×`,
-    });
-  }
-
   // Running subagents: one collapsible entry with the full list.
   if (sv.running_subagents > 0) {
     msgs.push({
       id: "subagent-running-0",
       kind: "subagent",
       name: `${sv.running_subagents} sub-agent${sv.running_subagents > 1 ? "s" : ""} running`,
-      model: sv.model,
       subStatus: "Working",
       // Pass the full list for the expanded view; filter to running only for the header count.
       subagentList: sv.subagent_list?.filter(a => a.status === "Running") ?? [],
@@ -322,7 +347,6 @@ function deriveTranscript(
       id: "subagent-0",
       kind: "subagent",
       name: `${completedSubagents} sub-agent${completedSubagents > 1 ? "s" : ""} completed`,
-      model: sv.model,
       subStatus: "Done",
       subagentList: sv.subagent_list?.filter(a => a.status === "Done") ?? [],
     });
@@ -448,14 +472,15 @@ function ToolResult({ text }: { text: string }) {
 function ShellCmd({ text }: { text: string }) {
   return (
     <div
-      className="mono"
+      className="mono copy-wrap"
       style={{
+        position: "relative",
         alignSelf: "flex-end",
         maxWidth: "78%",
         background: "var(--panel2)",
         border: "1px solid var(--border2)",
         color: "var(--txt2)",
-        padding: "8px 14px",
+        padding: "8px 34px 8px 14px",
         borderRadius: "11px 11px 4px 11px",
         fontSize: "calc(14px * var(--fs,1))",
         lineHeight: 1.5,
@@ -464,6 +489,8 @@ function ShellCmd({ text }: { text: string }) {
       }}
     >
       {text}
+      {/* Copy the command without the leading "! " prefix. */}
+      <CopyButton text={text.replace(/^!\s+/, "")} style={{ top: 5, right: 5 }} />
     </div>
   );
 }
@@ -471,23 +498,26 @@ function ShellCmd({ text }: { text: string }) {
 /** Shell output block — preformatted, indented like a tool result. */
 function ShellOutput({ text }: { text: string }) {
   return (
-    <pre
-      className="mono"
-      style={{
-        margin: "0 0 0 0",
-        padding: "11px 13px",
-        borderRadius: 9,
-        background: "var(--panel)",
-        border: "1px solid var(--border)",
-        fontSize: "calc(13px * var(--fs,1))",
-        lineHeight: 1.55,
-        color: "var(--txt)",
-        whiteSpace: "pre-wrap",
-        overflowX: "auto",
-      }}
-    >
-      {text}
-    </pre>
+    <div className="copy-wrap" style={{ position: "relative" }}>
+      <pre
+        className="mono"
+        style={{
+          margin: "0 0 0 0",
+          padding: "11px 34px 11px 13px",
+          borderRadius: 9,
+          background: "var(--panel)",
+          border: "1px solid var(--border)",
+          fontSize: "calc(13px * var(--fs,1))",
+          lineHeight: 1.55,
+          color: "var(--txt)",
+          whiteSpace: "pre-wrap",
+          overflowX: "auto",
+        }}
+      >
+        {text}
+      </pre>
+      <CopyButton text={text} style={{ top: 5, right: 5 }} />
+    </div>
   );
 }
 
@@ -1150,6 +1180,10 @@ interface ActivityTabProps {
 export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
   const { selectedSession, selectedGate } = useVm();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // True while the user is at (or very near) the bottom; new content auto-scrolls
+  // only when this is true so reading earlier content is never interrupted (Bug #6).
+  const stickToBottomRef = useRef(true);
 
   // Auto-scroll to the bottom whenever the transcript grows or the session/phase
   // changes, so the latest message is always in view by default. Track the
@@ -1162,14 +1196,21 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
       ? JSON.stringify(selectedSession!.transcript[transcriptLen - 1])
       : "";
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "auto" });
+    if (stickToBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "auto" });
+    }
   }, [
-    selectedSession?.id,
     transcriptLen,
     lastEntrySig,
     selectedSession?.state,
     selectedGate?.decision_id,
   ]);
+
+  // Session switch: always jump to bottom and re-enable stick-to-bottom.
+  useEffect(() => {
+    stickToBottomRef.current = true;
+    bottomRef.current?.scrollIntoView({ behavior: "auto" });
+  }, [selectedSession?.id]);
 
   const sv = selectedSession;
 
@@ -1181,7 +1222,7 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
   // below, not just a later one (a useEffect here mutates the cache too late
   // to affect the transcript on the render that first sees the gate).
   if (sv?.gate) {
-    recordHitlEpisode(sv.id, sv.gate);
+    recordHitlEpisode(sv.id, sv.gate, sv.transcript.length);
   }
 
   if (!sv) {
@@ -1239,8 +1280,13 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       {/* Transcript scroll area */}
       <div
+        ref={scrollContainerRef}
         id="transcript"
         style={{ flex: 1, overflowY: "auto", padding: "20px 24px" }}
+        onScroll={() => {
+          const el = scrollContainerRef.current;
+          if (el) stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        }}
       >
         <div
           style={{
@@ -1261,11 +1307,9 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
                     key={msg.id}
                     text={msg.text ?? ""}
                     testId={
-                      msg.id === "compaction-0"
-                        ? "compaction-indicator"
-                        : msg.id === "ratelimit-0"
-                          ? "ratelimit-indicator"
-                          : undefined
+                      msg.id === "ratelimit-0"
+                        ? "ratelimit-indicator"
+                        : undefined
                     }
                   />
                 );

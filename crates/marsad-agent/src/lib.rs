@@ -732,6 +732,8 @@ impl Agent {
             disallowed_tools: spec.disallowed_tools.clone(),
             driver: spec.driver.clone(),
             slash_commands: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
         };
         self.store
             .0

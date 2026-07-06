@@ -20,11 +20,13 @@ fn make_permission_gate() -> Gate {
         cwd: "/".to_string(),
         risk: "low".to_string(),
         explanation: "List root directory".to_string(),
+        is_elicitation: false,
     }
 }
 
 fn make_plan_gate() -> Gate {
     Gate::Plan {
+        request_id: "req-plan-errors-test".to_string(),
         summary: "Build plan".to_string(),
         steps: vec![PlanStep {
             title: "Step A".to_string(),
@@ -35,6 +37,7 @@ fn make_plan_gate() -> Gate {
 
 fn make_edit_gate() -> Gate {
     Gate::Edit {
+        request_id: "req-edit-errors-test".to_string(),
         file: "lib.rs".to_string(),
         diff: vec![DiffLine {
             sig: Sig::Add,

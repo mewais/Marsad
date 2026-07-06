@@ -174,6 +174,7 @@ fn scripted_full_happy_path_session() {
         cwd: "/workspace".to_string(),
         risk: "low".to_string(),
         explanation: "list config files".to_string(),
+        is_elicitation: false,
     };
     let decision = approve(&id, &gate);
     core.answer_gate(decision).expect("answer_gate");
@@ -278,6 +279,7 @@ fn scripted_gate_rejection_sends_deny_ipc() {
         cwd: "/db".to_string(),
         risk: "critical".to_string(),
         explanation: "irreversible".to_string(),
+        is_elicitation: false,
     };
     let d = reject(&id, &gate, "too dangerous");
     core.answer_gate(d).expect("answer_gate reject");
@@ -606,6 +608,7 @@ fn scripted_idempotent_answer_gate_end_to_end() {
         cwd: "/project".to_string(),
         risk: "low".to_string(),
         explanation: "build the project".to_string(),
+        is_elicitation: false,
     };
 
     // First approval — must emit exactly one IPC line

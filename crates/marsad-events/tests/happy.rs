@@ -296,6 +296,33 @@ fn elicitation_gate_fence_without_following_newline_falls_back() {
 }
 
 #[test]
+fn elicitation_gate_sets_is_elicitation_true() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(
+        s0,
+        stream(&elicitation_request_json("eli-e1", "hares", "Approve?")),
+    );
+    match s1.gate.as_ref().expect("gate present") {
+        marsad_gates::Gate::Permission { is_elicitation, .. } => {
+            assert!(*is_elicitation, "elicitation gate must have is_elicitation==true");
+        }
+        other => panic!("expected Permission gate, got {other:?}"),
+    }
+}
+
+#[test]
+fn can_use_tool_gate_sets_is_elicitation_false() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(s0, stream(&control_request_json("req-tool", "Bash")));
+    match s1.gate.as_ref().expect("gate present") {
+        marsad_gates::Gate::Permission { is_elicitation, .. } => {
+            assert!(!is_elicitation, "can_use_tool gate must have is_elicitation==false");
+        }
+        other => panic!("expected Permission gate, got {other:?}"),
+    }
+}
+
+#[test]
 fn empty_primary_arg_falls_back_to_tool_name() {
     // A present-but-empty primary arg (e.g. file_path:"") must not produce a
     // trailing-space "Read " — it falls through to the bare tool name.

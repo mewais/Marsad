@@ -693,6 +693,9 @@ fn reconcile_all_adopt_does_not_spawn() {
             posture: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
+            slash_commands: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
         })
         .expect("upsert_session must succeed");
 

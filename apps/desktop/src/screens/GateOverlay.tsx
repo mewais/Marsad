@@ -845,7 +845,7 @@ export function GateOverlay() {
                   </button>
                   {/* Permission-only: approve this action AND stop asking for
                       the rest of this session. */}
-                  {gate.is_permission && (
+                  {gate.is_permission && !gate.is_elicitation && (
                     <button
                       data-testid="approve-all-btn"
                       onClick={handleApproveAllSession}

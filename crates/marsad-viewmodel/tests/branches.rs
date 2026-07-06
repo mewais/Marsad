@@ -56,6 +56,7 @@ fn make_session(
         posture: "ask".to_string(),
         subagent_list: vec![],
         shell_running: false,
+        driver: "claude".to_string(),
     }
 }
 
@@ -362,6 +363,7 @@ fn ctx_warn_false_at_74_pct() {
             posture: "ask".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -411,6 +413,7 @@ fn ctx_warn_true_at_75_pct() {
             posture: "ask".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -578,6 +581,7 @@ fn ctx_warn_true_at_100_pct() {
             posture: "ask".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],

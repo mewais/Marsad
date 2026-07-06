@@ -58,7 +58,8 @@ pub struct Subagent {
 ///
 /// Serialized with a `role` tag so the UI can switch on it directly:
 /// `{"role":"assistant","text":...}`, `{"role":"user","text":...}`,
-/// `{"role":"tool","name":...,"input":...}`.
+/// `{"role":"tool","name":...,"input":...}`,
+/// `{"role":"compaction","trigger":...,"dropped_tokens":...}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum TranscriptEntry {
@@ -68,6 +69,10 @@ pub enum TranscriptEntry {
     User { text: String },
     /// A tool invocation by the assistant (`name` + JSON-encoded `input`).
     Tool { name: String, input: String },
+    /// A context compaction event (`system/compact_boundary`). Inserted in
+    /// sequence so the UI shows the compaction at its chronological position
+    /// rather than at the bottom of the transcript.
+    Compaction { trigger: String, dropped_tokens: u64 },
 }
 
 // ---------------------------------------------------------------------------
@@ -418,10 +423,18 @@ fn reduce_assistant(mut state: SessionState, msg: marsad_proto::AssistantMsg) ->
                     .or_else(|| input.get("description").and_then(|v| v.as_str()))
                     .unwrap_or("subagent")
                     .to_string();
+                // The Task/Agent tool input carries an optional `model` override;
+                // capture it so the UI shows the subagent's real model. Absent =
+                // inherits the session model, which the UI leaves blank (never
+                // shows the parent's model — that would mislead).
+                let subagent_model = input
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
                 let idx = state.subagents.len();
                 state.subagents.push(Subagent {
                     name: subagent_name,
-                    model: None,
+                    model: subagent_model,
                     status: SubagentStatus::Running,
                 });
                 state.running_task_ids.insert(id.clone(), idx);
@@ -522,6 +535,7 @@ fn reduce_control_request(
             .unwrap_or("")
             .to_string();
         let gate = marsad_gates::Gate::Plan {
+            request_id: req.request_id.clone(),
             summary: plan_md,
             steps: vec![],
         };
@@ -562,6 +576,7 @@ fn reduce_control_request(
         cwd: state.cwd.clone().unwrap_or_default(),
         risk: String::new(),
         explanation,
+        is_elicitation: req.elicitation_message.is_some(),
     };
     state.gate = Some(gate);
     state.phase = Phase::Needs;

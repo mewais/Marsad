@@ -40,6 +40,7 @@ fn base_session_view() -> SessionView {
         posture: "ask".to_string(),
         subagent_list: vec![],
         shell_running: false,
+        driver: "claude".to_string(),
     }
 }
 

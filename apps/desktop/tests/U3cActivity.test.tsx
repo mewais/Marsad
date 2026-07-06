@@ -47,9 +47,9 @@ function renderSession(patch: Partial<SessionView>) {
 }
 
 describe("U3c — compaction indicator", () => {
-  it("renders with count + trigger when the session has compacted", () => {
+  it("renders inline in transcript at the compaction entry's position", () => {
     renderSession({
-      compactions: 2,
+      compactions: 1,
       last_compaction: {
         trigger: "manual",
         pre_tokens: 100000,
@@ -57,16 +57,25 @@ describe("U3c — compaction indicator", () => {
         cumulative_dropped_tokens: 80000,
         duration_ms: 1200,
       },
+      transcript: [
+        { role: "user", text: "hello" },
+        { role: "compaction", trigger: "manual", dropped_tokens: 80000 },
+        { role: "assistant", text: "world" },
+      ],
     });
-    const el = screen.getByTestId("compaction-indicator");
-    expect(el.textContent).toContain("2");
+    // The compaction row is a SystemNote rendered inline between user/assistant.
+    const el = screen.getByText(/Context compacted/i);
     expect(el.textContent).toContain("manual");
     expect(el.textContent).toContain("80000");
   });
 
-  it("does not render when the session has never compacted", () => {
-    renderSession({ compactions: 0, last_compaction: null });
-    expect(screen.queryByTestId("compaction-indicator")).toBeNull();
+  it("does not render a compaction row when transcript has no compaction entries", () => {
+    renderSession({
+      compactions: 0,
+      last_compaction: null,
+      transcript: [],
+    });
+    expect(screen.queryByText(/Context compacted/i)).toBeNull();
   });
 });
 

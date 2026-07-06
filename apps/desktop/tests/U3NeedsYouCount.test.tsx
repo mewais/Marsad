@@ -45,6 +45,7 @@ const PERMISSION_NEEDS = baseSession({
       cwd: "/app",
       risk: "",
       explanation: "Clean build output",
+      is_elicitation: false,
     },
   },
 });
@@ -53,7 +54,7 @@ const PLAN_NEEDS = baseSession({
   id: "n2",
   name: "plan-needs",
   state: "Needs",
-  gate: { Plan: { summary: "Refactor the auth module", steps: [] } },
+  gate: { Plan: { request_id: "req-plan-test-u3", summary: "Refactor the auth module", steps: [] } },
 });
 
 const QUESTION_NEEDS = baseSession({

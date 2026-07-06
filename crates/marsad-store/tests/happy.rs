@@ -36,6 +36,8 @@ fn make_session(id: &str) -> PersistedSession {
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         slash_commands: vec![],
+        tools: vec![],
+        mcp_servers: vec![],
     }
 }
 
@@ -715,6 +717,8 @@ fn persisted_session_disallowed_tools_round_trips() {
         disallowed_tools: vec!["Bash".to_string(), "Edit".to_string()],
         driver: "claude".to_string(),
         slash_commands: vec![],
+        tools: vec![],
+        mcp_servers: vec![],
     };
     store.upsert_session(&session).expect("upsert");
     let restored = store.restore().expect("restore");

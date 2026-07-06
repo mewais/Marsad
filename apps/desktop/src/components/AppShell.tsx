@@ -148,8 +148,8 @@ export function AppShell({ children, onOpenSettings }: AppShellProps) {
           >
             <Watchtower size={15} />
           </div>
-          <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.05 }}>
-            <span style={{ fontWeight: 700, fontSize: "calc(14.5px * var(--fs,1))", letterSpacing: -0.2 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <span style={{ fontWeight: 700, fontSize: "calc(14.5px * var(--fs,1))", letterSpacing: -0.2, lineHeight: 1.25 }}>
               Marsad <span style={{ color: "var(--txt3)", fontWeight: 400 }}>—</span> مرصد
             </span>
             <span

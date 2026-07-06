@@ -490,3 +490,44 @@ fn bv7_empty_inputs_produce_empty_board_no_panic() {
     assert!(board.attention.is_empty());
     assert!(board.all.is_empty());
 }
+
+// ── single-node workstream card populates all fields ─────────────────────────
+
+/// A single-node workstream with membership wired produces a full card:
+/// host_chips, driver_dots, head_state, counts — not empty.
+#[test]
+fn single_node_workstream_card_populates_all_fields() {
+    let ws_id = "ws-abc";
+    let workstreams = vec![ws(ws_id, "My Session", "", None)]; // empty goal
+    let nodes = vec![node("abc", ws_id, Driver::Codex, "local", Phase::Working)];
+    let connections: Vec<Connection> = vec![];
+    let hosts: Vec<Host> = vec![];
+    let links: Vec<HostLink> = vec![];
+
+    let board = board_view(&workstreams, &nodes, &connections, &hosts, &links, None);
+    assert_eq!(board.all.len(), 1);
+    let card = &board.all[0];
+    assert_eq!(card.id, ws_id);
+    assert_eq!(card.session_count, 1, "node is in card");
+    assert!(!card.host_chips.is_empty(), "host_chips populated");
+    assert_eq!(card.driver_dots, vec![Driver::Codex], "real driver surfaced");
+    assert_eq!(card.head_state, Some(marsad_workstream::HeadState::Working));
+    assert_eq!(card.counts.working, 1);
+    // goal falls back to node name when ws.goal is empty
+    assert_eq!(card.goal, "node-abc", "goal falls back to node name");
+}
+
+/// A single-node workstream with a real goal keeps the goal, not the node name.
+#[test]
+fn single_node_workstream_card_keeps_explicit_goal() {
+    let ws_id = "ws-xyz";
+    let workstreams = vec![ws(ws_id, "My WS", "Ship it", None)];
+    let nodes = vec![node("xyz", ws_id, Driver::Claude, "local", Phase::Done)];
+    let connections: Vec<Connection> = vec![];
+    let hosts: Vec<Host> = vec![];
+    let links: Vec<HostLink> = vec![];
+
+    let board = board_view(&workstreams, &nodes, &connections, &hosts, &links, None);
+    let card = &board.all[0];
+    assert_eq!(card.goal, "Ship it", "explicit goal preserved");
+}

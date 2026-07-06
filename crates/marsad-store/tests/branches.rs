@@ -40,6 +40,8 @@ fn session(id: &str) -> PersistedSession {
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         slash_commands: vec![],
+        tools: vec![],
+        mcp_servers: vec![],
     }
 }
 
@@ -355,6 +357,8 @@ fn session_with_none_session_id_round_trips() {
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         slash_commands: vec![],
+        tools: vec![],
+        mcp_servers: vec![],
     };
     store.upsert_session(&sess).expect("upsert");
     let r = store.restore().expect("restore");
@@ -438,6 +442,8 @@ fn last_phase_all_values_round_trip() {
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
         };
         store.upsert_session(&sess).expect("upsert");
     }

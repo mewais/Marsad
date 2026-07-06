@@ -84,9 +84,11 @@ pub fn seeded_mock() -> MockState {
         cwd: "/app".to_string(),
         risk: "medium".to_string(),
         explanation: "Runs pending database migrations against the production schema.".to_string(),
+        is_elicitation: false,
     };
 
     let plan_gate = Gate::Plan {
+        request_id: "req-mock-plan-s02".to_string(),
         summary: "Refactor the job queue to use async workers with backpressure".to_string(),
         steps: vec![
             PlanStep {
@@ -105,6 +107,7 @@ pub fn seeded_mock() -> MockState {
     };
 
     let edit_gate = Gate::Edit {
+        request_id: "req-mock-edit-s03".to_string(),
         file: "src/features.py".to_string(),
         diff: vec![
             DiffLine { sig: Sig::Context, ln: "1".to_string(), text: "def compute_features(df):".to_string() },
@@ -151,6 +154,7 @@ pub fn seeded_mock() -> MockState {
             posture: "auto".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
         // Needs attention — plan gate
         SessionView {
@@ -182,6 +186,7 @@ pub fn seeded_mock() -> MockState {
             posture: "auto".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
         // Error — edit gate shown for reference
         SessionView {
@@ -213,6 +218,7 @@ pub fn seeded_mock() -> MockState {
             posture: "auto".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
         // Working sessions
         SessionView {
@@ -244,6 +250,7 @@ pub fn seeded_mock() -> MockState {
             posture: "auto".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
         SessionView {
             id: "s05".to_string(),
@@ -274,6 +281,7 @@ pub fn seeded_mock() -> MockState {
             posture: "auto".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
         SessionView {
             id: "s06".to_string(),
@@ -304,6 +312,7 @@ pub fn seeded_mock() -> MockState {
             posture: "auto".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
         // Done sessions
         SessionView {
@@ -335,6 +344,7 @@ pub fn seeded_mock() -> MockState {
             posture: "auto".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
         SessionView {
             id: "s08".to_string(),
@@ -365,6 +375,7 @@ pub fn seeded_mock() -> MockState {
             posture: "auto".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
         SessionView {
             id: "s09".to_string(),
@@ -395,6 +406,7 @@ pub fn seeded_mock() -> MockState {
             posture: "auto".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
         // Stale session
         SessionView {
@@ -426,6 +438,7 @@ pub fn seeded_mock() -> MockState {
             posture: "auto".to_string(),
             subagent_list: vec![],
             shell_running: false,
+            driver: "claude".to_string(),
         },
     ];
 

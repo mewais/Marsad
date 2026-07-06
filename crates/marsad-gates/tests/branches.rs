@@ -24,11 +24,13 @@ fn permission_gate(command: &str) -> Gate {
         cwd: "/tmp".to_string(),
         risk: "low".to_string(),
         explanation: "test".to_string(),
+        is_elicitation: false,
     }
 }
 
 fn plan_gate(summary: &str) -> Gate {
     Gate::Plan {
+        request_id: format!("req-plan-{summary}"),
         summary: summary.to_string(),
         steps: vec![PlanStep {
             title: "Step".to_string(),
@@ -39,6 +41,7 @@ fn plan_gate(summary: &str) -> Gate {
 
 fn edit_gate(file: &str) -> Gate {
     Gate::Edit {
+        request_id: format!("req-edit-{file}"),
         file: file.to_string(),
         diff: vec![DiffLine {
             sig: Sig::Add,
@@ -334,6 +337,7 @@ fn decision_id_matches_gate_decision_id_field() {
 #[test]
 fn plan_gate_with_no_steps_approve() {
     let gate = Gate::Plan {
+        request_id: "req-empty-steps".to_string(),
         summary: "Empty steps plan".to_string(),
         steps: vec![],
     };
@@ -344,6 +348,7 @@ fn plan_gate_with_no_steps_approve() {
 #[test]
 fn plan_gate_with_no_steps_decision_id_stable() {
     let gate = Gate::Plan {
+        request_id: "req-empty-steps".to_string(),
         summary: "Empty steps plan".to_string(),
         steps: vec![],
     };
@@ -359,6 +364,7 @@ fn plan_gate_with_no_steps_decision_id_stable() {
 #[test]
 fn edit_gate_with_empty_diff_approve() {
     let gate = Gate::Edit {
+        request_id: "req-empty-diff".to_string(),
         file: "empty.rs".to_string(),
         diff: vec![],
     };
@@ -407,4 +413,29 @@ fn decision_id_implements_debug_clone_partialeq() {
     let id2 = id.clone();
     assert_eq!(id, id2);
     let _dbg = format!("{id:?}");
+}
+
+// ---------------------------------------------------------------------------
+// Regression: two Plan gates with different request_ids in the same session
+// must produce DIFFERENT decision_ids (no ledger dedup across gate occurrences)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn plan_gates_different_request_id_same_session_produce_different_decision_ids() {
+    let gate1 = Gate::Plan {
+        request_id: "req-plan-occ-1".to_string(),
+        summary: "same plan text".to_string(),
+        steps: vec![],
+    };
+    let gate2 = Gate::Plan {
+        request_id: "req-plan-occ-2".to_string(),
+        summary: "same plan text".to_string(),
+        steps: vec![],
+    };
+    let id1 = decision_id("session-same", &gate1);
+    let id2 = decision_id("session-same", &gate2);
+    assert_ne!(
+        id1, id2,
+        "two Plan gates with different request_ids must have distinct decision_ids"
+    );
 }
