@@ -1195,11 +1195,12 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
   const messages = deriveTranscript(sv, buildHitlMessages(sv));
 
   // Derive prompt history for the Composer (Up/Down arrow recall).
-  // Collect user-typed prompts in arrival order, skipping shell "! " entries.
-  const promptHistory: string[] = sv.transcript.flatMap((entry) => {
-    if (entry.role !== "user") return [];
-    return entry.text.startsWith("! ") ? [] : [entry.text];
-  });
+  // Include user-typed prompts AND `! ` shell commands, in arrival order — the
+  // shell entries recall verbatim as `! <cmd>` (the composer re-runs a leading
+  // `!` as a shell command), so past shell commands are recallable too.
+  const promptHistory: string[] = sv.transcript.flatMap((entry) =>
+    entry.role === "user" ? [entry.text] : [],
+  );
 
   function handleSend(text: string) {
     // If text starts with "!" run the shell command on the session's host.
