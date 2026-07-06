@@ -16,8 +16,8 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { useVm } from "../bridge/useVm";
-import { launchSession, fetchGraph, capsKey } from "../bridge/api";
-import type { CapabilitiesView, ModelCatalog } from "../bridge/types";
+import { launchSession, fetchGraph, capsKey, getSettings, refreshCapabilities } from "../bridge/api";
+import type { CapabilitiesView, DiscoveredSession, ModelCatalog } from "../bridge/types";
 import type { Driver, GraphNode } from "../bridge/workstreamTypes";
 import { Modal } from "../components/Modal";
 
@@ -36,11 +36,35 @@ const DRIVERS: { id: Driver; label: string }[] = [
   { id: "gemini", label: "Gemini" },
 ];
 
+/** Per-driver accent (design tokens `--d-claude/--d-codex/--d-gemini`, with
+ *  literal fallbacks matching Board/GraphScreen's driverColor map). */
+const DRIVER_COLOR: Record<Driver, string> = {
+  claude: "var(--d-claude, #d97757)",
+  codex: "var(--d-codex, #3fb6a8)",
+  gemini: "var(--d-gemini, #9b8cf0)",
+};
+
 const POSTURES: { value: "ask" | "auto" | "full"; label: string }[] = [
   { value: "ask", label: "Ask each time" },
   { value: "auto", label: "Auto-approve safe" },
   { value: "full", label: "Full autonomy" },
 ];
+
+// Resume-label helpers (mirror NewSession's).
+function relativeTime(epochMs: number): string {
+  const diffSec = Math.floor((Date.now() - epochMs) / 1000);
+  if (diffSec < 60) return "just now";
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  return `${Math.floor(diffHr / 24)}d ago`;
+}
+
+function sessionLabel(s: DiscoveredSession): string {
+  const snippet = s.snippet.length > 50 ? s.snippet.slice(0, 50) + "…" : s.snippet;
+  return `${relativeTime(s.modified_ms)} · ${snippet}`;
+}
 
 const sectionLabel: React.CSSProperties = {
   fontSize: "calc(11.5px * var(--fs,1))",
@@ -85,9 +109,26 @@ function pickerBtnStyle(selected: boolean, disabled?: boolean): React.CSSPropert
 // ---------------------------------------------------------------------------
 
 export function NodeModal() {
-  const { state, dispatch, hosts, assignSession, addConnection, goToGraph } = useVm();
+  const {
+    state,
+    dispatch,
+    hosts,
+    assignSession,
+    addConnection,
+    goToGraph,
+    deleteWorkstream,
+    markDraftWorkstream,
+  } = useVm();
   const ctx = state.nodeModalCtx;
   const open = state.screen === "node-modal" && ctx !== null;
+
+  // BUG #2 — a "Single session" fast-lane workstream is created (empty) BEFORE
+  // this modal opens. If the user cancels without ever launching an agent, that
+  // empty draft must be discarded (otherwise it lingers on the Board and has to
+  // be deleted by hand). We only treat the first-node modal as a discardable
+  // draft, and only when it never produced a session — a successful launch sets
+  // this ref so the finally/close path leaves the (now non-empty) workstream be.
+  const launchedRef = React.useRef(false);
 
   const [name, setName] = useState("");
   const [project, setProject] = useState("");
@@ -95,15 +136,67 @@ export function NodeModal() {
     hosts.find((h) => h.is_local)?.id ?? hosts[0]?.id ?? "local"
   );
   const [driver, setDriver] = useState<Driver>("claude");
+  const [userModifiedDriver, setUserModifiedDriver] = useState(false);
   const [model, setModel] = useState("");
   const [userModifiedModel, setUserModifiedModel] = useState(false);
   const [posture, setPosture] = useState<"ask" | "auto" | "full">("auto");
+  // #2 pre-pick — Settings-persisted defaults (default_driver / default_models
+  // per driver / default_posture) resolved on mount. Model defaults are keyed
+  // by driver so switching driver picks that driver's default.
+  const [defaultModels, setDefaultModels] = useState<Record<string, string>>({});
   const [firstPrompt, setFirstPrompt] = useState("");
   const [controller, setController] = useState<string | null>(null);
   const [feeder, setFeeder] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [existingNodes, setExistingNodes] = useState<GraphNode[]>([]);
+  // #3 resume/continue — mirrors NewSession. `selectedResume === "continue"`
+  // maps to continue_recent; any other value is a resume_session_id.
+  const [resume, setResume] = useState(false);
+  const [selectedResume, setSelectedResume] = useState<string>("continue");
+
+  // #2 pre-pick — load Settings defaults once on mount (default driver,
+  // per-driver default model, default posture). Absent settings degrade to the
+  // capabilities-first-model / "auto" fallbacks used before.
+  useEffect(() => {
+    getSettings()
+      .then((s) => {
+        const dm: Record<string, string> = {};
+        for (const [d, m] of s.default_models ?? []) dm[d] = m;
+        // default_model is the legacy claude default — honor it if no explicit
+        // per-driver claude entry exists.
+        if (dm.claude === undefined && s.default_model) dm.claude = s.default_model;
+        setDefaultModels(dm);
+        if (!userModifiedDriver && s.default_driver) {
+          setDriver(s.default_driver as Driver);
+        }
+        const p = s.default_posture as "ask" | "auto" | "full";
+        if (p === "ask" || p === "auto" || p === "full") setPosture(p);
+      })
+      .catch(() => {/* keep fallbacks on error */});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // BUG #2 — refresh capabilities when the launch modal OPENS (and whenever the
+  // selected host/driver changes while open) so real availability populates and
+  // the driver picker / Launch button aren't blocked on absent telemetry.
+  // Fire-and-forget (mirrors NewSession's resume refresh) — results arrive via
+  // `capabilities` vm-updates.
+  useEffect(() => {
+    if (!open) return;
+    refreshCapabilities({ host_id: hostId, driver, project: project.trim() || undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, hostId, driver]);
+
+  // #3 resume — opening the picker (or changing project/host while it's open)
+  // fires a fire-and-forget refresh WITH the chosen project so claude's
+  // per-project session list populates. The cached list renders instantly off
+  // `state.capabilities` regardless.
+  useEffect(() => {
+    if (!resume) return;
+    refreshCapabilities({ host_id: hostId, driver, project: project.trim() || undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resume, hostId, driver, project]);
 
   // Existing nodes in this workstream — for the Controlled-by/Feeds-from
   // pickers. A brand-new "single session" workstream has none (nmHasNodes).
@@ -142,21 +235,82 @@ export function NodeModal() {
   function capsForDriver(d: Driver): CapabilitiesView | undefined {
     return state.capabilities[capsKey(d, hostId)];
   }
+  /** True while REAL discovery for this (driver, host) hasn't landed yet — caps
+   *  are absent. We stay optimistic during this window (never grey), and show a
+   *  loading indicator instead of the empty state. */
+  function driverDiscovering(d: Driver): boolean {
+    return capsForDriver(d) === undefined;
+  }
+  // Driver availability from REAL per-host discovery (dynamic-capabilities.md
+  // §5). While caps are absent (discovery in flight) stay optimistic — never
+  // grey a loading driver. Once caps are present the truth is authoritative:
+  // available iff Marsad has a launch driver (`launchable`) AND the CLI was
+  // actually detected on the host (`cli_available`). gemini → launchable:false
+  // → greyed; a driver not installed on the host → cli_available:false → greyed.
   function driverAvailable(d: Driver): boolean {
-    return capsForDriver(d)?.cli_available === true;
+    const c = capsForDriver(d);
+    if (!c) return true; // discovery in flight — optimistic
+    return c.launchable === true && c.cli_available === true;
+  }
+  /** Known-unavailable: caps are PRESENT and report the driver as not
+   *  launchable (gemini) or its CLI not detected. Absent caps (loading) are
+   *  never known-unavailable. */
+  function driverKnownUnavailable(d: Driver): boolean {
+    const c = capsForDriver(d);
+    return !!c && !driverAvailable(d);
   }
 
   const modelCatalog: ModelCatalog = capsForDriver(driver)?.models ?? EMPTY_MODEL_CATALOG;
 
+  // #1 model free-text — the custom input is ONLY for a model NOT in the
+  // catalog. When `model` matches a catalog entry (a picked family/radio), the
+  // box is empty; it shows the typed id only when the user is entering a custom
+  // one. Prevents picking `opus` from filling the box with "opus".
+  const customModelValue = modelCatalog.models.some((m) => m.id === model) ? "" : model;
+
+  // #3 resume — sessions come ONLY from capabilities[(driver, host)].sessions
+  // (populated by scan_claude_sessions once a project is in scope). String-
+  // project entries are filtered to the chosen project; agy-style null-project
+  // entries always show (they aren't scoped to a requested project).
+  const projectTrim = project.trim();
+  const driverCaps = capsForDriver(driver);
+  const allSessions: DiscoveredSession[] = driverCaps?.sessions ?? [];
+  const visibleSessions = allSessions.filter(
+    (s) => s.project == null || s.project === projectTrim
+  );
+  // #5 loading — caps absent for the selected (driver, host) ⇒ real discovery
+  // is in flight. Drives the model-list + resume-list spinners.
+  const capsLoading = driverCaps === undefined;
+  // #6 lazy unknown-path probe — the user typed/picked a project with no
+  // sessions in the current caps. Fire a scoped refresh so a previously-unknown
+  // path's sessions populate; show the resume spinner while it lands. Guarded so
+  // we only re-probe once per (host, driver, project) with zero visible hits.
+  const lazyProbedRef = React.useRef<string>("");
+  useEffect(() => {
+    if (!resume || !projectTrim) return;
+    if (visibleSessions.length > 0) return;
+    const key = `${hostId}::${driver}::${projectTrim}`;
+    if (lazyProbedRef.current === key) return;
+    lazyProbedRef.current = key;
+    refreshCapabilities({ host_id: hostId, driver, project: projectTrim });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resume, hostId, driver, projectTrim, visibleSessions.length]);
+
   useEffect(() => {
     if (userModifiedModel) return;
-    if (modelCatalog.models.length > 0) {
+    // Prefer the Settings per-driver default when it's a real option in this
+    // (driver,host)'s catalog (or when free text is allowed); else the
+    // newest/first catalog model; else empty.
+    const pref = defaultModels[driver];
+    if (pref && (modelCatalog.free_text || modelCatalog.models.some((m) => m.id === pref))) {
+      setModel(pref);
+    } else if (modelCatalog.models.length > 0) {
       setModel(modelCatalog.models[0].id);
     } else {
       setModel("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelCatalog.models, userModifiedModel]);
+  }, [modelCatalog.models, modelCatalog.free_text, userModifiedModel, defaultModels, driver]);
 
   function selectModel(id: string) {
     setUserModifiedModel(true);
@@ -165,11 +319,27 @@ export function NodeModal() {
 
   function selectDriver(d: Driver) {
     if (!driverAvailable(d)) return;
+    setUserModifiedDriver(true);
     setDriver(d);
     setUserModifiedModel(false);
   }
 
   function close() {
+    // BUG #2 — discard a just-created empty draft on cancel. Only when this is
+    // the first-node fast lane (`isFirstNode`), no agent was launched in this
+    // modal session, AND the workstream genuinely has 0 sessions right now.
+    // Never delete a workstream that already has sessions (the user might just
+    // be adding another agent and cancelling that).
+    if (ctx && ctx.isFirstNode && !launchedRef.current) {
+      const card = state.board?.all.find((c) => c.id === ctx.wsId);
+      const sessionCount = card?.session_count ?? 0;
+      if (sessionCount === 0) {
+        void deleteWorkstream(ctx.wsId);
+      }
+      // Draft consumed (discarded above, or never a draft) — clear the marker
+      // so a later openBoard doesn't try to discard it again.
+      markDraftWorkstream(null);
+    }
     dispatch({ type: "SET_SCREEN", screen: "board" });
   }
 
@@ -187,6 +357,14 @@ export function NodeModal() {
 
     setBusy(true);
     setLaunchError(null);
+    const resumeArgs: { resume_session_id?: string; continue_recent?: boolean } = {};
+    if (resume) {
+      if (selectedResume === "continue") {
+        resumeArgs.continue_recent = true;
+      } else {
+        resumeArgs.resume_session_id = selectedResume;
+      }
+    }
     try {
       const newId = await launchSession({
         project: project.trim(),
@@ -195,7 +373,13 @@ export function NodeModal() {
         posture,
         first_prompt: firstPrompt.trim() || undefined,
         name: sessionName,
+        driver,
+        ...resumeArgs,
       });
+      // A session now exists for this workstream — it is no longer an empty
+      // draft, so cancelling afterwards must NOT discard it (BUG #2).
+      launchedRef.current = true;
+      markDraftWorkstream(null);
       // First agent added = effective lead (isFirstNode is exactly that).
       await assignSession(newId, ctx.wsId, ctx.isFirstNode);
       if (controller) {
@@ -304,21 +488,36 @@ export function NodeModal() {
                   data-testid={`nm-driver-${d.id}`}
                   onClick={() => selectDriver(d.id)}
                   disabled={!available}
-                  title={!available ? "Not yet launchable" : undefined}
-                  style={pickerBtnStyle(selected, !available)}
+                  title={!available ? "Not available on this host" : undefined}
+                  style={{
+                    ...pickerBtnStyle(selected, !available),
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 7,
+                    borderColor: selected ? DRIVER_COLOR[d.id] : "var(--border2)",
+                    color: selected ? DRIVER_COLOR[d.id] : "var(--txt2)",
+                  }}
                 >
+                  <span
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      background: DRIVER_COLOR[d.id],
+                      flexShrink: 0,
+                    }}
+                  />
                   {d.label}
                 </button>
               );
             })}
           </div>
-          {!driverAvailable(driver) && (
+          {driverKnownUnavailable(driver) && (
             <div
               data-testid="nm-driver-unavailable-note"
               style={{ fontSize: "calc(12px * var(--fs,1))", color: "var(--txt3)", marginTop: 6, fontStyle: "italic" }}
             >
-              {DRIVERS.find((d) => d.id === driver)?.label} isn't launchable on this host yet — not
-              yet launchable.
+              {DRIVERS.find((d) => d.id === driver)?.label} isn't available on this host.
             </div>
           )}
         </div>
@@ -424,6 +623,99 @@ export function NodeModal() {
           </div>
         </div>
 
+        {/* Resume / continue — #3, mirrors NewSession. Sourced from
+            capabilities[(driver,host)].sessions (claude: scoped to the chosen
+            project). */}
+        <div>
+          <div style={sectionLabel}>Resume</div>
+          <div
+            data-testid="nm-resume-toggle"
+            onClick={() => setResume((r) => !r)}
+            style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer" }}
+          >
+            <span
+              style={{
+                width: 34,
+                height: 19,
+                borderRadius: 10,
+                background: resume ? "var(--accent)" : "var(--border2)",
+                position: "relative",
+                flexShrink: 0,
+                transition: "background 0.15s",
+              }}
+            >
+              <span
+                style={{
+                  position: "absolute",
+                  top: 2,
+                  left: resume ? 17 : 2,
+                  width: 15,
+                  height: 15,
+                  borderRadius: "50%",
+                  background: "#fff",
+                  transition: "left 0.15s",
+                }}
+              />
+            </span>
+            <span style={{ fontSize: "calc(13.5px * var(--fs,1))", color: "var(--txt2)", fontWeight: 500 }}>
+              Continue or resume a previous session
+            </span>
+          </div>
+
+          {resume && (
+            <div
+              style={{
+                marginTop: 8,
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                maxHeight: 200,
+                overflowY: "auto",
+              }}
+            >
+              <div
+                data-testid="nm-resume-continue"
+                onClick={() => setSelectedResume("continue")}
+                style={{
+                  ...pickerBtnStyle(selectedResume === "continue"),
+                  fontWeight: 600,
+                }}
+              >
+                Continue most recent
+              </div>
+              {visibleSessions.map((s) => {
+                const selected = selectedResume === s.id;
+                return (
+                  <div
+                    key={s.id}
+                    data-testid={`nm-resume-session-${s.id}`}
+                    onClick={() => setSelectedResume(s.id)}
+                    style={pickerBtnStyle(selected)}
+                  >
+                    {sessionLabel(s)}
+                  </div>
+                );
+              })}
+              {visibleSessions.length === 0 && capsLoading && (
+                <div
+                  data-testid="nm-resume-loading"
+                  style={{ fontSize: "calc(12.5px * var(--fs,1))", color: "var(--txt3)", fontStyle: "italic" }}
+                >
+                  Discovering sessions…
+                </div>
+              )}
+              {visibleSessions.length === 0 && !capsLoading && (
+                <div
+                  data-testid="nm-resume-hint"
+                  style={{ fontSize: "calc(12.5px * var(--fs,1))", color: "var(--txt3)", fontStyle: "italic" }}
+                >
+                  No previous sessions discovered yet for this project.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Controlled by / Feeds from — only when the workstream already has
             nodes to wire to (nmHasNodes). Single-select toggle each. */}
         {existingNodes.length > 0 && (
@@ -497,7 +789,15 @@ export function NodeModal() {
                 );
               })}
             </div>
-            {modelCatalog.models.length === 0 && (
+            {modelCatalog.models.length === 0 && capsLoading && (
+              <div
+                data-testid="nm-model-loading"
+                style={{ fontSize: "calc(13px * var(--fs,1))", color: "var(--txt3)", fontStyle: "italic" }}
+              >
+                Discovering models…
+              </div>
+            )}
+            {modelCatalog.models.length === 0 && !capsLoading && (
               <div
                 data-testid="nm-model-empty-hint"
                 style={{ fontSize: "calc(13px * var(--fs,1))", color: "var(--txt3)", fontStyle: "italic" }}
@@ -508,9 +808,9 @@ export function NodeModal() {
             {modelCatalog.free_text && (
               <input
                 data-testid="nm-model-freetext"
-                value={model}
+                value={customModelValue}
                 onChange={(e) => selectModel(e.target.value)}
-                placeholder="Custom model id"
+                placeholder="Type your own"
                 className="mono"
                 autoComplete="off"
                 autoCorrect="off"
@@ -574,7 +874,19 @@ export function NodeModal() {
           className="mono"
           style={{ fontSize: "calc(12px * var(--fs,1))", color: launchError ? "var(--error)" : "var(--txt3)", flex: 1 }}
         >
-          {launchError ? `Launch failed: ${launchError}` : "Runs over your SSH config · nothing installed inbound"}
+          {launchError ? (
+            `Launch failed: ${launchError}`
+          ) : !project.trim() ? (
+            <span data-testid="nm-launch-disabled-reason">Enter a project directory</span>
+          ) : !driverAvailable(driver) ? (
+            <span data-testid="nm-launch-disabled-reason">
+              {driverDiscovering(driver)
+                ? "Discovering… "
+                : `${DRIVERS.find((d) => d.id === driver)?.label} isn't available on this host`}
+            </span>
+          ) : (
+            "Runs over your SSH config · nothing installed inbound"
+          )}
         </div>
         <button
           onClick={close}

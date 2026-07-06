@@ -92,6 +92,14 @@ export interface GraphScreenProps {
   onDiscardDraft?: () => void;
   /** Drag-to-connect finished + an edge kind was chosen. */
   onConnect?: (from: string, to: string, kind: ConnKind, bi: boolean) => void;
+
+  // ---- Workstream lifecycle (#5, operate-mode inspector) — all optional ----
+  /** Pause every session in this workstream. */
+  onPauseWorkstream?: () => void;
+  /** Resume every session in this workstream. */
+  onResumeWorkstream?: () => void;
+  /** Delete this workstream (kills all sessions) — confirmed by the caller. */
+  onDeleteWorkstream?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +119,9 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
     onConfirmDraft,
     onDiscardDraft,
     onConnect,
+    onPauseWorkstream,
+    onResumeWorkstream,
+    onDeleteWorkstream,
   } = props;
 
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("host");
@@ -1082,6 +1093,39 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
               </span>
             </div>
 
+            {/* Workstream lifecycle (#5) — Pause all / Resume all / Delete. */}
+            {(onPauseWorkstream || onResumeWorkstream || onDeleteWorkstream) && (
+              <div style={{ display: "flex", gap: 7, marginBottom: 14, flexWrap: "wrap" }}>
+                {onPauseWorkstream && (
+                  <button
+                    data-testid="inspector-pause-ws"
+                    onClick={() => onPauseWorkstream()}
+                    style={inspectorActionStyle(false)}
+                  >
+                    ⏸ Pause all
+                  </button>
+                )}
+                {onResumeWorkstream && (
+                  <button
+                    data-testid="inspector-resume-ws"
+                    onClick={() => onResumeWorkstream()}
+                    style={inspectorActionStyle(false)}
+                  >
+                    ▶ Resume all
+                  </button>
+                )}
+                {onDeleteWorkstream && (
+                  <button
+                    data-testid="inspector-delete-ws"
+                    onClick={() => onDeleteWorkstream()}
+                    style={inspectorActionStyle(true)}
+                  >
+                    ✕ Delete
+                  </button>
+                )}
+              </div>
+            )}
+
             {graph.inspector.pending_handoff && (
               <div
                 data-testid="inspector-handoff"
@@ -1168,6 +1212,21 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
 // ---------------------------------------------------------------------------
 // Small local helpers
 // ---------------------------------------------------------------------------
+
+function inspectorActionStyle(danger: boolean): CSSProperties {
+  return {
+    fontFamily: "inherit",
+    fontSize: "calc(11.5px * var(--fs,1))",
+    fontWeight: 600,
+    padding: "6px 11px",
+    borderRadius: 8,
+    cursor: "pointer",
+    border: danger ? "1px solid var(--error)" : "1px solid var(--border2)",
+    background: danger ? "var(--error-bg)" : "var(--panel2)",
+    color: danger ? "var(--error)" : "var(--txt2)",
+    whiteSpace: "nowrap",
+  };
+}
 
 function pickerBtnStyle(border: string, bg: string, fg: string): CSSProperties {
   return {

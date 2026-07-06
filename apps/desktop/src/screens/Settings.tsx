@@ -13,8 +13,25 @@ import { useVm } from "../bridge/useVm";
 import { useTheme } from "../theme/ThemeProvider";
 import { getUiScale, applyUiScale } from "../theme/uiScale";
 import { Toggle } from "../components/Toggle";
-import { getAutostart, setAutostart, addHost, updateHost, removeHost, connectHostInteractive, listWslDistros, getSettings, setSettings, parseEnv, DEFAULT_SETTINGS, unionModelCatalog } from "../bridge/api";
-import type { ModelInfo, Settings, NotifPref } from "../bridge/types";
+import { getAutostart, setAutostart, addHost, updateHost, removeHost, connectHostInteractive, listWslDistros, getSettings, setSettings, parseEnv, DEFAULT_SETTINGS } from "../bridge/api";
+import type { CapabilitiesView, ModelInfo, Settings, NotifPref } from "../bridge/types";
+import type { Driver } from "../bridge/workstreamTypes";
+
+// Fixed enum of drivers (mirrors `Driver` in workstreamTypes.ts) — NOT model
+// data, so not a capabilities-gate violation. Per-driver models/availability
+// are capabilities-driven wherever shown.
+const DRIVERS: { id: Driver; label: string }[] = [
+  { id: "claude", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
+  { id: "gemini", label: "Gemini" },
+];
+
+/** Per-driver accent (design tokens `--d-claude/--d-codex/--d-gemini`). */
+const DRIVER_COLOR: Record<Driver, string> = {
+  claude: "var(--d-claude, #d97757)",
+  codex: "var(--d-codex, #3fb6a8)",
+  gemini: "var(--d-gemini, #9b8cf0)",
+};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -605,6 +622,302 @@ function envToText(env?: Array<[string, string]>): string {
   return (env ?? []).map(([k, v]) => `${k}=${v}`).join("\n");
 }
 
+/** Extract a `[driver, command]` list into a per-driver map for the codex /
+ *  gemini command-override fields (claude uses the dedicated `claude_bin`). */
+function agentCommandsToMap(cmds?: Array<[string, string]>): Record<string, string> {
+  const m: Record<string, string> = {};
+  for (const [d, c] of cmds ?? []) m[d] = c;
+  return m;
+}
+
+/** Build the `agent_commands` `[driver, command]` list to persist, given the
+ *  claude bin + the codex/gemini overrides. Only non-empty commands are kept.
+ *  Claude's override lives in `claude_bin` (its own field), so it's also
+ *  mirrored into agent_commands here for a uniform per-driver record. */
+function buildAgentCommands(
+  claudeBin: string,
+  codexCmd: string,
+  geminiCmd: string,
+): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  if (claudeBin.trim()) out.push(["claude", claudeBin.trim()]);
+  if (codexCmd.trim()) out.push(["codex", codexCmd.trim()]);
+  if (geminiCmd.trim()) out.push(["gemini", geminiCmd.trim()]);
+  return out;
+}
+
+// Shared field styling for host-config rows (module scope so both the local
+// card and the per-host RemoteHostCard use identical inputs).
+const HOST_FIELD_LABEL: React.CSSProperties = {
+  fontSize: "calc(12.5px * var(--fs,1))",
+  fontWeight: 600,
+  color: "var(--txt3)",
+  marginBottom: 5,
+};
+const HOST_FIELD_INPUT: React.CSSProperties = {
+  width: "100%",
+  background: "var(--panel)",
+  border: "1px solid var(--border2)",
+  borderRadius: 8,
+  padding: "9px 11px",
+  color: "var(--txt)",
+  fontSize: "calc(14.5px * var(--fs,1))",
+  outline: "none",
+  boxSizing: "border-box",
+  fontFamily: "var(--font-mono)",
+};
+
+/**
+ * A single registered REMOTE host card (BUG #3) — header (label/status/connect/
+ * remove) plus the row layout: Claude Code / Codex / Gemini command rows, the
+ * Setup command row, then the Environment box. Edits persist via `updateHost`
+ * (the three agent rows go through `agentCommands`). Local state seeds from the
+ * host and re-syncs when the host config changes (vm-update round-trip).
+ */
+function RemoteHostCard({
+  host,
+  onConnect,
+  onRemove,
+}: {
+  host: import("../bridge/types").Host;
+  onConnect: (target: string) => void;
+  onRemove: (id: string) => void;
+}) {
+  const cmds = agentCommandsToMap(host.agent_commands);
+  const [claudeBin, setClaudeBin] = useState(host.claude_bin ?? cmds.claude ?? "");
+  const [codexCmd, setCodexCmd] = useState(cmds.codex ?? "");
+  const [geminiCmd, setGeminiCmd] = useState(cmds.gemini ?? "");
+  const [setup, setSetup] = useState(host.setup ?? "");
+  const [env, setEnv] = useState(envToText(host.env));
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Re-sync from the host whenever its persisted config changes.
+  const syncKey = `${host.claude_bin ?? ""}|${host.setup ?? ""}|${envToText(host.env)}|${cmds.codex ?? ""}|${cmds.gemini ?? ""}`;
+  useEffect(() => {
+    const m = agentCommandsToMap(host.agent_commands);
+    setClaudeBin(host.claude_bin ?? m.claude ?? "");
+    setCodexCmd(m.codex ?? "");
+    setGeminiCmd(m.gemini ?? "");
+    setSetup(host.setup ?? "");
+    setEnv(envToText(host.env));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncKey]);
+
+  async function handleSave() {
+    if (busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await updateHost(
+        host.id,
+        claudeBin.trim(),
+        setup.trim(),
+        parseEnv(env),
+        undefined,
+        buildAgentCommands(claudeBin, codexCmd, geminiCmd),
+      );
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const statusColor =
+    host.status === "Connected"
+      ? "var(--done)"
+      : host.status === "Reconnecting" || host.status === "Connecting"
+      ? "var(--needs)"
+      : "var(--txt3)";
+
+  return (
+    <div
+      data-testid={`host-row-${host.id}`}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 11,
+        padding: "13px 15px",
+        borderRadius: 11,
+        background: "var(--panel)",
+        border: "1px solid var(--border)",
+      }}
+    >
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 13 }}>
+        <HostStatusDot status={host.status} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: "calc(15.5px * var(--fs,1))", color: "var(--txt)" }}>
+            {host.label}
+          </div>
+          <div
+            className="mono"
+            style={{ fontSize: "calc(13px * var(--fs,1))", color: "var(--txt3)", marginTop: 2 }}
+          >
+            {host.target} · {host.session_count} session{host.session_count !== 1 ? "s" : ""}
+          </div>
+        </div>
+        <span style={{ fontSize: "calc(13.5px * var(--fs,1))", color: statusColor, fontWeight: 600 }}>
+          {host.status}
+        </span>
+        {host.status !== "Connected" && (
+          <button
+            data-testid={`host-connect-${host.id}`}
+            onClick={() => onConnect(host.target)}
+            title="Open an interactive SSH login (for MFA / keyboard-interactive hosts)"
+            style={{
+              fontFamily: "inherit",
+              fontSize: "calc(13.5px * var(--fs,1))",
+              fontWeight: 600,
+              padding: "6px 11px",
+              borderRadius: 8,
+              border: "1px solid var(--border2)",
+              background: "transparent",
+              color: "var(--txt2)",
+              cursor: "pointer",
+            }}
+          >
+            Connect
+          </button>
+        )}
+        {host.removable ? (
+          <button
+            data-testid={`host-remove-${host.id}`}
+            onClick={() => onRemove(host.id)}
+            style={{
+              fontFamily: "inherit",
+              fontSize: "calc(13.5px * var(--fs,1))",
+              fontWeight: 600,
+              padding: "6px 11px",
+              borderRadius: 8,
+              border: "1px solid var(--border2)",
+              background: "transparent",
+              color: "var(--txt2)",
+              cursor: "pointer",
+            }}
+          >
+            Remove
+          </button>
+        ) : (
+          <span
+            style={{
+              fontSize: "calc(12.5px * var(--fs,1))",
+              fontWeight: 600,
+              padding: "3px 8px",
+              borderRadius: 6,
+              background: "var(--panel2)",
+              color: "var(--txt3)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            Protected
+          </span>
+        )}
+      </div>
+
+      {/* Row layout: one row per agent command, then Setup, then Environment. */}
+      <div>
+        <div style={HOST_FIELD_LABEL}>Claude Code command</div>
+        <input
+          data-testid={`host-claude-bin-${host.id}`}
+          value={claudeBin}
+          onChange={(e) => setClaudeBin(e.target.value)}
+          placeholder="claude"
+          className="mono"
+          style={HOST_FIELD_INPUT}
+        />
+      </div>
+      <div>
+        <div style={HOST_FIELD_LABEL}>Codex command</div>
+        <input
+          data-testid={`host-codex-cmd-${host.id}`}
+          value={codexCmd}
+          onChange={(e) => setCodexCmd(e.target.value)}
+          placeholder="codex"
+          className="mono"
+          style={HOST_FIELD_INPUT}
+        />
+      </div>
+      <div>
+        <div style={HOST_FIELD_LABEL}>Gemini command</div>
+        <input
+          data-testid={`host-gemini-cmd-${host.id}`}
+          value={geminiCmd}
+          onChange={(e) => setGeminiCmd(e.target.value)}
+          placeholder="gemini"
+          className="mono"
+          style={HOST_FIELD_INPUT}
+        />
+      </div>
+      <div>
+        <div style={HOST_FIELD_LABEL}>Setup command</div>
+        <input
+          data-testid={`host-setup-${host.id}`}
+          value={setup}
+          onChange={(e) => setSetup(e.target.value)}
+          placeholder="module load cuda"
+          className="mono"
+          style={HOST_FIELD_INPUT}
+        />
+      </div>
+      <div>
+        <div style={HOST_FIELD_LABEL}>Environment (one KEY=VALUE per line)</div>
+        <textarea
+          data-testid={`host-env-${host.id}`}
+          value={env}
+          onChange={(e) => setEnv(e.target.value)}
+          placeholder={"CUDA_HOME=/usr/local/cuda\nFOO=bar"}
+          className="mono"
+          rows={3}
+          style={{ ...HOST_FIELD_INPUT, resize: "vertical", minHeight: 64 }}
+        />
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span
+          className="mono"
+          style={{ fontSize: "calc(12.5px * var(--fs,1))", color: "var(--txt3)", flex: 1 }}
+        >
+          Applied to every session launched on this host.
+        </span>
+        {saved && (
+          <span
+            data-testid={`host-saved-${host.id}`}
+            style={{ fontSize: "calc(13px * var(--fs,1))", color: "var(--done)", fontWeight: 600 }}
+          >
+            Saved
+          </span>
+        )}
+        {err && (
+          <span style={{ fontSize: "calc(13px * var(--fs,1))", color: "var(--error)" }}>{err}</span>
+        )}
+        <button
+          data-testid={`host-save-${host.id}`}
+          disabled={busy}
+          onClick={handleSave}
+          style={{
+            fontFamily: "inherit",
+            fontWeight: 700,
+            fontSize: "calc(14.5px * var(--fs,1))",
+            padding: "8px 15px",
+            borderRadius: 8,
+            border: "none",
+            background: busy ? "var(--border2)" : "var(--accent)",
+            color: "#fff",
+            cursor: busy ? "default" : "pointer",
+            opacity: busy ? 0.55 : 1,
+          }}
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function HostsTab() {
   const { hosts } = useVm();
   const [label, setLabel] = useState("");
@@ -616,12 +929,19 @@ function HostsTab() {
 
   // Add-host launch config fields.
   const [addClaudeBin, setAddClaudeBin] = useState("");
+  const [addCodexCmd, setAddCodexCmd] = useState("");
+  const [addGeminiCmd, setAddGeminiCmd] = useState("");
   const [addSetup, setAddSetup] = useState("");
   const [addEnv, setAddEnv] = useState("");
 
   // Local-machine launch config, prefilled from the localhost host entry.
   const localHost = hosts.find((h) => h.is_local);
+  // Remote (non-local) hosts — their editable config cards render at the very
+  // bottom (#1), grouped with the add-host form.
+  const remoteHosts = hosts.filter((h) => !h.is_local);
   const [localClaudeBin, setLocalClaudeBin] = useState("");
+  const [localCodexCmd, setLocalCodexCmd] = useState("");
+  const [localGeminiCmd, setLocalGeminiCmd] = useState("");
   const [localSetup, setLocalSetup] = useState("");
   const [localEnv, setLocalEnv] = useState("");
   const [localBusy, setLocalBusy] = useState(false);
@@ -629,9 +949,13 @@ function HostsTab() {
 
   // Re-sync the local-machine fields whenever the localhost config changes
   // (e.g. after restore on launch or a save round-trip via vm-update).
-  const localKey = `${localHost?.claude_bin ?? ""}|${localHost?.setup ?? ""}|${envToText(localHost?.env)}`;
+  const localCmds = agentCommandsToMap(localHost?.agent_commands);
+  const localKey = `${localHost?.claude_bin ?? ""}|${localHost?.setup ?? ""}|${envToText(localHost?.env)}|${localCmds.codex ?? ""}|${localCmds.gemini ?? ""}`;
   useEffect(() => {
-    setLocalClaudeBin(localHost?.claude_bin ?? "");
+    const cmds = agentCommandsToMap(localHost?.agent_commands);
+    setLocalClaudeBin(localHost?.claude_bin ?? cmds.claude ?? "");
+    setLocalCodexCmd(cmds.codex ?? "");
+    setLocalGeminiCmd(cmds.gemini ?? "");
     setLocalSetup(localHost?.setup ?? "");
     setLocalEnv(envToText(localHost?.env));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -647,6 +971,8 @@ function HostsTab() {
         localClaudeBin.trim(),
         localSetup.trim(),
         parseEnv(localEnv),
+        undefined,
+        buildAgentCommands(localClaudeBin, localCodexCmd, localGeminiCmd),
       );
       setLocalSaved(true);
       window.setTimeout(() => setLocalSaved(false), 2500);
@@ -686,11 +1012,14 @@ function HostsTab() {
         addClaudeBin.trim(),
         addSetup.trim(),
         parseEnv(addEnv),
+        buildAgentCommands(addClaudeBin, addCodexCmd, addGeminiCmd),
       );
       // The host list refreshes via the "hosts" vm-update; clear the form.
       setLabel("");
       setTarget("");
       setAddClaudeBin("");
+      setAddCodexCmd("");
+      setAddGeminiCmd("");
       setAddSetup("");
       setAddEnv("");
     } catch (e) {
@@ -744,6 +1073,7 @@ function HostsTab() {
       {/* Local machine launch config */}
       <div style={{ ...S.sectionLabel, marginBottom: 10 }}>Local machine</div>
       <div
+        data-testid="host-row-local"
         style={{
           padding: 15,
           borderRadius: 12,
@@ -755,29 +1085,69 @@ function HostsTab() {
           marginBottom: 26,
         }}
       >
-        <div style={{ display: "flex", gap: 11 }}>
-          <div style={{ flex: 1 }}>
-            <div style={fieldLabel}>Claude command</div>
-            <input
-              data-testid="local-claude-bin"
-              value={localClaudeBin}
-              onChange={(e) => setLocalClaudeBin(e.target.value)}
-              placeholder="claude"
-              className="mono"
-              style={fieldInput}
-            />
-          </div>
-          <div style={{ flex: 1.6 }}>
-            <div style={fieldLabel}>Setup command</div>
-            <input
-              data-testid="local-setup"
-              value={localSetup}
-              onChange={(e) => setLocalSetup(e.target.value)}
-              placeholder="module load cuda"
-              className="mono"
-              style={fieldInput}
-            />
-          </div>
+        {/* localhost identity: this machine, not removable. */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <span style={{ fontSize: 11.5, color: "var(--txt2)", fontFamily: "var(--font-mono)" }}>
+            ▪ localhost · this machine
+          </span>
+          <span
+            style={{
+              fontSize: 10,
+              color: "var(--txt3)",
+              border: "1px solid var(--border)",
+              borderRadius: 5,
+              padding: "1px 6px",
+            }}
+          >
+            Protected
+          </span>
+        </div>
+        {/* Row layout (BUG #3) — one labeled row per agent command, then the
+            Setup command row, then the larger Environment box, matching the ref
+            design's Settings → Hosts host-card structure. */}
+        <div>
+          <div style={fieldLabel}>Claude Code command</div>
+          <input
+            data-testid="local-claude-bin"
+            value={localClaudeBin}
+            onChange={(e) => setLocalClaudeBin(e.target.value)}
+            placeholder="claude"
+            className="mono"
+            style={fieldInput}
+          />
+        </div>
+        <div>
+          <div style={fieldLabel}>Codex command</div>
+          <input
+            data-testid="local-codex-cmd"
+            value={localCodexCmd}
+            onChange={(e) => setLocalCodexCmd(e.target.value)}
+            placeholder="codex"
+            className="mono"
+            style={fieldInput}
+          />
+        </div>
+        <div>
+          <div style={fieldLabel}>Gemini command</div>
+          <input
+            data-testid="local-gemini-cmd"
+            value={localGeminiCmd}
+            onChange={(e) => setLocalGeminiCmd(e.target.value)}
+            placeholder="gemini"
+            className="mono"
+            style={fieldInput}
+          />
+        </div>
+        <div>
+          <div style={fieldLabel}>Setup command</div>
+          <input
+            data-testid="local-setup"
+            value={localSetup}
+            onChange={(e) => setLocalSetup(e.target.value)}
+            placeholder="module load cuda"
+            className="mono"
+            style={fieldInput}
+          />
         </div>
         <div>
           <div style={fieldLabel}>Environment (one KEY=VALUE per line)</div>
@@ -828,123 +1198,6 @@ function HostsTab() {
         </div>
       </div>
 
-      {/* Registered hosts */}
-      <div style={{ ...S.sectionLabel, marginBottom: 10 }}>Registered hosts</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 9, marginBottom: 26 }}>
-        {hosts.map((h) => (
-          <div
-            key={h.id}
-            data-testid={`host-row-${h.id}`}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 13,
-              padding: "13px 15px",
-              borderRadius: 11,
-              background: "var(--panel)",
-              border: "1px solid var(--border)",
-            }}
-          >
-            <HostStatusDot status={h.status} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontWeight: 600, fontSize: "calc(15.5px * var(--fs,1))", color: "var(--txt)" }}>
-                  {h.label}
-                </span>
-                {h.is_local && (
-                  <span
-                    style={{
-                      fontSize: "calc(11.5px * var(--fs,1))",
-                      fontWeight: 700,
-                      padding: "1px 6px",
-                      borderRadius: 5,
-                      background: "var(--panel2)",
-                      color: "var(--txt3)",
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    this machine
-                  </span>
-                )}
-              </div>
-              <div
-                className="mono"
-                style={{ fontSize: "calc(13px * var(--fs,1))", color: "var(--txt3)", marginTop: 2 }}
-              >
-                {h.target} · {h.session_count} session{h.session_count !== 1 ? "s" : ""}
-              </div>
-            </div>
-            <span
-              style={{
-                fontSize: "calc(13.5px * var(--fs,1))",
-                color:
-                  h.status === "Connected"
-                    ? "var(--done)"
-                    : h.status === "Reconnecting" || h.status === "Connecting"
-                    ? "var(--needs)"
-                    : "var(--txt3)",
-                fontWeight: 600,
-              }}
-            >
-              {h.status}
-            </span>
-            {!h.is_local && h.status !== "Connected" && (
-              <button
-                data-testid={`host-connect-${h.id}`}
-                onClick={() => handleConnect(h.target)}
-                title="Open an interactive SSH login (for MFA / keyboard-interactive hosts)"
-                style={{
-                  fontFamily: "inherit",
-                  fontSize: "calc(13.5px * var(--fs,1))",
-                  fontWeight: 600,
-                  padding: "6px 11px",
-                  borderRadius: 8,
-                  border: "1px solid var(--border2)",
-                  background: "transparent",
-                  color: "var(--txt2)",
-                  cursor: "pointer",
-                }}
-              >
-                Connect
-              </button>
-            )}
-            {h.removable ? (
-              <button
-                data-testid={`host-remove-${h.id}`}
-                onClick={() => handleRemove(h.id)}
-                style={{
-                  fontFamily: "inherit",
-                  fontSize: "calc(13.5px * var(--fs,1))",
-                  fontWeight: 600,
-                  padding: "6px 11px",
-                  borderRadius: 8,
-                  border: "1px solid var(--border2)",
-                  background: "transparent",
-                  color: "var(--txt2)",
-                  cursor: "pointer",
-                }}
-              >
-                Remove
-              </button>
-            ) : (
-              <span
-                style={{
-                  fontSize: "calc(12.5px * var(--fs,1))",
-                  fontWeight: 600,
-                  padding: "3px 8px",
-                  borderRadius: 6,
-                  background: "var(--panel2)",
-                  color: "var(--txt3)",
-                  border: "1px solid var(--border)",
-                }}
-              >
-                Protected
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-
       {hint && (
         <div
           data-testid="host-connect-hint"
@@ -960,6 +1213,26 @@ function HostsTab() {
         >
           {hint}
         </div>
+      )}
+
+      {/* Remote hosts — their CURRENT config (commands / setup / env), editable
+          in place. Grouped here at the bottom with the add-host form (#1) so
+          the existing hosts show their real values instead of looking like an
+          empty "add new" form. */}
+      {remoteHosts.length > 0 && (
+        <>
+          <div style={{ ...S.sectionLabel, marginBottom: 10 }}>Remote hosts</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 9, marginBottom: 26 }}>
+            {remoteHosts.map((h) => (
+              <RemoteHostCard
+                key={h.id}
+                host={h}
+                onConnect={handleConnect}
+                onRemove={handleRemove}
+              />
+            ))}
+          </div>
+        </>
       )}
 
       {/* Add a remote host */}
@@ -1041,30 +1314,51 @@ function HostsTab() {
             />
           </div>
         </div>
-        {/* Per-host launch config (optional) */}
-        <div style={{ display: "flex", gap: 11 }}>
-          <div style={{ flex: 1 }}>
-            <div style={fieldLabel}>Claude command</div>
-            <input
-              data-testid="host-add-claude-bin"
-              value={addClaudeBin}
-              onChange={(e) => setAddClaudeBin(e.target.value)}
-              placeholder="claude"
-              className="mono"
-              style={fieldInput}
-            />
-          </div>
-          <div style={{ flex: 1.6 }}>
-            <div style={fieldLabel}>Setup command</div>
-            <input
-              data-testid="host-add-setup"
-              value={addSetup}
-              onChange={(e) => setAddSetup(e.target.value)}
-              placeholder="module load cuda"
-              className="mono"
-              style={fieldInput}
-            />
-          </div>
+        {/* Per-host launch config (optional) — row layout (BUG #3): one labeled
+            row per agent command, then Setup, then the Environment box. */}
+        <div>
+          <div style={fieldLabel}>Claude Code command</div>
+          <input
+            data-testid="host-add-claude-bin"
+            value={addClaudeBin}
+            onChange={(e) => setAddClaudeBin(e.target.value)}
+            placeholder="claude"
+            className="mono"
+            style={fieldInput}
+          />
+        </div>
+        <div>
+          <div style={fieldLabel}>Codex command</div>
+          <input
+            data-testid="host-add-codex-cmd"
+            value={addCodexCmd}
+            onChange={(e) => setAddCodexCmd(e.target.value)}
+            placeholder="codex"
+            className="mono"
+            style={fieldInput}
+          />
+        </div>
+        <div>
+          <div style={fieldLabel}>Gemini command</div>
+          <input
+            data-testid="host-add-gemini-cmd"
+            value={addGeminiCmd}
+            onChange={(e) => setAddGeminiCmd(e.target.value)}
+            placeholder="gemini"
+            className="mono"
+            style={fieldInput}
+          />
+        </div>
+        <div>
+          <div style={fieldLabel}>Setup command</div>
+          <input
+            data-testid="host-add-setup"
+            value={addSetup}
+            onChange={(e) => setAddSetup(e.target.value)}
+            placeholder="module load cuda"
+            className="mono"
+            style={fieldInput}
+          />
         </div>
         <div>
           <div style={fieldLabel}>Environment (one KEY=VALUE per line)</div>
@@ -1174,30 +1468,94 @@ const POSTURES: Array<{ key: "ask" | "auto" | "full"; label: string; desc: strin
 ];
 
 interface SessionDefaultsTabProps {
-  model: string;
-  onModelChange: (m: string) => void;
+  /** The default driver applied to a fresh New Session / node ("claude" | …). */
+  driver: Driver;
+  onDriverChange: (d: Driver) => void;
+  /** Per-driver default model map (driver -> model slug). */
+  models: Record<string, string>;
+  onModelChange: (driver: Driver, m: string) => void;
   posture: "ask" | "auto" | "full";
   onPostureChange: (p: "ask" | "auto" | "full") => void;
-  /** Union of every known host/driver's models (dynamic-capabilities.md §5:
-   *  "same VM source (union across hosts for the global default picker) +
-   *  free text") — never a static import. */
-  models: ModelInfo[];
+  /** Live capabilities keyed by capsKey(driver, host) — the per-driver model
+   *  catalog is sourced from this (union across hosts), never a static import
+   *  (dynamic-capabilities.md §5). */
+  capabilities: Record<string, CapabilitiesView>;
 }
 
-function SessionDefaultsTab({ model, onModelChange, posture, onPostureChange, models }: SessionDefaultsTabProps) {
+/** Union of a single driver's models across every host, deduped by id — the
+ *  per-driver default-model catalog. Capabilities-sourced (never a preset). */
+function driverModelCatalog(
+  capabilities: Record<string, CapabilitiesView>,
+  driver: Driver,
+): ModelInfo[] {
+  const seen = new Set<string>();
+  const out: ModelInfo[] = [];
+  for (const cap of Object.values(capabilities)) {
+    if (cap.driver !== driver) continue;
+    for (const m of cap.models.models) {
+      if (!seen.has(m.id)) {
+        seen.add(m.id);
+        out.push(m);
+      }
+    }
+  }
+  return out;
+}
+
+function SessionDefaultsTab({ driver, onDriverChange, models, onModelChange, posture, onPostureChange, capabilities }: SessionDefaultsTabProps) {
+  const model = models[driver] ?? "";
+  const driverModels = driverModelCatalog(capabilities, driver);
   return (
     <div style={{ maxWidth: 860, display: "flex", flexDirection: "column", gap: 22 }}>
-      {/* Default model */}
+      {/* Default agent / driver */}
       <div>
-        <div style={S.sectionLabelBold}>Default model</div>
+        <div style={S.sectionLabelBold}>Default agent</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {models.map((m) => {
+          {DRIVERS.map((d) => {
+            const active = driver === d.id;
+            const color = DRIVER_COLOR[d.id];
+            return (
+              <button
+                key={d.id}
+                data-testid={`defaults-driver-${d.id}`}
+                onClick={() => onDriverChange(d.id)}
+                style={{
+                  fontFamily: "inherit",
+                  fontSize: "calc(14.5px * var(--fs,1))",
+                  fontWeight: 600,
+                  padding: "9px 14px",
+                  borderRadius: 9,
+                  cursor: "pointer",
+                  border: active ? `1px solid ${color}` : "1px solid var(--border2)",
+                  background: active ? "rgba(91,141,239,0.12)" : "var(--panel2)",
+                  color: active ? color : "var(--txt2)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
+                  transition: "all 0.15s",
+                }}
+              >
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                {d.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Default model — per selected driver */}
+      <div>
+        <div style={S.sectionLabelBold}>
+          Default model for {DRIVERS.find((d) => d.id === driver)?.label}
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {driverModels.map((m) => {
             const active = model === m.id;
             return (
               <button
                 key={m.id}
                 data-testid={`defaults-model-${m.id}`}
-                onClick={() => onModelChange(m.id)}
+                onClick={() => onModelChange(driver, m.id)}
                 style={{
                   fontFamily: "inherit",
                   fontSize: "calc(14.5px * var(--fs,1))",
@@ -1217,15 +1575,15 @@ function SessionDefaultsTab({ model, onModelChange, posture, onPostureChange, mo
             );
           })}
         </div>
-        {models.length === 0 && (
+        {driverModels.length === 0 && (
           <div style={{ fontSize: "calc(13.5px * var(--fs,1))", color: "var(--txt3)", fontStyle: "italic" }}>
-            No models observed yet — type one below.
+            No models observed yet for this agent — type one below.
           </div>
         )}
         <input
           data-testid="defaults-model-freetext"
           value={model}
-          onChange={(e) => onModelChange(e.target.value)}
+          onChange={(e) => onModelChange(driver, e.target.value)}
           placeholder="Custom model id"
           className="mono"
           autoComplete="off"
@@ -1625,6 +1983,10 @@ export function Settings() {
   const [confirmBeforeStop, setConfirmBeforeStop] = useState(DEFAULT_SETTINGS.confirm_before_stop);
   const [defaultModel, setDefaultModel] = useState(DEFAULT_SETTINGS.default_model);
   const [defaultPosture, setDefaultPosture] = useState<"ask" | "auto" | "full">(DEFAULT_SETTINGS.default_posture as "ask" | "auto" | "full");
+  // #2 — default driver + per-driver default models. `defaultModels` is a
+  // driver->model map in state; persisted as the `[driver, model]` pair list.
+  const [defaultDriver, setDefaultDriver] = useState<Driver>((DEFAULT_SETTINGS.default_driver as Driver) ?? "claude");
+  const [defaultModels, setDefaultModels] = useState<Record<string, string>>({});
 
   // Load settings from the backend once on mount.
   useEffect(() => {
@@ -1640,6 +2002,13 @@ export function Settings() {
         setConfirmBeforeStop(s.confirm_before_stop);
         setDefaultModel(s.default_model);
         setDefaultPosture(s.default_posture as "ask" | "auto" | "full");
+        setDefaultDriver((s.default_driver as Driver) ?? "claude");
+        const dm: Record<string, string> = {};
+        for (const [d, m] of s.default_models ?? []) dm[d] = m;
+        // Mirror the legacy `default_model` into the claude slot when absent so
+        // the per-driver picker pre-selects the previously-saved claude default.
+        if (dm.claude === undefined && s.default_model) dm.claude = s.default_model;
+        setDefaultModels(dm);
       })
       .catch((err) => console.error("[Settings] getSettings failed:", err));
   }, []);
@@ -1656,6 +2025,8 @@ export function Settings() {
       confirm_before_stop: confirmBeforeStop,
       default_model: defaultModel,
       default_posture: defaultPosture,
+      default_driver: defaultDriver,
+      default_models: Object.entries(defaultModels),
       ...patch,
     };
     setSettings(next).catch((err) => console.error("[Settings] setSettings failed:", err));
@@ -1690,9 +2061,21 @@ export function Settings() {
     setConfirmBeforeStop(v);
     persist({ confirm_before_stop: v });
   }
-  function handleDefaultModelChange(m: string) {
-    setDefaultModel(m);
-    persist({ default_model: m });
+  function handleDefaultDriverChange(d: Driver) {
+    setDefaultDriver(d);
+    persist({ default_driver: d });
+  }
+  function handleDefaultModelChange(d: Driver, m: string) {
+    const nextModels = { ...defaultModels, [d]: m };
+    setDefaultModels(nextModels);
+    // Keep the legacy `default_model` field in sync with the claude slot so
+    // older consumers (NewSession's legacy fallback) still see it.
+    const patch: Partial<Settings> = { default_models: Object.entries(nextModels) };
+    if (d === "claude") {
+      setDefaultModel(m);
+      patch.default_model = m;
+    }
+    persist(patch);
   }
   function handleDefaultPostureChange(p: "ask" | "auto" | "full") {
     setDefaultPosture(p);
@@ -1736,11 +2119,13 @@ export function Settings() {
           {activeTab === "Hosts" && <HostsTab />}
           {activeTab === "Session defaults" && (
             <SessionDefaultsTab
-              model={defaultModel}
+              driver={defaultDriver}
+              onDriverChange={handleDefaultDriverChange}
+              models={defaultModels}
               onModelChange={handleDefaultModelChange}
               posture={defaultPosture}
               onPostureChange={handleDefaultPostureChange}
-              models={unionModelCatalog(vmState.capabilities)}
+              capabilities={vmState.capabilities}
             />
           )}
           {activeTab === "General" && (

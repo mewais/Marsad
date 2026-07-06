@@ -113,15 +113,18 @@ export function SessionDetail() {
     stopSession(sessionId);
   }
 
-  function handleRestart() {
-    resumeSession(sessionId);
-  }
-
   function handleResume() {
     resumeSession(sessionId);
   }
 
   function handleRemove() {
+    // Delete kills the session (backend removes it). Confirm first — it's
+    // destructive and can't be undone.
+    const ok =
+      typeof window === "undefined" || typeof window.confirm !== "function"
+        ? true
+        : window.confirm(`Delete session "${name}"? This cannot be undone.`);
+    if (!ok) return;
     removeSession(sessionId);
   }
 
@@ -256,83 +259,62 @@ export function SessionDetail() {
               </button>
             )}
 
+            {/* Lifecycle: running ⇒ Pause; stopped ⇒ Resume; Delete always. */}
             {isStopped ? (
-              <>
-                <button
-                  data-testid="resume-btn"
-                  onClick={handleResume}
-                  style={{
-                    fontFamily: "inherit",
-                    fontWeight: 600,
-                    fontSize: "calc(14.5px * var(--fs,1))",
-                    padding: "7px 12px",
-                    borderRadius: 8,
-                    border: "1px solid var(--border2)",
-                    background: "var(--panel2)",
-                    color: "var(--txt2)",
-                    cursor: "pointer",
-                  }}
-                >
-                  ▶ Resume
-                </button>
-
-                <button
-                  data-testid="remove-btn"
-                  onClick={handleRemove}
-                  style={{
-                    fontFamily: "inherit",
-                    fontWeight: 600,
-                    fontSize: "calc(14.5px * var(--fs,1))",
-                    padding: "7px 12px",
-                    borderRadius: 8,
-                    border: "1px solid var(--error)",
-                    background: "var(--error-bg)",
-                    color: "var(--error)",
-                    cursor: "pointer",
-                  }}
-                >
-                  ✕ Remove
-                </button>
-              </>
+              <button
+                data-testid="resume-btn"
+                onClick={handleResume}
+                style={{
+                  fontFamily: "inherit",
+                  fontWeight: 600,
+                  fontSize: "calc(14.5px * var(--fs,1))",
+                  padding: "7px 12px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border2)",
+                  background: "var(--panel2)",
+                  color: "var(--txt2)",
+                  cursor: "pointer",
+                }}
+              >
+                ▶ Resume
+              </button>
             ) : (
-              <>
-                <button
-                  data-testid="stop-btn"
-                  onClick={handleStop}
-                  style={{
-                    fontFamily: "inherit",
-                    fontWeight: 600,
-                    fontSize: "calc(14.5px * var(--fs,1))",
-                    padding: "7px 12px",
-                    borderRadius: 8,
-                    border: "1px solid var(--border2)",
-                    background: "var(--panel2)",
-                    color: "var(--txt2)",
-                    cursor: "pointer",
-                  }}
-                >
-                  ⏸ Stop
-                </button>
-
-                <button
-                  data-testid="restart-btn"
-                  onClick={handleRestart}
-                  style={{
-                    fontFamily: "inherit",
-                    fontWeight: 600,
-                    fontSize: "calc(14.5px * var(--fs,1))",
-                    padding: "7px 12px",
-                    borderRadius: 8,
-                    border: "1px solid var(--border2)",
-                    background: "var(--panel2)",
-                    color: "var(--txt2)",
-                    cursor: "pointer",
-                  }}
-                >
-                  ↻ Restart
-                </button>
-              </>
+              <button
+                data-testid="pause-btn"
+                onClick={handleStop}
+                style={{
+                  fontFamily: "inherit",
+                  fontWeight: 600,
+                  fontSize: "calc(14.5px * var(--fs,1))",
+                  padding: "7px 12px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border2)",
+                  background: "var(--panel2)",
+                  color: "var(--txt2)",
+                  cursor: "pointer",
+                }}
+              >
+                ⏸ Pause
+              </button>
             )}
+
+            <button
+              data-testid="remove-btn"
+              onClick={handleRemove}
+              style={{
+                fontFamily: "inherit",
+                fontWeight: 600,
+                fontSize: "calc(14.5px * var(--fs,1))",
+                padding: "7px 12px",
+                borderRadius: 8,
+                border: "1px solid var(--error)",
+                background: "var(--error-bg)",
+                color: "var(--error)",
+                cursor: "pointer",
+              }}
+            >
+              ✕ Delete
+            </button>
           </div>
         </div>
 

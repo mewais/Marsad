@@ -36,6 +36,7 @@ function testModelCapabilities(hostId: string) {
     driver: "claude",
     host_id: hostId,
     cli_available: true,
+    launchable: true,
     models: {
       models: [
         { id: "claude-haiku-4-5" },
@@ -101,6 +102,7 @@ vi.mock("../src/bridge/api", async (importOriginal) => {
     runSlash: vi.fn().mockResolvedValue(undefined),
     stopSession: vi.fn().mockResolvedValue(undefined),
     resumeSession: vi.fn().mockResolvedValue(undefined),
+    removeSession: vi.fn().mockResolvedValue(undefined),
     // WAVE 3b (pty escape-hatch terminal) — spied so TerminalTab's wiring to
     // the real pty commands/events is exercised; in this happy-dom test
     // environment `isTauri()` is false so the REAL implementations are also
@@ -147,8 +149,8 @@ function getSendPrompt() {
 function getStopSession() {
   return api.stopSession as ReturnType<typeof vi.fn>;
 }
-function getResumeSession() {
-  return api.resumeSession as ReturnType<typeof vi.fn>;
+function getRemoveSession() {
+  return api.removeSession as ReturnType<typeof vi.fn>;
 }
 function getPtyStart() {
   return api.ptyStart as ReturnType<typeof vi.fn>;
@@ -210,22 +212,24 @@ describe("SessionDetail — header", () => {
     expect(screen.queryByTestId("answer-gate-btn")).toBeNull();
   });
 
-  it("renders Stop and Restart buttons", () => {
+  it("renders Pause and Delete buttons for a running session", () => {
     renderWith({ selectedId: "s01" });
-    expect(screen.getByTestId("stop-btn")).toBeTruthy();
-    expect(screen.getByTestId("restart-btn")).toBeTruthy();
+    expect(screen.getByTestId("pause-btn")).toBeTruthy();
+    expect(screen.getByTestId("remove-btn")).toBeTruthy();
   });
 
-  it("Stop button calls stopSession api", () => {
+  it("Pause button calls stopSession api", () => {
     renderWith({ selectedId: "s01" });
-    fireEvent.click(screen.getByTestId("stop-btn"));
+    fireEvent.click(screen.getByTestId("pause-btn"));
     expect(getStopSession()).toHaveBeenCalledWith("s01");
   });
 
-  it("Restart button calls resumeSession api", () => {
+  it("Delete button calls removeSession api after confirm", () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderWith({ selectedId: "s01" });
-    fireEvent.click(screen.getByTestId("restart-btn"));
-    expect(getResumeSession()).toHaveBeenCalledWith("s01");
+    fireEvent.click(screen.getByTestId("remove-btn"));
+    expect(getRemoveSession()).toHaveBeenCalledWith("s01");
+    confirmSpy.mockRestore();
   });
 });
 

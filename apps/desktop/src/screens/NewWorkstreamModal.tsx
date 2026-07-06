@@ -37,7 +37,8 @@ const textInputStyle: React.CSSProperties = {
 };
 
 export function NewWorkstreamModal() {
-  const { state, dispatch, createWorkstream, goToGraph, openNodeModal } = useVm();
+  const { state, dispatch, createWorkstream, goToGraph, openNodeModal, markDraftWorkstream } =
+    useVm();
 
   const open = state.screen === "new-workstream";
 
@@ -60,6 +61,10 @@ export function NewWorkstreamModal() {
     const id = `ws-${Date.now()}`;
     try {
       await createWorkstream(id, wsName, wsGoal);
+      // BUG #2 — the workstream is empty until an agent is launched. Mark it as
+      // a draft so cancelling the node modal / navigating back to the Board
+      // discards the orphan instead of leaving it on the Board.
+      markDraftWorkstream(id);
       if (path === "quick") {
         openNodeModal({ wsId: id, wsName, isFirstNode: true });
       } else {

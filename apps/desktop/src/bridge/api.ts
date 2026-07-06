@@ -60,6 +60,9 @@ export const DEFAULT_SETTINGS: Settings = {
   confirm_before_stop: true,
   default_model: "claude-sonnet-latest",
   default_posture: "ask",
+  // #2 new fields: default_driver + default_models (absent ⇒ "claude"/[])
+  default_driver: "claude",
+  default_models: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -108,6 +111,8 @@ export async function launchSession(args: {
   name?: string;
   // X4 launch-time Wasl attach — omitted ⇒ a plain, Wasl-free session.
   wasl?: boolean;
+  // #3 agent driver override — omitted ⇒ "claude".
+  driver?: string;
 }): Promise<string> {
   if (!isTauri()) return "mock-session-new";
   const invoke = await getInvoke();
@@ -235,14 +240,17 @@ export function parseEnv(text: string): Array<[string, string]> {
 
 /** Add a remote host (`label`, `user@host`). The optional per-host launch config
  *  (`claudeBin` / `setup` / `env` as `[key, value]` pairs) is applied whenever a
- *  session launches on the host. Rejects with the backend error string (e.g.
- *  duplicate label / malformed target) on failure. */
+ *  session launches on the host. `agentCommands` is a list of `[driver, command]`
+ *  pairs overriding the binary used for each driver on this host.
+ *  Rejects with the backend error string (e.g. duplicate label / malformed target)
+ *  on failure. */
 export async function addHost(
   label: string,
   target: string,
   claudeBin?: string,
   setup?: string,
   env?: Array<[string, string]>,
+  agentCommands?: Array<[string, string]>,
 ): Promise<void> {
   if (!isTauri()) return;
   const invoke = await getInvoke();
@@ -252,18 +260,21 @@ export async function addHost(
     claude_bin: claudeBin && claudeBin.length > 0 ? claudeBin : null,
     setup: setup && setup.length > 0 ? setup : null,
     env: env ?? [],
+    agent_commands: agentCommands ?? [],
   });
 }
 
-/** Update an existing host's launch config (`claudeBin` / `setup` / `env`), and
- *  optionally its `target`. Works for any host id INCLUDING `"localhost"` (pass
- *  no `target` to leave it unchanged). */
+/** Update an existing host's launch config (`claudeBin` / `setup` / `env` /
+ *  `agentCommands`), and optionally its `target`. Works for any host id INCLUDING
+ *  `"localhost"` (pass no `target` to leave it unchanged). `agentCommands` is a
+ *  list of `[driver, command]` pairs overriding the binary for each driver. */
 export async function updateHost(
   id: string,
   claudeBin?: string,
   setup?: string,
   env?: Array<[string, string]>,
   target?: string,
+  agentCommands?: Array<[string, string]>,
 ): Promise<void> {
   if (!isTauri()) return;
   const invoke = await getInvoke();
@@ -273,6 +284,7 @@ export async function updateHost(
     setup: setup && setup.length > 0 ? setup : null,
     env: env ?? [],
     target: target && target.length > 0 ? target : null,
+    agent_commands: agentCommands ?? [],
   });
 }
 
@@ -640,6 +652,26 @@ export async function deleteWorkstream(id: string): Promise<void> {
   await invoke("delete_workstream", { id });
 }
 
+/**
+ * Pause all sessions in a workstream (stop each running process; they remain
+ * resumable). Returns immediately; VmUpdates arrive via `listenVmUpdate`.
+ */
+export async function pauseWorkstream(id: string): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("pause_workstream", { id });
+}
+
+/**
+ * Resume all sessions in a workstream (send ResumeSession IPC for each;
+ * phases flip to Starting). Returns immediately; VmUpdates arrive via `listenVmUpdate`.
+ */
+export async function resumeWorkstream(id: string): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("resume_workstream", { id });
+}
+
 export async function addConnection(
   id: string,
   ws: string,
@@ -904,13 +936,15 @@ function mockCaps(): CapabilitiesView[] {
   const out: CapabilitiesView[] = [];
   for (const host of MOCK_HOSTS) {
     out.push({
-      driver: "claude", host_id: host, cli_available: true,
+      driver: "claude", host_id: host, cli_available: true, launchable: true,
       models: { models: claudeModels, source: "Listed", free_text: true },
       session_scope: null, sessions: [], fetched_at_ms: Date.now(), errors: [],
     });
+    // codex has a launch driver (launchable) but its CLI is not detected in
+    // this mock host; gemini has no launch driver at all (launchable: false).
     for (const driver of ["codex", "gemini"]) {
       out.push({
-        driver, host_id: host, cli_available: false,
+        driver, host_id: host, cli_available: false, launchable: driver === "codex",
         models: { models: [], source: "Observed", free_text: true },
         session_scope: null, sessions: [], fetched_at_ms: 0, errors: [],
       });

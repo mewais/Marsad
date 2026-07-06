@@ -34,6 +34,7 @@ const addConnection = vi.fn(
     _bi: boolean
   ) => {}
 );
+const deleteWorkstream = vi.fn(async (_id: string) => {});
 const fetchGraph = vi.fn(async (_wsId: string): Promise<GraphView | null> => null);
 const fetchBoard = vi.fn(async () => ({
   summary: { workstreams: 0, sessions: 0, hosts: 0 },
@@ -53,6 +54,8 @@ vi.mock("../src/bridge/api", async (importOriginal) => {
       launchSession(...args),
     assignSession: (...args: Parameters<typeof original.assignSession>) =>
       assignSession(...args),
+    deleteWorkstream: (...args: Parameters<typeof original.deleteWorkstream>) =>
+      deleteWorkstream(...args),
     addConnection: (...args: Parameters<typeof original.addConnection>) =>
       addConnection(...args as [string, string, string, string, "data" | "command" | "both", boolean]),
     fetchGraph: (...args: Parameters<typeof original.fetchGraph>) => fetchGraph(...args),
@@ -99,8 +102,10 @@ function StateCapture({
 }
 
 // ---------------------------------------------------------------------------
-// Capabilities fixture — ONLY claude is cli_available (matches real backend:
-// launch_session has no driver param yet, so codex/gemini stay unlaunchable).
+// Capabilities fixture — claude is cli_available; codex/gemini are probed and
+// KNOWN-false (cli_available: false). BUG #2 made driver availability
+// optimistic: only a KNOWN-false probe greys a driver out, so codex/gemini are
+// present here explicitly false to keep the "disabled driver" assertions valid.
 // ---------------------------------------------------------------------------
 
 function claudeOnlyCapabilities(hostId: string): Record<string, CapabilitiesView> {
@@ -109,6 +114,7 @@ function claudeOnlyCapabilities(hostId: string): Record<string, CapabilitiesView
       driver: "claude",
       host_id: hostId,
       cli_available: true,
+      launchable: true,
       models: {
         models: [{ id: "claude-sonnet-4-6" }, { id: "claude-opus-4-8" }],
         source: "Listed",
@@ -117,6 +123,28 @@ function claudeOnlyCapabilities(hostId: string): Record<string, CapabilitiesView
       session_scope: null,
       sessions: [],
       fetched_at_ms: 0,
+      errors: [],
+    },
+    [`codex::${hostId}`]: {
+      driver: "codex",
+      host_id: hostId,
+      cli_available: false,
+      launchable: true,
+      models: { models: [], source: "Observed", free_text: true },
+      session_scope: null,
+      sessions: [],
+      fetched_at_ms: 1,
+      errors: [],
+    },
+    [`gemini::${hostId}`]: {
+      driver: "gemini",
+      host_id: hostId,
+      cli_available: false,
+      launchable: false,
+      models: { models: [], source: "Observed", free_text: true },
+      session_scope: null,
+      sessions: [],
+      fetched_at_ms: 1,
       errors: [],
     },
   };
@@ -219,7 +247,12 @@ describe("NewWorkstreamModal — two-path choice", () => {
 
 function renderNodeModal(
   captured: { current: VmState | null },
-  opts?: { isFirstNode?: boolean; capabilities?: Record<string, CapabilitiesView> }
+  opts?: {
+    isFirstNode?: boolean;
+    capabilities?: Record<string, CapabilitiesView>;
+    board?: VmState["board"];
+    draftWsId?: string | null;
+  }
 ) {
   const isFirstNode = opts?.isFirstNode ?? true;
   const preloaded: Partial<VmState> = {
@@ -232,6 +265,8 @@ function renderNodeModal(
     wsMenuOpen: false,
     capabilities: opts?.capabilities ?? claudeOnlyCapabilities("local"),
     nodeModalCtx: { wsId: "ws-1", wsName: "Release v2.5", isFirstNode },
+    board: opts?.board,
+    draftWsId: opts?.draftWsId ?? null,
   };
   return render(
     <ThemeProvider initialTheme="dark">
@@ -271,6 +306,7 @@ describe("NodeModal — driver picker (capabilities-driven)", () => {
             driver: "claude",
             host_id: "local",
             cli_available: true,
+            launchable: true,
             models: {
               models: [{ id: "totally-custom-model-xyz" }],
               source: "Listed",
@@ -390,5 +426,80 @@ describe("NodeModal — Launch behavior", () => {
     renderNodeModal({ current: null });
     const btn = screen.getByTestId("nm-launch-btn") as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG #2 — cancelling the first-node modal discards the orphan draft workstream
+// ---------------------------------------------------------------------------
+
+function boardWith(wsId: string, sessionCount: number): VmState["board"] {
+  return {
+    summary: { workstreams: 1, sessions: sessionCount, hosts: 1 },
+    host_chips: [],
+    link_chips: [],
+    attention: [],
+    all: [
+      {
+        id: wsId,
+        name: "Release v2.5",
+        goal: "",
+        head_state: null,
+        driver_dots: [],
+        host_chips: [],
+        session_count: sessionCount,
+        counts: { working: 0, needs: 0, error: 0, done: 0 },
+        needs_attention: false,
+        is_single_node: false,
+      },
+    ],
+  };
+}
+
+describe("NodeModal — draft-discard on cancel (BUG #2)", () => {
+  it("cancelling a first-node modal for an empty just-created draft deletes the workstream", async () => {
+    // Fresh draft: board card exists but has 0 sessions.
+    renderNodeModal({ current: null }, { isFirstNode: true, board: boardWith("ws-1", 0) });
+
+    // Two "Cancel" affordances (header ✕ + footer Cancel) — click the footer one.
+    fireEvent.click(screen.getByText("Cancel"));
+
+    await waitFor(() => {
+      expect(deleteWorkstream).toHaveBeenCalledWith("ws-1");
+    });
+  });
+
+  it("cancelling does NOT delete a workstream that already has a session", async () => {
+    renderNodeModal({ current: null }, { isFirstNode: true, board: boardWith("ws-1", 1) });
+
+    fireEvent.click(screen.getByText("Cancel"));
+
+    // Give any async delete a chance to fire, then assert it never did.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(deleteWorkstream).not.toHaveBeenCalled();
+  });
+
+  it("cancelling a NON-first-node modal never deletes the workstream", async () => {
+    renderNodeModal({ current: null }, { isFirstNode: false, board: boardWith("ws-1", 0) });
+
+    fireEvent.click(screen.getByText("Cancel"));
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(deleteWorkstream).not.toHaveBeenCalled();
+  });
+
+  it("launching then the workstream is no longer a discardable draft (launch clears the marker)", async () => {
+    const captured: { current: VmState | null } = { current: null };
+    renderNodeModal(captured, { isFirstNode: true, board: boardWith("ws-1", 0) });
+
+    fireEvent.change(screen.getByTestId("nm-project-input"), {
+      target: { value: "~/code/release" },
+    });
+    fireEvent.click(screen.getByTestId("nm-launch-btn"));
+
+    await waitFor(() => expect(launchSession).toHaveBeenCalled());
+    // A successful launch navigates to the session; the draft was never discarded.
+    await waitFor(() => expect(captured.current?.screen).toBe("session"));
+    expect(deleteWorkstream).not.toHaveBeenCalled();
   });
 });

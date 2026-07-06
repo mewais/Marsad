@@ -63,6 +63,7 @@ const TEST_CAPABILITIES = {
     driver: "claude",
     host_id: "local",
     cli_available: true,
+    launchable: true,
     models: {
       models: [
         { id: "claude-haiku-4-5" },

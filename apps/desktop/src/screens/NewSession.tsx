@@ -3,10 +3,20 @@
  */
 import React, { useState, useEffect, useMemo } from "react";
 import { useVm } from "../bridge/useVm";
-import { launchSession, getSettings, capsForHostId, refreshCapabilities } from "../bridge/api";
+import { launchSession, getSettings, capsForHostId, capsKey, refreshCapabilities } from "../bridge/api";
 import type { CapabilitiesView, DiscoveredSession, ModelCatalog } from "../bridge/types";
+import type { Driver } from "../bridge/workstreamTypes";
 import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
+
+// Fixed enum of drivers Marsad knows about (mirrors `Driver` in
+// workstreamTypes.ts) — NOT model data, so not a capabilities-gate violation.
+// Availability + models per driver ARE capabilities-driven below.
+const DRIVERS: { id: Driver; label: string }[] = [
+  { id: "claude", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
+  { id: "gemini", label: "Gemini" },
+];
 
 // ---------------------------------------------------------------------------
 // Capabilities helpers (U2 — dynamic-capabilities.md §5)
@@ -94,30 +104,76 @@ export function NewSession() {
     setModel(id);
   }
   const [posture, setPosture] = useState<"ask" | "auto" | "full">("auto");
-  const [defaultModelSetting, setDefaultModelSetting] = useState<string | null>(null);
+  // Driver picker (#4) — capabilities-driven availability, defaulted to the
+  // Settings default_driver on mount.
+  const [driver, setDriver] = useState<Driver>("claude");
+  const [userModifiedDriver, setUserModifiedDriver] = useState(false);
+  // Per-driver default-model preferences (#2), keyed by driver name.
+  const [defaultModels, setDefaultModels] = useState<Record<string, string>>({});
 
-  // Initialize posture + the persisted default-model preference from settings
-  // (once on mount). The model itself is resolved by the effect below, which
-  // also needs the capabilities catalog for the selected host.
+  // Initialize posture + driver + the persisted default-model preferences from
+  // settings (once on mount). The model itself is resolved by the effect below,
+  // which also needs the capabilities catalog for the selected driver/host.
   useEffect(() => {
     getSettings()
       .then((s) => {
-        setDefaultModelSetting(s.default_model);
+        const dm: Record<string, string> = {};
+        for (const [d, m] of s.default_models ?? []) dm[d] = m;
+        if (dm.claude === undefined && s.default_model) dm.claude = s.default_model;
+        setDefaultModels(dm);
+        if (!userModifiedDriver && s.default_driver) setDriver(s.default_driver as Driver);
         const p = s.default_posture as "ask" | "auto" | "full";
         if (p === "ask" || p === "auto" || p === "full") setPosture(p);
       })
       .catch(() => {/* keep defaults on error */});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Capabilities for the selected host — options = capabilities[(driver,
-  // host)].models ONLY, never an import (dynamic-capabilities.md §5). There is
-  // no driver picker in the UI yet (M7d, non-goal), so we key off host id
-  // alone; today exactly one driver's capabilities exist per host.
-  const capsForHost: CapabilitiesView | undefined = useMemo(
-    () => capsForHostId(state.capabilities, hostId),
-    [state.capabilities, hostId]
+  // Capabilities for the selected driver+host — options = capabilities[(driver,
+  // host)].models ONLY, never an import (dynamic-capabilities.md §5). Falls back
+  // to any driver on the host (host-only lookup) when the exact (driver,host)
+  // pair hasn't been probed yet — keeps resume/staleness working.
+  const capsForDriverHost: CapabilitiesView | undefined = useMemo(
+    () => state.capabilities[capsKey(driver, hostId)] ?? capsForHostId(state.capabilities, hostId),
+    [state.capabilities, driver, hostId]
   );
-  const modelCatalog: ModelCatalog = capsForHost?.models ?? EMPTY_MODEL_CATALOG;
+  const capsForHost = capsForDriverHost;
+  const modelCatalog: ModelCatalog = capsForDriverHost?.models ?? EMPTY_MODEL_CATALOG;
+
+  // #1 model free-text — the custom input is ONLY for a model NOT in the
+  // catalog. When `model` matches a catalog entry (a picked family/radio), the
+  // box is empty; it shows the typed id only when the user is entering a custom
+  // one. Prevents picking `opus` from filling the box with "opus".
+  const customModelValue = modelCatalog.models.some((m) => m.id === model) ? "" : model;
+
+  // Driver availability from REAL per-host discovery (dynamic-capabilities.md
+  // §5). While caps are absent (discovery in flight) stay optimistic — never
+  // grey a loading driver (a loading state shows instead). Once caps are present
+  // the truth is authoritative: available iff Marsad has a launch driver
+  // (`launchable`) AND the CLI was actually detected on the host
+  // (`cli_available`). gemini → launchable:false → greyed; a driver not
+  // installed on the host → cli_available:false → greyed.
+  function driverDiscovering(d: Driver): boolean {
+    return state.capabilities[capsKey(d, hostId)] === undefined;
+  }
+  function driverAvailable(d: Driver): boolean {
+    const c = state.capabilities[capsKey(d, hostId)];
+    if (!c) return true; // discovery in flight — optimistic
+    return c.launchable === true && c.cli_available === true;
+  }
+  /** Known-unavailable: caps are PRESENT and report the driver as not
+   *  launchable (gemini) or its CLI not detected. Absent caps (loading) are
+   *  never known-unavailable. */
+  function driverKnownUnavailable(d: Driver): boolean {
+    const c = state.capabilities[capsKey(d, hostId)];
+    return !!c && !driverAvailable(d);
+  }
+  function selectDriver(d: Driver) {
+    if (!driverAvailable(d)) return;
+    setUserModifiedDriver(true);
+    setDriver(d);
+    setUserModifiedModel(false);
+  }
 
   // Default selection = persisted last-used model from settings if present in
   // the catalog, else the first catalog entry, else empty (free text). Once
@@ -125,15 +181,16 @@ export function NewSession() {
   // (e.g. switching host must not clobber an explicit pick).
   useEffect(() => {
     if (userModifiedModel) return;
-    if (defaultModelSetting !== null && modelCatalog.models.some((m) => m.id === defaultModelSetting)) {
-      setModel(defaultModelSetting);
+    const pref = defaultModels[driver];
+    if (pref && (modelCatalog.free_text || modelCatalog.models.some((m) => m.id === pref))) {
+      setModel(pref);
     } else if (modelCatalog.models.length > 0) {
       setModel(modelCatalog.models[0].id);
     } else {
       setModel("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultModelSetting, modelCatalog.models, userModifiedModel]);
+  }, [defaultModels, driver, modelCatalog.models, modelCatalog.free_text, userModifiedModel]);
 
   const [firstPrompt, setFirstPrompt] = useState("");
   const [busy, setBusy] = useState(false);
@@ -159,6 +216,16 @@ export function NewSession() {
   const [resume, setResume] = useState(false);
   const [selectedResume, setSelectedResume] = useState<string>("continue");
 
+  // BUG #2 — refresh capabilities when the modal OPENS (and on host/driver
+  // change while open) so real driver availability populates and the picker /
+  // Launch button aren't blocked on absent telemetry. Fire-and-forget; results
+  // arrive via `capabilities` vm-updates.
+  useEffect(() => {
+    if (!open) return;
+    refreshCapabilities({ host_id: hostId, driver, project: project.trim() || undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, hostId, driver]);
+
   // Opening the picker (or changing project/host while it's open) fires a
   // fire-and-forget refresh; the cached list (below) renders instantly off
   // `state.capabilities` regardless — never spinner-blocked (§3.3/§5).
@@ -166,7 +233,7 @@ export function NewSession() {
     if (!resume) return;
     refreshCapabilities({
       host_id: hostId,
-      driver: capsForHost?.driver ?? "claude",
+      driver,
       project: project.trim() || undefined,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -183,6 +250,24 @@ export function NewSession() {
   const unknownProjectSessions = visibleSessions.filter((s) => s.project == null);
   const knownProjectSessions = visibleSessions.filter((s) => s.project != null);
   const fetchedAtMs = capsForHost?.fetched_at_ms ?? 0;
+  // #5 loading — caps absent for the selected (driver, host) ⇒ real discovery
+  // is in flight. Drives the model-list + resume-list spinners (never blocks UI).
+  const capsLoading = state.capabilities[capsKey(driver, hostId)] === undefined;
+
+  // #6 lazy unknown-path probe — the user typed/picked a project with no
+  // sessions in the current caps. Fire a scoped refresh so a previously-unknown
+  // path's sessions populate; the resume spinner shows while it lands. Guarded
+  // so we only re-probe once per (host, driver, project) with zero visible hits.
+  const lazyProbedRef = React.useRef<string>("");
+  useEffect(() => {
+    if (!resume || !projectTrim) return;
+    if (visibleSessions.length > 0) return;
+    const key = `${hostId}::${driver}::${projectTrim}`;
+    if (lazyProbedRef.current === key) return;
+    lazyProbedRef.current = key;
+    refreshCapabilities({ host_id: hostId, driver, project: projectTrim });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resume, hostId, driver, projectTrim, visibleSessions.length]);
 
   function close() {
     // Board is the home screen (Workstreams redesign SLICE A).
@@ -195,6 +280,7 @@ export function NewSession() {
 
   async function handleLaunch() {
     if (!project.trim()) return;
+    if (!driverAvailable(driver)) return;
     setBusy(true);
     const resumeArgs: { resume_session_id?: string; continue_recent?: boolean } = {};
     if (resume) {
@@ -212,6 +298,7 @@ export function NewSession() {
         posture,
         first_prompt: firstPrompt.trim() || undefined,
         name: name.trim() || undefined,
+        driver,
         ...resumeArgs,
       });
       // Navigate to the new session (closes this modal).
@@ -409,6 +496,73 @@ export function NewSession() {
           )}
         </div>
 
+        {/* ---- Agent / driver picker (capabilities-driven, #4) ---- */}
+        <div>
+          <div style={sectionLabel}>Agent</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {DRIVERS.map((d) => {
+              const available = driverAvailable(d.id);
+              const selected = driver === d.id;
+              const color =
+                d.id === "claude"
+                  ? "var(--d-claude, #d97757)"
+                  : d.id === "codex"
+                  ? "var(--d-codex, #3fb6a8)"
+                  : "var(--d-gemini, #9b8cf0)";
+              return (
+                <button
+                  key={d.id}
+                  data-testid={`ns-driver-${d.id}`}
+                  onClick={() => selectDriver(d.id)}
+                  disabled={!available}
+                  title={!available ? "Not available on this host" : undefined}
+                  style={{
+                    fontFamily: "inherit",
+                    flex: "1 1 110px",
+                    fontSize: "calc(14.5px * var(--fs,1))",
+                    fontWeight: 600,
+                    padding: 10,
+                    borderRadius: 9,
+                    cursor: available ? "pointer" : "not-allowed",
+                    border: selected ? `1px solid ${color}` : "1px solid var(--border2)",
+                    background: selected ? "var(--accent-bg)" : "var(--panel2)",
+                    color: selected ? color : "var(--txt2)",
+                    opacity: available ? 1 : 0.45,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 7,
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      background: color,
+                      flexShrink: 0,
+                    }}
+                  />
+                  {d.label}
+                </button>
+              );
+            })}
+          </div>
+          {driverKnownUnavailable(driver) && (
+            <div
+              data-testid="ns-driver-unavailable-note"
+              style={{
+                fontSize: "calc(13px * var(--fs,1))",
+                color: "var(--txt3)",
+                marginTop: 6,
+                fontStyle: "italic",
+              }}
+            >
+              {DRIVERS.find((d) => d.id === driver)?.label} isn't available on this host.
+            </div>
+          )}
+        </div>
+
         {/* ---- Host picker ---- */}
         <div>
           <div style={sectionLabel}>Host</div>
@@ -590,7 +744,19 @@ export function NewSession() {
                 </>
               )}
 
-              {visibleSessions.length === 0 && (
+              {visibleSessions.length === 0 && capsLoading && (
+                <div
+                  data-testid="ns-resume-loading"
+                  style={{
+                    fontSize: "calc(14px * var(--fs,1))",
+                    color: "var(--txt3)",
+                    fontStyle: "italic",
+                  }}
+                >
+                  Discovering sessions…
+                </div>
+              )}
+              {visibleSessions.length === 0 && !capsLoading && (
                 <div
                   data-testid="ns-resume-hint"
                   style={{
@@ -659,7 +825,19 @@ export function NewSession() {
                 );
               })}
             </div>
-            {modelCatalog.models.length === 0 && (
+            {modelCatalog.models.length === 0 && capsLoading && (
+              <div
+                data-testid="ns-model-loading"
+                style={{
+                  fontSize: "calc(14px * var(--fs,1))",
+                  color: "var(--txt3)",
+                  fontStyle: "italic",
+                }}
+              >
+                Discovering models…
+              </div>
+            )}
+            {modelCatalog.models.length === 0 && !capsLoading && (
               <div
                 data-testid="ns-model-empty-hint"
                 style={{
@@ -674,9 +852,9 @@ export function NewSession() {
             {modelCatalog.free_text && (
               <input
                 data-testid="ns-model-freetext"
-                value={model}
+                value={customModelValue}
                 onChange={(e) => selectModel(e.target.value)}
-                placeholder="Custom model id"
+                placeholder="Type your own"
                 className="mono"
                 autoComplete="off"
                 autoCorrect="off"
@@ -790,9 +968,19 @@ export function NewSession() {
             fontFamily: "var(--font-mono, monospace)",
           }}
         >
-          {launchError
-            ? `Launch failed: ${launchError}`
-            : "Runs over your existing SSH config · nothing installed inbound"}
+          {launchError ? (
+            `Launch failed: ${launchError}`
+          ) : !project.trim() ? (
+            <span data-testid="ns-launch-disabled-reason">Enter a project directory</span>
+          ) : !driverAvailable(driver) ? (
+            <span data-testid="ns-launch-disabled-reason">
+              {driverDiscovering(driver)
+                ? "Discovering… "
+                : `${DRIVERS.find((d) => d.id === driver)?.label} isn't available on this host`}
+            </span>
+          ) : (
+            "Runs over your existing SSH config · nothing installed inbound"
+          )}
         </div>
 
         {/* Cancel */}
@@ -819,7 +1007,7 @@ export function NewSession() {
         <button
           data-testid="ns-launch-btn"
           onClick={handleLaunch}
-          disabled={busy || !project.trim()}
+          disabled={busy || !project.trim() || !driverAvailable(driver)}
           style={{
             fontFamily: "inherit",
             fontWeight: 700,
@@ -829,8 +1017,8 @@ export function NewSession() {
             border: "none",
             background: "var(--accent)",
             color: "#fff",
-            cursor: busy || !project.trim() ? "not-allowed" : "pointer",
-            opacity: busy || !project.trim() ? 0.5 : 1,
+            cursor: busy || !project.trim() || !driverAvailable(driver) ? "not-allowed" : "pointer",
+            opacity: busy || !project.trim() || !driverAvailable(driver) ? 0.5 : 1,
           }}
         >
           Launch session →

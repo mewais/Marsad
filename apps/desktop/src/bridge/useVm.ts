@@ -40,6 +40,8 @@ import {
   capsKey,
   createWorkstream as apiCreateWorkstream,
   deleteWorkstream as apiDeleteWorkstream,
+  pauseWorkstream as apiPauseWorkstream,
+  resumeWorkstream as apiResumeWorkstream,
   addConnection as apiAddConnection,
   removeConnection as apiRemoveConnection,
   createProfile as apiCreateProfile,
@@ -116,6 +118,12 @@ export interface VmState {
   // when opened from the New-workstream "Single session" path (later also
   // from the graph's design-mode "+ Add agent", a different slice).
   nodeModalCtx: NodeModalCtx | null;
+  // BUG #2 — id of the just-created empty "draft" workstream, if any. A draft
+  // is a workstream created by the New-workstream flow that has not yet gained
+  // a session; if the user cancels/navigates back before launching, it must be
+  // discarded so no empty workstream lingers on the Board. `null` when there is
+  // no pending draft (the common case).
+  draftWsId: string | null;
   // Capabilities (U2), keyed by capsKey(driver, host_id) — dynamic-capabilities.md §3.6.
   capabilities: Record<string, CapabilitiesView>;
   // Wasl (X5) — pending handoff gates + the latest observation entries.
@@ -154,7 +162,11 @@ type Action =
   | { type: "SELECT_NODE"; id: string | null }
   | { type: "SET_ACTIVE_PROFILE"; profile: string | null }
   | { type: "OPEN_NEW_WORKSTREAM" }
-  | { type: "OPEN_NODE_MODAL"; ctx: NodeModalCtx };
+  | { type: "OPEN_NODE_MODAL"; ctx: NodeModalCtx }
+  // BUG #2 — mark / clear the just-created empty "draft" workstream (a fresh
+  // workstream that has no session yet). Set right after createWorkstream in
+  // the New-workstream flow; cleared once it gains a session or is discarded.
+  | { type: "SET_DRAFT_WS"; wsId: string | null };
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -344,6 +356,9 @@ function reducer(state: VmState, action: Action): VmState {
     case "OPEN_NODE_MODAL":
       return { ...state, screen: "node-modal", nodeModalCtx: action.ctx };
 
+    case "SET_DRAFT_WS":
+      return { ...state, draftWsId: action.wsId };
+
     default:
       return state;
   }
@@ -369,6 +384,7 @@ export const initialVmState: VmState = {
   fromGraph: false,
   activeProfile: null,
   nodeModalCtx: null,
+  draftWsId: null,
   capabilities: {},
   waslGates: [],
   waslObservations: [],
@@ -428,6 +444,16 @@ export interface VmContextValue {
     profile?: string | null
   ) => Promise<void>;
   deleteWorkstream: (id: string) => Promise<void>;
+  /** BUG #2 — mark (or clear, with `null`) the pending empty "draft"
+   *  workstream. Set right after the New-workstream flow creates an empty
+   *  workstream; cleared once it gains a session. `openBoard` discards a still-
+   *  empty draft so no orphan lingers on the Board. */
+  markDraftWorkstream: (id: string | null) => void;
+  /** Pause every session in a workstream (backend stops each process; they
+   *  remain resumable). Refreshes board + open graph afterwards. */
+  pauseWorkstream: (id: string) => Promise<void>;
+  /** Resume every session in a workstream. Refreshes board + open graph. */
+  resumeWorkstream: (id: string) => Promise<void>;
   addConnection: (
     id: string,
     ws: string,
@@ -836,9 +862,24 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
   );
 
   const openBoard = React.useCallback(() => {
+    // BUG #2 — if there is a pending empty draft workstream (created via the
+    // New-workstream flow but never given a session) and the user is heading
+    // back to the Board, discard it so it doesn't linger. Only delete when it
+    // genuinely still has 0 sessions; a draft that gained a session had its
+    // draft marker cleared at launch, but we double-check the board card here
+    // so we never delete a real, non-empty workstream.
+    const draftId = state.draftWsId;
+    if (draftId) {
+      const card = state.board?.all.find((c) => c.id === draftId);
+      const sessionCount = card?.session_count ?? 0;
+      if (sessionCount === 0) {
+        void apiDeleteWorkstream(draftId);
+      }
+      dispatch({ type: "SET_DRAFT_WS", wsId: null });
+    }
     dispatch({ type: "OPEN_BOARD" });
     refreshBoard();
-  }, [refreshBoard]);
+  }, [refreshBoard, state.draftWsId, state.board]);
 
   // Called from the graph screen's node-open affordance — always arrives
   // FROM a graph, so `fromGraph: true` (drives the Level-3 Back label in a
@@ -933,6 +974,26 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
   const deleteWorkstream = React.useCallback(
     async (id: string) => {
       await apiDeleteWorkstream(id);
+      await refreshAfterMutation(state.wsId);
+    },
+    [refreshAfterMutation, state.wsId]
+  );
+
+  const markDraftWorkstream = React.useCallback((id: string | null) => {
+    dispatch({ type: "SET_DRAFT_WS", wsId: id });
+  }, []);
+
+  const pauseWorkstream = React.useCallback(
+    async (id: string) => {
+      await apiPauseWorkstream(id);
+      await refreshAfterMutation(state.wsId);
+    },
+    [refreshAfterMutation, state.wsId]
+  );
+
+  const resumeWorkstream = React.useCallback(
+    async (id: string) => {
+      await apiResumeWorkstream(id);
       await refreshAfterMutation(state.wsId);
     },
     [refreshAfterMutation, state.wsId]
@@ -1044,6 +1105,9 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     openNodeModal,
     createWorkstream,
     deleteWorkstream,
+    markDraftWorkstream,
+    pauseWorkstream,
+    resumeWorkstream,
     addConnection,
     removeConnection,
     createProfile,

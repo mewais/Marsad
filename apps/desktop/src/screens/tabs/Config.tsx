@@ -68,6 +68,11 @@ export function ConfigTab() {
   const initialPosture = (selectedSession?.posture as PostureId) ?? "ask";
   const [selectedModel, setSelectedModel] = useState(initialModel);
   const [posture, setPosture] = useState<PostureId>(initialPosture);
+  // #1 model free-text — the custom input is ONLY for a model NOT in the
+  // catalog. Empty when the selected model matches a catalog entry (a picked
+  // radio); shows the typed id only when it's a custom one. Prevents picking a
+  // catalog model from filling the custom box.
+  const customModelValue = modelOptions.some((m) => m.id === selectedModel) ? "" : selectedModel;
 
   // Tool toggle state: keyed by tool name. Initially all tools are enabled
   // (empty disallowed set). When the session provides a real tools list it is
@@ -203,9 +208,9 @@ export function ConfigTab() {
           {modelFreeText && (
             <input
               data-testid="config-model-freetext"
-              value={selectedModel}
+              value={customModelValue}
               onChange={(e) => setSelectedModel(e.target.value)}
-              placeholder="Custom model id"
+              placeholder="Type your own"
               className="mono"
               autoComplete="off"
               autoCorrect="off"

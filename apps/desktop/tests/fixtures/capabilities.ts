@@ -54,6 +54,9 @@ export interface CapabilitiesViewFixture {
   driver: string;
   host_id: string;
   cli_available: boolean;
+  /** Whether Marsad has a launch driver for this driver (claude/codex → true,
+   *  gemini → false). Defaults to true in `makeCapabilities`. */
+  launchable: boolean;
   models: ModelCatalogFixture;
   session_scope: SessionScopeFixture | null;
   sessions: DiscoveredSessionFixture[];
@@ -72,6 +75,7 @@ export function makeCapabilities(
 ): CapabilitiesViewFixture {
   return {
     cli_available: true,
+    launchable: true,
     models: emptyModelCatalog(),
     session_scope: null,
     sessions: [],

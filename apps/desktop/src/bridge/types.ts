@@ -91,6 +91,13 @@ export interface Host {
   setup?: string | null;
   /** Per-host environment, as `[key, value]` pairs. */
   env?: Array<[string, string]>;
+  /**
+   * Per-driver command overrides as `[driver, command]` pairs.
+   * E.g. `[["codex", "codex --sandbox"], ["gemini", "/opt/gemini/bin/gemini"]]`.
+   * When launching a session, the matching entry is used first; falls back to
+   * `claude_bin` for the "claude" driver, or the bare driver name otherwise.
+   */
+  agent_commands?: Array<[string, string]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +423,17 @@ export interface Settings {
   confirm_before_stop: boolean;
   default_model: string;
   default_posture: "ask" | "auto" | "full";
+  /**
+   * Default agent driver for new sessions ("claude" | "codex" | "gemini").
+   * Absent in older persisted settings → defaults to "claude".
+   */
+  default_driver?: string;
+  /**
+   * Per-driver default model slugs, as `[driver, model_slug]` pairs.
+   * E.g. `[["codex", "codex-mini-latest"]]`.
+   * Falls back to `default_model` for the "claude" driver if absent.
+   */
+  default_models?: Array<[string, string]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -523,6 +541,10 @@ export interface CapabilitiesView {
   driver: string;
   host_id: string;
   cli_available: boolean;
+  /** Whether Marsad has a launch driver for this driver (claude/codex → true,
+   *  gemini → false) — carried verbatim from `marsad_proto::Capabilities`. A
+   *  driver that isn't launchable is never offered even if its CLI is present. */
+  launchable: boolean;
   models: ModelCatalog;
   session_scope: SessionScope | null;
   sessions: DiscoveredSession[];

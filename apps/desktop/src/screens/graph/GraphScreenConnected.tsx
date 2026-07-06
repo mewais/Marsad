@@ -12,7 +12,7 @@
  *
  * See docs/specs/ui-app-wiring.md §Connected wrappers.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useVm } from "../../bridge/useVm";
 import { GraphScreen } from "./GraphScreen";
 
@@ -28,21 +28,55 @@ function genConnId(): string {
 }
 
 export function GraphScreenConnected(): JSX.Element {
-  const { state, selectNode, openNode, addConnection, openNodeModal } = useVm();
-  const [designMode, setDesignMode] = useState(false);
-
-  if (state.graph == null) {
-    return <div data-testid="graph-loading" />;
-  }
+  const {
+    state,
+    selectNode,
+    openNode,
+    addConnection,
+    openNodeModal,
+    pauseWorkstream,
+    resumeWorkstream,
+    deleteWorkstream,
+    openBoard,
+  } = useVm();
+  // #3/#4 — design-mode entry (THE launch unblocker). A workstream that is
+  // NEW or has ZERO sessions must open in DESIGN mode so "＋ Add agent" is
+  // shown (in operate mode an empty workstream only shows "✎ Update workflow"
+  // and there's no way to add — nothing could ever be launched). Once a
+  // workstream has sessions it opens in operate mode; the user can still flip
+  // back to design via "✎ Update workflow".
+  //
+  // `designMode` is null until we've seeded it for the currently-open
+  // workstream; we re-seed whenever the open workstream id changes (opening a
+  // different one) so each workstream gets the right initial mode, while an
+  // explicit user toggle within a workstream is preserved.
+  const [designMode, setDesignMode] = useState<boolean | null>(null);
+  const seededWsRef = useRef<string | null>(null);
 
   const graph = state.graph;
-  const wsId = state.wsId ?? graph.ws_id;
+  const wsId = (state.wsId ?? graph?.ws_id) ?? null;
+
+  useEffect(() => {
+    if (!graph || wsId == null) return;
+    if (seededWsRef.current === wsId) return;
+    seededWsRef.current = wsId;
+    // Empty / new workstream ⇒ start in design mode.
+    setDesignMode(graph.nodes.length === 0);
+  }, [wsId, graph]);
+
+  if (graph == null) {
+    return <div data-testid="graph-loading" />;
+  }
+  const g = graph; // non-null binding for the closures below
+
+  const effectiveDesignMode = designMode ?? g.nodes.length === 0;
+  const effectiveWsId = wsId ?? g.ws_id;
 
   // Interim gate wiring: route the gate affordance to the RECEIVING node's
   // session (the dedicated handoff-approval modal is a later block). This keeps
   // the control LIVE and testable — never a dead handler.
   function onOpenGate(connId: string): void {
-    const edge = graph.edges.find((x) => x.id === connId);
+    const edge = g.edges.find((x) => x.id === connId);
     if (edge) {
       openNode(edge.to);
     }
@@ -54,26 +88,61 @@ export function GraphScreenConnected(): JSX.Element {
   // reached from an EXISTING workstream's graph (never the empty "Build it
   // out" canvas, which is the New-workstream wizard's concern).
   function onAddAgent(): void {
-    openNodeModal({ wsId, wsName: graph.name, isFirstNode: false });
+    // First agent in an empty workstream ⇒ isFirstNode so Launch routes
+    // straight to Level-3 and the node becomes the workstream's lead.
+    openNodeModal({
+      wsId: effectiveWsId,
+      wsName: g.name,
+      isFirstNode: g.nodes.length === 0,
+    });
   }
 
   function onConnect(from: string, to: string, kind: Parameters<typeof addConnection>[4], bi: boolean): void {
-    void addConnection(genConnId(), wsId, from, to, kind, bi);
+    void addConnection(genConnId(), effectiveWsId, from, to, kind, bi);
+  }
+
+  // "Discard" in the design panel. For a fresh, empty "Build it out" draft
+  // (0 nodes / no session yet) this means abandoning the whole workstream —
+  // route back to the Board, where `openBoard` discards the pending draft so
+  // no orphan empty workstream lingers. For a workstream that already has
+  // nodes/sessions, Discard just leaves design mode (never deletes real work).
+  function onDiscardDraft(): void {
+    if (g.nodes.length === 0 && state.draftWsId === effectiveWsId) {
+      openBoard();
+    } else {
+      setDesignMode(false);
+    }
+  }
+
+  function onDeleteWorkstream(): void {
+    const label = g.name || effectiveWsId;
+    const ok =
+      typeof window === "undefined" || typeof window.confirm !== "function"
+        ? true
+        : window.confirm(
+            `Delete workstream "${label}"? This kills all its sessions and cannot be undone.`
+          );
+    if (!ok) return;
+    // Deleting the open workstream — return to the board afterwards.
+    void deleteWorkstream(effectiveWsId).then(() => openBoard());
   }
 
   return (
     <GraphScreen
-      graph={graph}
+      graph={g}
       selectedNode={state.nodeSel}
       onSelectNode={selectNode}
       onOpenNode={openNode}
       onOpenGate={onOpenGate}
-      designMode={designMode}
+      designMode={effectiveDesignMode}
       onEnterDesign={() => setDesignMode(true)}
       onConfirmDraft={() => setDesignMode(false)}
-      onDiscardDraft={() => setDesignMode(false)}
+      onDiscardDraft={onDiscardDraft}
       onAddAgent={onAddAgent}
       onConnect={onConnect}
+      onPauseWorkstream={() => void pauseWorkstream(effectiveWsId)}
+      onResumeWorkstream={() => void resumeWorkstream(effectiveWsId)}
+      onDeleteWorkstream={onDeleteWorkstream}
     />
   );
 }

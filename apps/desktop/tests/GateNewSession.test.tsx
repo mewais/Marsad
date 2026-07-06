@@ -85,6 +85,7 @@ function testModelCapabilities(hostId: string) {
     driver: "claude",
     host_id: hostId,
     cli_available: true,
+    launchable: true,
     models: {
       models: [
         { id: "claude-haiku-4-5" },

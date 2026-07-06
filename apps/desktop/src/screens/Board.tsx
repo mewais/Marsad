@@ -450,14 +450,57 @@ function SessionDots({ counts }: { counts: StateCounts }) {
 // Workstream row (all-section)
 // ---------------------------------------------------------------------------
 
+function WsActionBtn({
+  testid,
+  label,
+  danger,
+  onClick,
+}: {
+  testid: string;
+  label: string;
+  danger?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      data-testid={testid}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      style={{
+        fontFamily: "inherit",
+        fontSize: "calc(11px * var(--fs,1))",
+        fontWeight: 600,
+        padding: "4px 9px",
+        borderRadius: 7,
+        cursor: "pointer",
+        border: danger ? "1px solid var(--error)" : "1px solid var(--border2)",
+        background: danger ? "var(--error-bg)" : "var(--panel2)",
+        color: danger ? "var(--error)" : "var(--txt2)",
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 function WorkstreamRow({
   card,
   hostChips,
   onOpen,
+  onPause,
+  onResume,
+  onDelete,
 }: {
   card: WorkstreamCard;
   hostChips: HostChip[];
   onOpen: () => void;
+  onPause: () => void;
+  onResume: () => void;
+  onDelete: () => void;
 }) {
   const state = card.head_state;
   const color = state ? headStateColor[state] : "var(--border)";
@@ -554,6 +597,15 @@ function WorkstreamRow({
       >
         {state ?? "—"}
       </span>
+
+      {/* Workstream lifecycle actions (#5) — Pause all / Resume all / Delete.
+          Each stops row-click propagation so it doesn't also open the ws. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+        <WsActionBtn testid={`ws-pause-${card.id}`} label="⏸ Pause" onClick={onPause} />
+        <WsActionBtn testid={`ws-resume-${card.id}`} label="▶ Resume" onClick={onResume} />
+        <WsActionBtn testid={`ws-delete-${card.id}`} label="✕ Delete" danger onClick={onDelete} />
+      </div>
+
       <span style={{ color: "var(--txt3)", fontSize: "calc(15px * var(--fs,1))", flexShrink: 0 }}>›</span>
     </div>
   );
@@ -566,9 +618,22 @@ function WorkstreamRow({
 export interface BoardProps {
   board: BoardView;
   onOpenWorkstream: (id: string) => void;
+  /** Pause every session in a workstream (#5). Optional — presentational
+   *  render sites (tests) may omit lifecycle wiring. */
+  onPauseWorkstream?: (id: string) => void;
+  /** Resume every session in a workstream (#5). */
+  onResumeWorkstream?: (id: string) => void;
+  /** Delete a workstream (kills all its sessions) — confirmed by the caller (#5). */
+  onDeleteWorkstream?: (id: string) => void;
 }
 
-export function Board({ board, onOpenWorkstream }: BoardProps) {
+export function Board({
+  board,
+  onOpenWorkstream,
+  onPauseWorkstream,
+  onResumeWorkstream,
+  onDeleteWorkstream,
+}: BoardProps) {
   const { summary } = board;
 
   return (
@@ -679,6 +744,9 @@ export function Board({ board, onOpenWorkstream }: BoardProps) {
             card={card}
             hostChips={board.host_chips}
             onOpen={() => onOpenWorkstream(card.id)}
+            onPause={() => onPauseWorkstream?.(card.id)}
+            onResume={() => onResumeWorkstream?.(card.id)}
+            onDelete={() => onDeleteWorkstream?.(card.id)}
           />
         ))}
       </div>
