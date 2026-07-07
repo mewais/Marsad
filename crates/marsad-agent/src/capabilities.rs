@@ -917,14 +917,18 @@ impl HostProbeCtx {
 // Part 4 — CapabilityProvider (§3.2/§3.3/§3.4, §4)
 // ===========================================================================
 
-// Generous enough for a REMOTE host whose setup is heavy (e.g. `source
-// ~/module.sh` on an HPC module system) plus SSH connection establishment plus
-// the discovery script. `run_remote_script_bounded` returns None on timeout —
-// which drops EVERY section (avail/env included) → "Claude Code isn't available"
-// even though the host is reachable. 6s was too tight for such hosts; 20s covers
-// slow module-loading setups. Local probes finish in well under a second, so the
-// larger ceiling never adds latency there.
-const DEFAULT_PROBE_DEADLINE: Duration = Duration::from_secs(20);
+// Deadline for a host with NO setup command: SSH connect (bounded separately by
+// ConnectTimeout=10) + a trivial discovery script. Kept snappy so startup isn't
+// sluggish when some hosts are down/slow (unreachable ones fail at ConnectTimeout
+// regardless). `run_remote_script_bounded` returns None on timeout, dropping ALL
+// sections (→ "Claude Code isn't available") even for a reachable host, so this
+// must still comfortably cover a reachable host's fast path.
+const DEFAULT_PROBE_DEADLINE: Duration = Duration::from_secs(10);
+
+// Longer deadline for a host WITH a setup command: `source ~/module.sh` on an HPC
+// module system can legitimately take many seconds before the discovery script
+// even starts. Only these hosts pay the longer wait; see `queue_probe`.
+const SETUP_PROBE_DEADLINE: Duration = Duration::from_secs(25);
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct PersistedHostFile {
@@ -1120,6 +1124,21 @@ impl CapabilityProvider {
                 .host_target
                 .clone()
                 .or_else(|| Some(host_id.clone()).filter(|h| h != "local"));
+            // Per-host deadline: a heavy `setup` (e.g. `source ~/module.sh` on an
+            // HPC module system) legitimately takes many seconds, so those hosts
+            // get the long window; everything else fails fast so startup isn't
+            // sluggish. Unreachable hosts already fail in ~ConnectTimeout (10s)
+            // regardless — the deadline only bounds a REACHABLE-but-slow script.
+            let has_setup = cfg
+                .setup
+                .as_deref()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            let deadline = if has_setup {
+                SETUP_PROBE_DEADLINE
+            } else {
+                DEFAULT_PROBE_DEADLINE
+            };
             let ctx = HostProbeCtx {
                 host_id: host_id.clone(),
                 host_target,
@@ -1128,7 +1147,7 @@ impl CapabilityProvider {
                 claude_bin: cfg.claude_bin.clone(),
                 scope,
                 project,
-                deadline: DEFAULT_PROBE_DEADLINE,
+                deadline,
             };
             let mut caps = inner.probes[probe_idx].probe(&ctx);
 
