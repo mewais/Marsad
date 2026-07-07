@@ -899,6 +899,26 @@ export function capsForHostId(
   return Object.values(capabilities).find((c) => c.host_id === hostId);
 }
 
+/**
+ * Find the capabilities entry for a specific (driver, host) pair — the correct
+ * lookup when a session's driver is known. A host can expose several drivers
+ * (claude + codex), so keying on host alone (capsForHostId) returns an arbitrary
+ * driver's catalog — e.g. gpt models for a claude session. Falls back to the
+ * host-only match when the exact (driver, host) entry hasn't been probed yet.
+ */
+export function capsForDriverHost(
+  capabilities: Record<string, CapabilitiesView> | undefined,
+  driver: string,
+  hostId: string,
+): CapabilitiesView | undefined {
+  if (!capabilities) return undefined;
+  return (
+    capabilities[capsKey(driver, hostId)] ??
+    Object.values(capabilities).find((c) => c.driver === driver && c.host_id === hostId) ??
+    capsForHostId(capabilities, hostId)
+  );
+}
+
 /** Union of every known host/driver's models, deduped by id (verbatim, first
  *  occurrence wins) — used by the global default-model picker (Settings). */
 export function unionModelCatalog(

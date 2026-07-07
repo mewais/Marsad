@@ -903,7 +903,29 @@ impl Core {
     /// Apply an externally-computed health result for a host (runtime status, not
     /// persisted). Returns the updated host list.
     pub fn set_host_status(&mut self, id: &str, status: HostStatus) -> Vec<VmUpdate> {
+        // Detect a transition INTO Connected — a host coming (back) online after
+        // being anything else (Reconnecting/Unreachable/Connecting). This fires
+        // on reconnect regardless of MFA timing (the health probe only reports
+        // Connected once the shared connection is actually live), so it's the
+        // reliable place to (re)preload capabilities. The initial connect already
+        // preloads via connect_host_interactive; this covers RECONNECT, whose
+        // early connect-time probe cached "unreachable" while auth was pending.
+        let was_connected = self
+            .hosts
+            .list()
+            .iter()
+            .find(|h| h.id == id)
+            .map(|h| h.status == HostStatus::Connected)
+            .unwrap_or(false);
+        let now_connected = status == HostStatus::Connected;
         self.hosts.set_status(id, status);
+        if now_connected && !was_connected {
+            // Fire-and-forget re-probe for every driver on the reconnected host
+            // (same cost class as the connect-time refresh; results arrive later
+            // as CapabilitiesUpdate broadcasts). Refreshes the stale caps that the
+            // startup/connect-time probe cached as unreachable while auth pended.
+            self.refresh_capabilities(Some(id.to_string()), None, None);
+        }
         vec![VmUpdate::Hosts(self.hosts.list().to_vec())]
     }
 

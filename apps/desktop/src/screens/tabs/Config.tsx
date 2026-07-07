@@ -4,7 +4,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { useVm } from "../../bridge/useVm";
-import { restartSession, saveTemplate, listTemplates, capsForHostId } from "../../bridge/api";
+import { restartSession, saveTemplate, listTemplates, capsForDriverHost } from "../../bridge/api";
 import type { PersistedTemplate } from "../../bridge/types";
 
 // ---------------------------------------------------------------------------
@@ -52,10 +52,19 @@ function mcpStatusColor(status: string): string {
 export function ConfigTab() {
   const { selectedSession, state } = useVm();
 
-  // Model options come ONLY from capabilities[(driver, host)].models for the
-  // session's host (dynamic-capabilities.md §5) — never a static import.
+  // Model options come ONLY from capabilities[(driver, host)].models for THIS
+  // session's driver+host (dynamic-capabilities.md §5) — never a static import.
+  // Must key on the session's driver: a host can expose several drivers, so a
+  // host-only lookup would list e.g. codex/gpt models for a claude session.
   const capsForHost = useMemo(
-    () => (selectedSession ? capsForHostId(state.capabilities, selectedSession.host_id) : undefined),
+    () =>
+      selectedSession
+        ? capsForDriverHost(
+            state.capabilities,
+            selectedSession.driver ?? "claude",
+            selectedSession.host_id,
+          )
+        : undefined,
     [state.capabilities, selectedSession]
   );
   const modelOptions = capsForHost?.models.models ?? [];

@@ -766,3 +766,46 @@ fn usage_update_array_usage_field_is_noop() {
     let updates = core.on_agent_line(&line).expect("array usage is ok");
     assert!(updates.is_empty(), "array usage must produce no updates");
 }
+
+// ---------------------------------------------------------------------------
+// A host transitioning INTO Connected (reconnect) re-probes capabilities so the
+// stale "unreachable" catalog from a disconnected startup/connect is refreshed.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reconnect_to_connected_triggers_capability_preload() {
+    use marsad_core::HostStatus;
+
+    let (mut core, mut peer) = make_core();
+    // add_host starts the host in a non-Connected state (Reconnecting until the
+    // first successful health check).
+    let u = core
+        .add_host("srv", "wslssh:Ubuntu:narval", None, None, Vec::new(), Vec::new())
+        .expect("add host");
+    let host_id = u
+        .iter()
+        .find_map(|up| match up {
+            VmUpdate::Hosts(hs) => hs.iter().find(|h| h.target == "wslssh:Ubuntu:narval").map(|h| h.id.clone()),
+            _ => None,
+        })
+        .expect("host id");
+    let _ = peer.drain_outbound(); // consume add_host IPC
+
+    // Transition INTO Connected → must fire a RefreshCapabilities IPC (preload).
+    core.set_host_status(&host_id, HostStatus::Connected);
+    let out = peer.drain_outbound();
+    assert!(
+        out.iter().any(|l| l.contains("RefreshCapabilities")),
+        "reconnect to Connected must trigger a capability preload; got {out:?}"
+    );
+
+    // Already Connected → another Connected report (health tick) must NOT re-probe.
+    let out2 = peer.drain_outbound();
+    core.set_host_status(&host_id, HostStatus::Connected);
+    let out3 = peer.drain_outbound();
+    let _ = out2;
+    assert!(
+        !out3.iter().any(|l| l.contains("RefreshCapabilities")),
+        "a repeat Connected (no transition) must NOT re-probe; got {out3:?}"
+    );
+}
