@@ -646,11 +646,33 @@ impl Agent {
     /// happens in `serve.rs` (see `pty::spawn_pty_session`'s doc comment for
     /// why it can't happen here).
     fn handle_pty_start(&mut self, session_id: String) -> Result<Vec<String>, AgentError> {
-        if !self.sessions.contains_key(&session_id) {
+        // The terminal is a plain interactive shell that needs only the session's
+        // project/host_target (resolved from the STORE in serve.rs) — NOT a live
+        // claude process. So accept any session known to the store, not just one
+        // currently adopted in the in-memory `sessions` map: a Stale/reconnected/
+        // resumed session must still be able to open a terminal. Gating on the
+        // in-memory map silently dropped PtyStart for those (black-screen bug).
+        let known = self.sessions.contains_key(&session_id)
+            || {
+                #[cfg(not(coverage))]
+                {
+                    self.store
+                        .0
+                        .restore()
+                        .map(|r| r.sessions.iter().any(|s| s.id == session_id))
+                        .unwrap_or(false)
+                }
+                #[cfg(coverage)]
+                {
+                    false
+                }
+            };
+        if !known {
             return Err(AgentError::Protocol(format!(
                 "PtyStart: unknown session {session_id}"
             )));
         }
+        eprintln!("marsad-agent: session {session_id} PtyStart accepted");
         Ok(vec![])
     }
 
