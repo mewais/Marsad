@@ -454,26 +454,33 @@ function SessionDots({ counts }: { counts: StateCounts }) {
 function WsActionBtn({
   testid,
   label,
+  title,
   danger,
   onClick,
 }: {
   testid: string;
   label: string;
+  /** Tooltip — used when `label` is an icon-only glyph (dashboard rows). */
+  title?: string;
   danger?: boolean;
   onClick: () => void;
 }) {
+  // Icon-only when a `title` is supplied (dashboard): square button, glyph only.
+  const iconOnly = title !== undefined;
   return (
     <button
       data-testid={testid}
+      title={title}
+      aria-label={title}
       onClick={(e) => {
         e.stopPropagation();
         onClick();
       }}
       style={{
         fontFamily: "inherit",
-        fontSize: "calc(11px * var(--fs,1))",
+        fontSize: "calc(12.5px * var(--fs,1))",
         fontWeight: 600,
-        padding: "4px 9px",
+        padding: iconOnly ? "5px 8px" : "4px 9px",
         borderRadius: 7,
         cursor: "pointer",
         border: danger ? "1px solid var(--error)" : "1px solid var(--border2)",
@@ -481,6 +488,7 @@ function WsActionBtn({
         color: danger ? "var(--error)" : "var(--txt2)",
         whiteSpace: "nowrap",
         flexShrink: 0,
+        lineHeight: 1,
       }}
     >
       {label}
@@ -604,11 +612,11 @@ function WorkstreamRow({
           propagation so it doesn't also open the workstream. */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
         {(state === "working" || state === "needs" || state === "error") ? (
-          <WsActionBtn testid={`ws-pause-${card.id}`} label="⏸ Pause" onClick={onPause} />
+          <WsActionBtn testid={`ws-pause-${card.id}`} label="⏸" title="Pause" onClick={onPause} />
         ) : (
-          <WsActionBtn testid={`ws-resume-${card.id}`} label="▶ Resume" onClick={onResume} />
+          <WsActionBtn testid={`ws-resume-${card.id}`} label="▶" title="Resume" onClick={onResume} />
         )}
-        <WsActionBtn testid={`ws-delete-${card.id}`} label="✕ Delete" danger onClick={onDelete} />
+        <WsActionBtn testid={`ws-delete-${card.id}`} label="✕" title="Delete" danger onClick={onDelete} />
       </div>
 
       <span style={{ color: "var(--txt3)", fontSize: "calc(15px * var(--fs,1))", flexShrink: 0 }}>›</span>

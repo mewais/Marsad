@@ -7,6 +7,7 @@
  * §"LEVEL 3 — Session".
  */
 import type { CSSProperties } from "react";
+import { useEffect, useState } from "react";
 import { useVm } from "../bridge/useVm";
 import type { Tab } from "../bridge/types";
 import { stopSession, resumeSession, removeSession } from "../bridge/api";
@@ -76,6 +77,17 @@ export function SessionDetail() {
   const { name, host_label, branch, context_pct, model } = selectedDetail;
   const { id: sessionId, state: sessionState, changed_files } = selectedSession;
   const activeTab = state.tab;
+
+  // Keep the Terminal MOUNTED once first opened, toggling visibility with CSS
+  // rather than unmounting on tab switch — unmounting disposes the xterm
+  // instance and its scrollback, so returning to the tab showed a blank black
+  // screen (the pty is already live server-side, so no output replays). Lazy:
+  // only mount after the user first opens the Terminal tab, so we never spawn a
+  // pty for a session the user never terminals into.
+  const [terminalMounted, setTerminalMounted] = useState(false);
+  useEffect(() => {
+    if (activeTab === "Terminal") setTerminalMounted(true);
+  }, [activeTab]);
 
   // Driver pill — the SESSION carries its own driver (SessionView.driver, from
   // the persisted record). A host can expose several drivers, so deriving from
@@ -388,7 +400,21 @@ export function SessionDetail() {
         {activeTab === "Changes" && <ChangesTab />}
         {activeTab === "Config" && <ConfigTab />}
         {activeTab === "Usage" && <UsageTab />}
-        {activeTab === "Terminal" && <TerminalTab sessionId={sessionId} />}
+        {/* Terminal stays mounted once opened (keyed per session) — hidden, not
+            unmounted, on tab switch so its scrollback survives. */}
+        {terminalMounted && (
+          <div
+            style={{
+              display: activeTab === "Terminal" ? "flex" : "none",
+              flex: 1,
+              flexDirection: "column",
+              overflow: "hidden",
+              minHeight: 0,
+            }}
+          >
+            <TerminalTab key={sessionId} sessionId={sessionId} />
+          </div>
+        )}
       </div>
     </div>
   );

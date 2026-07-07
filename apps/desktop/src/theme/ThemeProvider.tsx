@@ -100,8 +100,14 @@ export function ThemeProvider({
       root.style.setProperty("--bg", canvasVeil);
       root.style.setProperty("--panel", withAlpha(tokens.panel, SURFACE_ALPHA));
       root.style.setProperty("--panel2", withAlpha(tokens.panel2, SURFACE_ALPHA * 0.8));
-      // --panel-dark: darker than --panel even in glass mode (terminal/diff panes).
-      root.style.setProperty("--panel-dark", withAlpha(tokens.panel, SURFACE_ALPHA * 0.55));
+      // --panel-dark: a DARKER translucent surface than --panel (terminal/diff
+      // panes). Lowering --panel's alpha alone made it lighter/more see-through,
+      // not darker; use a near-black base at a comparable alpha so it reads as a
+      // dark glass over the wallpaper.
+      root.style.setProperty(
+        "--panel-dark",
+        theme === "dark" ? "rgba(3,5,9,0.44)" : "rgba(120,128,140,0.34)",
+      );
       root.style.setProperty("--elev", withAlpha(tokens.elev, SURFACE_ALPHA + 0.22));
       document.body.style.background = "transparent";
     } else {

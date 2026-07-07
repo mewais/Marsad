@@ -10,10 +10,87 @@
 
 import React from "react";
 import { useVm } from "../bridge/useVm";
+import type { SessionView } from "../bridge/types";
 import { WaslGateModal } from "../screens/WaslGateModal";
 import { useTheme } from "../theme/ThemeProvider";
 import { wallpaperGradient } from "../theme/tokens";
 import { Watchtower } from "./Watchtower";
+
+// ---------------------------------------------------------------------------
+// Fleet status notifiers — compact per-state dot+count roll-up for the top bar.
+// Same dot style/colors as the dashboard's status dots. Shown on graph/session
+// screens (not the board, where it's redundant) so a single-session focus still
+// surfaces the whole fleet's status.
+// ---------------------------------------------------------------------------
+
+function StatusNotifiers({ sessions }: { sessions: SessionView[] }) {
+  // Bucket every session's phase into the dashboard's four active buckets plus a
+  // neutral "paused" (Stale/Detached). Mirrors marsad-viewmodel's state_counts.
+  const counts = { working: 0, needs: 0, error: 0, done: 0, paused: 0 };
+  for (const s of sessions) {
+    switch (s.state) {
+      case "Working":
+      case "Starting":
+        counts.working += 1;
+        break;
+      case "Needs":
+        counts.needs += 1;
+        break;
+      case "Error":
+        counts.error += 1;
+        break;
+      case "Done":
+        counts.done += 1;
+        break;
+      case "Stale":
+      case "Detached":
+        counts.paused += 1;
+        break;
+    }
+  }
+  // Fixed priority order; colors match the dashboard (headStateColor + neutral).
+  const buckets = (
+    [
+      { key: "working", color: "var(--accent)", pulse: true, title: "working" },
+      { key: "needs", color: "var(--needs)", pulse: true, title: "needs you" },
+      { key: "error", color: "var(--error)", pulse: false, title: "error" },
+      { key: "done", color: "var(--done)", pulse: false, title: "done" },
+      { key: "paused", color: "var(--txt3)", pulse: false, title: "paused" },
+    ] satisfies { key: keyof typeof counts; color: string; pulse: boolean; title: string }[]
+  ).filter((b) => counts[b.key] > 0);
+
+  if (buckets.length === 0) return null;
+
+  return (
+    <div
+      data-testid="fleet-status-notifiers"
+      style={{ display: "flex", alignItems: "center", gap: 12, marginRight: 4 }}
+    >
+      {buckets.map((b) => (
+        <span
+          key={b.key}
+          title={`${counts[b.key]} ${b.title}`}
+          style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+        >
+          <span
+            style={{
+              width: 9,
+              height: 9,
+              borderRadius: "50%",
+              background: b.color,
+              display: "inline-block",
+              flexShrink: 0,
+              animation: b.pulse ? "dotpulse 1.4s infinite" : undefined,
+            }}
+          />
+          <span style={{ fontSize: "calc(12px * var(--fs,1))", fontWeight: 700, color: "var(--txt2)" }}>
+            {counts[b.key]}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Breadcrumb trail
@@ -67,7 +144,7 @@ interface AppShellProps {
 }
 
 export function AppShell({ children, onOpenSettings }: AppShellProps) {
-  const { dispatch, openBoard, openNewWorkstream } = useVm();
+  const { state, dispatch, openBoard, openNewWorkstream } = useVm();
   const { theme, toggleTheme } = useTheme();
 
   const themeIcon = theme === "dark" ? "☀" : "☾";
@@ -170,6 +247,14 @@ export function AppShell({ children, onOpenSettings }: AppShellProps) {
 
         {/* Spacer */}
         <div style={{ flex: 1 }} />
+
+        {/* Fleet status notifiers — a compact roll-up of every session's state,
+            so while focused on one session/workstream you still see the whole
+            fleet. Hidden on the board (redundant there). Same dot style as the
+            dashboard. */}
+        {(state.screen === "graph" || state.screen === "session") && (
+          <StatusNotifiers sessions={state.snapshot?.sessions ?? []} />
+        )}
 
         {/* New workstream — opens the New-workstream modal (SLICE E): name +
             goal, then the Single-session / Build-it-out path choice. */}

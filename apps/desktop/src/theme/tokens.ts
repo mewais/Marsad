@@ -56,7 +56,8 @@ export const darkTokens: Tokens = {
   bg: "#0e1116",
   panel: "#151921",
   panel2: "#1a1f29",
-  panelDark: "rgba(8,10,14,0.82)",
+  // Opaque (non-glass) terminal/diff surface: a shade DARKER than --panel.
+  panelDark: "#0b0e13",
   elev: "#1e2530",
   border: "#242b37",
   border2: "#313a48",

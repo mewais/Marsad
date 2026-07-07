@@ -155,8 +155,6 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
     );
   }
 
-  const termTitle = `${selectedSession.host_id}:${selectedSession.branch}`;
-
   return (
     <div
       style={{
@@ -168,36 +166,6 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
         backdropFilter: "blur(22px)",
       }}
     >
-      {/* Header bar */}
-      <div
-        style={{
-          flexShrink: 0,
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          padding: "10px 18px",
-          borderBottom: "1px solid var(--border)",
-          background: "var(--panel)",
-        }}
-      >
-        <span
-          style={{ fontSize: "calc(13.5px * var(--fs,1))", fontWeight: 700, color: "var(--needs)" }}
-        >
-          ⎈ Escape hatch
-        </span>
-        <span style={{ fontSize: "calc(14px * var(--fs,1))", color: "var(--txt2)" }}>
-          A real interactive shell on this session's host — anything the
-          purpose-built UI doesn't cover, do it here.
-        </span>
-        <span style={{ flex: 1 }} />
-        <span
-          className="mono"
-          style={{ fontSize: "calc(13px * var(--fs,1))", color: "var(--txt3)" }}
-        >
-          {termTitle}
-        </span>
-      </div>
-
       {/* xterm.js mount point — clicking anywhere in it focuses the terminal
           natively (xterm.js's own textarea capture), no handler needed.
           background here shows through the xterm canvas (allowTransparency: true). */}
