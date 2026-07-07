@@ -6,16 +6,18 @@
  * transcript (Activity tab): no parsing/rendering of claude's stream-json
  * output here, just a plain interactive shell, rendered with xterm.js.
  *
+ * LIVENESS: each session's xterm instance (its DOM element, fit addon and pty
+ * event listener) is cached in a module-level map for the LIFETIME OF THE UI —
+ * once a terminal is opened it stays live across tab switches, session switches
+ * and board trips, only detaching its DOM from the container on unmount and
+ * reattaching it on return. The pty listener stays subscribed the whole time so
+ * scrollback keeps updating even while the tab is hidden. (The server-side pty
+ * itself outlives even that — until the session stops.) Nothing here persists
+ * across a UI reload, which is the intended scope.
+ *
  * Browser/mock mode (no Tauri backend): `ptyStart`/`ptyInput`/`ptyResize`/
  * `listenPty` are all no-ops (see bridge/api.ts), so this renders an
  * honestly IDLE terminal — no fake/synthetic output.
- *
- * BUILT-NOT-VERIFIED (WAVE 3b): wired against the real `pty_start`/
- * `pty_input`/`pty_resize` Tauri commands and the `"pty"` event channel, but
- * — like the rest of the desktop app's real (non-mock) path — never
- * actually run against a compiled `src-tauri` here (no webkit2gtk in this
- * sandbox). See docs/GAPS.md. The mock-mode path (this file's only
- * observable behavior in this sandbox) is exercised by `pnpm build`/`tsc`.
  */
 import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
@@ -40,6 +42,79 @@ function base64ToBytes(b64: string): Uint8Array {
 }
 
 // ---------------------------------------------------------------------------
+// Module-level live-terminal cache (keyed by session id). Survives component
+// unmount/remount — see the LIVENESS note in the file header.
+// ---------------------------------------------------------------------------
+
+interface TermEntry {
+  term: Terminal;
+  fit: FitAddon;
+  /** The element xterm was `open()`-ed into; moved between containers on
+   *  reattach, never destroyed while cached. */
+  el: HTMLDivElement;
+  unlisten?: () => void;
+  /** True once `ptyStart` has been sent (only fired once per session). */
+  started: boolean;
+}
+
+const TERMINALS = new Map<string, TermEntry>();
+
+function getOrCreate(sessionId: string): TermEntry {
+  const existing = TERMINALS.get(sessionId);
+  if (existing) return existing;
+
+  const el = document.createElement("div");
+  el.style.width = "100%";
+  el.style.height = "100%";
+
+  const term = new Terminal({
+    convertEol: true,
+    fontFamily: "'JetBrains Mono','Marsad Symbols',monospace",
+    fontSize: 13,
+    lineHeight: 1.4,
+    cursorBlink: true,
+    // allowTransparency + a fully-transparent rgba background (NOT the CSS
+    // keyword "transparent", which xterm's color parser rejects and silently
+    // treats as opaque black) so the --panel-dark glass shows through.
+    allowTransparency: true,
+    theme: {
+      background: "rgba(0,0,0,0)",
+      foreground: "#e8ecf1",
+      cursor: "#e8ecf1",
+      selectionBackground: "rgba(91,141,239,0.25)",
+    },
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+
+  const entry: TermEntry = { term, fit, el, started: false };
+  TERMINALS.set(sessionId, entry);
+
+  // Keystrokes + resizes go to the pty. Registered ONCE (they persist with the
+  // cached term across mounts).
+  term.onData((data) => void ptyInput(sessionId, data));
+  term.onResize(({ cols, rows }) => void ptyResize(sessionId, cols, rows));
+
+  // Subscribe ONCE; the listener writes into the cached term (which keeps its
+  // scrollback even while its element is detached from the DOM).
+  void listenPty((event: PtyEvent) => {
+    if (event.session_id !== sessionId) return;
+    const e = TERMINALS.get(sessionId);
+    if (!e) return;
+    if (event.kind === "pty_output") {
+      e.term.write(base64ToBytes(event.data));
+    } else if (event.kind === "pty_exit") {
+      e.term.write(`\r\n\x1b[90m[process exited — code ${event.code}]\x1b[0m\r\n`);
+    }
+  }).then((fn) => {
+    const e = TERMINALS.get(sessionId);
+    if (e) e.unlisten = fn;
+  });
+
+  return entry;
+}
+
+// ---------------------------------------------------------------------------
 // TerminalTab
 // ---------------------------------------------------------------------------
 
@@ -51,102 +126,48 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
   const { selectedSession } = useVm();
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Mount xterm.js once per (sessionId) — the whole component unmounts when
-  // the user switches away from the Terminal tab (SessionDetail.tsx renders
-  // it conditionally), so this effect's cleanup is the only pty-session
-  // teardown on this side; the pty itself keeps running server-side until
-  // the SESSION stops (see bridge/api.ts's WAVE 3b section header).
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
+    const container = containerRef.current;
+    if (!container) return;
 
-    const term = new Terminal({
-      convertEol: true,
-      fontFamily: "'JetBrains Mono','Marsad Symbols',monospace",
-      fontSize: 13,
-      lineHeight: 1.4,
-      cursorBlink: true,
-      // allowTransparency lets the xterm canvas be transparent so the --panel-dark
-      // glass background on the wrapping div shows through (BUG 2).
-      allowTransparency: true,
-      theme: {
-        // xterm's color parser does NOT accept the CSS keyword "transparent"
-        // (it silently falls back to opaque black); a fully-transparent rgba is
-        // required so the --panel-dark glass on the wrapping div shows through.
-        background: "rgba(0,0,0,0)",
-        foreground: "#e8ecf1",
-        cursor: "#e8ecf1",
-        selectionBackground: "rgba(91,141,239,0.25)",
-      },
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(el);
+    // Create-or-reuse this session's cached terminal, and (re)attach its element
+    // into our container. `term.open()` must run while the element is in the DOM
+    // so xterm can measure it, so open() happens here on first creation.
+    const entry = getOrCreate(sessionId);
+    container.appendChild(entry.el);
+    const firstOpen = !entry.term.element;
+    if (firstOpen) {
+      entry.term.open(entry.el);
+    }
 
-    // Guards against a listener/unlisten resolving after unmount (both
-    // `listenPty` and the initial `fit()` are async-adjacent races).
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-
-    // Defer ptyStart until after the post-layout RAF: flex containers measure
-    // zero clientHeight synchronously on mount (before the browser has painted).
-    // fit.fit() here sets cols/rows from those 0-height dims; ptyStart called
-    // with cols=0/rows=0 would spawn a mis-sized pty. The RAF re-fit below runs
-    // after the first paint, when the container has real dimensions — call
-    // ptyStart only then so the initial pty size is correct.
-    fit.fit();
-    term.focus();
-
-    // Post-layout re-fit + deferred ptyStart: one paint pass lets the flex
-    // container measure its real height before we start the pty.
-    const rafHandle = requestAnimationFrame(() => {
-      if (!disposed) {
-        fit.fit();
-        void ptyStart(sessionId, term.cols, term.rows);
+    // Post-layout fit: flex containers report 0 height synchronously on mount,
+    // so defer the fit (and the one-time ptyStart) to after the first paint.
+    const raf = requestAnimationFrame(() => {
+      entry.fit.fit();
+      if (!entry.started) {
+        entry.started = true;
+        void ptyStart(sessionId, entry.term.cols, entry.term.rows);
       }
+      // Reattached-from-cache: repaint the buffered scrollback into the freshly
+      // re-inserted element.
+      if (!firstOpen) entry.term.refresh(0, entry.term.rows - 1);
+      entry.term.focus();
     });
 
-    void listenPty((event: PtyEvent) => {
-      if (disposed || event.session_id !== sessionId) return;
-      if (event.kind === "pty_output") {
-        term.write(base64ToBytes(event.data));
-      } else if (event.kind === "pty_exit") {
-        term.write(`\r\n\x1b[90m[process exited — code ${event.code}]\x1b[0m\r\n`);
-      }
-    }).then((fn) => {
-      if (disposed) {
-        fn();
-      } else {
-        unlisten = fn;
-      }
-    });
-
-    const dataSub = term.onData((data) => {
-      void ptyInput(sessionId, data);
-    });
-    const resizeSub = term.onResize(({ cols, rows }) => {
-      void ptyResize(sessionId, cols, rows);
-    });
-
-    // Re-fit on both a window resize and a layout-only resize of the
-    // terminal's own container (e.g. the inspector panel toggling, or the
-    // tab bar wrapping at a narrow width) — a `ResizeObserver` on the
-    // container catches the latter, which a `window` resize listener alone
-    // would miss.
-    const handleWindowResize = () => fit.fit();
-    window.addEventListener("resize", handleWindowResize);
-    const resizeObserver = new ResizeObserver(() => fit.fit());
-    resizeObserver.observe(el);
+    const onWinResize = () => entry.fit.fit();
+    window.addEventListener("resize", onWinResize);
+    const resizeObserver = new ResizeObserver(() => entry.fit.fit());
+    resizeObserver.observe(container);
 
     return () => {
-      disposed = true;
-      cancelAnimationFrame(rafHandle);
-      window.removeEventListener("resize", handleWindowResize);
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", onWinResize);
       resizeObserver.disconnect();
-      dataSub.dispose();
-      resizeSub.dispose();
-      unlisten?.();
-      term.dispose();
+      // DETACH, don't destroy: keep the term/listener/scrollback alive in the
+      // cache so returning to this session's terminal shows its full history.
+      if (entry.el.parentNode === container) {
+        container.removeChild(entry.el);
+      }
     };
   }, [sessionId]);
 
@@ -169,9 +190,8 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
         backdropFilter: "blur(22px)",
       }}
     >
-      {/* xterm.js mount point — clicking anywhere in it focuses the terminal
-          natively (xterm.js's own textarea capture), no handler needed.
-          background here shows through the xterm canvas (allowTransparency: true). */}
+      {/* xterm.js mount point — the cached terminal's element is appended here on
+          mount and removed (kept alive) on unmount. */}
       <div
         ref={containerRef}
         data-testid="terminal-output"
