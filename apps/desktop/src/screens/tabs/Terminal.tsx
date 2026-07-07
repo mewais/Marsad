@@ -70,7 +70,10 @@ export function TerminalTab({ sessionId }: TerminalTabProps) {
       // glass background on the wrapping div shows through (BUG 2).
       allowTransparency: true,
       theme: {
-        background: "transparent",
+        // xterm's color parser does NOT accept the CSS keyword "transparent"
+        // (it silently falls back to opaque black); a fully-transparent rgba is
+        // required so the --panel-dark glass on the wrapping div shows through.
+        background: "rgba(0,0,0,0)",
         foreground: "#e8ecf1",
         cursor: "#e8ecf1",
         selectionBackground: "rgba(91,141,239,0.25)",

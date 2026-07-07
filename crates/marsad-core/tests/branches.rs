@@ -768,6 +768,37 @@ fn usage_update_array_usage_field_is_noop() {
 }
 
 // ---------------------------------------------------------------------------
+// A running `!` shell command surfaces the session as Working, not Done.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn running_shell_command_shows_working_not_done() {
+    let (mut core, _peer) = make_core();
+    let id = core
+        .launch_session(spec("/p", Posture::Ask))
+        .expect("launch");
+    // Drive the session to a terminal phase (Done) via a success result.
+    core.on_agent_line(&ipc_result_success(&id)).expect("result");
+    // Sanity: it's Done before any shell command.
+    let done = core.snapshot().sessions.iter().find(|s| s.id == id).unwrap().state.clone();
+    assert_eq!(format!("{done:?}"), "Done", "precondition: session is Done");
+
+    // A `!` shell command starts running — the session must read as Working.
+    core.inject_shell_command(&id, "sleep 5").expect("inject shell cmd");
+    let running = core.snapshot().sessions.iter().find(|s| s.id == id).unwrap().state.clone();
+    assert_eq!(
+        format!("{running:?}"),
+        "Working",
+        "a running ! shell command must show Working, not Done"
+    );
+
+    // When the output arrives, shell_running clears and the real phase returns.
+    core.inject_shell_result(&id, "done").expect("inject shell result");
+    let after = core.snapshot().sessions.iter().find(|s| s.id == id).unwrap().state.clone();
+    assert_eq!(format!("{after:?}"), "Done", "phase reverts after shell finishes");
+}
+
+// ---------------------------------------------------------------------------
 // A host transitioning INTO Connected (reconnect) re-probes capabilities so the
 // stale "unreachable" catalog from a disconnected startup/connect is refreshed.
 // ---------------------------------------------------------------------------

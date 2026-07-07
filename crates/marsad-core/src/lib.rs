@@ -2937,7 +2937,16 @@ impl Core {
             project: record.project.clone(),
             branch: String::new(),
             model: s.model.clone().unwrap_or_default(),
-            state: s.phase.clone(),
+            // A running `!` shell command means the session is actively doing
+            // work — surface it as Working even if claude's own phase is a
+            // terminal state (Done/Stale), so the badge/board don't read "done"
+            // while a bash command is still running. Cleared when the shell
+            // output arrives (inject_shell_result clears shell_running).
+            state: if record.shell_running {
+                Phase::Working
+            } else {
+                s.phase.clone()
+            },
             changed_files: record.changes.len() as u32,
             subagents: s.subagents.len() as u32,
             running_subagents: s
