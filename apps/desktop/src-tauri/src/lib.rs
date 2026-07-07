@@ -35,7 +35,7 @@ pub(crate) fn resolve_socket_path() -> String {
 /// Resolve the data root directory.
 /// Append a diagnostic line to `<data_root>/desktop.log` (the GUI process has no
 /// visible stderr on Windows, so eprintln is invisible). Best-effort; never fails.
-fn diag_log(msg: &str) {
+pub(crate) fn diag_log(msg: &str) {
     let dr = resolve_data_root();
     let path = std::path::Path::new(&dr).join("desktop.log");
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {

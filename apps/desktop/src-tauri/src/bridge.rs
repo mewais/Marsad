@@ -1662,16 +1662,27 @@ pub fn cost_breakdown(
 /// connection would cut the per-call connect overhead; deferred as a
 /// follow-up — see `docs/GAPS.md` — to keep this BUILT-NOT-VERIFIED surface
 /// as simple/low-risk as possible.)
-fn send_pty_ipc(msg: &marsad_proto::IpcMsg) {
+fn send_pty_ipc(msg: &marsad_proto::IpcMsg, hold: bool) {
     use marsad_transport::Transport;
     let socket_path = crate::resolve_socket_path();
     let mut ipc = marsad_transport::LocalIpc::new(&socket_path);
     if let Err(e) = ipc.connect() {
-        eprintln!("marsad-desktop: pty command: failed to connect to agent: {e}");
+        crate::diag_log(&format!(
+            "marsad-desktop: pty command: failed to connect to agent: {e}"
+        ));
         return;
     }
-    if let Err(e) = ipc.send_line(&marsad_proto::encode_ipc(msg)) {
-        eprintln!("marsad-desktop: pty command: failed to send: {e}");
+    match ipc.send_line(&marsad_proto::encode_ipc(msg)) {
+        Ok(()) => crate::diag_log("marsad-desktop: pty command sent OK"),
+        Err(e) => crate::diag_log(&format!("marsad-desktop: pty command: failed to send: {e}")),
+    }
+    // The agent reads this line off the throwaway connection asynchronously;
+    // dropping the socket the instant send_line returns can race the server's
+    // read on some transports (data discarded on close). Hold the connection
+    // open briefly so the agent drains the line first. Only for PtyStart (fired
+    // once) — never for per-keystroke PtyInput, which must not add typing lag.
+    if hold {
+        std::thread::sleep(std::time::Duration::from_millis(80));
     }
 }
 
@@ -1685,13 +1696,19 @@ pub fn pty_start(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
+    crate::diag_log(&format!(
+        "marsad-desktop: pty_start command invoked sid={session_id} {cols}x{rows}"
+    ));
     let guard = state.lock().map_err(|e| e.to_string())?;
     if let AppState::Live(_) = &*guard {
-        send_pty_ipc(&marsad_proto::IpcMsg::PtyStart {
-            session_id,
-            cols,
-            rows,
-        });
+        send_pty_ipc(
+            &marsad_proto::IpcMsg::PtyStart {
+                session_id,
+                cols,
+                rows,
+            },
+            true, // hold: PtyStart fires once; keep the socket open so it lands
+        );
     }
     Ok(())
 }
@@ -1705,7 +1722,7 @@ pub fn pty_input(
 ) -> Result<(), String> {
     let guard = state.lock().map_err(|e| e.to_string())?;
     if let AppState::Live(_) = &*guard {
-        send_pty_ipc(&marsad_proto::IpcMsg::PtyInput { session_id, data });
+        send_pty_ipc(&marsad_proto::IpcMsg::PtyInput { session_id, data }, false);
     }
     Ok(())
 }
@@ -1721,11 +1738,14 @@ pub fn pty_resize(
 ) -> Result<(), String> {
     let guard = state.lock().map_err(|e| e.to_string())?;
     if let AppState::Live(_) = &*guard {
-        send_pty_ipc(&marsad_proto::IpcMsg::PtyResize {
-            session_id,
-            cols,
-            rows,
-        });
+        send_pty_ipc(
+            &marsad_proto::IpcMsg::PtyResize {
+                session_id,
+                cols,
+                rows,
+            },
+            false,
+        );
     }
     Ok(())
 }
