@@ -379,11 +379,15 @@ pub fn build_claude_discovery_script(
          \n\
          # Source 3: models observed in recent transcripts — most likely to surface\n\
          # a subscription model like \"fable\" that is only stored in session history.\n\
-         ls -t \"$base\"/projects/*/*.jsonl 2>/dev/null \
-           | head -20 \
-           | xargs grep -h -o '\"model\":\"[^\"]*\"' 2>/dev/null \
+         # Bounded so it can't dominate the probe deadline on a slow remote FS:\n\
+         # only the newest few files, each read for just its FIRST model match\n\
+         # (grep -m1, so a huge transcript isn't scanned end-to-end).\n\
+         ls -t \"$base\"/projects/*/*.jsonl 2>/dev/null | head -6 \
+           | while IFS= read -r f; do \
+               grep -m1 -h -o '\"model\":\"[^\"]*\"' \"$f\" 2>/dev/null; \
+             done \
            | sed 's/\"model\":\"\\([^\"]*\\)\"/\\1/' \
-           | sort -u | head -50 \
+           | sort -u | head -20 \
            | while IFS= read -r m; do printf 'model\\t%s\\n' \"$m\"; done",
     );
     // Sessions: only when a concrete project is in scope (claude's on-disk dir is
@@ -913,7 +917,14 @@ impl HostProbeCtx {
 // Part 4 — CapabilityProvider (§3.2/§3.3/§3.4, §4)
 // ===========================================================================
 
-const DEFAULT_PROBE_DEADLINE: Duration = Duration::from_secs(6);
+// Generous enough for a REMOTE host whose setup is heavy (e.g. `source
+// ~/module.sh` on an HPC module system) plus SSH connection establishment plus
+// the discovery script. `run_remote_script_bounded` returns None on timeout —
+// which drops EVERY section (avail/env included) → "Claude Code isn't available"
+// even though the host is reachable. 6s was too tight for such hosts; 20s covers
+// slow module-loading setups. Local probes finish in well under a second, so the
+// larger ceiling never adds latency there.
+const DEFAULT_PROBE_DEADLINE: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct PersistedHostFile {
