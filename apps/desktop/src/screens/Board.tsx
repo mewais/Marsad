@@ -212,7 +212,13 @@ function HostStrip({ board }: { board: BoardView }) {
       </span>
       {board.host_chips.map((host) => {
         const color = hostStatusColor[host.status] ?? "var(--txt3)";
-        const pulse = host.status === "reconnecting" || host.status === "unreachable" || host.status === "down";
+        // "connecting" = reachable but capability discovery still loading (agents +
+        // models). Pulse it (like reconnecting) so it reads as in-progress.
+        const pulse =
+          host.status === "connecting" ||
+          host.status === "reconnecting" ||
+          host.status === "unreachable" ||
+          host.status === "down";
         return (
           <span
             key={host.id}

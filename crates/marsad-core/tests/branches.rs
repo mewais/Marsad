@@ -840,3 +840,73 @@ fn reconnect_to_connected_triggers_capability_preload() {
         "a repeat Connected (no transition) must NOT re-probe; got {out3:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A reachable host stays Connecting until EVERY probed driver's caps land, then
+// flips to Connected (agents + versioned models loaded). No optimism.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn host_connecting_until_all_drivers_discovered() {
+    use marsad_core::HostStatus;
+
+    let (mut core, _peer) = make_core();
+    let u = core
+        .add_host("srv", "wslssh:Ubuntu:narval", None, None, Vec::new(), Vec::new())
+        .expect("add host");
+    let host_id = u
+        .iter()
+        .find_map(|up| match up {
+            VmUpdate::Hosts(hs) => hs
+                .iter()
+                .find(|h| h.target == "wslssh:Ubuntu:narval")
+                .map(|h| h.id.clone()),
+            _ => None,
+        })
+        .expect("host id");
+
+    let status_of = |core: &Core| {
+        core.snapshot()
+            .hosts
+            .into_iter()
+            .find(|h| h.id == host_id)
+            .unwrap()
+            .status
+    };
+    let caps_line = |driver: &str| {
+        format!(
+            r#"{{"type":"CapabilitiesUpdate","host_id":"{host_id}","driver":"{driver}","capabilities":{{"driver":"{driver}","host_id":"{host_id}","cli_available":true,"launchable":true,"models":{{"models":[],"source":"Observed","free_text":true}},"session_scope":null,"sessions":[],"fetched_at_ms":0,"errors":[]}}}}"#
+        )
+    };
+
+    // Reachable but no caps yet → Connecting.
+    core.set_host_status(&host_id, HostStatus::Connected);
+    assert_eq!(status_of(&core), HostStatus::Connecting, "no caps yet → Connecting");
+
+    // Two of three drivers land → still Connecting.
+    core.on_agent_line(&caps_line("claude")).expect("claude caps");
+    core.on_agent_line(&caps_line("codex")).expect("codex caps");
+    assert_eq!(
+        status_of(&core),
+        HostStatus::Connecting,
+        "partial discovery → still Connecting"
+    );
+
+    // The last probed driver lands → promoted to Connected.
+    core.on_agent_line(&caps_line("gemini")).expect("gemini caps");
+    assert_eq!(
+        status_of(&core),
+        HostStatus::Connected,
+        "all drivers discovered → Connected"
+    );
+
+    // Going Unreachable forgets discovery so a later reconnect returns to Connecting.
+    core.set_host_status(&host_id, HostStatus::Unreachable);
+    assert_eq!(status_of(&core), HostStatus::Unreachable);
+    core.set_host_status(&host_id, HostStatus::Connected);
+    assert_eq!(
+        status_of(&core),
+        HostStatus::Connecting,
+        "after a drop, caps must be re-discovered → Connecting again"
+    );
+}

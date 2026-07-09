@@ -281,6 +281,23 @@ export function NodeModal() {
   // #5 loading — caps absent for the selected (driver, host) ⇒ real discovery
   // is in flight. Drives the model-list + resume-list spinners.
   const capsLoading = driverCaps === undefined;
+  const fetchedAtMs = driverCaps?.fetched_at_ms ?? 0;
+  // Path-pick session loading (mirrors NewSession): show a spinner while the
+  // scoped refresh for a newly-picked path lands, even when caps already exist.
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const sessionsBaselineRef = React.useRef<number>(fetchedAtMs);
+  useEffect(() => {
+    if (!resume) return;
+    sessionsBaselineRef.current = fetchedAtMs;
+    setSessionsLoading(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resume, hostId, driver, projectTrim]);
+  useEffect(() => {
+    if (sessionsLoading && fetchedAtMs !== sessionsBaselineRef.current) {
+      setSessionsLoading(false);
+    }
+  }, [fetchedAtMs, sessionsLoading]);
+  const loadingSessions = capsLoading || sessionsLoading;
   // #6 lazy unknown-path probe — the user typed/picked a project with no
   // sessions in the current caps. Fire a scoped refresh so a previously-unknown
   // path's sessions populate; show the resume spinner while it lands. Guarded so
@@ -610,7 +627,7 @@ export function NodeModal() {
                       background:
                         h.status === "Connected"
                           ? "var(--done)"
-                          : h.status === "Reconnecting"
+                          : h.status === "Reconnecting" || h.status === "Connecting"
                           ? "var(--needs)"
                           : "var(--error)",
                       flexShrink: 0,
@@ -696,15 +713,15 @@ export function NodeModal() {
                   </div>
                 );
               })}
-              {visibleSessions.length === 0 && capsLoading && (
+              {loadingSessions && (
                 <div
                   data-testid="nm-resume-loading"
                   style={{ fontSize: "calc(12.5px * var(--fs,1))", color: "var(--txt3)", fontStyle: "italic" }}
                 >
-                  Discovering sessions…
+                  {visibleSessions.length === 0 ? "Discovering sessions…" : "Refreshing…"}
                 </div>
               )}
-              {visibleSessions.length === 0 && !capsLoading && (
+              {visibleSessions.length === 0 && !loadingSessions && (
                 <div
                   data-testid="nm-resume-hint"
                   style={{ fontSize: "calc(12.5px * var(--fs,1))", color: "var(--txt3)", fontStyle: "italic" }}

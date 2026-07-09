@@ -926,9 +926,14 @@ impl HostProbeCtx {
 const DEFAULT_PROBE_DEADLINE: Duration = Duration::from_secs(10);
 
 // Longer deadline for a host WITH a setup command: `source ~/module.sh` on an HPC
-// module system can legitimately take many seconds before the discovery script
-// even starts. Only these hosts pay the longer wait; see `queue_probe`.
-const SETUP_PROBE_DEADLINE: Duration = Duration::from_secs(25);
+// login node can take tens of seconds (measured ~58s on one) before the discovery
+// script even starts, and it re-pays that on every fresh (non-multiplexed) SSH
+// connection. This is a CEILING, not a fixed cost — fast hosts return early — so
+// only genuinely-slow login hosts use the window. It costs no user-visible
+// finickiness because the host shows "Connecting" until discovery lands (see
+// Core::set_host_status), so a long-but-completing probe is honest, not a timeout.
+// run_remote_script_bounded logs the real elapsed time so this is tuned from data.
+const SETUP_PROBE_DEADLINE: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct PersistedHostFile {

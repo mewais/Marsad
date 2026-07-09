@@ -410,6 +410,11 @@ pub struct Core {
     active_profile: Option<String>,
     /// U1 dynamic capability discovery: last known snapshot per (driver, host_id).
     capabilities: HashMap<(String, String), marsad_proto::Capabilities>,
+    /// Per-host set of drivers whose capability discovery has LANDED since the
+    /// host last came online. A host stays `Connecting` until every probed driver
+    /// has reported (agents + versioned models loaded), then flips to `Connected`.
+    /// Cleared when the host goes Unreachable so a reconnect re-discovers.
+    caps_loaded: HashMap<String, std::collections::HashSet<String>>,
     /// X3 (docs/specs/wasl-connector.md §5.2): pending Wasl gates, keyed by
     /// (host_id, gate_id). Node-authoritative: entries are added by
     /// `WaslGateRequested` and removed ONLY by `WaslGateDecided` (incl.
@@ -499,6 +504,7 @@ impl Core {
             ws_leads: HashMap::new(),
             active_profile: None,
             capabilities: HashMap::new(),
+            caps_loaded: HashMap::new(),
             wasl_gates: std::collections::BTreeMap::new(),
         })
     }
@@ -902,29 +908,53 @@ impl Core {
 
     /// Apply an externally-computed health result for a host (runtime status, not
     /// persisted). Returns the updated host list.
+    /// The drivers Marsad probes on every host (mirrors the agent's probe set).
+    /// A host is only `Connected` once ALL of these have reported their caps.
+    const PROBED_DRIVERS: [&'static str; 3] = ["claude", "codex", "gemini"];
+
+    /// True once every probed driver's capability discovery has landed for `id`
+    /// (agents + versioned models loaded) since the host last came online.
+    fn host_caps_fully_loaded(&self, id: &str) -> bool {
+        match self.caps_loaded.get(id) {
+            Some(seen) => Self::PROBED_DRIVERS.iter().all(|d| seen.contains(*d)),
+            None => false,
+        }
+    }
+
     pub fn set_host_status(&mut self, id: &str, status: HostStatus) -> Vec<VmUpdate> {
-        // Detect a transition INTO Connected — a host coming (back) online after
-        // being anything else (Reconnecting/Unreachable/Connecting). This fires
-        // on reconnect regardless of MFA timing (the health probe only reports
-        // Connected once the shared connection is actually live), so it's the
-        // reliable place to (re)preload capabilities. The initial connect already
-        // preloads via connect_host_interactive; this covers RECONNECT, whose
-        // early connect-time probe cached "unreachable" while auth was pending.
-        let was_connected = self
-            .hosts
-            .list()
-            .iter()
-            .find(|h| h.id == id)
-            .map(|h| h.status == HostStatus::Connected)
-            .unwrap_or(false);
-        let now_connected = status == HostStatus::Connected;
-        self.hosts.set_status(id, status);
-        if now_connected && !was_connected {
-            // Fire-and-forget re-probe for every driver on the reconnected host
-            // (same cost class as the connect-time refresh; results arrive later
-            // as CapabilitiesUpdate broadcasts). Refreshes the stale caps that the
-            // startup/connect-time probe cached as unreachable while auth pended.
-            self.refresh_capabilities(Some(id.to_string()), None, None);
+        // The health worker reports raw reachability (Connected / Unreachable).
+        // We translate that into the truthful UI status: a reachable host stays
+        // `Connecting` until its capability discovery has fully landed (agents +
+        // versioned models), then flips to `Connected`. No optimism, no timeouts
+        // surfaced — just "connecting while the background load happens".
+        match status {
+            HostStatus::Connected => {
+                let fully = self.host_caps_fully_loaded(id);
+                let effective = if fully {
+                    HostStatus::Connected
+                } else {
+                    HostStatus::Connecting
+                };
+                self.hosts.set_status(id, effective);
+                // Kick off discovery exactly once per online session: the presence
+                // of a `caps_loaded` entry is the "already triggered" marker, so
+                // repeated health ticks while Connecting don't re-probe. Cleared on
+                // Unreachable below, so a reconnect re-discovers.
+                if !fully && !self.caps_loaded.contains_key(id) {
+                    self.caps_loaded
+                        .insert(id.to_string(), std::collections::HashSet::new());
+                    self.refresh_capabilities(Some(id.to_string()), None, None);
+                }
+            }
+            HostStatus::Unreachable => {
+                // Went offline → forget its discovery so a reconnect re-probes
+                // cleanly (and the host correctly returns to Connecting first).
+                self.caps_loaded.remove(id);
+                self.hosts.set_status(id, HostStatus::Unreachable);
+            }
+            other => {
+                self.hosts.set_status(id, other);
+            }
         }
         vec![VmUpdate::Hosts(self.hosts.list().to_vec())]
     }
@@ -2231,8 +2261,30 @@ impl Core {
                 capabilities,
             } => {
                 self.capabilities
-                    .insert((driver, host_id), capabilities.clone());
-                Ok(vec![VmUpdate::Capabilities(capabilities.into())])
+                    .insert((driver.clone(), host_id.clone()), capabilities.clone());
+                let mut updates = vec![VmUpdate::Capabilities(capabilities.into())];
+                // Record this driver as discovered for the host. Once every probed
+                // driver has landed, a host that was Connecting (reachable, discovery
+                // in flight) is promoted to Connected — agents + versioned models are
+                // now loaded and the launch modals will show the real truth.
+                self.caps_loaded
+                    .entry(host_id.clone())
+                    .or_default()
+                    .insert(driver);
+                if self.host_caps_fully_loaded(&host_id) {
+                    let is_connecting = self
+                        .hosts
+                        .list()
+                        .iter()
+                        .find(|h| h.id == host_id)
+                        .map(|h| h.status == HostStatus::Connecting)
+                        .unwrap_or(false);
+                    if is_connecting {
+                        self.hosts.set_status(&host_id, HostStatus::Connected);
+                        updates.push(VmUpdate::Hosts(self.hosts.list().to_vec()));
+                    }
+                }
+                Ok(updates)
             }
             // X3 (docs/specs/wasl-connector.md §5.2): a Wasl gate surfaced (or
             // re-surfaced via resnapshot reconcile).

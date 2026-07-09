@@ -308,7 +308,13 @@ pub fn run_remote_script_bounded(
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let mut child = command.spawn().ok()?;
+    let mut child = match command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("marsad-agent: remote_script_bounded SPAWN FAILED for {host_target:?}: {e}");
+            return None;
+        }
+    };
     {
         let mut stdin = child.stdin.take()?;
         stdin.write_all(script.as_bytes()).ok()?;
@@ -333,13 +339,28 @@ pub fn run_remote_script_bounded(
     loop {
         match child.try_wait() {
             Ok(Some(_)) => {
-                return Some(reader.join().unwrap_or_default());
+                let out = reader.join().unwrap_or_default();
+                let ms = start.elapsed().as_millis();
+                // Only log notably-slow completions to keep agent.log quiet — this
+                // is how we measure real remote-probe cost (e.g. HPC login shells).
+                if ms > 3000 {
+                    eprintln!(
+                        "marsad-agent: remote_script_bounded for {host_target:?} completed in {ms}ms ({} bytes)",
+                        out.len()
+                    );
+                }
+                return Some(out);
             }
             Ok(None) => {
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
                     let _ = reader.join();
+                    eprintln!(
+                        "marsad-agent: remote_script_bounded for {host_target:?} TIMED OUT after {}ms (deadline {}ms)",
+                        start.elapsed().as_millis(),
+                        timeout.as_millis()
+                    );
                     return None;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));

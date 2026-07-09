@@ -254,6 +254,27 @@ export function NewSession() {
   // is in flight. Drives the model-list + resume-list spinners (never blocks UI).
   const capsLoading = state.capabilities[capsKey(driver, hostId)] === undefined;
 
+  // Path-pick session loading: when the resume picker is open and the
+  // (host, driver, project) changes, a scoped capability refresh is fired below
+  // to list THAT path's resumable sessions. Show a spinner until the fresh
+  // snapshot lands — even when caps already exist from connect-time (so
+  // `capsLoading` is false and wouldn't show one). Cleared when the caps
+  // snapshot's `fetched_at_ms` advances past the value captured at request time.
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const sessionsBaselineRef = React.useRef<number>(fetchedAtMs);
+  useEffect(() => {
+    if (!resume) return;
+    sessionsBaselineRef.current = fetchedAtMs;
+    setSessionsLoading(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resume, hostId, driver, projectTrim]);
+  useEffect(() => {
+    if (sessionsLoading && fetchedAtMs !== sessionsBaselineRef.current) {
+      setSessionsLoading(false);
+    }
+  }, [fetchedAtMs, sessionsLoading]);
+  const loadingSessions = capsLoading || sessionsLoading;
+
   // #6 lazy unknown-path probe — the user typed/picked a project with no
   // sessions in the current caps. Fire a scoped refresh so a previously-unknown
   // path's sessions populate; the resume spinner shows while it lands. Guarded
@@ -601,7 +622,7 @@ export function NewSession() {
                       background:
                         h.status === "Connected"
                           ? "var(--done)"
-                          : h.status === "Reconnecting"
+                          : h.status === "Reconnecting" || h.status === "Connecting"
                           ? "var(--needs)"
                           : "var(--error)",
                       flexShrink: 0,
@@ -744,7 +765,7 @@ export function NewSession() {
                 </>
               )}
 
-              {visibleSessions.length === 0 && capsLoading && (
+              {loadingSessions && (
                 <div
                   data-testid="ns-resume-loading"
                   style={{
@@ -753,10 +774,12 @@ export function NewSession() {
                     fontStyle: "italic",
                   }}
                 >
-                  Discovering sessions…
+                  {visibleSessions.length === 0
+                    ? "Discovering sessions…"
+                    : "Refreshing…"}
                 </div>
               )}
-              {visibleSessions.length === 0 && !capsLoading && (
+              {visibleSessions.length === 0 && !loadingSessions && (
                 <div
                   data-testid="ns-resume-hint"
                   style={{

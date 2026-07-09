@@ -287,8 +287,10 @@ function deriveTranscript(
   // Show a working spinner only while Claude is actually working. A freshly
   // launched session sits idle (claude emits nothing until prompted), so we
   // don't show a perpetual "Starting up…" spinner — the composer below is ready
-  // for the first prompt.
-  if (sv.state === "Working") {
+  // for the first prompt. NOT while a `!` shell command runs: that surfaces the
+  // session as Working (core::make_session_view) but has its own dedicated
+  // "Running shell command…" spinner below — showing both is redundant.
+  if (sv.state === "Working" && !sv.shell_running) {
     msgs.push({
       id: "working-0",
       kind: "working",

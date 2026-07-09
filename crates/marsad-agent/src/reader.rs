@@ -199,12 +199,43 @@ pub(crate) fn spawn_session_reader(
                     // ssh.exe would mangle). If claude isn't running, bail — the
                     // session reader has nothing to attach to.
                     let host = host_target.clone().unwrap_or_default();
-                    let (claude_pid, abs_dir) = match remote_resolve_pid_dir(&host, &sid) {
+                    // Retry the resolve: on a host with heavy setup (e.g. `source
+                    // ~/module.sh` on an HPC login node) claude can take many seconds
+                    // to be up after the durable launch returns. A single resolve
+                    // right after the launch's `sleep 0.3` loses that race and wrongly
+                    // reports "claude not running" → the session sticks at Starting.
+                    // Poll for a few seconds before giving up.
+                    let resolved = {
+                        let mut r = None;
+                        for attempt in 0..12 {
+                            if let Some(pd) = remote_resolve_pid_dir(&host, &sid) {
+                                r = Some(pd);
+                                break;
+                            }
+                            if attempt == 0 {
+                                eprintln!(
+                                    "marsad-agent: session {sid} claude not up yet — polling (slow remote setup?)"
+                                );
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(600));
+                        }
+                        r
+                    };
+                    let (claude_pid, abs_dir) = match resolved {
                         Some(pd) => pd,
                         None => {
+                            // Fetch the remote out.log tail so a genuine crash (claude
+                            // not on PATH, setup error) is visible instead of a bare
+                            // "not running".
+                            let dir = remote_session_dir(&sid);
+                            let log_tail = run_remote_script(
+                                &host,
+                                &format!("dir={dir}\ntail -c 4000 \"$dir/out.log\" 2>/dev/null"),
+                            )
+                            .unwrap_or_default();
                             eprintln!(
-                                    "marsad-agent: session {sid} remote resolve failed (claude not running?) — not attaching"
-                                );
+                                "marsad-agent: session {sid} remote resolve failed after retries (claude not running?) — not attaching. out.log tail:\n{log_tail}"
+                            );
                             break 'reconnect;
                         }
                     };

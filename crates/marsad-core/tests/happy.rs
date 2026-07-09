@@ -1365,9 +1365,16 @@ fn set_host_status_updates_the_list() {
         .add_host("srv", "a@h", None, None, Vec::new(), Vec::new())
         .expect("add");
     let id = remote_id(&u);
+    // A reachable host whose capability discovery hasn't landed yet shows
+    // Connecting (not Connected) — it flips to Connected only once every probed
+    // driver has reported (see reconnect/discovery tests in branches.rs).
     let u2 = core.set_host_status(&id, HostStatus::Connected);
     let h = hosts_from(&u2).into_iter().find(|h| h.id == id).unwrap();
-    assert_eq!(h.status, HostStatus::Connected);
+    assert_eq!(h.status, HostStatus::Connecting);
+    // Unreachable is reported verbatim.
+    let u3 = core.set_host_status(&id, HostStatus::Unreachable);
+    let h3 = hosts_from(&u3).into_iter().find(|h| h.id == id).unwrap();
+    assert_eq!(h3.status, HostStatus::Unreachable);
 }
 
 #[test]
