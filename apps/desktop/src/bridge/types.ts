@@ -48,6 +48,16 @@ export interface QuestionPrompt {
   options: QuestionOption[];
 }
 
+/** One scope-of-allowance choice parsed from an MCP elicitation's schema enum. */
+export interface ElicitationChoice {
+  /** Schema property the value belongs under (e.g. "grant"). */
+  key: string;
+  /** Enum value sent back in the response content. */
+  value: string;
+  /** Human-facing label (enumNames when present, else the value). */
+  label: string;
+}
+
 export type Gate =
   | {
       Permission: {
@@ -57,6 +67,9 @@ export type Gate =
         risk: string;
         explanation: string;
         is_elicitation: boolean;
+        /** Scope-of-allowance choices parsed from the elicitation's schema enum
+         *  (e.g. once/session/deny). Empty ⇒ render the binary Approve/Reject. */
+        elicitation_choices?: ElicitationChoice[];
       };
     }
   | { Plan: { request_id: string; summary: string; steps: PlanStep[] } }

@@ -577,6 +577,11 @@ fn reduce_control_request(
         risk: String::new(),
         explanation,
         is_elicitation: req.elicitation_message.is_some(),
+        // Scope-of-allowance choices from the elicitation's requested_schema enum
+        // (empty for can_use_tool gates and schemaless elicitations).
+        elicitation_choices: marsad_proto::parse_elicitation_choices(
+            req.elicitation_schema.as_ref(),
+        ),
     };
     state.gate = Some(gate);
     state.phase = Phase::Needs;

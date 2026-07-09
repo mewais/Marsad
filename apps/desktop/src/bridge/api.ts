@@ -358,6 +358,9 @@ export async function answerGate(args: {
   decision_id: string;
   allow: boolean;
   deny_reason?: string;
+  /** For an accepted MCP elicitation that offered a scope choice, the `content`
+   *  object to send back (e.g. { grant: "session" }). Ignored on reject. */
+  elicitation_content?: Record<string, unknown>;
 }): Promise<void> {
   resolvedGateLog.push({
     session_id: args.session_id,

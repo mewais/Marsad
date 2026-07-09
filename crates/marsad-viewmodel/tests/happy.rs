@@ -422,6 +422,7 @@ fn gate_vm_returns_some_for_permission_gate() {
         risk: "medium".to_string(),
         explanation: "needs DB access".to_string(),
         is_elicitation: false,
+        elicitation_choices: Vec::new(),
     };
     let mut snap = representative_snapshot();
     snap.sessions[0].gate = Some(gate);
@@ -442,6 +443,7 @@ fn gate_vm_permission_kind_and_icon() {
         risk: "low".to_string(),
         explanation: "directory listing".to_string(),
         is_elicitation: false,
+        elicitation_choices: Vec::new(),
     };
     let mut snap = representative_snapshot();
     snap.sessions[0].gate = Some(gate);

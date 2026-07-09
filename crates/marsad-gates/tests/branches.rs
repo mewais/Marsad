@@ -25,6 +25,7 @@ fn permission_gate(command: &str) -> Gate {
         risk: "low".to_string(),
         explanation: "test".to_string(),
         is_elicitation: false,
+        elicitation_choices: Vec::new(),
     }
 }
 

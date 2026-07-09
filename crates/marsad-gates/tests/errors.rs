@@ -21,6 +21,7 @@ fn make_permission_gate() -> Gate {
         risk: "low".to_string(),
         explanation: "List root directory".to_string(),
         is_elicitation: false,
+        elicitation_choices: Vec::new(),
     }
 }
 

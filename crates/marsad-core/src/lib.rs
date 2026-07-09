@@ -1611,6 +1611,9 @@ impl Core {
             request_id: ctrl.request_id,
             allow: ctrl.allow,
             deny_reason: ctrl.deny_reason,
+            // For an accepted scope-elicitation, forward the chosen content
+            // (e.g. { "grant": "session" }); None for everything else.
+            elicitation_content: decision.elicitation_content.clone(),
         })?;
 
         // Optimistically clear the pending gate NOW so the card disappears the

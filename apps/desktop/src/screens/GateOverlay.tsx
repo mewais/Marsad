@@ -128,6 +128,21 @@ export function GateOverlay() {
     close();
   }
 
+  // Accept an MCP elicitation with a specific scope choice (e.g. grant=session).
+  // The chosen key/value becomes the elicitation response `content`.
+  async function handleElicitationChoice(key: string, value: string) {
+    if (!selectedSession) return;
+    setBusy(true);
+    await answerGate({
+      session_id: selectedSession.id,
+      decision_id: selectedGate?.decision_id ?? selectedSession.id,
+      allow: true,
+      elicitation_content: { [key]: value },
+    });
+    setBusy(false);
+    close();
+  }
+
   if (!open || !selectedGate || !selectedSession) {
     // Render nothing visible — keep mount for test compatibility
     return (
@@ -146,6 +161,10 @@ export function GateOverlay() {
   const raw = selectedSession.gate;
   const permissionData =
     raw && "Permission" in raw ? raw.Permission : null;
+  // Scope-of-allowance choices offered by an MCP elicitation (once/session/deny…).
+  // When present, they REPLACE the binary Approve/Reject with one button per choice.
+  const elicitationChoices = permissionData?.elicitation_choices ?? [];
+  const hasChoices = elicitationChoices.length > 0;
   const planData =
     raw && "Plan" in raw ? raw.Plan : null;
   const editData =
@@ -399,6 +418,41 @@ export function GateOverlay() {
                   }}
                 >
                   ⚠ {permissionData.risk}
+                </div>
+              )}
+
+              {/* Scope choices (MCP elicitation): one button per allowed scope.
+                  Clicking sends that choice as the elicitation response. */}
+              {hasChoices && (
+                <div
+                  data-testid="gate-elicitation-choices"
+                  style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}
+                >
+                  {elicitationChoices.map((c, i) => (
+                    <button
+                      key={`${c.key}=${c.value}-${i}`}
+                      data-testid={`gate-choice-${c.value}`}
+                      onClick={() => handleElicitationChoice(c.key, c.value)}
+                      disabled={busy}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        padding: "11px 14px",
+                        borderRadius: 11,
+                        border: "1px solid var(--border2)",
+                        background: "var(--panel2)",
+                        color: "var(--txt)",
+                        cursor: busy ? "not-allowed" : "pointer",
+                        opacity: busy ? 0.6 : 1,
+                        textAlign: "left",
+                        fontFamily: "inherit",
+                        fontWeight: 600,
+                        fontSize: "calc(15px * var(--fs,1))",
+                      }}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
@@ -866,25 +920,29 @@ export function GateOverlay() {
                       Approve all this session
                     </button>
                   )}
-                  <button
-                    data-testid="approve-btn"
-                    onClick={handleApprove}
-                    disabled={busy}
-                    style={{
-                      fontFamily: "inherit",
-                      fontWeight: 700,
-                      fontSize: "calc(15px * var(--fs,1))",
-                      padding: "9px 20px",
-                      borderRadius: 9,
-                      border: "none",
-                      background: "var(--done)",
-                      color: "#0e1116",
-                      cursor: busy ? "not-allowed" : "pointer",
-                      opacity: busy ? 0.6 : 1,
-                    }}
-                  >
-                    {approveLabel(kind)}
-                  </button>
+                  {/* Elicitation scope choices replace the generic Approve —
+                      the per-choice buttons in the body ARE the accept action. */}
+                  {!hasChoices && (
+                    <button
+                      data-testid="approve-btn"
+                      onClick={handleApprove}
+                      disabled={busy}
+                      style={{
+                        fontFamily: "inherit",
+                        fontWeight: 700,
+                        fontSize: "calc(15px * var(--fs,1))",
+                        padding: "9px 20px",
+                        borderRadius: 9,
+                        border: "none",
+                        background: "var(--done)",
+                        color: "#0e1116",
+                        cursor: busy ? "not-allowed" : "pointer",
+                        opacity: busy ? 0.6 : 1,
+                      }}
+                    >
+                      {approveLabel(kind)}
+                    </button>
+                  )}
                 </>
               )}
             </>

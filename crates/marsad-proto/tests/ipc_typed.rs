@@ -422,7 +422,7 @@ fn answer_gate_golden_contract() {
             request_id: "req-1".to_string(),
             allow: true,
             deny_reason: None,
-        },
+            elicitation_content: None,        },
     );
 }
 
@@ -725,7 +725,7 @@ fn all_goldens() -> Vec<(&'static str, &'static str, IpcMsg)> {
                 request_id: "req-1".to_string(),
                 allow: true,
                 deny_reason: None,
-            },
+                elicitation_content: None,            },
         ),
         (
             "AnswerQuestion",

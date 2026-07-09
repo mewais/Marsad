@@ -31,6 +31,11 @@ pub enum Gate {
         /// True when this permission gate came from an MCP elicitation (answered with {action}),
         /// not a claude can_use_tool request — the UI hides "Approve all this session" for these.
         is_elicitation: bool,
+        /// Scope-of-allowance choices parsed from the elicitation's requested_schema
+        /// enum (e.g. once/session/deny). Empty for a plain permission gate or a
+        /// schemaless elicitation → the UI shows the binary Approve/Reject.
+        #[serde(default)]
+        elicitation_choices: Vec<marsad_proto::ElicitationChoice>,
     },
     Plan {
         /// The control-request id this gate answers. Unique per gate occurrence.
@@ -119,6 +124,12 @@ pub struct GateDecision {
     pub id: DecisionId,
     pub session_id: String,
     pub decision: Decision,
+    /// For an accepted MCP elicitation that offered a scope choice, the `content`
+    /// object to send back (e.g. `{ "grant": "session" }`). `None` for rejects,
+    /// `can_use_tool` gates, and schemaless elicitations. Forwarded verbatim into
+    /// `IpcMsg::AnswerGate.elicitation_content`.
+    #[serde(default)]
+    pub elicitation_content: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +247,7 @@ pub fn approve(session_id: &str, gate: &Gate) -> GateDecision {
         id: decision_id(session_id, gate),
         session_id: session_id.to_string(),
         decision: Decision::Approve,
+        elicitation_content: None,
     }
 }
 
@@ -247,6 +259,7 @@ pub fn reject(session_id: &str, gate: &Gate, reason: &str) -> GateDecision {
         decision: Decision::Reject {
             reason: reason.to_string(),
         },
+        elicitation_content: None,
     }
 }
 

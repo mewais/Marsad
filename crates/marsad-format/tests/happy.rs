@@ -120,6 +120,7 @@ fn gate_meta_permission_fields() {
         risk: String::from("low"),
         explanation: String::from("list files"),
         is_elicitation: false,
+        elicitation_choices: Vec::new(),
     };
     let gm: GateMeta = gate_meta(&gate);
     assert_eq!(gm.kind, "Permission");

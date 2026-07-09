@@ -565,6 +565,7 @@ fn answer_gate_unknown_session_returns_unknown_session_error() {
         risk: "high".to_string(),
         explanation: "destructive".to_string(),
         is_elicitation: false,
+        elicitation_choices: Vec::new(),
     };
     let decision = approve(UNKNOWN, &gate);
     let err = core.answer_gate(decision).unwrap_err();

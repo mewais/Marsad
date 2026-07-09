@@ -78,8 +78,9 @@ impl Agent {
                 session_id,
                 allow,
                 deny_reason,
+                elicitation_content,
                 ..
-            } => self.handle_answer_gate(&session_id, allow, deny_reason),
+            } => self.handle_answer_gate(&session_id, allow, deny_reason, elicitation_content),
             marsad_proto::IpcMsg::AnswerQuestion {
                 session_id,
                 answers,
@@ -478,7 +479,11 @@ impl Agent {
                     let mut writer = shared.lock().unwrap();
                     if let Some(gate) = pending {
                         let decline = if gate.elicitation {
-                            marsad_proto::encode_control_response_elicitation(&gate.request_id, false)
+                            marsad_proto::encode_control_response_elicitation(
+                                &gate.request_id,
+                                false,
+                                None,
+                            )
                         } else {
                             marsad_proto::encode_control_response(&marsad_proto::ControlResponse {
                                 request_id: gate.request_id,
@@ -520,6 +525,7 @@ impl Agent {
         session_id: &str,
         allow: bool,
         deny_reason: Option<String>,
+        elicitation_content: Option<serde_json::Value>,
     ) -> Result<Vec<String>, AgentError> {
         // In production builds, translate the answer into a real
         // `control_response` and write it to the session's in.fifo so claude
@@ -546,7 +552,14 @@ impl Agent {
                 // the wrong shape leaves claude blocked (the MCP host can't read
                 // the result). Branch on the kind captured when the gate arrived.
                 let encoded = if gate.elicitation {
-                    marsad_proto::encode_control_response_elicitation(&gate.request_id, allow)
+                    // On accept, forward the chosen scope content (e.g.
+                    // `{ "grant": "session" }`); the UI built it from the picked
+                    // choice. A schemaless accept sends `{}`.
+                    marsad_proto::encode_control_response_elicitation(
+                        &gate.request_id,
+                        allow,
+                        if allow { elicitation_content.clone() } else { None },
+                    )
                 } else {
                     let resp = marsad_proto::ControlResponse {
                         request_id: gate.request_id,
@@ -568,7 +581,7 @@ impl Agent {
         // Suppress unused-variable warnings in coverage builds (the fake path
         // never reads `allow`/`deny_reason` — no writer IO to translate them into).
         #[cfg(coverage)]
-        let (_, _) = (allow, deny_reason);
+        let (_, _, _) = (allow, deny_reason, elicitation_content);
 
         // If no pending gate, this is a benign no-op (the tests assert non-Protocol-error).
         let event = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::GateAnswered {

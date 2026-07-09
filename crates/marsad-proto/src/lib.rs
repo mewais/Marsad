@@ -294,6 +294,65 @@ pub struct ControlRequest {
     /// updatedInput}` shape. `None` for a normal tool-permission request.
     #[serde(default)]
     pub elicitation_message: Option<String>,
+    /// The elicitation's `requested_schema` (a JSON Schema object) when present.
+    /// When it declares an enum property, that property is a choice list (the
+    /// "scope of allowance", e.g. hares' `grant`: once/session/deny) that the UI
+    /// renders as buttons. `None` for `can_use_tool` and schemaless elicitations.
+    #[serde(default)]
+    pub elicitation_schema: Option<serde_json::Value>,
+}
+
+/// One selectable choice parsed out of an elicitation's `requested_schema`
+/// (an enum property). `value` is the enum value sent back in the response
+/// `content`; `label` is the human-facing text (`enumNames` when present, else
+/// the value); `key` is the schema property the value belongs under.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ElicitationChoice {
+    pub key: String,
+    pub value: String,
+    pub label: String,
+}
+
+/// Parse an elicitation `requested_schema` into a flat list of choices. Looks at
+/// the FIRST object property carrying an `enum` array; pairs each enum entry with
+/// its `enumNames` label when the arrays line up. Returns an empty vec for a
+/// schemaless / empty-property elicitation (→ the UI falls back to Approve/Deny).
+pub fn parse_elicitation_choices(schema: Option<&serde_json::Value>) -> Vec<ElicitationChoice> {
+    let Some(props) = schema
+        .and_then(|s| s.get("properties"))
+        .and_then(|p| p.as_object())
+    else {
+        return Vec::new();
+    };
+    for (key, prop) in props {
+        let Some(values) = prop.get("enum").and_then(|e| e.as_array()) else {
+            continue;
+        };
+        if values.is_empty() {
+            continue;
+        }
+        let names = prop.get("enumNames").and_then(|n| n.as_array());
+        let mut out = Vec::with_capacity(values.len());
+        for (i, v) in values.iter().enumerate() {
+            // enum entries are typically strings; stringify anything else.
+            let value = v
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| v.to_string());
+            let label = names
+                .and_then(|n| n.get(i))
+                .and_then(|l| l.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| value.clone());
+            out.push(ElicitationChoice {
+                key: key.clone(),
+                value,
+                label,
+            });
+        }
+        return out;
+    }
+    Vec::new()
 }
 
 /// Outbound permission answer the GUI/agent sends back to the `claude` CLI in
@@ -742,6 +801,13 @@ pub enum IpcMsg {
         allow: bool,
         #[serde(default)]
         deny_reason: Option<String>,
+        /// For an MCP elicitation that offered a scope-of-allowance choice, the
+        /// `content` object to send back on accept (e.g. `{ "grant": "session" }`).
+        /// The UI builds it from the picked choice's `key`/`value`. `None` for a
+        /// schemaless accept or a `can_use_tool` gate. Additive + defaulted so
+        /// older callers/wire messages still parse.
+        #[serde(default)]
+        elicitation_content: Option<serde_json::Value>,
     },
     AnswerQuestion {
         /// The session whose pending AskUserQuestion gate this answers.
@@ -1191,6 +1257,7 @@ fn parse_control_request(value: serde_json::Value) -> StreamMsg {
                 input,
                 request_id: rid.to_string(),
                 elicitation_message: None,
+                elicitation_schema: None,
             })
         }
         // MCP elicitation: an MCP server asking the user to approve an action.
@@ -1209,11 +1276,15 @@ fn parse_control_request(value: serde_json::Value) -> StreamMsg {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
+            // `requested_schema` (snake_case, as claude emits it) carries the
+            // choice list for elicitations that offer a scope of allowance.
+            let schema = req.get("requested_schema").cloned();
             StreamMsg::ControlRequest(ControlRequest {
                 tool_name: server,
                 input: serde_json::Value::Null,
                 request_id: rid.to_string(),
                 elicitation_message: Some(message),
+                elicitation_schema: schema,
             })
         }
         _ => StreamMsg::Unknown(value),
@@ -1282,11 +1353,19 @@ pub fn encode_control_response(resp: &ControlResponse) -> String {
 /// - accept: `…"response":{"action":"accept","content":{}}`
 /// - decline: `…"response":{"action":"decline"}`
 ///
-/// A declined/denied gate maps to `decline` (the user said no). `content` is an
-/// empty object on accept — the matched action carries no form fields here.
-pub fn encode_control_response_elicitation(request_id: &str, accept: bool) -> String {
+/// A declined/denied gate maps to `decline` (the user said no). On accept,
+/// `content` carries the chosen schema fields (e.g. `{ "grant": "session" }` for
+/// a scope elicitation); pass `None` for a schemaless accept (encodes `{}`).
+pub fn encode_control_response_elicitation(
+    request_id: &str,
+    accept: bool,
+    content: Option<serde_json::Value>,
+) -> String {
     let inner = if accept {
-        serde_json::json!({ "action": "accept", "content": {} })
+        serde_json::json!({
+            "action": "accept",
+            "content": content.unwrap_or_else(|| serde_json::json!({})),
+        })
     } else {
         serde_json::json!({ "action": "decline" })
     };

@@ -341,7 +341,7 @@ fn encode_control_response_deny_without_reason_defaults_to_empty_message() {
 
 #[test]
 fn encode_control_response_elicitation_accept() {
-    let encoded = encode_control_response_elicitation("eli-1", true);
+    let encoded = encode_control_response_elicitation("eli-1", true, None);
     let raw: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
     assert_eq!(raw["type"], "control_response");
     assert_eq!(raw["response"]["subtype"], "success");
@@ -352,11 +352,61 @@ fn encode_control_response_elicitation_accept() {
 
 #[test]
 fn encode_control_response_elicitation_decline() {
-    let encoded = encode_control_response_elicitation("eli-2", false);
+    let encoded = encode_control_response_elicitation("eli-2", false, None);
     let raw: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
     assert_eq!(raw["response"]["request_id"], "eli-2");
     assert_eq!(raw["response"]["response"]["action"], "decline");
     assert!(raw["response"]["response"].get("content").is_none());
+}
+
+#[test]
+fn encode_control_response_elicitation_accept_with_content() {
+    // A scope elicitation accept carries the chosen content verbatim.
+    let content = serde_json::json!({ "grant": "session" });
+    let encoded = encode_control_response_elicitation("eli-3", true, Some(content));
+    let raw: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
+    assert_eq!(raw["response"]["response"]["action"], "accept");
+    assert_eq!(raw["response"]["response"]["content"]["grant"], "session");
+}
+
+#[test]
+fn parse_elicitation_choices_reads_hares_grant_schema() {
+    use marsad_proto::parse_elicitation_choices;
+    // The exact schema hares' request_path_access elicitation sends.
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "grant": {
+                "type": "string",
+                "title": "Grant scope",
+                "enum": ["once", "session", "deny"],
+                "enumNames": [
+                    "Allow once (this command only)",
+                    "Allow for rest of session",
+                    "Deny",
+                ],
+            },
+        },
+        "required": ["grant"],
+    });
+    let choices = parse_elicitation_choices(Some(&schema));
+    assert_eq!(choices.len(), 3);
+    assert!(choices.iter().all(|c| c.key == "grant"));
+    assert_eq!(choices[0].value, "once");
+    assert_eq!(choices[0].label, "Allow once (this command only)");
+    assert_eq!(choices[1].value, "session");
+    assert_eq!(choices[2].value, "deny");
+    assert_eq!(choices[2].label, "Deny");
+}
+
+#[test]
+fn parse_elicitation_choices_empty_schema_yields_none() {
+    use marsad_proto::parse_elicitation_choices;
+    // The high-memory / exec elicitations use an empty-property schema → no
+    // choices → the UI falls back to binary Approve/Deny.
+    let schema = serde_json::json!({ "type": "object", "properties": {} });
+    assert!(parse_elicitation_choices(Some(&schema)).is_empty());
+    assert!(parse_elicitation_choices(None).is_empty());
 }
 
 #[test]
@@ -618,7 +668,7 @@ fn encode_ipc_all_variants_produce_valid_json() {
             request_id: "req-1".to_string(),
             allow: true,
             deny_reason: None,
-        },
+            elicitation_content: None,        },
         IpcMsg::AnswerQuestion {
             session_id: "sid-6".to_string(),
             request_id: "req-q1".to_string(),

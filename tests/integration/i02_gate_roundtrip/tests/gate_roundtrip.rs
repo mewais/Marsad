@@ -32,6 +32,7 @@ fn permission_gate() -> Gate {
         risk: "low".to_string(),
         explanation: "list temp files".to_string(),
         is_elicitation: false,
+        elicitation_choices: Vec::new(),
     }
 }
 
@@ -228,6 +229,7 @@ fn decision_id_differs_by_gate_content() {
         risk: "low".to_string(),
         explanation: "".to_string(),
         is_elicitation: false,
+        elicitation_choices: Vec::new(),
     };
     let gate_b = Gate::Permission {
         request_id: "req-test".to_string(),
@@ -236,6 +238,7 @@ fn decision_id_differs_by_gate_content() {
         risk: "high".to_string(),
         explanation: "".to_string(),
         is_elicitation: false,
+        elicitation_choices: Vec::new(),
     };
     assert_ne!(
         decision_id(sid, &gate_a),
