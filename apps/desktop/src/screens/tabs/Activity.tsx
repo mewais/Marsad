@@ -1180,7 +1180,7 @@ interface ActivityTabProps {
 }
 
 export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
-  const { selectedSession, selectedGate } = useVm();
+  const { selectedSession, selectedGate, selectedSessionLoading } = useVm();
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   // True while the user is at (or very near) the bottom; new content auto-scrolls
@@ -1231,6 +1231,38 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
     return (
       <div style={{ padding: 20, color: "var(--txt3)" }}>
         No session selected.
+      </div>
+    );
+  }
+
+  // Launch gap: the session is selected and its name/header already show, but the
+  // real SessionView (with transcript) hasn't arrived yet — show an honest
+  // loading state instead of an empty body.
+  if (selectedSessionLoading && sv.transcript.length === 0) {
+    return (
+      <div
+        data-testid="transcript-loading"
+        style={{
+          padding: 24,
+          color: "var(--txt3)",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+        }}
+      >
+        <span
+          aria-hidden="true"
+          style={{
+            width: 13,
+            height: 13,
+            border: "2px solid var(--border2)",
+            borderTopColor: "var(--accent)",
+            borderRadius: "50%",
+            animation: "spin .8s linear infinite",
+            display: "inline-block",
+          }}
+        />
+        Loading transcript…
       </div>
     );
   }

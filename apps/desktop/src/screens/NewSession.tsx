@@ -314,8 +314,16 @@ export function NewSession() {
         driver,
         ...resumeArgs,
       });
-      // Navigate to the new session (closes this modal).
-      dispatch({ type: "SELECT_SESSION", id: newId });
+      // Navigate to the new session (closes this modal). Seed an optimistic
+      // placeholder so the header shows the picked name and the transcript shows
+      // "Loading transcript…" during the launch gap.
+      const proj = project.trim();
+      const basename = proj.replace(/\/+$/, "").split("/").pop() || proj;
+      dispatch({
+        type: "SELECT_SESSION",
+        id: newId,
+        optimistic: { name: name.trim() || basename, project: proj, host_id: hostId, driver },
+      });
     } catch (err) {
       // Don't leave the dialog stuck if the launch fails — surface it.
       console.error("[NewSession] launch failed:", err);

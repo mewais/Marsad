@@ -397,7 +397,17 @@ export function NodeModal() {
       }
       if (ctx.isFirstNode) {
         // Straight to Level-3 — never via the graph (single-session nav rule).
-        dispatch({ type: "SELECT_SESSION", id: newId, fromGraph: false, wsId: ctx.wsId });
+        // Seed an optimistic placeholder so the header shows the picked name and
+        // the transcript shows "Loading transcript…" until the real view lands.
+        const proj = project.trim();
+        const basename = proj.replace(/\/+$/, "").split("/").pop() || proj;
+        dispatch({
+          type: "SELECT_SESSION",
+          id: newId,
+          fromGraph: false,
+          wsId: ctx.wsId,
+          optimistic: { name: sessionName || basename, project: proj, host_id: hostId, driver },
+        });
       } else {
         await goToGraph(ctx.wsId);
       }

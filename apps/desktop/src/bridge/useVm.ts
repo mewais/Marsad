@@ -93,6 +93,16 @@ export interface NodeModalCtx {
 // Store state
 // ---------------------------------------------------------------------------
 
+/** Minimal placeholder for a session that's been selected/launched but whose
+ *  real SessionView hasn't arrived from the backend yet. */
+export interface PendingSession {
+  id: string;
+  name: string;
+  project: string;
+  host_id: string;
+  driver?: string;
+}
+
 export interface VmState {
   snapshot: AppSnapshot | null;
   // UI-only nav
@@ -124,6 +134,13 @@ export interface VmState {
   // discarded so no empty workstream lingers on the Board. `null` when there is
   // no pending draft (the common case).
   draftWsId: string | null;
+  // Optimistic placeholder for a just-launched session: set the instant we
+  // SELECT_SESSION with the picked name/project (before the backend's real
+  // SessionView arrives), so the header/breadcrumb show the real name and the
+  // transcript shows "Loading transcript…" instead of the raw session-key +
+  // "No session selected." during the launch gap. Cleared when the real
+  // SessionView lands (or when a different session is selected).
+  pendingSession: PendingSession | null;
   // Capabilities (U2), keyed by capsKey(driver, host_id) — dynamic-capabilities.md §3.6.
   capabilities: Record<string, CapabilitiesView>;
   // Wasl (X5) — pending handoff gates + the latest observation entries.
@@ -148,6 +165,9 @@ type Action =
       fromGraph?: boolean;
       /** The owning workstream, when known at the call site (board/graph). */
       wsId?: string;
+      /** Optimistic placeholder details for a just-launched session, so the UI
+       *  shows the real name + "loading transcript" during the launch gap. */
+      optimistic?: { name: string; project: string; host_id: string; driver?: string };
     }
   | { type: "SET_TAB"; tab: Tab }
   | { type: "SET_FILTER"; filter: Filter }
@@ -196,7 +216,11 @@ function reducer(state: VmState, action: Action): VmState {
               s.id === ev.session.id ? ev.session : s
             )
           : [...state.snapshot.sessions, ev.session];
-        return { ...state, snapshot: { ...state.snapshot, sessions } };
+        // The real SessionView has arrived — retire the optimistic placeholder
+        // for this id so the loading state gives way to the live view.
+        const pendingSession =
+          state.pendingSession?.id === ev.session.id ? null : state.pendingSession;
+        return { ...state, snapshot: { ...state.snapshot, sessions }, pendingSession };
       }
       if (ev.kind === "session_removed") {
         // Drop the removed session's row. If it was the open one, fall back to
@@ -294,6 +318,12 @@ function reducer(state: VmState, action: Action): VmState {
         screen: action.id ? "session" : state.screen,
         fromGraph: action.id ? !!action.fromGraph : state.fromGraph,
         wsId: action.id ? (action.wsId ?? state.wsId) : state.wsId,
+        // Seed the optimistic placeholder only when the caller supplied one
+        // (a fresh launch); selecting an existing session clears it.
+        pendingSession:
+          action.id && action.optimistic
+            ? { id: action.id, ...action.optimistic }
+            : null,
       };
 
     case "SET_TAB":
@@ -385,6 +415,7 @@ export const initialVmState: VmState = {
   activeProfile: null,
   nodeModalCtx: null,
   draftWsId: null,
+  pendingSession: null,
   capabilities: {},
   waslGates: [],
   waslObservations: [],
@@ -404,6 +435,9 @@ export interface VmContextValue {
   selectedSession: SessionView | null;
   selectedDetail: SessionDetailVM | null;
   selectedGate: GateVM | null;
+  /** True while the selected session is an optimistic placeholder (its real
+   *  SessionView hasn't landed yet) — drives the "Loading transcript…" state. */
+  selectedSessionLoading: boolean;
   workspaces: Workspace[];
   hosts: Host[];
   activeWs: Workspace | null;
@@ -613,13 +647,45 @@ function computeSidebar(
   return rows;
 }
 
+/** Synthesize a minimal SessionView from an optimistic pending placeholder so
+ *  the session screen renders the real name (state Starting, empty transcript)
+ *  during the launch gap before the backend's real SessionView arrives. */
+function pendingToSessionView(p: PendingSession): SessionView {
+  return {
+    id: p.id,
+    name: p.name,
+    host_id: p.host_id,
+    project: p.project,
+    branch: "",
+    model: "",
+    state: "Starting",
+    changed_files: 0,
+    subagents: 0,
+    running_subagents: 0,
+    subagent_list: [],
+    cost_usd: 0,
+    tokens: 0,
+    context_pct: 0,
+    gate: null,
+    transcript: [],
+    changes: [],
+    model_usage: [],
+    cost_estimated: false,
+    tools: [],
+    mcp_servers: [],
+    slash_commands: [],
+    posture: "ask",
+    driver: p.driver,
+    compactions: 0,
+    last_compaction: null,
+    rate_limit: null,
+  };
+}
+
 function computeDetail(
-  sessions: SessionView[],
-  selectedId: string | null,
+  sv: SessionView | null,
   hosts: Host[]
 ): SessionDetailVM | null {
-  if (!selectedId) return null;
-  const sv = sessions.find((s) => s.id === selectedId);
   if (!sv) return null;
   return {
     name: sv.name,
@@ -844,13 +910,28 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     () => computeSidebar(sessions, hosts, state.filter, state.search),
     [sessions, hosts, state.filter, state.search]
   );
-  const selectedSession = useMemo(
-    () => sessions.find((s) => s.id === state.selectedId) ?? null,
-    [sessions, state.selectedId]
+  // The real session, or the optimistic placeholder while a just-launched
+  // session's real SessionView is still in flight.
+  const selectedSession = useMemo(() => {
+    const real = sessions.find((s) => s.id === state.selectedId) ?? null;
+    if (real) return real;
+    if (state.pendingSession && state.pendingSession.id === state.selectedId) {
+      return pendingToSessionView(state.pendingSession);
+    }
+    return null;
+  }, [sessions, state.selectedId, state.pendingSession]);
+  // True while we're showing the placeholder (real view not yet arrived) — the
+  // transcript renders "Loading transcript…" instead of an empty/no-session body.
+  const selectedSessionLoading = useMemo(
+    () =>
+      !!state.pendingSession &&
+      state.pendingSession.id === state.selectedId &&
+      !sessions.some((s) => s.id === state.selectedId),
+    [state.pendingSession, state.selectedId, sessions]
   );
   const selectedDetail = useMemo(
-    () => computeDetail(sessions, state.selectedId, hosts),
-    [sessions, state.selectedId, hosts]
+    () => computeDetail(selectedSession, hosts),
+    [selectedSession, hosts]
   );
   const selectedGate = useMemo(
     () => computeGate(sessions, state.selectedId),
@@ -972,10 +1053,18 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
         const wsName = card?.name ?? state.graph?.name ?? wsIdForSession;
         list.push({ label: wsName, onClick: () => void goToGraph(wsIdForSession) });
       }
-      list.push({ label: sv?.name ?? state.selectedId, onClick: null });
+      // During the launch gap the real session isn't in `sessions` yet — fall
+      // back to the optimistic placeholder's name so the crumb never flashes the
+      // raw session-key.
+      const label =
+        sv?.name ??
+        (state.pendingSession?.id === state.selectedId
+          ? state.pendingSession.name
+          : state.selectedId);
+      list.push({ label, onClick: null });
     }
     return list;
-  }, [state.screen, state.wsId, state.selectedId, state.board, state.graph, sessions, goToGraph]);
+  }, [state.screen, state.wsId, state.selectedId, state.board, state.graph, state.pendingSession, sessions, goToGraph]);
 
   const selectNode = React.useCallback((id: string | null) => {
     dispatch({ type: "SELECT_NODE", id });
@@ -1116,6 +1205,7 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     selectedSession,
     selectedDetail,
     selectedGate,
+    selectedSessionLoading,
     workspaces,
     hosts,
     activeWs,
