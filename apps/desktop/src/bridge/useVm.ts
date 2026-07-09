@@ -108,7 +108,11 @@ export interface VmState {
   // UI-only nav
   screen: Screen;
   selectedId: string | null;
+  // The active tab for the CURRENT session. Per-session so switching sessions
+  // never carries the Terminal tab over (which would open a terminal you didn't
+  // ask for) — each session remembers its own, defaulting to Activity.
   tab: Tab;
+  tabBySession: Record<string, Tab>;
   filter: Filter;
   search: string;
   wsMenuOpen: boolean;
@@ -318,6 +322,9 @@ function reducer(state: VmState, action: Action): VmState {
         screen: action.id ? "session" : state.screen,
         fromGraph: action.id ? !!action.fromGraph : state.fromGraph,
         wsId: action.id ? (action.wsId ?? state.wsId) : state.wsId,
+        // Restore this session's remembered tab (default Activity — never carry
+        // the previous session's Terminal tab over).
+        tab: action.id ? (state.tabBySession[action.id] ?? "Activity") : state.tab,
         // Seed the optimistic placeholder only when the caller supplied one
         // (a fresh launch); selecting an existing session clears it.
         pendingSession:
@@ -327,7 +334,13 @@ function reducer(state: VmState, action: Action): VmState {
       };
 
     case "SET_TAB":
-      return { ...state, tab: action.tab };
+      return {
+        ...state,
+        tab: action.tab,
+        tabBySession: state.selectedId
+          ? { ...state.tabBySession, [state.selectedId]: action.tab }
+          : state.tabBySession,
+      };
 
     case "SET_FILTER":
       return { ...state, filter: action.filter };
@@ -404,6 +417,7 @@ export const initialVmState: VmState = {
   screen: "board",
   selectedId: null,
   tab: "Activity",
+  tabBySession: {},
   filter: "All",
   search: "",
   wsMenuOpen: false,
