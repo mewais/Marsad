@@ -403,6 +403,23 @@ impl Transport for LocalIpc {
     }
 }
 
+#[cfg(not(coverage))]
+impl LocalIpc {
+    /// Consume a connected `LocalIpc` and return its independent write + read
+    /// handles as boxed trait objects (cross-platform — no `UnixStream` in the
+    /// signature). Lets a caller own a persistent connection with a dedicated
+    /// writer thread AND a drain thread (reading + discarding broadcasts so the
+    /// agent's per-client buffer never fills). `None` if not connected.
+    pub fn into_rw(
+        mut self,
+    ) -> Option<(Box<dyn std::io::Write + Send>, Box<dyn std::io::BufRead + Send>)> {
+        match (self.stream.take(), self.reader.take()) {
+            (Some(s), Some(r)) => Some((Box::new(s), Box::new(r))),
+            _ => None,
+        }
+    }
+}
+
 // ── LocalIpcListener ──────────────────────────────────────────────────────────
 //
 // Server-side Unix socket listener used by marsad-agent to accept GUI clients.

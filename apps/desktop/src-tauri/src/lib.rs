@@ -282,6 +282,7 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::pty_start,
             bridge::pty_input,
             bridge::pty_resize,
+            bridge::pty_close,
         ])
 }
 
@@ -586,6 +587,11 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
                                 &app,
                                 events::VmUpdateEnvelope::PtyOutput {
                                     session_id: session_id.to_string(),
+                                    terminal_id: v
+                                        .get("terminal_id")
+                                        .and_then(|s| s.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
                                     data: data.to_string(),
                                 },
                             );
@@ -601,6 +607,11 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
                                 &app,
                                 events::VmUpdateEnvelope::PtyExit {
                                     session_id: session_id.to_string(),
+                                    terminal_id: v
+                                        .get("terminal_id")
+                                        .and_then(|s| s.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
                                     code: code as i32,
                                 },
                             );

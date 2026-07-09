@@ -181,30 +181,43 @@ export async function interrupt(id: string): Promise<void> {
 /** Start (or, if already live, no-op re-attach to) a session's interactive pty. */
 export async function ptyStart(
   sessionId: string,
+  terminalId: string,
   cols: number,
   rows: number
 ): Promise<void> {
   if (!isTauri()) return;
   const invoke = await getInvoke();
-  await invoke("pty_start", { session_id: sessionId, cols, rows });
+  await invoke("pty_start", { session_id: sessionId, terminal_id: terminalId, cols, rows });
 }
 
 /** Forward raw keystroke bytes (from xterm.js's `onData`) to the pty stdin. */
-export async function ptyInput(sessionId: string, data: string): Promise<void> {
+export async function ptyInput(
+  sessionId: string,
+  terminalId: string,
+  data: string
+): Promise<void> {
   if (!isTauri()) return;
   const invoke = await getInvoke();
-  await invoke("pty_input", { session_id: sessionId, data });
+  await invoke("pty_input", { session_id: sessionId, terminal_id: terminalId, data });
 }
 
 /** Resize the pty viewport (e.g. after `xterm-addon-fit` recomputes cols/rows). */
 export async function ptyResize(
   sessionId: string,
+  terminalId: string,
   cols: number,
   rows: number
 ): Promise<void> {
   if (!isTauri()) return;
   const invoke = await getInvoke();
-  await invoke("pty_resize", { session_id: sessionId, cols, rows });
+  await invoke("pty_resize", { session_id: sessionId, terminal_id: terminalId, cols, rows });
+}
+
+/** v2: close (kill) ONE terminal of a session. */
+export async function ptyClose(sessionId: string, terminalId: string): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("pty_close", { session_id: sessionId, terminal_id: terminalId });
 }
 
 /** Parse an environment textarea (one `KEY=VALUE` per line) into `[key, value]`

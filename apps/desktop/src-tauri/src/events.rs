@@ -59,10 +59,10 @@ pub enum VmUpdateEnvelope {
     /// pty bytes have no session/business meaning for `marsad-core` to
     /// reduce) and NOT emitted on the `"vm-update"` channel — see
     /// `emit_pty_update`'s doc comment for why this is a separate event.
-    PtyOutput { session_id: String, data: String },
+    PtyOutput { session_id: String, terminal_id: String, data: String },
     /// The pty's child process exited. `code` is the process exit code
     /// (`-1` when the pty could not even be spawned).
-    PtyExit { session_id: String, code: i32 },
+    PtyExit { session_id: String, terminal_id: String, code: i32 },
 }
 
 impl From<VmUpdate> for VmUpdateEnvelope {
@@ -207,11 +207,13 @@ mod tests {
     fn pty_output_envelope_wire_shape() {
         let env = VmUpdateEnvelope::PtyOutput {
             session_id: "s-1".into(),
+            terminal_id: "t-1".into(),
             data: "bHMgLWxhCg==".into(),
         };
         let v = serde_json::to_value(&env).unwrap();
         assert_eq!(v["kind"], "pty_output");
         assert_eq!(v["session_id"], "s-1");
+        assert_eq!(v["terminal_id"], "t-1");
         assert_eq!(v["data"], "bHMgLWxhCg==");
     }
 
@@ -219,11 +221,13 @@ mod tests {
     fn pty_exit_envelope_wire_shape() {
         let env = VmUpdateEnvelope::PtyExit {
             session_id: "s-1".into(),
+            terminal_id: "t-1".into(),
             code: 0,
         };
         let v = serde_json::to_value(&env).unwrap();
         assert_eq!(v["kind"], "pty_exit");
         assert_eq!(v["session_id"], "s-1");
+        assert_eq!(v["terminal_id"], "t-1");
         assert_eq!(v["code"], 0);
     }
 }

@@ -109,15 +109,26 @@ impl Agent {
             // `serve.rs` (needs the `subscribers` broadcast list, which only
             // that scope owns), which re-parses them straight off the raw
             // inbound line — see `pty::spawn_pty_session`'s doc comment.
-            marsad_proto::IpcMsg::PtyStart { session_id, .. } => self.handle_pty_start(session_id),
-            marsad_proto::IpcMsg::PtyInput { session_id, data } => {
-                self.handle_pty_input(&session_id, &data)
-            }
+            marsad_proto::IpcMsg::PtyStart {
+                session_id,
+                terminal_id,
+                ..
+            } => self.handle_pty_start(session_id, terminal_id),
+            marsad_proto::IpcMsg::PtyInput {
+                session_id,
+                terminal_id,
+                data,
+            } => self.handle_pty_input(&session_id, &terminal_id, &data),
             marsad_proto::IpcMsg::PtyResize {
                 session_id,
+                terminal_id,
                 cols,
                 rows,
-            } => self.handle_pty_resize(&session_id, cols, rows),
+            } => self.handle_pty_resize(&session_id, &terminal_id, cols, rows),
+            marsad_proto::IpcMsg::PtyClose {
+                session_id,
+                terminal_id,
+            } => self.handle_pty_close(&session_id, &terminal_id),
             // Every other tag is an agent→GUI/core message (ack/broadcast) that
             // has no business arriving inbound here — same observable Protocol
             // error class as an unrecognized type.
@@ -698,7 +709,11 @@ impl Agent {
     /// alive is observed via `PtyOutput` broadcasts. The actual spawn
     /// happens in `serve.rs` (see `pty::spawn_pty_session`'s doc comment for
     /// why it can't happen here).
-    fn handle_pty_start(&mut self, session_id: String) -> Result<Vec<String>, AgentError> {
+    fn handle_pty_start(
+        &mut self,
+        session_id: String,
+        _terminal_id: String,
+    ) -> Result<Vec<String>, AgentError> {
         // The terminal is a plain interactive shell that needs only the session's
         // project/host_target (resolved from the STORE in serve.rs) — NOT a live
         // claude process. So accept any session known to the store, not just one
@@ -736,12 +751,14 @@ impl Agent {
     fn handle_pty_input(
         &mut self,
         session_id: &str,
+        terminal_id: &str,
         data: &str,
     ) -> Result<Vec<String>, AgentError> {
         #[cfg(not(coverage))]
         {
+            let key = crate::pty::pty_key(session_id, terminal_id);
             let entries = self.pty_entries.0.lock().unwrap();
-            if let Some(entry_arc) = entries.get(session_id) {
+            if let Some(entry_arc) = entries.get(&key) {
                 let mut entry = entry_arc.lock().unwrap();
                 match entry
                     .writer
@@ -760,7 +777,7 @@ impl Agent {
             }
         }
         #[cfg(coverage)]
-        let _ = data;
+        let (_, _) = (terminal_id, data);
         Ok(vec![])
     }
 
@@ -769,13 +786,15 @@ impl Agent {
     fn handle_pty_resize(
         &mut self,
         session_id: &str,
+        terminal_id: &str,
         cols: u16,
         rows: u16,
     ) -> Result<Vec<String>, AgentError> {
         #[cfg(not(coverage))]
         {
+            let key = crate::pty::pty_key(session_id, terminal_id);
             let entries = self.pty_entries.0.lock().unwrap();
-            if let Some(entry_arc) = entries.get(session_id) {
+            if let Some(entry_arc) = entries.get(&key) {
                 let entry = entry_arc.lock().unwrap();
                 if let Err(e) = crate::pty::resize_pty(&entry, cols, rows) {
                     eprintln!("marsad-agent: session {session_id} pty resize FAILED: {e}");
@@ -783,7 +802,25 @@ impl Agent {
             }
         }
         #[cfg(coverage)]
-        let (_, _) = (cols, rows);
+        let (_, _, _) = (terminal_id, cols, rows);
+        Ok(vec![])
+    }
+
+    /// v2: close (kill + reap) ONE terminal of a session. Fire-and-forget; the
+    /// teardown surfaces to the UI via that terminal's `PtyExit` broadcast (the
+    /// pump thread reaps and removes the entry). Idempotent.
+    fn handle_pty_close(
+        &mut self,
+        session_id: &str,
+        terminal_id: &str,
+    ) -> Result<Vec<String>, AgentError> {
+        #[cfg(not(coverage))]
+        {
+            let key = crate::pty::pty_key(session_id, terminal_id);
+            crate::pty::teardown_terminal(&key, &self.pty_entries.0);
+        }
+        #[cfg(coverage)]
+        let _ = terminal_id;
         Ok(vec![])
     }
 

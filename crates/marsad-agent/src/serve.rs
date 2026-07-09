@@ -118,7 +118,7 @@ impl Agent {
             /// pty from this, mirroring `new_session_id`'s FIFO-reader
             /// handoff (see `pty::spawn_pty_session`'s doc comment for why
             /// the spawn can't happen inside `handle_ipc` itself).
-            pty_start: Option<(String, u16, u16, String, Option<String>)>,
+            pty_start: Option<(String, String, u16, u16, String, Option<String>)>,
             /// Stage 2 codex: driver string for the new session ("codex"/"claude").
             #[allow(dead_code)]
             driver: String,
@@ -610,11 +610,12 @@ impl Agent {
                                         // `subscribers` (see
                                         // `pty::spawn_pty_session`'s doc
                                         // comment).
-                                        if let Some((sid, cols, rows, project, host_target)) =
+                                        if let Some((sid, terminal_id, cols, rows, project, host_target)) =
                                             reply.pty_start
                                         {
                                             crate::pty::spawn_pty_session(
                                                 sid,
+                                                terminal_id,
                                                 cols,
                                                 rows,
                                                 project,
@@ -797,17 +798,23 @@ impl Agent {
             // above) since `handle_ipc`'s typed match arm drops `cols`/`rows`
             // (see `ipc.rs::handle_pty_start`'s doc comment) — the project +
             // host_target are resolved here, the only scope with `self`.
-            let pty_start: Option<(String, u16, u16, String, Option<String>)> =
+            let pty_start: Option<(String, String, u16, u16, String, Option<String>)> =
                 if cmd.line.contains("\"PtyStart\"") && out_lines.is_ok() {
                     serde_json::from_str::<serde_json::Value>(&cmd.line)
                         .ok()
                         .and_then(|v| {
                             let sid = v.get("session_id")?.as_str()?.to_string();
+                            // v2: terminal_id is optional (empty → session keys the pty).
+                            let terminal_id = v
+                                .get("terminal_id")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             let cols = v.get("cols")?.as_u64()? as u16;
                             let rows = v.get("rows")?.as_u64()? as u16;
                             let (project, host_target) =
                                 self.session_project_and_host_target(&sid)?;
-                            Some((sid, cols, rows, project, host_target))
+                            Some((sid, terminal_id, cols, rows, project, host_target))
                         })
                 } else {
                     None

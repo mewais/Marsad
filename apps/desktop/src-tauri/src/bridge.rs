@@ -1665,27 +1665,70 @@ pub fn cost_breakdown(
 /// connection would cut the per-call connect overhead; deferred as a
 /// follow-up — see `docs/GAPS.md` — to keep this BUILT-NOT-VERIFIED surface
 /// as simple/low-risk as possible.)
-fn send_pty_ipc(msg: &marsad_proto::IpcMsg, hold: bool) {
+fn send_pty_ipc(msg: &marsad_proto::IpcMsg, _hold: bool) {
+    // Enqueue onto the single persistent pty sender (ordered, non-blocking). The
+    // OLD approach — a fresh ephemeral connection per keystroke, dropped
+    // immediately for PtyInput — raced the agent's read on close and SILENTLY
+    // DROPPED keystrokes (and per-connection connect overhead added lag). A
+    // single long-lived connection with a dedicated writer thread delivers every
+    // line in order with a real flush and no close-race. A companion drain thread
+    // reads + discards the agent's broadcasts so its per-client buffer never fills.
+    let _ = pty_sender().send(marsad_proto::encode_ipc(msg));
+}
+
+/// The process-wide ordered pty-command sender. Lazily spins up one background
+/// thread owning a persistent agent connection; every `pty_*` command pushes its
+/// encoded line here. Serialized → keystrokes never arrive out of order.
+fn pty_sender() -> &'static std::sync::mpsc::Sender<String> {
+    use std::sync::OnceLock;
+    static TX: OnceLock<std::sync::mpsc::Sender<String>> = OnceLock::new();
+    TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || pty_sender_loop(rx));
+        tx
+    })
+}
+
+fn pty_sender_loop(rx: std::sync::mpsc::Receiver<String>) {
     use marsad_transport::Transport;
-    let socket_path = crate::resolve_socket_path();
-    let mut ipc = marsad_transport::LocalIpc::new(&socket_path);
-    if let Err(e) = ipc.connect() {
-        crate::diag_log(&format!(
-            "marsad-desktop: pty command: failed to connect to agent: {e}"
-        ));
-        return;
-    }
-    match ipc.send_line(&marsad_proto::encode_ipc(msg)) {
-        Ok(()) => crate::diag_log("marsad-desktop: pty command sent OK"),
-        Err(e) => crate::diag_log(&format!("marsad-desktop: pty command: failed to send: {e}")),
-    }
-    // The agent reads this line off the throwaway connection asynchronously;
-    // dropping the socket the instant send_line returns can race the server's
-    // read on some transports (data discarded on close). Hold the connection
-    // open briefly so the agent drains the line first. Only for PtyStart (fired
-    // once) — never for per-keystroke PtyInput, which must not add typing lag.
-    if hold {
-        std::thread::sleep(std::time::Duration::from_millis(80));
+    use std::io::Write;
+
+    let mut writer: Option<Box<dyn Write + Send>> = None;
+    for line in rx {
+        // (Re)connect if we have no live writer.
+        if writer.is_none() {
+            let mut ipc = marsad_transport::LocalIpc::new(&crate::resolve_socket_path());
+            if ipc.connect().is_err() {
+                crate::diag_log("marsad-desktop: pty sender: connect failed");
+                continue; // drop this one line; next keystroke retries
+            }
+            match ipc.into_rw() {
+                Some((w, mut reader)) => {
+                    // Drain + discard the agent's broadcasts so this persistent
+                    // connection's server-side buffer never fills.
+                    std::thread::spawn(move || {
+                        use std::io::BufRead;
+                        let mut buf = String::new();
+                        loop {
+                            buf.clear();
+                            match reader.read_line(&mut buf) {
+                                Ok(0) | Err(_) => break,
+                                Ok(_) => {}
+                            }
+                        }
+                    });
+                    writer = Some(w);
+                }
+                None => continue,
+            }
+        }
+        if let Some(w) = writer.as_mut() {
+            let framed = format!("{line}\n");
+            if w.write_all(framed.as_bytes()).and_then(|_| w.flush()).is_err() {
+                // Broken pipe — drop the writer so the next line reconnects.
+                writer = None;
+            }
+        }
     }
 }
 
@@ -1696,17 +1739,19 @@ fn send_pty_ipc(msg: &marsad_proto::IpcMsg, hold: bool) {
 pub fn pty_start(
     state: State<'_, ManagedState>,
     session_id: String,
+    terminal_id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
     crate::diag_log(&format!(
-        "marsad-desktop: pty_start command invoked sid={session_id} {cols}x{rows}"
+        "marsad-desktop: pty_start command invoked sid={session_id} term={terminal_id} {cols}x{rows}"
     ));
     let guard = state.lock().map_err(|e| e.to_string())?;
     if let AppState::Live(_) = &*guard {
         send_pty_ipc(
             &marsad_proto::IpcMsg::PtyStart {
                 session_id,
+                terminal_id,
                 cols,
                 rows,
             },
@@ -1721,11 +1766,19 @@ pub fn pty_start(
 pub fn pty_input(
     state: State<'_, ManagedState>,
     session_id: String,
+    terminal_id: String,
     data: String,
 ) -> Result<(), String> {
     let guard = state.lock().map_err(|e| e.to_string())?;
     if let AppState::Live(_) = &*guard {
-        send_pty_ipc(&marsad_proto::IpcMsg::PtyInput { session_id, data }, false);
+        send_pty_ipc(
+            &marsad_proto::IpcMsg::PtyInput {
+                session_id,
+                terminal_id,
+                data,
+            },
+            false,
+        );
     }
     Ok(())
 }
@@ -1736,6 +1789,7 @@ pub fn pty_input(
 pub fn pty_resize(
     state: State<'_, ManagedState>,
     session_id: String,
+    terminal_id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
@@ -1744,10 +1798,31 @@ pub fn pty_resize(
         send_pty_ipc(
             &marsad_proto::IpcMsg::PtyResize {
                 session_id,
+                terminal_id,
                 cols,
                 rows,
             },
             false,
+        );
+    }
+    Ok(())
+}
+
+/// v2: close (kill) ONE terminal of a session.
+#[tauri::command(rename_all = "snake_case")]
+pub fn pty_close(
+    state: State<'_, ManagedState>,
+    session_id: String,
+    terminal_id: String,
+) -> Result<(), String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    if let AppState::Live(_) = &*guard {
+        send_pty_ipc(
+            &marsad_proto::IpcMsg::PtyClose {
+                session_id,
+                terminal_id,
+            },
+            true, // hold: fires rarely; keep the socket open so it lands
         );
     }
     Ok(())

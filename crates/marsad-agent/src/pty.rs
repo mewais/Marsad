@@ -138,6 +138,17 @@ pub fn pty_exec_argv(host_target: Option<&str>, shell: &str) -> Vec<String> {
     }
 }
 
+/// The pty registry key for a (session, terminal) pair: the `terminal_id` when
+/// set, else the `session_id` (back-compat — a lone terminal keys by session).
+/// Pure; always compiled + unit-testable.
+pub(crate) fn pty_key(session_id: &str, terminal_id: &str) -> String {
+    if terminal_id.is_empty() {
+        session_id.to_string()
+    } else {
+        terminal_id.to_string()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Real pty IO — production builds only (see module doc's "Coverage
 // discipline" section)
@@ -150,6 +161,9 @@ pub struct PtyEntry {
     pub master: Box<dyn portable_pty::MasterPty + Send>,
     pub writer: Box<dyn Write + Send>,
     pub child: Box<dyn portable_pty::Child + Send + Sync>,
+    /// The owning session — lets `teardown_session` kill EVERY terminal of a
+    /// session (the registry is keyed by terminal, not session, in v2).
+    pub session_id: String,
 }
 
 #[cfg(not(coverage))]
@@ -166,8 +180,10 @@ impl std::fmt::Debug for PtyEntry {
 #[cfg(not(coverage))]
 pub(crate) type SharedPtyEntry = std::sync::Arc<std::sync::Mutex<PtyEntry>>;
 
-/// The full per-session pty registry, keyed by Marsad session id. Mirrors
-/// `session_writers`'s `Arc<Mutex<HashMap<..>>>` shape exactly.
+/// The full pty registry, keyed by TERMINAL key (`pty_key`: terminal_id, or the
+/// session id for a lone/back-compat terminal). Mirrors `session_writers`'s
+/// `Arc<Mutex<HashMap<..>>>` shape. Each entry records its owning `session_id`
+/// so `teardown_session` can kill every terminal of a stopped session.
 #[cfg(not(coverage))]
 pub(crate) type PtyRegistry =
     std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, SharedPtyEntry>>>;
@@ -229,6 +245,8 @@ pub fn spawn_pty(
             master: pair.master,
             writer,
             child,
+            // Set by the caller (spawn_pty_session) which knows the session.
+            session_id: String::new(),
         },
         reader,
     ))
@@ -275,6 +293,7 @@ pub fn resize_pty(entry: &PtyEntry, cols: u16, rows: u16) -> Result<(), PtyError
 #[cfg(not(coverage))]
 pub(crate) fn spawn_pty_session(
     sid: String,
+    terminal_id: String,
     cols: u16,
     rows: u16,
     project: String,
@@ -283,8 +302,9 @@ pub(crate) fn spawn_pty_session(
     entries: PtyRegistry,
 ) {
     std::thread::spawn(move || {
-        if entries.lock().unwrap().contains_key(&sid) {
-            eprintln!("marsad-agent: session {sid} PtyStart — pty already live, no-op");
+        let key = pty_key(&sid, &terminal_id);
+        if entries.lock().unwrap().contains_key(&key) {
+            eprintln!("marsad-agent: session {sid} PtyStart — pty {key} already live, no-op");
             return;
         }
 
@@ -304,19 +324,21 @@ pub(crate) fn spawn_pty_session(
         };
 
         match spawn_pty(&argv, cwd, cols, rows) {
-            Ok((entry, reader)) => {
+            Ok((mut entry, reader)) => {
+                entry.session_id = sid.clone();
                 let shared = std::sync::Arc::new(std::sync::Mutex::new(entry));
                 entries
                     .lock()
                     .unwrap()
-                    .insert(sid.clone(), std::sync::Arc::clone(&shared));
-                eprintln!("marsad-agent: session {sid} pty started ({cols}x{rows})");
-                pump_pty_output(sid, reader, subs, entries);
+                    .insert(key.clone(), std::sync::Arc::clone(&shared));
+                eprintln!("marsad-agent: session {sid} pty {key} started ({cols}x{rows})");
+                pump_pty_output(sid, terminal_id, key, reader, subs, entries);
             }
             Err(e) => {
                 eprintln!("marsad-agent: session {sid} pty spawn failed: {e}");
                 let line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::PtyExit {
                     session_id: sid,
+                    terminal_id,
                     code: -1,
                 });
                 let subs = subs.lock().unwrap();
@@ -336,6 +358,8 @@ pub(crate) fn spawn_pty_session(
 #[cfg(not(coverage))]
 fn pump_pty_output(
     sid: String,
+    terminal_id: String,
+    key: String,
     mut reader: Box<dyn Read + Send>,
     subs: std::sync::Arc<std::sync::Mutex<Vec<std::sync::mpsc::Sender<String>>>>,
     entries: PtyRegistry,
@@ -351,6 +375,7 @@ fn pump_pty_output(
                 let data = BASE64.encode(&buf[..n]);
                 let line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::PtyOutput {
                     session_id: sid.clone(),
+                    terminal_id: terminal_id.clone(),
                     data,
                 });
                 let subs_guard = subs.lock().unwrap();
@@ -366,16 +391,17 @@ fn pump_pty_output(
     // is already gone — report a benign 0 rather than re-deriving a code
     // from a child we no longer own (idempotent teardown race, both paths
     // converge safely; see `teardown_session`).
-    let code = match entries.lock().unwrap().remove(&sid) {
+    let code = match entries.lock().unwrap().remove(&key) {
         Some(entry_arc) => {
             let mut e = entry_arc.lock().unwrap();
             e.child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1)
         }
         None => 0,
     };
-    eprintln!("marsad-agent: session {sid} pty exited (code {code})");
+    eprintln!("marsad-agent: session {sid} pty {key} exited (code {code})");
     let line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::PtyExit {
         session_id: sid,
+        terminal_id,
         code,
     });
     let subs_guard = subs.lock().unwrap();
@@ -390,11 +416,30 @@ fn pump_pty_output(
 /// the entry).
 #[cfg(not(coverage))]
 pub(crate) fn teardown_session(sid: &str, entries: &PtyRegistry) {
-    let removed = entries.lock().unwrap().remove(sid);
+    // v2: the registry is keyed by terminal, so kill EVERY terminal owned by
+    // this session. Collect the matching keys under the lock, then remove + kill.
+    let keys: Vec<String> = {
+        let guard = entries.lock().unwrap();
+        guard
+            .iter()
+            .filter(|(_, e)| e.lock().unwrap().session_id == sid)
+            .map(|(k, _)| k.clone())
+            .collect()
+    };
+    for key in keys {
+        teardown_terminal(&key, entries);
+    }
+}
+
+/// Kill + reap ONE terminal (by registry key) and remove it. Idempotent — a
+/// no-op if the terminal already exited and the pump thread removed the entry.
+#[cfg(not(coverage))]
+pub(crate) fn teardown_terminal(key: &str, entries: &PtyRegistry) {
+    let removed = entries.lock().unwrap().remove(key);
     if let Some(entry_arc) = removed {
         let mut e = entry_arc.lock().unwrap();
         let _ = e.child.kill();
         let _ = e.child.wait();
-        eprintln!("marsad-agent: session {sid} pty killed (StopSession)");
+        eprintln!("marsad-agent: pty {key} killed");
     }
 }

@@ -80,7 +80,7 @@ const PTY_START: &str = r#"{"type":"PtyStart","session_id":"s-1","cols":80,"rows
 fn pty_start() -> IpcMsg {
     IpcMsg::PtyStart {
         session_id: "s-1".to_string(),
-        cols: 80,
+        terminal_id: String::new(),        cols: 80,
         rows: 24,
     }
 }
@@ -129,7 +129,7 @@ const PTY_INPUT: &str = r#"{"type":"PtyInput","session_id":"s-1","data":"ls -la\
 fn pty_input() -> IpcMsg {
     IpcMsg::PtyInput {
         session_id: "s-1".to_string(),
-        data: "ls -la\n".to_string(),
+        terminal_id: String::new(),        data: "ls -la\n".to_string(),
     }
 }
 
@@ -146,7 +146,7 @@ fn pty_input_golden_contract() {
 fn pty_input_control_character_roundtrips_as_plain_text() {
     let msg = IpcMsg::PtyInput {
         session_id: "s-1".to_string(),
-        data: "\u{3}".to_string(), // Ctrl-C
+        terminal_id: String::new(),        data: "\u{3}".to_string(), // Ctrl-C
     };
     let encoded = encode_ipc(&msg);
     let reparsed = parse_ipc(&encoded).expect("control character must roundtrip");
@@ -186,7 +186,7 @@ const PTY_RESIZE: &str = r#"{"type":"PtyResize","session_id":"s-1","cols":120,"r
 fn pty_resize() -> IpcMsg {
     IpcMsg::PtyResize {
         session_id: "s-1".to_string(),
-        cols: 120,
+        terminal_id: String::new(),        cols: 120,
         rows: 40,
     }
 }
@@ -215,7 +215,7 @@ const PTY_OUTPUT: &str = r#"{"type":"PtyOutput","session_id":"s-1","data":"bHMgL
 fn pty_output() -> IpcMsg {
     IpcMsg::PtyOutput {
         session_id: "s-1".to_string(),
-        data: "bHMgLWxhCg==".to_string(), // base64("ls -la\n")
+        terminal_id: String::new(),        data: "bHMgLWxhCg==".to_string(), // base64("ls -la\n")
     }
 }
 
@@ -244,14 +244,14 @@ const PTY_EXIT_SPAWN_FAILURE: &str = r#"{"type":"PtyExit","session_id":"s-1","co
 fn pty_exit() -> IpcMsg {
     IpcMsg::PtyExit {
         session_id: "s-1".to_string(),
-        code: 0,
+        terminal_id: String::new(),        code: 0,
     }
 }
 
 fn pty_exit_spawn_failure() -> IpcMsg {
     IpcMsg::PtyExit {
         session_id: "s-1".to_string(),
-        code: -1,
+        terminal_id: String::new(),        code: -1,
     }
 }
 

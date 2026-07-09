@@ -625,10 +625,10 @@ export type PtyEvent =
   /** `data` is base64 of raw pty output bytes (arbitrary — control
    *  sequences, mid-multibyte-UTF-8 reads) — decode and feed straight to
    *  xterm.js's `Terminal.write` (which accepts a `Uint8Array`). */
-  | { kind: "pty_output"; session_id: string; data: string }
+  | { kind: "pty_output"; session_id: string; terminal_id: string; data: string }
   /** The pty's child process exited; `code` is `-1` if it could not even be
    *  spawned. */
-  | { kind: "pty_exit"; session_id: string; code: number };
+  | { kind: "pty_exit"; session_id: string; terminal_id: string; code: number };
 
 /**
  * X5 — a pending Wasl handoff gate surfaced to the human (mirrors

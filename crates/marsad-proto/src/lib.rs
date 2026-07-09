@@ -804,9 +804,10 @@ pub enum IpcMsg {
         /// For an MCP elicitation that offered a scope-of-allowance choice, the
         /// `content` object to send back on accept (e.g. `{ "grant": "session" }`).
         /// The UI builds it from the picked choice's `key`/`value`. `None` for a
-        /// schemaless accept or a `can_use_tool` gate. Additive + defaulted so
-        /// older callers/wire messages still parse.
-        #[serde(default)]
+        /// schemaless accept or a `can_use_tool` gate. Additive + defaulted +
+        /// skipped-when-absent so older callers/wire messages (and golden
+        /// contracts) are unaffected.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         elicitation_content: Option<serde_json::Value>,
     },
     AnswerQuestion {
@@ -1057,6 +1058,11 @@ pub enum IpcMsg {
     /// broadcasts, same "fire and forget" disposition as `SetWorkspace`.
     PtyStart {
         session_id: String,
+        /// Which terminal within the session (v2: multiple terminals per
+        /// session). Empty → the session's default terminal (back-compat: the
+        /// agent keys the pty registry by session_id when this is empty).
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        terminal_id: String,
         cols: u16,
         rows: u16,
     },
@@ -1068,14 +1074,26 @@ pub enum IpcMsg {
     /// loss, so no base64 is needed here.
     PtyInput {
         session_id: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        terminal_id: String,
         data: String,
     },
     /// The terminal's viewport was resized (e.g. the desktop window resized,
     /// or `xterm-addon-fit` recomputed cols/rows).
     PtyResize {
         session_id: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        terminal_id: String,
         cols: u16,
         rows: u16,
+    },
+    /// Close (kill + reap) ONE terminal of a session (v2: the user clicked ✕ on
+    /// a terminal tab, or "restart" = close then a fresh PtyStart). Fire-and-
+    /// forget; the teardown is observed via the terminal's `PtyExit` broadcast.
+    PtyClose {
+        session_id: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        terminal_id: String,
     },
     // ── agent → GUI/core ────────────────────────────────────────────────────
     /// A chunk of raw bytes read from the pty (merged stdout+stderr — a pty
@@ -1087,6 +1105,8 @@ pub enum IpcMsg {
     /// the raw bytes straight to `xterm.js`'s `Terminal.write`.
     PtyOutput {
         session_id: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        terminal_id: String,
         data: String,
     },
     /// The pty's child process exited (the shell was closed, `exit` was
@@ -1094,6 +1114,8 @@ pub enum IpcMsg {
     /// (`-1` when the pty could not even be spawned).
     PtyExit {
         session_id: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        terminal_id: String,
         code: i32,
     },
 }
