@@ -216,28 +216,20 @@ export function NewSession() {
   const [resume, setResume] = useState(false);
   const [selectedResume, setSelectedResume] = useState<string>("continue");
 
-  // BUG #2 — refresh capabilities when the modal OPENS (and on host/driver
-  // change while open) so real driver availability populates and the picker /
-  // Launch button aren't blocked on absent telemetry. Fire-and-forget; results
-  // arrive via `capabilities` vm-updates.
+  // Capability discovery (agents + versioned models) is loaded at connect time —
+  // a host only reaches "Connected" once every driver's caps have landed. The
+  // modal must therefore NOT re-run capability discovery when it's already there:
+  // on a slow remote (etx ~47s) that redoes the whole probe AND races the
+  // path-scoped session probe. Fire a capability probe ONLY when the exact
+  // (driver, host) pair is still absent (never probed, or host still Connecting).
+  // NO project here — this is purely "what agents/models exist", not a session
+  // listing (that's the effect below, on path-pick).
   useEffect(() => {
     if (!open) return;
-    refreshCapabilities({ host_id: hostId, driver, project: project.trim() || undefined });
+    if (state.capabilities[capsKey(driver, hostId)] !== undefined) return;
+    refreshCapabilities({ host_id: hostId, driver });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, hostId, driver]);
-
-  // Opening the picker (or changing project/host while it's open) fires a
-  // fire-and-forget refresh; the cached list (below) renders instantly off
-  // `state.capabilities` regardless — never spinner-blocked (§3.3/§5).
-  useEffect(() => {
-    if (!resume) return;
-    refreshCapabilities({
-      host_id: hostId,
-      driver,
-      project: project.trim() || undefined,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resume, hostId, project]);
 
   const projectTrim = project.trim();
   const allSessions: DiscoveredSession[] = capsForHost?.sessions ?? [];
@@ -263,7 +255,9 @@ export function NewSession() {
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const sessionsBaselineRef = React.useRef<number>(fetchedAtMs);
   useEffect(() => {
-    if (!resume) return;
+    // Only when a concrete path is chosen — with no project there is nothing to
+    // list, so no probe fires and no spinner should show.
+    if (!resume || !projectTrim) return;
     sessionsBaselineRef.current = fetchedAtMs;
     setSessionsLoading(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -275,20 +269,18 @@ export function NewSession() {
   }, [fetchedAtMs, sessionsLoading]);
   const loadingSessions = capsLoading || sessionsLoading;
 
-  // #6 lazy unknown-path probe — the user typed/picked a project with no
-  // sessions in the current caps. Fire a scoped refresh so a previously-unknown
-  // path's sessions populate; the resume spinner shows while it lands. Guarded
-  // so we only re-probe once per (host, driver, project) with zero visible hits.
-  const lazyProbedRef = React.useRef<string>("");
+  // The ONE session-listing probe: whenever the picker is open and a concrete
+  // path is chosen (or host/driver/path changes), list THAT path's resumable
+  // sessions. This is the only place the modal sends `project` — the backend
+  // dedups per (driver, host, project) and merges results by project, so it can
+  // never be swallowed by, or clobber, the connect-time capability probe. Fires
+  // unconditionally on path change (no "only if empty" guard) so re-picking a
+  // path always refreshes and clears the spinner.
   useEffect(() => {
     if (!resume || !projectTrim) return;
-    if (visibleSessions.length > 0) return;
-    const key = `${hostId}::${driver}::${projectTrim}`;
-    if (lazyProbedRef.current === key) return;
-    lazyProbedRef.current = key;
     refreshCapabilities({ host_id: hostId, driver, project: projectTrim });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resume, hostId, driver, projectTrim, visibleSessions.length]);
+  }, [resume, hostId, driver, projectTrim]);
 
   function close() {
     // Board is the home screen (Workstreams redesign SLICE A).

@@ -78,8 +78,9 @@ impl Agent {
                 session_id,
                 allow,
                 deny_reason,
+                elicitation_content,
                 ..
-            } => self.handle_answer_gate(&session_id, allow, deny_reason),
+            } => self.handle_answer_gate(&session_id, allow, deny_reason, elicitation_content),
             marsad_proto::IpcMsg::AnswerQuestion {
                 session_id,
                 answers,
@@ -444,18 +445,62 @@ impl Agent {
                 .map(|s| s.driver)
                 .unwrap_or_else(|| "claude".to_string());
 
+            // An interrupt abandons the current turn, so ANY gate still pending
+            // for this session must be resolved and cleared — otherwise it stays
+            // wedged in the session's single gate slot AND (for an MCP
+            // elicitation) leaves the host's request half-open, so every
+            // subsequent gate for this session fails closed ("declined") without
+            // ever reaching the UI. The user asked to stop, so the correct
+            // resolution is to DECLINE the pending tool/elicitation. Take the gate
+            // out of the slot unconditionally (both drivers) so a fresh gate can
+            // be captured cleanly on the next turn.
+            let pending = { self.pending_gates.0.lock().unwrap().remove(session_id) };
+
             if driver == "codex" {
-                // Codex: interrupt is a documented no-op. Log and return ack.
+                // Codex: interrupt is a documented no-op, and the eval-loop writer
+                // must not receive a control_response (it would corrupt the command
+                // sequence). Clearing the slot above is enough. Log and return ack.
+                if pending.is_some() {
+                    eprintln!(
+                        "marsad-agent: session {session_id} pending gate cleared on interrupt (codex)"
+                    );
+                }
                 eprintln!(
                     "marsad-agent: session {session_id} interrupt NO-OP for codex \
                      (codex exec turns are one-shot; no interrupt protocol exists)"
                 );
             } else {
-                // Claude: send the interrupt control_request.
-                let encoded = marsad_proto::encode_control_request_interrupt("req_interrupt");
+                // Claude: decline the pending gate cleanly (if any), then send the
+                // interrupt control_request to end the turn. Both go to the same
+                // session writer, decline first so the host resolves the blocked
+                // request before the turn is torn down.
                 let writers = self.session_writers.0.lock().unwrap();
                 if let Some(shared) = writers.get(session_id) {
                     let mut writer = shared.lock().unwrap();
+                    if let Some(gate) = pending {
+                        let decline = if gate.elicitation {
+                            marsad_proto::encode_control_response_elicitation(
+                                &gate.request_id,
+                                false,
+                                None,
+                            )
+                        } else {
+                            marsad_proto::encode_control_response(&marsad_proto::ControlResponse {
+                                request_id: gate.request_id,
+                                allow: false,
+                                deny_reason: Some("interrupted".to_string()),
+                                updated_input: None,
+                            })
+                        };
+                        let _ = writer
+                            .write_all(decline.as_bytes())
+                            .and_then(|_| writer.write_all(b"\n"))
+                            .and_then(|_| writer.flush());
+                        eprintln!(
+                            "marsad-agent: session {session_id} pending gate declined on interrupt"
+                        );
+                    }
+                    let encoded = marsad_proto::encode_control_request_interrupt("req_interrupt");
                     let _ = writer
                         .write_all(encoded.as_bytes())
                         .and_then(|_| writer.write_all(b"\n"))
@@ -480,6 +525,7 @@ impl Agent {
         session_id: &str,
         allow: bool,
         deny_reason: Option<String>,
+        elicitation_content: Option<serde_json::Value>,
     ) -> Result<Vec<String>, AgentError> {
         // In production builds, translate the answer into a real
         // `control_response` and write it to the session's in.fifo so claude
@@ -506,7 +552,14 @@ impl Agent {
                 // the wrong shape leaves claude blocked (the MCP host can't read
                 // the result). Branch on the kind captured when the gate arrived.
                 let encoded = if gate.elicitation {
-                    marsad_proto::encode_control_response_elicitation(&gate.request_id, allow)
+                    // On accept, forward the chosen scope content (e.g.
+                    // `{ "grant": "session" }`); the UI built it from the picked
+                    // choice. A schemaless accept sends `{}`.
+                    marsad_proto::encode_control_response_elicitation(
+                        &gate.request_id,
+                        allow,
+                        if allow { elicitation_content.clone() } else { None },
+                    )
                 } else {
                     let resp = marsad_proto::ControlResponse {
                         request_id: gate.request_id,
@@ -528,7 +581,7 @@ impl Agent {
         // Suppress unused-variable warnings in coverage builds (the fake path
         // never reads `allow`/`deny_reason` — no writer IO to translate them into).
         #[cfg(coverage)]
-        let (_, _) = (allow, deny_reason);
+        let (_, _, _) = (allow, deny_reason, elicitation_content);
 
         // If no pending gate, this is a benign no-op (the tests assert non-Protocol-error).
         let event = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::GateAnswered {

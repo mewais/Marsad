@@ -2258,10 +2258,45 @@ impl Core {
             IpcMsg::CapabilitiesUpdate {
                 host_id,
                 driver,
-                capabilities,
+                mut capabilities,
             } => {
-                self.capabilities
-                    .insert((driver.clone(), host_id.clone()), capabilities.clone());
+                // Merge sessions by project so a path-scoped probe and the
+                // connect-time capability probe (which runs concurrently and
+                // carries an EMPTY session list) don't clobber each other. The
+                // incoming `session_scope` says what this update authoritatively
+                // covers:
+                //   * AllKnown  → a capability probe: keep the sessions we already
+                //     had (its own list is empty; overwriting would flip the picker
+                //     to "none discovered" right after a real result landed).
+                //   * Projects(p) → replace exactly project p's rows with this
+                //     update's rows (an empty result correctly clears p), leaving
+                //     every other project's rows intact.
+                let key = (driver.clone(), host_id.clone());
+                if let Some(existing) = self.capabilities.get(&key) {
+                    match &capabilities.session_scope {
+                        Some(marsad_proto::SessionScope::Projects(ps)) => {
+                            let replacing: std::collections::HashSet<&str> =
+                                ps.iter().map(|p| p.as_str()).collect();
+                            let mut merged: Vec<marsad_proto::DiscoveredSession> = existing
+                                .sessions
+                                .iter()
+                                .filter(|s| {
+                                    s.project
+                                        .as_deref()
+                                        .map(|p| !replacing.contains(p))
+                                        .unwrap_or(false)
+                                })
+                                .cloned()
+                                .collect();
+                            merged.extend(capabilities.sessions.iter().cloned());
+                            capabilities.sessions = merged;
+                        }
+                        _ => {
+                            capabilities.sessions = existing.sessions.clone();
+                        }
+                    }
+                }
+                self.capabilities.insert(key, capabilities.clone());
                 let mut updates = vec![VmUpdate::Capabilities(capabilities.into())];
                 // Record this driver as discovered for the host. Once every probed
                 // driver has landed, a host that was Connecting (reachable, discovery

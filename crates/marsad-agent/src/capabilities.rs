@@ -398,9 +398,13 @@ pub fn build_claude_discovery_script(
             let cd = cd_for(p);
             let body = format!(
                 "base=${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}\n\
-                 cwd=$(cd {cd} 2>/dev/null && pwd -P) || exit 0\n\
+                 cwd=$(cd {cd} 2>/dev/null && pwd -P)\n\
                  enc=$(printf '%s' \"$cwd\" | sed 's/[^a-zA-Z0-9]/-/g')\n\
                  dir=\"$base/projects/$enc\"\n\
+                 printf 'MARSAD_DIAG\\tccd=[%s]|base=[%s]|cwd=[%s]|enc=[%s]|exists=%s|count=%s\\n' \
+                   \"${{CLAUDE_CONFIG_DIR:-UNSET}}\" \"$base\" \"$cwd\" \"$enc\" \
+                   \"$([ -d \"$dir\" ] && echo Y || echo N)\" \
+                   \"$(ls \"$dir\"/*.jsonl 2>/dev/null | wc -l | tr -d ' ')\"\n\
                  for f in $(ls -t \"$dir\"/*.jsonl 2>/dev/null); do \
                    u=$(basename \"$f\" .jsonl); \
                    m=$(stat -c %Y \"$f\" 2>/dev/null || echo 0); \
@@ -953,7 +957,11 @@ struct Inner {
     scopes: Mutex<HashMap<(String, String), SessionScope>>,
     observed_models: Mutex<HashMap<String, Vec<ModelInfo>>>,
     subscribers: Mutex<Vec<mpsc::Sender<String>>>,
-    in_flight: Mutex<HashSet<(String, String)>>,
+    // Dedup key is (driver, host_id, project): a project-scoped session probe
+    // must NOT collide with the connect-time (project=None) capability probe —
+    // otherwise picking a path while the ~slow capability probe is still running
+    // gets silently dropped and the requester never receives its sessions.
+    in_flight: Mutex<HashSet<(String, String, Option<String>)>>,
 }
 
 /// The capability provider: owns the (driver, host) cache, dedupes in-flight
@@ -1083,6 +1091,9 @@ impl CapabilityProvider {
         cfg: HostLaunchCfg,
     ) {
         let key = (driver.clone(), host_id.clone());
+        // Dedup token includes the project so a path-scoped session probe runs
+        // independently of the connect-time capability probe (project=None).
+        let flight_key = (driver.clone(), host_id.clone(), project.clone());
 
         let scope = {
             let mut scopes = self.inner.scopes.lock().unwrap();
@@ -1109,7 +1120,7 @@ impl CapabilityProvider {
             .position(|p| p.driver() == driver)
             .and_then(|idx| {
                 let mut in_flight = self.inner.in_flight.lock().unwrap();
-                in_flight.insert(key.clone()).then_some(idx)
+                in_flight.insert(flight_key.clone()).then_some(idx)
             });
         let probe_idx = match probe_idx {
             Some(i) => i,
@@ -1179,7 +1190,7 @@ impl CapabilityProvider {
             persist_host(&inner, &host_id);
             broadcast_update(&inner, &caps);
 
-            inner.in_flight.lock().unwrap().remove(&key);
+            inner.in_flight.lock().unwrap().remove(&flight_key);
         });
     }
 
@@ -1506,6 +1517,18 @@ impl CapabilityProbe for RealClaudeProbe {
             match run_discovery(ctx.host_target.as_deref(), &script, ctx.deadline) {
                 Ok(out) => {
                     let secs = parse_discovery_sections(&out);
+                    // DIAG: dump the raw sessions section (carries the MARSAD_DIAG
+                    // line with the resolved base/cwd/enc/dir/count) so an empty
+                    // session list on a host like etx can be diagnosed from agent.log
+                    // rather than guessed. Only when a project was in scope.
+                    if ctx.project.is_some() {
+                        eprintln!(
+                            "marsad-agent: claude sessions probe for {:?} project={:?} raw:\n{}",
+                            ctx.host_target,
+                            ctx.project,
+                            secs.get("sessions")
+                        );
+                    }
                     // Family catalog annotated with the host's REAL resolved
                     // versions from the env section (families are only offered
                     // when claude actually resolved on the host).
@@ -1537,6 +1560,30 @@ impl CapabilityProbe for RealClaudeProbe {
                     (false, vec![], vec![])
                 }
             };
+        // Stamp the REQUESTED project onto every discovered session. The remote
+        // lister can't recover the original path from claude's lossy on-disk
+        // encoding, so the caller (which knows the exact path it asked for) is the
+        // source of truth. This makes the frontend's per-path filter meaningful
+        // and lets Core merge/replace sessions by project without cross-path
+        // contamination.
+        let sessions: Vec<DiscoveredSession> = match ctx.project.as_deref() {
+            Some(p) if !p.trim().is_empty() => sessions
+                .into_iter()
+                .map(|mut s| {
+                    s.project = Some(p.to_string());
+                    s
+                })
+                .collect(),
+            _ => sessions,
+        };
+        // `session_scope` marks what THIS update authoritatively covers so Core
+        // knows how to merge it: a path-scoped probe replaces exactly project p's
+        // rows; a capability probe (AllKnown) carries no session authority and
+        // must not wipe a prior scoped result.
+        let session_scope = match ctx.project.as_deref() {
+            Some(p) if !p.trim().is_empty() => SessionScope::Projects(vec![p.to_string()]),
+            _ => SessionScope::AllKnown,
+        };
         Capabilities {
             driver: "claude".to_string(),
             host_id: ctx.host_id.clone(),
@@ -1547,7 +1594,7 @@ impl CapabilityProbe for RealClaudeProbe {
                 source: ModelListSource::Observed,
                 free_text: true,
             },
-            session_scope: Some(ctx.scope.clone()),
+            session_scope: Some(session_scope),
             sessions,
             fetched_at_ms: now_ms(),
             errors,

@@ -177,26 +177,18 @@ export function NodeModal() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // BUG #2 — refresh capabilities when the launch modal OPENS (and whenever the
-  // selected host/driver changes while open) so real availability populates and
-  // the driver picker / Launch button aren't blocked on absent telemetry.
-  // Fire-and-forget (mirrors NewSession's resume refresh) — results arrive via
-  // `capabilities` vm-updates.
+  // Capability discovery (agents + versioned models) is loaded at connect time —
+  // a host only reaches "Connected" once every driver's caps have landed. Do NOT
+  // re-run it from the modal when it's already present: on a slow remote (etx
+  // ~47s) that redoes the whole probe AND races the path-scoped session probe.
+  // Fire ONLY when the exact (driver, host) pair is still absent, and with NO
+  // project (this is "what agents/models exist", not a session listing).
   useEffect(() => {
     if (!open) return;
-    refreshCapabilities({ host_id: hostId, driver, project: project.trim() || undefined });
+    if (state.capabilities[capsKey(driver, hostId)] !== undefined) return;
+    refreshCapabilities({ host_id: hostId, driver });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, hostId, driver]);
-
-  // #3 resume — opening the picker (or changing project/host while it's open)
-  // fires a fire-and-forget refresh WITH the chosen project so claude's
-  // per-project session list populates. The cached list renders instantly off
-  // `state.capabilities` regardless.
-  useEffect(() => {
-    if (!resume) return;
-    refreshCapabilities({ host_id: hostId, driver, project: project.trim() || undefined });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resume, hostId, driver, project]);
 
   // Existing nodes in this workstream — for the Controlled-by/Feeds-from
   // pickers. A brand-new "single session" workstream has none (nmHasNodes).
@@ -287,7 +279,8 @@ export function NodeModal() {
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const sessionsBaselineRef = React.useRef<number>(fetchedAtMs);
   useEffect(() => {
-    if (!resume) return;
+    // Only when a concrete path is chosen — no project, nothing to list, no spinner.
+    if (!resume || !projectTrim) return;
     sessionsBaselineRef.current = fetchedAtMs;
     setSessionsLoading(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -298,20 +291,17 @@ export function NodeModal() {
     }
   }, [fetchedAtMs, sessionsLoading]);
   const loadingSessions = capsLoading || sessionsLoading;
-  // #6 lazy unknown-path probe — the user typed/picked a project with no
-  // sessions in the current caps. Fire a scoped refresh so a previously-unknown
-  // path's sessions populate; show the resume spinner while it lands. Guarded so
-  // we only re-probe once per (host, driver, project) with zero visible hits.
-  const lazyProbedRef = React.useRef<string>("");
+  // The ONE session-listing probe: whenever the picker is open and a concrete
+  // path is chosen (or host/driver/path changes), list THAT path's resumable
+  // sessions. This is the only place the modal sends `project`; the backend dedups
+  // per (driver, host, project) and merges by project, so it can never be
+  // swallowed by, or clobber, the connect-time capability probe. Fires
+  // unconditionally on path change so re-picking always refreshes + clears the spinner.
   useEffect(() => {
     if (!resume || !projectTrim) return;
-    if (visibleSessions.length > 0) return;
-    const key = `${hostId}::${driver}::${projectTrim}`;
-    if (lazyProbedRef.current === key) return;
-    lazyProbedRef.current = key;
     refreshCapabilities({ host_id: hostId, driver, project: projectTrim });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resume, hostId, driver, projectTrim, visibleSessions.length]);
+  }, [resume, hostId, driver, projectTrim]);
 
   useEffect(() => {
     if (userModifiedModel) return;
