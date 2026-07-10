@@ -646,33 +646,11 @@ function buildAgentCommands(
   return out;
 }
 
-// Shared field styling for host-config rows (module scope so both the local
-// card and the per-host RemoteHostCard use identical inputs).
-const HOST_FIELD_LABEL: React.CSSProperties = {
-  fontSize: "calc(12.5px * var(--fs,1))",
-  fontWeight: 600,
-  color: "var(--txt3)",
-  marginBottom: 5,
-};
-const HOST_FIELD_INPUT: React.CSSProperties = {
-  width: "100%",
-  background: "var(--panel)",
-  border: "1px solid var(--border2)",
-  borderRadius: 8,
-  padding: "9px 11px",
-  color: "var(--txt)",
-  fontSize: "calc(14.5px * var(--fs,1))",
-  outline: "none",
-  boxSizing: "border-box",
-  fontFamily: "var(--font-mono)",
-};
-
 /**
- * A single registered REMOTE host card (BUG #3) — header (label/status/connect/
- * remove) plus the row layout: Claude Code / Codex / Gemini command rows, the
- * Setup command row, then the Environment box. Edits persist via `updateHost`
- * (the three agent rows go through `agentCommands`). Local state seeds from the
- * host and re-syncs when the host config changes (vm-update round-trip).
+ * A single registered REMOTE host card — header ONLY: label / status / Connect /
+ * Remove. Per-host config (Claude/Codex/Gemini commands, Setup, Environment) is
+ * set once when ADDING the host (see the "Add a host" form) and is intentionally
+ * NOT editable here: an existing host shows only actions, not settings.
  */
 function RemoteHostCard({
   host,
@@ -683,49 +661,6 @@ function RemoteHostCard({
   onConnect: (target: string) => void;
   onRemove: (id: string) => void;
 }) {
-  const cmds = agentCommandsToMap(host.agent_commands);
-  const [claudeBin, setClaudeBin] = useState(host.claude_bin ?? cmds.claude ?? "");
-  const [codexCmd, setCodexCmd] = useState(cmds.codex ?? "");
-  const [geminiCmd, setGeminiCmd] = useState(cmds.gemini ?? "");
-  const [setup, setSetup] = useState(host.setup ?? "");
-  const [env, setEnv] = useState(envToText(host.env));
-  const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  // Re-sync from the host whenever its persisted config changes.
-  const syncKey = `${host.claude_bin ?? ""}|${host.setup ?? ""}|${envToText(host.env)}|${cmds.codex ?? ""}|${cmds.gemini ?? ""}`;
-  useEffect(() => {
-    const m = agentCommandsToMap(host.agent_commands);
-    setClaudeBin(host.claude_bin ?? m.claude ?? "");
-    setCodexCmd(m.codex ?? "");
-    setGeminiCmd(m.gemini ?? "");
-    setSetup(host.setup ?? "");
-    setEnv(envToText(host.env));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [syncKey]);
-
-  async function handleSave() {
-    if (busy) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      await updateHost(
-        host.id,
-        claudeBin.trim(),
-        setup.trim(),
-        parseEnv(env),
-        undefined,
-        buildAgentCommands(claudeBin, codexCmd, geminiCmd),
-      );
-      setSaved(true);
-      window.setTimeout(() => setSaved(false), 2500);
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   const statusColor =
     host.status === "Connected"
@@ -817,102 +752,6 @@ function RemoteHostCard({
             Protected
           </span>
         )}
-      </div>
-
-      {/* Row layout: one row per agent command, then Setup, then Environment. */}
-      <div>
-        <div style={HOST_FIELD_LABEL}>Claude Code command</div>
-        <input
-          data-testid={`host-claude-bin-${host.id}`}
-          value={claudeBin}
-          onChange={(e) => setClaudeBin(e.target.value)}
-          placeholder="claude"
-          className="mono"
-          style={HOST_FIELD_INPUT}
-        />
-      </div>
-      <div>
-        <div style={HOST_FIELD_LABEL}>Codex command</div>
-        <input
-          data-testid={`host-codex-cmd-${host.id}`}
-          value={codexCmd}
-          onChange={(e) => setCodexCmd(e.target.value)}
-          placeholder="codex"
-          className="mono"
-          style={HOST_FIELD_INPUT}
-        />
-      </div>
-      <div>
-        <div style={HOST_FIELD_LABEL}>Gemini command</div>
-        <input
-          data-testid={`host-gemini-cmd-${host.id}`}
-          value={geminiCmd}
-          onChange={(e) => setGeminiCmd(e.target.value)}
-          placeholder="gemini"
-          className="mono"
-          style={HOST_FIELD_INPUT}
-        />
-      </div>
-      <div>
-        <div style={HOST_FIELD_LABEL}>Setup command</div>
-        <input
-          data-testid={`host-setup-${host.id}`}
-          value={setup}
-          onChange={(e) => setSetup(e.target.value)}
-          placeholder="module load cuda"
-          className="mono"
-          style={HOST_FIELD_INPUT}
-        />
-      </div>
-      <div>
-        <div style={HOST_FIELD_LABEL}>Environment (one KEY=VALUE per line)</div>
-        <textarea
-          data-testid={`host-env-${host.id}`}
-          value={env}
-          onChange={(e) => setEnv(e.target.value)}
-          placeholder={"CUDA_HOME=/usr/local/cuda\nFOO=bar"}
-          className="mono"
-          rows={3}
-          style={{ ...HOST_FIELD_INPUT, resize: "vertical", minHeight: 64 }}
-        />
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <span
-          className="mono"
-          style={{ fontSize: "calc(12.5px * var(--fs,1))", color: "var(--txt3)", flex: 1 }}
-        >
-          Applied to every session launched on this host.
-        </span>
-        {saved && (
-          <span
-            data-testid={`host-saved-${host.id}`}
-            style={{ fontSize: "calc(13px * var(--fs,1))", color: "var(--done)", fontWeight: 600 }}
-          >
-            Saved
-          </span>
-        )}
-        {err && (
-          <span style={{ fontSize: "calc(13px * var(--fs,1))", color: "var(--error)" }}>{err}</span>
-        )}
-        <button
-          data-testid={`host-save-${host.id}`}
-          disabled={busy}
-          onClick={handleSave}
-          style={{
-            fontFamily: "inherit",
-            fontWeight: 700,
-            fontSize: "calc(14.5px * var(--fs,1))",
-            padding: "8px 15px",
-            borderRadius: 8,
-            border: "none",
-            background: busy ? "var(--border2)" : "var(--accent)",
-            color: "#fff",
-            cursor: busy ? "default" : "pointer",
-            opacity: busy ? 0.55 : 1,
-          }}
-        >
-          {busy ? "Saving…" : "Save"}
-        </button>
       </div>
     </div>
   );
