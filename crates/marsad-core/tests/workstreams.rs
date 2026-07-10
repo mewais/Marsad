@@ -381,6 +381,73 @@ fn persisted_session_reappears_on_board_after_reload() {
 }
 
 // ---------------------------------------------------------------------------
+// Regression: a Fresh session is persisted with session_id=None (the claude
+// conversation UUID is unknown until system/init arrives). That UUID lives ONLY
+// in memory unless Core writes it back to the store on init. Without this, two
+// sessions in the SAME directory both restore with session_id=None and fall back
+// to "most recent .jsonl", collapsing onto ONE claude session after restart.
+// Core MUST persist the captured UUID on system/init so each session resumes its
+// own conversation.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn system_init_persists_claude_session_uuid_to_store() {
+    use marsad_store::{PersistedSession, Store};
+
+    let backend = MemoryBackend::new();
+    // Agent-side launch: a Fresh session is persisted with session_id=None.
+    {
+        let mut store = Store::new(Box::new(backend.clone()));
+        store
+            .upsert_session(&PersistedSession {
+                id: "sess-uuid-1".to_string(),
+                session_id: None,
+                name: "sess-uuid-1".to_string(),
+                host_id: "local".to_string(),
+                host_target: None,
+                claude_bin: None,
+                setup: None,
+                env: Vec::new(),
+                project: "/tmp/same-dir".to_string(),
+                branch: "main".to_string(),
+                model: "claude-opus-4-5".to_string(),
+                last_phase: "Starting".to_string(),
+                posture: None,
+                disallowed_tools: vec![],
+                driver: "claude".to_string(),
+                slash_commands: vec![],
+                tools: vec![],
+                mcp_servers: vec![],
+            })
+            .expect("agent persists fresh session");
+    }
+
+    let mut core = core_with_backend(backend.clone());
+    core.load_sessions().expect("load_sessions");
+
+    // The real claude conversation UUID arrives via system/init (inner
+    // `session_id`), distinct from the marsad routing id ("sess-uuid-1").
+    let init = r#"{"type":"AgentEvent","session_id":"sess-uuid-1","event":{"type":"system","subtype":"init","session_id":"claude-real-uuid-abc","model":"claude-opus-4-5","cwd":"/tmp/same-dir","tools":[],"mcp_servers":[],"permissionMode":"default"}}"#;
+    core.on_agent_line(init).expect("on_agent_line init");
+
+    // The store must now record the claude UUID for this session (the --resume /
+    // transcript-backfill target that survives a restart).
+    let store = Store::new(Box::new(backend));
+    let persisted = store
+        .restore()
+        .expect("restore")
+        .sessions
+        .into_iter()
+        .find(|s| s.id == "sess-uuid-1")
+        .expect("session still persisted");
+    assert_eq!(
+        persisted.session_id.as_deref(),
+        Some("claude-real-uuid-abc"),
+        "system/init must persist the captured claude session UUID to the store"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // CW4 — add_connection invalid cases -> CoreError::Connection, nothing persisted
 // ---------------------------------------------------------------------------
 

@@ -2810,24 +2810,41 @@ impl Core {
             )
         };
 
-        // Persist slash_commands, tools, and mcp_servers after a SystemInit so
-        // that on the next attach/reconnect (when send_init is false) the restored
-        // session shows them without waiting for another system/init.
+        // Persist the claude session UUID, slash_commands, tools, and mcp_servers
+        // after a SystemInit so that on the next attach/reconnect (when send_init
+        // is false) the restored session shows them without waiting for another
+        // system/init.
+        //
+        // The UUID is the critical one: a Fresh launch persists session_id=None
+        // (the real claude conversation id is unknown until system/init arrives),
+        // and that id lives ONLY in memory (`state.session_id`) unless we write it
+        // back here. Without this, on the next app restart two sessions in the SAME
+        // directory both load session_id=None and fall back to "most recent
+        // .jsonl" (remote_transcript_script `ls -t | head -1`) → they COLLAPSE onto
+        // the same claude session. Persisting the id makes each session resume /
+        // backfill its OWN conversation. Guarded to the claude driver: codex's
+        // synthesized system/init carries the codex thread_id in `session_id`,
+        // which is NOT a `claude --resume` target and must not be persisted there.
         // Best-effort: a store error here must not fail the event processing.
         if is_system_init {
-            let (slash_cmds, tools, mcp_servers) = self
+            let (claude_sid, slash_cmds, tools, mcp_servers) = self
                 .sessions
                 .get(&session_id)
                 .map(|r| (
+                    r.state.session_id.clone(),
                     r.state.slash_commands.clone(),
                     r.state.tools.clone(),
                     r.state.mcp_servers.clone(),
                 ))
                 .unwrap_or_default();
-            if !slash_cmds.is_empty() || !tools.is_empty() || !mcp_servers.is_empty() {
+            let has_sid = claude_sid.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+            if has_sid || !slash_cmds.is_empty() || !tools.is_empty() || !mcp_servers.is_empty() {
                 // Load the persisted session, update fields, write back.
                 if let Ok(restored) = self.store.restore() {
                     if let Some(mut ps) = restored.sessions.into_iter().find(|s| s.id == session_id) {
+                        if has_sid && ps.driver == "claude" && ps.session_id.as_deref() != claude_sid.as_deref() {
+                            ps.session_id = claude_sid;
+                        }
                         ps.slash_commands = slash_cmds;
                         ps.tools = tools;
                         ps.mcp_servers = mcp_servers;
