@@ -211,6 +211,7 @@ pub fn stop_session(
             AppState::Mock(_) => vec![],
         }
     };
+    drop_exec_shell(&id); // kill the session's persistent `!` shell
     crate::events::emit_updates(&app, updates);
     Ok(())
 }
@@ -234,6 +235,7 @@ pub fn remove_session(
             AppState::Mock(_) => vec![],
         }
     };
+    drop_exec_shell(&id); // kill the session's persistent `!` shell
     crate::events::emit_updates(&app, updates);
     Ok(())
 }
@@ -1082,6 +1084,79 @@ pub fn list_templates(state: State<'_, ManagedState>) -> Result<Vec<PersistedTem
 /// indicator), (2) runs the command on the blocking pool (off the async runtime
 /// and off the main thread), (3) injects the output when it completes. The state
 /// lock is taken + dropped around each step, never held across the await.
+/// Process-wide registry of persistent per-session `!` shells, keyed by session
+/// id. Each shell sources the host `setup` once and stays alive for the session,
+/// so subsequent `!` commands skip the setup cost. Dropping an entry kills its
+/// child (see `ExecShell`'s Drop).
+type ExecShellRegistry = std::sync::Mutex<
+    std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<marsad_agent::exec_shell::ExecShell>>>,
+>;
+
+fn exec_shells() -> &'static ExecShellRegistry {
+    static R: std::sync::OnceLock<ExecShellRegistry> = std::sync::OnceLock::new();
+    R.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Run `command` through the session's persistent shell. Returns `Some(output)`
+/// on success, or `None` to signal the caller should use the one-shot fallback
+/// (shell couldn't spawn, or died — in which case the dead entry is dropped so a
+/// later `!` respawns it fresh).
+fn exec_via_persistent_shell(
+    session_id: &str,
+    host_target: Option<&str>,
+    project: &str,
+    setup: Option<&str>,
+    env: &[(String, String)],
+    command: &str,
+) -> Option<String> {
+    // Get-or-spawn this session's shell (spawn under the lock so two racing `!`s
+    // don't create two shells).
+    let shell = {
+        let mut reg = exec_shells().lock().ok()?;
+        if let Some(existing) = reg.get(session_id) {
+            existing.clone()
+        } else {
+            match marsad_agent::exec_shell::ExecShell::spawn(host_target, project, setup, env) {
+                Ok(s) => {
+                    let arc = std::sync::Arc::new(std::sync::Mutex::new(s));
+                    reg.insert(session_id.to_string(), arc.clone());
+                    arc
+                }
+                Err(e) => {
+                    crate::diag_log(&format!(
+                        "marsad-desktop: exec shell spawn failed for {session_id}: {e} — one-shot fallback"
+                    ));
+                    return None;
+                }
+            }
+        }
+    };
+
+    // Run (per-session serialized by this shell's own lock). On error the shell
+    // has died — drop it so the next `!` respawns, and fall back for THIS call.
+    let result = {
+        let mut sh = shell.lock().ok()?;
+        sh.run(command)
+    };
+    match result {
+        Ok(out) => Some(out),
+        Err(e) => {
+            crate::diag_log(&format!(
+                "marsad-desktop: exec shell died for {session_id}: {e} — one-shot fallback"
+            ));
+            exec_shells().lock().ok()?.remove(session_id);
+            None
+        }
+    }
+}
+
+/// Kill + forget a session's persistent `!` shell (on stop/delete). Best-effort.
+pub(crate) fn drop_exec_shell(session_id: &str) {
+    if let Ok(mut reg) = exec_shells().lock() {
+        reg.remove(session_id); // Drop kills the child
+    }
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn run_shell(
     app: tauri::AppHandle,
@@ -1124,20 +1199,36 @@ pub async fn run_shell(
     }; // lock released before the await below
 
     // 2. Execute the command on the BLOCKING POOL so the UI never freezes.
+    //    Prefer the session's PERSISTENT exec shell (setup sourced once → a bare
+    //    `ls` is instant even on a slow-setup host, and cwd/exports persist across
+    //    `!`s). Fall back to the one-shot path if the shell can't spawn or dies.
     let cmd_for_exec = command.clone();
-    let output = tauri::async_runtime::spawn_blocking(move || match host_target {
-        Some(target) => {
-            // Remote: setup + env exports + cd + command; `2>&1` folds stderr in.
-            let script =
-                build_remote_shell_script(&host_setup, &host_env, &project, &cmd_for_exec);
-            let out = marsad_agent::run_remote_script(&target, &script).unwrap_or_default();
-            if out.trim().is_empty() {
-                "(no output)".to_string()
-            } else {
-                out
-            }
+    let sid_for_exec = session_id.clone();
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        if let Some(out) = exec_via_persistent_shell(
+            &sid_for_exec,
+            host_target.as_deref(),
+            &project,
+            host_setup.as_deref(),
+            &host_env,
+            &cmd_for_exec,
+        ) {
+            return if out.trim().is_empty() { "(no output)".to_string() } else { out };
         }
-        None => run_shell_locally_with_env(&cmd_for_exec, &project, &host_setup, &host_env),
+        // Fallback: one-shot (old behavior) — re-sources setup each call.
+        match host_target {
+            Some(target) => {
+                let script =
+                    build_remote_shell_script(&host_setup, &host_env, &project, &cmd_for_exec);
+                let out = marsad_agent::run_remote_script(&target, &script).unwrap_or_default();
+                if out.trim().is_empty() {
+                    "(no output)".to_string()
+                } else {
+                    out
+                }
+            }
+            None => run_shell_locally_with_env(&cmd_for_exec, &project, &host_setup, &host_env),
+        }
     })
     .await
     .unwrap_or_else(|e| format!("(shell task failed: {e})"));

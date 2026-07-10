@@ -17,6 +17,8 @@ use marsad_store::{MemoryBackend, Store};
 
 pub mod capabilities;
 pub mod codex;
+#[cfg(not(coverage))]
+pub mod exec_shell;
 mod driver;
 mod ipc;
 mod pty;
