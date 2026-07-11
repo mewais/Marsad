@@ -211,7 +211,7 @@ fn elicitation_request_json(request_id: &str, server: &str, message: &str) -> St
 }
 
 #[test]
-fn elicitation_gate_extracts_fenced_command_and_keeps_message() {
+fn elicitation_gate_extracts_fenced_command_and_keeps_full_message() {
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
     let message = "**Command requires approval**\n\nPattern matched: `*git push*`\n\n```\ncd /proj && git push\n```\n\nAllow it to run?";
     let s1 = reduce(
@@ -220,23 +220,31 @@ fn elicitation_gate_extracts_fenced_command_and_keeps_message() {
     );
     assert_eq!(s1.phase, Phase::Needs);
     let (command, explanation) = gate_command_explanation(&s1);
+    // Fenced command still extracted for the `$ …` line …
     assert_eq!(command, "cd /proj && git push");
-    assert_eq!(explanation, "Approval requested by MCP server: hares");
+    // … and the FULL prompt is kept as the explanation (not a generic line), so
+    // nothing in the server's justification is hidden.
+    assert_eq!(explanation, message);
 }
 
 #[test]
-fn elicitation_gate_without_fence_uses_first_nonempty_line() {
+fn elicitation_without_fence_has_empty_command_and_full_explanation() {
+    // A request_path_access-style prompt: no fenced command, path/mode/reason in
+    // the body. The command line must be EMPTY (UI hides the block) and the full
+    // prompt — including the requested path — must be the explanation.
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let message = "Access OUTSIDE the sandbox requested.\n\nPath: /mnt/c/Users/mohewais/Desktop\nMode: rw\nReason: copy the installer";
     let s1 = reduce(
         s0,
-        stream(&elicitation_request_json(
-            "eli-2",
-            "srv",
-            "\n  Approve writing to disk?  \nmore",
-        )),
+        stream(&elicitation_request_json("eli-2", "hares", message)),
     );
-    let (command, _) = gate_command_explanation(&s1);
-    assert_eq!(command, "Approve writing to disk?");
+    let (command, explanation) = gate_command_explanation(&s1);
+    assert_eq!(command, "", "path-access gate must have no `$ …` command line");
+    assert_eq!(explanation, message);
+    assert!(
+        explanation.contains("/mnt/c/Users/mohewais/Desktop"),
+        "the requested path must be visible in the gate, got: {explanation}"
+    );
 }
 
 #[test]
@@ -248,8 +256,9 @@ fn elicitation_gate_empty_message_is_blank_not_panicking() {
 }
 
 #[test]
-fn elicitation_gate_unterminated_fence_falls_back_to_line() {
-    // Opening fence but no closing fence → fall through to first non-empty line.
+fn elicitation_gate_unterminated_fence_has_empty_command() {
+    // Opening fence but no closing fence → not a real block → empty command
+    // (the full prompt is shown as the explanation instead).
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
     let s1 = reduce(
         s0,
@@ -259,13 +268,14 @@ fn elicitation_gate_unterminated_fence_falls_back_to_line() {
             "Run this?\n```\nrm -rf x",
         )),
     );
-    let (command, _) = gate_command_explanation(&s1);
-    assert_eq!(command, "Run this?");
+    let (command, explanation) = gate_command_explanation(&s1);
+    assert_eq!(command, "");
+    assert_eq!(explanation, "Run this?\n```\nrm -rf x");
 }
 
 #[test]
-fn elicitation_gate_fence_with_only_whitespace_falls_back() {
-    // Fenced block present but empty/whitespace → fall through to first line.
+fn elicitation_gate_fence_with_only_whitespace_has_empty_command() {
+    // Fenced block present but empty/whitespace → empty command.
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
     let s1 = reduce(
         s0,
@@ -276,12 +286,12 @@ fn elicitation_gate_fence_with_only_whitespace_falls_back() {
         )),
     );
     let (command, _) = gate_command_explanation(&s1);
-    assert_eq!(command, "Header");
+    assert_eq!(command, "");
 }
 
 #[test]
-fn elicitation_gate_fence_without_following_newline_falls_back() {
-    // An opening ``` with no newline after it (no real block) → first-line fallback.
+fn elicitation_gate_fence_without_following_newline_has_empty_command() {
+    // An opening ``` with no newline after it (no real block) → empty command.
     let s0 = reduce(SessionState::initial(), stream(system_init_json()));
     let s1 = reduce(
         s0,
@@ -292,7 +302,7 @@ fn elicitation_gate_fence_without_following_newline_falls_back() {
         )),
     );
     let (command, _) = gate_command_explanation(&s1);
-    assert_eq!(command, "Allow it? ```inline");
+    assert_eq!(command, "");
 }
 
 #[test]

@@ -549,14 +549,17 @@ fn reduce_control_request(
     // bare tool name — a Bash gate used to read `$ Bash` because we copied
     // `tool_name` here instead of reading the command out of `input`.
     let (command, explanation) = if let Some(message) = &req.elicitation_message {
-        // MCP elicitation (e.g. a sandboxed-bash server asking to approve a
-        // command). The prompt is free-form markdown; pull the command out of its
-        // fenced code block for the `$ …` line and keep the full prompt as the
-        // explanation so the user sees the server's full justification.
-        (
-            elicitation_command(message),
-            format!("Approval requested by MCP server: {}", req.tool_name),
-        )
+        // MCP elicitation (e.g. hares asking to approve a shell command, or a
+        // request_path_access prompt). Show the FULL prompt as the explanation so
+        // nothing important is hidden: the path-access prompt carries the path,
+        // mode, and reason in its BODY, and the old code discarded it (it showed a
+        // generic "Approval requested by MCP server: …" line and, for the `$ …`
+        // line, only the first line of the message — so the requested path was
+        // never displayed). The `$ …` command line is reserved for a fenced
+        // ```code``` block a server put a shell command in; when there is none
+        // (e.g. a path request), `elicitation_command` returns "" and the UI hides
+        // the command block.
+        (elicitation_command(message), message.trim().to_string())
     } else {
         let command = describe_tool_request(&req.tool_name, &req.input);
         // Prefer claude's own description of the action when present (the Bash
@@ -640,12 +643,13 @@ fn parse_question_prompts(input: &serde_json::Value) -> Vec<marsad_gates::Questi
         .collect()
 }
 
-/// Pull the command out of an MCP elicitation prompt for the gate's `$ …` line.
-///
-/// MCP approval prompts are free-form markdown; servers conventionally put the
-/// command in a fenced ```code``` block (the `hares` sandboxed-bash server does).
-/// Prefer that block; else fall back to the first non-empty line; else the whole
-/// (trimmed) message — so the gate is never blank.
+/// Pull the shell command out of an MCP elicitation prompt for the gate's `$ …`
+/// line — but ONLY when the server put one in a fenced ```code``` block (hares'
+/// bash-approval prompts do). Returns an empty string when there is no such block
+/// (e.g. a `request_path_access` prompt, which has no command). The caller shows
+/// the full prompt as the explanation and the UI hides the empty command block —
+/// so we never mistake the prompt's first prose line for a command (that dropped
+/// the requested path off the path-access gate entirely).
 fn elicitation_command(message: &str) -> String {
     if let Some(open) = message.find("```") {
         // Skip the opening fence and its (optional) language tag up to the newline.
@@ -659,12 +663,7 @@ fn elicitation_command(message: &str) -> String {
             }
         }
     }
-    message
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or_else(|| message.trim())
-        .to_string()
+    String::new()
 }
 
 /// Render a human-readable one-line command for a `can_use_tool` permission gate.

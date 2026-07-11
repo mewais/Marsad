@@ -330,19 +330,27 @@ export function GateOverlay() {
           {/* ---- PERMISSION variant ---- */}
           {gate.is_permission && permissionData && (
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-              {/* Explanation */}
+              {/* Explanation. For MCP elicitations (e.g. a request_path_access
+                  prompt) this is the server's FULL markdown prompt — carrying the
+                  requested path/mode/reason — so preserve its line breaks. */}
               <div
                 style={{
                   fontSize: "calc(15px * var(--fs,1))",
                   color: "var(--txt2)",
                   marginBottom: 11,
                   lineHeight: 1.55,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
                 }}
               >
                 {permissionData.explanation}
               </div>
 
-              {/* Command block */}
+              {/* Command block — only when there is an actual command to run.
+                  Elicitations without a fenced command (e.g. path-access requests)
+                  carry an empty command; showing "$ " with a blank line there was
+                  meaningless, so hide the whole block. */}
+              {permissionData.command.trim() && (
               <div
                 style={{
                   borderRadius: 11,
@@ -398,6 +406,7 @@ export function GateOverlay() {
                   cwd: {permissionData.cwd}
                 </div>
               </div>
+              )}
 
               {/* Risk warning — single-line amber banner. Only shown when there
                   IS a risk note; command gates carry no risk string, so an empty
