@@ -9,7 +9,7 @@
  * VmProvider initialState, click into the Hosts tab.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { VmProvider, VmState } from "../src/bridge/useVm";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { Settings } from "../src/screens/Settings";
@@ -67,39 +67,20 @@ describe("Settings Hosts — row layout (BUG #3)", () => {
     expect(screen.getAllByText("Claude Code command").length).toBeGreaterThan(0);
   });
 
-  it("each connected remote host card exposes the same command rows + Environment box", () => {
+  it("existing remote host cards show actions only — NO config fields or Save", () => {
+    // Per-host config is set once in the add-host form; an existing host card
+    // shows only actions (Connect/Remove). The command/Setup/Environment rows and
+    // the Save button must NOT render on an existing card.
     renderSettings();
     for (const id of ["hetzner", "gpu"]) {
-      expect(screen.getByTestId(`host-claude-bin-${id}`)).toBeTruthy();
-      expect(screen.getByTestId(`host-codex-cmd-${id}`)).toBeTruthy();
-      expect(screen.getByTestId(`host-gemini-cmd-${id}`)).toBeTruthy();
-      expect(screen.getByTestId(`host-setup-${id}`)).toBeTruthy();
-      expect(screen.getByTestId(`host-env-${id}`)).toBeTruthy();
-      expect(screen.getByTestId(`host-save-${id}`)).toBeTruthy();
+      expect(screen.getByTestId(`host-row-${id}`)).toBeTruthy();
+      expect(screen.queryByTestId(`host-claude-bin-${id}`)).toBeNull();
+      expect(screen.queryByTestId(`host-codex-cmd-${id}`)).toBeNull();
+      expect(screen.queryByTestId(`host-gemini-cmd-${id}`)).toBeNull();
+      expect(screen.queryByTestId(`host-setup-${id}`)).toBeNull();
+      expect(screen.queryByTestId(`host-env-${id}`)).toBeNull();
+      expect(screen.queryByTestId(`host-save-${id}`)).toBeNull();
     }
-  });
-
-  it("saving a remote host wires the agent command rows through updateHost agentCommands", async () => {
-    renderSettings();
-    fireEvent.change(screen.getByTestId("host-codex-cmd-hetzner"), {
-      target: { value: "codex --sandbox" },
-    });
-    fireEvent.change(screen.getByTestId("host-gemini-cmd-hetzner"), {
-      target: { value: "/opt/gemini/bin/gemini" },
-    });
-    fireEvent.click(screen.getByTestId("host-save-hetzner"));
-
-    await waitFor(() => expect(updateHost).toHaveBeenCalled());
-    const call = updateHost.mock.calls[0] as unknown[];
-    // updateHost(id, claudeBin, setup, env, target, agentCommands)
-    expect(call[0]).toBe("hetzner");
-    const agentCommands = call[5] as Array<[string, string]>;
-    expect(agentCommands).toEqual(
-      expect.arrayContaining([
-        ["codex", "codex --sandbox"],
-        ["gemini", "/opt/gemini/bin/gemini"],
-      ])
-    );
   });
 
   it("add-host form lays out one command per row (Claude/Codex/Gemini/Setup) + Environment", () => {

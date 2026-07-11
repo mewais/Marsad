@@ -159,7 +159,14 @@ export function NewSession() {
   function driverAvailable(d: Driver): boolean {
     const c = state.capabilities[capsKey(d, hostId)];
     if (!c) return true; // discovery in flight — optimistic
-    return c.launchable === true && c.cli_available === true;
+    if (!c.launchable) return false; // no Marsad driver (e.g. gemini) — hard no
+    // A probe that ERRORED/TIMED OUT (common on slow-setup remote hosts, e.g. an
+    // HPC login node running `source ~/module.sh`) says NOTHING about whether
+    // claude is installed. Never block a launchable driver on a flaky probe: stay
+    // optimistic and let the launch be the source of truth. Only grey out when the
+    // probe SUCCEEDED (no errors) and the CLI was genuinely absent.
+    if (c.errors.length > 0) return true;
+    return c.cli_available === true;
   }
   /** Known-unavailable: caps are PRESENT and report the driver as not
    *  launchable (gemini) or its CLI not detected. Absent caps (loading) are

@@ -158,13 +158,21 @@ describe("NewSession resume picker — capabilities-only source (U2 contract)", 
     );
   });
 
-  it("empty capabilities sessions ⇒ an honest hint, never the mock-mode listSessions() fallback list", () => {
+  it("empty capabilities sessions ⇒ an honest discovering/hint state, never the mock-mode listSessions() fallback list", () => {
     renderNewSession([makeCapabilities({ driver: "claude", host_id: "local" })]); // sessions: []
 
     fillProjectAndResume("~/projects/api");
 
-    expect(screen.getByTestId("ns-resume-hint")).toBeTruthy();
+    // Honest-loading: on open, with a project chosen and no sessions cached yet,
+    // the picker shows discovery-in-progress ("Discovering…"); once the probe
+    // lands empty it shows the "none found" hint. Either is honest — what must
+    // NEVER appear is the old hardcoded mock listSessions() list, and
+    // listSessions must never be called.
+    const honest =
+      screen.queryByTestId("ns-resume-loading") ?? screen.queryByTestId("ns-resume-hint");
+    expect(honest).toBeTruthy();
     expect(screen.queryByText(/Add a login endpoint to the API/)).toBeNull();
+    expect(screen.queryByText(/Refactor the auth middleware/)).toBeNull();
     expect(api.listSessions as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   });
 });

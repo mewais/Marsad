@@ -275,7 +275,9 @@ describe("SessionDetail — tab bar", () => {
   it("clicking Terminal tab renders Terminal content", () => {
     renderWith({ selectedId: "s04" });
     fireEvent.click(screen.getByTestId("tab-Terminal"));
-    expect(screen.getByText(/Escape hatch/i)).toBeTruthy();
+    // The Terminal tab mounts the xterm output surface (the old "Escape hatch"
+    // header was removed).
+    expect(screen.getByTestId("terminal-output")).toBeTruthy();
   });
 
   it("Changes tab shows file count badge when changed_files > 0", () => {
@@ -466,16 +468,10 @@ describe("ChangesTab", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 8. Terminal tab — escape hatch renders
+// 8. Terminal tab — real xterm mounts + pty wiring
 // ---------------------------------------------------------------------------
 
 describe("TerminalTab", () => {
-  it("renders escape hatch header text", () => {
-    renderWith({ selectedId: "s04" });
-    fireEvent.click(screen.getByTestId("tab-Terminal"));
-    expect(screen.getByText(/Escape hatch/i)).toBeTruthy();
-  });
-
   it("mounts a REAL xterm.js terminal (WAVE 3b — no more synthetic lines)", () => {
     renderWith({ selectedId: "s04" });
     fireEvent.click(screen.getByTestId("tab-Terminal"));
@@ -485,13 +481,19 @@ describe("TerminalTab", () => {
     expect(container.querySelector(".xterm")).toBeTruthy();
   });
 
-  it("starts the session's pty on mount", () => {
+  it("starts the session's pty on mount", async () => {
     renderWith({ selectedId: "s04" });
     fireEvent.click(screen.getByTestId("tab-Terminal"));
-    expect(getPtyStart()).toHaveBeenCalledWith(
-      "s04",
-      expect.any(Number),
-      expect.any(Number)
+    // pty_start fires inside a requestAnimationFrame (multi-terminal v2), so let
+    // it flush. It now carries the per-session terminal_id:
+    // (sessionId, terminalId, cols, rows).
+    await waitFor(() =>
+      expect(getPtyStart()).toHaveBeenCalledWith(
+        "s04",
+        expect.any(String),
+        expect.any(Number),
+        expect.any(Number)
+      )
     );
   });
 

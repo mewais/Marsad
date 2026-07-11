@@ -242,7 +242,12 @@ export function NodeModal() {
   function driverAvailable(d: Driver): boolean {
     const c = capsForDriver(d);
     if (!c) return true; // discovery in flight — optimistic
-    return c.launchable === true && c.cli_available === true;
+    if (!c.launchable) return false; // no Marsad driver (e.g. gemini) — hard no
+    // A probe that ERRORED/TIMED OUT (slow-setup remote hosts) says nothing about
+    // whether claude is installed. Don't block a launchable driver on a flaky
+    // probe; only grey out when the probe SUCCEEDED (no errors) and cli was absent.
+    if (c.errors.length > 0) return true;
+    return c.cli_available === true;
   }
   /** Known-unavailable: caps are PRESENT and report the driver as not
    *  launchable (gemini) or its CLI not detected. Absent caps (loading) are
