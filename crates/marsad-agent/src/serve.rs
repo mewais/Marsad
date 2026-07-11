@@ -148,6 +148,11 @@ impl Agent {
         // insert via `session_writers_for_fifo`.
         let session_writers_for_fifo = Arc::clone(&self.session_writers.0);
 
+        // ── Pending-prompt queue ───────────────────────────────────────────
+        // Shared across the serve thread (handle_send_prompt enqueues when no
+        // writer is registered) and the reader threads (which flush on register).
+        let session_pending_prompts_for_fifo = Arc::clone(&self.pending_prompts);
+
         // ── Session children registry ──────────────────────────────────────
         // Shared across the serve thread (kill_container via self) and the
         // reader threads (which insert the spawned remote child after spawn).
@@ -322,6 +327,7 @@ impl Agent {
                                 data_root.clone(),
                                 Arc::clone(&subscribers),
                                 Arc::clone(&self.session_writers.0),
+                                Arc::clone(&self.pending_prompts),
                                 Arc::clone(&self.pending_gates.0),
                                 Arc::clone(&self.session_children.0),
                                 Some(Arc::clone(&capability_provider)),
@@ -384,6 +390,7 @@ impl Agent {
                         data_root.clone(),
                         Arc::clone(&subscribers),
                         Arc::clone(&self.session_writers.0),
+                        Arc::clone(&self.pending_prompts),
                         Arc::clone(&self.pending_gates.0),
                         Arc::clone(&self.session_children.0),
                         Some(Arc::clone(&capability_provider)),
@@ -496,6 +503,7 @@ impl Agent {
                 let data_root_client = data_root.clone();
                 let subs_for_fifo = Arc::clone(&subs_accept);
                 let writers_for_fifo = Arc::clone(&session_writers_for_fifo);
+                let pending_prompts_for_fifo = Arc::clone(&session_pending_prompts_for_fifo);
                 let pending_for_fifo = Arc::clone(&pending_gates_for_fifo);
                 let children_for_reader = Arc::clone(&session_children_for_reader);
                 let capability_provider_for_reader = Arc::clone(&capability_provider_accept);
@@ -594,6 +602,7 @@ impl Agent {
                                                 data_root_client.clone(),
                                                 Arc::clone(&subs_for_fifo),
                                                 Arc::clone(&writers_for_fifo),
+                                                Arc::clone(&pending_prompts_for_fifo),
                                                 Arc::clone(&pending_for_fifo),
                                                 Arc::clone(&children_for_reader),
                                                 Some(Arc::clone(&capability_provider_for_reader)),

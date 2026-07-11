@@ -414,10 +414,26 @@ impl Agent {
                         ),
                     }
                 } else {
-                    // No registered writer — the prompt is dropped on the floor and
-                    // the UI shows nothing. Surface it instead of failing silently.
+                    // No registered writer yet — the reader thread is still
+                    // (re)attaching (e.g. the seconds-long remote pid-dir resolve
+                    // after a resume/reconnect). QUEUE the encoded prompt so the
+                    // reader flushes it in order the moment it registers the writer,
+                    // instead of dropping it while the UI shows PromptSent (which
+                    // silently lost prompts typed right after a resume). Bounded +
+                    // TTL'd (drained in reader.rs on writer registration).
+                    let mut bytes = encoded.into_bytes();
+                    bytes.push(b'\n');
+                    let mut q = self.pending_prompts.lock().unwrap();
+                    let entry = q.entry(session_id.to_string()).or_default();
+                    entry.push((std::time::Instant::now(), bytes));
+                    let n = entry.len();
+                    if n > crate::PENDING_PROMPT_MAX {
+                        entry.drain(0..n - crate::PENDING_PROMPT_MAX);
+                    }
                     eprintln!(
-                        "marsad-agent: session {session_id} send_prompt DROPPED — no writer registered (session not connected?)"
+                        "marsad-agent: session {session_id} send_prompt QUEUED ({} chars) — writer not ready, will deliver on (re)attach ({} queued)",
+                        text.len(),
+                        entry.len()
                     );
                 }
             }

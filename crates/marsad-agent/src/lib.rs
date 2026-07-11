@@ -206,6 +206,48 @@ type SharedWriter = std::sync::Arc<std::sync::Mutex<Box<dyn std::io::Write + Sen
 #[cfg(not(coverage))]
 struct SessionWritersWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, SharedWriter>>>);
 
+// Per-session queue of prompts that arrived before the session's writer was
+// registered — production builds only. The reader thread registers the writer
+// only AFTER it (re)attaches (for remote sessions: a seconds-long remote pid-dir
+// resolve after a resume/reconnect). A prompt sent in that window used to be
+// DROPPED while `handle_send_prompt` still returned PromptSent — so it appeared
+// in the UI as sent but never reached claude. Instead we QUEUE the already-encoded
+// stream-json bytes here (newline-terminated) and the reader flushes them, in
+// order, the moment it registers the writer. Bounded (`PENDING_PROMPT_MAX`) and
+// TTL'd (`PENDING_PROMPT_TTL`) so a prompt typed while a session is paused/dead is
+// discarded rather than delivered much later, out of context.
+#[cfg(not(coverage))]
+pub(crate) type PendingPrompts =
+    std::sync::Arc<std::sync::Mutex<HashMap<String, Vec<(std::time::Instant, Vec<u8>)>>>>;
+
+/// Max queued prompts retained per session (most-recent wins).
+#[cfg(not(coverage))]
+pub(crate) const PENDING_PROMPT_MAX: usize = 64;
+
+/// A queued prompt older than this on (re)attach is skipped rather than delivered.
+/// Covers the seconds-long remote resolve window with wide margin, but discards a
+/// prompt typed long before a manual resume.
+#[cfg(not(coverage))]
+pub(crate) const PENDING_PROMPT_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Keep only the freshest `PENDING_PROMPT_MAX` queued prompts for `sid`, then
+/// return the ones within `PENDING_PROMPT_TTL` (in original order) to deliver.
+/// Pure so it can be unit-tested without threads/IO.
+#[cfg(not(coverage))]
+pub(crate) fn drain_fresh_prompts(
+    items: Vec<(std::time::Instant, Vec<u8>)>,
+    now: std::time::Instant,
+) -> Vec<Vec<u8>> {
+    let len = items.len();
+    let start = len.saturating_sub(PENDING_PROMPT_MAX);
+    items
+        .into_iter()
+        .skip(start)
+        .filter(|(ts, _)| now.duration_since(*ts) <= PENDING_PROMPT_TTL)
+        .map(|(_, b)| b)
+        .collect()
+}
+
 #[cfg(not(coverage))]
 impl fmt::Debug for SessionWritersWrap {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -398,6 +440,11 @@ pub struct Agent {
     /// Production builds only — gated out of the coverage build.
     #[cfg(not(coverage))]
     session_writers: SessionWritersWrap,
+    /// Per-session prompts queued while the writer wasn't registered yet (the
+    /// reader is still (re)attaching). Flushed in order by the reader on writer
+    /// registration. Production builds only — gated out of the coverage build.
+    #[cfg(not(coverage))]
+    pending_prompts: PendingPrompts,
     /// Per-session pending permission gates awaiting a GUI answer.
     /// Production builds only — gated out of the coverage build.
     #[cfg(not(coverage))]
@@ -471,6 +518,8 @@ impl Agent {
                 HashMap::new(),
             ))),
             #[cfg(not(coverage))]
+            pending_prompts: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+            #[cfg(not(coverage))]
             pending_gates: PendingGatesWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
@@ -538,6 +587,7 @@ impl Agent {
             session_writers: SessionWritersWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
+            pending_prompts: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             pending_gates: PendingGatesWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
@@ -836,6 +886,38 @@ impl Agent {
 #[cfg(all(test, not(coverage)))]
 mod reconnect_spec_tests {
     use super::*;
+
+    #[test]
+    fn drain_fresh_prompts_keeps_fresh_in_order_and_drops_stale() {
+        let now = std::time::Instant::now();
+        // Two fresh (within TTL), one stale (older than TTL).
+        let items = vec![
+            (now - std::time::Duration::from_secs(1), b"first\n".to_vec()),
+            (
+                now - (PENDING_PROMPT_TTL + std::time::Duration::from_secs(5)),
+                b"stale\n".to_vec(),
+            ),
+            (now - std::time::Duration::from_secs(2), b"second\n".to_vec()),
+        ];
+        let out = drain_fresh_prompts(items, now);
+        // Stale dropped; fresh kept in original order.
+        assert_eq!(out, vec![b"first\n".to_vec(), b"second\n".to_vec()]);
+    }
+
+    #[test]
+    fn drain_fresh_prompts_bounds_to_most_recent_max() {
+        let now = std::time::Instant::now();
+        // MAX + 3 fresh items; only the most recent MAX are retained.
+        let n = PENDING_PROMPT_MAX + 3;
+        let items: Vec<_> = (0..n)
+            .map(|i| (now, format!("p{i}\n").into_bytes()))
+            .collect();
+        let out = drain_fresh_prompts(items, now);
+        assert_eq!(out.len(), PENDING_PROMPT_MAX);
+        // The oldest 3 (p0,p1,p2) are dropped; first kept is p3.
+        assert_eq!(out[0], b"p3\n".to_vec());
+        assert_eq!(out[PENDING_PROMPT_MAX - 1], format!("p{}\n", n - 1).into_bytes());
+    }
 
     #[test]
     fn rebuilds_full_autonomy_spec_from_persisted() {

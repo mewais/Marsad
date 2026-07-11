@@ -124,6 +124,9 @@ pub(crate) fn spawn_session_reader(
     data_root: String,
     subs_fifo: std::sync::Arc<std::sync::Mutex<Vec<std::sync::mpsc::Sender<String>>>>,
     writers_fifo: std::sync::Arc<std::sync::Mutex<HashMap<String, SharedWriter>>>,
+    // Prompts queued (by handle_send_prompt) while this session had no registered
+    // writer — flushed in order right after the writer registers below.
+    pending_prompts: super::PendingPrompts,
     pending_fifo: std::sync::Arc<std::sync::Mutex<HashMap<String, PendingGate>>>,
     children: std::sync::Arc<std::sync::Mutex<HashMap<String, std::process::Child>>>,
     // U1 (§3.2 trigger 4): passive claude-model observation. `None` for
@@ -547,6 +550,33 @@ pub(crate) fn spawn_session_reader(
             {
                 let mut registry = writers_fifo.lock().unwrap();
                 registry.insert(sid.clone(), std::sync::Arc::clone(&writer));
+            }
+
+            // Flush any prompts that arrived while the writer wasn't registered yet
+            // (queued by handle_send_prompt during this (re)attach window). Deliver
+            // in order; `drain_fresh_prompts` drops stale ones (TTL) so a prompt
+            // typed long before a manual resume isn't fired out of context. Held
+            // under the pending_prompts lock so a concurrent send_prompt either
+            // queues before the drain (delivered here) or finds the writer already
+            // registered (delivered directly) — never lost, never duplicated.
+            {
+                let queued = { pending_prompts.lock().unwrap().remove(&sid).unwrap_or_default() };
+                if !queued.is_empty() {
+                    use std::io::Write;
+                    let fresh = super::drain_fresh_prompts(queued, std::time::Instant::now());
+                    let mut w = writer.lock().unwrap();
+                    let mut delivered = 0usize;
+                    for bytes in &fresh {
+                        if w.write_all(bytes).and_then(|_| w.flush()).is_ok() {
+                            delivered += 1;
+                        }
+                    }
+                    if delivered > 0 {
+                        eprintln!(
+                            "marsad-agent: session {sid} flushed {delivered} queued prompt(s) on (re)attach"
+                        );
+                    }
+                }
             }
 
             // For a REMOTE resume/reconnect, fetch the prior conversation from the
@@ -984,9 +1014,16 @@ pub(crate) fn spawn_session_reader(
 
         // Final cleanup: ensure the writer registry slot is gone (it may already
         // be absent if the reconnect loop tore it down; the remove is idempotent).
+        // Also drop any still-queued prompts for this session: this thread has
+        // given up (re)attaching, so nothing here will deliver them. (A later
+        // manual resume spawns a fresh reader; anything typed then queues anew and
+        // its own drain — bounded by TTL — handles it.)
         {
             let mut registry = writers_fifo.lock().unwrap();
             registry.remove(&sid);
+        }
+        {
+            pending_prompts.lock().unwrap().remove(&sid);
         }
     });
 }
