@@ -10,7 +10,8 @@
 
 import React from "react";
 import { useVm } from "../bridge/useVm";
-import type { SessionView } from "../bridge/types";
+import type { SessionView, Host } from "../bridge/types";
+import { connHintForHost } from "../bridge/connectivity";
 import { WaslGateModal } from "../screens/WaslGateModal";
 import { useTheme } from "../theme/ThemeProvider";
 import { wallpaperGradient } from "../theme/tokens";
@@ -23,14 +24,36 @@ import { Watchtower } from "./Watchtower";
 // surfaces the whole fleet's status.
 // ---------------------------------------------------------------------------
 
-function StatusNotifiers({ sessions }: { sessions: SessionView[] }) {
+function StatusNotifiers({
+  sessions,
+  hosts,
+}: {
+  sessions: SessionView[];
+  hosts: Host[];
+}) {
   // Bucket every session into the dashboard's four active buckets plus a neutral
   // "paused". Two-axis model — mirrors marsad_workstream::severity: `Done`
   // always counts as done (finished its job, shown regardless of liveness); any
   // other phase only counts as active while the session is LIVE (Resumed); a
   // not-live (Paused) session is paused regardless of its last phase.
-  const counts = { working: 0, needs: 0, error: 0, done: 0, paused: 0 };
+  const counts = {
+    working: 0,
+    needs: 0,
+    error: 0,
+    done: 0,
+    paused: 0,
+    reconnecting: 0,
+    disconnected: 0,
+  };
   for (const s of sessions) {
+    // Connectivity axis (orthogonal to lifecycle): a session whose host link is
+    // (re)connecting or down is ALSO tallied here, in addition to its lifecycle
+    // bucket — the two are independent (a Resumed+Working session can be
+    // Reconnecting). Host-derived, mirrors the per-session hint.
+    const hint = connHintForHost(hosts, s.host_id);
+    if (hint === "Reconnecting") counts.reconnecting += 1;
+    else if (hint === "Disconnected") counts.disconnected += 1;
+
     if (s.state === "Done") {
       counts.done += 1;
       continue;
@@ -57,6 +80,7 @@ function StatusNotifiers({ sessions }: { sessions: SessionView[] }) {
     }
   }
   // Fixed priority order; colors match the dashboard (headStateColor + neutral).
+  // Connectivity (reconnecting/disconnected) trails the lifecycle buckets.
   const buckets = (
     [
       { key: "working", color: "var(--accent)", pulse: true, title: "working" },
@@ -64,6 +88,8 @@ function StatusNotifiers({ sessions }: { sessions: SessionView[] }) {
       { key: "error", color: "var(--error)", pulse: false, title: "error" },
       { key: "done", color: "var(--done)", pulse: false, title: "done" },
       { key: "paused", color: "var(--txt3)", pulse: false, title: "paused" },
+      { key: "reconnecting", color: "var(--needs)", pulse: true, title: "reconnecting" },
+      { key: "disconnected", color: "var(--error)", pulse: false, title: "disconnected" },
     ] satisfies { key: keyof typeof counts; color: string; pulse: boolean; title: string }[]
   ).filter((b) => counts[b.key] > 0);
 
@@ -261,7 +287,10 @@ export function AppShell({ children, onOpenSettings }: AppShellProps) {
             fleet. Hidden on the board (redundant there). Same dot style as the
             dashboard. */}
         {(state.screen === "graph" || state.screen === "session") && (
-          <StatusNotifiers sessions={state.snapshot?.sessions ?? []} />
+          <StatusNotifiers
+            sessions={state.snapshot?.sessions ?? []}
+            hosts={state.snapshot?.hosts ?? []}
+          />
         )}
 
         {/* New workstream — opens the New-workstream modal (SLICE E): name +

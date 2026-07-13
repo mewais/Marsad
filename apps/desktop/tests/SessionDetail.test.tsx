@@ -253,6 +253,32 @@ describe("SessionDetail — header", () => {
     expect(screen.getByTestId("pause-btn")).toBeTruthy();
     expect(screen.queryByTestId("resume-btn")).toBeNull();
   });
+
+  // Host-derived connectivity hint (NOT a lifecycle change): the session stays
+  // Resumed; the chip just says "we've lost contact with its host".
+  it("shows no connectivity hint when the session's host is Connected", () => {
+    renderWith({ selectedId: "s01" }); // s01 is on "local" (Connected)
+    expect(screen.queryByTestId("conn-hint-reconnecting")).toBeNull();
+    expect(screen.queryByTestId("conn-hint-disconnected")).toBeNull();
+  });
+
+  it("shows a Reconnecting hint when the session's host is Reconnecting", () => {
+    const hosts = MOCK_SNAPSHOT.hosts.map((h) =>
+      h.id === "local" ? { ...h, status: "Reconnecting" as const } : h
+    );
+    renderWith({ hosts, selectedId: "s01" });
+    expect(screen.getByTestId("conn-hint-reconnecting")).toBeTruthy();
+    expect(screen.queryByTestId("conn-hint-disconnected")).toBeNull();
+  });
+
+  it("shows a Disconnected hint when the session's host is Unreachable", () => {
+    const hosts = MOCK_SNAPSHOT.hosts.map((h) =>
+      h.id === "local" ? { ...h, status: "Unreachable" as const } : h
+    );
+    renderWith({ hosts, selectedId: "s01" });
+    expect(screen.getByTestId("conn-hint-disconnected")).toBeTruthy();
+    expect(screen.queryByTestId("conn-hint-reconnecting")).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

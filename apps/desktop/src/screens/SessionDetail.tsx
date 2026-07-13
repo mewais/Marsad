@@ -11,6 +11,8 @@ import { useVm } from "../bridge/useVm";
 import type { Tab } from "../bridge/types";
 import { stopSession, resumeSession, removeSession } from "../bridge/api";
 import { Badge } from "../components/Badge";
+import { ConnHintChip } from "../components/ConnHintChip";
+import { connHintForHost } from "../bridge/connectivity";
 import { ActivityTab } from "./tabs/Activity";
 import { ChangesTab } from "./tabs/Changes";
 import { ConfigTab } from "./tabs/Config";
@@ -140,6 +142,15 @@ export function SessionDetail() {
   // missing (older snapshots) is treated as live (Resumed).
   const isStopped = selectedSession.live === false;
 
+  // Host-derived connectivity hint (NOT a lifecycle change): if this session's
+  // host link is (re)connecting or unreachable, surface it next to the host
+  // label so the user knows we've temporarily lost contact — the session itself
+  // stays Resumed because it's still alive on the host.
+  const connHint = connHintForHost(
+    state.snapshot?.hosts ?? [],
+    selectedSession.host_id
+  );
+
   // Shared button style for all action buttons in the header — ensures uniform
   // height/padding/font across Back, Answer gate, Pause/Resume, Delete.
   const headerBtnBase: CSSProperties = {
@@ -233,6 +244,7 @@ export function SessionDetail() {
                 </span>
               )}
               <span>▪ {host_label}</span>
+              {connHint && <ConnHintChip hint={connHint} size="xs" />}
               <span>⎇ {branch}</span>
               {model && (
                 <span

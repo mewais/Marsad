@@ -130,6 +130,7 @@ export function GraphScreenConnected(): JSX.Element {
   return (
     <GraphScreen
       graph={g}
+      hosts={state.snapshot?.hosts ?? []}
       selectedNode={state.nodeSel}
       onSelectNode={selectNode}
       onOpenNode={openNode}

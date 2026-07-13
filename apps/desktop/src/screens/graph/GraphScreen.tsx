@@ -27,6 +27,9 @@ import {
 } from "./layout";
 import type { GraphLayout, Point } from "./layout";
 import { edgeColor, edgeDashStyle, edgeStrokeWidth } from "./edgeStyle";
+import type { Host } from "../../bridge/types";
+import { connHintForStatus, tallyConnHints } from "../../bridge/connectivity";
+import { ConnHintChip } from "../../components/ConnHintChip";
 
 // ---------------------------------------------------------------------------
 // Colour / state helpers
@@ -100,6 +103,11 @@ export interface GraphScreenProps {
   onResumeWorkstream?: () => void;
   /** Delete this workstream (kills all sessions) — confirmed by the caller. */
   onDeleteWorkstream?: () => void;
+
+  /** Live hosts — for the host-derived connectivity hint on nodes (a dropped
+   *  host link surfaces as Reconnecting/Disconnected without changing the
+   *  session's lifecycle). Omitted ⇒ no hints. */
+  hosts?: Host[];
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +130,16 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
     onPauseWorkstream,
     onResumeWorkstream,
     onDeleteWorkstream,
+    hosts = [],
   } = props;
+
+  // Host-derived connectivity (NOT lifecycle): map a node's host id → its live
+  // status → the "Reconnecting"/"Disconnected" hint. `hostStatusOf` powers both
+  // the per-node highlight (inspector session list) and the inspector's
+  // fleet-for-this-workstream tally.
+  const hostStatusOf = (hostId: string): string | undefined =>
+    hosts.find((h) => h.id === hostId)?.status;
+  const graphConn = tallyConnHints(graph.nodes.map((n) => hostStatusOf(n.host)));
 
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("host");
   const [zoom, setZoom] = useState(1);
@@ -1091,6 +1108,36 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
               >
                 {graph.inspector.needs} needs
               </span>
+              {graphConn.reconnecting > 0 && (
+                <span
+                  data-testid="inspector-reconnecting"
+                  style={{
+                    fontSize: "calc(11.5px * var(--fs,1))",
+                    fontWeight: 700,
+                    padding: "3px 8px",
+                    borderRadius: 6,
+                    color: "var(--needs)",
+                    background: "var(--needs-bg)",
+                  }}
+                >
+                  {graphConn.reconnecting} reconnecting
+                </span>
+              )}
+              {graphConn.disconnected > 0 && (
+                <span
+                  data-testid="inspector-disconnected"
+                  style={{
+                    fontSize: "calc(11.5px * var(--fs,1))",
+                    fontWeight: 700,
+                    padding: "3px 8px",
+                    borderRadius: 6,
+                    color: "var(--error)",
+                    background: "var(--error-bg)",
+                  }}
+                >
+                  {graphConn.disconnected} disconnected
+                </span>
+              )}
             </div>
 
             {/* Workstream lifecycle (#5) — Pause all / Resume all / Delete. */}
@@ -1197,6 +1244,11 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
                     <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {n.name}
                     </span>
+                    {(() => {
+                      // Per-session highlight: this node's host-derived hint.
+                      const hint = connHintForStatus(hostStatusOf(n.host));
+                      return hint ? <ConnHintChip hint={hint} size="xs" /> : null;
+                    })()}
                     <span style={{ color: "var(--txt3)" }}>›</span>
                   </div>
                 ))}

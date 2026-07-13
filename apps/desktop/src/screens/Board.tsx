@@ -15,6 +15,7 @@ import type {
   StateCounts,
   WorkstreamCard,
 } from "../bridge/workstreamTypes";
+import { tallyConnHints } from "../bridge/connectivity";
 
 // ---------------------------------------------------------------------------
 // State colour / label helpers (mirrors design tokens; Level-1 head states)
@@ -521,6 +522,13 @@ function WorkstreamRow({
   const color = state ? headStateColor[state] : "var(--border)";
   const bg = state ? headStateBg[state] : "transparent";
   const buckets = nonZeroBuckets(card.counts);
+  // Host-derived connectivity for THIS workstream's hosts (NOT a lifecycle
+  // state): surface "N reconnecting / N disconnected" alongside the session
+  // counts so a dropped host link is visible on the dashboard. Counts the
+  // workstream's hosts currently in each state.
+  const connCounts = tallyConnHints(
+    card.host_chips.map((id) => hostChips.find((h) => h.id === id)?.status)
+  );
 
   return (
     <div
@@ -594,6 +602,36 @@ function WorkstreamRow({
             {card.counts[b.key]} {b.label}
           </span>
         ))}
+        {connCounts.reconnecting > 0 && (
+          <span
+            data-testid={`ws-reconnecting-${card.id}`}
+            style={{
+              fontSize: "calc(10px * var(--fs,1))",
+              fontWeight: 600,
+              padding: "2px 8px",
+              borderRadius: 6,
+              color: "var(--needs)",
+              background: "var(--needs-bg)",
+            }}
+          >
+            {connCounts.reconnecting} reconnecting
+          </span>
+        )}
+        {connCounts.disconnected > 0 && (
+          <span
+            data-testid={`ws-disconnected-${card.id}`}
+            style={{
+              fontSize: "calc(10px * var(--fs,1))",
+              fontWeight: 600,
+              padding: "2px 8px",
+              borderRadius: 6,
+              color: "var(--error)",
+              background: "var(--error-bg)",
+            }}
+          >
+            {connCounts.disconnected} disconnected
+          </span>
+        )}
       </div>
 
       <span
