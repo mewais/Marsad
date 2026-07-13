@@ -590,8 +590,25 @@ impl Agent {
                                         }
 
                                         // If a new session was launched, start a
-                                        // FIFO reader thread for it.
-                                        if let Some(session_id) = reply.new_session_id {
+                                        // FIFO reader thread for it. Defensive
+                                        // dedup: never spawn a second reader onto a
+                                        // session that already has a writer
+                                        // registered (a reader is attached). The
+                                        // agent-loop `resume_already_live` guard
+                                        // already suppresses the common case
+                                        // synchronously; this closes the narrow race
+                                        // where a reader spawned moments earlier is
+                                        // still connecting.
+                                        let already_attached = reply
+                                            .new_session_id
+                                            .as_deref()
+                                            .map(|sid| {
+                                                writers_for_fifo.lock().unwrap().contains_key(sid)
+                                            })
+                                            .unwrap_or(false);
+                                        if let Some(session_id) =
+                                            reply.new_session_id.filter(|_| !already_attached)
+                                        {
                                             spawn_session_reader(
                                                 session_id,
                                                 reply.host_target,
@@ -718,6 +735,20 @@ impl Agent {
             let is_launch = cmd.line.contains("\"LaunchSession\"");
             let is_resume = cmd.line.contains("\"ResumeSession\"");
 
+            // Double-launch guard (see handle_resume_session). Capture BEFORE
+            // handle_ipc whether the resume target is already tracked live: if so,
+            // the handler no-ops (no relaunch) and we must NOT extract a
+            // new_session_id below — otherwise the client thread would spawn a
+            // second reader onto the already-attached session. `self.sessions` is
+            // the authoritative synchronous signal (populated by startup reconnect
+            // before this loop runs).
+            let resume_already_live = is_resume
+                && serde_json::from_str::<serde_json::Value>(&cmd.line)
+                    .ok()
+                    .and_then(|v| v["session_id"].as_str().map(|s| s.to_string()))
+                    .map(|sid| self.sessions.contains_key(&sid))
+                    .unwrap_or(false);
+
             // For a launch OR resume, capture the first_prompt BEFORE handle_ipc
             // consumes the JSON — we pass it to the FIFO thread via AgentReply so
             // a resumed/continued session can be handed a new prompt on reconnect.
@@ -737,13 +768,15 @@ impl Agent {
                     // Extract a new session_id from the response when the
                     // command was a launch or resume — so the accept thread
                     // can open the FIFO reader.
-                    let sid = if is_launch || is_resume {
+                    let sid = if (is_launch || is_resume) && !resume_already_live {
                         lines.first().and_then(|l| {
                             serde_json::from_str::<serde_json::Value>(l)
                                 .ok()
                                 .and_then(|v| v["session_id"].as_str().map(|s| s.to_string()))
                         })
                     } else {
+                        // Already-live resume: handler no-op'd (no relaunch), so do
+                        // not spawn a duplicate reader for the still-attached session.
                         None
                     };
 

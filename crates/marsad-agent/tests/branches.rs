@@ -153,17 +153,50 @@ fn launch_session_empty_resume_id_is_fresh() {
     );
 }
 
-/// Resuming a tracked session WITHOUT a known claude session id → `--continue`.
+/// Resuming a STOPPED (persisted-but-not-live) session WITHOUT a known claude
+/// session id → `--continue`. Set up store-only (like the `_with_claude_id`
+/// sibling) so the session is genuinely not-live: resuming a session that is
+/// still LIVE is a no-op by design (the double-launch guard), so a live session
+/// would never reach the `--continue` relaunch this asserts.
 #[test]
 fn resume_session_tracked_without_claude_id_continues() {
-    let mut agent = make_agent();
-    let (_, sid) = do_launch(&mut agent); // persisted with session_id = None
-    let resume = format!(r#"{{"type":"ResumeSession","session_id":"{sid}"}}"#);
-    agent.handle_ipc(&resume).expect("resume");
+    let mut store = marsad_store::Store::new(Box::new(MemoryBackend::new()));
+    store
+        .upsert_session(&marsad_store::PersistedSession {
+            id: "tracked-nocid".to_string(),
+            session_id: None, // no known claude id → --continue
+            name: "t".to_string(),
+            host_id: "local".to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
+            project: "/home/user/p".to_string(),
+            branch: "main".to_string(),
+            model: "claude-opus-4-8".to_string(),
+            last_phase: "Done".to_string(),
+            posture: None,
+            disallowed_tools: vec![],
+            driver: "claude".to_string(),
+            slash_commands: vec![],
+            tools: vec![],
+            mcp_servers: vec![],
+        })
+        .expect("upsert");
+    let mut agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(FakeContainer::new()),
+        Box::new(CaptureNotifier::new()),
+        Box::new(store),
+    )
+    .expect("with_fakes");
+
+    let resume = r#"{"type":"ResumeSession","session_id":"tracked-nocid"}"#;
+    agent.handle_ipc(resume).expect("resume");
     let last = agent.container_calls().last().expect("spawn").clone();
     assert!(
         last.contains("--continue"),
-        "tracked session without claude id → --continue; got {last}"
+        "stopped session without claude id → --continue; got {last}"
     );
 }
 

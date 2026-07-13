@@ -543,6 +543,60 @@ fn handle_ipc_send_prompt_routes() {
     );
 }
 
+/// Double-launch guard: resuming an ALREADY-LIVE session must NOT relaunch a
+/// second container. A live session (just launched, still in the agent's live
+/// map) hit by `ResumeSession` re-acks `SessionResumed` without a second
+/// `spawn`. This is the fix for the duplicate-reader / clobbered-FIFO flakiness
+/// where a reconnected-live session got a second `claude --resume` stacked on
+/// top of it (re-running the durable script `rm -f in.fifo; mkfifo in.fifo`).
+#[test]
+fn handle_ipc_resume_of_live_session_does_not_relaunch() {
+    let container = FakeContainer::new();
+    let notifier = CaptureNotifier::new();
+    let backend = MemoryBackend::new();
+
+    let mut agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(container),
+        Box::new(notifier),
+        Box::new(marsad_store::Store::new(Box::new(backend))),
+    )
+    .expect("with_fakes");
+
+    // Launch → the session is now live (in the agent's in-memory session map).
+    let launch_line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"Ask"}"#;
+    let launched = agent.handle_ipc(launch_line).expect("launch");
+    let session_id = extract_session_id_from_lines(&launched);
+    let spawns_after_launch = agent
+        .container_calls()
+        .iter()
+        .filter(|c| c.contains("spawn"))
+        .count();
+
+    // Resume the SAME, still-live session → guard must fire: no relaunch.
+    let resume_line = format!(r#"{{"type":"ResumeSession","session_id":"{session_id}"}}"#);
+    let resumed = agent.handle_ipc(&resume_line).expect("resume must be Ok");
+
+    let spawns_after_resume = agent
+        .container_calls()
+        .iter()
+        .filter(|c| c.contains("spawn"))
+        .count();
+    assert_eq!(
+        spawns_after_resume, spawns_after_launch,
+        "resume of a LIVE session must NOT relaunch (no extra spawn); calls: {:?}",
+        agent.container_calls()
+    );
+
+    // It still re-acks SessionResumed for the same id so the UI/core stay in sync.
+    assert!(
+        resumed
+            .iter()
+            .any(|l| l.contains("\"SessionResumed\"") && l.contains(&session_id)),
+        "resume of a live session must re-ack SessionResumed for {session_id}; got {resumed:?}"
+    );
+}
+
 // ── handle_hook: hook payload routing ─────────────────────────────────────────
 
 /// A `Notification` hook payload must be handled without error.

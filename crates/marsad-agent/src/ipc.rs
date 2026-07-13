@@ -203,6 +203,28 @@ impl Agent {
         session_id: String,
         first_prompt: Option<String>,
     ) -> Result<Vec<String>, AgentError> {
+        // Already-live guard (the double-launch fix). If this session is already
+        // tracked live — reconnected at startup, or never stopped — a resume MUST
+        // NOT relaunch: `launch_with_id` re-runs the durable script
+        // (`rm -f in.fifo; mkfifo in.fifo`), clobbering the FIFO the existing
+        // reader is attached to. That spawns a SECOND claude + reader fighting
+        // over one session dir (the duplicate-reader / duplicate-gate / stray-
+        // interrupt flakiness). `self.sessions` is populated synchronously by the
+        // startup reconnect BEFORE any command is processed, so it is an
+        // authoritative "is a reader attached" signal here. No-op re-ack; the
+        // serve loop suppresses the duplicate reader spawn for this case too.
+        // (`first_prompt` on an already-live session is intentionally dropped —
+        // a running session takes prompts via SendPrompt, not a resume.)
+        if self.sessions.contains_key(&session_id) {
+            eprintln!(
+                "marsad-agent: resume {session_id} ignored — already live (no relaunch, no duplicate reader)"
+            );
+            let _ = first_prompt;
+            return Ok(vec![marsad_proto::encode_ipc(
+                &marsad_proto::IpcMsg::SessionResumed { session_id },
+            )]);
+        }
+
         // Look the session up in the store to recover its project + model.
         let restored = self
             .store
