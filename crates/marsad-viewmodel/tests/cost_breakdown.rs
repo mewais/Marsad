@@ -39,6 +39,7 @@ fn node(id: &str, ws: &str, driver: Driver, host: &str) -> Node {
         name: format!("node-{id}"),
         driver,
         live: true,
+        end_reason: None,
         host: host.to_string(),
         state: Phase::Working,
         lead: false,
@@ -81,6 +82,7 @@ fn sv(id: &str, host_id: &str, cost_usd: f64, cost_estimated: bool) -> SessionVi
         shell_running: false,
         driver: "claude".to_string(),
         live: true,
+        end_reason: None,
     }
 }
 

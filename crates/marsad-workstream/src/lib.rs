@@ -97,6 +97,11 @@ pub struct Node {
     /// `Done` node which is always surfaced in Done (finished its job).
     #[serde(default = "default_node_live")]
     pub live: bool,
+    /// Why this node's last turn ended, when noteworthy (user Cancel / real
+    /// error). Surfaced as a reason chip on the board card + graph node. `None`
+    /// for a normal turn.
+    #[serde(default)]
+    pub end_reason: Option<marsad_events::EndReason>,
     /// True if this node is the workstream lead (design `role:'lead'`).
     #[serde(default)]
     pub lead: bool,
@@ -227,7 +232,10 @@ fn severity(phase: &Phase, live: bool) -> Option<HeadState> {
     match phase {
         Phase::Needs => Some(HeadState::Needs),
         Phase::Error => Some(HeadState::Error),
-        Phase::Working | Phase::Starting => Some(HeadState::Working),
+        Phase::Working => Some(HeadState::Working),
+        // Starting is folded into Done: a launched-but-idle session isn't
+        // "working" — it's idle/ready, the same resting bucket as a finished one.
+        Phase::Starting => Some(HeadState::Done),
         Phase::Done => Some(HeadState::Done), // unreachable: handled above
         Phase::Stale | Phase::Detached => None,
     }

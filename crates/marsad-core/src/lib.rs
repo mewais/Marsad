@@ -652,7 +652,12 @@ impl Core {
                 _ => self.transcript.most_recent(&s.project),
             };
             let mut state = SessionState::initial();
-            state.phase = Phase::Stale;
+            // Two-axis model: the ACTIVITY of a restored session is idle → Done
+            // (it isn't mid-turn from our POV). "Not running" is carried by the
+            // separate liveness axis (`live=false` below → Paused) until the agent
+            // reconnects and proves it live. (Previously this was `Stale`, which
+            // conflated activity with liveness.)
+            state.phase = Phase::Done;
             state.model = Some(s.model.clone());
             state.session_id = s.session_id.clone();
             // Restore the persisted posture so the Config tab shows the correct
@@ -1565,11 +1570,18 @@ impl Core {
         let trimmed = text.trim();
         if !trimmed.is_empty() {
             // Safe: require_session above guarantees the entry exists.
-            self.sessions.get_mut(id).unwrap().transcript.push(
-                marsad_events::TranscriptEntry::User {
+            let rec = self.sessions.get_mut(id).unwrap();
+            rec.transcript
+                .push(marsad_events::TranscriptEntry::User {
                     text: trimmed.to_string(),
-                },
-            );
+                });
+            // Optimistically enter Working the instant the user sends — don't wait
+            // for claude's first token. Clears any prior end reason / stale
+            // interrupt so a fresh turn starts clean. The stream re-drives phase
+            // authoritatively from here (assistant → Working, result → Done).
+            rec.state.phase = Phase::Working;
+            rec.state.end_reason = None;
+            rec.state.interrupt_requested = false;
         }
         self.send_ipc(&IpcMsg::SendPrompt {
             session_id: id.to_string(),
@@ -1579,6 +1591,10 @@ impl Core {
 
     pub fn interrupt(&mut self, id: &str) -> Result<(), CoreError> {
         self.require_session(id)?;
+        // Record that WE initiated this interrupt so the resulting error turn is
+        // classified as a calm user Cancel (Done, "Cancelled by the user") rather
+        // than a failure. require_session guarantees the entry exists.
+        self.sessions.get_mut(id).unwrap().state.interrupt_requested = true;
         // Emit a dedicated `Interrupt` message so the agent routes it to
         // handle_interrupt — which writes claude's `interrupt` control_request to
         // stop the CURRENT TURN (claude then ends the turn with
@@ -1778,6 +1794,7 @@ impl Core {
             lead,
             branch: String::new(),
             live: record.live,
+            end_reason: record.state.end_reason,
             context_pct: record.state.context_pct.round().clamp(0.0, 100.0) as u8,
             // Surface a concise pending-gate summary so the workstream board's
             // attention card can show WHAT needs the human, not just the name.
@@ -2444,6 +2461,18 @@ impl Core {
             Some(r) => r,
             None => return Ok(vec![]),
         };
+        // Re-derive activity on reconnect: a session we just re-attached to, which
+        // has prior history and no active turn, is idle → Done. Backfill runs
+        // before any live stream events (is_first_attach), so a truly-working
+        // reconnected session's next assistant/result event re-drives the phase.
+        // Only supersede a restored/unknown phase (Starting/Stale/Detached) — never
+        // clobber an already-active Working/Needs/Error.
+        if matches!(
+            record.state.phase,
+            Phase::Starting | Phase::Stale | Phase::Detached
+        ) {
+            record.state.phase = Phase::Done;
+        }
         // Prepend history so it precedes any live entries already streamed.
         if !history.is_empty() {
             let mut combined = history;
@@ -3152,6 +3181,7 @@ impl Core {
             shell_running: record.shell_running,
             driver: record.driver.clone(),
             live: record.live,
+            end_reason: s.end_reason,
         }
     }
 }

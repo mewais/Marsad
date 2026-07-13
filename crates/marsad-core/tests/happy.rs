@@ -2366,9 +2366,11 @@ fn seed_session(seed: &mut Store, id: &str, host_id: &str, claude_uuid: Option<&
     .expect("seed session");
 }
 
-/// A persisted session is restored into the snapshot, marked Stale (resumable),
-/// on its real host — covering both the known-uuid (session) and unknown-uuid
-/// (most_recent) transcript-load branches — and the restore is idempotent.
+/// A persisted session is restored into the snapshot on its real host — covering
+/// both the known-uuid (session) and unknown-uuid (most_recent) transcript-load
+/// branches — and the restore is idempotent. Two-axis model: its ACTIVITY is idle
+/// (Done); "not running until proven" is carried by the separate liveness axis
+/// (`live == false` → Paused), not by the phase.
 #[test]
 fn load_sessions_restores_persisted_sessions() {
     let backend = MemoryBackend::new();
@@ -2389,8 +2391,12 @@ fn load_sessions_restores_persisted_sessions() {
     assert_eq!(sv.host_id, "host-5", "restored session keeps its host");
     assert_eq!(
         sv.state,
-        marsad_events::Phase::Stale,
-        "restored session is Stale (resumable), not a fake-live phase"
+        marsad_events::Phase::Done,
+        "restored session's activity is idle (Done), not a fake-live phase"
+    );
+    assert!(
+        !sv.live,
+        "restored session is not-live (Paused) until the agent proves it live"
     );
     assert!(
         snap.sessions.iter().any(|s| s.id == "session-restore-2"),

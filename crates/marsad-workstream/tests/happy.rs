@@ -21,6 +21,7 @@ fn node(id: &str, ws: &str, driver: Driver, host: &str, state: Phase) -> Node {
         name: format!("node-{id}"),
         driver,
         live: true,
+        end_reason: None,
         host: host.to_string(),
         state,
         lead: false,
@@ -308,27 +309,28 @@ fn head_state_only_done() {
     assert_eq!(head_state(&nodes), Some(HeadState::Done));
 }
 
-// ── T7: head_state Starting folds into Working ───────────────────────────────
+// ── T7: head_state Starting folds into Done (idle) ──────────────────────────
 
 #[test]
-fn head_state_starting_alone_is_working() {
+fn head_state_starting_alone_is_done() {
+    // Revamp: a launched-but-idle (Starting) session is idle → Done, not Working.
     let nodes = vec![node("a", "w1", Driver::Claude, "h1", Phase::Starting)];
-    assert_eq!(head_state(&nodes), Some(HeadState::Working));
+    assert_eq!(head_state(&nodes), Some(HeadState::Done));
 }
 
 #[test]
-fn head_state_starting_and_done_is_working() {
+fn head_state_starting_and_done_is_done() {
     let nodes = vec![
         node("a", "w1", Driver::Claude, "h1", Phase::Starting),
         node("b", "w1", Driver::Claude, "h1", Phase::Done),
     ];
-    assert_eq!(head_state(&nodes), Some(HeadState::Working));
+    assert_eq!(head_state(&nodes), Some(HeadState::Done));
 }
 
-// ── T8: state_counts covers all buckets incl. Starting → working ────────────
+// ── T8: state_counts covers all buckets incl. Starting → done ───────────────
 
 #[test]
-fn state_counts_all_buckets_with_starting_folded_into_working() {
+fn state_counts_all_buckets_with_starting_folded_into_done() {
     let nodes = vec![
         node("a", "w1", Driver::Claude, "h1", Phase::Working),
         node("b", "w1", Driver::Claude, "h1", Phase::Starting),
@@ -340,13 +342,14 @@ fn state_counts_all_buckets_with_starting_folded_into_working() {
         node("h", "w1", Driver::Claude, "h1", Phase::Done),
     ];
     let counts = state_counts(&nodes);
+    // Starting (b) now folds into done: working=1, done=4.
     assert_eq!(
         counts,
         StateCounts {
-            working: 2,
+            working: 1,
             needs: 2,
             error: 1,
-            done: 3,
+            done: 4,
         }
     );
 }

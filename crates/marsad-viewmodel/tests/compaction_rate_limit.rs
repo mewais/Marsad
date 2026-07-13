@@ -42,6 +42,7 @@ fn base_session_view() -> SessionView {
         shell_running: false,
         driver: "claude".to_string(),
         live: true,
+        end_reason: None,
     }
 }
 

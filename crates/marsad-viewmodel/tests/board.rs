@@ -28,6 +28,7 @@ fn node(id: &str, ws: &str, driver: Driver, host: &str, state: Phase) -> Node {
         name: format!("node-{id}"),
         driver,
         live: true,
+        end_reason: None,
         host: host.to_string(),
         state,
         lead: false,

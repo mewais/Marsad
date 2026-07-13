@@ -27,6 +27,7 @@ fn node(id: &str, ws: &str, driver: Driver, host: &str, state: Phase) -> Node {
         name: format!("node-{id}"),
         driver,
         live: true,
+        end_reason: None,
         host: host.to_string(),
         state,
         lead: false,
@@ -279,8 +280,9 @@ fn gv5_inspector_working_needs_counts_and_pending_handoff_first_gated() {
 
     let graph = graph_view("w1", &workstreams, &nodes, &connections).unwrap();
 
-    // working incl Starting = 2 (a, b); needs = 1 (c)
-    assert_eq!(graph.inspector.working, 2);
+    // Starting is folded into Done (idle), so only `a` counts as working; `b`
+    // (Starting) and `d` (Done) are both idle. needs = 1 (c).
+    assert_eq!(graph.inspector.working, 1);
     assert_eq!(graph.inspector.needs, 1);
 
     let handoff = graph

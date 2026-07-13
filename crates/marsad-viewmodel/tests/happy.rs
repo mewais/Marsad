@@ -86,6 +86,7 @@ fn representative_snapshot() -> AppSnapshot {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            end_reason: None,
         },
         SessionView {
             id: "s2".to_string(),
@@ -122,6 +123,7 @@ fn representative_snapshot() -> AppSnapshot {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            end_reason: None,
         },
         SessionView {
             id: "s3".to_string(),
@@ -158,6 +160,7 @@ fn representative_snapshot() -> AppSnapshot {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            end_reason: None,
         },
         SessionView {
             id: "s4".to_string(),
@@ -194,6 +197,7 @@ fn representative_snapshot() -> AppSnapshot {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            end_reason: None,
         },
         SessionView {
             id: "s5".to_string(),
@@ -230,6 +234,7 @@ fn representative_snapshot() -> AppSnapshot {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            end_reason: None,
         },
     ];
 
@@ -319,21 +324,24 @@ fn group_overview_needs_comes_before_error_in_attention() {
 }
 
 #[test]
-fn group_overview_active_is_working_plus_starting() {
+fn group_overview_active_is_working_only() {
+    // Starting is folded into Done (idle), so only a live Working session is
+    // "active"; a launched-but-idle (Starting) one is not.
     let snap = representative_snapshot();
     let groups = group_overview(&snap);
-    assert_eq!(groups.active.len(), 2);
-    let states: Vec<Phase> = groups.active.iter().map(|c| c.state.clone()).collect();
-    assert!(states.contains(&Phase::Working));
-    assert!(states.contains(&Phase::Starting));
+    assert_eq!(groups.active.len(), 1);
+    assert_eq!(groups.active[0].state, Phase::Working);
 }
 
 #[test]
-fn group_overview_idle_is_done_only() {
+fn group_overview_idle_includes_done_and_starting() {
+    // Idle = Done + Starting (the folded resting states).
     let snap = representative_snapshot();
     let groups = group_overview(&snap);
-    assert_eq!(groups.idle.len(), 1);
-    assert_eq!(groups.idle[0].state, Phase::Done);
+    assert_eq!(groups.idle.len(), 2);
+    let states: Vec<Phase> = groups.idle.iter().map(|c| c.state.clone()).collect();
+    assert!(states.contains(&Phase::Done));
+    assert!(states.contains(&Phase::Starting));
 }
 
 #[test]
@@ -828,6 +836,7 @@ fn session_view_new_fields_populated() {
         shell_running: false,
         driver: "claude".to_string(),
         live: true,
+        end_reason: None,
     };
     let sv2 = sv.clone();
     assert_eq!(sv, sv2);
@@ -869,6 +878,7 @@ fn session_view_new_fields_empty_by_default_in_literal() {
         shell_running: false,
         driver: "claude".to_string(),
         live: true,
+        end_reason: None,
     };
     assert!(sv.tools.is_empty());
     assert!(sv.mcp_servers.is_empty());

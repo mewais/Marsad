@@ -103,6 +103,12 @@ pub struct SessionView {
     /// and spinner suppression.
     #[serde(default = "default_live")]
     pub live: bool,
+    /// Why the last turn ended, when noteworthy: a user Cancel (phase Done) or a
+    /// real failure (phase Error). Drives the card's reason text so an Error card
+    /// is never blank and a cancel reads "Cancelled by the user". `None` for a
+    /// normal turn / while working.
+    #[serde(default)]
+    pub end_reason: Option<marsad_events::EndReason>,
 }
 
 fn default_posture() -> String {
@@ -420,17 +426,17 @@ pub fn group_overview(s: &AppSnapshot) -> OverviewGroups {
     for sv in s
         .sessions
         .iter()
-        .filter(|sv| sv.live && matches!(sv.state, Phase::Working | Phase::Starting))
+        .filter(|sv| sv.live && sv.state == Phase::Working)
     {
         active.push(session_card(sv, &s.hosts));
     }
-    // Idle = finished (Done, any liveness) OR not-live (Paused: user-stopped, or
-    // host-killed mid-work) — so a stopped/crashed session still appears in the
-    // overview instead of vanishing from it.
+    // Idle = finished/idle (Done, or Starting folded into Done) any liveness, OR
+    // not-live (Paused: user-stopped, or host-killed) — so a stopped/crashed and a
+    // launched-but-idle session both appear in the overview instead of vanishing.
     for sv in s
         .sessions
         .iter()
-        .filter(|sv| sv.state == Phase::Done || !sv.live)
+        .filter(|sv| matches!(sv.state, Phase::Done | Phase::Starting) || !sv.live)
     {
         idle.push(session_card(sv, &s.hosts));
     }
@@ -751,6 +757,11 @@ pub struct WorkstreamCard {
     /// Attention-card CTA label. `None` → the UI derives one from head_state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cta_label: Option<String>,
+    /// A noteworthy end reason to surface on the card (a real error's reason, or a
+    /// user Cancel). Aggregated across the workstream's nodes: a real error wins
+    /// over a cancel. `None` when nothing noteworthy. Drives a small reason chip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_reason: Option<marsad_events::EndReason>,
 }
 
 /// Lowercase status string for a host, matching `marsad_hosts::HostStatus`.
@@ -819,6 +830,17 @@ fn workstream_card(ws: &Workstream, nodes: &[Node], connections: &[Connection]) 
         (None, None)
     };
 
+    // Aggregate a noteworthy end reason for the card chip: a real error's reason
+    // (MaxTurns / ExecutionError) wins over a user Cancel, so a genuine failure is
+    // never masked by a cancel elsewhere in the workstream.
+    let end_reason = owned_nodes
+        .iter()
+        .filter_map(|n| n.end_reason)
+        .max_by_key(|r| match r {
+            marsad_events::EndReason::MaxTurns | marsad_events::EndReason::ExecutionError => 1u8,
+            marsad_events::EndReason::Cancelled => 0u8,
+        });
+
     WorkstreamCard {
         id: ws.id.clone(),
         name: ws.name.clone(),
@@ -832,6 +854,7 @@ fn workstream_card(ws: &Workstream, nodes: &[Node], connections: &[Connection]) 
         is_single_node: owned_nodes.len() == 1,
         headline,
         cta_label,
+        end_reason,
     }
 }
 

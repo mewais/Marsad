@@ -13,7 +13,7 @@
 //! - Unknown StreamMsg: state preserved, no panic
 //! - Stale phase: out-of-order events do not panic
 
-use marsad_events::{reduce, Event, Phase, SessionState};
+use marsad_events::{reduce, EndReason, Event, Phase, SessionState};
 use marsad_proto::parse_stream_line;
 
 // ---------------------------------------------------------------------------
@@ -77,6 +77,59 @@ fn result_is_error_flag_gives_error_phase() {
     let s0 = after_init();
     let s1 = reduce(s0, stream(&result_json("success", true)));
     assert_eq!(s1.phase, Phase::Error);
+}
+
+// ---------------------------------------------------------------------------
+// EndReason: cancel vs real error
+// ---------------------------------------------------------------------------
+
+/// A user-initiated interrupt (interrupt_requested set by core) turns the error
+/// result into a calm Cancel: phase Done (groups under Done), end_reason
+/// Cancelled, and the one-shot interrupt flag is consumed.
+#[test]
+fn interrupt_result_is_cancelled_not_error() {
+    let mut s = after_init();
+    s.interrupt_requested = true;
+    let s1 = reduce(s, stream(&result_json("error_during_execution", false)));
+    assert_eq!(s1.phase, Phase::Done, "user cancel is Done, not Error");
+    assert_eq!(s1.end_reason, Some(EndReason::Cancelled));
+    assert!(!s1.interrupt_requested, "interrupt flag consumed by the turn");
+    assert_eq!(EndReason::Cancelled.text(), "Cancelled by the user");
+}
+
+/// A genuine error (no interrupt) stays Error and carries a real reason.
+#[test]
+fn error_results_carry_a_reason() {
+    let s_exec = reduce(
+        after_init(),
+        stream(&result_json("error_during_execution", false)),
+    );
+    assert_eq!(s_exec.phase, Phase::Error);
+    assert_eq!(s_exec.end_reason, Some(EndReason::ExecutionError));
+
+    let s_max = reduce(after_init(), stream(&result_json("error_max_turns", false)));
+    assert_eq!(s_max.phase, Phase::Error);
+    assert_eq!(s_max.end_reason, Some(EndReason::MaxTurns));
+
+    let s_flag = reduce(after_init(), stream(&result_json("success", true)));
+    assert_eq!(s_flag.phase, Phase::Error);
+    assert_eq!(s_flag.end_reason, Some(EndReason::ExecutionError));
+}
+
+/// A successful result clears any reason; a new turn (assistant) after an error
+/// also clears the stale reason.
+#[test]
+fn success_and_new_turn_clear_end_reason() {
+    let s_ok = reduce(after_init(), stream(&result_json("success", false)));
+    assert_eq!(s_ok.phase, Phase::Done);
+    assert_eq!(s_ok.end_reason, None);
+
+    // After an error, the next assistant turn clears the stale reason.
+    let s_err = reduce(after_init(), stream(&result_json("error_max_turns", false)));
+    assert_eq!(s_err.end_reason, Some(EndReason::MaxTurns));
+    let s_next = reduce(s_err, stream(&assistant_json("msg-after-err")));
+    assert_eq!(s_next.phase, Phase::Working);
+    assert_eq!(s_next.end_reason, None, "new turn clears the stale reason");
 }
 
 // ---------------------------------------------------------------------------

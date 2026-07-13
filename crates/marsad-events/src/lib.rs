@@ -29,6 +29,32 @@ pub enum Phase {
     Detached,
 }
 
+/// Why a turn ended, when that reason is worth surfacing. `None` on the session
+/// means "no noteworthy end reason" (a normal successful turn, or still working).
+/// This is the human-facing explanation behind an `Error` card, and it also
+/// distinguishes a deliberate user cancel (which lands in `Done`, calm) from a
+/// genuine failure (`Error`, red).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EndReason {
+    /// The user interrupted the turn (Escape / Stop). Not a failure → phase Done.
+    Cancelled,
+    /// Claude hit its max-turns limit (`result` subtype error_max_turns) → Error.
+    MaxTurns,
+    /// Claude reported an error during execution → Error.
+    ExecutionError,
+}
+
+impl EndReason {
+    /// Short human-facing text for the card / session view.
+    pub fn text(self) -> &'static str {
+        match self {
+            EndReason::Cancelled => "Cancelled by the user",
+            EndReason::MaxTurns => "Reached the max turn limit",
+            EndReason::ExecutionError => "Ended with an execution error",
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SubagentStatus / Subagent
 // ---------------------------------------------------------------------------
@@ -174,6 +200,17 @@ pub struct SessionState {
     /// to the next assistant turn) keeps the original, lenient behavior.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     gate_confirmed_automated: bool,
+    /// Why the last turn ended, when noteworthy (see `EndReason`). Drives the
+    /// human-facing text on an Error/Cancelled card. `None` for a normal turn or
+    /// while working. Cleared when a new turn starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_reason: Option<EndReason>,
+    /// Set true by the core layer the moment it sends an `Interrupt` for this
+    /// session; read by `reduce_result` so the resulting error turn is classified
+    /// as a calm user Cancel (Done) rather than a failure (Error). Cleared once
+    /// consumed, or when a new turn starts.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub interrupt_requested: bool,
 }
 
 impl SessionState {
@@ -202,6 +239,8 @@ impl SessionState {
             seen_message_ids: HashSet::new(),
             running_task_ids: HashMap::new(),
             gate_confirmed_automated: false,
+            end_reason: None,
+            interrupt_requested: false,
         }
     }
 
@@ -215,6 +254,7 @@ impl SessionState {
         self.gate_confirmed_automated = false;
         if matches!(self.phase, Phase::Needs) {
             self.phase = Phase::Working;
+            self.end_reason = None;
         }
     }
 
@@ -289,6 +329,10 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
             state.slash_commands = init.slash_commands;
             state.permission_mode = Some(init.permission_mode);
             state.phase = Phase::Working;
+            // Fresh init = a new turn is beginning; drop any stale end reason /
+            // pending interrupt from a prior turn.
+            state.end_reason = None;
+            state.interrupt_requested = false;
             state
         }
 
@@ -326,6 +370,8 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
                 state.gate = None;
                 state.gate_confirmed_automated = false;
                 state.phase = Phase::Working;
+                // A human reply starts a new turn — clear any prior end reason.
+                state.end_reason = None;
             } else if state.gate.is_some() {
                 state.gate_confirmed_automated = true;
             }
@@ -454,6 +500,8 @@ fn reduce_assistant(mut state: SessionState, msg: marsad_proto::AssistantMsg) ->
     // all) keeps the original, lenient behavior.
     if !state.gate_confirmed_automated {
         state.phase = Phase::Working;
+        // Assistant output = an active turn; a prior end reason is stale.
+        state.end_reason = None;
     }
     state
 }
@@ -485,16 +533,34 @@ fn reduce_result(mut state: SessionState, result: marsad_proto::ResultMsg) -> Se
         return state;
     }
 
-    // Determine phase from error flags / subtype.
+    // Determine phase + end_reason from error flags / subtype.
+    //
+    // A turn the USER interrupted (Escape/Stop) comes back as an error result
+    // (claude ends the turn with error_during_execution), but it is NOT a
+    // failure — classify it as a calm Cancel: phase Done (groups under Done),
+    // end_reason Cancelled ("Cancelled by the user"). A genuine error keeps
+    // phase Error and carries a real reason so the card is never blank.
     use marsad_proto::ResultSubtype;
-    state.phase = if result.is_error {
-        Phase::Error
+    let is_error = result.is_error
+        || matches!(
+            result.subtype,
+            ResultSubtype::ErrorMaxTurns | ResultSubtype::ErrorDuringExecution
+        );
+    if is_error && state.interrupt_requested {
+        state.phase = Phase::Done;
+        state.end_reason = Some(EndReason::Cancelled);
+    } else if is_error {
+        state.phase = Phase::Error;
+        state.end_reason = Some(match result.subtype {
+            ResultSubtype::ErrorMaxTurns => EndReason::MaxTurns,
+            _ => EndReason::ExecutionError,
+        });
     } else {
-        match result.subtype {
-            ResultSubtype::Success => Phase::Done,
-            ResultSubtype::ErrorMaxTurns | ResultSubtype::ErrorDuringExecution => Phase::Error,
-        }
-    };
+        state.phase = Phase::Done;
+        state.end_reason = None;
+    }
+    // The interrupt signal is one-shot: consumed by the turn it ended.
+    state.interrupt_requested = false;
 
     state
 }
