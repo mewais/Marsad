@@ -16,6 +16,7 @@ import type {
   WorkstreamCard,
 } from "../bridge/workstreamTypes";
 import { tallyConnHints } from "../bridge/connectivity";
+import { EndReasonChip } from "../components/EndReasonChip";
 
 // ---------------------------------------------------------------------------
 // State colour / label helpers (mirrors design tokens; Level-1 head states)
@@ -632,6 +633,7 @@ function WorkstreamRow({
             {connCounts.disconnected} disconnected
           </span>
         )}
+        {card.end_reason && <EndReasonChip reason={card.end_reason} />}
       </div>
 
       <span

@@ -279,6 +279,31 @@ describe("SessionDetail — header", () => {
     expect(screen.getByTestId("conn-hint-disconnected")).toBeTruthy();
     expect(screen.queryByTestId("conn-hint-reconnecting")).toBeNull();
   });
+
+  // Activity axis: a user cancel is a calm Done ("Cancelled"), a real error is red
+  // with its specific reason — never a blank card.
+  it("shows a calm Cancelled badge + reason for a user-cancelled turn", () => {
+    const sessions = MOCK_SNAPSHOT.sessions.map((s) =>
+      s.id === "s01"
+        ? { ...s, state: "Done" as const, end_reason: "Cancelled" as const, live: true }
+        : s
+    );
+    renderWith({ sessions, selectedId: "s01" });
+    // Badge reads "Cancelled", not "Done".
+    expect(screen.getByText("Cancelled")).toBeTruthy();
+    // Activity shows the human reason (default tab is Activity).
+    expect(screen.getByText("Cancelled by the user")).toBeTruthy();
+  });
+
+  it("shows the specific reason text for a failed turn", () => {
+    const sessions = MOCK_SNAPSHOT.sessions.map((s) =>
+      s.id === "s01"
+        ? { ...s, state: "Error" as const, end_reason: "ExecutionError" as const, live: true }
+        : s
+    );
+    renderWith({ sessions, selectedId: "s01" });
+    expect(screen.getByText("Ended with an execution error")).toBeTruthy();
+  });
 });
 
 // ---------------------------------------------------------------------------

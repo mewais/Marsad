@@ -22,6 +22,7 @@ import {
   getResolvedGates,
   type ResolvedGateEntry,
 } from "../../bridge/api";
+import { endReasonText } from "../../bridge/types";
 import type {
   SlashEntry,
   SessionView,
@@ -311,8 +312,17 @@ function deriveTranscript(
     });
   }
 
-  // If session has an error, show an error entry
-  if (sv.state === "Error") {
+  // Surface why the last turn ended, when noteworthy. A user cancel is calm
+  // ("Cancelled by the user"); a real error (max turns / execution) is red with
+  // its specific reason — never the old blank/generic error line.
+  if (sv.end_reason) {
+    msgs.push({
+      id: "end-reason-0",
+      kind: sv.end_reason === "Cancelled" ? "system" : "error",
+      text: endReasonText(sv.end_reason),
+    });
+  } else if (sv.state === "Error") {
+    // Fallback for an Error with no specific reason (older/edge streams).
     msgs.push({
       id: "error-0",
       kind: "error",

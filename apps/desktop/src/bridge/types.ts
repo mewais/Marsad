@@ -19,6 +19,22 @@ export type Phase =
   | "Stale"
   | "Detached";
 
+/** Why a turn ended, when worth surfacing (mirrors marsad_events::EndReason).
+ *  `Cancelled` pairs with `state:"Done"` (calm); the others with `state:"Error"`. */
+export type EndReason = "Cancelled" | "MaxTurns" | "ExecutionError";
+
+/** Human-facing text for an EndReason (mirrors `EndReason::text` in Rust). */
+export function endReasonText(r: EndReason): string {
+  switch (r) {
+    case "Cancelled":
+      return "Cancelled by the user";
+    case "MaxTurns":
+      return "Reached the max turn limit";
+    case "ExecutionError":
+      return "Ended with an execution error";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Gate (marsad-gates)
 // ---------------------------------------------------------------------------
@@ -227,6 +243,13 @@ export interface SessionView {
   last_compaction: CompactMetadata | null;
   /** Most recent rate-limit info, if the session has hit one. */
   rate_limit: RateLimitInfo | null;
+  /**
+   * Why the last turn ended, when noteworthy: a user Cancel (with `state:"Done"`)
+   * or a real failure (`state:"Error"`). Drives the card's reason text so an
+   * Error card is never blank and a cancel reads "Cancelled by the user".
+   * `null`/absent for a normal turn or while working.
+   */
+  end_reason?: EndReason | null;
   /**
    * Lifecycle liveness (two-axis model): `true` = Resumed (the process is alive
    * on its host — survives UI close / connection drop / app restart), `false` =

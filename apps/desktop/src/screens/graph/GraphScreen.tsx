@@ -30,6 +30,7 @@ import { edgeColor, edgeDashStyle, edgeStrokeWidth } from "./edgeStyle";
 import type { Host } from "../../bridge/types";
 import { connHintForStatus, tallyConnHints } from "../../bridge/connectivity";
 import { ConnHintChip } from "../../components/ConnHintChip";
+import { EndReasonChip } from "../../components/EndReasonChip";
 
 // ---------------------------------------------------------------------------
 // Colour / state helpers
@@ -1244,6 +1245,7 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
                     <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {n.name}
                     </span>
+                    {n.end_reason && <EndReasonChip reason={n.end_reason} size="xs" />}
                     {(() => {
                       // Per-session highlight: this node's host-derived hint.
                       const hint = connHintForStatus(hostStatusOf(n.host));

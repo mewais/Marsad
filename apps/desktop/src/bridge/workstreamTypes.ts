@@ -73,6 +73,9 @@ export interface WorkstreamCard {
    * back to a head-state-derived default when absent.
    */
   cta_label?: string;
+  /** A noteworthy end reason to surface as a card chip (a real error's reason,
+   *  or a user Cancel). Absent/null when nothing noteworthy. */
+  end_reason?: EndReason | null;
 }
 
 export interface BoardView {
@@ -100,6 +103,10 @@ export type Phase =
 /** Connection kind (mirrors marsad-workstream::ConnKind). */
 export type ConnKind = "data" | "command" | "both";
 
+/** Why a node's last turn ended (mirrors marsad_events::EndReason). Duplicated
+ *  here to keep this view-types module self-contained, like `Phase`/`Driver`. */
+export type EndReason = "Cancelled" | "MaxTurns" | "ExecutionError";
+
 export interface GraphNode {
   id: string;
   name: string;
@@ -110,6 +117,8 @@ export interface GraphNode {
   context_pct: number;
   is_lead: boolean;
   depth: number;
+  /** Noteworthy end reason for a per-node reason chip; absent for a normal turn. */
+  end_reason?: EndReason | null;
 }
 
 export type EdgeStatus = "normal" | "consulting" | "needs";

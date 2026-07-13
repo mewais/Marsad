@@ -8,7 +8,8 @@ interface StateDotProps {
 
 /** Colored dot that pulses for Working/Needs states. */
 export function StateDot({ state, size = 8 }: StateDotProps) {
-  const pulsing = state === "Working" || state === "Starting";
+  // Starting is folded into Done (idle) — no pulse; only real work pulses.
+  const pulsing = state === "Working";
   const needsPulse = state === "Needs";
 
   return (

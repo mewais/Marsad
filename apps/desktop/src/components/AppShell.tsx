@@ -54,7 +54,9 @@ function StatusNotifiers({
     if (hint === "Reconnecting") counts.reconnecting += 1;
     else if (hint === "Disconnected") counts.disconnected += 1;
 
-    if (s.state === "Done") {
+    // Starting is folded into Done (idle): a launched-but-idle session is done,
+    // not working.
+    if (s.state === "Done" || s.state === "Starting") {
       counts.done += 1;
       continue;
     }
@@ -64,7 +66,6 @@ function StatusNotifiers({
     }
     switch (s.state) {
       case "Working":
-      case "Starting":
         counts.working += 1;
         break;
       case "Needs":

@@ -1,7 +1,10 @@
-import type { Phase } from "../bridge/types";
+import type { Phase, EndReason } from "../bridge/types";
 
 interface BadgeProps {
   state: Phase;
+  /** The session's end reason, so a user cancel reads "Cancelled" (calm) instead
+   *  of a plain "Done". Ignored unless `state` is Done. */
+  endReason?: EndReason | null;
   label?: string;
 }
 
@@ -10,7 +13,8 @@ const phaseColor: Record<Phase, string> = {
   Working: "var(--accent)",
   Error: "var(--error)",
   Done: "var(--done)",
-  Starting: "var(--accent2)",
+  // Starting is folded into Done (idle) — same colour, not its own thing.
+  Starting: "var(--done)",
   Stale: "var(--neutral)",
   Detached: "var(--txt3)",
 };
@@ -20,7 +24,7 @@ const phaseBg: Record<Phase, string> = {
   Working: "var(--working-bg)",
   Error: "var(--error-bg)",
   Done: "var(--done-bg)",
-  Starting: "var(--working-bg)",
+  Starting: "var(--done-bg)",
   Stale: "transparent",
   Detached: "transparent",
 };
@@ -30,14 +34,22 @@ const phaseLabel: Record<Phase, string> = {
   Working: "Working",
   Error: "Error",
   Done: "Done",
-  Starting: "Starting",
+  // Starting folded into Done: a launched-but-idle session reads "Done" (idle).
+  Starting: "Done",
   // `Stale` is the internal phase for a not-live session (user-stopped, restored
   // on relaunch, or process gone). Surface it to users as the plainer "Stopped".
   Stale: "Stopped",
   Detached: "Stopped",
 };
 
-export function Badge({ state, label }: BadgeProps) {
+export function Badge({ state, endReason, label }: BadgeProps) {
+  // A user cancel is a calm end, not a failure: it lands in Done but reads
+  // "Cancelled" (neutral colour) so it's distinguishable from a genuine finish.
+  const isCancelled =
+    (state === "Done" || state === "Starting") && endReason === "Cancelled";
+  const color = isCancelled ? "var(--txt2)" : phaseColor[state];
+  const background = isCancelled ? "var(--panel2)" : phaseBg[state];
+  const text = label ?? (isCancelled ? "Cancelled" : phaseLabel[state]);
   return (
     <span
       style={{
@@ -46,14 +58,14 @@ export function Badge({ state, label }: BadgeProps) {
         letterSpacing: 0.4,
         padding: "3px 8px",
         borderRadius: 6,
-        color: phaseColor[state],
-        background: phaseBg[state],
+        color,
+        background,
         textTransform: "uppercase",
         whiteSpace: "nowrap",
         flexShrink: 0,
       }}
     >
-      {label ?? phaseLabel[state]}
+      {text}
     </span>
   );
 }
