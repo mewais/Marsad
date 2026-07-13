@@ -90,6 +90,13 @@ pub struct Node {
     /// Host id.
     pub host: String,
     pub state: Phase,
+    /// Lifecycle liveness (two-axis model): `true` = Resumed (process alive on
+    /// its host), `false` = Paused (not running, for any reason). Authoritative
+    /// from the agent, not inferred from `state`. Drives board grouping: a
+    /// not-live node is dormant (→ Paused) regardless of `state`, except a
+    /// `Done` node which is always surfaced in Done (finished its job).
+    #[serde(default = "default_node_live")]
+    pub live: bool,
     /// True if this node is the workstream lead (design `role:'lead'`).
     #[serde(default)]
     pub lead: bool,
@@ -97,6 +104,10 @@ pub struct Node {
     /// 0..=100
     pub context_pct: u8,
     pub status: String,
+}
+
+fn default_node_live() -> bool {
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -196,14 +207,28 @@ impl std::error::Error for ConnError {}
 // Severity helper (internal)
 // ---------------------------------------------------------------------------
 
-/// Severity of a `Phase` for head-state / bucketing purposes.
-/// `None` means the phase is dormant (Stale/Detached) and contributes nothing.
-fn severity(phase: &Phase) -> Option<HeadState> {
+/// Severity of a node for head-state / bucketing purposes, in the two-axis
+/// model. `None` means the node is dormant (→ the board's Paused group).
+///
+/// - `Done` is activity-terminal: a finished session is ALWAYS surfaced in Done
+///   (the user wants completed work visible) whether or not its process is still
+///   alive.
+/// - Every other phase only contributes while the session is actually alive
+///   (`live`). A not-live node — user-paused, or host-killed mid-work
+///   (reboot / OOM / scheduler / crash) — is dormant, so it lands in Paused
+///   instead of lying with Working/Needs/Error.
+fn severity(phase: &Phase, live: bool) -> Option<HeadState> {
+    if matches!(phase, Phase::Done) {
+        return Some(HeadState::Done);
+    }
+    if !live {
+        return None;
+    }
     match phase {
         Phase::Needs => Some(HeadState::Needs),
         Phase::Error => Some(HeadState::Error),
         Phase::Working | Phase::Starting => Some(HeadState::Working),
-        Phase::Done => Some(HeadState::Done),
+        Phase::Done => Some(HeadState::Done), // unreachable: handled above
         Phase::Stale | Phase::Detached => None,
     }
 }
@@ -226,7 +251,7 @@ fn severity_rank(state: HeadState) -> u8 {
 pub fn head_state(nodes: &[Node]) -> Option<HeadState> {
     nodes
         .iter()
-        .filter_map(|n| severity(&n.state))
+        .filter_map(|n| severity(&n.state, n.live))
         .max_by_key(|s| severity_rank(*s))
 }
 
@@ -235,7 +260,7 @@ pub fn head_state(nodes: &[Node]) -> Option<HeadState> {
 pub fn state_counts(nodes: &[Node]) -> StateCounts {
     let mut counts = StateCounts::default();
     for n in nodes {
-        match severity(&n.state) {
+        match severity(&n.state, n.live) {
             Some(HeadState::Needs) => counts.needs += 1,
             Some(HeadState::Error) => counts.error += 1,
             Some(HeadState::Working) => counts.working += 1,

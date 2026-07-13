@@ -57,6 +57,7 @@ fn make_session(
         subagent_list: vec![],
         shell_running: false,
         driver: "claude".to_string(),
+        live: true,
     }
 }
 
@@ -364,6 +365,7 @@ fn ctx_warn_false_at_74_pct() {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -414,6 +416,7 @@ fn ctx_warn_true_at_75_pct() {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -582,6 +585,7 @@ fn ctx_warn_true_at_100_pct() {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],

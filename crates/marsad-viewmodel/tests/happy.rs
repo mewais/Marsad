@@ -85,6 +85,7 @@ fn representative_snapshot() -> AppSnapshot {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
         SessionView {
             id: "s2".to_string(),
@@ -120,6 +121,7 @@ fn representative_snapshot() -> AppSnapshot {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
         SessionView {
             id: "s3".to_string(),
@@ -155,6 +157,7 @@ fn representative_snapshot() -> AppSnapshot {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
         SessionView {
             id: "s4".to_string(),
@@ -190,6 +193,7 @@ fn representative_snapshot() -> AppSnapshot {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
         SessionView {
             id: "s5".to_string(),
@@ -225,6 +229,7 @@ fn representative_snapshot() -> AppSnapshot {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
     ];
 
@@ -822,6 +827,7 @@ fn session_view_new_fields_populated() {
         subagent_list: vec![],
         shell_running: false,
         driver: "claude".to_string(),
+        live: true,
     };
     let sv2 = sv.clone();
     assert_eq!(sv, sv2);
@@ -862,6 +868,7 @@ fn session_view_new_fields_empty_by_default_in_literal() {
         subagent_list: vec![],
         shell_running: false,
         driver: "claude".to_string(),
+        live: true,
     };
     assert!(sv.tools.is_empty());
     assert!(sv.mcp_servers.is_empty());

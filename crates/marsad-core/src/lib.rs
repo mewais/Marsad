@@ -384,6 +384,15 @@ struct SessionRecord {
     /// node_of() can expose the real driver on the workstream board instead of
     /// always reporting Claude.
     driver: String,
+    /// Lifecycle liveness (two-axis model): `true` = Resumed (process alive on
+    /// its host), `false` = Paused (not running, for ANY reason). Authoritative
+    /// from the agent — NOT inferred from `state.phase`. Set true on launch and
+    /// on any evidence of life (agent stream event / transcript backfill /
+    /// `SessionLiveness{live:true}`); set false on stop and on
+    /// `SessionLiveness{live:false}` (host reboot / OOM / crash / claude exit).
+    /// Restored sessions start `false` (unknown until the agent confirms) so we
+    /// never optimistically claim a session is running before proving it.
+    live: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -728,6 +737,11 @@ impl Core {
                     name: restored_name,
                     shell_running: false,
                     driver: s.driver.clone(),
+                    // Restored from the store: we do NOT yet know if the process
+                    // survived on its host. Start Paused; the agent flips it to
+                    // Resumed via a stream event / backfill / SessionLiveness once
+                    // it actually reconnects. No optimism — truth on confirmation.
+                    live: false,
                 },
             );
             let sv = self.make_session_view(&s.id, self.sessions.get(&s.id).unwrap());
@@ -1198,6 +1212,10 @@ impl Core {
                 name: custom_name,
                 shell_running: false,
                 driver,
+                // A launch (or a resume, which reuses this path) is starting the
+                // process now → Resumed. The agent's SessionLiveness will correct
+                // this to Paused if the launch never actually comes up.
+                live: true,
             },
         );
 
@@ -1360,7 +1378,15 @@ impl Core {
             first_prompt: None,
         })?;
         // require_session above guarantees it exists.
-        self.sessions.get_mut(id).unwrap().state.phase = Phase::Starting;
+        {
+            let rec = self.sessions.get_mut(id).unwrap();
+            rec.state.phase = Phase::Starting;
+            // Optimistically Resumed: we are (re)starting the process now. The
+            // agent's SessionLiveness corrects this to Paused if it never comes
+            // up. (For an already-live session the agent no-ops the relaunch —
+            // see handle_resume_session — and live stays true anyway.)
+            rec.live = true;
+        }
         let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
         let snap = self.snapshot();
         let groups = marsad_viewmodel::group_overview(&snap);
@@ -1391,8 +1417,15 @@ impl Core {
         self.send_ipc(&IpcMsg::StopSession {
             session_id: id.to_string(),
         })?;
-        // Mark the session not-live. require_session above guarantees it exists.
-        self.sessions.get_mut(id).unwrap().state.phase = Phase::Stale;
+        // Mark the session not-live (Paused). require_session guarantees it
+        // exists. `live=false` is the authoritative lifecycle flip; the phase is
+        // also set Stale for legacy consumers, but the board/affordance now key
+        // off `live`.
+        {
+            let rec = self.sessions.get_mut(id).unwrap();
+            rec.state.phase = Phase::Stale;
+            rec.live = false;
+        }
         let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
         let snap = self.snapshot();
         let groups = marsad_viewmodel::group_overview(&snap);
@@ -1744,6 +1777,7 @@ impl Core {
             state: record.state.phase.clone(),
             lead,
             branch: String::new(),
+            live: record.live,
             context_pct: record.state.context_pct.round().clamp(0.0, 100.0) as u8,
             // Surface a concise pending-gate summary so the workstream board's
             // attention card can show WHAT needs the human, not just the name.
@@ -2256,6 +2290,10 @@ impl Core {
             IpcMsg::UsageUpdate { session_id, usage } => {
                 self.handle_usage_update(session_id, usage)
             }
+            // Two-axis lifecycle: authoritative Resumed/Paused from the agent.
+            IpcMsg::SessionLiveness { session_id, live } => {
+                self.handle_session_liveness(&session_id, live)
+            }
             // U1: one (driver, host) snapshot — always a COMPLETE replace, never
             // a merge (dynamic-capabilities.md §2/§3.5).
             IpcMsg::CapabilitiesUpdate {
@@ -2499,6 +2537,31 @@ impl Core {
     /// live `result` event already set for the same or a different model.
     ///
     /// Unknown session or missing session_id → error / no-op.
+    /// Two-axis lifecycle: apply an authoritative liveness signal from the
+    /// agent's reader thread. `true` = Resumed (process alive on its host),
+    /// `false` = Paused (host reboot / OOM / scheduler kill / crash / claude
+    /// exit / reconnect gave up). This is the truthful source of the
+    /// Paused-on-host-death transition — never inferred from the turn phase.
+    /// Unknown session or no change → no-op (avoid board churn).
+    fn handle_session_liveness(
+        &mut self,
+        session_id: &str,
+        live: bool,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        match self.sessions.get_mut(session_id) {
+            Some(rec) if rec.live != live => rec.live = live,
+            _ => return Ok(vec![]),
+        }
+        let sv = self.make_session_view(session_id, self.sessions.get(session_id).unwrap());
+        let snap = self.snapshot();
+        let groups = marsad_viewmodel::group_overview(&snap);
+        Ok(vec![
+            VmUpdate::Session(sv),
+            VmUpdate::Overview(groups),
+            VmUpdate::Board(self.board()),
+        ])
+    }
+
     fn handle_usage_update(
         &mut self,
         session_id: String,
@@ -2712,6 +2775,15 @@ impl Core {
         // agent supervises but we have not launched/adopted) is an UnknownSession,
         // not a panic.
         self.require_session(&session_id)?;
+
+        // Evidence of life: a live stream event proves the process is running, so
+        // mark it Resumed. This is the robust fallback for the SessionLiveness
+        // one-shot (e.g. if core subscribed just after the reader emitted it):
+        // any inbound event flips a restored/Paused session to Resumed. The
+        // SessionView built below picks this up.
+        if let Some(rec) = self.sessions.get_mut(&session_id) {
+            rec.live = true;
+        }
 
         // Parse the event into a StreamMsg; treat unparseable events as Unknown
         // (forward-compat, no error).
@@ -3079,6 +3151,7 @@ impl Core {
             subagent_list,
             shell_running: record.shell_running,
             driver: record.driver.clone(),
+            live: record.live,
         }
     }
 }

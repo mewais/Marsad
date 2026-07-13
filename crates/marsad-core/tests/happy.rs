@@ -1099,6 +1099,38 @@ fn last_sv(updates: &[VmUpdate]) -> marsad_viewmodel::SessionView {
         .expect("a SessionView")
 }
 
+/// Two-axis lifecycle (Gap A/B): an authoritative `SessionLiveness` from the
+/// agent's reader is the truthful Resumed↔Paused source. `live:false` (host
+/// reboot / OOM / crash / claude exit) flips a running session to Paused — even
+/// though its activity phase is untouched — and `live:true` flips it back to
+/// Resumed. Lifecycle is NOT inferred from the turn phase.
+#[test]
+fn session_liveness_signal_flips_paused_and_resumed() {
+    let (mut core, _fake) = make_core();
+    let id = launch_t(&mut core, None, LaunchMode::Fresh);
+    // A launched + initialized session is Resumed (live).
+    let u = core
+        .on_agent_line(&ipc_agent_event_system_init(&id))
+        .expect("system_init");
+    assert!(last_sv(&u).live, "launched+init session must be Resumed (live)");
+
+    // Host kills it → SessionLiveness{false} → Paused.
+    let dead = format!(r#"{{"type":"SessionLiveness","session_id":"{id}","live":false}}"#);
+    let u = core.on_agent_line(&dead).expect("liveness false");
+    assert!(
+        !last_sv(&u).live,
+        "SessionLiveness live:false must flip the session to Paused (live=false)"
+    );
+
+    // Reconnect → SessionLiveness{true} → Resumed again.
+    let alive = format!(r#"{{"type":"SessionLiveness","session_id":"{id}","live":true}}"#);
+    let u = core.on_agent_line(&alive).expect("liveness true");
+    assert!(
+        last_sv(&u).live,
+        "SessionLiveness live:true must flip the session back to Resumed (live=true)"
+    );
+}
+
 #[test]
 fn transcript_resume_loads_session_history() {
     use marsad_events::TranscriptEntry;

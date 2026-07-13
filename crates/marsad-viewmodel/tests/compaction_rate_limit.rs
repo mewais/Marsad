@@ -41,6 +41,7 @@ fn base_session_view() -> SessionView {
         subagent_list: vec![],
         shell_running: false,
         driver: "claude".to_string(),
+        live: true,
     }
 }
 

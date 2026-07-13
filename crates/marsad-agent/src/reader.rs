@@ -661,6 +661,20 @@ pub(crate) fn spawn_session_reader(
             // blocks here; the writer clone is in the session_writers registry for
             // handle_send_prompt — no lock contention.
             eprintln!("marsad-agent: session {sid} stream connected");
+            // Two-axis lifecycle: attaching to a running session ⇒ Resumed. Tell
+            // core authoritatively (it starts restored sessions Paused until this
+            // lands). Emitted on every (re)connect so a post-drop reconnect
+            // re-asserts liveness.
+            {
+                let line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionLiveness {
+                    session_id: sid.clone(),
+                    live: true,
+                });
+                let subs = subs_fifo.lock().unwrap();
+                for s in subs.iter() {
+                    let _ = s.send(line.clone());
+                }
+            }
             use std::io::BufRead;
             let mut lines_seen = 0u64;
             // Debounce tracker for the tool_use-triggered Changes probe (#4).
@@ -1011,6 +1025,24 @@ pub(crate) fn spawn_session_reader(
                 }
             } // probe loop
         } // 'reconnect loop
+
+        // Two-axis lifecycle: this reader has given up (re)attaching. For a
+        // REMOTE session that means the process is gone or unreachable — claude
+        // exited, the host rebooted / OOM-killed / scheduler-killed it, or the
+        // reconnect cap was hit. Tell core so the card flips to Paused instead of
+        // lying with its last activity state (Gap B: host-death → Paused). Local
+        // sessions manage liveness elsewhere; skip here to avoid a false Paused
+        // on a still-live local session.
+        if exec_prefix_for(host_target.as_deref()).is_some() {
+            let line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionLiveness {
+                session_id: sid.clone(),
+                live: false,
+            });
+            let subs = subs_fifo.lock().unwrap();
+            for s in subs.iter() {
+                let _ = s.send(line.clone());
+            }
+        }
 
         // Final cleanup: ensure the writer registry slot is gone (it may already
         // be absent if the reconnect loop tore it down; the remove is idempotent).

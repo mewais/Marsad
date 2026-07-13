@@ -93,6 +93,16 @@ pub struct SessionView {
     /// first-discovered capability driver (a host can offer several).
     #[serde(default = "default_driver")]
     pub driver: String,
+    /// Lifecycle liveness (the two-axis model). `true` = Resumed: the session
+    /// process is alive on its host and survives UI close / connection drop /
+    /// full app restart. `false` = Paused: not running, for ANY reason — the
+    /// user paused it, or the host killed it (reboot / OOM / scheduler / crash).
+    /// Authoritative from the agent's `SessionLiveness` signal — NOT inferred
+    /// from `state`, so a finished-but-alive session is `state: Done, live:
+    /// true`. Drives the Pause↔Resume affordance, the board's Paused grouping,
+    /// and spinner suppression.
+    #[serde(default = "default_live")]
+    pub live: bool,
 }
 
 fn default_posture() -> String {
@@ -101,6 +111,10 @@ fn default_posture() -> String {
 
 fn default_driver() -> String {
     "claude".to_string()
+}
+
+fn default_live() -> bool {
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -384,26 +398,39 @@ pub fn group_overview(s: &AppSnapshot) -> OverviewGroups {
     let mut active: Vec<SessionCard> = Vec::new();
     let mut idle: Vec<SessionCard> = Vec::new();
 
-    // Needs first in attention bucket
-    for sv in s.sessions.iter().filter(|sv| sv.state == Phase::Needs) {
-        attention.push(session_card(sv, &s.hosts));
-    }
-    for sv in s.sessions.iter().filter(|sv| sv.state == Phase::Error) {
+    // Two-axis lifecycle: attention/active buckets only hold LIVE (Resumed)
+    // sessions; a not-live (Paused) session is idle regardless of its last
+    // activity phase — except `Done`, which is always idle (finished its job).
+    // Mirrors marsad_workstream::severity so the overview and the board agree.
+    // Needs first in attention bucket.
+    for sv in s
+        .sessions
+        .iter()
+        .filter(|sv| sv.live && sv.state == Phase::Needs)
+    {
         attention.push(session_card(sv, &s.hosts));
     }
     for sv in s
         .sessions
         .iter()
-        .filter(|sv| matches!(sv.state, Phase::Working | Phase::Starting))
+        .filter(|sv| sv.live && sv.state == Phase::Error)
+    {
+        attention.push(session_card(sv, &s.hosts));
+    }
+    for sv in s
+        .sessions
+        .iter()
+        .filter(|sv| sv.live && matches!(sv.state, Phase::Working | Phase::Starting))
     {
         active.push(session_card(sv, &s.hosts));
     }
-    // Done plus the not-live phases (Stale = stopped, Detached) so a stopped
-    // session still appears in the overview instead of vanishing from it.
+    // Idle = finished (Done, any liveness) OR not-live (Paused: user-stopped, or
+    // host-killed mid-work) — so a stopped/crashed session still appears in the
+    // overview instead of vanishing from it.
     for sv in s
         .sessions
         .iter()
-        .filter(|sv| matches!(sv.state, Phase::Done | Phase::Stale | Phase::Detached))
+        .filter(|sv| sv.state == Phase::Done || !sv.live)
     {
         idle.push(session_card(sv, &s.hosts));
     }

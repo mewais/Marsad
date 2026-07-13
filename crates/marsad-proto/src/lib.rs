@@ -1118,6 +1118,19 @@ pub enum IpcMsg {
         terminal_id: String,
         code: i32,
     },
+
+    // ── Session liveness (agent → GUI/core) ──────────────────────────────────
+    /// Authoritative session liveness, emitted by the reader thread: `true` when
+    /// it attaches to a running session (launch/resume/reconnect), `false` when
+    /// the process is confirmed gone — the remote/local claude exited, the host
+    /// rebooted / OOM-killed / scheduler-killed it, or reconnect gave up. Core
+    /// flips the session's lifecycle (Resumed ↔ Paused) from THIS, not from the
+    /// turn phase, so a finished-but-alive session stays Resumed and a
+    /// host-killed session honestly shows Paused (the two-axis model).
+    SessionLiveness {
+        session_id: String,
+        live: bool,
+    },
 }
 
 impl IpcMsg {
@@ -1533,6 +1546,7 @@ pub fn parse_ipc(line: &str) -> Result<IpcMsg, ProtoError> {
         "PtyResize",
         "PtyOutput",
         "PtyExit",
+        "SessionLiveness",
     ];
 
     if !KNOWN.contains(&type_str) {

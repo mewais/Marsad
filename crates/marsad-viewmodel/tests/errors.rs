@@ -62,6 +62,7 @@ fn single_session_snapshot(phase: Phase) -> AppSnapshot {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         }],
         hosts: vec![Host {
             id: "local".to_string(),
@@ -230,6 +231,7 @@ fn rescope_unknown_workspace_returns_unchanged_snapshot() {
                 subagent_list: vec![],
                 shell_running: false,
                 driver: "claude".to_string(),
+                live: true,
             },
             SessionView {
                 id: "s2".to_string(),
@@ -265,6 +267,7 @@ fn rescope_unknown_workspace_returns_unchanged_snapshot() {
                 subagent_list: vec![],
                 shell_running: false,
                 driver: "claude".to_string(),
+                live: true,
             },
         ],
         hosts: vec![Host {
@@ -337,6 +340,7 @@ fn rescope_empty_workspace_session_ids_gives_no_sessions() {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         }],
         hosts: vec![],
         workspaces: vec![Workspace {

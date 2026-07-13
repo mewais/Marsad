@@ -20,6 +20,7 @@ fn node(id: &str, ws: &str, driver: Driver, host: &str, state: Phase) -> Node {
         ws: ws.to_string(),
         name: format!("node-{id}"),
         driver,
+        live: true,
         host: host.to_string(),
         state,
         lead: false,
@@ -466,4 +467,37 @@ fn dependency_depth_diamond() {
     assert_eq!(dependency_depth("b", "w1", &conns), 1);
     assert_eq!(dependency_depth("c", "w1", &conns), 1);
     assert_eq!(dependency_depth("d", "w1", &conns), 2);
+}
+
+/// Two-axis lifecycle severity: a not-live (Paused) node is dormant regardless
+/// of its activity phase — EXCEPT `Done`, which always surfaces (finished its
+/// job, the user wants completed work visible). This routes a host-killed
+/// session to the board's Paused group instead of falsely showing Working.
+#[test]
+fn head_state_ignores_not_live_nodes_except_done() {
+    // Live Working → Working.
+    let live_working = node("a", "ws", Driver::Claude, "h", Phase::Working);
+    assert_eq!(head_state(&[live_working]), Some(HeadState::Working));
+
+    // Not-live Working (host-killed mid-work) → dormant → None (Paused group).
+    let mut dead_working = node("b", "ws", Driver::Claude, "h", Phase::Working);
+    dead_working.live = false;
+    assert_eq!(head_state(std::slice::from_ref(&dead_working)), None);
+
+    // Not-live Done → still Done (finished its job).
+    let mut dead_done = node("c", "ws", Driver::Claude, "h", Phase::Done);
+    dead_done.live = false;
+    assert_eq!(head_state(&[dead_done]), Some(HeadState::Done));
+
+    // Mixed ws: a dormant dead-Working + a live Needs → Needs wins.
+    let live_needs = node("d", "ws", Driver::Claude, "h", Phase::Needs);
+    assert_eq!(head_state(&[dead_working, live_needs]), Some(HeadState::Needs));
+
+    // state_counts likewise ignores the not-live node (only the live Needs counts).
+    let live_needs2 = node("e", "ws", Driver::Claude, "h", Phase::Needs);
+    let mut dead_working2 = node("f", "ws", Driver::Claude, "h", Phase::Working);
+    dead_working2.live = false;
+    let counts = state_counts(&[live_needs2, dead_working2]);
+    assert_eq!(counts.needs, 1);
+    assert_eq!(counts.working, 0, "not-live working node must not be counted");
 }
