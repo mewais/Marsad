@@ -231,6 +231,28 @@ describe("SessionDetail — header", () => {
     expect(getRemoveSession()).toHaveBeenCalledWith("s01");
     confirmSpy.mockRestore();
   });
+
+  // Two-axis lifecycle (Gap A): the Pause↔Resume affordance follows LIVENESS,
+  // not the activity phase.
+  it("shows Resume (not Pause) for a Paused session even if its phase is Working", () => {
+    // Same id so selectedDetail still resolves; flipped to not-live (Paused)
+    // while its activity phase stays Working — the affordance must follow live.
+    const sessions = MOCK_SNAPSHOT.sessions.map((s) =>
+      s.id === "s01" ? { ...s, state: "Working" as const, live: false } : s
+    );
+    renderWith({ sessions, selectedId: "s01" });
+    expect(screen.getByTestId("resume-btn")).toBeTruthy();
+    expect(screen.queryByTestId("pause-btn")).toBeNull();
+  });
+
+  it("shows Pause (not Resume) for a finished-but-alive session (Done + live)", () => {
+    const sessions = MOCK_SNAPSHOT.sessions.map((s) =>
+      s.id === "s01" ? { ...s, state: "Done" as const, live: true } : s
+    );
+    renderWith({ sessions, selectedId: "s01" });
+    expect(screen.getByTestId("pause-btn")).toBeTruthy();
+    expect(screen.queryByTestId("resume-btn")).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -24,10 +24,21 @@ import { Watchtower } from "./Watchtower";
 // ---------------------------------------------------------------------------
 
 function StatusNotifiers({ sessions }: { sessions: SessionView[] }) {
-  // Bucket every session's phase into the dashboard's four active buckets plus a
-  // neutral "paused" (Stale/Detached). Mirrors marsad-viewmodel's state_counts.
+  // Bucket every session into the dashboard's four active buckets plus a neutral
+  // "paused". Two-axis model — mirrors marsad_workstream::severity: `Done`
+  // always counts as done (finished its job, shown regardless of liveness); any
+  // other phase only counts as active while the session is LIVE (Resumed); a
+  // not-live (Paused) session is paused regardless of its last phase.
   const counts = { working: 0, needs: 0, error: 0, done: 0, paused: 0 };
   for (const s of sessions) {
+    if (s.state === "Done") {
+      counts.done += 1;
+      continue;
+    }
+    if (s.live === false) {
+      counts.paused += 1;
+      continue;
+    }
     switch (s.state) {
       case "Working":
       case "Starting":
@@ -38,9 +49,6 @@ function StatusNotifiers({ sessions }: { sessions: SessionView[] }) {
         break;
       case "Error":
         counts.error += 1;
-        break;
-      case "Done":
-        counts.done += 1;
         break;
       case "Stale":
       case "Detached":

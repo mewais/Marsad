@@ -132,15 +132,13 @@ export function SessionDetail() {
     openBoard();
   }
 
-  // A not-live session (user-stopped, restored on relaunch, process gone, or done)
-  // offers Resume + Delete instead of Pause + Delete.
-  // Running states (Working, Starting, Needs) → Pause.
-  // Stopped/terminal states (Stale, Detached, Done, Error) → Resume.
-  const isStopped =
-    sessionState === "Stale" ||
-    sessionState === "Detached" ||
-    sessionState === "Done" ||
-    sessionState === "Error";
+  // Two-axis lifecycle: the Pause↔Resume affordance is driven by LIVENESS, not
+  // the activity phase. A live (Resumed) session — even one that has finished a
+  // turn (Done) — is running on its host and offers Pause. A not-live (Paused)
+  // session — user-stopped, restored-but-dead, or host-killed (OOM/crash) —
+  // offers Resume (a cold `--resume`). `live` is authoritative from the agent;
+  // missing (older snapshots) is treated as live (Resumed).
+  const isStopped = selectedSession.live === false;
 
   // Shared button style for all action buttons in the header — ensures uniform
   // height/padding/font across Back, Answer gate, Pause/Resume, Delete.

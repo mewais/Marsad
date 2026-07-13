@@ -227,6 +227,17 @@ export interface SessionView {
   last_compaction: CompactMetadata | null;
   /** Most recent rate-limit info, if the session has hit one. */
   rate_limit: RateLimitInfo | null;
+  /**
+   * Lifecycle liveness (two-axis model): `true` = Resumed (the process is alive
+   * on its host — survives UI close / connection drop / app restart), `false` =
+   * Paused (not running, for ANY reason: the user paused it, or the host killed
+   * it — reboot / OOM / scheduler / crash). Authoritative from the agent, NOT
+   * inferred from `state`: a finished-but-alive session is `state:"Done",
+   * live:true`. Drives the Pause↔Resume affordance, the Paused grouping, and
+   * spinner suppression. Optional for back-compat with older snapshots; treat
+   * a missing value as `true` (Resumed).
+   */
+  live?: boolean;
 }
 
 /** Mirrors marsad_proto::CompactMetadata — one context-compaction event. */

@@ -156,6 +156,7 @@ pub fn seeded_mock() -> MockState {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
         // Needs attention — plan gate
         SessionView {
@@ -188,6 +189,7 @@ pub fn seeded_mock() -> MockState {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
         // Error — edit gate shown for reference
         SessionView {
@@ -220,6 +222,7 @@ pub fn seeded_mock() -> MockState {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
         // Working sessions
         SessionView {
@@ -252,6 +255,7 @@ pub fn seeded_mock() -> MockState {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
         SessionView {
             id: "s05".to_string(),
@@ -283,6 +287,7 @@ pub fn seeded_mock() -> MockState {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
         SessionView {
             id: "s06".to_string(),
@@ -314,6 +319,7 @@ pub fn seeded_mock() -> MockState {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
         // Done sessions
         SessionView {
@@ -346,6 +352,7 @@ pub fn seeded_mock() -> MockState {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
         SessionView {
             id: "s08".to_string(),
@@ -377,6 +384,7 @@ pub fn seeded_mock() -> MockState {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
         SessionView {
             id: "s09".to_string(),
@@ -408,6 +416,7 @@ pub fn seeded_mock() -> MockState {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
         // Stale session
         SessionView {
@@ -440,6 +449,7 @@ pub fn seeded_mock() -> MockState {
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
+            live: true,
         },
     ];
 

@@ -289,8 +289,10 @@ function deriveTranscript(
   // don't show a perpetual "Starting up…" spinner — the composer below is ready
   // for the first prompt. NOT while a `!` shell command runs: that surfaces the
   // session as Working (core::make_session_view) but has its own dedicated
-  // "Running shell command…" spinner below — showing both is redundant.
-  if (sv.state === "Working" && !sv.shell_running) {
+  // "Running shell command…" spinner below — showing both is redundant. And NOT
+  // when the session is Paused (live === false): a not-live session does no
+  // work, so a "Working…" spinner would be a lie (two-axis model).
+  if (sv.state === "Working" && !sv.shell_running && sv.live !== false) {
     msgs.push({
       id: "working-0",
       kind: "working",
