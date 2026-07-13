@@ -514,6 +514,43 @@ fn handle_ipc_subscribe_returns_ack() {
     assert!(result.is_ok(), "Subscribe must return Ok; got {result:?}");
 }
 
+/// Reconcile-on-subscribe: a (re)subscribing GUI must be told the current
+/// liveness of every tracked session, so it can't be left stuck on a stale
+/// state after missing the one-shot `SessionLiveness` broadcast (e.g. it
+/// subscribed after a session died). Subscribe replays a `SessionLiveness` line
+/// per tracked session alongside the `Subscribed` ack.
+#[test]
+fn handle_ipc_subscribe_replays_liveness_for_tracked_sessions() {
+    let container = FakeContainer::new();
+    let notifier = CaptureNotifier::new();
+    let backend = MemoryBackend::new();
+
+    let mut agent = Agent::with_fakes(
+        stdio_cfg(),
+        Box::new(container),
+        Box::new(notifier),
+        Box::new(marsad_store::Store::new(Box::new(backend))),
+    )
+    .expect("with_fakes");
+
+    // Launch → the session is tracked.
+    let launch_line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"Ask"}"#;
+    let launched = agent.handle_ipc(launch_line).expect("launch");
+    let session_id = extract_session_id_from_lines(&launched);
+
+    let sub = agent.handle_ipc(r#"{"type":"Subscribe"}"#).expect("subscribe");
+    assert!(
+        sub.iter()
+            .any(|l| l.contains("\"Subscribed\"")),
+        "Subscribe must still ack Subscribed; got {sub:?}"
+    );
+    assert!(
+        sub.iter()
+            .any(|l| l.contains("\"SessionLiveness\"") && l.contains(&session_id)),
+        "Subscribe must replay SessionLiveness for the tracked session {session_id}; got {sub:?}"
+    );
+}
+
 /// A `SendPrompt` for an existing session must route and return Ok.
 #[test]
 fn handle_ipc_send_prompt_routes() {

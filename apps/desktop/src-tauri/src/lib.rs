@@ -624,13 +624,18 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
                     // discovery, incl. the subscribe-replay) and the Wasl gate/
                     // observation broadcasts were previously DROPPED here — which
                     // silently starved the model picker ("No models observed yet")
-                    // and the Wasl surfaces. Acks (Subscribed/SessionLaunched/
-                    // CapabilitiesRefreshQueued/…) and pty (handled above) stay skipped.
+                    // and the Wasl surfaces. SessionLiveness (Resumed↔Paused truth,
+                    // incl. the subscribe-replay) was ALSO dropped here — which left
+                    // a session that died on its host stuck showing Working/Resumed
+                    // and silently queuing prompts into a dead session. Acks
+                    // (Subscribed/SessionLaunched/CapabilitiesRefreshQueued/…) and
+                    // pty (handled above) stay skipped.
                     if ty != Some("AgentEvent")
                         && ty != Some("TranscriptBackfill")
                         && ty != Some("ChangesUpdate")
                         && ty != Some("UsageUpdate")
                         && ty != Some("CapabilitiesUpdate")
+                        && ty != Some("SessionLiveness")
                         && ty != Some("WaslGateRequested")
                         && ty != Some("WaslGateDecided")
                         && ty != Some("WaslObservation")

@@ -666,6 +666,7 @@ pub(crate) fn spawn_session_reader(
             // lands). Emitted on every (re)connect so a post-drop reconnect
             // re-asserts liveness.
             {
+                eprintln!("marsad-agent: session {sid} liveness -> LIVE (broadcast)");
                 let line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionLiveness {
                     session_id: sid.clone(),
                     live: true,
@@ -1034,6 +1035,7 @@ pub(crate) fn spawn_session_reader(
         // sessions manage liveness elsewhere; skip here to avoid a false Paused
         // on a still-live local session.
         if exec_prefix_for(host_target.as_deref()).is_some() {
+            eprintln!("marsad-agent: session {sid} liveness -> PAUSED (reader gave up; broadcast)");
             let line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionLiveness {
                 session_id: sid.clone(),
                 live: false,

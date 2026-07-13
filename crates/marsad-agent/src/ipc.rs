@@ -685,7 +685,29 @@ impl Agent {
         let subscriber_id = format!("sub-{}", self.next_id);
         self.next_id += 1;
         let ack = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::Subscribed { subscriber_id });
-        Ok(vec![ack])
+        let mut out = vec![ack];
+
+        // Reconcile liveness on (re)subscribe. `SessionLiveness` is otherwise a
+        // one-shot broadcast: a GUI that subscribes AFTER a session died (a
+        // desktop restart, or reconnecting to this durable daemon) would never
+        // learn it died and would sit stuck on the stale phase, silently queuing
+        // prompts into a dead session. So replay the authoritative liveness for
+        // every tracked session now: a session with a registered writer has a
+        // live reader attached (Resumed); one without does not (Paused). The GUI
+        // applies these and shows the truth (Resume button, not a working spinner).
+        {
+            let writers = self.session_writers.0.lock().unwrap();
+            for sid in self.sessions.keys() {
+                let live = writers.contains_key(sid);
+                out.push(marsad_proto::encode_ipc(
+                    &marsad_proto::IpcMsg::SessionLiveness {
+                        session_id: sid.clone(),
+                        live,
+                    },
+                ));
+            }
+        }
+        Ok(out)
     }
 
     /// X2 (docs/specs/wasl-connector.md §4.3): relay one explicit human
