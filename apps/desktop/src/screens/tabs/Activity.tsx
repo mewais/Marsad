@@ -164,6 +164,9 @@ type MsgKind =
 interface TranscriptMsg {
   id: string;
   kind: MsgKind;
+  /** Epoch-ms time of this entry, when known — drives day separators, idle-gap
+   *  markers, and the per-turn time. Absent for synthetic rows (spinner, etc.). */
+  at?: number | null;
   text?: string;
   // tool call fields
   tool?: string;
@@ -244,15 +247,16 @@ function deriveTranscript(
 
   // The real conversation, in arrival order.
   sv.transcript.forEach((entry, i) => {
+    const at = entry.at ?? null;
     if (entry.role === "assistant") {
-      msgs.push({ id: `t-${i}`, kind: "response", text: entry.text });
+      msgs.push({ id: `t-${i}`, kind: "response", text: entry.text, at });
     } else if (entry.role === "user") {
       // Shell commands injected by the "!" prefix are User entries starting with
       // "! " — render them as a distinct shell command row instead of a prompt bubble.
       if (entry.text.startsWith("! ")) {
-        msgs.push({ id: `t-${i}`, kind: "shell_cmd", text: entry.text });
+        msgs.push({ id: `t-${i}`, kind: "shell_cmd", text: entry.text, at });
       } else {
-        msgs.push({ id: `t-${i}`, kind: "prompt", text: entry.text });
+        msgs.push({ id: `t-${i}`, kind: "prompt", text: entry.text, at });
       }
     } else if (entry.role === "compaction") {
       // Compaction entry: render inline at its chronological position.
@@ -260,10 +264,11 @@ function deriveTranscript(
         id: `t-${i}`,
         kind: "system",
         text: `Context compacted (${entry.trigger}, ${entry.dropped_tokens} tokens dropped)`,
+        at,
       });
     } else if (entry.name === "shell") {
       // Shell output from "!" commands: render as a pre-formatted output block.
-      msgs.push({ id: `t-${i}`, kind: "shell_out", text: entry.input });
+      msgs.push({ id: `t-${i}`, kind: "shell_out", text: entry.input, at });
     } else {
       msgs.push({
         id: `t-${i}`,
@@ -271,6 +276,7 @@ function deriveTranscript(
         tool: entry.name,
         args: entry.input,
         toolStatus: "done",
+        at,
       });
     }
     // Insert HITL cards immediately after the transcript entry that was the last
@@ -453,6 +459,123 @@ function ResponseMsg({ text }: { text: string }) {
       >
         <Markdown text={text} />
       </div>
+    </div>
+  );
+}
+
+// ── Transcript time helpers (day separators, idle-gap markers, per-turn time) ──
+
+/** Idle gap (ms) that triggers a subtle time marker within the same day. */
+const GAP_MS = 30 * 60 * 1000;
+
+/** Kinds that belong to an ASSISTANT turn (a run of these = one turn). */
+const ASSISTANT_KINDS: ReadonlySet<MsgKind> = new Set<MsgKind>([
+  "response",
+  "tool",
+  "result",
+  "subagent",
+]);
+
+function clock(ms: number): string {
+  return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function fullStamp(ms: number): string {
+  return new Date(ms).toLocaleString([], {
+    weekday: "short",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function startOfDay(ms: number): number {
+  const d = new Date(ms);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+function sameLocalDay(a: number, b: number): boolean {
+  return startOfDay(a) === startOfDay(b);
+}
+
+/** "Today" / "Yesterday" / "Thu, Jul 9" for a day-separator divider. */
+function dayLabel(ms: number): string {
+  const diff = Math.round((startOfDay(Date.now()) - startOfDay(ms)) / 86_400_000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  return new Date(ms).toLocaleDateString([], {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+/** Full-width centered date divider inserted when the calendar day changes. */
+function DaySeparator({ at }: { at: number }) {
+  return (
+    <div
+      data-testid="transcript-day-separator"
+      style={{ display: "flex", alignItems: "center", gap: 12, margin: "4px 0" }}
+    >
+      <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
+      <span
+        className="mono"
+        title={fullStamp(at)}
+        style={{
+          fontSize: "calc(11px * var(--fs,1))",
+          fontWeight: 700,
+          letterSpacing: 0.3,
+          color: "var(--txt3)",
+          textTransform: "uppercase",
+        }}
+      >
+        {dayLabel(at)}
+      </span>
+      <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
+    </div>
+  );
+}
+
+/** Faint centered time marker for a long idle gap within a day. */
+function GapMarker({ at }: { at: number }) {
+  return (
+    <div
+      data-testid="transcript-gap-marker"
+      style={{ display: "flex", justifyContent: "center", margin: "-2px 0" }}
+    >
+      <span
+        className="mono"
+        title={fullStamp(at)}
+        style={{ fontSize: "calc(10.5px * var(--fs,1))", color: "var(--txt3)", opacity: 0.7 }}
+      >
+        · {clock(at)} ·
+      </span>
+    </div>
+  );
+}
+
+/** Muted per-turn time, below a user prompt (end) or an assistant turn (start). */
+function TurnTime({ at, align }: { at: number; align: "start" | "end" }) {
+  return (
+    <div
+      data-testid="transcript-turn-time"
+      style={{
+        display: "flex",
+        justifyContent: align === "end" ? "flex-end" : "flex-start",
+        marginTop: -8,
+        // Assistant times align to the text column (past the 37px avatar gutter).
+        paddingLeft: align === "start" ? 37 : 0,
+      }}
+    >
+      <span
+        className="mono"
+        title={fullStamp(at)}
+        style={{ fontSize: "calc(10.5px * var(--fs,1))", color: "var(--txt3)" }}
+      >
+        {clock(at)}
+      </span>
     </div>
   );
 }
@@ -1343,69 +1466,109 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
             gap: 14,
           }}
         >
-          {messages.map((msg) => {
-            switch (msg.kind) {
-              case "prompt":
-                return <PromptBubble key={msg.id} text={msg.text ?? ""} />;
-              case "system":
-                return (
-                  <SystemNote
-                    key={msg.id}
-                    text={msg.text ?? ""}
-                    testId={
-                      msg.id === "ratelimit-0"
-                        ? "ratelimit-indicator"
-                        : undefined
-                    }
-                  />
-                );
-              case "response":
-                return <ResponseMsg key={msg.id} text={msg.text ?? ""} />;
-              case "tool":
-                return (
-                  <ToolUse
-                    key={msg.id}
-                    tool={msg.tool ?? ""}
-                    args={msg.args}
-                    toolStatus={msg.toolStatus}
-                  />
-                );
-              case "result":
-                return <ToolResult key={msg.id} text={msg.text ?? ""} />;
-              case "shell_cmd":
-                return <ShellCmd key={msg.id} text={msg.text ?? ""} />;
-              case "shell_out":
-                return <ShellOutput key={msg.id} text={msg.text ?? ""} />;
-              case "error":
-                return <ErrorMsg key={msg.id} text={msg.text ?? ""} />;
-              case "working":
-                return (
-                  <WorkingSpinner key={msg.id} text={msg.text ?? "Working…"} />
-                );
-              case "hitl":
-                return msg.episode ? (
-                  <HitlCard
-                    key={msg.id}
-                    episode={msg.episode}
-                    pending={!!msg.pending}
-                    resolution={msg.resolution}
-                    onOpenGate={onOpenGate}
-                  />
-                ) : null;
-              case "subagent":
-                return (
-                  <SubagentEntry
-                    key={msg.id}
-                    name={msg.name ?? ""}
-                    model={msg.model}
-                    subStatus={msg.subStatus}
-                    subagentList={msg.subagentList}
-                  />
-                );
-              default:
-                return null;
-            }
-          })}
+          {(() => {
+            const renderMsg = (msg: TranscriptMsg): ReactNode => {
+              switch (msg.kind) {
+                case "prompt":
+                  return <PromptBubble key={msg.id} text={msg.text ?? ""} />;
+                case "system":
+                  return (
+                    <SystemNote
+                      key={msg.id}
+                      text={msg.text ?? ""}
+                      testId={
+                        msg.id === "ratelimit-0" ? "ratelimit-indicator" : undefined
+                      }
+                    />
+                  );
+                case "response":
+                  return <ResponseMsg key={msg.id} text={msg.text ?? ""} />;
+                case "tool":
+                  return (
+                    <ToolUse
+                      key={msg.id}
+                      tool={msg.tool ?? ""}
+                      args={msg.args}
+                      toolStatus={msg.toolStatus}
+                    />
+                  );
+                case "result":
+                  return <ToolResult key={msg.id} text={msg.text ?? ""} />;
+                case "shell_cmd":
+                  return <ShellCmd key={msg.id} text={msg.text ?? ""} />;
+                case "shell_out":
+                  return <ShellOutput key={msg.id} text={msg.text ?? ""} />;
+                case "error":
+                  return <ErrorMsg key={msg.id} text={msg.text ?? ""} />;
+                case "working":
+                  return <WorkingSpinner key={msg.id} text={msg.text ?? "Working…"} />;
+                case "hitl":
+                  return msg.episode ? (
+                    <HitlCard
+                      key={msg.id}
+                      episode={msg.episode}
+                      pending={!!msg.pending}
+                      resolution={msg.resolution}
+                      onOpenGate={onOpenGate}
+                    />
+                  ) : null;
+                case "subagent":
+                  return (
+                    <SubagentEntry
+                      key={msg.id}
+                      name={msg.name ?? ""}
+                      model={msg.model}
+                      subStatus={msg.subStatus}
+                      subagentList={msg.subagentList}
+                    />
+                  );
+                default:
+                  return null;
+              }
+            };
+
+            // Weave in day separators + idle-gap markers between messages, and a
+            // muted per-turn time: below a user prompt (end-aligned), and below the
+            // LAST entry of an assistant turn (a run of response/tool/result/
+            // subagent). Timeless synthetic rows (spinner, etc.) pass through.
+            const out: ReactNode[] = [];
+            let prevAt: number | null = null;
+            messages.forEach((msg, i) => {
+              const at = msg.at ?? null;
+              if (at != null) {
+                if (prevAt == null || !sameLocalDay(prevAt, at)) {
+                  out.push(<DaySeparator key={`day-${msg.id}`} at={at} />);
+                } else if (at - prevAt >= GAP_MS) {
+                  out.push(<GapMarker key={`gap-${msg.id}`} at={at} />);
+                }
+              }
+              out.push(renderMsg(msg));
+              if (at != null) {
+                if (msg.kind === "prompt") {
+                  out.push(<TurnTime key={`tt-${msg.id}`} at={at} align="end" />);
+                } else if (ASSISTANT_KINDS.has(msg.kind)) {
+                  // End of an assistant turn = no later assistant-side entry before
+                  // the next user boundary. Skip interleaved synthetic rows (a gate
+                  // card / working spinner raised mid-turn) so they don't split the
+                  // run into multiple times.
+                  let j = i + 1;
+                  while (
+                    j < messages.length &&
+                    (messages[j].kind === "hitl" || messages[j].kind === "working")
+                  ) {
+                    j++;
+                  }
+                  const next = messages[j];
+                  const nextIsAssistant = next != null && ASSISTANT_KINDS.has(next.kind);
+                  if (!nextIsAssistant) {
+                    out.push(<TurnTime key={`tt-${msg.id}`} at={at} align="start" />);
+                  }
+                }
+                prevAt = at;
+              }
+            });
+            return out;
+          })()}
           <div ref={bottomRef} />
         </div>
       </div>
