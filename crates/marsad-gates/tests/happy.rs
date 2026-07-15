@@ -23,6 +23,7 @@ fn make_permission_gate() -> Gate {
         explanation: "Removes temporary files".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     }
 }
 

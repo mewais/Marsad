@@ -4,7 +4,8 @@
  */
 import { useState, useEffect } from "react";
 import { useVm } from "../bridge/useVm";
-import { answerGate, answerQuestion, restartSession } from "../bridge/api";
+import { answerGate, answerQuestion } from "../bridge/api";
+import type { PermissionSuggestion } from "../bridge/types";
 import { DiffView } from "../components/DiffView";
 import { Markdown } from "../components/Markdown";
 
@@ -32,6 +33,16 @@ function kindBadge(kind: string): string {
   if (kind === "edit") return "Edit";
   if (kind === "question") return "Question";
   return "Permission";
+}
+
+// Button text for one of claude's permission_suggestions, built ONLY from
+// claude's own fields (behavior + rule content) — nothing invented or renamed.
+function suggestionLabel(s: PermissionSuggestion): string {
+  const behavior = (s.behavior ?? "allow").trim();
+  const rules = (s.rules ?? [])
+    .map((r) => r?.ruleContent?.trim())
+    .filter((c): c is string => !!c);
+  return rules.length ? `${behavior} ${rules.join(", ")}` : behavior;
 }
 
 // ---------------------------------------------------------------------------
@@ -83,34 +94,20 @@ export function GateOverlay() {
     close();
   }
 
-  // "Approve all this session" — a permission-gate-only affordance. This
-  // relays the human's answer for THIS gate exactly like Approve & run, then
-  // additionally switches the underlying agent's own permission posture to
-  // auto-approve for the rest of the session, so the AGENT stops asking —
-  // Marsad still never auto-answers a gate on the human's behalf; the human
-  // clicked once, explicitly, right here.
-  async function handleApproveAllSession() {
+  // Accept a `can_use_tool` gate by picking one of claude's OWN
+  // `permission_suggestions` ("always allow …"). We relay the human's answer
+  // exactly like Approve & run, plus echo claude's chosen suggestion back
+  // VERBATIM as updatedPermissions — the real, claude-provided way to stop being
+  // asked, with NO session restart and nothing invented on our side.
+  async function handleAllowSuggestion(suggestion: PermissionSuggestion) {
     if (!selectedSession) return;
     setBusy(true);
     await answerGate({
       session_id: selectedSession.id,
       decision_id: selectedGate?.decision_id ?? selectedSession.id,
       allow: true,
+      permission_updates: [suggestion],
     });
-    if (selectedSession.posture !== "full") {
-      try {
-        await restartSession({
-          id: selectedSession.id,
-          model: selectedSession.model,
-          posture: "auto",
-        });
-      } catch (err) {
-        // Best-effort: the gate itself was already answered above, so the
-        // human's immediate request went through even if the posture change
-        // didn't stick.
-        console.error("[GateOverlay] approve-all posture switch failed:", err);
-      }
-    }
     setBusy(false);
     close();
   }
@@ -165,6 +162,8 @@ export function GateOverlay() {
   // When present, they REPLACE the binary Approve/Reject with one button per choice.
   const elicitationChoices = permissionData?.elicitation_choices ?? [];
   const hasChoices = elicitationChoices.length > 0;
+  // claude's OWN "always allow …" options for a can_use_tool gate, verbatim.
+  const permissionSuggestions = permissionData?.permission_suggestions ?? [];
   const planData =
     raw && "Plan" in raw ? raw.Plan : null;
   const editData =
@@ -906,29 +905,35 @@ export function GateOverlay() {
                   >
                     {rejectLabel(kind)}
                   </button>
-                  {/* Permission-only: approve this action AND stop asking for
-                      the rest of this session. */}
-                  {gate.is_permission && !gate.is_elicitation && (
-                    <button
-                      data-testid="approve-all-btn"
-                      onClick={handleApproveAllSession}
-                      disabled={busy}
-                      style={{
-                        fontFamily: "inherit",
-                        fontWeight: 600,
-                        fontSize: "calc(15px * var(--fs,1))",
-                        padding: "9px 15px",
-                        borderRadius: 9,
-                        border: "1px solid var(--border2)",
-                        background: "var(--panel2)",
-                        color: "var(--txt2)",
-                        cursor: busy ? "not-allowed" : "pointer",
-                        opacity: busy ? 0.6 : 1,
-                      }}
-                    >
-                      Approve all this session
-                    </button>
-                  )}
+                  {/* Permission-only: claude's OWN "always allow …" suggestions,
+                      rendered VERBATIM (one button each). Picking one approves now
+                      AND persists the exact rule claude offered — no restart, no
+                      invented option. Absent ⇒ only Allow/Reject show. */}
+                  {gate.is_permission &&
+                    !gate.is_elicitation &&
+                    permissionSuggestions.map((s, i) => (
+                      <button
+                        key={i}
+                        data-testid={`approve-suggestion-${i}`}
+                        onClick={() => handleAllowSuggestion(s)}
+                        disabled={busy}
+                        title={s.destination ? `destination: ${s.destination}` : undefined}
+                        style={{
+                          fontFamily: "inherit",
+                          fontWeight: 600,
+                          fontSize: "calc(15px * var(--fs,1))",
+                          padding: "9px 15px",
+                          borderRadius: 9,
+                          border: "1px solid var(--border2)",
+                          background: "var(--panel2)",
+                          color: "var(--txt2)",
+                          cursor: busy ? "not-allowed" : "pointer",
+                          opacity: busy ? 0.6 : 1,
+                        }}
+                      >
+                        {suggestionLabel(s)}
+                      </button>
+                    ))}
                   {/* Elicitation scope choices replace the generic Approve —
                       the per-choice buttons in the body ARE the accept action. */}
                   {!hasChoices && (

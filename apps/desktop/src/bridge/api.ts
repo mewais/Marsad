@@ -374,6 +374,10 @@ export async function answerGate(args: {
   /** For an accepted MCP elicitation that offered a scope choice, the `content`
    *  object to send back (e.g. { grant: "session" }). Ignored on reject. */
   elicitation_content?: Record<string, unknown>;
+  /** For an accepted can_use_tool "always allow …" suggestion, claude's own
+   *  suggestion object(s) echoed back VERBATIM as updatedPermissions. Ignored on
+   *  reject. Sent as a JSON array. */
+  permission_updates?: unknown;
 }): Promise<void> {
   resolvedGateLog.push({
     session_id: args.session_id,

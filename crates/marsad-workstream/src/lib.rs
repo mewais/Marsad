@@ -223,20 +223,21 @@ impl std::error::Error for ConnError {}
 ///   (reboot / OOM / scheduler / crash) — is dormant, so it lands in Paused
 ///   instead of lying with Working/Needs/Error.
 fn severity(phase: &Phase, live: bool) -> Option<HeadState> {
-    if matches!(phase, Phase::Done) {
-        return Some(HeadState::Done);
-    }
-    if !live {
-        return None;
-    }
     match phase {
+        // Attention / terminal states ALWAYS surface, regardless of liveness — a
+        // pending gate (Needs), a failure (Error), or finished work (Done) must
+        // never be hidden behind `live` (a blocked gate means claude is alive and
+        // waiting for the human; hiding it would strand an unanswerable gate).
         Phase::Needs => Some(HeadState::Needs),
         Phase::Error => Some(HeadState::Error),
+        Phase::Done => Some(HeadState::Done),
+        // Everything else only surfaces while actually live; a not-live session is
+        // dormant (→ the board's Paused group).
+        _ if !live => None,
         Phase::Working => Some(HeadState::Working),
-        // Starting is folded into Done: a launched-but-idle session isn't
-        // "working" — it's idle/ready, the same resting bucket as a finished one.
+        // Starting folds into Done: a launched-but-idle session is idle/ready, the
+        // same resting bucket as a finished one.
         Phase::Starting => Some(HeadState::Done),
-        Phase::Done => Some(HeadState::Done), // unreachable: handled above
         Phase::Stale | Phase::Detached => None,
     }
 }

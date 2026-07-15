@@ -86,6 +86,7 @@ pub fn seeded_mock() -> MockState {
         explanation: "Runs pending database migrations against the production schema.".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     };
 
     let plan_gate = Gate::Plan {

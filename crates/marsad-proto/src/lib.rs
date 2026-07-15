@@ -300,6 +300,14 @@ pub struct ControlRequest {
     /// renders as buttons. `None` for `can_use_tool` and schemaless elicitations.
     #[serde(default)]
     pub elicitation_schema: Option<serde_json::Value>,
+    /// The `permission_suggestions` claude attaches to a `can_use_tool` request —
+    /// the REAL "always allow …" options (each an `addRules` object with its own
+    /// `behavior`/`destination`/`rules`). Carried through VERBATIM so the UI shows
+    /// exactly the options claude offers (in addition to plain allow/deny) and
+    /// echoes the chosen one back unchanged as `updatedPermissions`. Empty when
+    /// claude offers none. We never invent, rename, or drop these.
+    #[serde(default)]
+    pub permission_suggestions: Vec<serde_json::Value>,
 }
 
 /// One selectable choice parsed out of an elicitation's `requested_schema`
@@ -373,6 +381,12 @@ pub struct ControlResponse {
     /// empty object would run e.g. Bash with no command. `None` encodes `{}`.
     #[serde(default)]
     pub updated_input: Option<serde_json::Value>,
+    /// The permission update(s) claude should apply for this allow — the chosen
+    /// `permission_suggestion` object(s), echoed back VERBATIM as
+    /// `updatedPermissions` (a JSON array) so an "always allow …" click persists
+    /// the rule claude itself offered. `None` for a plain one-time allow / a deny.
+    #[serde(default)]
+    pub updated_permissions: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -809,6 +823,12 @@ pub enum IpcMsg {
         /// contracts) are unaffected.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         elicitation_content: Option<serde_json::Value>,
+        /// For a `can_use_tool` gate where the human picked one of claude's own
+        /// `permission_suggestions` ("always allow …"), the chosen suggestion
+        /// object(s) — echoed back VERBATIM as `updatedPermissions`. `None` for a
+        /// plain one-time allow / a deny. Additive + defaulted + skipped-when-absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_updates: Option<serde_json::Value>,
     },
     AnswerQuestion {
         /// The session whose pending AskUserQuestion gate this answers.
@@ -1287,12 +1307,19 @@ fn parse_control_request(value: serde_json::Value) -> StreamMsg {
                 .unwrap_or_default()
                 .to_string();
             let input = req.get("input").cloned().unwrap_or(serde_json::Value::Null);
+            // Verbatim passthrough of claude's real "always allow …" options.
+            let permission_suggestions = req
+                .get("permission_suggestions")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
             StreamMsg::ControlRequest(ControlRequest {
                 tool_name,
                 input,
                 request_id: rid.to_string(),
                 elicitation_message: None,
                 elicitation_schema: None,
+                permission_suggestions,
             })
         }
         // MCP elicitation: an MCP server asking the user to approve an action.
@@ -1320,6 +1347,7 @@ fn parse_control_request(value: serde_json::Value) -> StreamMsg {
                 request_id: rid.to_string(),
                 elicitation_message: Some(message),
                 elicitation_schema: schema,
+                permission_suggestions: Vec::new(),
             })
         }
         _ => StreamMsg::Unknown(value),
@@ -1355,13 +1383,18 @@ pub fn encode_user_input(input: &UserInput) -> String {
 /// - deny:  `{"type":"control_response","response":{"subtype":"success","request_id":"X","response":{"behavior":"deny","message":"…"}}}`
 pub fn encode_control_response(resp: &ControlResponse) -> String {
     let inner = if resp.allow {
-        serde_json::json!({
+        let mut obj = serde_json::json!({
             "behavior": "allow",
             "updatedInput": resp
                 .updated_input
                 .clone()
                 .unwrap_or_else(|| serde_json::json!({})),
-        })
+        });
+        // Persist the chosen "always allow …" rule VERBATIM when one was picked.
+        if let Some(perms) = resp.updated_permissions.clone() {
+            obj["updatedPermissions"] = perms;
+        }
+        obj
     } else {
         serde_json::json!({
             "behavior": "deny",

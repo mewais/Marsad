@@ -36,6 +36,12 @@ pub enum Gate {
         /// schemaless elicitation → the UI shows the binary Approve/Reject.
         #[serde(default)]
         elicitation_choices: Vec<marsad_proto::ElicitationChoice>,
+        /// claude's own `permission_suggestions` for a `can_use_tool` gate — the
+        /// real "always allow …" options, VERBATIM. The UI renders one button per
+        /// suggestion (using claude's rule text) alongside plain allow/deny, and
+        /// echoes the chosen one back unchanged. Empty when claude offers none.
+        #[serde(default)]
+        permission_suggestions: Vec<serde_json::Value>,
     },
     Plan {
         /// The control-request id this gate answers. Unique per gate occurrence.
@@ -130,6 +136,12 @@ pub struct GateDecision {
     /// `IpcMsg::AnswerGate.elicitation_content`.
     #[serde(default)]
     pub elicitation_content: Option<serde_json::Value>,
+    /// For a `can_use_tool` allow where the human picked one of claude's own
+    /// `permission_suggestions` ("always allow …"), the chosen suggestion
+    /// object(s) — forwarded VERBATIM into `IpcMsg::AnswerGate.permission_updates`
+    /// → claude's `updatedPermissions`. `None` for a plain allow / a reject.
+    #[serde(default)]
+    pub permission_updates: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +260,7 @@ pub fn approve(session_id: &str, gate: &Gate) -> GateDecision {
         session_id: session_id.to_string(),
         decision: Decision::Approve,
         elicitation_content: None,
+        permission_updates: None,
     }
 }
 
@@ -260,6 +273,7 @@ pub fn reject(session_id: &str, gate: &Gate, reason: &str) -> GateDecision {
             reason: reason.to_string(),
         },
         elicitation_content: None,
+        permission_updates: None,
     }
 }
 
@@ -286,12 +300,14 @@ pub fn to_control_response(decision: &GateDecision) -> marsad_proto::ControlResp
             // agent fills `updated_input` from the pending `can_use_tool`
             // request before encoding the wire response.
             updated_input: None,
+            updated_permissions: None,
         },
         Decision::Reject { reason } => marsad_proto::ControlResponse {
             request_id: decision.id.0.clone(),
             allow: false,
             deny_reason: Some(reason.clone()),
             updated_input: None,
+            updated_permissions: None,
         },
     }
 }

@@ -292,6 +292,7 @@ pub fn answer_gate(
     allow: bool,
     deny_reason: Option<String>,
     elicitation_content: Option<serde_json::Value>,
+    permission_updates: Option<serde_json::Value>,
 ) -> Result<(), String> {
     let updates = {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
@@ -308,6 +309,8 @@ pub fn answer_gate(
                     decision,
                     // Only meaningful for an accepted scope-elicitation.
                     elicitation_content: if allow { elicitation_content } else { None },
+                    // The chosen "always allow …" suggestion, verbatim (allow only).
+                    permission_updates: if allow { permission_updates } else { None },
                 };
                 // Emits Session+Overview updates that clear the answered gate so
                 // the card disappears immediately (see Core::answer_gate).

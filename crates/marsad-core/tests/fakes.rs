@@ -176,6 +176,7 @@ fn scripted_full_happy_path_session() {
         explanation: "list config files".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     };
     let decision = approve(&id, &gate);
     core.answer_gate(decision).expect("answer_gate");
@@ -282,6 +283,7 @@ fn scripted_gate_rejection_sends_deny_ipc() {
         explanation: "irreversible".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     };
     let d = reject(&id, &gate, "too dangerous");
     core.answer_gate(d).expect("answer_gate reject");
@@ -612,6 +614,7 @@ fn scripted_idempotent_answer_gate_end_to_end() {
         explanation: "build the project".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     };
 
     // First approval — must emit exactly one IPC line

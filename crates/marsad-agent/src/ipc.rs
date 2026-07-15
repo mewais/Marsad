@@ -79,8 +79,15 @@ impl Agent {
                 allow,
                 deny_reason,
                 elicitation_content,
+                permission_updates,
                 ..
-            } => self.handle_answer_gate(&session_id, allow, deny_reason, elicitation_content),
+            } => self.handle_answer_gate(
+                &session_id,
+                allow,
+                deny_reason,
+                elicitation_content,
+                permission_updates,
+            ),
             marsad_proto::IpcMsg::AnswerQuestion {
                 session_id,
                 answers,
@@ -539,6 +546,7 @@ impl Agent {
                                 allow: false,
                                 deny_reason: Some("interrupted".to_string()),
                                 updated_input: None,
+                                updated_permissions: None,
                             })
                         };
                         let _ = writer
@@ -575,6 +583,7 @@ impl Agent {
         allow: bool,
         deny_reason: Option<String>,
         elicitation_content: Option<serde_json::Value>,
+        permission_updates: Option<serde_json::Value>,
     ) -> Result<Vec<String>, AgentError> {
         // In production builds, translate the answer into a real
         // `control_response` and write it to the session's in.fifo so claude
@@ -615,6 +624,10 @@ impl Agent {
                         allow,
                         deny_reason,
                         updated_input: if allow { Some(gate.input) } else { None },
+                        // Echo the chosen "always allow …" suggestion VERBATIM so
+                        // claude persists the rule it itself offered. None → a plain
+                        // one-time allow (or a deny).
+                        updated_permissions: if allow { permission_updates.clone() } else { None },
                     };
                     marsad_proto::encode_control_response(&resp)
                 };

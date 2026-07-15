@@ -74,6 +74,23 @@ export interface ElicitationChoice {
   label: string;
 }
 
+/** claude's own `permission_suggestion` for a can_use_tool gate — a real
+ *  "always allow …" option. Carried VERBATIM (we render a label from claude's
+ *  own rule text and echo the whole object back unchanged). Fields mirror
+ *  claude's shape; kept loose so we never reshape what claude sent. */
+export interface PermissionSuggestion {
+  /** e.g. "addRules". */
+  type?: string;
+  /** e.g. "allow" | "deny". */
+  behavior?: string;
+  /** e.g. "localSettings" | "session" | … */
+  destination?: string;
+  /** claude's rule rows, e.g. [{ toolName: "Bash", ruleContent: "git push *" }]. */
+  rules?: { toolName?: string; ruleContent?: string }[];
+  // Any other keys claude includes are preserved on the object at runtime.
+  [k: string]: unknown;
+}
+
 export type Gate =
   | {
       Permission: {
@@ -86,6 +103,11 @@ export type Gate =
         /** Scope-of-allowance choices parsed from the elicitation's schema enum
          *  (e.g. once/session/deny). Empty ⇒ render the binary Approve/Reject. */
         elicitation_choices?: ElicitationChoice[];
+        /** claude's own `permission_suggestions` for a can_use_tool gate — the real
+         *  "always allow …" options, VERBATIM. Each is claude's raw suggestion
+         *  object ({type,rules,behavior,destination}); the UI renders one button per
+         *  entry and echoes the chosen one back unchanged. Empty ⇒ none offered. */
+        permission_suggestions?: PermissionSuggestion[];
       };
     }
   | { Plan: { request_id: string; summary: string; steps: PlanStep[] } }

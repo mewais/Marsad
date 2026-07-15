@@ -677,6 +677,9 @@ fn reduce_control_request(
         elicitation_choices: marsad_proto::parse_elicitation_choices(
             req.elicitation_schema.as_ref(),
         ),
+        // claude's real "always allow …" options for a can_use_tool gate, VERBATIM
+        // (empty for elicitations / when claude offers none).
+        permission_suggestions: req.permission_suggestions.clone(),
     };
     state.gate = Some(gate);
     state.phase = Phase::Needs;

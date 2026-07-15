@@ -184,6 +184,7 @@ fn gate_meta_permission() {
         explanation: String::from("push to remote"),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     };
     let gm = gate_meta(&gate);
     assert_eq!(gm.kind, "Permission");

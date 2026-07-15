@@ -278,6 +278,7 @@ fn encode_control_response_allow_with_updated_input() {
         allow: true,
         deny_reason: None,
         updated_input: Some(serde_json::json!({"command": "ls /"})),
+        updated_permissions: None,
     };
     let encoded = encode_control_response(&resp);
     let raw: serde_json::Value =
@@ -300,6 +301,7 @@ fn encode_control_response_allow_without_updated_input_defaults_to_empty_object(
         allow: true,
         deny_reason: None,
         updated_input: None,
+        updated_permissions: None,
     };
     let encoded = encode_control_response(&resp);
     let raw: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
@@ -317,6 +319,7 @@ fn encode_control_response_deny_with_reason() {
         allow: false,
         deny_reason: Some("blocked".to_string()),
         updated_input: None,
+        updated_permissions: None,
     };
     let encoded = encode_control_response(&resp);
     let raw: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
@@ -332,6 +335,7 @@ fn encode_control_response_deny_without_reason_defaults_to_empty_message() {
         allow: false,
         deny_reason: None,
         updated_input: None,
+        updated_permissions: None,
     };
     let encoded = encode_control_response(&resp);
     let raw: serde_json::Value = serde_json::from_str(&encoded).expect("valid JSON");
@@ -668,7 +672,9 @@ fn encode_ipc_all_variants_produce_valid_json() {
             request_id: "req-1".to_string(),
             allow: true,
             deny_reason: None,
-            elicitation_content: None,        },
+            elicitation_content: None,
+            permission_updates: None,
+        },
         IpcMsg::AnswerQuestion {
             session_id: "sid-6".to_string(),
             request_id: "req-q1".to_string(),

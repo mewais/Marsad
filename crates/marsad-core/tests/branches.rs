@@ -337,6 +337,7 @@ fn answer_gate_idempotent_second_call_is_noop() {
         explanation: "read only".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     };
 
     // First answer — should succeed and emit one outbound IPC
@@ -647,6 +648,7 @@ fn answer_gate_permission_gate_outbound_references_gate() {
         explanation: "run container".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     };
     let d = approve(&id, &gate);
     core.answer_gate(d).expect("answer_gate permission");
@@ -687,6 +689,7 @@ fn answer_gate_clears_pending_gate_and_emits_session_update() {
         explanation: "list".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     };
     let updates = core
         .answer_gate(approve(&id, &gate))

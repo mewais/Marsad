@@ -404,23 +404,16 @@ pub fn group_overview(s: &AppSnapshot) -> OverviewGroups {
     let mut active: Vec<SessionCard> = Vec::new();
     let mut idle: Vec<SessionCard> = Vec::new();
 
-    // Two-axis lifecycle: attention/active buckets only hold LIVE (Resumed)
-    // sessions; a not-live (Paused) session is idle regardless of its last
-    // activity phase — except `Done`, which is always idle (finished its job).
     // Mirrors marsad_workstream::severity so the overview and the board agree.
+    // Attention (Needs/Error) ALWAYS surfaces — a pending gate or a failure is
+    // never hidden behind liveness. `active` (Working) is liveness-gated. `idle`
+    // = finished/idle (Done, or Starting folded into Done), OR not-live (Paused)
+    // that isn't already an attention state.
     // Needs first in attention bucket.
-    for sv in s
-        .sessions
-        .iter()
-        .filter(|sv| sv.live && sv.state == Phase::Needs)
-    {
+    for sv in s.sessions.iter().filter(|sv| sv.state == Phase::Needs) {
         attention.push(session_card(sv, &s.hosts));
     }
-    for sv in s
-        .sessions
-        .iter()
-        .filter(|sv| sv.live && sv.state == Phase::Error)
-    {
+    for sv in s.sessions.iter().filter(|sv| sv.state == Phase::Error) {
         attention.push(session_card(sv, &s.hosts));
     }
     for sv in s
@@ -430,14 +423,10 @@ pub fn group_overview(s: &AppSnapshot) -> OverviewGroups {
     {
         active.push(session_card(sv, &s.hosts));
     }
-    // Idle = finished/idle (Done, or Starting folded into Done) any liveness, OR
-    // not-live (Paused: user-stopped, or host-killed) — so a stopped/crashed and a
-    // launched-but-idle session both appear in the overview instead of vanishing.
-    for sv in s
-        .sessions
-        .iter()
-        .filter(|sv| matches!(sv.state, Phase::Done | Phase::Starting) || !sv.live)
-    {
+    for sv in s.sessions.iter().filter(|sv| {
+        !matches!(sv.state, Phase::Needs | Phase::Error)
+            && (matches!(sv.state, Phase::Done | Phase::Starting) || !sv.live)
+    }) {
         idle.push(session_card(sv, &s.hosts));
     }
 

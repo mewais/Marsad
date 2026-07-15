@@ -504,3 +504,22 @@ fn head_state_ignores_not_live_nodes_except_done() {
     assert_eq!(counts.needs, 1);
     assert_eq!(counts.working, 0, "not-live working node must not be counted");
 }
+
+/// A pending gate (Needs) or a failure (Error) must ALWAYS surface, even when the
+/// node is not-live — a blocked gate can never be hidden behind liveness (that
+/// would strand an unanswerable gate; it's what made a WebSearch HITL vanish from
+/// the dashboard when its host flapped).
+#[test]
+fn head_state_needs_and_error_surface_even_when_not_live() {
+    let mut dead_needs = node("a", "ws", Driver::Claude, "h", Phase::Needs);
+    dead_needs.live = false;
+    assert_eq!(head_state(&[dead_needs.clone()]), Some(HeadState::Needs));
+
+    let mut dead_error = node("b", "ws", Driver::Claude, "h", Phase::Error);
+    dead_error.live = false;
+    assert_eq!(head_state(&[dead_error]), Some(HeadState::Error));
+
+    // And they still count in their buckets despite !live.
+    let counts = state_counts(&[dead_needs]);
+    assert_eq!(counts.needs, 1, "a not-live gate must still be counted");
+}

@@ -523,6 +523,7 @@ fn answer_gate_sends_ipc_and_routes_to_one_session() {
         explanation: "directory listing".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     };
     let decision = approve(&id, &gate);
     core.answer_gate(decision)

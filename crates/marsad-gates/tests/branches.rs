@@ -26,6 +26,7 @@ fn permission_gate(command: &str) -> Gate {
         explanation: "test".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     }
 }
 

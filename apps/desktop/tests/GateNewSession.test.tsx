@@ -216,26 +216,59 @@ describe("GateOverlay — permission variant", () => {
     expect(getRestartSession()).not.toHaveBeenCalled();
   });
 
-  it("renders an 'Approve all this session' button for a permission gate", () => {
-    renderGate("s01");
-    expect(screen.getByTestId("approve-all-btn").textContent).toContain(
-      "Approve all this session"
+  // A real claude permission_suggestion ("always allow git push *").
+  const SUGGESTION = {
+    type: "addRules",
+    behavior: "allow",
+    destination: "localSettings",
+    rules: [{ toolName: "Bash", ruleContent: "git push *" }],
+  };
+  // Inject suggestions onto s01's Permission gate.
+  function withSuggestions(suggestions: unknown[]): Partial<AppSnapshot> {
+    const sessions = MOCK_SNAPSHOT.sessions.map((s) => {
+      if (s.id !== "s01" || !s.gate || !("Permission" in s.gate)) return s;
+      return {
+        ...s,
+        gate: {
+          Permission: {
+            ...(s.gate as { Permission: Record<string, unknown> }).Permission,
+            permission_suggestions: suggestions,
+          },
+        },
+      } as typeof s;
+    });
+    return { sessions };
+  }
+
+  it("renders claude's real permission_suggestions verbatim — no fabricated 'all session' button", () => {
+    renderGate("s01", withSuggestions([SUGGESTION]));
+    // The invented button is gone.
+    expect(screen.queryByTestId("approve-all-btn")).toBeNull();
+    // claude's own rule text shows on a real per-suggestion button.
+    expect(screen.getByTestId("approve-suggestion-0").textContent).toContain(
+      "git push *"
     );
   });
 
-  it("clicking 'Approve all this session' answers the gate AND switches posture to auto", async () => {
-    renderGate("s01");
-    fireEvent.click(screen.getByTestId("approve-all-btn"));
+  it("clicking a suggestion answers allow AND echoes claude's suggestion back verbatim", async () => {
+    renderGate("s01", withSuggestions([SUGGESTION]));
+    fireEvent.click(screen.getByTestId("approve-suggestion-0"));
     await vi.waitFor(() => {
       expect(getAnswerGate()).toHaveBeenCalledWith(
-        expect.objectContaining({ allow: true, session_id: "s01" })
+        expect.objectContaining({
+          allow: true,
+          session_id: "s01",
+          permission_updates: [SUGGESTION],
+        })
       );
     });
-    await vi.waitFor(() => {
-      expect(getRestartSession()).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "s01", posture: "auto" })
-      );
-    });
+  });
+
+  it("shows NO suggestion buttons when claude offers none — only Allow/Reject", () => {
+    renderGate("s01", withSuggestions([]));
+    expect(screen.queryByTestId("approve-suggestion-0")).toBeNull();
+    expect(screen.getByTestId("approve-btn")).toBeTruthy();
+    expect(screen.getByTestId("reject-btn")).toBeTruthy();
   });
 });
 

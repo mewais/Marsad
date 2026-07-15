@@ -436,6 +436,7 @@ fn gate_vm_returns_some_for_permission_gate() {
         explanation: "needs DB access".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     };
     let mut snap = representative_snapshot();
     snap.sessions[0].gate = Some(gate);
@@ -457,6 +458,7 @@ fn gate_vm_permission_kind_and_icon() {
         explanation: "directory listing".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     };
     let mut snap = representative_snapshot();
     snap.sessions[0].gate = Some(gate);

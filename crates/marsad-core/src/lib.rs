@@ -1670,6 +1670,9 @@ impl Core {
             // For an accepted scope-elicitation, forward the chosen content
             // (e.g. { "grant": "session" }); None for everything else.
             elicitation_content: decision.elicitation_content.clone(),
+            // For an accepted "always allow …" suggestion, forward the chosen
+            // rule verbatim → claude's updatedPermissions; None otherwise.
+            permission_updates: decision.permission_updates.clone(),
         })?;
 
         // Optimistically clear the pending gate NOW so the card disappears the
