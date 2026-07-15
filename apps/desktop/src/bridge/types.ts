@@ -285,11 +285,13 @@ export interface RateLimitInfo {
 // TranscriptEntry — one rendered conversation line (matches Rust, role-tagged)
 // ---------------------------------------------------------------------------
 
+// `at` is epoch milliseconds when known (live entries stamped on arrival;
+// resumed entries carry the JSONL time). Absent for entries with no known time.
 export type TranscriptEntry =
-  | { role: "assistant"; text: string }
-  | { role: "user"; text: string }
-  | { role: "tool"; name: string; input: string }
-  | { role: "compaction"; trigger: string; dropped_tokens: number };
+  | { role: "assistant"; text: string; at?: number | null }
+  | { role: "user"; text: string; at?: number | null }
+  | { role: "tool"; name: string; input: string; at?: number | null }
+  | { role: "compaction"; trigger: string; dropped_tokens: number; at?: number | null };
 
 // ---------------------------------------------------------------------------
 // FileChange — one changed file from the git probe

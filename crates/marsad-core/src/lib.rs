@@ -1179,6 +1179,7 @@ impl Core {
             if !fp.is_empty() {
                 transcript.push(marsad_events::TranscriptEntry::User {
                     text: fp.to_string(),
+                    at: Some(now_ms()),
                 });
             }
         }
@@ -1503,16 +1504,19 @@ impl Core {
     ) -> Result<Vec<VmUpdate>, CoreError> {
         self.require_session(id)?;
         let record = self.sessions.get_mut(id).unwrap();
+        let at = Some(now_ms());
         record
             .transcript
             .push(marsad_events::TranscriptEntry::User {
                 text: format!("! {}", command.trim()),
+                at,
             });
         record
             .transcript
             .push(marsad_events::TranscriptEntry::Tool {
                 name: "shell".to_string(),
                 input: output.to_string(),
+                at,
             });
         let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
         Ok(vec![VmUpdate::Session(sv)])
@@ -1535,6 +1539,7 @@ impl Core {
             .transcript
             .push(marsad_events::TranscriptEntry::User {
                 text: format!("! {}", command.trim()),
+                at: Some(now_ms()),
             });
         record.shell_running = true;
         let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
@@ -1557,6 +1562,7 @@ impl Core {
             .push(marsad_events::TranscriptEntry::Tool {
                 name: "shell".to_string(),
                 input: output.to_string(),
+                at: Some(now_ms()),
             });
         let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
         Ok(vec![VmUpdate::Session(sv)])
@@ -1574,6 +1580,7 @@ impl Core {
             rec.transcript
                 .push(marsad_events::TranscriptEntry::User {
                     text: trimmed.to_string(),
+                    at: Some(now_ms()),
                 });
             // Optimistically enter Working the instant the user sends — don't wait
             // for claude's first token. Clears any prior end reason / stale
@@ -2839,6 +2846,7 @@ impl Core {
                                     format!("a\u{0}{t}"),
                                     marsad_events::TranscriptEntry::Assistant {
                                         text: t.to_string(),
+                                        at: Some(now_ms()),
                                     },
                                 ));
                             }
@@ -2850,6 +2858,7 @@ impl Core {
                                 marsad_events::TranscriptEntry::Tool {
                                     name: name.clone(),
                                     input,
+                                    at: Some(now_ms()),
                                 },
                             ));
                         }
@@ -2869,6 +2878,7 @@ impl Core {
                 Some(marsad_events::TranscriptEntry::Compaction {
                     trigger: cb.compact_metadata.trigger.clone(),
                     dropped_tokens: cb.compact_metadata.cumulative_dropped_tokens,
+                    at: Some(now_ms()),
                 })
             } else {
                 None
@@ -3193,6 +3203,16 @@ impl Core {
 /// Return a simple timestamp string for workspace `saved_at` fields.
 ///
 /// Uses seconds-since-epoch; good enough for display and round-trips.
+/// Epoch milliseconds now — the timestamp stamped on LIVE transcript entries as
+/// they arrive (resumed/backfilled entries instead carry the JSONL's own time).
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 fn chrono_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()

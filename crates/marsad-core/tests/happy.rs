@@ -1136,6 +1136,7 @@ fn transcript_resume_loads_session_history() {
     use marsad_events::TranscriptEntry;
     let hist = vec![TranscriptEntry::User {
         text: "h1".to_string(),
+        at: None,
     }];
     let mut core = core_with_history(hist.clone(), vec![]);
     let id = launch_t(&mut core, None, LaunchMode::Resume("uuid-x".to_string()));
@@ -1150,6 +1151,7 @@ fn transcript_continue_loads_most_recent_history() {
     use marsad_events::TranscriptEntry;
     let recent = vec![TranscriptEntry::Assistant {
         text: "r1".to_string(),
+        at: None,
     }];
     let mut core = core_with_history(vec![], recent.clone());
     let id = launch_t(&mut core, None, LaunchMode::Continue);
@@ -1177,12 +1179,9 @@ fn transcript_first_prompt_is_injected() {
     let u = core
         .on_agent_line(&ipc_agent_event_system_init(&id))
         .unwrap();
-    assert_eq!(
-        last_sv(&u).transcript,
-        vec![TranscriptEntry::User {
-            text: "hello there".to_string()
-        }]
-    );
+    let t = last_sv(&u).transcript;
+    assert_eq!(t.len(), 1);
+    assert!(matches!(&t[0], TranscriptEntry::User { text, .. } if text == "hello there"));
 }
 
 #[test]
@@ -1208,13 +1207,9 @@ fn transcript_assistant_text_appended_and_deduped() {
     let u = core
         .on_agent_line(&ipc_agent_event_assistant(&id, "m1"))
         .unwrap();
-    assert_eq!(
-        last_sv(&u).transcript,
-        vec![TranscriptEntry::Assistant {
-            text: "Thinking...".to_string()
-        }],
-        "same message id must append exactly once"
-    );
+    let t = last_sv(&u).transcript;
+    assert_eq!(t.len(), 1, "same message id must append exactly once");
+    assert!(matches!(&t[0], TranscriptEntry::Assistant { text, .. } if text == "Thinking..."));
 }
 
 #[test]
@@ -1265,17 +1260,10 @@ fn transcript_send_prompt_is_injected() {
     let u = core
         .on_agent_line(&ipc_agent_event_assistant(&id, "m9"))
         .unwrap();
-    assert_eq!(
-        last_sv(&u).transcript,
-        vec![
-            TranscriptEntry::User {
-                text: "please do X".to_string()
-            },
-            TranscriptEntry::Assistant {
-                text: "Thinking...".to_string()
-            },
-        ]
-    );
+    let t = last_sv(&u).transcript;
+    assert_eq!(t.len(), 2);
+    assert!(matches!(&t[0], TranscriptEntry::User { text, .. } if text == "please do X"));
+    assert!(matches!(&t[1], TranscriptEntry::Assistant { text, .. } if text == "Thinking..."));
 }
 
 // ---------------------------------------------------------------------------
@@ -2913,15 +2901,12 @@ fn inject_shell_output_appends_entries_and_returns_session_update() {
 
     // Transcript must have: User("! ls -la") and Tool { name: "shell", input: output }
     assert_eq!(sv.transcript.len(), 2, "two entries must be appended");
-    assert_eq!(
-        sv.transcript[0],
-        TranscriptEntry::User {
-            text: "! ls -la".to_string()
-        },
+    assert!(
+        matches!(&sv.transcript[0], TranscriptEntry::User { text, .. } if text == "! ls -la"),
         "first entry must be the ! command"
     );
     assert!(
-        matches!(&sv.transcript[1], TranscriptEntry::Tool { name, input }
+        matches!(&sv.transcript[1], TranscriptEntry::Tool { name, input, .. }
             if name == "shell" && input.contains("file.txt")),
         "second entry must be Tool(shell) with the output"
     );
@@ -2942,11 +2927,8 @@ fn inject_shell_output_trims_command() {
         VmUpdate::Session(s) => s.clone(),
         other => panic!("{other:?}"),
     };
-    assert_eq!(
-        sv.transcript[0],
-        TranscriptEntry::User {
-            text: "! echo hello".to_string()
-        },
+    assert!(
+        matches!(&sv.transcript[0], TranscriptEntry::User { text, .. } if text == "! echo hello"),
         "command must be trimmed"
     );
 }

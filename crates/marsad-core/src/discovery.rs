@@ -224,6 +224,11 @@ struct JsonlLine {
     subtype: Option<String>,
     #[serde(default, rename = "compact_metadata")]
     compact_metadata: Option<JsonlCompactMetadata>,
+    /// Per-entry ISO-8601 UTC time claude records on every JSONL line
+    /// (e.g. "2026-06-01T20:03:03.967Z"). Parsed to epoch-ms for the transcript
+    /// timestamp so a resumed session's history shows real day separators/times.
+    #[serde(default)]
+    timestamp: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -313,6 +318,53 @@ fn truncate_snippet(s: String) -> String {
 /// - `"assistant"` lines → `TranscriptEntry::Assistant` for each text block and
 ///   `TranscriptEntry::Tool` for each `tool_use` block.
 /// - Every other line type, blank line, or unparseable line is skipped.
+/// Parse an ISO-8601 UTC timestamp ("2026-06-01T20:03:03.967Z", millis
+/// optional) to epoch milliseconds. `None` on any malformed input. No date
+/// crate: the date part uses Howard Hinnant's `days_from_civil`.
+fn iso_to_ms(s: &str) -> Option<i64> {
+    let s = s.trim();
+    let b = s.as_bytes();
+    if s.len() < 19 || b[4] != b'-' || b[7] != b'-' || (b[10] != b'T' && b[10] != b' ') {
+        return None;
+    }
+    let year: i64 = s.get(0..4)?.parse().ok()?;
+    let month: i64 = s.get(5..7)?.parse().ok()?;
+    let day: i64 = s.get(8..10)?.parse().ok()?;
+    let hour: i64 = s.get(11..13)?.parse().ok()?;
+    let min: i64 = s.get(14..16)?.parse().ok()?;
+    let sec: i64 = s.get(17..19)?.parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    // Optional ".fff" fractional seconds → milliseconds (pad/truncate to 3).
+    let millis: i64 = if s.len() > 20 && b[19] == b'.' {
+        let frac: String = s[20..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .take(3)
+            .collect();
+        if frac.is_empty() {
+            0
+        } else {
+            let mut m: i64 = frac.parse().ok()?;
+            for _ in 0..(3 - frac.len()) {
+                m *= 10;
+            }
+            m
+        }
+    } else {
+        0
+    };
+    // days_from_civil (Hinnant): days since 1970-01-01.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    Some((days * 86400 + hour * 3600 + min * 60 + sec) * 1000 + millis)
+}
+
 pub fn parse_transcript(jsonl: &str) -> Vec<TranscriptEntry> {
     let mut out = Vec::new();
     for line in jsonl.lines() {
@@ -324,6 +376,8 @@ pub fn parse_transcript(jsonl: &str) -> Vec<TranscriptEntry> {
             continue;
         };
         let role = parsed.line_type.as_deref();
+        // Per-entry time from the JSONL (used for day separators / per-turn times).
+        let at = parsed.timestamp.as_deref().and_then(iso_to_ms);
 
         // A `system/compact_boundary` line inserts a Compaction entry in sequence
         // so the UI shows it at the chronological point where compaction occurred.
@@ -334,6 +388,7 @@ pub fn parse_transcript(jsonl: &str) -> Vec<TranscriptEntry> {
                 out.push(TranscriptEntry::Compaction {
                     trigger: cm.trigger,
                     dropped_tokens: cm.cumulative_dropped_tokens,
+                    at,
                 });
             }
             continue;
@@ -354,6 +409,7 @@ pub fn parse_transcript(jsonl: &str) -> Vec<TranscriptEntry> {
                             if !text.is_empty() {
                                 out.push(TranscriptEntry::User {
                                     text: text.to_string(),
+                                    at,
                                 });
                             }
                         }
@@ -369,6 +425,7 @@ pub fn parse_transcript(jsonl: &str) -> Vec<TranscriptEntry> {
                                 if !text.is_empty() {
                                     out.push(TranscriptEntry::Assistant {
                                         text: text.to_string(),
+                                        at,
                                     });
                                 }
                             }
@@ -377,6 +434,7 @@ pub fn parse_transcript(jsonl: &str) -> Vec<TranscriptEntry> {
                             out.push(TranscriptEntry::Tool {
                                 name: block.name.unwrap_or_default(),
                                 input: block.input.map(|v| v.to_string()).unwrap_or_default(),
+                                at,
                             });
                         }
                         _ => {}
@@ -1136,7 +1194,7 @@ mod tests {
             parse_transcript(jsonl),
             vec![TranscriptEntry::User {
                 text: "hi there".to_string()
-            }]
+            , at: None }]
         );
     }
 
@@ -1149,11 +1207,12 @@ mod tests {
             vec![
                 TranscriptEntry::Assistant {
                     text: "on it".to_string()
-                },
+                , at: None },
                 // serde_json renders the single-key object deterministically.
                 TranscriptEntry::Tool {
                     name: "Write".to_string(),
                     input: r#"{"path":"a.txt"}"#.to_string(),
+                    at: None,
                 },
             ]
         );
@@ -1166,7 +1225,8 @@ mod tests {
             parse_transcript(jsonl),
             vec![TranscriptEntry::Tool {
                 name: String::new(),
-                input: String::new()
+                input: String::new(),
+                at: None
             }]
         );
     }
@@ -1226,9 +1286,9 @@ mod tests {
         assert_eq!(
             parse_transcript(jsonl),
             vec![
-                TranscriptEntry::User { text: "q1".into() },
-                TranscriptEntry::Assistant { text: "a1".into() },
-                TranscriptEntry::User { text: "q2".into() },
+                TranscriptEntry::User { text: "q1".into() , at: None },
+                TranscriptEntry::Assistant { text: "a1".into() , at: None },
+                TranscriptEntry::User { text: "q2".into() , at: None },
             ]
         );
     }
@@ -1248,12 +1308,13 @@ mod tests {
         assert_eq!(
             t,
             vec![
-                TranscriptEntry::User { text: "before".into() },
+                TranscriptEntry::User { text: "before".into() , at: None },
                 TranscriptEntry::Compaction {
                     trigger: "manual".into(),
                     dropped_tokens: 800,
+                    at: None,
                 },
-                TranscriptEntry::Assistant { text: "after".into() },
+                TranscriptEntry::Assistant { text: "after".into() , at: None },
             ],
             "Compaction must appear between user and assistant, not at the end"
         );
@@ -1268,7 +1329,40 @@ mod tests {
             r#"{"type":"system","subtype":"compact_boundary","session_id":"s1"}"#,
         );
         let t = parse_transcript(jsonl);
-        assert_eq!(t, vec![TranscriptEntry::User { text: "hi".into() }]);
+        assert_eq!(t, vec![TranscriptEntry::User { text: "hi".into() , at: None }]);
+    }
+
+    #[test]
+    fn iso_to_ms_parses_utc_timestamps() {
+        // Epoch anchors (verifiable): 1970-01-01 = 0; 2000-01-01 = 946684800000ms.
+        assert_eq!(iso_to_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(iso_to_ms("2000-01-01T00:00:00Z"), Some(946_684_800_000));
+        // Milliseconds captured; later same-day time is strictly greater.
+        let a = iso_to_ms("2026-06-01T20:03:03.967Z").unwrap();
+        assert_eq!(a % 1000, 967, "fractional seconds → millis");
+        let b = iso_to_ms("2026-06-01T20:03:04Z").unwrap();
+        assert!(b > a, "later time must be greater");
+        // Space separator + no millis both accepted.
+        assert!(iso_to_ms("2026-06-01 20:03:03Z").is_some());
+        // Malformed → None (never panics).
+        assert_eq!(iso_to_ms("not-a-date"), None);
+        assert_eq!(iso_to_ms(""), None);
+        assert_eq!(iso_to_ms("2026-13-99T00:00:00Z"), None);
+    }
+
+    #[test]
+    fn parse_transcript_reads_entry_timestamp() {
+        let jsonl = r#"{"type":"user","timestamp":"2026-06-01T20:03:03.967Z","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#;
+        let t = parse_transcript(jsonl);
+        assert_eq!(t.len(), 1);
+        match &t[0] {
+            TranscriptEntry::User { text, at } => {
+                assert_eq!(text, "hi");
+                assert_eq!(*at, iso_to_ms("2026-06-01T20:03:03.967Z"));
+                assert!(at.is_some(), "JSONL timestamp must be parsed into `at`");
+            }
+            other => panic!("expected User, got {other:?}"),
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -1294,10 +1388,10 @@ mod tests {
             vec![
                 TranscriptEntry::User {
                     text: "hello".into()
-                },
+                , at: None },
                 TranscriptEntry::Assistant {
                     text: "world".into()
-                },
+                , at: None },
             ]
         );
     }

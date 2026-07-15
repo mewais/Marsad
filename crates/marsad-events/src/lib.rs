@@ -86,19 +86,45 @@ pub struct Subagent {
 /// `{"role":"assistant","text":...}`, `{"role":"user","text":...}`,
 /// `{"role":"tool","name":...,"input":...}`,
 /// `{"role":"compaction","trigger":...,"dropped_tokens":...}`.
+/// Epoch-milliseconds timestamp for a transcript entry, when known. Live entries
+/// are stamped by core on arrival; resumed/backfilled entries carry the time
+/// parsed from the claude JSONL. `None` for entries whose time is unknown (older
+/// data / synthetic test entries). The UI uses it for day separators, idle-gap
+/// markers, and per-turn times — NOT a timestamp under every line.
+///
+/// `#[serde(default, skip_serializing_if = "Option::is_none")]` on every variant
+/// keeps the wire clean and lets old serialized transcripts parse unchanged.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum TranscriptEntry {
     /// Assistant prose (a `text` content block from claude).
-    Assistant { text: String },
+    Assistant {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<i64>,
+    },
     /// A user/human turn (a `text` content block in a user message).
-    User { text: String },
+    User {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<i64>,
+    },
     /// A tool invocation by the assistant (`name` + JSON-encoded `input`).
-    Tool { name: String, input: String },
+    Tool {
+        name: String,
+        input: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<i64>,
+    },
     /// A context compaction event (`system/compact_boundary`). Inserted in
     /// sequence so the UI shows the compaction at its chronological position
     /// rather than at the bottom of the transcript.
-    Compaction { trigger: String, dropped_tokens: u64 },
+    Compaction {
+        trigger: String,
+        dropped_tokens: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<i64>,
+    },
 }
 
 // ---------------------------------------------------------------------------

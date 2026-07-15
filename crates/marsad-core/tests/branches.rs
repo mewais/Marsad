@@ -477,7 +477,7 @@ fn streamed_blocks_sharing_a_message_id_all_appear_and_dedup() {
     let text_count = sv
         .transcript
         .iter()
-        .filter(|e| matches!(e, marsad_events::TranscriptEntry::Assistant { text } if text == "ok"))
+        .filter(|e| matches!(e, marsad_events::TranscriptEntry::Assistant { text, .. } if text == "ok"))
         .count();
     let has_tool = sv
         .transcript
