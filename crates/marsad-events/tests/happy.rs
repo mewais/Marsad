@@ -137,6 +137,46 @@ fn control_request_transitions_to_needs() {
     assert!(s1.gate.is_some());
 }
 
+// Regression (gate flash-and-vanish): a pending gate means claude is BLOCKED
+// awaiting a human answer. A subsequent assistant message in the SAME turn
+// (claude reasoning / firing further parallel tool calls) must NOT flip the
+// phase back to Working — doing so silently dropped the gate's card off the
+// dashboard's attention bucket. Real MCP/opencode turns emit `control_request
+// → assistant` with no intervening `user` tool_result, so the gate must stay
+// Needs based on `gate.is_some()`, not on any stream heuristic.
+#[test]
+fn assistant_after_control_request_keeps_gate_needs() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(s0, stream(&control_request_json("req-1", "Bash")));
+    assert_eq!(s1.phase, Phase::Needs);
+    // No intervening `user` tool_result — assistant follows the gate directly.
+    let s2 = reduce(s1, stream(&assistant_json("msg-after-gate", 50, 10)));
+    assert_eq!(
+        s2.phase,
+        Phase::Needs,
+        "an assistant message must not clobber a still-open gate"
+    );
+    assert!(s2.gate.is_some(), "the gate must remain pending");
+}
+
+// Regression: likewise a turn-level `result` is claude's, not the human's
+// answer, so it must not mark the session Done out from under a pending gate.
+#[test]
+fn result_after_control_request_keeps_gate_needs() {
+    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s1 = reduce(s0, stream(&control_request_json("req-1", "Bash")));
+    assert_eq!(s1.phase, Phase::Needs);
+    let s2 = reduce(s1, stream(&result_success_json(100, 20, 1.0)));
+    assert_eq!(
+        s2.phase,
+        Phase::Needs,
+        "a result must not clobber a still-open gate"
+    );
+    assert!(s2.gate.is_some(), "the gate must remain pending");
+    // But cost/tokens from the result are still recorded.
+    assert_eq!(s2.cost_usd, 1.0);
+}
+
 #[test]
 fn bash_gate_shows_the_actual_command_not_the_tool_name() {
     // Regression: the gate used to display the tool name ("Bash") instead of the

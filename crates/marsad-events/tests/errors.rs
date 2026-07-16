@@ -97,6 +97,28 @@ fn interrupt_result_is_cancelled_not_error() {
     assert_eq!(EndReason::Cancelled.text(), "Cancelled by the user");
 }
 
+/// A user interrupt while a gate is OPEN: the cancelled error result must still
+/// resolve the turn (Done + Cancelled) AND drop the pending gate, rather than
+/// getting held at Needs by the "don't clobber an open gate" guard. Regression
+/// for the gate-stickiness fix (a pending gate normally survives a `result`, but
+/// an interrupt genuinely ends the turn and declines the gate).
+#[test]
+fn interrupt_while_gate_open_cancels_and_clears_gate() {
+    let mut s = reduce(
+        after_init(),
+        stream(
+            r#"{"type":"control_request","request_id":"req-x","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{}}}"#,
+        ),
+    );
+    assert_eq!(s.phase, Phase::Needs);
+    assert!(s.gate.is_some());
+    s.interrupt_requested = true;
+    let s1 = reduce(s, stream(&result_json("error_during_execution", false)));
+    assert_eq!(s1.phase, Phase::Done, "cancelled turn is Done, not stuck Needs");
+    assert_eq!(s1.end_reason, Some(EndReason::Cancelled));
+    assert!(s1.gate.is_none(), "the abandoned gate must be cleared on cancel");
+}
+
 /// A genuine error (no interrupt) stays Error and carries a real reason.
 #[test]
 fn error_results_carry_a_reason() {

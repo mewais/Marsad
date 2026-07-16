@@ -220,20 +220,6 @@ pub struct SessionState {
     /// tool_result completions. Keyed by the `id` of the `Task` tool_use block.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     running_task_ids: HashMap<String, usize>,
-    /// Set once, while `gate` is open, a `user` message arrives that carries
-    /// ONLY tool_result blocks (no literal human `text` reply) — i.e. proof
-    /// that only automation (the CLI echoing an already-approved tool's own
-    /// output), never the human, has spoken since the gate opened. Real
-    /// approvals travel over the separate control-response channel and never
-    /// appear as a stream event (see `encode_control_response`), so once this
-    /// is set, later `assistant`/`result` events must not paper over the
-    /// still-unanswered gate by flipping phase away from `Needs`. Cleared
-    /// (along with `gate`) only by an actual human `text` reply. Starts
-    /// `false` so a gate that closes before any tool_result is ever observed
-    /// (e.g. a synthetic/idealized stream that jumps straight from the gate
-    /// to the next assistant turn) keeps the original, lenient behavior.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    gate_confirmed_automated: bool,
     /// Why the last turn ended, when noteworthy (see `EndReason`). Drives the
     /// human-facing text on an Error/Cancelled card. `None` for a normal turn or
     /// while working. Cleared when a new turn starts.
@@ -273,7 +259,6 @@ impl SessionState {
             rate_limit: None,
             seen_message_ids: HashSet::new(),
             running_task_ids: HashMap::new(),
-            gate_confirmed_automated: false,
             end_reason: None,
             interrupt_requested: false,
         }
@@ -285,7 +270,6 @@ impl SessionState {
     /// `Needs` phase back to `Working`. The claude stream remains the source of
     /// truth: its subsequent messages re-drive phase/gate as usual.
     pub fn clear_gate_on_answer(&mut self) {
-        self.gate_confirmed_automated = false;
         self.advance_gate();
     }
 
@@ -420,29 +404,23 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
             // blocks is the CLI's own automatic echo of an already-approved
             // tool's output — the real approval travels over the separate
             // control-response channel (see `reduce_control_request` /
-            // `encode_control_response`), never as a stream `user` turn. Real
-            // captures confirm every `user` line while a permission/plan gate
-            // is open is a bare tool_result for the now-approved tool call —
-            // seeing one proves definitively that only automation (not the
-            // human) has spoken since the gate opened, so it flips
-            // `gate_confirmed_automated` and the gate now legitimately stays
-            // open (Phase::Needs) for the rest of the fold — see
-            // `reduce_assistant` / `reduce_result` — until an actual human
-            // `text` reply arrives.
+            // `encode_control_response`), never as a stream `user` turn — so it
+            // must NOT resolve the gate. The gate stays open (Phase::Needs) until
+            // an actual human `text` reply arrives or the gate is answered via
+            // the control channel (`clear_gate_on_answer`); `reduce_assistant` /
+            // `reduce_result` now key their "don't clobber an open gate" guard on
+            // `state.gate` directly, so no separate confirmation flag is needed.
             let has_text_reply = msg
                 .message
                 .content
                 .iter()
                 .any(|b| matches!(b, marsad_proto::ContentBlock::Text { .. }));
             if has_text_reply {
-                state.gate_confirmed_automated = false;
                 // Advance the gate queue (show the next pending gate if any; else
                 // clear + flip to Working). A human reply resolves the current gate.
                 state.advance_gate();
                 // A human reply starts a new turn — clear any prior end reason.
                 state.end_reason = None;
-            } else if state.gate.is_some() {
-                state.gate_confirmed_automated = true;
             }
             // Check for tool_result blocks that complete a running Task subagent.
             for block in &msg.message.content {
@@ -557,17 +535,19 @@ fn reduce_assistant(mut state: SessionState, msg: marsad_proto::AssistantMsg) ->
         }
     }
 
-    // A pending gate that has been CONFIRMED automated (see
-    // `gate_confirmed_automated` / the `StreamMsg::User` arm) stays open
-    // until the human's actual answer — an assistant message that shows up
-    // in the meantime (e.g. claude continuing to reason/act on
-    // already-approved tool output while the gate itself was only ever
-    // resolved by automation, never a literal reply) must not silently paper
-    // over the open Need. A gate that has NOT yet seen that confirmation
-    // (e.g. a caller that drives `reduce` directly from `ControlRequest`
-    // straight to `Assistant`, with no intervening stream `user` event at
-    // all) keeps the original, lenient behavior.
-    if !state.gate_confirmed_automated {
+    // A pending gate means claude is BLOCKED on a `can_use_tool` /
+    // AskUserQuestion / ExitPlanMode control_request that has not yet been
+    // answered (the agent captured it and no control_response / human reply has
+    // cleared it — see `advance_gate` / `clear_gate_on_answer`). An assistant
+    // message that arrives while the gate is still open (e.g. claude reasoning
+    // or firing further parallel tool calls in the same turn) must NOT paper
+    // over that open Need by flipping the phase back to Working — otherwise the
+    // gate's card silently leaves the dashboard's attention bucket while the
+    // human still owes an answer. We key this on the gate itself, not a stream
+    // heuristic: real MCP/opencode turns emit `control_request → assistant`
+    // with no intervening `user` tool_result, so the old
+    // `gate_confirmed_automated` flag stayed false and the gate got clobbered.
+    if state.gate.is_none() {
         state.phase = Phase::Working;
         // Assistant output = an active turn; a prior end reason is stale.
         state.end_reason = None;
@@ -591,14 +571,18 @@ fn reduce_result(mut state: SessionState, result: marsad_proto::ResultMsg) -> Se
     // Replace model_usage with the authoritative cumulative per-model breakdown.
     state.model_usage = result.model_usage;
 
-    // A gate CONFIRMED automated (see `gate_confirmed_automated`) means the
-    // human never actually answered it — claude's own turn-level `result` is
-    // not the human's decision, so it must not retroactively mark the
-    // session Done/Error out from under a pending Needs. Cost/tokens/
-    // model_usage above still reflect the real captured usage either way. A
-    // gate that never saw that confirmation (no intervening stream `user`
-    // event) keeps the original, lenient behavior — `result` is authoritative.
-    if state.gate_confirmed_automated {
+    // A still-pending gate means claude is BLOCKED awaiting a human answer;
+    // claude's own turn-level `result` is not that answer, so it must not
+    // retroactively mark the session Done/Error out from under a pending Needs.
+    // Cost/tokens/model_usage above still reflect the real captured usage either
+    // way. Keyed on the gate itself (not the old `gate_confirmed_automated`
+    // heuristic) so it holds even when no intervening `user` tool_result arrived.
+    //
+    // EXCEPTION: a user-initiated interrupt (Escape) genuinely ends the turn —
+    // the agent declines the pending gate(s) over the control channel — so we
+    // must NOT hold at Needs; fall through to classify the calm Cancel below,
+    // which also drops the abandoned gate(s).
+    if state.gate.is_some() && !state.interrupt_requested {
         return state;
     }
 
@@ -618,6 +602,11 @@ fn reduce_result(mut state: SessionState, result: marsad_proto::ResultMsg) -> Se
     if is_error && state.interrupt_requested {
         state.phase = Phase::Done;
         state.end_reason = Some(EndReason::Cancelled);
+        // The cancelled turn abandons any pending gate(s) — the agent declines
+        // them on interrupt — so clear them here rather than leaving a stranded
+        // Needs card behind a Done turn.
+        state.gate = None;
+        state.gate_queue.clear();
     } else if is_error {
         state.phase = Phase::Error;
         state.end_reason = Some(match result.subtype {
