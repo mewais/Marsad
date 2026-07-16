@@ -63,6 +63,7 @@ fn single_session_snapshot(phase: Phase) -> AppSnapshot {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         }],
         hosts: vec![Host {
@@ -233,6 +234,7 @@ fn rescope_unknown_workspace_returns_unchanged_snapshot() {
                 shell_running: false,
                 driver: "claude".to_string(),
                 live: true,
+                conn_health: "Connected".to_string(),
                 end_reason: None,
             },
             SessionView {
@@ -270,6 +272,7 @@ fn rescope_unknown_workspace_returns_unchanged_snapshot() {
                 shell_running: false,
                 driver: "claude".to_string(),
                 live: true,
+                conn_health: "Connected".to_string(),
                 end_reason: None,
             },
         ],
@@ -344,6 +347,7 @@ fn rescope_empty_workspace_session_ids_gives_no_sessions() {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         }],
         hosts: vec![],

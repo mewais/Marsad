@@ -393,6 +393,13 @@ struct SessionRecord {
     /// Restored sessions start `false` (unknown until the agent confirms) so we
     /// never optimistically claim a session is running before proving it.
     live: bool,
+    /// Per-session CONNECTION health (distinct from `live`): whether Marsad
+    /// currently has a clean stream to the (remote) session. Driven by the agent's
+    /// `SessionConn` events (real stream drop / re-attach / flap), NOT the periodic
+    /// host poll. Used to HARD-BLOCK sending into a broken pipe and to show the true
+    /// state. `live=false` (Paused) takes priority in the UI. Defaults to
+    /// `Connected` (local sessions and until the agent says otherwise).
+    conn_health: marsad_proto::ConnHealth,
 }
 
 // ---------------------------------------------------------------------------
@@ -747,6 +754,7 @@ impl Core {
                     // Resumed via a stream event / backfill / SessionLiveness once
                     // it actually reconnects. No optimism — truth on confirmation.
                     live: false,
+                    conn_health: marsad_proto::ConnHealth::Connected,
                 },
             );
             let sv = self.make_session_view(&s.id, self.sessions.get(&s.id).unwrap());
@@ -1222,6 +1230,7 @@ impl Core {
                 // process now → Resumed. The agent's SessionLiveness will correct
                 // this to Paused if the launch never actually comes up.
                 live: true,
+                conn_health: marsad_proto::ConnHealth::Connected,
             },
         );
 
@@ -2321,6 +2330,11 @@ impl Core {
             IpcMsg::SessionLiveness { session_id, live } => {
                 self.handle_session_liveness(&session_id, live)
             }
+            // Per-session connection health (Connected/Reconnecting/Unstable) from
+            // the agent's reader — drives the disconnected UI + composer hard-block.
+            IpcMsg::SessionConn { session_id, health } => {
+                self.handle_session_conn(&session_id, health)
+            }
             // U1: one (driver, host) snapshot — always a COMPLETE replace, never
             // a merge (dynamic-capabilities.md §2/§3.5).
             IpcMsg::CapabilitiesUpdate {
@@ -2588,7 +2602,37 @@ impl Core {
         live: bool,
     ) -> Result<Vec<VmUpdate>, CoreError> {
         match self.sessions.get_mut(session_id) {
-            Some(rec) if rec.live != live => rec.live = live,
+            Some(rec) if rec.live != live => {
+                rec.live = live;
+                // Coming back Resumed clears any stale connection health so the UI
+                // doesn't linger on "Reconnecting" before the reader's next
+                // SessionConn lands (it emits Connected on attach right after this).
+                if live {
+                    rec.conn_health = marsad_proto::ConnHealth::Connected;
+                }
+            }
+            _ => return Ok(vec![]),
+        }
+        let sv = self.make_session_view(session_id, self.sessions.get(session_id).unwrap());
+        let snap = self.snapshot();
+        let groups = marsad_viewmodel::group_overview(&snap);
+        Ok(vec![
+            VmUpdate::Session(sv),
+            VmUpdate::Overview(groups),
+            VmUpdate::Board(self.board()),
+        ])
+    }
+
+    /// Per-session connection health from the agent's reader (real stream events,
+    /// not the host poll). Mirrors `handle_session_liveness`. A no-op when the
+    /// value is unchanged so it doesn't churn the board.
+    fn handle_session_conn(
+        &mut self,
+        session_id: &str,
+        health: marsad_proto::ConnHealth,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        match self.sessions.get_mut(session_id) {
+            Some(rec) if rec.conn_health != health => rec.conn_health = health,
             _ => return Ok(vec![]),
         }
         let sv = self.make_session_view(session_id, self.sessions.get(session_id).unwrap());
@@ -3194,6 +3238,7 @@ impl Core {
             shell_running: record.shell_running,
             driver: record.driver.clone(),
             live: record.live,
+            conn_health: conn_health_str(record.conn_health),
             end_reason: s.end_reason,
         }
     }
@@ -3202,6 +3247,17 @@ impl Core {
 // ---------------------------------------------------------------------------
 // Private free functions
 // ---------------------------------------------------------------------------
+
+/// Map the per-session connection health enum to the string the SessionView
+/// carries to the UI ("Connected"/"Reconnecting"/"Unstable").
+fn conn_health_str(h: marsad_proto::ConnHealth) -> String {
+    match h {
+        marsad_proto::ConnHealth::Connected => "Connected",
+        marsad_proto::ConnHealth::Reconnecting => "Reconnecting",
+        marsad_proto::ConnHealth::Unstable => "Unstable",
+    }
+    .to_string()
+}
 
 /// Return a simple timestamp string for workspace `saved_at` fields.
 ///

@@ -456,8 +456,9 @@ impl Agent {
                     // after a resume/reconnect). QUEUE the encoded prompt so the
                     // reader flushes it in order the moment it registers the writer,
                     // instead of dropping it while the UI shows PromptSent (which
-                    // silently lost prompts typed right after a resume). Bounded +
-                    // TTL'd (drained in reader.rs on writer registration).
+                    // silently lost prompts typed right after a resume). Bounded by
+                    // PENDING_PROMPT_MAX (no time limit — survives a slow/long
+                    // outage); drained in reader.rs on writer registration.
                     let mut bytes = encoded.into_bytes();
                     bytes.push(b'\n');
                     let mut q = self.pending_prompts.lock().unwrap();
@@ -465,7 +466,15 @@ impl Agent {
                     entry.push((std::time::Instant::now(), bytes));
                     let n = entry.len();
                     if n > crate::PENDING_PROMPT_MAX {
-                        entry.drain(0..n - crate::PENDING_PROMPT_MAX);
+                        // Bound hit — drop the oldest to cap memory. SURFACE it
+                        // (don't drop silently): this is the only place queued input
+                        // can still be lost, and only under an extreme backlog.
+                        let overflow = n - crate::PENDING_PROMPT_MAX;
+                        eprintln!(
+                            "marsad-agent: session {session_id} pending-prompt queue over cap ({n} > {}) — dropping {overflow} oldest",
+                            crate::PENDING_PROMPT_MAX
+                        );
+                        entry.drain(0..overflow);
                     }
                     eprintln!(
                         "marsad-agent: session {session_id} send_prompt QUEUED ({} chars) — writer not ready, will deliver on (re)attach ({} queued)",

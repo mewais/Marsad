@@ -1583,14 +1583,35 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
         }}
       >
         <div style={{ maxWidth: 1040, margin: "0 auto" }}>
-          <Composer
-            sessionId={sessionId}
-            onSend={handleSend}
-            onInterrupt={handleInterrupt}
-            onSlashSelect={handleSlashSelect}
-            history={promptHistory}
-            slashCommands={sv.slash_commands}
-          />
+          {(() => {
+            // Hard-block sending whenever the session isn't cleanly reachable:
+            // Paused (not running) or its stream isn't Connected (Reconnecting /
+            // Unstable). Prevents firing a prompt/command into a broken pipe; the
+            // draft is preserved untouched. Uses the per-session `conn_health`
+            // (real reader events), not the coarse 15s host poll.
+            const connHealth = sv.conn_health ?? "Connected";
+            const paused = sv.live === false;
+            const sendBlocked = paused || connHealth !== "Connected";
+            const disabledReason = paused
+              ? "Session paused — resume it to send"
+              : connHealth === "Reconnecting"
+                ? "Reconnecting… your text is kept, send when it's back"
+                : connHealth === "Unstable"
+                  ? "Connection unstable — your text is kept, send when it's back"
+                  : undefined;
+            return (
+              <Composer
+                sessionId={sessionId}
+                onSend={handleSend}
+                onInterrupt={handleInterrupt}
+                onSlashSelect={handleSlashSelect}
+                disabled={sendBlocked}
+                disabledReason={disabledReason}
+                history={promptHistory}
+                slashCommands={sv.slash_commands}
+              />
+            );
+          })()}
         </div>
       </div>
     </div>

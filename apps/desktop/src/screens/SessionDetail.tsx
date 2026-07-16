@@ -12,7 +12,7 @@ import type { Tab } from "../bridge/types";
 import { stopSession, resumeSession, removeSession } from "../bridge/api";
 import { Badge } from "../components/Badge";
 import { ConnHintChip } from "../components/ConnHintChip";
-import { connHintForHost } from "../bridge/connectivity";
+import { connHintForSession } from "../bridge/connectivity";
 import { ActivityTab } from "./tabs/Activity";
 import { ChangesTab } from "./tabs/Changes";
 import { ConfigTab } from "./tabs/Config";
@@ -142,11 +142,14 @@ export function SessionDetail() {
   // missing (older snapshots) is treated as live (Resumed).
   const isStopped = selectedSession.live === false;
 
-  // Host-derived connectivity hint (NOT a lifecycle change): if this session's
-  // host link is (re)connecting or unreachable, surface it next to the host
-  // label so the user knows we've temporarily lost contact — the session itself
-  // stays Resumed because it's still alive on the host.
-  const connHint = connHintForHost(
+  // Connectivity hint (NOT a lifecycle change): if this session's stream is
+  // (re)connecting/unstable, or its host link is unreachable, surface it next to
+  // the host label so the user knows we've temporarily lost contact — the session
+  // itself stays Resumed because it's still alive on the host. Prefers the
+  // per-session `conn_health` (real reader events) over the coarse host poll, so
+  // a session whose stream drops while the host still pings is caught.
+  const connHint = connHintForSession(
+    selectedSession.conn_health,
     state.snapshot?.hosts ?? [],
     selectedSession.host_id
   );

@@ -19,6 +19,9 @@ interface ComposerProps {
   onInterrupt: () => void;
   onSlashSelect?: (entry: SlashEntry) => void;
   disabled?: boolean;
+  /** Shown as the textarea placeholder when `disabled` (e.g. "Session paused —
+   *  resume to send", "Reconnecting… (your text is kept)"). */
+  disabledReason?: string;
   /** Previously sent prompts for this session, oldest first. Used for Up/Down history navigation. */
   history?: string[];
   /** Live slash commands from the current session's system/init event — the
@@ -35,6 +38,7 @@ export function Composer({
   onInterrupt,
   onSlashSelect,
   disabled,
+  disabledReason,
   history = [],
   slashCommands,
 }: ComposerProps) {
@@ -203,16 +207,35 @@ export function Composer({
   }
 
   function submit() {
+    // Hard-block: never fire into a paused/disconnected session. The draft is
+    // left completely untouched so the user's text is preserved for when the
+    // connection is back.
+    if (disabled) return;
     const t = text.trim();
     if (!t) return;
     // Reset history navigation on send
     historyIndexRef.current = null;
     draftRef.current = "";
     composerDrafts.delete(sessionId); // sent → clear the saved draft
-    onSend(t);
     setText("");
     setSlashOpen(false);
     if (textareaRef.current) textareaRef.current.style.height = "auto";
+    // If the send fails (transport throw, or a rejected async send), restore the
+    // text + draft so input is never silently lost. Called SYNCHRONOUSLY so the
+    // send is dispatched immediately (a queued/delivered prompt leaves the box
+    // cleared); only a real failure puts the text back.
+    const restore = () => {
+      composerDrafts.set(sessionId, t);
+      setText((cur) => (cur ? cur : t));
+    };
+    try {
+      const result = onSend(t) as unknown;
+      if (result && typeof (result as { then?: unknown }).then === "function") {
+        (result as Promise<unknown>).catch(restore);
+      }
+    } catch {
+      restore();
+    }
   }
 
   function handleSlashSelect(entry: SlashEntry) {
@@ -318,7 +341,11 @@ export function Composer({
           onChange={handleInput}
           onKeyDown={handleKeyDown}
           disabled={disabled}
-          placeholder="Send a prompt · / commands · ! shell  (⏎ send, ⇧⏎ newline)"
+          placeholder={
+            disabled
+              ? (disabledReason ?? "Sending is unavailable right now")
+              : "Send a prompt · / commands · ! shell  (⏎ send, ⇧⏎ newline)"
+          }
           style={{
             flex: 1,
             background: "none",

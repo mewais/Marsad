@@ -33,8 +33,9 @@ use remote::REMOTE_RUNTIME_DIR;
 
 pub use driver::{claude_argv, posture_to_mode};
 pub use reader::{
-    assistant_has_file_modifying_tool_use, reconnect_backoff_next, RECONNECT_INITIAL_BACKOFF_SECS,
-    RECONNECT_MAX_BACKOFF_SECS, RECONNECT_MAX_TOTAL_SECS, RECONNECT_PROBE_TIMEOUT_SECS,
+    assistant_has_file_modifying_tool_use, liveness_verdict, reconnect_backoff_next,
+    RECONNECT_INITIAL_BACKOFF_SECS, RECONNECT_MAX_BACKOFF_SECS, RECONNECT_MAX_TOTAL_SECS,
+    RECONNECT_PROBE_TIMEOUT_SECS,
 };
 pub use remote::{
     build_remote_codex_eval_loop, build_remote_spawn_cmd, exec_prefix_for,
@@ -213,9 +214,9 @@ struct SessionWritersWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, Shared
 // DROPPED while `handle_send_prompt` still returned PromptSent — so it appeared
 // in the UI as sent but never reached claude. Instead we QUEUE the already-encoded
 // stream-json bytes here (newline-terminated) and the reader flushes them, in
-// order, the moment it registers the writer. Bounded (`PENDING_PROMPT_MAX`) and
-// TTL'd (`PENDING_PROMPT_TTL`) so a prompt typed while a session is paused/dead is
-// discarded rather than delivered much later, out of context.
+// order, the moment it registers the writer. Bounded (`PENDING_PROMPT_MAX`); NOT
+// time-limited — a queued prompt survives a slow/long outage and is delivered on
+// the next re-attach (the host session is durable), so the user never loses input.
 #[cfg(not(coverage))]
 pub(crate) type PendingPrompts =
     std::sync::Arc<std::sync::Mutex<HashMap<String, Vec<(std::time::Instant, Vec<u8>)>>>>;
@@ -224,28 +225,23 @@ pub(crate) type PendingPrompts =
 #[cfg(not(coverage))]
 pub(crate) const PENDING_PROMPT_MAX: usize = 64;
 
-/// A queued prompt older than this on (re)attach is skipped rather than delivered.
-/// Covers the seconds-long remote resolve window with wide margin, but discards a
-/// prompt typed long before a manual resume.
-#[cfg(not(coverage))]
-pub(crate) const PENDING_PROMPT_TTL: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// Keep only the freshest `PENDING_PROMPT_MAX` queued prompts for `sid`, then
-/// return the ones within `PENDING_PROMPT_TTL` (in original order) to deliver.
-/// Pure so it can be unit-tested without threads/IO.
+/// Keep only the freshest `PENDING_PROMPT_MAX` queued prompts for `sid` and
+/// return them in original order to deliver. Pure so it can be unit-tested
+/// without threads/IO.
+///
+/// NO time-based drop: a prompt the user sent must survive an outage "slow for a
+/// while" and be delivered whenever the reader re-attaches (the host session is
+/// durable). An earlier 120s TTL silently discarded prompts on a slow reconnect —
+/// that was input loss, which we no longer accept. `now` is retained in the
+/// signature (unused) for call-site/test stability.
 #[cfg(not(coverage))]
 pub(crate) fn drain_fresh_prompts(
     items: Vec<(std::time::Instant, Vec<u8>)>,
-    now: std::time::Instant,
+    _now: std::time::Instant,
 ) -> Vec<Vec<u8>> {
     let len = items.len();
     let start = len.saturating_sub(PENDING_PROMPT_MAX);
-    items
-        .into_iter()
-        .skip(start)
-        .filter(|(ts, _)| now.duration_since(*ts) <= PENDING_PROMPT_TTL)
-        .map(|(_, b)| b)
-        .collect()
+    items.into_iter().skip(start).map(|(_, b)| b).collect()
 }
 
 #[cfg(not(coverage))]
@@ -898,20 +894,46 @@ mod reconnect_spec_tests {
     use super::*;
 
     #[test]
-    fn drain_fresh_prompts_keeps_fresh_in_order_and_drops_stale() {
+    fn liveness_verdict_reads_last_meaningful_line_only() {
+        // Clean cases.
+        assert_eq!(liveness_verdict("LIVE"), "LIVE");
+        assert_eq!(liveness_verdict("DEAD"), "DEAD");
+        // Login-shell banner/MOTD before the verdict → still LIVE (the bug that
+        // caused false-Paused when the whole blob was compared to "LIVE").
+        assert_eq!(
+            liveness_verdict("Welcome to the HPC login node\nModule init done\nLIVE\n"),
+            "LIVE"
+        );
+        assert_eq!(liveness_verdict("banner\nDEAD\n"), "DEAD");
+        // Flap noise: empty / banner-only / garbled → NOT LIVE and NOT DEAD, so
+        // callers keep probing instead of Pausing.
+        assert_eq!(liveness_verdict(""), "");
+        assert_eq!(liveness_verdict("\n\n  \n"), "");
+        assert_ne!(liveness_verdict("motd: welcome"), "LIVE");
+        assert_ne!(liveness_verdict("motd: welcome"), "DEAD");
+        // Trailing blank lines are skipped to find the real verdict.
+        assert_eq!(liveness_verdict("LIVE\n\n  \n"), "LIVE");
+    }
+
+    #[test]
+    fn drain_fresh_prompts_keeps_all_in_order_regardless_of_age() {
         let now = std::time::Instant::now();
-        // Two fresh (within TTL), one stale (older than TTL).
+        // Even an "old" prompt is preserved now — no time-based drop. A prompt the
+        // user sent must survive a slow/long outage and be delivered on re-attach.
         let items = vec![
             (now - std::time::Duration::from_secs(1), b"first\n".to_vec()),
             (
-                now - (PENDING_PROMPT_TTL + std::time::Duration::from_secs(5)),
-                b"stale\n".to_vec(),
+                now - std::time::Duration::from_secs(600),
+                b"old\n".to_vec(),
             ),
             (now - std::time::Duration::from_secs(2), b"second\n".to_vec()),
         ];
         let out = drain_fresh_prompts(items, now);
-        // Stale dropped; fresh kept in original order.
-        assert_eq!(out, vec![b"first\n".to_vec(), b"second\n".to_vec()]);
+        // All kept, in original order (bounded only by PENDING_PROMPT_MAX).
+        assert_eq!(
+            out,
+            vec![b"first\n".to_vec(), b"old\n".to_vec(), b"second\n".to_vec()]
+        );
     }
 
     #[test]

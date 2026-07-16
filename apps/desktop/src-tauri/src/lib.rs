@@ -636,6 +636,7 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
                         && ty != Some("UsageUpdate")
                         && ty != Some("CapabilitiesUpdate")
                         && ty != Some("SessionLiveness")
+                        && ty != Some("SessionConn")
                         && ty != Some("WaslGateRequested")
                         && ty != Some("WaslGateDecided")
                         && ty != Some("WaslObservation")

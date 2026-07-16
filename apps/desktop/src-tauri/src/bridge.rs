@@ -1223,11 +1223,14 @@ pub async fn run_shell(
             Some(target) => {
                 let script =
                     build_remote_shell_script(&host_setup, &host_env, &project, &cmd_for_exec);
-                let out = marsad_agent::run_remote_script(&target, &script).unwrap_or_default();
-                if out.trim().is_empty() {
-                    "(no output)".to_string()
-                } else {
-                    out
+                // `run_remote_script` returns None when it couldn't run the command
+                // at all (connection down/slow). Distinguish that from a command
+                // that ran and produced nothing — never silently swallow a command
+                // as "(no output)" when it never actually executed.
+                match marsad_agent::run_remote_script(&target, &script) {
+                    Some(out) if !out.trim().is_empty() => out,
+                    Some(_) => "(no output)".to_string(),
+                    None => "⚠ connection lost — command not run. Try again once reconnected.".to_string(),
                 }
             }
             None => run_shell_locally_with_env(&cmd_for_exec, &project, &host_setup, &host_env),

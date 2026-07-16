@@ -82,6 +82,7 @@ fn sv(id: &str, host_id: &str, cost_usd: f64, cost_estimated: bool) -> SessionVi
         shell_running: false,
         driver: "claude".to_string(),
         live: true,
+        conn_health: "Connected".to_string(),
         end_reason: None,
     }
 }

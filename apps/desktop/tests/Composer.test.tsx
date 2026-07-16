@@ -45,3 +45,52 @@ describe("Composer per-session drafts", () => {
     expect(ta().value).toBe("B text");
   });
 });
+
+describe("Composer hard-block when disconnected/paused", () => {
+  it("disables the textarea + send, shows the reason, and never sends or clears the draft", () => {
+    const onSend = vi.fn();
+    render(
+      <Composer
+        sessionId="sess-block"
+        onSend={onSend}
+        onInterrupt={vi.fn()}
+        disabled
+        disabledReason="Reconnecting… your text is kept"
+      />,
+    );
+    // Placeholder reflects the reason; textarea is disabled.
+    const ta = screen.getByPlaceholderText(
+      "Reconnecting… your text is kept",
+    ) as HTMLTextAreaElement;
+    expect(ta.disabled).toBe(true);
+
+    // Even if a submit is forced (Enter), nothing is sent while blocked.
+    fireEvent.keyDown(ta, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("keeps the typed draft intact across a disable (text is never lost)", () => {
+    const { rerender } = render(
+      <Composer sessionId="sess-keep" onSend={vi.fn()} onInterrupt={vi.fn()} />,
+    );
+    const enabled = () =>
+      screen.getByPlaceholderText(/Send a prompt/i) as HTMLTextAreaElement;
+    fireEvent.change(enabled(), { target: { value: "important prompt" } });
+
+    // Connection drops → composer becomes disabled. The draft must survive.
+    rerender(
+      <Composer
+        sessionId="sess-keep"
+        onSend={vi.fn()}
+        onInterrupt={vi.fn()}
+        disabled
+        disabledReason="Session paused — resume it to send"
+      />,
+    );
+    // Re-enable (reconnected) → the text is still there to send.
+    rerender(
+      <Composer sessionId="sess-keep" onSend={vi.fn()} onInterrupt={vi.fn()} />,
+    );
+    expect(enabled().value).toBe("important prompt");
+  });
+});

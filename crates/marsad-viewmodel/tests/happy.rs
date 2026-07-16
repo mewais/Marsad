@@ -86,6 +86,7 @@ fn representative_snapshot() -> AppSnapshot {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
         SessionView {
@@ -123,6 +124,7 @@ fn representative_snapshot() -> AppSnapshot {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
         SessionView {
@@ -160,6 +162,7 @@ fn representative_snapshot() -> AppSnapshot {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
         SessionView {
@@ -197,6 +200,7 @@ fn representative_snapshot() -> AppSnapshot {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
         SessionView {
@@ -234,6 +238,7 @@ fn representative_snapshot() -> AppSnapshot {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
     ];
@@ -838,6 +843,7 @@ fn session_view_new_fields_populated() {
         shell_running: false,
         driver: "claude".to_string(),
         live: true,
+        conn_health: "Connected".to_string(),
         end_reason: None,
     };
     let sv2 = sv.clone();
@@ -880,6 +886,7 @@ fn session_view_new_fields_empty_by_default_in_literal() {
         shell_running: false,
         driver: "claude".to_string(),
         live: true,
+        conn_health: "Connected".to_string(),
         end_reason: None,
     };
     assert!(sv.tools.is_empty());

@@ -1151,6 +1151,32 @@ pub enum IpcMsg {
         session_id: String,
         live: bool,
     },
+    /// Agent→core: the per-session CONNECTION health, distinct from liveness. A
+    /// remote session's stream can drop / go slow while the process is still
+    /// alive on the host (still Resumed) — this reports whether Marsad currently
+    /// has a clean stream to it. Driven by REAL reader events (stream EOF, LIVE
+    /// re-attach, repeated flaps), not the periodic host poll, so it's prompt and
+    /// per-session. Core surfaces it on the SessionView so the UI can show the
+    /// true state and HARD-BLOCK sending into a broken pipe. `live=false`
+    /// (Paused) always wins over this.
+    SessionConn {
+        session_id: String,
+        health: ConnHealth,
+    },
+}
+
+/// Per-session connection health (see `IpcMsg::SessionConn`). Serializes as its
+/// PascalCase variant name ("Connected"/"Reconnecting"/"Unstable"), matching the
+/// TS `ConnHealth` mirror.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConnHealth {
+    /// Clean stream to the session.
+    Connected,
+    /// Stream dropped; the reader is actively re-attaching (auto-reconnect).
+    Reconnecting,
+    /// The stream keeps flapping (re-attached then dropped again before it
+    /// restabilized) — connected but unreliable.
+    Unstable,
 }
 
 impl IpcMsg {
@@ -1580,6 +1606,7 @@ pub fn parse_ipc(line: &str) -> Result<IpcMsg, ProtoError> {
         "PtyOutput",
         "PtyExit",
         "SessionLiveness",
+        "SessionConn",
     ];
 
     if !KNOWN.contains(&type_str) {

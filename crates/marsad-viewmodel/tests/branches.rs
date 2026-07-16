@@ -58,6 +58,7 @@ fn make_session(
         shell_running: false,
         driver: "claude".to_string(),
         live: true,
+        conn_health: "Connected".to_string(),
         end_reason: None,
     }
 }
@@ -367,6 +368,7 @@ fn ctx_warn_false_at_74_pct() {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         }],
         hosts: vec![host("local", "localhost")],
@@ -419,6 +421,7 @@ fn ctx_warn_true_at_75_pct() {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         }],
         hosts: vec![host("local", "localhost")],
@@ -589,6 +592,7 @@ fn ctx_warn_true_at_100_pct() {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         }],
         hosts: vec![host("local", "localhost")],

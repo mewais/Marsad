@@ -72,6 +72,21 @@ pub fn reconnect_backoff_next(current: u64) -> u64 {
     current.saturating_mul(2).min(RECONNECT_MAX_BACKOFF_SECS)
 }
 
+/// Extract the liveness-probe verdict from a remote script's output: the LAST
+/// non-empty, trimmed line. The `remote_liveness_script` echoes `LIVE`/`DEAD` as
+/// its final line, but an HPC/etx login shell may prepend a banner/MOTD and a
+/// half-up flapping tunnel can return truncated output — so we read the last
+/// meaningful line, not the whole blob. Callers treat ONLY an exact "DEAD" as
+/// claude-exited; anything that isn't "LIVE"/"DEAD" is flap noise (keep probing,
+/// never Pause). Pure — unit-tested.
+pub fn liveness_verdict(out: &str) -> &str {
+    out.lines()
+        .rev()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+}
+
 // ── assistant_has_file_modifying_tool_use ────────────────────────────────────
 
 /// Return `true` if the given `assistant` stream event contains at least one
@@ -220,6 +235,25 @@ pub(crate) fn spawn_session_reader(
         // Backoff state (remote reconnect only).
         let mut backoff_secs = RECONNECT_INITIAL_BACKOFF_SECS;
         let mut total_waited_secs: u64 = 0;
+
+        // Per-session CONNECTION health (distinct from liveness). Emitted on REAL
+        // stream events — attach, first line flowing, connection lost — so the UI
+        // shows the true state and HARD-BLOCKS sending into a broken pipe.
+        // `consecutive_flaps` counts drops where the stream never restabilized (no
+        // lines seen that attach); ≥2 ⇒ Unstable. A line flowing resets it. Not
+        // driven by any timeout.
+        let mut consecutive_flaps: u32 = 0;
+        let emit_conn = |health: marsad_proto::ConnHealth| {
+            let line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionConn {
+                session_id: sid.clone(),
+                health,
+            });
+            if let Ok(subs) = subs_fifo.lock() {
+                for s in subs.iter() {
+                    let _ = s.send(line.clone());
+                }
+            }
+        };
 
         'reconnect: loop {
             // Superseded (a newer reader took over) or stopped (paused) → exit now,
@@ -723,6 +757,14 @@ pub(crate) fn spawn_session_reader(
                     let _ = s.send(line.clone());
                 }
             }
+            // Per-session connection health on (re)attach: Unstable if we've been
+            // flapping (reconnected then re-dropped without restabilizing), else
+            // Connected. A line flowing (below) downgrades Unstable → Connected.
+            emit_conn(if consecutive_flaps >= 2 {
+                marsad_proto::ConnHealth::Unstable
+            } else {
+                marsad_proto::ConnHealth::Connected
+            });
             use std::io::BufRead;
             let mut lines_seen = 0u64;
             // Debounce tracker for the tool_use-triggered Changes probe (#4).
@@ -764,6 +806,16 @@ pub(crate) fn spawn_session_reader(
                     }
                     Ok(_) => {
                         lines_seen += 1;
+                        // The stream is flowing again → the connection restabilized.
+                        // Clear any flap streak and, if we'd shown Unstable on this
+                        // attach, downgrade back to Connected.
+                        if lines_seen == 1 && consecutive_flaps > 0 {
+                            let was_unstable = consecutive_flaps >= 2;
+                            consecutive_flaps = 0;
+                            if was_unstable {
+                                emit_conn(marsad_proto::ConnHealth::Connected);
+                            }
+                        }
                         let raw = raw.trim_end_matches('\n');
 
                         // Capture a `can_use_tool` control
@@ -1023,6 +1075,15 @@ pub(crate) fn spawn_session_reader(
             };
 
             eprintln!("marsad-agent: session {sid} connection lost, probing liveness");
+            // Flap accounting: a connection that dropped without the stream ever
+            // restabilizing this attach (no lines) counts toward instability; a
+            // productive attach already reset the counter when its first line flowed.
+            if lines_seen == 0 {
+                consecutive_flaps = consecutive_flaps.saturating_add(1);
+            }
+            // Per-session connection health: the stream dropped and we're now
+            // actively re-attaching. This is what HARD-BLOCKS the composer.
+            emit_conn(marsad_proto::ConnHealth::Reconnecting);
 
             // Probe + backoff loop: keep probing until the connection comes back
             // (probe succeeds) or we exceed the total retry cap.
@@ -1067,8 +1128,16 @@ pub(crate) fn spawn_session_reader(
                         // Continue the probe loop.
                     }
                     Some(out) => {
-                        // Connection is back.  Interpret the result.
-                        if out.trim() == "LIVE" {
+                        // Interpret the result. The liveness script echoes its
+                        // verdict as the LAST non-empty line ("LIVE"/"DEAD"); an
+                        // etx/HPC login shell may prepend a banner/MOTD, and a
+                        // half-up flapping tunnel can return truncated/garbled
+                        // output. So read the LAST non-empty line, and ONLY treat a
+                        // definitive "DEAD" as claude-exited. Anything else (banner
+                        // only, empty, garbled) is flap noise — NOT proof claude
+                        // died — so keep probing rather than falsely Pausing.
+                        let verdict = liveness_verdict(&out);
+                        if verdict == "LIVE" {
                             eprintln!(
                                 "marsad-agent: session {sid} reconnected live remote session"
                             );
@@ -1077,9 +1146,15 @@ pub(crate) fn spawn_session_reader(
                             total_waited_secs = 0;
                             // Re-attach: continue the outer reconnect loop.
                             continue 'reconnect;
-                        } else {
+                        } else if verdict == "DEAD" {
                             eprintln!("marsad-agent: session {sid} claude exited, stopping");
                             break 'reconnect;
+                        } else {
+                            eprintln!(
+                                "marsad-agent: session {sid} ambiguous liveness probe ({verdict:?}) — connection not clean, still down"
+                            );
+                            // Keep probing (same as a None result). Never Paused on
+                            // ambiguous flap output.
                         }
                     }
                 }
@@ -1124,16 +1199,15 @@ pub(crate) fn spawn_session_reader(
 
         // Final cleanup: ensure the writer registry slot is gone (it may already
         // be absent if the reconnect loop tore it down; the remove is idempotent).
-        // Also drop any still-queued prompts for this session: this thread has
-        // given up (re)attaching, so nothing here will deliver them. (A later
-        // manual resume spawns a fresh reader; anything typed then queues anew and
-        // its own drain — bounded by TTL — handles it.)
         {
             let mut registry = writers_fifo.lock().unwrap();
             registry.remove(&sid);
         }
-        {
-            pending_prompts.lock().unwrap().remove(&sid);
-        }
+        // Do NOT wipe still-queued prompts here. This reader gave up, but the host
+        // session is durable — a later resume spawns a fresh reader that will flush
+        // this same (session-keyed) queue on attach, so anything the user sent must
+        // survive. Wiping it here was a silent-loss bug: a prompt sent during a long
+        // outage vanished when the reader hit its cap. The queue is bounded
+        // (PENDING_PROMPT_MAX) so it can't grow without limit.
     });
 }

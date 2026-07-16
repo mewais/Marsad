@@ -158,6 +158,7 @@ pub fn seeded_mock() -> MockState {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
         // Needs attention — plan gate
@@ -192,6 +193,7 @@ pub fn seeded_mock() -> MockState {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
         // Error — edit gate shown for reference
@@ -226,6 +228,7 @@ pub fn seeded_mock() -> MockState {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
         // Working sessions
@@ -260,6 +263,7 @@ pub fn seeded_mock() -> MockState {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
         SessionView {
@@ -293,6 +297,7 @@ pub fn seeded_mock() -> MockState {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
         SessionView {
@@ -326,6 +331,7 @@ pub fn seeded_mock() -> MockState {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
         // Done sessions
@@ -360,6 +366,7 @@ pub fn seeded_mock() -> MockState {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
         SessionView {
@@ -393,6 +400,7 @@ pub fn seeded_mock() -> MockState {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
         SessionView {
@@ -426,6 +434,7 @@ pub fn seeded_mock() -> MockState {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
         // Stale session
@@ -460,6 +469,7 @@ pub fn seeded_mock() -> MockState {
             shell_running: false,
             driver: "claude".to_string(),
             live: true,
+            conn_health: "Connected".to_string(),
             end_reason: None,
         },
     ];

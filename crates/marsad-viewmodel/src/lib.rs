@@ -103,6 +103,13 @@ pub struct SessionView {
     /// and spinner suppression.
     #[serde(default = "default_live")]
     pub live: bool,
+    /// Per-session CONNECTION health, independent of `live`: "Connected",
+    /// "Reconnecting" (stream dropped, auto-reattaching), or "Unstable" (flapping).
+    /// Driven by the agent's real stream events (`SessionConn`), NOT the periodic
+    /// host poll. The UI shows the true state and HARD-BLOCKS sending when this is
+    /// not "Connected" (or when `live` is false). Defaults to "Connected".
+    #[serde(default = "default_conn_health")]
+    pub conn_health: String,
     /// Why the last turn ended, when noteworthy: a user Cancel (phase Done) or a
     /// real failure (phase Error). Drives the card's reason text so an Error card
     /// is never blank and a cancel reads "Cancelled by the user". `None` for a
@@ -121,6 +128,10 @@ fn default_driver() -> String {
 
 fn default_live() -> bool {
     true
+}
+
+fn default_conn_health() -> String {
+    "Connected".to_string()
 }
 
 // ---------------------------------------------------------------------------

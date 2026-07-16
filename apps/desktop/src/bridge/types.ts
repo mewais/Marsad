@@ -283,6 +283,14 @@ export interface SessionView {
    * a missing value as `true` (Resumed).
    */
   live?: boolean;
+  /**
+   * Per-session CONNECTION health, independent of `live`: "Connected",
+   * "Reconnecting" (stream dropped, auto-reattaching), or "Unstable" (flapping).
+   * Driven by the agent's real stream events, not the periodic host poll. The UI
+   * shows this and HARD-BLOCKS sending when it's not "Connected" (or when paused).
+   * Optional for back-compat; treat a missing value as "Connected".
+   */
+  conn_health?: "Connected" | "Reconnecting" | "Unstable";
 }
 
 /** Mirrors marsad_proto::CompactMetadata — one context-compaction event. */
