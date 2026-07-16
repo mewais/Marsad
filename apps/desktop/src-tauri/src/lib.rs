@@ -832,21 +832,68 @@ fn ssh_health(target: &str) -> marsad_core::HostStatus {
     }
 }
 
-/// One WSL reachability probe: `wsl.exe -d <distro> -- true`. WSL hosts are NOT ssh
-/// targets, so they must be probed via `wsl.exe`, not `ssh` (otherwise they always
-/// read Unreachable). Off Windows `wsl.exe` is absent → Reconnecting/Unreachable.
-fn wsl_health(distro: &str) -> marsad_core::HostStatus {
-    use marsad_core::HostStatus;
+/// Parse the running-distro names out of `wsl.exe --list --running --quiet`
+/// stdout. Pure (no IO) so it's unit-testable. wsl.exe emits UTF-16LE by
+/// default (older builds) or UTF-8 when `WSL_UTF8=1` is honored; for ASCII
+/// distro names both decode correctly if we drop the UTF-16 NUL padding, the
+/// BOM bytes, and CRs before splitting on lines. Blank lines are ignored.
+fn wsl_running_distro_names(raw: &[u8]) -> Vec<String> {
+    let cleaned: Vec<u8> = raw
+        .iter()
+        .copied()
+        .filter(|&b| b != 0x00 && b != 0xFF && b != 0xFE && b != b'\r')
+        .collect();
+    String::from_utf8_lossy(&cleaned)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// Whether a WSL distro is currently RUNNING, WITHOUT launching it.
+///
+/// `wsl.exe --list --running --quiet` lists only already-running distros and
+/// never auto-starts one. This is the crux of the fix: the old probe
+/// `wsl.exe -d <distro> -- true` RESURRECTS a shut-down distro (WSL auto-starts
+/// the VM on any `-d` command), so it could never observe a `wsl --shutdown`
+/// and always read Connected. `None` means wsl.exe couldn't be run at all (not
+/// Windows / not installed / `--list` failed) — the caller degrades to
+/// Reconnecting rather than a false Unreachable.
+fn wsl_distro_running(distro: &str) -> Option<bool> {
     let mut cmd = std::process::Command::new("wsl.exe");
-    cmd.args(["-d", distro, "--", "true"])
+    cmd.args(["--list", "--running", "--quiet"])
+        // Ask newer wsl.exe to emit UTF-8; older builds ignore it and emit
+        // UTF-16LE, which wsl_running_distro_names still decodes for ASCII names.
+        .env("WSL_UTF8", "1")
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     hide_console(&mut cmd);
-    match cmd.status() {
-        Ok(s) if s.success() => HostStatus::Connected,
-        Ok(_) => HostStatus::Unreachable,
-        Err(_) => HostStatus::Reconnecting,
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let target = distro.trim();
+    Some(
+        wsl_running_distro_names(&out.stdout)
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(target)),
+    )
+}
+
+/// One WSL reachability probe. WSL hosts are NOT ssh targets, so they must be
+/// probed via `wsl.exe`, not `ssh`. Liveness is decided by whether the distro is
+/// RUNNING (`--list --running`) — NOT by running a command inside it, which would
+/// resurrect a `wsl --shutdown`-ed distro and mask the outage. Off Windows
+/// `wsl.exe` is absent → Reconnecting.
+fn wsl_health(distro: &str) -> marsad_core::HostStatus {
+    use marsad_core::HostStatus;
+    match wsl_distro_running(distro) {
+        Some(true) => HostStatus::Connected,
+        // Distro is stopped (e.g. `wsl --shutdown`, host reboot) — report it down
+        // instead of silently relaunching it behind the user's back.
+        Some(false) => HostStatus::Unreachable,
+        // Couldn't run wsl.exe at all (not Windows / not installed).
+        None => HostStatus::Reconnecting,
     }
 }
 
@@ -906,6 +953,16 @@ fn host_health(target: &str) -> marsad_core::HostStatus {
 /// shared master makes this succeed → Connected (same pattern as plink_health).
 fn wslssh_health(distro: &str, target: &str) -> marsad_core::HostStatus {
     use marsad_core::HostStatus;
+    // The ssh-through-wsl probe below would itself resurrect a shut-down distro
+    // (any `wsl -d <distro> …` auto-starts the VM), masking a `wsl --shutdown`.
+    // So first check the distro is genuinely RUNNING, without launching it. If
+    // it's down, the whole wslssh route is unreachable regardless of the inner
+    // ssh target.
+    match wsl_distro_running(distro) {
+        Some(false) => return HostStatus::Unreachable,
+        None => return HostStatus::Reconnecting,
+        Some(true) => {}
+    }
     let mut cmd = std::process::Command::new("wsl.exe");
     cmd.args([
         "-d",
@@ -931,5 +988,38 @@ fn wslssh_health(distro: &str, target: &str) -> marsad_core::HostStatus {
         Ok(s) if s.success() => HostStatus::Connected,
         Ok(_) => HostStatus::Unreachable,
         Err(_) => HostStatus::Reconnecting,
+    }
+}
+
+#[cfg(test)]
+mod wsl_health_tests {
+    use super::wsl_running_distro_names;
+
+    #[test]
+    fn parses_utf8_list() {
+        // `WSL_UTF8=1` output: plain UTF-8, one distro per line.
+        let raw = b"Ubuntu\nDebian\n";
+        assert_eq!(wsl_running_distro_names(raw), vec!["Ubuntu", "Debian"]);
+    }
+
+    #[test]
+    fn parses_utf16le_list_with_bom_and_cr() {
+        // Legacy wsl.exe output: UTF-16LE with a BOM and CRLF line endings.
+        // "Ubuntu\r\n" as UTF-16LE, prefixed with the 0xFF 0xFE BOM.
+        let mut raw: Vec<u8> = vec![0xFF, 0xFE];
+        for ch in "Ubuntu\r\n".chars() {
+            raw.push(ch as u8);
+            raw.push(0x00);
+        }
+        assert_eq!(wsl_running_distro_names(&raw), vec!["Ubuntu"]);
+    }
+
+    #[test]
+    fn empty_when_no_distros_running() {
+        // After `wsl --shutdown`, `--list --running` prints nothing (or blanks).
+        assert!(wsl_running_distro_names(b"").is_empty());
+        assert!(wsl_running_distro_names(b"\r\n\r\n").is_empty());
+        // UTF-16LE of just a trailing newline decodes to no names either.
+        assert!(wsl_running_distro_names(&[0xFF, 0xFE, 0x0A, 0x00]).is_empty());
     }
 }
