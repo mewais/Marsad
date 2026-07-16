@@ -33,6 +33,7 @@ fn permission_gate() -> Gate {
         explanation: "list temp files".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     }
 }
 
@@ -230,6 +231,7 @@ fn decision_id_differs_by_gate_content() {
         explanation: "".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     };
     let gate_b = Gate::Permission {
         request_id: "req-test".to_string(),
@@ -239,6 +241,7 @@ fn decision_id_differs_by_gate_content() {
         explanation: "".to_string(),
         is_elicitation: false,
         elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
     };
     assert_ne!(
         decision_id(sid, &gate_a),
@@ -605,6 +608,7 @@ fn run_live_gate(allow: bool) -> Result<GateOutcome, String> {
                     // On approval the CLI USES updatedInput as the tool input —
                     // echo the original verbatim so the right command runs.
                     updated_input: if allow { Some(cr.input.clone()) } else { None },
+                    updated_permissions: None,
                 };
                 let wire = marsad_proto::encode_control_response(&resp);
                 stdin

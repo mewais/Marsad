@@ -172,6 +172,14 @@ pub struct SessionState {
     pub last_action: Option<String>,
     pub subagents: Vec<Subagent>,
     pub gate: Option<marsad_gates::Gate>,
+    /// Additional pending gates behind the currently-shown `gate`, in arrival
+    /// order. claude can raise several permission requests at once (parallel tool
+    /// calls); we surface them ONE AT A TIME (`gate` = current, this = the rest)
+    /// and advance on each answer. Previously a second gate while one was open was
+    /// DROPPED here while the agent kept the newest — so the answer got misrouted
+    /// and the turn hung. Empty in the common single-gate case.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gate_queue: Vec<marsad_gates::Gate>,
     pub changed_files: u32,
     /// Per-model token + cost breakdown from the last `result` event.
     /// Cumulative (replaced each time, not accumulated) — consistent with
@@ -253,6 +261,7 @@ impl SessionState {
             last_action: None,
             subagents: Vec::new(),
             gate: None,
+            gate_queue: Vec::new(),
             changed_files: 0,
             model_usage: std::collections::HashMap::new(),
             tools: Vec::new(),
@@ -276,12 +285,45 @@ impl SessionState {
     /// `Needs` phase back to `Working`. The claude stream remains the source of
     /// truth: its subsequent messages re-drive phase/gate as usual.
     pub fn clear_gate_on_answer(&mut self) {
-        self.gate = None;
         self.gate_confirmed_automated = false;
-        if matches!(self.phase, Phase::Needs) {
+        self.advance_gate();
+    }
+
+    /// Advance to the next queued gate (the human answered/closed the current one).
+    /// If another gate is waiting it becomes current (phase stays `Needs`); if the
+    /// queue is empty, clear the gate and flip a lingering `Needs` → `Working`.
+    fn advance_gate(&mut self) {
+        self.gate = if self.gate_queue.is_empty() {
+            None
+        } else {
+            Some(self.gate_queue.remove(0))
+        };
+        if self.gate.is_none() && matches!(self.phase, Phase::Needs) {
             self.phase = Phase::Working;
             self.end_reason = None;
         }
+    }
+
+    /// Enqueue a gate for the human. If nothing is currently shown it becomes the
+    /// current `gate`; otherwise it waits behind it (surfaced one-at-a-time). A gate
+    /// whose `request_id` is already current or queued is ignored (claude re-emit /
+    /// duplicate reader), so it can't pile up. Sets phase `Needs`.
+    fn enqueue_gate(&mut self, gate: marsad_gates::Gate) {
+        let rid = gate_request_id(&gate);
+        let dup = self
+            .gate
+            .as_ref()
+            .map(|g| gate_request_id(g) == rid)
+            .unwrap_or(false)
+            || self.gate_queue.iter().any(|g| gate_request_id(g) == rid);
+        if !dup {
+            if self.gate.is_none() {
+                self.gate = Some(gate);
+            } else {
+                self.gate_queue.push(gate);
+            }
+        }
+        self.phase = Phase::Needs;
     }
 
     /// Return the context window size (in tokens) for a given model name.
@@ -393,9 +435,10 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
                 .iter()
                 .any(|b| matches!(b, marsad_proto::ContentBlock::Text { .. }));
             if has_text_reply {
-                state.gate = None;
                 state.gate_confirmed_automated = false;
-                state.phase = Phase::Working;
+                // Advance the gate queue (show the next pending gate if any; else
+                // clear + flip to Working). A human reply resolves the current gate.
+                state.advance_gate();
                 // A human reply starts a new turn — clear any prior end reason.
                 state.end_reason = None;
             } else if state.gate.is_some() {
@@ -591,21 +634,28 @@ fn reduce_result(mut state: SessionState, result: marsad_proto::ResultMsg) -> Se
     state
 }
 
+/// A gate's identity for dedup/queue purposes: `request_id` for the claude gate
+/// kinds, `gate_id` for a connector Handoff.
+fn gate_request_id(gate: &marsad_gates::Gate) -> &str {
+    match gate {
+        marsad_gates::Gate::Permission { request_id, .. }
+        | marsad_gates::Gate::Plan { request_id, .. }
+        | marsad_gates::Gate::Edit { request_id, .. }
+        | marsad_gates::Gate::Question { request_id, .. } => request_id,
+        marsad_gates::Gate::Handoff { gate_id, .. } => gate_id,
+    }
+}
+
 fn reduce_control_request(
     mut state: SessionState,
     req: marsad_proto::ControlRequest,
 ) -> SessionState {
-    // A gate already awaiting a human answer takes priority: don't let a
-    // second, unrelated control_request silently replace it before the human
-    // ever weighed in (a bare tool_result — see the `StreamMsg::User` arm —
-    // does NOT count as an answer). Real captures confirm this: claude may
-    // open a further gate (e.g. a `Write` permission request right after an
-    // approved `ExitPlanMode`) while the earlier one was only ever resolved
-    // by its own tool executing, never by literal human input — the FIRST
-    // still-open gate is what the human actually owes an answer to.
-    if state.gate.is_some() {
-        return state;
-    }
+    // A gate already awaiting a human answer takes priority — but a second,
+    // unrelated control_request is NOT dropped (claude can raise several at once
+    // via parallel tool calls, and it waits on ALL of them). It is QUEUED behind
+    // the current one via `enqueue_gate` and surfaced after the human answers the
+    // first. Previously this early-returned and dropped the new gate while the
+    // agent kept the newest, so the answer got misrouted and the turn hung.
 
     // Detect special HITL tool names first.
     if req.tool_name == "AskUserQuestion" {
@@ -614,8 +664,7 @@ fn reduce_control_request(
             request_id: req.request_id.clone(),
             questions,
         };
-        state.gate = Some(gate);
-        state.phase = Phase::Needs;
+        state.enqueue_gate(gate);
         return state;
     }
 
@@ -631,8 +680,7 @@ fn reduce_control_request(
             summary: plan_md,
             steps: vec![],
         };
-        state.gate = Some(gate);
-        state.phase = Phase::Needs;
+        state.enqueue_gate(gate);
         return state;
     }
 
@@ -681,8 +729,7 @@ fn reduce_control_request(
         // (empty for elicitations / when claude offers none).
         permission_suggestions: req.permission_suggestions.clone(),
     };
-    state.gate = Some(gate);
-    state.phase = Phase::Needs;
+    state.enqueue_gate(gate);
     state
 }
 

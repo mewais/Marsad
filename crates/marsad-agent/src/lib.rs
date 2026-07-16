@@ -384,10 +384,20 @@ struct PendingGate {
 }
 
 /// Per-session pending-gate registry. Shared (Arc) between the FIFO reader
-/// threads (which insert when a `can_use_tool` arrives) and the agent command
-/// loop (`handle_answer_gate`, which reads + clears when the GUI answers).
+/// threads (which push_back when a `can_use_tool` arrives) and the agent command
+/// loop (`handle_answer_gate`, which removes the matching gate when the GUI
+/// answers).
+///
+/// The value is a `VecDeque`, not a single slot: a single turn can block on a
+/// burst of gates (e.g. WebSearch fanning out across a flapping remote), and an
+/// earlier design that kept only the latest gate silently dropped the rest —
+/// answering one then misrouted to a gate claude was no longer blocked on. The
+/// deque preserves every distinct pending gate (deduped by `request_id`) so each
+/// is answered against its own `request_id`.
 #[cfg(not(coverage))]
-struct PendingGatesWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, PendingGate>>>);
+struct PendingGatesWrap(
+    std::sync::Arc<std::sync::Mutex<HashMap<String, std::collections::VecDeque<PendingGate>>>>,
+);
 
 #[cfg(not(coverage))]
 impl fmt::Debug for PendingGatesWrap {

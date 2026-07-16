@@ -16,6 +16,35 @@ use super::remote::{
 };
 #[cfg(not(coverage))]
 use super::{PendingGate, SharedWriter};
+#[cfg(not(coverage))]
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// ── Per-session reader cancellation ──────────────────────────────────────────
+// A reader may sit in a long reconnect-probe backoff (up to
+// RECONNECT_MAX_TOTAL_SECS) after a connection drop. If the user pauses the
+// session, or a NEW reader is spawned for the same session (resume / reconnect
+// on a flapping host), the OLD reader MUST exit promptly — otherwise readers
+// stack up (observed 14-for-one on a flaky etx host), multiplying gate broadcasts
+// and stream events into churn. `spawn_session_reader` registers a fresh token
+// (tripping any prior one for that sid); `cancel_reader` (StopSession) trips it.
+
+#[cfg(not(coverage))]
+fn reader_cancels() -> &'static std::sync::Mutex<HashMap<String, std::sync::Arc<AtomicBool>>> {
+    static CANCELS: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<String, std::sync::Arc<AtomicBool>>>,
+    > = std::sync::OnceLock::new();
+    CANCELS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Trip the current reader thread's cancel token for `sid` (StopSession/pause),
+/// so a lingering reconnect-probe loop exits at its next check instead of stacking
+/// with the reader a later Resume spawns.
+#[cfg(not(coverage))]
+pub(crate) fn cancel_reader(sid: &str) {
+    if let Some(tok) = reader_cancels().lock().unwrap().get(sid) {
+        tok.store(true, Ordering::SeqCst);
+    }
+}
 
 // ── Reconnect backoff constants and helper ───────────────────────────────────
 
@@ -127,7 +156,9 @@ pub(crate) fn spawn_session_reader(
     // Prompts queued (by handle_send_prompt) while this session had no registered
     // writer — flushed in order right after the writer registers below.
     pending_prompts: super::PendingPrompts,
-    pending_fifo: std::sync::Arc<std::sync::Mutex<HashMap<String, PendingGate>>>,
+    pending_fifo: std::sync::Arc<
+        std::sync::Mutex<HashMap<String, std::collections::VecDeque<PendingGate>>>,
+    >,
     children: std::sync::Arc<std::sync::Mutex<HashMap<String, std::process::Child>>>,
     // U1 (§3.2 trigger 4): passive claude-model observation. `None` for
     // reconnect paths that don't carry the Arc (never actually passed as
@@ -147,6 +178,17 @@ pub(crate) fn spawn_session_reader(
     // was not yet run (i.e. not provided to spawn_container).  For the durable
     // model, it's not needed here — the launch script already ran.
     let _ = run_command;
+
+    // Register a fresh cancellation token for this session, tripping any prior
+    // reader's token so a stale reconnect-probe loop (from a flapping host or a
+    // prior resume) exits promptly instead of stacking with this new reader.
+    let cancel = std::sync::Arc::new(AtomicBool::new(false));
+    {
+        let mut m = reader_cancels().lock().unwrap();
+        if let Some(old) = m.insert(sid.clone(), cancel.clone()) {
+            old.store(true, Ordering::SeqCst);
+        }
+    }
 
     let session_dir = std::path::PathBuf::from(&data_root)
         .join("sessions")
@@ -180,6 +222,11 @@ pub(crate) fn spawn_session_reader(
         let mut total_waited_secs: u64 = 0;
 
         'reconnect: loop {
+            // Superseded (a newer reader took over) or stopped (paused) → exit now,
+            // don't attach/re-probe.
+            if cancel.load(Ordering::SeqCst) {
+                break 'reconnect;
+            }
             // ── Open and connect the transport ─────────────
             // Local session → platform FIFO/pipe transport
             // (tmux+FIFO on Unix, named pipe on Windows), yielding
@@ -729,42 +776,42 @@ pub(crate) fn spawn_session_reader(
                             marsad_proto::parse_stream_line(raw)
                         {
                             let mut gates = pending_fifo.lock().unwrap();
-                            // Deduplicate: if the SAME request_id already
-                            // sits in the registry (claude re-emitted it),
-                            // ignore the duplicate so we don't clobber the
-                            // existing entry and misroute a later AnswerGate.
-                            // If it's a genuinely NEW request_id while one
-                            // is already pending, replace it (the first one
-                            // was either answered or abandoned) and warn.
-                            let dup = gates
-                                .get(&sid)
-                                .map(|existing| existing.request_id == cr.request_id)
-                                .unwrap_or(false);
+                            let queue = gates.entry(sid.clone()).or_default();
+                            // Deduplicate by request_id ACROSS the whole queue:
+                            // a flapping remote replays the same control_request
+                            // on each reconnect, so ignore any request_id we're
+                            // already holding rather than enqueuing a duplicate
+                            // that would later be answered against a gate claude
+                            // is no longer blocked on. A genuinely NEW request_id
+                            // is pushed to the BACK — claude can block on a burst
+                            // of gates in one turn, and each must be preserved and
+                            // answered against its own request_id (no overwrite).
+                            let dup = queue.iter().any(|g| g.request_id == cr.request_id);
                             if dup {
                                 eprintln!(
                                     "marsad-agent: session {sid} gate DUPLICATE ignored (control_request {})",
                                     cr.request_id
                                 );
                             } else {
-                                if gates.contains_key(&sid) {
-                                    eprintln!(
-                                        "marsad-agent: session {sid} gate REPLACED — new control_request {} (previous unanswered)",
-                                        cr.request_id
-                                    );
-                                } else {
-                                    eprintln!(
-                                        "marsad-agent: session {sid} gate captured (control_request {})",
-                                        cr.request_id
-                                    );
-                                }
-                                gates.insert(
-                                    sid.clone(),
-                                    PendingGate {
-                                        request_id: cr.request_id,
-                                        input: cr.input,
-                                        elicitation: cr.elicitation_message.is_some(),
-                                    },
+                                eprintln!(
+                                    "marsad-agent: session {sid} gate captured (control_request {}, {} now queued)",
+                                    cr.request_id,
+                                    queue.len() + 1
                                 );
+                                // DIAG (temporary): log EXACTLY what claude offers for
+                                // this tool so gate options are truth-based, not guessed.
+                                eprintln!(
+                                    "marsad-agent: session {sid} GATE_DIAG tool={} elicitation={} suggestions={}",
+                                    cr.tool_name,
+                                    cr.elicitation_message.is_some(),
+                                    serde_json::to_string(&cr.permission_suggestions)
+                                        .unwrap_or_else(|_| "[]".to_string())
+                                );
+                                queue.push_back(PendingGate {
+                                    request_id: cr.request_id,
+                                    input: cr.input,
+                                    elicitation: cr.elicitation_message.is_some(),
+                                });
                             }
                         }
 
@@ -980,6 +1027,11 @@ pub(crate) fn spawn_session_reader(
             // Probe + backoff loop: keep probing until the connection comes back
             // (probe succeeds) or we exceed the total retry cap.
             loop {
+                // Stopped/superseded while backing off → exit promptly (don't sit
+                // out the rest of a 30-min probe window stacking with a new reader).
+                if cancel.load(Ordering::SeqCst) {
+                    break 'reconnect;
+                }
                 if total_waited_secs >= RECONNECT_MAX_TOTAL_SECS {
                     eprintln!(
                         "marsad-agent: session {sid} reconnect cap ({RECONNECT_MAX_TOTAL_SECS}s) reached — giving up"
@@ -987,9 +1039,16 @@ pub(crate) fn spawn_session_reader(
                     break 'reconnect;
                 }
 
-                // Sleep before the next probe (always, to avoid busy-looping).
+                // Sleep before the next probe (always, to avoid busy-looping), in
+                // 1s increments so a cancel (pause/supersede) is honored within ~1s
+                // instead of after the full backoff.
                 eprintln!("marsad-agent: session {sid} still down, retrying in {backoff_secs}s");
-                std::thread::sleep(std::time::Duration::from_secs(backoff_secs));
+                for _ in 0..backoff_secs {
+                    if cancel.load(Ordering::SeqCst) {
+                        break 'reconnect;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
                 total_waited_secs = total_waited_secs.saturating_add(backoff_secs);
                 backoff_secs = reconnect_backoff_next(backoff_secs);
 
@@ -1027,14 +1086,31 @@ pub(crate) fn spawn_session_reader(
             } // probe loop
         } // 'reconnect loop
 
+        // Whether THIS reader was superseded/stopped (vs it giving up on its own).
+        let was_cancelled = cancel.load(Ordering::SeqCst);
+        // De-register our token if it's still the current one (a newer reader may
+        // have already replaced it — don't clobber that).
+        {
+            let mut m = reader_cancels().lock().unwrap();
+            if m.get(&sid)
+                .map(|t| std::sync::Arc::ptr_eq(t, &cancel))
+                .unwrap_or(false)
+            {
+                m.remove(&sid);
+            }
+        }
+
         // Two-axis lifecycle: this reader has given up (re)attaching. For a
         // REMOTE session that means the process is gone or unreachable — claude
         // exited, the host rebooted / OOM-killed / scheduler-killed it, or the
         // reconnect cap was hit. Tell core so the card flips to Paused instead of
         // lying with its last activity state (Gap B: host-death → Paused). Local
         // sessions manage liveness elsewhere; skip here to avoid a false Paused
-        // on a still-live local session.
-        if exec_prefix_for(host_target.as_deref()).is_some() {
+        // on a still-live local session. Also SKIP when we were cancelled: a
+        // supersede means a newer reader owns liveness (it will broadcast LIVE) and
+        // a stop already set Paused in core — a stray PAUSED here would race and
+        // wrongly flip the fresh session Paused.
+        if exec_prefix_for(host_target.as_deref()).is_some() && !was_cancelled {
             eprintln!("marsad-agent: session {sid} liveness -> PAUSED (reader gave up; broadcast)");
             let line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionLiveness {
                 session_id: sid.clone(),
