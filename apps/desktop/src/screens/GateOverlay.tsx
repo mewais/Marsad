@@ -8,6 +8,7 @@ import { answerGate, answerQuestion } from "../bridge/api";
 import type { PermissionSuggestion } from "../bridge/types";
 import { DiffView } from "../components/DiffView";
 import { Markdown } from "../components/Markdown";
+import { GateOptions, type GateOption } from "../components/GateOptions";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -451,36 +452,34 @@ export function GateOverlay() {
               {/* Scope choices (MCP elicitation): one button per allowed scope.
                   Clicking sends that choice as the elicitation response. */}
               {hasChoices && (
-                <div
-                  data-testid="gate-elicitation-choices"
-                  style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}
-                >
-                  {elicitationChoices.map((c, i) => (
-                    <button
-                      key={`${c.key}=${c.value}-${i}`}
-                      data-testid={`gate-choice-${c.value}`}
-                      onClick={() => handleElicitationChoice(c.key, c.value)}
-                      disabled={busy}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        padding: "11px 14px",
-                        borderRadius: 11,
-                        border: "1px solid var(--border2)",
-                        background: "var(--panel2)",
-                        color: "var(--txt)",
-                        cursor: busy ? "not-allowed" : "pointer",
-                        opacity: busy ? 0.6 : 1,
-                        textAlign: "left",
-                        fontFamily: "inherit",
-                        fontWeight: 600,
-                        fontSize: "calc(15px * var(--fs,1))",
-                      }}
-                    >
-                      {c.label}
-                    </button>
-                  ))}
-                </div>
+                <GateOptions
+                  testid="gate-elicitation-choices"
+                  disabled={busy}
+                  options={elicitationChoices.map((c, i) => ({
+                    id: `${c.key}=${c.value}-${i}`,
+                    testid: `gate-choice-${c.value}`,
+                    label: c.label,
+                    onSelect: () => handleElicitationChoice(c.key, c.value),
+                  }))}
+                />
+              )}
+
+              {/* claude's OWN "always allow …" suggestions / ACP options, rendered
+                  VERBATIM (one row each) in the body — same stacked layout as every
+                  other gate choice. Picking one approves now AND persists the exact
+                  rule/option the agent offered. Absent (or an elicitation) ⇒ only the
+                  footer Allow/Reject show. */}
+              {!gate.is_elicitation && (
+                <GateOptions
+                  disabled={busy}
+                  options={permissionSuggestions.map((s, i) => ({
+                    id: `suggestion-${i}`,
+                    testid: `approve-suggestion-${i}`,
+                    label: suggestionLabel(s),
+                    title: s.destination ? `destination: ${s.destination}` : undefined,
+                    onSelect: () => handleAllowSuggestion(s),
+                  }))}
+                />
               )}
             </div>
           )}
@@ -603,9 +602,11 @@ export function GateOverlay() {
                   >
                     {q.question}
                   </div>
-                  {/* Options */}
-                  <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                    {q.options.map((opt, oi) => {
+                  {/* Options — same stacked renderer as every other gate choice.
+                      Selection/accumulation stays here; GateOptions is presentational. */}
+                  <GateOptions
+                    disabled={busy}
+                    options={q.options.map((opt, oi) => {
                       const selectedLabels = multiSelected[q.question] ?? [];
                       const isSelected = selectedLabels.includes(opt.label);
 
@@ -616,7 +617,7 @@ export function GateOverlay() {
                       const immediate =
                         !q.multi_select && questionData.questions.length === 1;
 
-                      const handleOptionClick = async () => {
+                      const onSelect = async () => {
                         if (!selectedSession || !questionData) return;
                         if (immediate) {
                           setBusy(true);
@@ -644,52 +645,15 @@ export function GateOverlay() {
                         });
                       };
 
-                      return (
-                        <button
-                          key={oi}
-                          onClick={handleOptionClick}
-                          disabled={busy}
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            alignItems: "flex-start",
-                            gap: 2,
-                            padding: "11px 14px",
-                            borderRadius: 11,
-                            border: isSelected
-                              ? "1.5px solid var(--accent2)"
-                              : "1px solid var(--border2)",
-                            background: isSelected ? "var(--accent-bg)" : "var(--panel2)",
-                            cursor: busy ? "not-allowed" : "pointer",
-                            opacity: busy ? 0.6 : 1,
-                            textAlign: "left",
-                            fontFamily: "inherit",
-                          }}
-                        >
-                          <span
-                            style={{
-                              fontWeight: 700,
-                              fontSize: "calc(15px * var(--fs,1))",
-                              color: isSelected ? "var(--accent2)" : "var(--txt)",
-                            }}
-                          >
-                            {opt.label}
-                          </span>
-                          {opt.description && (
-                            <span
-                              style={{
-                                fontSize: "calc(13.5px * var(--fs,1))",
-                                color: "var(--txt3)",
-                                lineHeight: 1.4,
-                              }}
-                            >
-                              {opt.description}
-                            </span>
-                          )}
-                        </button>
-                      );
+                      return {
+                        id: String(oi),
+                        label: opt.label,
+                        description: opt.description || undefined,
+                        selected: isSelected,
+                        onSelect,
+                      } as GateOption;
                     })}
-                  </div>
+                  />
                 </div>
               ))}
             </div>
@@ -924,35 +888,9 @@ export function GateOverlay() {
                   >
                     {rejectLabel(kind)}
                   </button>
-                  {/* Permission-only: claude's OWN "always allow …" suggestions,
-                      rendered VERBATIM (one button each). Picking one approves now
-                      AND persists the exact rule claude offered — no restart, no
-                      invented option. Absent ⇒ only Allow/Reject show. */}
-                  {gate.is_permission &&
-                    !gate.is_elicitation &&
-                    permissionSuggestions.map((s, i) => (
-                      <button
-                        key={i}
-                        data-testid={`approve-suggestion-${i}`}
-                        onClick={() => handleAllowSuggestion(s)}
-                        disabled={busy}
-                        title={s.destination ? `destination: ${s.destination}` : undefined}
-                        style={{
-                          fontFamily: "inherit",
-                          fontWeight: 600,
-                          fontSize: "calc(15px * var(--fs,1))",
-                          padding: "9px 15px",
-                          borderRadius: 9,
-                          border: "1px solid var(--border2)",
-                          background: "var(--panel2)",
-                          color: "var(--txt2)",
-                          cursor: busy ? "not-allowed" : "pointer",
-                          opacity: busy ? 0.6 : 1,
-                        }}
-                      >
-                        {suggestionLabel(s)}
-                      </button>
-                    ))}
+                  {/* claude/ACP "always allow …" options now render in the BODY
+                      (GateOptions), consistent with every other gate choice — not as
+                      footer buttons. The footer keeps only the generic actions. */}
                   {/* Elicitation scope choices replace the generic Approve —
                       the per-choice buttons in the body ARE the accept action. */}
                   {!hasChoices && (
