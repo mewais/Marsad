@@ -423,16 +423,16 @@ pub fn group_overview(s: &AppSnapshot) -> OverviewGroups {
     let mut active: Vec<SessionCard> = Vec::new();
     let mut idle: Vec<SessionCard> = Vec::new();
 
-    // Mirrors marsad_workstream::severity so the overview and the board agree.
-    // Attention (Needs/Error) ALWAYS surfaces — a pending gate or a failure is
-    // never hidden behind liveness. `active` (Working) is liveness-gated. `idle`
-    // = finished/idle (Done, or Starting folded into Done), OR not-live (Paused)
-    // that isn't already an attention state.
+    // Mirrors marsad_workstream::severity (liveness-first) so the overview and the
+    // board agree. A NOT-running session is always idle/Paused regardless of its
+    // last phase — pausing kills the process, so a stale Needs/Error is wasted and
+    // must NOT surface as attention. Attention (Needs/Error) + active (Working) are
+    // therefore LIVE-only; `idle` holds live-Done plus every paused/dormant session.
     // Needs first in attention bucket.
-    for sv in s.sessions.iter().filter(|sv| sv.state == Phase::Needs) {
+    for sv in s.sessions.iter().filter(|sv| sv.live && sv.state == Phase::Needs) {
         attention.push(session_card(sv, &s.hosts));
     }
-    for sv in s.sessions.iter().filter(|sv| sv.state == Phase::Error) {
+    for sv in s.sessions.iter().filter(|sv| sv.live && sv.state == Phase::Error) {
         attention.push(session_card(sv, &s.hosts));
     }
     for sv in s
@@ -443,8 +443,11 @@ pub fn group_overview(s: &AppSnapshot) -> OverviewGroups {
         active.push(session_card(sv, &s.hosts));
     }
     for sv in s.sessions.iter().filter(|sv| {
-        !matches!(sv.state, Phase::Needs | Phase::Error)
-            && (matches!(sv.state, Phase::Done | Phase::Starting) || !sv.live)
+        // Everything not already in attention/active: a LIVE resting session (Done,
+        // or Starting folded into Done — mirrors severity), OR ANY not-live session
+        // (Paused, regardless of its last phase — its stale Needs/Error is wasted).
+        (sv.live && !matches!(sv.state, Phase::Needs | Phase::Error | Phase::Working))
+            || !sv.live
     }) {
         idle.push(session_card(sv, &s.hosts));
     }

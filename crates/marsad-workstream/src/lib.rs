@@ -157,7 +157,10 @@ pub struct Connection {
 // ---------------------------------------------------------------------------
 
 /// Most-urgent aggregate state across a set of nodes.
-/// Priority order: Needs > Error > Working > Done.
+/// Priority order: Needs > Error > Working > Done > Paused.
+/// `Paused` is liveness-first: a not-running session shows Paused regardless of
+/// its last activity phase (its gate/error is wasted — pause kills the process),
+/// and only wins when NOTHING live is more urgent (so it's the lowest rank).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HeadState {
@@ -165,6 +168,7 @@ pub enum HeadState {
     Error,
     Working,
     Done,
+    Paused,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -173,6 +177,7 @@ pub struct StateCounts {
     pub needs: usize,
     pub error: usize,
     pub done: usize,
+    pub paused: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -213,41 +218,44 @@ impl std::error::Error for ConnError {}
 // ---------------------------------------------------------------------------
 
 /// Severity of a node for head-state / bucketing purposes, in the two-axis
-/// model. `None` means the node is dormant (→ the board's Paused group).
+/// model. `None` means the node is dormant and contributes nothing.
 ///
-/// - `Done` is activity-terminal: a finished session is ALWAYS surfaced in Done
-///   (the user wants completed work visible) whether or not its process is still
-///   alive.
-/// - Every other phase only contributes while the session is actually alive
-///   (`live`). A not-live node — user-paused, or host-killed mid-work
-///   (reboot / OOM / scheduler / crash) — is dormant, so it lands in Paused
-///   instead of lying with Working/Needs/Error.
+/// LIVENESS-FIRST: a not-running session (`!live`) is `Paused` regardless of its
+/// last activity phase. Pausing kills the process, so any pending gate (Needs) or
+/// error is WASTED — not actionable until a cold resume — so it must NOT show as
+/// Needs/Error/Done/Working; it shows Paused and groups separately. Only
+/// `Stale`/`Detached` (never-real / superseded) stay dormant (`None`).
+///
+/// While live, the activity phase decides: Needs/Error (attention) > Working >
+/// Done. (`Starting` folds into Done — launched-but-idle.)
 fn severity(phase: &Phase, live: bool) -> Option<HeadState> {
+    if !live {
+        return match phase {
+            // Never-real / superseded nodes are dormant, not "Paused".
+            Phase::Stale | Phase::Detached => None,
+            // Everything else that isn't running → Paused (overrides the phase).
+            _ => Some(HeadState::Paused),
+        };
+    }
     match phase {
-        // Attention / terminal states ALWAYS surface, regardless of liveness — a
-        // pending gate (Needs), a failure (Error), or finished work (Done) must
-        // never be hidden behind `live` (a blocked gate means claude is alive and
-        // waiting for the human; hiding it would strand an unanswerable gate).
         Phase::Needs => Some(HeadState::Needs),
         Phase::Error => Some(HeadState::Error),
-        Phase::Done => Some(HeadState::Done),
-        // Everything else only surfaces while actually live; a not-live session is
-        // dormant (→ the board's Paused group).
-        _ if !live => None,
         Phase::Working => Some(HeadState::Working),
-        // Starting folds into Done: a launched-but-idle session is idle/ready, the
-        // same resting bucket as a finished one.
         Phase::Starting => Some(HeadState::Done),
+        Phase::Done => Some(HeadState::Done),
         Phase::Stale | Phase::Detached => None,
     }
 }
 
 fn severity_rank(state: HeadState) -> u8 {
     match state {
-        HeadState::Needs => 4,
-        HeadState::Error => 3,
-        HeadState::Working => 2,
-        HeadState::Done => 1,
+        HeadState::Needs => 5,
+        HeadState::Error => 4,
+        HeadState::Working => 3,
+        HeadState::Done => 2,
+        // Lowest: an aggregate card is Paused only when NOTHING live outranks it
+        // (i.e. every member is paused/dormant).
+        HeadState::Paused => 1,
     }
 }
 
@@ -255,8 +263,9 @@ fn severity_rank(state: HeadState) -> u8 {
 // Functions
 // ---------------------------------------------------------------------------
 
-/// The most-urgent state among the given nodes, priority Needs > Error > Working > Done.
-/// `Stale`/`Detached` are dormant and contribute no severity. Empty or all-dormant → `None`.
+/// The most-urgent state among the given nodes, priority Needs > Error > Working >
+/// Done > Paused. `Stale`/`Detached` are dormant and contribute no severity. Empty
+/// or all-dormant → `None`. (A card is Paused only when every member is paused.)
 pub fn head_state(nodes: &[Node]) -> Option<HeadState> {
     nodes
         .iter()
@@ -264,8 +273,9 @@ pub fn head_state(nodes: &[Node]) -> Option<HeadState> {
         .max_by_key(|s| severity_rank(*s))
 }
 
-/// Tally nodes by bucket: `working` = Working+Starting, `needs` = Needs, `error` = Error,
-/// `done` = Done. `Stale`/`Detached` are not counted in any bucket.
+/// Tally nodes by bucket (liveness-first): a not-running node counts as `paused`
+/// regardless of phase; live nodes count by phase (`working` incl. Starting).
+/// `Stale`/`Detached` are not counted in any bucket.
 pub fn state_counts(nodes: &[Node]) -> StateCounts {
     let mut counts = StateCounts::default();
     for n in nodes {
@@ -274,6 +284,7 @@ pub fn state_counts(nodes: &[Node]) -> StateCounts {
             Some(HeadState::Error) => counts.error += 1,
             Some(HeadState::Working) => counts.working += 1,
             Some(HeadState::Done) => counts.done += 1,
+            Some(HeadState::Paused) => counts.paused += 1,
             None => {}
         }
     }

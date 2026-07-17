@@ -211,7 +211,11 @@ export function SessionDetail() {
               >
                 {name}
               </h1>
-              <Badge state={sessionState} endReason={selectedSession.end_reason} />
+              <Badge
+                state={sessionState}
+                endReason={selectedSession.end_reason}
+                live={selectedSession.live}
+              />
             </div>
 
             {/* Meta row: driver pill (bordered) + host + branch + context */}

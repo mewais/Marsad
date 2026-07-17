@@ -2610,6 +2610,12 @@ impl Core {
                 // going Paused/finalized must not linger on a stale
                 // "Reconnecting"/"Unstable"/"Disconnected" hint.
                 rec.conn_health = marsad_proto::ConnHealth::Connected;
+                // Pausing kills the process → any pending gate/question is wasted
+                // (unanswerable until a cold resume). Discard it so it neither
+                // lingers in state nor resurfaces on resume.
+                if !live {
+                    rec.state.drop_gates_on_pause();
+                }
             }
             _ => return Ok(vec![]),
         }

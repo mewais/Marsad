@@ -91,6 +91,7 @@ fn state_counts_dormant_nodes_all_zero() {
             needs: 0,
             error: 0,
             done: 0,
+            paused: 0,
         }
     );
 }

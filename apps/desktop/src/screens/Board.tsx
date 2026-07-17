@@ -38,6 +38,8 @@ const headStateColor: Record<HeadState, string> = {
   error: "var(--error)",
   working: "var(--accent)",
   done: "var(--done)",
+  // Paused = dormant (not running): a muted, calm look — not an alarm colour.
+  paused: "var(--txt3)",
 };
 
 const headStateBg: Record<HeadState, string> = {
@@ -45,6 +47,7 @@ const headStateBg: Record<HeadState, string> = {
   error: "var(--error-bg)",
   working: "var(--working-bg)",
   done: "var(--done-bg)",
+  paused: "var(--panel2)",
 };
 
 const driverColor: Record<Driver, string> = {
@@ -86,6 +89,7 @@ function nonZeroBuckets(counts: StateCounts): { key: keyof StateCounts; label: s
     { key: "needs", label: "needs you" },
     { key: "error", label: "error" },
     { key: "done", label: "done" },
+    { key: "paused", label: "paused" },
   ];
   return buckets.filter((b) => counts[b.key] > 0);
 }
@@ -718,13 +722,17 @@ export function Board({
   };
 
   // Group the dashboard into Live / Done / Paused so active work sits on top.
-  // Live = working/needs/error; Done = finished; Paused = null head_state (every
-  // node Stale/Detached). Stable order preserved within each group.
+  // Liveness-first: Live = live working/needs/error; Done = live finished; Paused =
+  // every member not running (head_state "paused") — a paused session shows here
+  // regardless of its last phase (its gate/error is wasted on pause). Dormant
+  // (Stale/Detached only) → null head_state, also grouped under Paused.
   const liveCards = board.all.filter(
     (c) => c.head_state === "working" || c.head_state === "needs" || c.head_state === "error"
   );
   const doneCards = board.all.filter((c) => c.head_state === "done");
-  const pausedCards = board.all.filter((c) => c.head_state === null);
+  const pausedCards = board.all.filter(
+    (c) => c.head_state === "paused" || c.head_state === null
+  );
 
   return (
     <div

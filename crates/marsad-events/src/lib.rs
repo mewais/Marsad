@@ -287,6 +287,21 @@ impl SessionState {
         self.advance_gate();
     }
 
+    /// Discard ALL pending gates (current + queue) when the session is PAUSED.
+    /// Pausing kills the host process, so any pending permission/question is
+    /// wasted — it can't be answered until a cold resume (like closing the Claude
+    /// Code TUI mid-prompt). Clearing it here (not just hiding it behind the PAUSED
+    /// badge) keeps the data honest and prevents a stale gate resurfacing on resume.
+    /// A lingering `Needs` phase flips back to `Working`.
+    pub fn drop_gates_on_pause(&mut self) {
+        self.gate = None;
+        self.gate_queue.clear();
+        if matches!(self.phase, Phase::Needs) {
+            self.phase = Phase::Working;
+            self.end_reason = None;
+        }
+    }
+
     /// Advance to the next queued gate (the human answered/closed the current one).
     /// If another gate is waiting it becomes current (phase stays `Needs`); if the
     /// queue is empty, clear the gate and flip a lingering `Needs` → `Working`.

@@ -42,7 +42,7 @@ function makeCard(overrides: Partial<WorkstreamCard> = {}): WorkstreamCard {
     driver_dots: ["claude"],
     host_chips: ["localhost"],
     session_count: 1,
-    counts: { working: 1, needs: 0, error: 0, done: 0 },
+    counts: { working: 1, needs: 0, error: 0, done: 0, paused: 0 },
     needs_attention: false,
     is_single_node: true,
     ...overrides,
@@ -97,7 +97,7 @@ describe("Board — single source of truth (SessionView-driven status)", () => {
       id: "w-done-live",
       head_state: "done",
       node_ids: ["sess-done-live"],
-      counts: { working: 0, needs: 0, error: 0, done: 1 },
+      counts: { working: 0, needs: 0, error: 0, done: 1, paused: 0 },
     });
     const board = makeBoard({ all: [card] });
     const session = makeSession({ id: "sess-done-live", state: "Done", live: true });
@@ -115,7 +115,7 @@ describe("Board — single source of truth (SessionView-driven status)", () => {
       id: "w-done-paused",
       head_state: "done",
       node_ids: ["sess-done-paused"],
-      counts: { working: 0, needs: 0, error: 0, done: 1 },
+      counts: { working: 0, needs: 0, error: 0, done: 1, paused: 0 },
     });
     const board = makeBoard({ all: [card] });
     const session = makeSession({ id: "sess-done-paused", state: "Done", live: false });
@@ -126,6 +126,29 @@ describe("Board — single source of truth (SessionView-driven status)", () => {
     );
     expect(screen.getByTestId("ws-resume-w-done-paused")).toBeTruthy();
     expect(screen.queryByTestId("ws-pause-w-done-paused")).toBeNull();
+  });
+
+  it("renders a paused card with the PAUSED badge (liveness-first, not its phase)", () => {
+    // A finished-but-paused session: backend severity → head_state 'paused'
+    // (overriding Done). The row shows the paused head-state, not 'done'.
+    const card = makeCard({
+      id: "w-paused",
+      head_state: "paused",
+      node_ids: ["sess-paused"],
+      counts: { working: 0, needs: 0, error: 0, done: 0, paused: 1 },
+    });
+    const board = makeBoard({ all: [card] });
+    const session = makeSession({ id: "sess-paused", state: "Done", live: false });
+    render(
+      <ThemeProvider initialTheme="dark">
+        <Board board={board} sessions={[session]} onOpenWorkstream={vi.fn()} />
+      </ThemeProvider>
+    );
+    const row = screen.getByTestId("workstream-row-w-paused");
+    expect(row.querySelector('[data-head-state="paused"]')).toBeTruthy();
+    // Resume (not Pause) is offered — it's not running.
+    expect(screen.getByTestId("ws-resume-w-paused")).toBeTruthy();
+    expect(screen.queryByTestId("ws-pause-w-paused")).toBeNull();
   });
 
   it("surfaces the per-session 'Unstable' connection hint on the dashboard card", () => {
@@ -157,7 +180,7 @@ describe("Board — single source of truth (SessionView-driven status)", () => {
       head_state: "needs",
       needs_attention: true,
       node_ids: ["sess-attn"],
-      counts: { working: 0, needs: 1, error: 0, done: 0 },
+      counts: { working: 0, needs: 1, error: 0, done: 0, paused: 0 },
     });
     const board = makeBoard({ all: [card], attention: [card] });
     const session = makeSession({
@@ -385,7 +408,7 @@ describe("Board — UB6 all-section rows", () => {
         makeCard({
           id: "w2",
           session_count: 4,
-          counts: { working: 3, needs: 1, error: 0, done: 0 },
+          counts: { working: 3, needs: 1, error: 0, done: 0, paused: 0 },
         }),
       ],
     });
@@ -406,7 +429,7 @@ describe("Board — UB6 all-section rows", () => {
           id: "w3",
           session_count: 2,
           head_state: "done",
-          counts: { working: 0, needs: 0, error: 0, done: 2 },
+          counts: { working: 0, needs: 0, error: 0, done: 2, paused: 0 },
         }),
       ],
     });
@@ -555,7 +578,7 @@ describe("Board — UB9 pulsing state dot", () => {
         makeCard({
           id: "w-done",
           head_state: "done",
-          counts: { working: 0, needs: 0, error: 0, done: 1 },
+          counts: { working: 0, needs: 0, error: 0, done: 1, paused: 0 },
         }),
       ],
     });
@@ -638,10 +661,10 @@ describe("Board — UB11 link-issue chip content", () => {
 
 describe("Board — UB12 head-state priority reflection", () => {
   it.each([
-    { head_state: "needs" as const, counts: { working: 5, needs: 1, error: 2, done: 3 } },
-    { head_state: "error" as const, counts: { working: 5, needs: 0, error: 1, done: 3 } },
-    { head_state: "working" as const, counts: { working: 1, needs: 0, error: 0, done: 5 } },
-    { head_state: "done" as const, counts: { working: 0, needs: 0, error: 0, done: 5 } },
+    { head_state: "needs" as const, counts: { working: 5, needs: 1, error: 2, done: 3, paused: 0 } },
+    { head_state: "error" as const, counts: { working: 5, needs: 0, error: 1, done: 3, paused: 0 } },
+    { head_state: "working" as const, counts: { working: 1, needs: 0, error: 0, done: 5, paused: 0 } },
+    { head_state: "done" as const, counts: { working: 0, needs: 0, error: 0, done: 5, paused: 0 } },
   ])(
     "a row surfaces head_state=$head_state as its pill even when other buckets outnumber it",
     ({ head_state, counts }) => {
@@ -662,7 +685,7 @@ describe("Board — UB12 head-state priority reflection", () => {
         makeCard({
           id: "w-needs-over-error",
           head_state: "needs",
-          counts: { working: 0, needs: 1, error: 1, done: 0 },
+          counts: { working: 0, needs: 1, error: 1, done: 0, paused: 0 },
           needs_attention: true,
         }),
       ],
@@ -757,7 +780,7 @@ describe("Board — UB14 attention card session dots", () => {
           id: "w-dots",
           head_state: "needs",
           session_count: 4,
-          counts: { working: 2, needs: 1, error: 0, done: 1 },
+          counts: { working: 2, needs: 1, error: 0, done: 1, paused: 0 },
           needs_attention: true,
         }),
       ],
@@ -775,7 +798,7 @@ describe("Board — UB14 attention card session dots", () => {
           id: "w-dots-pulse",
           head_state: "needs",
           session_count: 2,
-          counts: { working: 1, needs: 0, error: 0, done: 1 },
+          counts: { working: 1, needs: 0, error: 0, done: 1, paused: 0 },
           needs_attention: true,
         }),
       ],

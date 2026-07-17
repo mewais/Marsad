@@ -12,7 +12,7 @@
 // Shared primitives
 // ---------------------------------------------------------------------------
 
-export type HeadState = "needs" | "error" | "working" | "done";
+export type HeadState = "needs" | "error" | "working" | "done" | "paused";
 export type Driver = "claude" | "codex" | "gemini" | "opencode";
 
 export interface StateCounts {
@@ -20,6 +20,7 @@ export interface StateCounts {
   needs: number;
   error: number;
   done: number;
+  paused: number;
 }
 
 // ---------------------------------------------------------------------------

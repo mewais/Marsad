@@ -230,7 +230,7 @@ function headStateForWs(wsId: string): HeadState | null {
 
 function countsForWs(wsId: string): StateCounts {
   const nodes = nodesForWs(wsId);
-  const counts: StateCounts = { working: 0, needs: 0, error: 0, done: 0 };
+  const counts: StateCounts = { working: 0, needs: 0, error: 0, done: 0, paused: 0 };
   for (const n of nodes) {
     if (n.state === "Needs") counts.needs++;
     else if (n.state === "Error") counts.error++;

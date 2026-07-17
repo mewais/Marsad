@@ -448,7 +448,7 @@ function boardWith(wsId: string, sessionCount: number): VmState["board"] {
         driver_dots: [],
         host_chips: [],
         session_count: sessionCount,
-        counts: { working: 0, needs: 0, error: 0, done: 0 },
+        counts: { working: 0, needs: 0, error: 0, done: 0, paused: 0 },
         needs_attention: false,
         is_single_node: false,
       },

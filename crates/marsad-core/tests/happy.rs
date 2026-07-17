@@ -1175,6 +1175,40 @@ fn conn_health_surfaces_and_clears_on_pause() {
     assert_eq!(last_sv(&u).conn_health, "Disconnected");
 }
 
+/// Pausing kills the process, so a pending HITL gate is WASTED (unanswerable
+/// until a cold resume — like closing the Claude Code TUI mid-prompt). A
+/// `SessionLiveness{live:false}` must therefore DROP the pending gate from state
+/// (not just hide it): the card shows PAUSED, and nothing stale resurfaces on
+/// resume.
+#[test]
+fn pause_drops_the_pending_gate() {
+    let (mut core, _fake) = make_core();
+    let id = launch_t(&mut core, None, LaunchMode::Fresh);
+    let _ = core
+        .on_agent_line(&ipc_agent_event_system_init(&id))
+        .expect("init");
+
+    // A control_request drives the session to Needs with a pending gate.
+    let u = core
+        .on_agent_line(&ipc_agent_event_control_request(&id, "req-1"))
+        .expect("control_request");
+    let sv = last_sv(&u);
+    assert_eq!(sv.state, marsad_events::Phase::Needs, "gate → Needs");
+    assert!(sv.gate.is_some(), "gate must be pending before pause");
+
+    // Pause → the gate is discarded and the lingering Needs flips off.
+    let dead = format!(r#"{{"type":"SessionLiveness","session_id":"{id}","live":false}}"#);
+    let u = core.on_agent_line(&dead).expect("liveness false");
+    let sv = last_sv(&u);
+    assert!(!sv.live, "session is Paused");
+    assert!(sv.gate.is_none(), "the wasted gate must be cleared on pause");
+    assert_ne!(
+        sv.state,
+        marsad_events::Phase::Needs,
+        "phase must not linger on Needs after the gate is dropped"
+    );
+}
+
 #[test]
 fn transcript_resume_loads_session_history() {
     use marsad_events::TranscriptEntry;

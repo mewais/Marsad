@@ -350,6 +350,7 @@ fn state_counts_all_buckets_with_starting_folded_into_done() {
             needs: 2,
             error: 1,
             done: 4,
+            paused: 0,
         }
     );
 }
@@ -472,54 +473,63 @@ fn dependency_depth_diamond() {
     assert_eq!(dependency_depth("d", "w1", &conns), 2);
 }
 
-/// Two-axis lifecycle severity: a not-live (Paused) node is dormant regardless
-/// of its activity phase — EXCEPT `Done`, which always surfaces (finished its
-/// job, the user wants completed work visible). This routes a host-killed
-/// session to the board's Paused group instead of falsely showing Working.
+/// Two-axis severity is LIVENESS-FIRST: a not-live (Paused) node is `Paused`
+/// regardless of its activity phase — even Done. Pausing kills the process, so a
+/// finished-but-paused session shows PAUSED (grouped separately), not Done. A
+/// live node always outranks a paused one in an aggregate card.
 #[test]
-fn head_state_ignores_not_live_nodes_except_done() {
+fn head_state_not_live_nodes_are_paused_regardless_of_phase() {
     // Live Working → Working.
     let live_working = node("a", "ws", Driver::Claude, "h", Phase::Working);
     assert_eq!(head_state(&[live_working]), Some(HeadState::Working));
 
-    // Not-live Working (host-killed mid-work) → dormant → None (Paused group).
+    // Not-live Working (host-killed mid-work) → Paused.
     let mut dead_working = node("b", "ws", Driver::Claude, "h", Phase::Working);
     dead_working.live = false;
-    assert_eq!(head_state(std::slice::from_ref(&dead_working)), None);
+    assert_eq!(
+        head_state(std::slice::from_ref(&dead_working)),
+        Some(HeadState::Paused)
+    );
 
-    // Not-live Done → still Done (finished its job).
+    // Not-live Done → Paused (finished, but not running → grouped as Paused).
     let mut dead_done = node("c", "ws", Driver::Claude, "h", Phase::Done);
     dead_done.live = false;
-    assert_eq!(head_state(&[dead_done]), Some(HeadState::Done));
+    assert_eq!(head_state(&[dead_done]), Some(HeadState::Paused));
 
-    // Mixed ws: a dormant dead-Working + a live Needs → Needs wins.
+    // Mixed ws: a paused node + a live Needs → the live Needs wins.
     let live_needs = node("d", "ws", Driver::Claude, "h", Phase::Needs);
     assert_eq!(head_state(&[dead_working, live_needs]), Some(HeadState::Needs));
 
-    // state_counts likewise ignores the not-live node (only the live Needs counts).
+    // state_counts: the not-live node counts as `paused`, not its phase.
     let live_needs2 = node("e", "ws", Driver::Claude, "h", Phase::Needs);
     let mut dead_working2 = node("f", "ws", Driver::Claude, "h", Phase::Working);
     dead_working2.live = false;
     let counts = state_counts(&[live_needs2, dead_working2]);
     assert_eq!(counts.needs, 1);
-    assert_eq!(counts.working, 0, "not-live working node must not be counted");
+    assert_eq!(counts.working, 0, "not-live working node must not count as working");
+    assert_eq!(counts.paused, 1, "not-live node counts as paused");
 }
 
-/// A pending gate (Needs) or a failure (Error) must ALWAYS surface, even when the
-/// node is not-live — a blocked gate can never be hidden behind liveness (that
-/// would strand an unanswerable gate; it's what made a WebSearch HITL vanish from
-/// the dashboard when its host flapped).
+/// LIVENESS-FIRST: pausing kills the process, so a paused session's pending gate
+/// (Needs) or error is WASTED — unanswerable until a cold resume. It must NOT
+/// surface as Needs/Error; it shows Paused and groups separately (core also
+/// clears the gate on pause). A LIVE Needs/Error still surfaces as attention.
 #[test]
-fn head_state_needs_and_error_surface_even_when_not_live() {
+fn head_state_paused_overrides_needs_and_error() {
     let mut dead_needs = node("a", "ws", Driver::Claude, "h", Phase::Needs);
     dead_needs.live = false;
-    assert_eq!(head_state(&[dead_needs.clone()]), Some(HeadState::Needs));
+    assert_eq!(head_state(&[dead_needs.clone()]), Some(HeadState::Paused));
 
     let mut dead_error = node("b", "ws", Driver::Claude, "h", Phase::Error);
     dead_error.live = false;
-    assert_eq!(head_state(&[dead_error]), Some(HeadState::Error));
+    assert_eq!(head_state(&[dead_error]), Some(HeadState::Paused));
 
-    // And they still count in their buckets despite !live.
+    // They count as paused, not needs/error.
     let counts = state_counts(&[dead_needs]);
-    assert_eq!(counts.needs, 1, "a not-live gate must still be counted");
+    assert_eq!(counts.paused, 1);
+    assert_eq!(counts.needs, 0, "a paused gate is not a live 'needs'");
+
+    // But a LIVE Needs still surfaces as attention (unchanged).
+    let live_needs = node("z", "ws", Driver::Claude, "h", Phase::Needs);
+    assert_eq!(head_state(&[live_needs]), Some(HeadState::Needs));
 }

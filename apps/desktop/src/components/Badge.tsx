@@ -5,6 +5,11 @@ interface BadgeProps {
   /** The session's end reason, so a user cancel reads "Cancelled" (calm) instead
    *  of a plain "Done". Ignored unless `state` is Done. */
   endReason?: EndReason | null;
+  /** Liveness (two-axis). LIVENESS-FIRST: when `false` (Paused, not running) the
+   *  badge reads "Paused" and overrides the activity phase entirely — a paused
+   *  session's gate/error is wasted, so it never shows Needs/Error/Done/Working.
+   *  Missing/true → show the activity phase as usual. */
+  live?: boolean;
   label?: string;
 }
 
@@ -42,14 +47,18 @@ const phaseLabel: Record<Phase, string> = {
   Detached: "Stopped",
 };
 
-export function Badge({ state, endReason, label }: BadgeProps) {
+export function Badge({ state, endReason, live, label }: BadgeProps) {
+  // Liveness-first: a not-running session reads "Paused" regardless of its last
+  // activity phase.
+  const paused = live === false;
   // A user cancel is a calm end, not a failure: it lands in Done but reads
   // "Cancelled" (neutral colour) so it's distinguishable from a genuine finish.
   const isCancelled =
-    (state === "Done" || state === "Starting") && endReason === "Cancelled";
-  const color = isCancelled ? "var(--txt2)" : phaseColor[state];
-  const background = isCancelled ? "var(--panel2)" : phaseBg[state];
-  const text = label ?? (isCancelled ? "Cancelled" : phaseLabel[state]);
+    !paused && (state === "Done" || state === "Starting") && endReason === "Cancelled";
+  const color = paused ? "var(--txt3)" : isCancelled ? "var(--txt2)" : phaseColor[state];
+  const background = paused ? "var(--panel2)" : isCancelled ? "var(--panel2)" : phaseBg[state];
+  const text =
+    label ?? (paused ? "Paused" : isCancelled ? "Cancelled" : phaseLabel[state]);
   return (
     <span
       style={{

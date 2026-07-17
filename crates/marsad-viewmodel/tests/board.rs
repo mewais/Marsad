@@ -235,6 +235,7 @@ fn bv3_card_derivations_for_mixed_workstream() {
             needs: 1,
             error: 0,
             done: 2,
+            paused: 0,
         }
     );
     assert!(!card.is_single_node);

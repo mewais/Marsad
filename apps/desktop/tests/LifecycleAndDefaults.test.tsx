@@ -448,7 +448,7 @@ describe("#5 Workstream lifecycle (Board)", () => {
         driver_dots: ["claude"],
         host_chips: ["local"],
         session_count: 2,
-        counts: { working: 2, needs: 0, error: 0, done: 0 },
+        counts: { working: 2, needs: 0, error: 0, done: 0, paused: 0 },
         needs_attention: false,
         is_single_node: false,
       },
@@ -461,7 +461,7 @@ describe("#5 Workstream lifecycle (Board)", () => {
       {
         ...workingBoardWith.all[0],
         head_state: "done",
-        counts: { working: 0, needs: 0, error: 0, done: 2 },
+        counts: { working: 0, needs: 0, error: 0, done: 2, paused: 0 },
       },
     ],
   };
