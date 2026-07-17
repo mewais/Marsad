@@ -290,7 +290,19 @@ export interface SessionView {
    * shows this and HARD-BLOCKS sending when it's not "Connected" (or when paused).
    * Optional for back-compat; treat a missing value as "Connected".
    */
-  conn_health?: "Connected" | "Reconnecting" | "Unstable";
+  conn_health?: "Connected" | "Reconnecting" | "Unstable" | "Disconnected";
+  /**
+   * ACP plan entries from `session/update{plan}` — the live plan/todo list.
+   * Each entry has a `content` string and a `priority` ("critical"|"high"|
+   * "medium"|"low"). Optional for back-compat; absent when no plan has been
+   * received yet (non-opencode sessions, or opencode sessions in build mode).
+   */
+  plan_entries?: { content: string; priority: string }[];
+  /**
+   * Current mode id from ACP `current_mode_update` (e.g. "plan"|"build").
+   * Optional for back-compat; absent before the first mode update.
+   */
+  current_mode?: string;
 }
 
 /** Mirrors marsad_proto::CompactMetadata — one context-compaction event. */

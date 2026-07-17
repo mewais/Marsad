@@ -4,9 +4,9 @@
 
 use marsad_lifecycle::Persisted;
 
-use super::capabilities::{CapabilityProvider, RealAgyProbe, RealClaudeProbe, RealCodexProbe};
+use super::capabilities::{CapabilityProvider, RealAgyProbe, RealClaudeProbe, RealCodexProbe, RealOpencodeProbe};
 use super::reader::spawn_session_reader;
-use super::remote::{exec_prefix_for, remote_liveness_script, run_remote_script_bounded};
+use super::remote::exec_prefix_for;
 use super::{Agent, AgentError, ListenSpec, SessionRecord};
 
 /// Default `set_wasl_connector_factory` (docs/specs/wasl-connector.md §4.2):
@@ -128,6 +128,12 @@ impl Agent {
             /// Stage 2 codex: shared thread_id map (Arc clone from Agent).
             #[allow(dead_code)]
             codex_threads: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
+            /// opencode ACP: cached spec for the reader thread's ACP handshake.
+            #[allow(dead_code)]
+            opencode_spec: Option<super::CachedOpencodeSpec>,
+            /// opencode ACP: shared ACP sessionId map (Arc clone from Agent).
+            #[allow(dead_code)]
+            acp_sessions: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
         }
 
         // The command sender is cloned into each client thread.
@@ -169,6 +175,12 @@ impl Agent {
         // (which insert thread_id when thread.started arrives from codex).
         let codex_threads_for_reader = Arc::clone(&self.codex_threads.0);
 
+        // ── opencode ACP sessionId registry ────────────────────────────────
+        // Shared across the serve thread (handle_send_prompt, handle_interrupt,
+        // handle_answer_gate — all read the ACP sessionId) and the FIFO reader
+        // threads (which insert the sessionId when the session/new result arrives).
+        let acp_sessions_for_reader = Arc::clone(&self.acp_sessions.0);
+
         // ── WAVE 3b pty registry ────────────────────────────────────────────
         // Shared across the serve thread (handle_pty_input/handle_pty_resize
         // via self, handle_stop_session's teardown via self) and the pty
@@ -189,6 +201,7 @@ impl Agent {
                 Box::new(RealClaudeProbe),
                 Box::new(RealCodexProbe),
                 Box::new(RealAgyProbe),
+                Box::new(RealOpencodeProbe),
             ],
             vec!["local".to_string()],
             std::path::Path::new(&data_root),
@@ -242,13 +255,15 @@ impl Agent {
                         let id = s.id.clone();
                         let tx = tx.clone();
                         std::thread::spawn(move || {
-                            let live = run_remote_script_bounded(
+                            // Startup reconcile: only a definitive LIVE counts as
+                            // Resumed. Unreachable/Dead both start the session
+                            // Paused here; the reader's state machine corrects an
+                            // Unreachable host to Disconnected once it attaches.
+                            let live = crate::remote::probe_liveness(
                                 &host,
-                                &remote_liveness_script(&id),
+                                &id,
                                 std::time::Duration::from_secs(6),
-                            )
-                            .map(|out| out.trim() == "LIVE")
-                            .unwrap_or(false);
+                            ) == crate::remote::Liveness::Live;
                             let _ = tx.send((id, live));
                         });
                     }
@@ -334,6 +349,8 @@ impl Agent {
                                 s.driver.clone(),
                                 reconnect_codex_spec, // rebuilt for codex, None for claude
                                 Arc::clone(&codex_threads_for_reader),
+                                None, // opencode_spec: not re-sent on reconnect
+                                Arc::clone(&acp_sessions_for_reader),
                             );
                             eprintln!("marsad-agent: reconnected live remote session {}", s.id);
                         }
@@ -397,6 +414,8 @@ impl Agent {
                         s.driver.clone(),
                         reconnect_codex_spec, // rebuilt for codex, None for claude
                         Arc::clone(&codex_threads_for_reader),
+                        None, // opencode_spec: not re-sent on reconnect
+                        Arc::clone(&acp_sessions_for_reader),
                     );
                     eprintln!("marsad-agent: reconnected live session {}", s.id);
                 }
@@ -509,6 +528,7 @@ impl Agent {
                 let capability_provider_for_reader = Arc::clone(&capability_provider_accept);
                 let pty_entries_for_client = Arc::clone(&pty_entries_for_reader);
                 let codex_threads_for_client = Arc::clone(&codex_threads_for_reader);
+                let acp_sessions_for_client = Arc::clone(&acp_sessions_for_reader);
 
                 // Split the client into independent write and read halves so
                 // each thread has exclusive ownership — no Mutex required.
@@ -626,6 +646,8 @@ impl Agent {
                                                 reply.driver,
                                                 reply.codex_spec,
                                                 Arc::clone(&codex_threads_for_client),
+                                                reply.opencode_spec,
+                                                Arc::clone(&acp_sessions_for_client),
                                             );
                                         }
 
@@ -728,6 +750,8 @@ impl Agent {
                     driver: "claude".to_string(),
                     codex_spec: None,
                     codex_threads: Arc::clone(&self.codex_threads.0),
+                    opencode_spec: None,
+                    acp_sessions: Arc::clone(&self.acp_sessions.0),
                 });
                 continue;
             }
@@ -864,24 +888,39 @@ impl Agent {
 
             // Stage 2 codex: look up driver + cached spec for the new session
             // so the reader thread can build first-turn commands + translate events.
-            let (session_driver, session_codex_spec) = if let Some(ref sid) = new_session_id {
-                let drv = self
-                    .store
-                    .0
-                    .restore()
-                    .ok()
-                    .and_then(|r| r.sessions.into_iter().find(|s| &s.id == sid))
-                    .map(|s| s.driver)
-                    .unwrap_or_else(|| "claude".to_string());
-                let cs = if drv == "codex" {
-                    self.codex_specs.0.lock().unwrap().get(sid.as_str()).cloned()
+            let (session_driver, session_codex_spec, session_opencode_spec) =
+                if let Some(ref sid) = new_session_id {
+                    let session_rec = self
+                        .store
+                        .0
+                        .restore()
+                        .ok()
+                        .and_then(|r| r.sessions.into_iter().find(|s| &s.id == sid));
+                    let drv = session_rec
+                        .as_ref()
+                        .map(|s| s.driver.clone())
+                        .unwrap_or_else(|| "claude".to_string());
+                    let cs = if drv == "codex" {
+                        self.codex_specs.0.lock().unwrap().get(sid.as_str()).cloned()
+                    } else {
+                        None
+                    };
+                    let os = if drv == "opencode" {
+                        session_rec.map(|s| super::CachedOpencodeSpec {
+                            model: s.model.clone(),
+                            project: s.project.clone(),
+                            // For a Resume(uuid) launch, the stored session_id is the
+                            // ACP sessionId to use for session/load. For Fresh/Continue,
+                            // it is None → reader sends session/new.
+                            acp_session_id: s.session_id.clone(),
+                        })
+                    } else {
+                        None
+                    };
+                    (drv, cs, os)
                 } else {
-                    None
+                    ("claude".to_string(), None, None)
                 };
-                (drv, cs)
-            } else {
-                ("claude".to_string(), None)
-            };
 
             // Send reply; if the client thread is gone, ignore the error.
             let _ = cmd.reply_tx.send(AgentReply {
@@ -895,6 +934,8 @@ impl Agent {
                 driver: session_driver,
                 codex_spec: session_codex_spec,
                 codex_threads: Arc::clone(&self.codex_threads.0),
+                opencode_spec: session_opencode_spec,
+                acp_sessions: Arc::clone(&self.acp_sessions.0),
             });
         }
 

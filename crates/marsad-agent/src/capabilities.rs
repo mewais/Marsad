@@ -1609,3 +1609,147 @@ fn now_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
+// ===========================================================================
+// opencode probe + discovery helpers (§6 / §8)
+// ===========================================================================
+
+/// Build the opencode discovery script: after `setup`, check availability
+/// of the resolved command word, then run `<command> models` (lines of
+/// `provider/model`) and `opencode session list --format json` for resume.
+///
+/// Output is sectioned by the standard `@@MARSAD_SEC_BEGIN:`/`@@MARSAD_SEC_END:`
+/// sentinels (same as the other builders) so `parse_discovery_sections` works.
+pub fn build_opencode_discovery_script(command: &str, setup: Option<&str>) -> String {
+    let word = command_word(command);
+    let avail = section("avail", &format!("command -v {} 2>/dev/null", sh_squote(word)));
+    let models = section(
+        "models",
+        &format!(
+            "command -v {w} >/dev/null 2>&1 && {cmd} models 2>/dev/null || true",
+            w = sh_squote(word),
+            cmd = command,
+        ),
+    );
+    let sessions = section(
+        "sessions",
+        &format!(
+            "command -v {w} >/dev/null 2>&1 && {cmd} session list --format json 2>/dev/null || true",
+            w = sh_squote(word),
+            cmd = command,
+        ),
+    );
+    with_setup(setup, &format!("{avail}{models}{sessions}"))
+}
+
+/// Parse `opencode models` stdout: one `provider/model` line per entry.
+///
+/// `raw` is the body of the `models` discovery section.
+/// Returns `Vec<ModelInfo>` with `source: Listed` and `free_text: true`.
+/// The `--verbose` variant appends cost info after whitespace; only the first
+/// whitespace-separated token (the `provider/model` id) is kept.
+pub fn parse_opencode_models(raw: &str) -> Vec<ModelInfo> {
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            // Strip optional cost suffix (e.g. "  $3.00/1M in, $15.00/1M out").
+            // The id is the first whitespace-delimited token.
+            let id = line.split_whitespace().next().unwrap_or(line);
+            ModelInfo {
+                id: id.to_string(),
+                annotation: None,
+            }
+        })
+        .collect()
+}
+
+/// Parse `opencode session list --format json` stdout: a list of
+/// `(session_id, Option<project>)` pairs.
+///
+/// `raw` is the body of the `sessions` discovery section.
+/// Malformed JSON or a non-array root yields an empty list — never a panic.
+/// Entries missing an `id` field are skipped. The `directory` field maps to
+/// `project`; missing/null `directory` yields `None`.
+pub fn parse_opencode_sessions(raw: &str) -> Vec<(String, Option<String>)> {
+    let arr = match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(serde_json::Value::Array(a)) => a,
+        _ => return Vec::new(),
+    };
+    arr.into_iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(|v| v.as_str())?.to_string();
+            if id.is_empty() {
+                return None;
+            }
+            let project = entry
+                .get("directory")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            Some((id, project))
+        })
+        .collect()
+}
+
+/// Real opencode probe: setup-first `command -v` + `opencode models` +
+/// `opencode session list`, run over the host connection or locally.
+/// Registered in the probes list in `serve.rs` alongside claude/codex/agy.
+#[cfg(not(coverage))]
+pub struct RealOpencodeProbe;
+
+#[cfg(not(coverage))]
+impl CapabilityProbe for RealOpencodeProbe {
+    fn driver(&self) -> &'static str {
+        "opencode"
+    }
+
+    fn launchable(&self) -> bool {
+        true
+    }
+
+    fn probe(&self, ctx: &HostProbeCtx) -> Capabilities {
+        let command = ctx.resolve_command("opencode");
+        let script = build_opencode_discovery_script(&command, ctx.setup.as_deref());
+        let mut errors = Vec::new();
+        let (cli_available, models, sessions) =
+            match run_discovery(ctx.host_target.as_deref(), &script, ctx.deadline) {
+                Ok(out) => {
+                    let secs = parse_discovery_sections(&out);
+                    let raw_sessions = secs.get("sessions");
+                    let discovered: Vec<DiscoveredSession> = parse_opencode_sessions(raw_sessions)
+                        .into_iter()
+                        .map(|(id, project)| DiscoveredSession {
+                            id,
+                            project,
+                            snippet: String::new(),
+                            modified_ms: 0,
+                        })
+                        .collect();
+                    (
+                        parse_avail(secs.get("avail")),
+                        parse_opencode_models(secs.get("models")),
+                        discovered,
+                    )
+                }
+                Err(e) => {
+                    errors.push(format!("opencode discovery: {e}"));
+                    (false, vec![], vec![])
+                }
+            };
+        Capabilities {
+            driver: "opencode".to_string(),
+            host_id: ctx.host_id.clone(),
+            cli_available,
+            launchable: self.launchable(),
+            models: ModelCatalog {
+                models,
+                source: ModelListSource::Listed,
+                free_text: true,
+            },
+            session_scope: Some(SessionScope::AllKnown),
+            sessions,
+            fetched_at_ms: now_ms(),
+            errors,
+        }
+    }
+}

@@ -371,7 +371,75 @@ impl Agent {
                 .map(|s| s.driver)
                 .unwrap_or_else(|| "claude".to_string());
 
-            if driver == "codex" {
+            if driver == "opencode" {
+                // opencode ACP: send a session/prompt JSON-RPC request to in.fifo.
+                // Look up the ACP sessionId from the registry (populated by the reader
+                // thread when the session/new result arrives). If not yet available,
+                // fall back to the pending-prompt queue (handled by the claude path
+                // below as a fallback, but for opencode the queue holds raw ACP lines
+                // so we build + queue the request here and let the reader flush it).
+                let acp_session_id = self.acp_sessions.0.lock().unwrap().get(session_id).cloned();
+                if let Some(acp_sid) = acp_session_id {
+                    // We use a simple incrementing id based on the current time
+                    // (millis) to avoid collisions across turns. The reader thread
+                    // correlates responses by the numeric id > 2 (initialize=1,
+                    // session/new=2, first_prompt=3, subsequent=4+).
+                    let req_id = serde_json::json!(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .subsec_millis() as u64
+                            + 100u64  // ensure > 3
+                    );
+                    let prompt_params = crate::acp::session_prompt_params(&acp_sid, text);
+                    let prompt_line = crate::acp::encode_request(req_id, "session/prompt", prompt_params);
+                    let writers = self.session_writers.0.lock().unwrap();
+                    if let Some(shared) = writers.get(session_id) {
+                        let mut writer = shared.lock().unwrap();
+                        match writer
+                            .write_all(prompt_line.as_bytes())
+                            .and_then(|_| writer.write_all(b"\n"))
+                            .and_then(|_| writer.flush())
+                        {
+                            Ok(()) => eprintln!(
+                                "marsad-agent: session {session_id} opencode send_prompt → session/prompt ({} chars)",
+                                text.len()
+                            ),
+                            Err(e) => eprintln!(
+                                "marsad-agent: session {session_id} opencode send_prompt WRITE FAILED: {e}"
+                            ),
+                        }
+                    } else {
+                        // No writer yet: queue the ACP request line (newline-terminated).
+                        let mut bytes = prompt_line.into_bytes();
+                        bytes.push(b'\n');
+                        let mut q = self.pending_prompts.lock().unwrap();
+                        let entry = q.entry(session_id.to_string()).or_default();
+                        entry.push((std::time::Instant::now(), bytes));
+                        eprintln!(
+                            "marsad-agent: session {session_id} opencode send_prompt QUEUED — writer not ready"
+                        );
+                    }
+                } else {
+                    // ACP sessionId not yet known (session/new result not received).
+                    // Queue the raw text so the reader can build + send it later.
+                    eprintln!(
+                        "marsad-agent: session {session_id} opencode send_prompt QUEUED — ACP sessionId not yet known"
+                    );
+                    // We queue a sentinel byte-blob with the user text so it's not lost.
+                    // The reader flushes queued prompts when the writer registers; but
+                    // those queued blobs must be valid ACP lines. Since we don't have
+                    // the ACP sessionId yet, encode a temporary placeholder that the
+                    // reader's flush will send as-is (the ACP sessionId will be in the
+                    // registry by then, so `handle_send_prompt` will use the real path
+                    // on a subsequent call).
+                    let mut bytes = text.as_bytes().to_vec();
+                    bytes.push(b'\n');
+                    let mut q = self.pending_prompts.lock().unwrap();
+                    let entry = q.entry(session_id.to_string()).or_default();
+                    entry.push((std::time::Instant::now(), bytes));
+                }
+            } else if driver == "codex" {
                 // Codex follow-up turn: build the eval-loop command via codex_turn_cmd.
                 // Look up the cached spec and the stored thread_id (from thread.started).
                 let spec_opt = self.codex_specs.0.lock().unwrap().get(session_id).cloned();
@@ -534,7 +602,59 @@ impl Agent {
                 .remove(session_id)
                 .unwrap_or_default();
 
-            if driver == "codex" {
+            if driver == "opencode" {
+                // opencode ACP interrupt: send session/cancel notification, then
+                // answer any pending permission request with {outcome:"cancelled"}.
+                let acp_session_id = self.acp_sessions.0.lock().unwrap().get(session_id).cloned();
+                let writers = self.session_writers.0.lock().unwrap();
+                if let Some(shared) = writers.get(session_id) {
+                    let mut writer = shared.lock().unwrap();
+
+                    // 1. Answer any pending permission gate(s) with cancelled.
+                    for gate in &pending {
+                        let cancel_result = crate::acp::request_permission_response(None);
+                        // Parse the stored request id back as a JSON Value.
+                        let acp_req_id: serde_json::Value =
+                            serde_json::from_str(&gate.request_id).unwrap_or_else(|_| {
+                                serde_json::Value::String(gate.request_id.clone())
+                            });
+                        let cancel_line = crate::acp::encode_response(acp_req_id, cancel_result);
+                        let _ = writer.write_all(cancel_line.as_bytes());
+                        let _ = writer.write_all(b"\n");
+                        eprintln!(
+                            "marsad-agent: session {session_id} opencode pending gate cancelled on interrupt"
+                        );
+                    }
+                    let _ = writer.flush();
+
+                    // 2. Send session/cancel notification (no reply expected).
+                    if let Some(ref acp_sid) = acp_session_id {
+                        let cancel_params = crate::acp::session_cancel_params(acp_sid);
+                        let cancel_notification =
+                            crate::acp::encode_notification("session/cancel", cancel_params);
+                        let _ = writer.write_all(cancel_notification.as_bytes());
+                        let _ = writer.write_all(b"\n");
+                        let _ = writer.flush();
+                        eprintln!(
+                            "marsad-agent: session {session_id} opencode sent session/cancel"
+                        );
+                    } else {
+                        eprintln!(
+                            "marsad-agent: session {session_id} opencode interrupt: no ACP sessionId (session/cancel not sent)"
+                        );
+                    }
+                } else {
+                    if !pending.is_empty() {
+                        eprintln!(
+                            "marsad-agent: session {session_id} opencode interrupt: {} pending gate(s) cleared (no writer to cancel them)",
+                            pending.len()
+                        );
+                    }
+                    eprintln!(
+                        "marsad-agent: session {session_id} opencode interrupt: no writer registered (session/cancel not sent)"
+                    );
+                }
+            } else if driver == "codex" {
                 // Codex: interrupt is a documented no-op, and the eval-loop writer
                 // must not receive a control_response (it would corrupt the command
                 // sequence). Clearing the queue above is enough. Log and return ack.
@@ -649,6 +769,69 @@ impl Agent {
                 }
                 taken
             };
+
+            // Look up the driver for this session so we can branch on opencode.
+            let gate_driver = self
+                .store
+                .0
+                .restore()
+                .ok()
+                .and_then(|r| r.sessions.into_iter().find(|s| s.id == session_id))
+                .map(|s| s.driver)
+                .unwrap_or_else(|| "claude".to_string());
+
+            if gate_driver == "opencode" {
+                // opencode ACP: answer the pending session/request_permission with
+                // { outcome:"selected", optionId } or { outcome:"cancelled" }.
+                //
+                // The pending gate's `request_id` is the raw ACP JSON-RPC id string
+                // (stored by the reader as `gate.request_id`). The chosen optionId
+                // arrives via `permission_updates` (a JSON Value carrying the ACP
+                // option object: { optionId, name, kind }).
+                if let Some(gate) = pending {
+                    // Extract the optionId from permission_updates (the chosen ACP option).
+                    let option_id = if allow {
+                        permission_updates
+                            .as_ref()
+                            .and_then(|v| v.get("optionId").and_then(|o| o.as_str()))
+                            .map(|s| s.to_string())
+                    } else {
+                        None
+                    };
+
+                    let result_val = crate::acp::request_permission_response(
+                        option_id.as_deref(),
+                    );
+
+                    // Parse the stored ACP request id back as a JSON Value.
+                    let acp_req_id: serde_json::Value =
+                        serde_json::from_str(&gate.request_id).unwrap_or_else(|_| {
+                            serde_json::Value::String(gate.request_id.clone())
+                        });
+
+                    let response_line = crate::acp::encode_response(acp_req_id, result_val);
+                    let writers = self.session_writers.0.lock().unwrap();
+                    if let Some(shared) = writers.get(session_id) {
+                        let mut writer = shared.lock().unwrap();
+                        let _ = writer.write_all(response_line.as_bytes());
+                        let _ = writer.write_all(b"\n");
+                        let _ = writer.flush();
+                        eprintln!(
+                            "marsad-agent: session {session_id} opencode gate answered \
+                             (optionId={option_id:?}, allow={allow})"
+                        );
+                    } else {
+                        eprintln!(
+                            "marsad-agent: session {session_id} opencode gate answer DROPPED — no writer"
+                        );
+                    }
+                }
+                // Early return — skip the claude gate-answer path below.
+                let event = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::GateAnswered {
+                    session_id: session_id.to_string(),
+                });
+                return Ok(vec![event]);
+            }
 
             if let Some(gate) = pending {
                 // An MCP elicitation is answered with `{action: accept|decline}`,

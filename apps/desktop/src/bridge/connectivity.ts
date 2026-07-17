@@ -39,6 +39,8 @@ export function connHintForConnHealth(health: string | null | undefined): ConnHi
       return "Reconnecting";
     case "Unstable":
       return "Unstable";
+    case "Disconnected":
+      return "Disconnected";
     default:
       // "Connected" or missing → no session-level hint.
       return null;

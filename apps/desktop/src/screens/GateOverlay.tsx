@@ -35,9 +35,15 @@ function kindBadge(kind: string): string {
   return "Permission";
 }
 
-// Button text for one of claude's permission_suggestions, built ONLY from
-// claude's own fields (behavior + rule content) — nothing invented or renamed.
+// Button text for one permission suggestion. ACP options carry a `name` field
+// (verbatim from the agent) and no `behavior`/`rules`. Claude options carry
+// `behavior` + `rules`. Use `name` when present (ACP path); fall back to the
+// claude behavior+rules path so claude gates are never broken.
 function suggestionLabel(s: PermissionSuggestion): string {
+  // ACP options always have a `name`; claude options never do.
+  if (typeof (s as Record<string, unknown>).name === "string") {
+    return ((s as Record<string, unknown>).name as string).trim();
+  }
   const behavior = (s.behavior ?? "allow").trim();
   const rules = (s.rules ?? [])
     .map((r) => r?.ruleContent?.trim())
@@ -102,12 +108,25 @@ export function GateOverlay() {
   async function handleAllowSuggestion(suggestion: PermissionSuggestion) {
     if (!selectedSession) return;
     setBusy(true);
-    await answerGate({
-      session_id: selectedSession.id,
-      decision_id: selectedGate?.decision_id ?? selectedSession.id,
-      allow: true,
-      permission_updates: [suggestion],
-    });
+    const raw = suggestion as Record<string, unknown>;
+    // ACP options carry `optionId` (no `behavior`/`rules`); surface it at
+    // the top level so the backend can reply to the ACP request by optionId.
+    // Claude options use the existing permission_updates path.
+    if (typeof raw.optionId === "string") {
+      await answerGate({
+        session_id: selectedSession.id,
+        decision_id: selectedGate?.decision_id ?? selectedSession.id,
+        allow: true,
+        optionId: raw.optionId,
+      });
+    } else {
+      await answerGate({
+        session_id: selectedSession.id,
+        decision_id: selectedGate?.decision_id ?? selectedSession.id,
+        allow: true,
+        permission_updates: [suggestion],
+      });
+    }
     setBusy(false);
     close();
   }

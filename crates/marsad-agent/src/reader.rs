@@ -9,10 +9,9 @@ use std::collections::HashMap;
 
 #[cfg(not(coverage))]
 use super::remote::{
-    exec_prefix_for, parse_remote_changes, remote_changes_script, remote_liveness_script,
-    remote_reader_argv, remote_resolve_pid_dir, remote_session_dir, remote_transcript_script,
-    remote_usage_script, remote_writer_argv, resolve_remote_bin, run_remote_script,
-    run_remote_script_bounded,
+    exec_prefix_for, parse_remote_changes, remote_changes_script, remote_reader_argv,
+    remote_resolve_pid_dir, remote_session_dir, remote_transcript_script, remote_usage_script,
+    remote_writer_argv, resolve_remote_bin, run_remote_script,
 };
 #[cfg(not(coverage))]
 use super::{PendingGate, SharedWriter};
@@ -20,9 +19,10 @@ use super::{PendingGate, SharedWriter};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 // ── Per-session reader cancellation ──────────────────────────────────────────
-// A reader may sit in a long reconnect-probe backoff (up to
-// RECONNECT_MAX_TOTAL_SECS) after a connection drop. If the user pauses the
-// session, or a NEW reader is spawned for the same session (resume / reconnect
+// A reader may sit in a steady reconnect-probe backoff after a connection drop
+// (an unreachable durable session is probed indefinitely, presumed alive). If the
+// user pauses the session, or a NEW reader is spawned for the same session
+// (resume / reconnect
 // on a flapping host), the OLD reader MUST exit promptly — otherwise readers
 // stack up (observed 14-for-one on a flaky etx host), multiplying gate broadcasts
 // and stream events into churn. `spawn_session_reader` registers a fresh token
@@ -54,12 +54,6 @@ pub const RECONNECT_INITIAL_BACKOFF_SECS: u64 = 3;
 /// Maximum delay between liveness probes (seconds).
 pub const RECONNECT_MAX_BACKOFF_SECS: u64 = 30;
 
-/// Maximum total time to spend retrying a dropped connection (seconds).
-/// After this the reader thread gives up and the session is considered lost.
-/// 30 minutes handles MFA re-auth windows; a permanently-gone host won't
-/// leak the thread forever.
-pub const RECONNECT_MAX_TOTAL_SECS: u64 = 1800;
-
 /// Timeout for each bounded liveness probe while the connection is down (seconds).
 /// Short so a host that is still unreachable doesn't stall the backoff loop.
 pub const RECONNECT_PROBE_TIMEOUT_SECS: u64 = 8;
@@ -72,19 +66,66 @@ pub fn reconnect_backoff_next(current: u64) -> u64 {
     current.saturating_mul(2).min(RECONNECT_MAX_BACKOFF_SECS)
 }
 
-/// Extract the liveness-probe verdict from a remote script's output: the LAST
-/// non-empty, trimmed line. The `remote_liveness_script` echoes `LIVE`/`DEAD` as
-/// its final line, but an HPC/etx login shell may prepend a banner/MOTD and a
-/// half-up flapping tunnel can return truncated output — so we read the last
-/// meaningful line, not the whole blob. Callers treat ONLY an exact "DEAD" as
-/// claude-exited; anything that isn't "LIVE"/"DEAD" is flap noise (keep probing,
-/// never Pause). Pure — unit-tested.
-pub fn liveness_verdict(out: &str) -> &str {
-    out.lines()
-        .rev()
-        .map(|l| l.trim())
-        .find(|l| !l.is_empty())
-        .unwrap_or("")
+// ── Connection-health state machine (pure, unit-tested) ──────────────────────
+//
+// The reader emits a `ConnHealth` on real stream events. These two pure
+// functions are the WHOLE decision logic — no flap counter driving state at
+// attach, no verdict-string guessing. The reader just calls them and emits.
+
+/// What to do after a liveness probe during a reconnect, plus the health to emit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProbeStep {
+    /// Connection health to broadcast now (None = leave unchanged).
+    pub emit: Option<marsad_proto::ConnHealth>,
+    pub action: ProbeAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeAction {
+    /// Re-attach to the (live) session.
+    Reattach,
+    /// Process is confirmed gone → finalize the session to Paused.
+    Pause,
+    /// Couldn't confirm — keep probing (host presumed still hosting the session).
+    KeepProbing,
+}
+
+/// Health to emit when the stream DROPS. A drop right after a bare re-attach that
+/// never produced a line (`lines_seen == 0`) is a FLAP → `Unstable`; a drop from a
+/// connection that was actually working → a plain `Reconnecting` blip.
+pub fn conn_on_drop(lines_seen: u64) -> marsad_proto::ConnHealth {
+    if lines_seen == 0 {
+        marsad_proto::ConnHealth::Unstable
+    } else {
+        marsad_proto::ConnHealth::Reconnecting
+    }
+}
+
+/// Decide the next step from a probe verdict. `backoff_at_max` means we've been
+/// retrying long enough that the backoff has saturated — a still-Unreachable host
+/// at that point is a SUSTAINED outage → surface `Disconnected` (honest "lost
+/// contact", session presumed alive) rather than an endless "Reconnecting".
+/// Crucially, `Unreachable` NEVER pauses — only a definitive `Dead` does.
+pub fn conn_on_probe(verdict: crate::remote::Liveness, backoff_at_max: bool) -> ProbeStep {
+    use marsad_proto::ConnHealth;
+    match verdict {
+        crate::remote::Liveness::Live => ProbeStep {
+            emit: None, // the re-attach emits Connected
+            action: ProbeAction::Reattach,
+        },
+        crate::remote::Liveness::Dead => ProbeStep {
+            emit: None, // Paused (live=false) clears conn_health in core
+            action: ProbeAction::Pause,
+        },
+        crate::remote::Liveness::Unreachable => ProbeStep {
+            emit: Some(if backoff_at_max {
+                ConnHealth::Disconnected
+            } else {
+                ConnHealth::Reconnecting
+            }),
+            action: ProbeAction::KeepProbing,
+        },
+    }
 }
 
 // ── assistant_has_file_modifying_tool_use ────────────────────────────────────
@@ -152,10 +193,11 @@ pub fn assistant_has_file_modifying_tool_use(event: &serde_json::Value) -> bool 
 ///     writer+reader children are spawned, TranscriptBackfill is re-run, and the read
 ///     loop resumes — all without any user action.
 ///   - Probe returns `DEAD` → claude truly exited (turn done / crashed) → normal
-///     teardown, same as before.
-///
-/// Total retry time is capped at `RECONNECT_MAX_TOTAL_SECS` so a permanently-gone
-/// host doesn't leak a thread forever.
+///     teardown (session finalized to Paused).
+///   - Probe returns `Unreachable` → the host can't be reached; the durable session
+///     is PRESUMED ALIVE, so the reader keeps probing at the steady backoff and
+///     surfaces `Disconnected` (never a false Paused), flipping back to Connected
+///     the moment the host answers LIVE. The thread exits only on cancel/stop or DEAD.
 #[cfg(not(coverage))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_session_reader(
@@ -188,6 +230,13 @@ pub(crate) fn spawn_session_reader(
     // Stage 2 codex: shared map for storing the codex thread_id from thread.started.
     // Shared with handle_send_prompt so follow-up turns use codex exec resume.
     codex_threads: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
+    // opencode ACP: cached spec for the ACP handshake (initialize + session/new).
+    // None for non-opencode sessions.
+    opencode_spec: Option<crate::CachedOpencodeSpec>,
+    // opencode ACP: shared map for storing the ACP sessionId from the session/new
+    // (or session/load) result. Shared with handle_send_prompt / handle_interrupt /
+    // handle_answer_gate so they can address subsequent ACP requests.
+    acp_sessions: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
 ) {
     // `run_command` is only used when the caller signals that a launch script
     // was not yet run (i.e. not provided to spawn_container).  For the durable
@@ -234,15 +283,12 @@ pub(crate) fn spawn_session_reader(
 
         // Backoff state (remote reconnect only).
         let mut backoff_secs = RECONNECT_INITIAL_BACKOFF_SECS;
-        let mut total_waited_secs: u64 = 0;
 
         // Per-session CONNECTION health (distinct from liveness). Emitted on REAL
-        // stream events — attach, first line flowing, connection lost — so the UI
-        // shows the true state and HARD-BLOCKS sending into a broken pipe.
-        // `consecutive_flaps` counts drops where the stream never restabilized (no
-        // lines seen that attach); ≥2 ⇒ Unstable. A line flowing resets it. Not
-        // driven by any timeout.
-        let mut consecutive_flaps: u32 = 0;
+        // stream events via the pure state machine (`conn_on_drop`/`conn_on_probe`):
+        // attach → Connected; drop → Reconnecting/Unstable; sustained unreachable →
+        // Disconnected; DEAD → Paused. The UI uses it to show the true state and
+        // HARD-BLOCK sending into a broken pipe.
         let emit_conn = |health: marsad_proto::ConnHealth| {
             let line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionConn {
                 session_id: sid.clone(),
@@ -426,23 +472,22 @@ pub(crate) fn spawn_session_reader(
                 None => {
                     #[cfg(unix)]
                     {
-                        if driver == "codex" {
-                            // Codex eval-loop transport: open in.fifo for writing
-                            // (prompt delivery) and out.log (a regular file) for
-                            // reading (codex JSONL output).
+                        if driver == "codex" || driver == "opencode" {
+                            // Codex eval-loop transport AND opencode ACP persistent
+                            // process: both write to out.log (a regular file) rather
+                            // than out.fifo, so we use the same in.fifo + out.log
+                            // transport. For opencode, the process is persistent and
+                            // writes ACP JSON-RPC lines continuously to out.log.
                             //
-                            // We cannot use ClaudeFifoTransport here because the
-                            // eval-loop writes to out.log (a regular file) only
-                            // when a command runs — so opening out.fifo for reading
-                            // would deadlock (no writer appears until the first
-                            // codex command, which requires connect() to have
-                            // already completed). Using a regular file avoids
-                            // the circular wait entirely.
+                            // We cannot use ClaudeFifoTransport here because opening
+                            // out.fifo for reading would block until opencode's first
+                            // write — which can't happen until after the ACP handshake,
+                            // creating a deadlock. A regular file never blocks on open().
                             //
-                            // Open in.fifo for writing: blocks until the tmux eval-loop
-                            // shell opens it for reading (which it does immediately on
-                            // the `cat in.fifo |` side). We wait for the session dir
-                            // to appear (tmux creates it when the session starts).
+                            // Open in.fifo for writing: blocks until the tmux shell opens
+                            // it for reading (which it does immediately on the `cat in.fifo |`
+                            // side). We wait for the session dir to appear (tmux creates
+                            // it when the session starts).
                             let in_fifo = session_dir.join("in.fifo");
                             let out_log = session_dir.join("out.log");
 
@@ -454,21 +499,21 @@ pub(crate) fn spawn_session_reader(
                                     break;
                                 }
                                 if std::time::Instant::now() >= deadline {
-                                    eprintln!("marsad-agent: codex session {sid}: in.fifo not created within 15s");
+                                    eprintln!("marsad-agent: {driver} session {sid}: in.fifo not created within 15s");
                                     break 'reconnect;
                                 }
                                 std::thread::sleep(std::time::Duration::from_millis(100));
                             }
 
                             // Open in.fifo for writing (non-blocking: the cat in the
-                            // eval-loop is already waiting as a reader).
+                            // shell is already waiting as a reader).
                             let in_file = match std::fs::OpenOptions::new()
                                 .write(true)
                                 .open(&in_fifo)
                             {
                                 Ok(f) => f,
                                 Err(e) => {
-                                    eprintln!("marsad-agent: codex session {sid}: open in.fifo: {e}");
+                                    eprintln!("marsad-agent: {driver} session {sid}: open in.fifo: {e}");
                                     break 'reconnect;
                                 }
                             };
@@ -483,12 +528,12 @@ pub(crate) fn spawn_session_reader(
                             let out_file = match std::fs::File::open(&out_log) {
                                 Ok(f) => f,
                                 Err(e) => {
-                                    eprintln!("marsad-agent: codex session {sid}: open out.log: {e}");
+                                    eprintln!("marsad-agent: {driver} session {sid}: open out.log: {e}");
                                     break 'reconnect;
                                 }
                             };
 
-                            eprintln!("marsad-agent: session {sid} codex transport connected (in.fifo + out.log)");
+                            eprintln!("marsad-agent: session {sid} {driver} transport connected (in.fifo + out.log)");
                             let w: Box<dyn std::io::Write + Send> = Box::new(in_file);
                             let r: std::io::BufReader<Box<dyn std::io::Read + Send>> =
                                 std::io::BufReader::new(Box::new(out_file));
@@ -549,7 +594,8 @@ pub(crate) fn spawn_session_reader(
             // initialized, so re-sending it would be wrong — hence `send_init` and
             // `is_first_attach`. Fire-and-forget: the CLI's ack is ignored.
             // CODEX: no initialize handshake — codex exec uses no control protocol.
-            if send_init && is_first_attach && driver != "codex" {
+            // OPENCODE: ACP handshake is sent below (initialize + session/new|session/load).
+            if send_init && is_first_attach && driver != "codex" && driver != "opencode" {
                 use std::io::Write;
                 let init = marsad_proto::encode_control_request_initialize("req_1_init");
                 let mut w = writer.lock().unwrap();
@@ -559,6 +605,73 @@ pub(crate) fn spawn_session_reader(
                 eprintln!("marsad-agent: session {sid} sent initialize handshake");
             }
 
+            // ── opencode ACP handshake (LAUNCH only, first attach only) ───────
+            // For a fresh opencode session: send `initialize` then `session/new`
+            // (or `session/load` if we have a stored ACP sessionId for resume).
+            // On reconnect: the remote process is already running and in-session;
+            // DO NOT re-send the handshake — we just re-attach to the stream.
+            // The ACP request IDs used here are the SAME ids the response-tracking
+            // map below (`pending_acp_reqs`) uses to correlate responses.
+            if driver == "opencode" && send_init && is_first_attach {
+                use std::io::Write;
+                use crate::acp;
+
+                // Monotonic request-id counter: use a thread-local AtomicU64 so
+                // multiple reader threads (parallel sessions) never collide.
+                // We start at 1 and increment — the reader loop below also uses
+                // this counter for per-turn session/prompt requests.
+                // We use simple numeric IDs: 1 = initialize, 2 = session/new|load.
+                let init_id = serde_json::json!(1u64);
+                let session_id_for_new = serde_json::json!(2u64);
+
+                // Send `initialize`.
+                let init_params = acp::initialize_params("marsad", env!("CARGO_PKG_VERSION"));
+                let init_line = acp::encode_request(init_id.clone(), "initialize", init_params);
+                {
+                    let mut w = writer.lock().unwrap();
+                    let _ = w.write_all(init_line.as_bytes());
+                    let _ = w.write_all(b"\n");
+                    let _ = w.flush();
+                }
+                eprintln!("marsad-agent: session {sid} opencode sent initialize");
+
+                // Send `session/new` or `session/load` depending on whether we have
+                // a stored ACP sessionId (resume path).
+                let (session_method, session_params) = if let Some(ref spec) = opencode_spec {
+                    let cwd = &spec.project;
+                    let mcp_servers = serde_json::json!([]);
+                    if let Some(ref acp_sid) = spec.acp_session_id {
+                        // Resume: session/load with the stored ACP sessionId.
+                        (
+                            "session/load",
+                            acp::session_load_params(acp_sid, cwd, &mcp_servers),
+                        )
+                    } else {
+                        // Fresh: session/new.
+                        (
+                            "session/new",
+                            acp::session_new_params(cwd, &mcp_servers, None),
+                        )
+                    }
+                } else {
+                    // No spec — fall back to session/new with empty cwd.
+                    ("session/new", acp::session_new_params(".", &serde_json::json!([]), None))
+                };
+
+                let session_line = acp::encode_request(
+                    session_id_for_new.clone(),
+                    session_method,
+                    session_params,
+                );
+                {
+                    let mut w = writer.lock().unwrap();
+                    let _ = w.write_all(session_line.as_bytes());
+                    let _ = w.write_all(b"\n");
+                    let _ = w.flush();
+                }
+                eprintln!("marsad-agent: session {sid} opencode sent {session_method}");
+            }
+
             // Deliver the first_prompt (if any) immediately so the process receives its
             // initial task.  Only on the very first attach — on reconnect the process is
             // already running (a prompt was already sent) and re-sending would be wrong.
@@ -566,7 +679,12 @@ pub(crate) fn spawn_session_reader(
             // CLAUDE: delivers as a stream-json user message on stdin.
             // CODEX: delivers as a `codex_turn_cmd` eval-loop command on in.fifo;
             //        the eval-loop container spawns `codex exec …` as a subprocess.
-            if is_first_attach {
+            // OPENCODE: first_prompt is delivered as a `session/prompt` ACP request
+            //           AFTER the session/new result arrives (so the ACP sessionId is
+            //           known). The read loop below handles this delivery on the
+            //           session/new response. We skip the first-prompt delivery here
+            //           for opencode.
+            if is_first_attach && driver != "opencode" {
                 if let Some(ref prompt) = first_prompt {
                     use std::io::Write;
                     let plen = prompt.len();
@@ -757,14 +875,11 @@ pub(crate) fn spawn_session_reader(
                     let _ = s.send(line.clone());
                 }
             }
-            // Per-session connection health on (re)attach: Unstable if we've been
-            // flapping (reconnected then re-dropped without restabilizing), else
-            // Connected. A line flowing (below) downgrades Unstable → Connected.
-            emit_conn(if consecutive_flaps >= 2 {
-                marsad_proto::ConnHealth::Unstable
-            } else {
-                marsad_proto::ConnHealth::Connected
-            });
+            // A successful (re)attach means we have a clean stream RIGHT NOW →
+            // Connected. This always clears any prior Reconnecting/Unstable/
+            // Disconnected — self-healing, so an idle-after-flap session can never
+            // get stuck on "Unstable".
+            emit_conn(marsad_proto::ConnHealth::Connected);
             use std::io::BufRead;
             let mut lines_seen = 0u64;
             // Debounce tracker for the tool_use-triggered Changes probe (#4).
@@ -776,22 +891,23 @@ pub(crate) fn spawn_session_reader(
                 let mut raw = String::new();
                 match reader.read_line(&mut raw) {
                     Ok(0) => {
-                        // For codex sessions reading from out.log (a regular file),
-                        // EOF means "no more data right now" — the eval-loop may be
-                        // between turns, so we poll-sleep rather than breaking.
-                        // We detect session liveness by checking if in.fifo still exists
-                        // (it disappears when the tmux session exits/eval-loop ends).
-                        // For non-codex (FIFO/pipe) sessions, EOF always means done.
-                        if driver == "codex" {
+                        // For codex/opencode sessions reading from out.log (a regular
+                        // file), EOF means "no more data right now" — the process is
+                        // still running (between ACP messages / turns), so we poll-sleep
+                        // rather than breaking. We detect session liveness by checking
+                        // if in.fifo still exists (it disappears when the tmux session
+                        // exits). For non-codex/opencode (FIFO/pipe) sessions, EOF
+                        // always means done.
+                        if driver == "codex" || driver == "opencode" {
                             let in_fifo = session_dir.join("in.fifo");
                             if in_fifo.exists() {
-                                // Eval-loop still running, waiting for next turn.
+                                // Process still running, waiting for more output.
                                 std::thread::sleep(std::time::Duration::from_millis(200));
                                 continue;
                             }
-                            // Eval-loop exited (in.fifo gone): real EOF.
+                            // Process exited (in.fifo gone): real EOF.
                             eprintln!(
-                                "marsad-agent: session {sid} codex reader done (eval-loop exited) after {lines_seen} line(s)"
+                                "marsad-agent: session {sid} {driver} reader done (process exited) after {lines_seen} line(s)"
                             );
                         } else {
                             eprintln!(
@@ -806,16 +922,6 @@ pub(crate) fn spawn_session_reader(
                     }
                     Ok(_) => {
                         lines_seen += 1;
-                        // The stream is flowing again → the connection restabilized.
-                        // Clear any flap streak and, if we'd shown Unstable on this
-                        // attach, downgrade back to Connected.
-                        if lines_seen == 1 && consecutive_flaps > 0 {
-                            let was_unstable = consecutive_flaps >= 2;
-                            consecutive_flaps = 0;
-                            if was_unstable {
-                                emit_conn(marsad_proto::ConnHealth::Connected);
-                            }
-                        }
                         let raw = raw.trim_end_matches('\n');
 
                         // Capture a `can_use_tool` control
@@ -869,6 +975,270 @@ pub(crate) fn spawn_session_reader(
 
                         let raw_value: serde_json::Value = serde_json::from_str(raw)
                             .unwrap_or_else(|_| serde_json::json!({"raw": raw}));
+
+                        // Driver dispatch: translate raw output line into a
+                        // claude-stream-json Value.
+                        //
+                        // - "opencode": parse ACP JSON-RPC; notifications →
+                        //   translate via acp_translate; request_permission →
+                        //   capture as pending gate + broadcast; session/new result
+                        //   → stash ACP sessionId.
+                        // - "codex": translate JSONL via codex_event_to_stream_json.
+                        // - everything else ("claude"): raw stream-json, no translation.
+                        if driver == "opencode" {
+                            use crate::acp;
+                            use crate::acp_translate;
+
+                            let acp_msg = match acp::parse_acp_line(raw) {
+                                Ok(m) => m,
+                                Err(e) => {
+                                    eprintln!(
+                                        "marsad-agent: session {sid} opencode ACP parse error: {e} (line: {raw})"
+                                    );
+                                    continue;
+                                }
+                            };
+
+                            match acp_msg {
+                                // ── Notification ──────────────────────────────────────────
+                                acp::AcpMessage::Notification { method, params } => {
+                                    if method == "session/update" {
+                                        if let Some(update) = acp::extract_update(&params) {
+                                            // Compaction detection: bump the boundary event.
+                                            if acp_translate::detect_compaction(update) {
+                                                eprintln!(
+                                                    "marsad-agent: session {sid} opencode compaction detected"
+                                                );
+                                            }
+                                            // Translate to stream-json; skip None (unknown types).
+                                            let model_str = opencode_spec
+                                                .as_ref()
+                                                .map(|s| s.model.as_str())
+                                                .unwrap_or("");
+                                            if let Some(translated) =
+                                                acp_translate::acp_update_to_stream_json(
+                                                    update, &sid, model_str,
+                                                )
+                                            {
+                                                let ipc_msg = marsad_proto::IpcMsg::AgentEvent {
+                                                    session_id: sid.clone(),
+                                                    event: translated,
+                                                };
+                                                let encoded = marsad_proto::encode_ipc(&ipc_msg);
+                                                let subs = subs_fifo.lock().unwrap();
+                                                subs.iter().for_each(|s| {
+                                                    let _ = s.send(encoded.clone());
+                                                });
+                                            }
+                                        }
+                                    } else {
+                                        eprintln!(
+                                            "marsad-agent: session {sid} opencode unknown notification: {method}"
+                                        );
+                                    }
+                                }
+
+                                // ── Request (agent→client) ─────────────────────────────────
+                                acp::AcpMessage::Request { id, method, params } => {
+                                    if acp::is_permission_request(&method) {
+                                        // session/request_permission: capture as pending gate.
+                                        // The ACP request `id` is stored as `request_id` in the
+                                        // PendingGate so `handle_answer_gate` can reply to it.
+                                        let acp_request_id = id.to_string();
+                                        let gate = acp_translate::acp_permission_to_gate(&params);
+
+                                        // The gate's own `request_id` field comes from acp_permission_to_gate
+                                        // (uses toolUseId). We ALSO need to store the raw ACP JSON-RPC id
+                                        // so we can write the response. We store it as the PendingGate's
+                                        // request_id (overriding the toolUseId) so handle_answer_gate
+                                        // can use it directly for the JSON-RPC reply.
+                                        let gate_request_id = match &gate {
+                                            marsad_gates::Gate::Permission { request_id, .. } => {
+                                                request_id.clone()
+                                            }
+                                            _ => acp_request_id.clone(),
+                                        };
+
+                                        {
+                                            let mut gates = pending_fifo.lock().unwrap();
+                                            let queue = gates.entry(sid.clone()).or_default();
+                                            let dup = queue
+                                                .iter()
+                                                .any(|g| g.request_id == gate_request_id);
+                                            if dup {
+                                                eprintln!(
+                                                    "marsad-agent: session {sid} opencode gate DUPLICATE ignored ({})",
+                                                    gate_request_id
+                                                );
+                                            } else {
+                                                eprintln!(
+                                                    "marsad-agent: session {sid} opencode gate captured (acp_id={acp_request_id}, gate_id={gate_request_id}, {} now queued)",
+                                                    queue.len() + 1
+                                                );
+                                                // Store the raw ACP JSON-RPC id string as the
+                                                // PendingGate.request_id so handle_answer_gate can
+                                                // write `encode_response(id, ...)` to the writer.
+                                                queue.push_back(PendingGate {
+                                                    request_id: acp_request_id.clone(),
+                                                    input: params.clone(),
+                                                    elicitation: false,
+                                                });
+                                            }
+                                        }
+
+                                        // Broadcast the gate as an AgentEvent so the GUI renders it.
+                                        // We encode the gate into the canonical control_request shape
+                                        // that marsad_proto expects. For opencode, we synthesise a
+                                        // stream-json `can_use_tool` control_request shape.
+                                        let tool_call = params.get("toolCall").cloned().unwrap_or(serde_json::json!({}));
+                                        let tool_name = tool_call.get("toolName").and_then(|v| v.as_str()).unwrap_or("unknown_tool");
+                                        let tool_use_id = tool_call.get("toolUseId").and_then(|v| v.as_str()).unwrap_or("");
+                                        let input_str = tool_call.get("input").and_then(|v| v.as_str()).unwrap_or("{}");
+                                        let input_val: serde_json::Value = serde_json::from_str(input_str).unwrap_or(serde_json::json!({}));
+                                        let options = params.get("options").cloned().unwrap_or(serde_json::json!([]));
+                                        let permission_suggestions = acp_translate::acp_options_to_suggestions(&options);
+
+                                        let gate_event = serde_json::json!({
+                                            "type": "control_request",
+                                            "request": {
+                                                "type": "can_use_tool",
+                                                "request_id": acp_request_id,
+                                                "tool_name": tool_name,
+                                                "tool_use_id": tool_use_id,
+                                                "input": input_val,
+                                                "permission_suggestions": permission_suggestions,
+                                            }
+                                        });
+                                        let ipc_msg = marsad_proto::IpcMsg::AgentEvent {
+                                            session_id: sid.clone(),
+                                            event: gate_event,
+                                        };
+                                        let encoded = marsad_proto::encode_ipc(&ipc_msg);
+                                        let subs = subs_fifo.lock().unwrap();
+                                        subs.iter().for_each(|s| {
+                                            let _ = s.send(encoded.clone());
+                                        });
+                                    } else {
+                                        eprintln!(
+                                            "marsad-agent: session {sid} opencode unknown agent request: {method} (id={id})"
+                                        );
+                                    }
+                                }
+
+                                // ── Response ──────────────────────────────────────────────
+                                acp::AcpMessage::Response { id, result } => {
+                                    // Correlate by id. id=1 → initialize result.
+                                    // id=2 → session/new or session/load result.
+                                    // id>=3 → session/prompt result (one per turn).
+                                    let id_u64 = id.as_u64().unwrap_or(0);
+
+                                    match result {
+                                        Err(err_val) => {
+                                            eprintln!(
+                                                "marsad-agent: session {sid} opencode ACP error response id={id}: {err_val}"
+                                            );
+                                        }
+                                        Ok(res) => {
+                                            if id_u64 == 1 {
+                                                // initialize result: agentCapabilities.
+                                                // We just note it (no action needed beyond logging).
+                                                eprintln!(
+                                                    "marsad-agent: session {sid} opencode initialize OK (capabilities: {res})"
+                                                );
+                                            } else if id_u64 == 2 {
+                                                // session/new or session/load result: extract sessionId.
+                                                if let Some(acp_session_id) = acp::extract_session_id(&res) {
+                                                    eprintln!(
+                                                        "marsad-agent: session {sid} opencode ACP sessionId={acp_session_id}"
+                                                    );
+                                                    // Store in the registry so handle_send_prompt etc. can use it.
+                                                    acp_sessions.lock().unwrap().insert(sid.clone(), acp_session_id.clone());
+
+                                                    // Synthesize system/init event and broadcast.
+                                                    let model_str = opencode_spec.as_ref().map(|s| s.model.as_str()).unwrap_or("");
+                                                    let cwd_str = opencode_spec.as_ref().map(|s| s.project.as_str()).unwrap_or(".");
+                                                    // Use a placeholder for init_result (we don't store it).
+                                                    let init_result = serde_json::json!({});
+                                                    let system_init = acp_translate::acp_init_to_system_init(
+                                                        &init_result,
+                                                        &res,
+                                                        model_str,
+                                                        cwd_str,
+                                                        &sid,
+                                                    );
+
+                                                    // U1: observe model from system/init.
+                                                    if let (Some(provider), Some(model)) = (
+                                                        capability_provider.as_ref(),
+                                                        system_init.get("model").and_then(|m| m.as_str()),
+                                                    ) {
+                                                        provider.observe_claude_model(&capability_host_id, model);
+                                                    }
+
+                                                    let ipc_msg = marsad_proto::IpcMsg::AgentEvent {
+                                                        session_id: sid.clone(),
+                                                        event: system_init,
+                                                    };
+                                                    let encoded = marsad_proto::encode_ipc(&ipc_msg);
+                                                    {
+                                                        let subs = subs_fifo.lock().unwrap();
+                                                        subs.iter().for_each(|s| {
+                                                            let _ = s.send(encoded.clone());
+                                                        });
+                                                    }
+
+                                                    // Deliver first_prompt as session/prompt (if any).
+                                                    if is_first_attach {
+                                                        if let Some(ref prompt) = first_prompt {
+                                                            use std::io::Write;
+                                                            // Next request id: 3 (initialize=1, session/new=2).
+                                                            let prompt_req_id = serde_json::json!(3u64);
+                                                            let prompt_params = acp::session_prompt_params(&acp_session_id, prompt);
+                                                            let prompt_line = acp::encode_request(
+                                                                prompt_req_id,
+                                                                "session/prompt",
+                                                                prompt_params,
+                                                            );
+                                                            let mut w = writer.lock().unwrap();
+                                                            let _ = w.write_all(prompt_line.as_bytes());
+                                                            let _ = w.write_all(b"\n");
+                                                            let _ = w.flush();
+                                                            eprintln!(
+                                                                "marsad-agent: session {sid} opencode sent first_prompt as session/prompt ({} chars)",
+                                                                prompt.len()
+                                                            );
+                                                        }
+                                                    }
+                                                } else {
+                                                    eprintln!(
+                                                        "marsad-agent: session {sid} opencode session/new result missing sessionId: {res}"
+                                                    );
+                                                }
+                                            } else {
+                                                // session/prompt result: extract stopReason + broadcast.
+                                                if let Some(stop_reason) = acp::extract_stop_reason(&res) {
+                                                    let result_event = acp_translate::acp_stop_reason_to_result(&stop_reason);
+                                                    let ipc_msg = marsad_proto::IpcMsg::AgentEvent {
+                                                        session_id: sid.clone(),
+                                                        event: result_event,
+                                                    };
+                                                    let encoded = marsad_proto::encode_ipc(&ipc_msg);
+                                                    let subs = subs_fifo.lock().unwrap();
+                                                    subs.iter().for_each(|s| {
+                                                        let _ = s.send(encoded.clone());
+                                                    });
+                                                    eprintln!(
+                                                        "marsad-agent: session {sid} opencode session/prompt result: {stop_reason}"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // opencode lines are fully handled above; continue to next line.
+                            continue;
+                        }
 
                         // Stage 2 codex: translate the raw codex JSONL event into
                         // a claude-stream-json Value. If translation yields None
@@ -1075,28 +1445,18 @@ pub(crate) fn spawn_session_reader(
             };
 
             eprintln!("marsad-agent: session {sid} connection lost, probing liveness");
-            // Flap accounting: a connection that dropped without the stream ever
-            // restabilizing this attach (no lines) counts toward instability; a
-            // productive attach already reset the counter when its first line flowed.
-            if lines_seen == 0 {
-                consecutive_flaps = consecutive_flaps.saturating_add(1);
-            }
-            // Per-session connection health: the stream dropped and we're now
-            // actively re-attaching. This is what HARD-BLOCKS the composer.
-            emit_conn(marsad_proto::ConnHealth::Reconnecting);
+            // Emit the drop health via the pure state machine: a drop that never
+            // restabilized this attach (no lines) is a FLAP → Unstable; otherwise a
+            // plain Reconnecting blip. This is what HARD-BLOCKS the composer.
+            emit_conn(conn_on_drop(lines_seen));
 
-            // Probe + backoff loop: keep probing until the connection comes back
-            // (probe succeeds) or we exceed the total retry cap.
+            // Probe + backoff loop. Exits ONLY on: cancel (pause/supersede), or a
+            // definitive DEAD verdict (→ Paused). An Unreachable host NEVER pauses
+            // the session — the durable process is presumed alive; we keep probing
+            // at the steady backoff and surface Disconnected once it saturates,
+            // flipping back to Connected the instant the host answers LIVE.
             loop {
-                // Stopped/superseded while backing off → exit promptly (don't sit
-                // out the rest of a 30-min probe window stacking with a new reader).
                 if cancel.load(Ordering::SeqCst) {
-                    break 'reconnect;
-                }
-                if total_waited_secs >= RECONNECT_MAX_TOTAL_SECS {
-                    eprintln!(
-                        "marsad-agent: session {sid} reconnect cap ({RECONNECT_MAX_TOTAL_SECS}s) reached — giving up"
-                    );
                     break 'reconnect;
                 }
 
@@ -1110,52 +1470,32 @@ pub(crate) fn spawn_session_reader(
                     }
                     std::thread::sleep(std::time::Duration::from_secs(1));
                 }
-                total_waited_secs = total_waited_secs.saturating_add(backoff_secs);
+                // Once the backoff has grown to its steady max, a still-unreachable
+                // host is a SUSTAINED outage (→ Disconnected, not endless Reconnecting).
+                let backoff_at_max = backoff_secs >= RECONNECT_MAX_BACKOFF_SECS;
                 backoff_secs = reconnect_backoff_next(backoff_secs);
 
-                // Bounded probe: if the connection is still down, the remote
-                // `bash -s` can't even start → the spawn or read fails quickly,
-                // returning None.  We treat None as "still down".
-                let probe_result = run_remote_script_bounded(
+                let verdict = crate::remote::probe_liveness(
                     host,
-                    &remote_liveness_script(&sid),
+                    &sid,
                     std::time::Duration::from_secs(RECONNECT_PROBE_TIMEOUT_SECS),
                 );
-
-                match probe_result {
-                    None => {
-                        // Connection still down (probe failed / timed out).
-                        // Continue the probe loop.
+                let step = conn_on_probe(verdict, backoff_at_max);
+                if let Some(h) = step.emit {
+                    emit_conn(h);
+                }
+                match step.action {
+                    ProbeAction::Reattach => {
+                        eprintln!("marsad-agent: session {sid} reconnected live remote session");
+                        backoff_secs = RECONNECT_INITIAL_BACKOFF_SECS;
+                        continue 'reconnect;
                     }
-                    Some(out) => {
-                        // Interpret the result. The liveness script echoes its
-                        // verdict as the LAST non-empty line ("LIVE"/"DEAD"); an
-                        // etx/HPC login shell may prepend a banner/MOTD, and a
-                        // half-up flapping tunnel can return truncated/garbled
-                        // output. So read the LAST non-empty line, and ONLY treat a
-                        // definitive "DEAD" as claude-exited. Anything else (banner
-                        // only, empty, garbled) is flap noise — NOT proof claude
-                        // died — so keep probing rather than falsely Pausing.
-                        let verdict = liveness_verdict(&out);
-                        if verdict == "LIVE" {
-                            eprintln!(
-                                "marsad-agent: session {sid} reconnected live remote session"
-                            );
-                            // Reset backoff for next potential drop.
-                            backoff_secs = RECONNECT_INITIAL_BACKOFF_SECS;
-                            total_waited_secs = 0;
-                            // Re-attach: continue the outer reconnect loop.
-                            continue 'reconnect;
-                        } else if verdict == "DEAD" {
-                            eprintln!("marsad-agent: session {sid} claude exited, stopping");
-                            break 'reconnect;
-                        } else {
-                            eprintln!(
-                                "marsad-agent: session {sid} ambiguous liveness probe ({verdict:?}) — connection not clean, still down"
-                            );
-                            // Keep probing (same as a None result). Never Paused on
-                            // ambiguous flap output.
-                        }
+                    ProbeAction::Pause => {
+                        eprintln!("marsad-agent: session {sid} probe DEAD — process gone, finalizing");
+                        break 'reconnect;
+                    }
+                    ProbeAction::KeepProbing => {
+                        // Host unreachable — presume the durable session alive, keep going.
                     }
                 }
             } // probe loop

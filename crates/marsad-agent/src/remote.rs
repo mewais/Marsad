@@ -290,15 +290,34 @@ pub fn run_remote_script_bounded(
     script: &str,
     timeout: std::time::Duration,
 ) -> Option<String> {
+    // Capability discovery needs the LOGIN shell (module env, PATH) to find
+    // `claude`/`codex`/`opencode` and run `... debug models`.
+    run_remote_bounded_shell(host_target, script, timeout, true)
+}
+
+/// Shared bounded remote-exec primitive. `login` picks the shell mode:
+/// `true` → `bash -l -s` (login shell: sources profile / module env — needed for
+/// capability discovery); `false` → `bash -s` (NO profile — used by the liveness
+/// probe, which needs only builtins and must NOT let an HPC login profile swallow
+/// or garble its output). Returns the child's stdout, or `None` if it couldn't run
+/// / timed out. Real-IO build only.
+#[cfg(not(coverage))]
+fn run_remote_bounded_shell(
+    host_target: &str,
+    script: &str,
+    timeout: std::time::Duration,
+    login: bool,
+) -> Option<String> {
     use std::io::{Read, Write};
     use std::process::{Command, Stdio};
     let prefix = exec_prefix_for(Some(host_target))?;
     let bin = resolve_remote_bin(&prefix[0]);
     let mut command = Command::new(&bin);
+    command.args(&prefix[1..]).arg("bash");
+    if login {
+        command.arg("-l");
+    }
     command
-        .args(&prefix[1..])
-        .arg("bash")
-        .arg("-l")
         .arg("-s")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -311,7 +330,7 @@ pub fn run_remote_script_bounded(
     let mut child = match command.spawn() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("marsad-agent: remote_script_bounded SPAWN FAILED for {host_target:?}: {e}");
+            eprintln!("marsad-agent: remote_bounded_shell SPAWN FAILED for {host_target:?}: {e}");
             return None;
         }
     };
@@ -345,7 +364,7 @@ pub fn run_remote_script_bounded(
                 // is how we measure real remote-probe cost (e.g. HPC login shells).
                 if ms > 3000 {
                     eprintln!(
-                        "marsad-agent: remote_script_bounded for {host_target:?} completed in {ms}ms ({} bytes)",
+                        "marsad-agent: remote_bounded_shell for {host_target:?} completed in {ms}ms ({} bytes)",
                         out.len()
                     );
                 }
@@ -357,7 +376,7 @@ pub fn run_remote_script_bounded(
                     let _ = child.wait();
                     let _ = reader.join();
                     eprintln!(
-                        "marsad-agent: remote_script_bounded for {host_target:?} TIMED OUT after {}ms (deadline {}ms)",
+                        "marsad-agent: remote_bounded_shell for {host_target:?} TIMED OUT after {}ms (deadline {}ms)",
                         start.elapsed().as_millis(),
                         timeout.as_millis()
                     );
@@ -368,6 +387,54 @@ pub fn run_remote_script_bounded(
             Err(_) => return None,
         }
     }
+}
+
+/// Tri-state result of a session liveness probe. The reader's connection state
+/// machine keys off this — critically distinguishing `Unreachable` (couldn't
+/// reach the host / no clean answer → keep trying, session PRESUMED alive) from
+/// `Dead` (host reachable, process confirmed gone → finalize to Paused). Empty or
+/// garbled probe output is `Unreachable`, NEVER silently treated as dead or as an
+/// endless-retry ambiguity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Liveness {
+    Live,
+    Dead,
+    Unreachable,
+}
+
+/// The sentinel line the remote liveness script prints. Parsed out of the raw
+/// probe output so a login banner / MOTD / partial flap output can't be mistaken
+/// for a verdict — only a line carrying this exact prefix counts.
+pub const LIVENESS_SENTINEL: &str = "MARSAD_LIVENESS:";
+
+/// Parse a liveness verdict out of raw probe output. Pure — unit-tested.
+/// `None` (the command couldn't run / timed out) or output with no sentinel line
+/// (empty / garbled / banner-only) → `Unreachable`. Otherwise the sentinel value
+/// (`LIVE`/`DEAD`) decides. Scans ALL lines so surrounding noise is ignored.
+pub fn parse_liveness(output: Option<&str>) -> Liveness {
+    let out = match output {
+        Some(o) => o,
+        None => return Liveness::Unreachable,
+    };
+    for line in out.lines() {
+        if let Some(v) = line.trim().strip_prefix(LIVENESS_SENTINEL) {
+            return match v.trim() {
+                "LIVE" => Liveness::Live,
+                "DEAD" => Liveness::Dead,
+                _ => Liveness::Unreachable,
+            };
+        }
+    }
+    Liveness::Unreachable
+}
+
+/// Probe a durable remote session's liveness over a NON-login `bash -s` (so an
+/// HPC login profile can't swallow the sentinel), returning a definitive
+/// tri-state. This is the reader's one source of connection truth.
+#[cfg(not(coverage))]
+pub fn probe_liveness(host_target: &str, sid: &str, timeout: std::time::Duration) -> Liveness {
+    let out = run_remote_bounded_shell(host_target, &remote_liveness_script(sid), timeout, false);
+    parse_liveness(out.as_deref())
 }
 
 /// Resolve a durable remote session's ABSOLUTE dir + the detached claude pid,
@@ -732,13 +799,16 @@ echo "marsad-durable-launch: sid={sid} dir=$dir"
 /// a stream that will never produce output.  Intended for `run_remote_script`.
 pub fn remote_liveness_script(sid: &str) -> String {
     let dir = remote_session_dir(sid);
+    // Verdict is printed as a SENTINEL line (`MARSAD_LIVENESS:LIVE|DEAD`) so the
+    // parser can pick it out even if a login banner / MOTD leaks onto stdout.
+    // Run over a NON-login shell (see `probe_liveness`) so nothing swallows it.
     format!(
         r#"dir={dir}
-if [ ! -p "$dir/in.fifo" ]; then echo DEAD; exit 0; fi
+if [ ! -p "$dir/in.fifo" ]; then echo MARSAD_LIVENESS:DEAD; exit 0; fi
 ka=$(cat "$dir/ka.pid" 2>/dev/null || echo "")
 cl=$(cat "$dir/claude.pid" 2>/dev/null || echo "")
 if [ -n "$ka" ] && kill -0 "$ka" 2>/dev/null \
-   && [ -n "$cl" ] && kill -0 "$cl" 2>/dev/null; then echo LIVE; else echo DEAD; fi
+   && [ -n "$cl" ] && kill -0 "$cl" 2>/dev/null; then echo MARSAD_LIVENESS:LIVE; else echo MARSAD_LIVENESS:DEAD; fi
 "#,
         dir = dir,
     )

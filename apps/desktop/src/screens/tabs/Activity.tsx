@@ -23,6 +23,7 @@ import {
   type ResolvedGateEntry,
 } from "../../bridge/api";
 import { endReasonText } from "../../bridge/types";
+import { canSend, sendBlockedReason } from "../../bridge/sessionStatus";
 import type {
   SlashEntry,
   SessionView,
@@ -1445,8 +1446,83 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
     runSlash(sessionId, entry.name);
   }
 
+  // Plan entries from ACP plan mode (opencode `session/update{plan}`).
+  const planEntries = sv.plan_entries ?? [];
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      {/* ACP plan entries (opencode plan mode) — rendered above the transcript
+          when present so the live plan is always visible without scrolling. */}
+      {planEntries.length > 0 && (
+        <div
+          data-testid="plan-entries"
+          style={{
+            flexShrink: 0,
+            padding: "12px 24px",
+            borderBottom: "1px solid var(--border)",
+            background: "var(--panel2)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          <div
+            style={{
+              fontSize: "calc(12px * var(--fs,1))",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: 0.4,
+              color: "var(--txt3)",
+              marginBottom: 4,
+            }}
+          >
+            Plan
+          </div>
+          {planEntries.map((entry, i) => (
+            <div
+              key={i}
+              data-testid="plan-entry"
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 9,
+                padding: "8px 11px",
+                borderRadius: 8,
+                border: "1px solid var(--border)",
+                background: "var(--panel)",
+                fontSize: "calc(14px * var(--fs,1))",
+              }}
+            >
+              {/* Priority badge styled with color but rendered as aria-label to
+                  avoid a second text node that would duplicate the content match
+                  in getByText. The priority IS conveyed in the data-testid element's
+                  textContent via the combined label below. */}
+              <span
+                aria-label={entry.priority}
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  flexShrink: 0,
+                  alignSelf: "center",
+                  background:
+                    entry.priority === "critical"
+                      ? "var(--error)"
+                      : entry.priority === "high"
+                      ? "var(--needs)"
+                      : entry.priority === "low"
+                      ? "var(--txt3)"
+                      : "var(--txt2)",
+                }}
+              />
+              <span style={{ flex: 1, color: "var(--txt)", lineHeight: 1.4 }}>
+                {entry.content}{" · "}{entry.priority}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Transcript scroll area */}
       <div
         ref={scrollContainerRef}
@@ -1583,35 +1659,21 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
         }}
       >
         <div style={{ maxWidth: 1040, margin: "0 auto" }}>
-          {(() => {
-            // Hard-block sending whenever the session isn't cleanly reachable:
-            // Paused (not running) or its stream isn't Connected (Reconnecting /
-            // Unstable). Prevents firing a prompt/command into a broken pipe; the
-            // draft is preserved untouched. Uses the per-session `conn_health`
-            // (real reader events), not the coarse 15s host poll.
-            const connHealth = sv.conn_health ?? "Connected";
-            const paused = sv.live === false;
-            const sendBlocked = paused || connHealth !== "Connected";
-            const disabledReason = paused
-              ? "Session paused — resume it to send"
-              : connHealth === "Reconnecting"
-                ? "Reconnecting… your text is kept, send when it's back"
-                : connHealth === "Unstable"
-                  ? "Connection unstable — your text is kept, send when it's back"
-                  : undefined;
-            return (
-              <Composer
-                sessionId={sessionId}
-                onSend={handleSend}
-                onInterrupt={handleInterrupt}
-                onSlashSelect={handleSlashSelect}
-                disabled={sendBlocked}
-                disabledReason={disabledReason}
-                history={promptHistory}
-                slashCommands={sv.slash_commands}
-              />
-            );
-          })()}
+          {/* SENDING is blocked when the session isn't cleanly reachable (Paused,
+              or stream Reconnecting/Unstable) — but the composer stays fully
+              editable so the draft is never lost; only delivery waits. The block
+              decision comes from the SHARED sessionStatus helpers (same source of
+              truth as the dashboard), never a separate projection. */}
+          <Composer
+            sessionId={sessionId}
+            onSend={handleSend}
+            onInterrupt={handleInterrupt}
+            onSlashSelect={handleSlashSelect}
+            sendDisabled={!canSend(sv)}
+            sendDisabledReason={sendBlockedReason(sv) ?? undefined}
+            history={promptHistory}
+            slashCommands={sv.slash_commands}
+          />
         </div>
       </div>
     </div>

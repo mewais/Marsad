@@ -68,6 +68,7 @@ export function BoardScreen(): JSX.Element {
   return (
     <Board
       board={board}
+      sessions={state.snapshot?.sessions ?? []}
       onOpenWorkstream={openWorkstream}
       onPauseWorkstream={(id) => void pauseWorkstream(id)}
       onResumeWorkstream={(id) => void resumeWorkstream(id)}

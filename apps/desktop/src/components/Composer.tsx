@@ -18,10 +18,13 @@ interface ComposerProps {
   onSend: (text: string) => void;
   onInterrupt: () => void;
   onSlashSelect?: (entry: SlashEntry) => void;
-  disabled?: boolean;
-  /** Shown as the textarea placeholder when `disabled` (e.g. "Session paused —
-   *  resume to send", "Reconnecting… (your text is kept)"). */
-  disabledReason?: string;
+  /** When true, SENDING is blocked (session paused / disconnected / unstable) but
+   *  the textarea stays fully editable — the user can keep composing; only the Send
+   *  button (and Enter-to-send) is disabled. */
+  sendDisabled?: boolean;
+  /** Short reason shown as the Send button's tooltip + a hint when `sendDisabled`
+   *  (e.g. "Session paused — resume to send", "Reconnecting…"). */
+  sendDisabledReason?: string;
   /** Previously sent prompts for this session, oldest first. Used for Up/Down history navigation. */
   history?: string[];
   /** Live slash commands from the current session's system/init event — the
@@ -37,8 +40,8 @@ export function Composer({
   onSend,
   onInterrupt,
   onSlashSelect,
-  disabled,
-  disabledReason,
+  sendDisabled,
+  sendDisabledReason,
   history = [],
   slashCommands,
 }: ComposerProps) {
@@ -134,6 +137,9 @@ export function Composer({
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
+      // When sending is blocked, don't swallow Enter — let it insert a newline so
+      // the user can keep composing freely (the draft is preserved either way).
+      if (sendDisabled) return;
       e.preventDefault();
       submit();
       return;
@@ -207,10 +213,10 @@ export function Composer({
   }
 
   function submit() {
-    // Hard-block: never fire into a paused/disconnected session. The draft is
-    // left completely untouched so the user's text is preserved for when the
-    // connection is back.
-    if (disabled) return;
+    // Sending is blocked (paused/disconnected/unstable): do nothing and leave the
+    // draft completely untouched. The textarea stays editable so the user can keep
+    // composing; only delivery waits for a healthy connection.
+    if (sendDisabled) return;
     const t = text.trim();
     if (!t) return;
     // Reset history navigation on send
@@ -301,6 +307,21 @@ export function Composer({
         </div>
       )}
 
+      {/* Send-blocked hint — the input stays editable, only delivery waits. */}
+      {sendDisabled && sendDisabledReason && (
+        <div
+          data-testid="composer-send-hint"
+          style={{
+            fontSize: "calc(12.5px * var(--fs,1))",
+            color: "var(--needs)",
+            marginBottom: 6,
+            paddingLeft: 4,
+          }}
+        >
+          {sendDisabledReason} — you can keep typing; it'll send when you can.
+        </div>
+      )}
+
       <div
         style={{
           display: "flex",
@@ -340,12 +361,7 @@ export function Composer({
           value={text}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
-          disabled={disabled}
-          placeholder={
-            disabled
-              ? (disabledReason ?? "Sending is unavailable right now")
-              : "Send a prompt · / commands · ! shell  (⏎ send, ⇧⏎ newline)"
-          }
+          placeholder="Send a prompt · / commands · ! shell  (⏎ send, ⇧⏎ newline)"
           style={{
             flex: 1,
             background: "none",
@@ -380,7 +396,9 @@ export function Composer({
           </button>
           <button
             onClick={submit}
-            disabled={disabled}
+            disabled={sendDisabled}
+            title={sendDisabled ? sendDisabledReason : undefined}
+            data-testid="composer-send"
             style={{
               fontFamily: "inherit",
               fontWeight: 700,
@@ -388,9 +406,14 @@ export function Composer({
               padding: "8px 16px",
               borderRadius: 8,
               border: "none",
-              background: bangMode ? "var(--done)" : "var(--accent)",
-              color: bangMode ? "#0e1116" : "#fff",
-              cursor: "pointer",
+              background: sendDisabled
+                ? "var(--panel2)"
+                : bangMode
+                  ? "var(--done)"
+                  : "var(--accent)",
+              color: sendDisabled ? "var(--txt3)" : bangMode ? "#0e1116" : "#fff",
+              cursor: sendDisabled ? "not-allowed" : "pointer",
+              opacity: sendDisabled ? 0.6 : 1,
             }}
           >
             {bangMode ? "Run ↵" : "Send ↵"}

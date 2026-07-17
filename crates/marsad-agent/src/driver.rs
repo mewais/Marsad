@@ -91,7 +91,33 @@ impl Agent {
                     ));
                 }
 
-                if driver == "codex" {
+                if driver == "opencode" {
+                    // opencode ACP: persistent process, claude-shaped (in.fifo →
+                    // opencode acp → out.log). Same FIFO-wired single-invocation
+                    // shape as claude — NOT an eval-loop. We write to out.log (a
+                    // REGULAR FILE, not out.fifo) so the reader thread can open it
+                    // independently at any time (a named FIFO blocks on open() until
+                    // a paired reader/writer appears — the codex-branch comment
+                    // explains the deadlock). `cat in.fifo |` is load-bearing (same
+                    // named-FIFO/anonymous-pipe reason as the claude path above).
+                    let out_log = session_dir.join("out.log");
+                    let bin = argv.first().map(String::as_str).unwrap_or("opencode");
+                    let opencode_args = &argv[1..];
+                    format!(
+                        "{}cd {} && cat {} | {} {} >> {} 2>>{}",
+                        prefix,
+                        shell_quote(project),
+                        shell_quote(&in_fifo.display().to_string()),
+                        shell_quote(bin),
+                        opencode_args
+                            .iter()
+                            .map(|a| shell_quote(a))
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                        out_log.display(),
+                        err_log.display(),
+                    )
+                } else if driver == "codex" {
                     // Codex eval-loop container command:
                     //   <setup>
                     //   export 'K'='V'
@@ -671,13 +697,40 @@ pub fn codex_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
     argv
 }
 
+// ── opencode_argv ─────────────────────────────────────────────────────────────
+
+/// Build the `opencode acp` invocation for a persistent session launch.
+///
+/// opencode is launched as a PERSISTENT process (bidirectional channel via
+/// stdin/stdout), NOT an eval-loop. Binary is resolved from
+/// `LaunchSpec.claude_bin` (default `"opencode"`), same as codex reuses it.
+///
+/// The spawn command shape is: `opencode acp [--model <model>]`
+/// (exact flags TBD per opencode's ACP CLI spec; body is todo!()).
+pub fn opencode_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
+    let bin = spec
+        .claude_bin
+        .as_deref()
+        .unwrap_or("opencode")
+        .to_string();
+    let mut argv = vec![bin, "acp".to_string()];
+    // Pass the model if one was specified.
+    if !spec.model.is_empty() {
+        argv.push("--model".to_string());
+        argv.push(spec.model.clone());
+    }
+    argv
+}
+
 /// Dispatch to the correct argv builder based on `spec.driver`.
 ///
-/// - `"codex"` → [`codex_argv`]
+/// - `"codex"`    → [`codex_argv`]
+/// - `"opencode"` → [`opencode_argv`]
 /// - anything else (including `"claude"`, the default) → [`claude_argv`]
 pub fn session_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
     match spec.driver.as_str() {
         "codex" => codex_argv(spec),
+        "opencode" => opencode_argv(spec),
         _ => claude_argv(spec),
     }
 }

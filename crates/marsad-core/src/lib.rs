@@ -2604,12 +2604,12 @@ impl Core {
         match self.sessions.get_mut(session_id) {
             Some(rec) if rec.live != live => {
                 rec.live = live;
-                // Coming back Resumed clears any stale connection health so the UI
-                // doesn't linger on "Reconnecting" before the reader's next
-                // SessionConn lands (it emits Connected on attach right after this).
-                if live {
-                    rec.conn_health = marsad_proto::ConnHealth::Connected;
-                }
+                // Connection health is meaningful only while the session is running.
+                // Reset it to Connected on ANY liveness flip: coming back Resumed
+                // starts clean (the reader emits Connected on attach right after);
+                // going Paused/finalized must not linger on a stale
+                // "Reconnecting"/"Unstable"/"Disconnected" hint.
+                rec.conn_health = marsad_proto::ConnHealth::Connected;
             }
             _ => return Ok(vec![]),
         }
@@ -3240,6 +3240,8 @@ impl Core {
             live: record.live,
             conn_health: conn_health_str(record.conn_health),
             end_reason: s.end_reason,
+            plan_entries: s.plan_entries.clone(),
+            current_mode: s.current_mode.clone(),
         }
     }
 }
@@ -3255,6 +3257,7 @@ fn conn_health_str(h: marsad_proto::ConnHealth) -> String {
         marsad_proto::ConnHealth::Connected => "Connected",
         marsad_proto::ConnHealth::Reconnecting => "Reconnecting",
         marsad_proto::ConnHealth::Unstable => "Unstable",
+        marsad_proto::ConnHealth::Disconnected => "Disconnected",
     }
     .to_string()
 }

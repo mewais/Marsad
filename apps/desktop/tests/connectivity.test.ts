@@ -35,6 +35,7 @@ describe("connectivity hint (host-derived, not lifecycle)", () => {
     expect(connHintForConnHealth("Connected")).toBeNull();
     expect(connHintForConnHealth("Reconnecting")).toBe("Reconnecting");
     expect(connHintForConnHealth("Unstable")).toBe("Unstable");
+    expect(connHintForConnHealth("Disconnected")).toBe("Disconnected");
     expect(connHintForConnHealth(undefined)).toBeNull();
   });
 

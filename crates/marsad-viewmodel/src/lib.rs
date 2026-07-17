@@ -116,6 +116,14 @@ pub struct SessionView {
     /// normal turn / while working.
     #[serde(default)]
     pub end_reason: Option<marsad_events::EndReason>,
+    /// opencode ACP plan-mode: the live plan/todo list entries from the most recent
+    /// `system/plan_update` event. Empty before the first plan_update.
+    #[serde(default)]
+    pub plan_entries: Vec<marsad_proto::PlanEntry>,
+    /// opencode ACP: the current session mode id (e.g. "plan", "build") from the
+    /// most recent `system/mode_update` event. `None` before the first mode_update.
+    #[serde(default)]
+    pub current_mode: Option<String>,
 }
 
 fn default_posture() -> String {
@@ -747,6 +755,13 @@ pub struct WorkstreamCard {
     pub driver_dots: Vec<Driver>,
     pub host_chips: Vec<String>,
     pub session_count: usize,
+    /// The session ids in this card, in node order. Lets the dashboard look up
+    /// each session's canonical `SessionView` (from `state.sessions`) and derive
+    /// per-session status — badge / connection hint / resume-pause — from the SAME
+    /// source of truth as the session-detail view, instead of a divergent
+    /// workstream-aggregate projection. See apps/desktop bridge/sessionStatus.ts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub node_ids: Vec<String>,
     pub counts: StateCounts,
     pub needs_attention: bool,
     pub is_single_node: bool,
@@ -849,6 +864,7 @@ fn workstream_card(ws: &Workstream, nodes: &[Node], connections: &[Connection]) 
         driver_dots: driver_dots(&owned_nodes),
         host_chips: host_chips(&owned_nodes),
         session_count: owned_nodes.len(),
+        node_ids: owned_nodes.iter().map(|n| n.id.clone()).collect(),
         counts: state_counts(&owned_nodes),
         needs_attention,
         is_single_node: owned_nodes.len() == 1,

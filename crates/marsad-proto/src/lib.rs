@@ -473,6 +473,45 @@ pub struct LaunchSpec {
 }
 
 // ---------------------------------------------------------------------------
+// PlanEntry / PlanUpdate / ModeUpdate / SlashUpdate (opencode ACP — §3 canonical shapes)
+// ---------------------------------------------------------------------------
+
+/// One entry in an opencode plan (plan-mode todo list item).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct PlanEntry {
+    pub content: String,
+    #[serde(default)]
+    pub priority: String,
+}
+
+/// A `{"type":"system","subtype":"plan_update",...}` event — opencode emitted
+/// a live plan/todo list update. `session_id` and `plan_entries` are the
+/// load-bearing payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlanUpdate {
+    pub session_id: String,
+    #[serde(default)]
+    pub plan_entries: Vec<PlanEntry>,
+}
+
+/// A `{"type":"system","subtype":"mode_update",...}` event — opencode switched
+/// to a different session mode (plan/build/etc.).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModeUpdate {
+    pub session_id: String,
+    pub current_mode: String,
+}
+
+/// A `{"type":"system","subtype":"slash_update",...}` event — opencode emitted
+/// a fresh catalog of available slash commands (mid-session replacement).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SlashUpdate {
+    pub session_id: String,
+    #[serde(default, deserialize_with = "deserialize_slash_commands")]
+    pub slash_commands: Vec<SlashCommandInfo>,
+}
+
+// ---------------------------------------------------------------------------
 // CompactMetadata / CompactBoundary (U3b — context-compaction events)
 // ---------------------------------------------------------------------------
 
@@ -561,6 +600,12 @@ pub enum StreamMsg {
     CompactBoundary(CompactBoundary),
     /// U3b: top-level `rate_limit_event` — a rate-limit status notice.
     RateLimitEvent(RateLimitEvent),
+    /// opencode ACP: `system/plan_update` — live plan/todo list from opencode plan mode.
+    PlanUpdate(PlanUpdate),
+    /// opencode ACP: `system/mode_update` — current session mode changed.
+    ModeUpdate(ModeUpdate),
+    /// opencode ACP: `system/slash_update` — mid-session slash command catalog replacement.
+    SlashUpdate(SlashUpdate),
     Unknown(serde_json::Value),
 }
 
@@ -1172,11 +1217,19 @@ pub enum IpcMsg {
 pub enum ConnHealth {
     /// Clean stream to the session.
     Connected,
-    /// Stream dropped; the reader is actively re-attaching (auto-reconnect).
+    /// Stream dropped; the reader is actively re-attaching (auto-reconnect,
+    /// backoff still growing) — a transient blip.
     Reconnecting,
     /// The stream keeps flapping (re-attached then dropped again before it
-    /// restabilized) — connected but unreliable.
+    /// restabilized) — reachable but unreliable.
     Unstable,
+    /// Sustained loss of contact: the reconnect backoff has reached its steady
+    /// max and the host is still unreachable. The durable session is PRESUMED
+    /// ALIVE (we could not confirm it dead — that would be `Paused`), and the
+    /// reader keeps probing at the steady interval; it flips back to `Connected`
+    /// the moment contact returns. Distinct from `Reconnecting` (a brief blip)
+    /// and from `Paused`/`live=false` (process confirmed gone).
+    Disconnected,
 }
 
 impl IpcMsg {
@@ -1294,6 +1347,15 @@ pub fn parse_stream_line(line: &str) -> Result<StreamMsg, ProtoError> {
         }
         "system" if obj.get("subtype").and_then(|v| v.as_str()) == Some("compact_boundary") => {
             from_val("compact_boundary", value).map(StreamMsg::CompactBoundary)
+        }
+        "system" if obj.get("subtype").and_then(|v| v.as_str()) == Some("plan_update") => {
+            from_val("plan_update", value).map(StreamMsg::PlanUpdate)
+        }
+        "system" if obj.get("subtype").and_then(|v| v.as_str()) == Some("mode_update") => {
+            from_val("mode_update", value).map(StreamMsg::ModeUpdate)
+        }
+        "system" if obj.get("subtype").and_then(|v| v.as_str()) == Some("slash_update") => {
+            from_val("slash_update", value).map(StreamMsg::SlashUpdate)
         }
         "system" => Ok(StreamMsg::Unknown(value)),
         "assistant" => from_val("assistant", value).map(StreamMsg::Assistant),

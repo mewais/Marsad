@@ -44,6 +44,8 @@ fn base_session_view() -> SessionView {
         live: true,
         conn_health: "Connected".to_string(),
         end_reason: None,
+        plan_entries: vec![],
+        current_mode: None,
     }
 }
 

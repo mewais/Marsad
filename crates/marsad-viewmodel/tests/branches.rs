@@ -60,6 +60,8 @@ fn make_session(
         live: true,
         conn_health: "Connected".to_string(),
         end_reason: None,
+        plan_entries: vec![],
+        current_mode: None,
     }
 }
 
@@ -370,6 +372,8 @@ fn ctx_warn_false_at_74_pct() {
             live: true,
             conn_health: "Connected".to_string(),
             end_reason: None,
+            plan_entries: vec![],
+            current_mode: None,
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -423,6 +427,8 @@ fn ctx_warn_true_at_75_pct() {
             live: true,
             conn_health: "Connected".to_string(),
             end_reason: None,
+            plan_entries: vec![],
+            current_mode: None,
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -594,6 +600,8 @@ fn ctx_warn_true_at_100_pct() {
             live: true,
             conn_health: "Connected".to_string(),
             end_reason: None,
+            plan_entries: vec![],
+            current_mode: None,
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],

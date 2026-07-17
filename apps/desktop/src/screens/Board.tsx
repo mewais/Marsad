@@ -15,8 +15,19 @@ import type {
   StateCounts,
   WorkstreamCard,
 } from "../bridge/workstreamTypes";
-import { tallyConnHints } from "../bridge/connectivity";
+import type { SessionView } from "../bridge/types";
+import type { ConnHint } from "../bridge/connectivity";
+import { aggregateCardStatus } from "../bridge/sessionStatus";
+import { ConnHintChip } from "../components/ConnHintChip";
 import { EndReasonChip } from "../components/EndReasonChip";
+
+/** Per-card status derived from the card's member SessionViews — the SINGLE
+ *  source of truth shared with the session-detail view. */
+export interface CardStatus {
+  canPause: boolean;
+  canResume: boolean;
+  connHint: ConnHint | null;
+}
 
 // ---------------------------------------------------------------------------
 // State colour / label helpers (mirrors design tokens; Level-1 head states)
@@ -40,6 +51,7 @@ const driverColor: Record<Driver, string> = {
   claude: "#d97757",
   codex: "#3fb6a8",
   gemini: "#9b8cf0",
+  opencode: "#f0a050",
 };
 
 const hostStatusColor: Record<string, string> = {
@@ -299,10 +311,12 @@ function LinkChipPill({ link, hostChips }: { link: LinkChip; hostChips: HostChip
 function AttentionCard({
   card,
   hostChips,
+  status,
   onOpen,
 }: {
   card: WorkstreamCard;
   hostChips: HostChip[];
+  status: CardStatus;
   onOpen: () => void;
 }) {
   const state = card.head_state;
@@ -358,6 +372,12 @@ function AttentionCard({
         </span>
         <div style={{ flex: 1 }} />
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {/* Per-session connection health (incl. Unstable) — same source as detail. */}
+          {status.connHint && (
+            <span data-testid={`attention-conn-${card.id}`}>
+              <ConnHintChip hint={status.connHint} size="xs" />
+            </span>
+          )}
           <HostChipPills hostIds={card.host_chips} hostChips={hostChips} variant="plain" />
         </div>
       </div>
@@ -507,6 +527,7 @@ function WsActionBtn({
 function WorkstreamRow({
   card,
   hostChips,
+  status,
   onOpen,
   onPause,
   onResume,
@@ -514,6 +535,7 @@ function WorkstreamRow({
 }: {
   card: WorkstreamCard;
   hostChips: HostChip[];
+  status: CardStatus;
   onOpen: () => void;
   onPause: () => void;
   onResume: () => void;
@@ -523,13 +545,6 @@ function WorkstreamRow({
   const color = state ? headStateColor[state] : "var(--border)";
   const bg = state ? headStateBg[state] : "transparent";
   const buckets = nonZeroBuckets(card.counts);
-  // Host-derived connectivity for THIS workstream's hosts (NOT a lifecycle
-  // state): surface "N reconnecting / N disconnected" alongside the session
-  // counts so a dropped host link is visible on the dashboard. Counts the
-  // workstream's hosts currently in each state.
-  const connCounts = tallyConnHints(
-    card.host_chips.map((id) => hostChips.find((h) => h.id === id)?.status)
-  );
 
   return (
     <div
@@ -603,34 +618,12 @@ function WorkstreamRow({
             {card.counts[b.key]} {b.label}
           </span>
         ))}
-        {connCounts.reconnecting > 0 && (
-          <span
-            data-testid={`ws-reconnecting-${card.id}`}
-            style={{
-              fontSize: "calc(10px * var(--fs,1))",
-              fontWeight: 600,
-              padding: "2px 8px",
-              borderRadius: 6,
-              color: "var(--needs)",
-              background: "var(--needs-bg)",
-            }}
-          >
-            {connCounts.reconnecting} reconnecting
-          </span>
-        )}
-        {connCounts.disconnected > 0 && (
-          <span
-            data-testid={`ws-disconnected-${card.id}`}
-            style={{
-              fontSize: "calc(10px * var(--fs,1))",
-              fontWeight: 600,
-              padding: "2px 8px",
-              borderRadius: 6,
-              color: "var(--error)",
-              background: "var(--error-bg)",
-            }}
-          >
-            {connCounts.disconnected} disconnected
+        {/* Per-session connection health (Reconnecting / Unstable / Disconnected),
+            from the SAME source the detail view uses — so the dashboard shows the
+            exact state, incl. Unstable. */}
+        {status.connHint && (
+          <span data-testid={`ws-conn-${card.id}`}>
+            <ConnHintChip hint={status.connHint} size="xs" />
           </span>
         )}
         {card.end_reason && <EndReasonChip reason={card.end_reason} />}
@@ -653,11 +646,13 @@ function WorkstreamRow({
         {state ?? "—"}
       </span>
 
-      {/* Workstream lifecycle actions — state-appropriate: running → Pause;
-          stopped/idle → Resume. Delete always visible. Each stops row-click
-          propagation so it doesn't also open the workstream. */}
+      {/* Workstream lifecycle actions — driven by the sessions' authoritative
+          LIVENESS (canPause = any session running), NOT the phase head_state.
+          This is what fixes the "Resume shown on a Done-but-live session" drift:
+          a finished-but-running session correctly offers Pause here, matching the
+          detail view. Delete always visible. Each stops row-click propagation. */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-        {(state === "working" || state === "needs" || state === "error") ? (
+        {status.canPause ? (
           <WsActionBtn testid={`ws-pause-${card.id}`} label="⏸" title="Pause" onClick={onPause} />
         ) : (
           <WsActionBtn testid={`ws-resume-${card.id}`} label="▶" title="Resume" onClick={onResume} />
@@ -676,6 +671,11 @@ function WorkstreamRow({
 
 export interface BoardProps {
   board: BoardView;
+  /** The canonical SessionViews (same objects the detail view renders), keyed by
+   *  id via each card's `node_ids`. The dashboard derives per-session status from
+   *  THESE — one source of truth. Optional so presentational tests/mocks may omit
+   *  it (status then degrades to head_state-only). */
+  sessions?: SessionView[];
   onOpenWorkstream: (id: string) => void;
   /** Pause every session in a workstream (#5). Optional — presentational
    *  render sites (tests) may omit lifecycle wiring. */
@@ -688,12 +688,34 @@ export interface BoardProps {
 
 export function Board({
   board,
+  sessions = [],
   onOpenWorkstream,
   onPauseWorkstream,
   onResumeWorkstream,
   onDeleteWorkstream,
 }: BoardProps) {
   const { summary } = board;
+
+  // SINGLE SOURCE OF TRUTH: resolve each card's member SessionViews by id and
+  // derive its status (resume/pause + connection hint) from them — the exact
+  // objects + logic the session-detail view uses. When `sessions` isn't supplied
+  // (bare presentational tests), fall back to head_state so the board still
+  // renders sensibly.
+  const sessionsById = new Map(sessions.map((s) => [s.id, s]));
+  const cardStatus = (card: WorkstreamCard): CardStatus => {
+    const members = (card.node_ids ?? [])
+      .map((id) => sessionsById.get(id))
+      .filter((s): s is SessionView => s != null);
+    if (members.length === 0) {
+      // No SessionViews available — derive resume/pause from head_state as before.
+      const live =
+        card.head_state === "working" ||
+        card.head_state === "needs" ||
+        card.head_state === "error";
+      return { canPause: live, canResume: !live, connHint: null };
+    }
+    return aggregateCardStatus(members, board.host_chips);
+  };
 
   // Group the dashboard into Live / Done / Paused so active work sits on top.
   // Live = working/needs/error; Done = finished; Paused = null head_state (every
@@ -785,6 +807,7 @@ export function Board({
                 key={card.id}
                 card={card}
                 hostChips={board.host_chips}
+                status={cardStatus(card)}
                 onOpen={() => onOpenWorkstream(card.id)}
               />
             ))}
@@ -838,6 +861,7 @@ export function Board({
                   key={card.id}
                   card={card}
                   hostChips={board.host_chips}
+                  status={cardStatus(card)}
                   onOpen={() => onOpenWorkstream(card.id)}
                   onPause={() => onPauseWorkstream?.(card.id)}
                   onResume={() => onResumeWorkstream?.(card.id)}

@@ -15,6 +15,8 @@ use marsad_lifecycle::{FakeContainer, Persisted};
 use marsad_notify::{CaptureNotifier, Notifier};
 use marsad_store::{MemoryBackend, Store};
 
+pub mod acp;
+pub mod acp_translate;
 pub mod capabilities;
 pub mod codex;
 #[cfg(not(coverage))]
@@ -31,10 +33,10 @@ mod wasl;
 #[cfg(not(coverage))]
 use remote::REMOTE_RUNTIME_DIR;
 
-pub use driver::{claude_argv, posture_to_mode};
+pub use driver::{claude_argv, opencode_argv, posture_to_mode};
 pub use reader::{
-    assistant_has_file_modifying_tool_use, liveness_verdict, reconnect_backoff_next,
-    RECONNECT_INITIAL_BACKOFF_SECS, RECONNECT_MAX_BACKOFF_SECS, RECONNECT_MAX_TOTAL_SECS,
+    assistant_has_file_modifying_tool_use, conn_on_drop, conn_on_probe, reconnect_backoff_next,
+    ProbeAction, ProbeStep, RECONNECT_INITIAL_BACKOFF_SECS, RECONNECT_MAX_BACKOFF_SECS,
     RECONNECT_PROBE_TIMEOUT_SECS,
 };
 pub use remote::{
@@ -42,8 +44,11 @@ pub use remote::{
     remote_durable_launch_script, remote_kill_script, remote_liveness_script, remote_reader_argv,
     remote_session_dir, remote_writer_argv,
 };
+pub use remote::{parse_liveness, Liveness, LIVENESS_SENTINEL};
 #[cfg(not(coverage))]
-pub use remote::{fetch_remote_session_list, run_remote_script, run_remote_script_bounded};
+pub use remote::{
+    fetch_remote_session_list, probe_liveness, run_remote_script, run_remote_script_bounded,
+};
 pub use wasl::{load_wasl_config, wasl_event_lines};
 
 // WAVE 3b — pty escape-hatch terminal. `default_shell`/`pty_exec_argv` are
@@ -339,6 +344,19 @@ pub(crate) fn cached_codex_spec_from_persisted(
     }
 }
 
+/// Minimal per-session spec for opencode ACP sessions — holds what the reader
+/// thread needs to perform the ACP handshake (initialize + session/new or
+/// session/load). Keyed by Marsad session_id. Production builds only.
+#[cfg(not(coverage))]
+#[derive(Clone, Debug)]
+pub(crate) struct CachedOpencodeSpec {
+    pub model: String,
+    pub project: String,
+    /// Stored ACP sessionId from a prior run (for `session/load` on resume).
+    /// `None` for fresh launches → the reader sends `session/new`.
+    pub acp_session_id: Option<String>,
+}
+
 /// Per-session codex spec cache wrapper (production builds only).
 #[cfg(not(coverage))]
 struct CodexSpecsWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, CachedCodexSpec>>>);
@@ -362,6 +380,23 @@ struct CodexThreadsWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, String>>
 impl fmt::Debug for CodexThreadsWrap {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("CodexThreadsWrap")
+    }
+}
+
+/// Per-session ACP sessionId registry for opencode sessions — keyed by Marsad
+/// session_id, holds the ACP `sessionId` string returned by `session/new` or
+/// `session/load`. Shared between the reader thread (which inserts it when the
+/// `session/new` result arrives) and `handle_send_prompt` / `handle_interrupt`
+/// / `handle_answer_gate` (which read it to address subsequent ACP requests).
+///
+/// Mirrors `codex_threads`: a simple string map, production builds only.
+#[cfg(not(coverage))]
+struct AcpSessionsWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>);
+
+#[cfg(not(coverage))]
+impl fmt::Debug for AcpSessionsWrap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("AcpSessionsWrap")
     }
 }
 
@@ -478,6 +513,13 @@ pub struct Agent {
     /// Production builds only.
     #[cfg(not(coverage))]
     codex_threads: CodexThreadsWrap,
+    /// Per-session ACP sessionId map for opencode sessions: populated by the
+    /// reader when the `session/new` (or `session/load`) result arrives,
+    /// read by `handle_send_prompt`/`handle_interrupt`/`handle_answer_gate`
+    /// to address subsequent ACP JSON-RPC requests. Mirrors `codex_threads`.
+    /// Production builds only.
+    #[cfg(not(coverage))]
+    acp_sessions: AcpSessionsWrap,
     /// Wasl connector registry (X2), keyed by host_id. Always compiled — see
     /// `WaslConnectorsWrap`'s doc comment.
     wasl_connectors: WaslConnectorsWrap,
@@ -543,6 +585,8 @@ impl Agent {
             codex_specs: CodexSpecsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
             #[cfg(not(coverage))]
             codex_threads: CodexThreadsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
+            #[cfg(not(coverage))]
+            acp_sessions: AcpSessionsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
             wasl_connectors: WaslConnectorsWrap(empty_wasl_connector_map()),
             wasl_connector_factory: WaslConnectorFactoryWrap(None),
         })
@@ -606,6 +650,7 @@ impl Agent {
             ))),
             codex_specs: CodexSpecsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
             codex_threads: CodexThreadsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
+            acp_sessions: AcpSessionsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
             wasl_connectors: WaslConnectorsWrap(empty_wasl_connector_map()),
             wasl_connector_factory: WaslConnectorFactoryWrap(None),
         })
@@ -729,6 +774,11 @@ impl Agent {
                     .unwrap()
                     .insert(session_id.clone(), run_cmd);
             }
+
+            // opencode: no additional in-memory spec needed at launch (the ACP
+            // sessionId arrives later via the session/new response and is captured
+            // in `acp_sessions` by the reader thread). The persistent process is
+            // spawned by `spawn_container` exactly like claude — no extra work here.
 
             // Cache codex spec for later turns (handle_send_prompt): both local and
             // remote codex sessions need this so follow-up turns can build
@@ -893,27 +943,6 @@ impl Agent {
 mod reconnect_spec_tests {
     use super::*;
 
-    #[test]
-    fn liveness_verdict_reads_last_meaningful_line_only() {
-        // Clean cases.
-        assert_eq!(liveness_verdict("LIVE"), "LIVE");
-        assert_eq!(liveness_verdict("DEAD"), "DEAD");
-        // Login-shell banner/MOTD before the verdict → still LIVE (the bug that
-        // caused false-Paused when the whole blob was compared to "LIVE").
-        assert_eq!(
-            liveness_verdict("Welcome to the HPC login node\nModule init done\nLIVE\n"),
-            "LIVE"
-        );
-        assert_eq!(liveness_verdict("banner\nDEAD\n"), "DEAD");
-        // Flap noise: empty / banner-only / garbled → NOT LIVE and NOT DEAD, so
-        // callers keep probing instead of Pausing.
-        assert_eq!(liveness_verdict(""), "");
-        assert_eq!(liveness_verdict("\n\n  \n"), "");
-        assert_ne!(liveness_verdict("motd: welcome"), "LIVE");
-        assert_ne!(liveness_verdict("motd: welcome"), "DEAD");
-        // Trailing blank lines are skipped to find the real verdict.
-        assert_eq!(liveness_verdict("LIVE\n\n  \n"), "LIVE");
-    }
 
     #[test]
     fn drain_fresh_prompts_keeps_all_in_order_regardless_of_age() {

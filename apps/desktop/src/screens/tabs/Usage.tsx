@@ -22,6 +22,7 @@ const DRIVER_COLOR: Record<Driver, string> = {
   claude: "#d97757",
   codex: "#3fb6a8",
   gemini: "#9b8cf0",
+  opencode: "#f0a050",
 };
 
 /** driver hex -> ~12-14% tint background, matching the design tokens' "driver

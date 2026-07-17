@@ -16,6 +16,7 @@ const DRIVERS: { id: Driver; label: string }[] = [
   { id: "claude", label: "Claude Code" },
   { id: "codex", label: "Codex" },
   { id: "gemini", label: "Gemini" },
+  { id: "opencode", label: "opencode" },
 ];
 
 // ---------------------------------------------------------------------------

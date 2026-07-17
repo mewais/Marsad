@@ -12,7 +12,7 @@ import type { Tab } from "../bridge/types";
 import { stopSession, resumeSession, removeSession } from "../bridge/api";
 import { Badge } from "../components/Badge";
 import { ConnHintChip } from "../components/ConnHintChip";
-import { connHintForSession } from "../bridge/connectivity";
+import { canResume, sessionConnHint } from "../bridge/sessionStatus";
 import { ActivityTab } from "./tabs/Activity";
 import { ChangesTab } from "./tabs/Changes";
 import { ConfigTab } from "./tabs/Config";
@@ -140,19 +140,15 @@ export function SessionDetail() {
   // session — user-stopped, restored-but-dead, or host-killed (OOM/crash) —
   // offers Resume (a cold `--resume`). `live` is authoritative from the agent;
   // missing (older snapshots) is treated as live (Resumed).
-  const isStopped = selectedSession.live === false;
+  const isStopped = canResume(selectedSession);
 
   // Connectivity hint (NOT a lifecycle change): if this session's stream is
   // (re)connecting/unstable, or its host link is unreachable, surface it next to
   // the host label so the user knows we've temporarily lost contact — the session
-  // itself stays Resumed because it's still alive on the host. Prefers the
-  // per-session `conn_health` (real reader events) over the coarse host poll, so
-  // a session whose stream drops while the host still pings is caught.
-  const connHint = connHintForSession(
-    selectedSession.conn_health,
-    state.snapshot?.hosts ?? [],
-    selectedSession.host_id
-  );
+  // itself stays Resumed because it's still alive on the host. Derived from the
+  // SHARED sessionStatus helper (same source the dashboard uses), preferring the
+  // per-session `conn_health` over the coarse host poll.
+  const connHint = sessionConnHint(selectedSession, state.snapshot?.hosts ?? []);
 
   // Shared button style for all action buttons in the header — ensures uniform
   // height/padding/font across Back, Answer gate, Pause/Resume, Delete.

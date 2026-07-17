@@ -1132,6 +1132,49 @@ fn session_liveness_signal_flips_paused_and_resumed() {
     );
 }
 
+/// `conn_health` is a per-session CONNECTION signal that is meaningful only while
+/// the session is running. A `SessionConn` surfaces it on the view; going Paused
+/// (`live:false`) MUST clear it so a finalized/paused session never lingers on a
+/// stale "Reconnecting"/"Unstable"/"Disconnected" hint (the DCSim/Tajir bug tail).
+#[test]
+fn conn_health_surfaces_and_clears_on_pause() {
+    let (mut core, _fake) = make_core();
+    let id = launch_t(&mut core, None, LaunchMode::Fresh);
+    let _ = core
+        .on_agent_line(&ipc_agent_event_system_init(&id))
+        .expect("init");
+
+    // Reader reports the stream flapping to Unstable → surfaces on the view.
+    let unstable = format!(r#"{{"type":"SessionConn","session_id":"{id}","health":"Unstable"}}"#);
+    let u = core.on_agent_line(&unstable).expect("conn unstable");
+    assert_eq!(
+        last_sv(&u).conn_health,
+        "Unstable",
+        "conn_health must surface on the SessionView"
+    );
+
+    // Reader gives up / user pauses → SessionLiveness false → conn_health cleared.
+    let dead = format!(r#"{{"type":"SessionLiveness","session_id":"{id}","live":false}}"#);
+    let u = core.on_agent_line(&dead).expect("liveness false");
+    let sv = last_sv(&u);
+    assert!(!sv.live, "session must be Paused");
+    assert_eq!(
+        sv.conn_health, "Connected",
+        "conn_health must be cleared on pause — no stale Unstable/Reconnecting hint"
+    );
+
+    // A sustained-unreachable Disconnected also surfaces while running.
+    let _ = core
+        .on_agent_line(&format!(
+            r#"{{"type":"SessionLiveness","session_id":"{id}","live":true}}"#
+        ))
+        .expect("live again");
+    let disc =
+        format!(r#"{{"type":"SessionConn","session_id":"{id}","health":"Disconnected"}}"#);
+    let u = core.on_agent_line(&disc).expect("conn disconnected");
+    assert_eq!(last_sv(&u).conn_health, "Disconnected");
+}
+
 #[test]
 fn transcript_resume_loads_session_history() {
     use marsad_events::TranscriptEntry;

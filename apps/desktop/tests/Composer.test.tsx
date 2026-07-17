@@ -46,51 +46,64 @@ describe("Composer per-session drafts", () => {
   });
 });
 
-describe("Composer hard-block when disconnected/paused", () => {
-  it("disables the textarea + send, shows the reason, and never sends or clears the draft", () => {
+describe("Composer sendDisabled — textarea stays editable, only Send is blocked", () => {
+  it("keeps the textarea EDITABLE, disables the Send button, and doesn't send on Enter", () => {
     const onSend = vi.fn();
     render(
       <Composer
         sessionId="sess-block"
         onSend={onSend}
         onInterrupt={vi.fn()}
-        disabled
-        disabledReason="Reconnecting… your text is kept"
+        sendDisabled
+        sendDisabledReason="Reconnecting…"
       />,
     );
-    // Placeholder reflects the reason; textarea is disabled.
-    const ta = screen.getByPlaceholderText(
-      "Reconnecting… your text is kept",
-    ) as HTMLTextAreaElement;
-    expect(ta.disabled).toBe(true);
+    // Textarea uses the NORMAL placeholder and is NOT disabled — the user can type.
+    const ta = screen.getByPlaceholderText(/Send a prompt/i) as HTMLTextAreaElement;
+    expect(ta.disabled).toBe(false);
+    fireEvent.change(ta, { target: { value: "typed while reconnecting" } });
+    expect(ta.value).toBe("typed while reconnecting");
 
-    // Even if a submit is forced (Enter), nothing is sent while blocked.
+    // The Send button is disabled.
+    const send = screen.getByTestId("composer-send") as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+
+    // Enter must NOT send while blocked (and must not clear the draft).
     fireEvent.keyDown(ta, { key: "Enter" });
     expect(onSend).not.toHaveBeenCalled();
+    expect(ta.value).toBe("typed while reconnecting");
+
+    // The reason hint is shown.
+    expect(screen.getByTestId("composer-send-hint").textContent).toContain(
+      "Reconnecting…",
+    );
   });
 
-  it("keeps the typed draft intact across a disable (text is never lost)", () => {
+  it("keeps the typed draft intact across a send-disable (text is never lost)", () => {
     const { rerender } = render(
       <Composer sessionId="sess-keep" onSend={vi.fn()} onInterrupt={vi.fn()} />,
     );
-    const enabled = () =>
+    const ta = () =>
       screen.getByPlaceholderText(/Send a prompt/i) as HTMLTextAreaElement;
-    fireEvent.change(enabled(), { target: { value: "important prompt" } });
+    fireEvent.change(ta(), { target: { value: "important prompt" } });
 
-    // Connection drops → composer becomes disabled. The draft must survive.
+    // Connection drops → sending disabled. The draft must survive AND stay editable.
     rerender(
       <Composer
         sessionId="sess-keep"
         onSend={vi.fn()}
         onInterrupt={vi.fn()}
-        disabled
-        disabledReason="Session paused — resume it to send"
+        sendDisabled
+        sendDisabledReason="Session paused — resume it to send"
       />,
     );
+    expect(ta().value).toBe("important prompt");
+    expect(ta().disabled).toBe(false);
+
     // Re-enable (reconnected) → the text is still there to send.
     rerender(
       <Composer sessionId="sess-keep" onSend={vi.fn()} onInterrupt={vi.fn()} />,
     );
-    expect(enabled().value).toBe("important prompt");
+    expect(ta().value).toBe("important prompt");
   });
 });

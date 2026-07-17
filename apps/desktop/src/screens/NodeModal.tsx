@@ -42,6 +42,7 @@ const DRIVER_COLOR: Record<Driver, string> = {
   claude: "var(--d-claude, #d97757)",
   codex: "var(--d-codex, #3fb6a8)",
   gemini: "var(--d-gemini, #9b8cf0)",
+  opencode: "var(--d-opencode, #f0a050)",
 };
 
 const POSTURES: { value: "ask" | "auto" | "full"; label: string }[] = [

@@ -378,6 +378,10 @@ export async function answerGate(args: {
    *  suggestion object(s) echoed back VERBATIM as updatedPermissions. Ignored on
    *  reject. Sent as a JSON array. */
   permission_updates?: unknown;
+  /** ACP path: the chosen option's optionId, surfaced at the top level so the
+   *  backend can reply to the ACP request_permission with { outcome:"selected",
+   *  optionId }. Absent for claude permission gates. */
+  optionId?: string;
 }): Promise<void> {
   resolvedGateLog.push({
     session_id: args.session_id,

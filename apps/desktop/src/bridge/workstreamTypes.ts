@@ -13,7 +13,7 @@
 // ---------------------------------------------------------------------------
 
 export type HeadState = "needs" | "error" | "working" | "done";
-export type Driver = "claude" | "codex" | "gemini";
+export type Driver = "claude" | "codex" | "gemini" | "opencode";
 
 export interface StateCounts {
   working: number;
@@ -56,6 +56,14 @@ export interface WorkstreamCard {
   driver_dots: Driver[];
   host_chips: string[];
   session_count: number;
+  /**
+   * Session ids in this card (node order). The dashboard looks up each session's
+   * canonical `SessionView` from `state.sessions` to derive per-session status
+   * (badge / connection hint / resume-pause) from the SAME source of truth as the
+   * session-detail view — never a divergent aggregate. See bridge/sessionStatus.ts.
+   * Optional for back-compat with older snapshots / mock boards.
+   */
+  node_ids?: string[];
   counts: StateCounts;
   needs_attention: boolean;
   is_single_node: boolean;

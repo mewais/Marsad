@@ -71,6 +71,111 @@ function makeBoard(overrides: Partial<BoardView> = {}): BoardView {
 }
 
 // ---------------------------------------------------------------------------
+// Single source of truth: dashboard derives per-session status from the SAME
+// SessionView the detail view uses (via card.node_ids → state.sessions), not the
+// phase-aggregate head_state. Regressions for the dashboard/detail drift.
+// ---------------------------------------------------------------------------
+
+import type { SessionView } from "../src/bridge/types";
+
+function makeSession(overrides: Partial<SessionView> = {}): SessionView {
+  return {
+    id: "s1",
+    host_id: "host-a",
+    state: "Done",
+    live: true,
+    conn_health: "Connected",
+    ...overrides,
+  } as unknown as SessionView;
+}
+
+describe("Board — single source of truth (SessionView-driven status)", () => {
+  it("shows PAUSE (not Resume) for a Done-but-live session — matches the detail view", () => {
+    // Bug 3: head_state='done' used to force a Resume button even though the
+    // session is live (running). Now it reads liveness from the SessionView.
+    const card = makeCard({
+      id: "w-done-live",
+      head_state: "done",
+      node_ids: ["sess-done-live"],
+      counts: { working: 0, needs: 0, error: 0, done: 1 },
+    });
+    const board = makeBoard({ all: [card] });
+    const session = makeSession({ id: "sess-done-live", state: "Done", live: true });
+    render(
+      <ThemeProvider initialTheme="dark">
+        <Board board={board} sessions={[session]} onOpenWorkstream={vi.fn()} />
+      </ThemeProvider>
+    );
+    expect(screen.getByTestId("ws-pause-w-done-live")).toBeTruthy();
+    expect(screen.queryByTestId("ws-resume-w-done-live")).toBeNull();
+  });
+
+  it("shows RESUME for a Done-and-paused session", () => {
+    const card = makeCard({
+      id: "w-done-paused",
+      head_state: "done",
+      node_ids: ["sess-done-paused"],
+      counts: { working: 0, needs: 0, error: 0, done: 1 },
+    });
+    const board = makeBoard({ all: [card] });
+    const session = makeSession({ id: "sess-done-paused", state: "Done", live: false });
+    render(
+      <ThemeProvider initialTheme="dark">
+        <Board board={board} sessions={[session]} onOpenWorkstream={vi.fn()} />
+      </ThemeProvider>
+    );
+    expect(screen.getByTestId("ws-resume-w-done-paused")).toBeTruthy();
+    expect(screen.queryByTestId("ws-pause-w-done-paused")).toBeNull();
+  });
+
+  it("surfaces the per-session 'Unstable' connection hint on the dashboard card", () => {
+    // Bug 1: conn_health=Unstable showed in the detail view but never on the board.
+    const card = makeCard({
+      id: "w-unstable",
+      head_state: "working",
+      node_ids: ["sess-unstable"],
+    });
+    const board = makeBoard({ all: [card] });
+    const session = makeSession({
+      id: "sess-unstable",
+      state: "Working",
+      live: true,
+      conn_health: "Unstable",
+    });
+    render(
+      <ThemeProvider initialTheme="dark">
+        <Board board={board} sessions={[session]} onOpenWorkstream={vi.fn()} />
+      </ThemeProvider>
+    );
+    const chip = screen.getByTestId("ws-conn-w-unstable");
+    expect(chip.textContent).toContain("Unstable");
+  });
+
+  it("shows the Unstable hint on an attention card too", () => {
+    const card = makeCard({
+      id: "w-attn",
+      head_state: "needs",
+      needs_attention: true,
+      node_ids: ["sess-attn"],
+      counts: { working: 0, needs: 1, error: 0, done: 0 },
+    });
+    const board = makeBoard({ all: [card], attention: [card] });
+    const session = makeSession({
+      id: "sess-attn",
+      state: "Needs",
+      live: true,
+      conn_health: "Unstable",
+    });
+    render(
+      <ThemeProvider initialTheme="dark">
+        <Board board={board} sessions={[session]} onOpenWorkstream={vi.fn()} />
+      </ThemeProvider>
+    );
+    expect(screen.getByTestId("attention-conn-w-attn").textContent).toContain("Unstable");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // UB1 — summary line
 // ---------------------------------------------------------------------------
 

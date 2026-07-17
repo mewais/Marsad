@@ -160,6 +160,8 @@ pub fn seeded_mock() -> MockState {
             live: true,
             conn_health: "Connected".to_string(),
             end_reason: None,
+            plan_entries: vec![],
+            current_mode: None,
         },
         // Needs attention — plan gate
         SessionView {
@@ -195,6 +197,8 @@ pub fn seeded_mock() -> MockState {
             live: true,
             conn_health: "Connected".to_string(),
             end_reason: None,
+            plan_entries: vec![],
+            current_mode: None,
         },
         // Error — edit gate shown for reference
         SessionView {
@@ -230,6 +234,8 @@ pub fn seeded_mock() -> MockState {
             live: true,
             conn_health: "Connected".to_string(),
             end_reason: None,
+            plan_entries: vec![],
+            current_mode: None,
         },
         // Working sessions
         SessionView {
@@ -265,6 +271,8 @@ pub fn seeded_mock() -> MockState {
             live: true,
             conn_health: "Connected".to_string(),
             end_reason: None,
+            plan_entries: vec![],
+            current_mode: None,
         },
         SessionView {
             id: "s05".to_string(),
@@ -299,6 +307,8 @@ pub fn seeded_mock() -> MockState {
             live: true,
             conn_health: "Connected".to_string(),
             end_reason: None,
+            plan_entries: vec![],
+            current_mode: None,
         },
         SessionView {
             id: "s06".to_string(),
@@ -333,6 +343,8 @@ pub fn seeded_mock() -> MockState {
             live: true,
             conn_health: "Connected".to_string(),
             end_reason: None,
+            plan_entries: vec![],
+            current_mode: None,
         },
         // Done sessions
         SessionView {
@@ -368,6 +380,8 @@ pub fn seeded_mock() -> MockState {
             live: true,
             conn_health: "Connected".to_string(),
             end_reason: None,
+            plan_entries: vec![],
+            current_mode: None,
         },
         SessionView {
             id: "s08".to_string(),
@@ -402,6 +416,8 @@ pub fn seeded_mock() -> MockState {
             live: true,
             conn_health: "Connected".to_string(),
             end_reason: None,
+            plan_entries: vec![],
+            current_mode: None,
         },
         SessionView {
             id: "s09".to_string(),
@@ -436,6 +452,8 @@ pub fn seeded_mock() -> MockState {
             live: true,
             conn_health: "Connected".to_string(),
             end_reason: None,
+            plan_entries: vec![],
+            current_mode: None,
         },
         // Stale session
         SessionView {
@@ -471,6 +489,8 @@ pub fn seeded_mock() -> MockState {
             live: true,
             conn_health: "Connected".to_string(),
             end_reason: None,
+            plan_entries: vec![],
+            current_mode: None,
         },
     ];
 

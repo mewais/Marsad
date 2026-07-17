@@ -157,6 +157,9 @@ pub enum Event {
 // SessionState
 // ---------------------------------------------------------------------------
 
+// Re-export PlanEntry so callers can use it as `marsad_events::PlanEntry`.
+pub use marsad_proto::PlanEntry;
+
 /// Derived state of a single Claude Code session; produced by folding events.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionState {
@@ -231,6 +234,15 @@ pub struct SessionState {
     /// consumed, or when a new turn starts.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub interrupt_requested: bool,
+    /// opencode ACP plan-mode: the live plan/todo list entries from the most recent
+    /// `system/plan_update` event. Empty before the first plan_update. Replaced
+    /// wholesale on each update (not appended — each update is a full snapshot).
+    #[serde(default)]
+    pub plan_entries: Vec<marsad_proto::PlanEntry>,
+    /// opencode ACP: the current session mode id (e.g. "plan", "build") from the
+    /// most recent `system/mode_update` event. `None` before the first mode_update.
+    #[serde(default)]
+    pub current_mode: Option<String>,
 }
 
 impl SessionState {
@@ -261,6 +273,8 @@ impl SessionState {
             running_task_ids: HashMap::new(),
             end_reason: None,
             interrupt_requested: false,
+            plan_entries: Vec::new(),
+            current_mode: None,
         }
     }
 
@@ -472,6 +486,39 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
                 return state;
             }
             state.rate_limit = Some(rl.rate_limit_info);
+            state
+        }
+
+        // opencode ACP: live plan/todo list update. Informational — replaces
+        // plan_entries wholesale (each event is a full snapshot, not a patch).
+        // Does not touch phase or tokens. Same Stale/Detached totality-no-op rule
+        // as CompactBoundary.
+        StreamMsg::PlanUpdate(pu) => {
+            if stale_or_detached {
+                return state;
+            }
+            state.plan_entries = pu.plan_entries;
+            state
+        }
+
+        // opencode ACP: current session mode changed. Informational — sets
+        // current_mode to the new id. Does not touch phase.
+        StreamMsg::ModeUpdate(mu) => {
+            if stale_or_detached {
+                return state;
+            }
+            state.current_mode = Some(mu.current_mode);
+            state
+        }
+
+        // opencode ACP: mid-session slash command catalog update. Replaces
+        // slash_commands wholesale (each event is a full catalog snapshot).
+        // Does not touch phase.
+        StreamMsg::SlashUpdate(su) => {
+            if stale_or_detached {
+                return state;
+            }
+            state.slash_commands = su.slash_commands;
             state
         }
 
