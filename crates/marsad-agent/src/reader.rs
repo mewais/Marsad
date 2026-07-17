@@ -1215,22 +1215,23 @@ pub(crate) fn spawn_session_reader(
                                                     );
                                                 }
                                             } else {
-                                                // session/prompt result: extract stopReason + broadcast.
-                                                if let Some(stop_reason) = acp::extract_stop_reason(&res) {
-                                                    let result_event = acp_translate::acp_stop_reason_to_result(&stop_reason);
-                                                    let ipc_msg = marsad_proto::IpcMsg::AgentEvent {
-                                                        session_id: sid.clone(),
-                                                        event: result_event,
-                                                    };
-                                                    let encoded = marsad_proto::encode_ipc(&ipc_msg);
-                                                    let subs = subs_fifo.lock().unwrap();
-                                                    subs.iter().for_each(|s| {
-                                                        let _ = s.send(encoded.clone());
-                                                    });
-                                                    eprintln!(
-                                                        "marsad-agent: session {sid} opencode session/prompt result: {stop_reason}"
-                                                    );
-                                                }
+                                                // session/prompt result: extract stopReason + usage, broadcast.
+                                                // Use acp_prompt_result_to_result so per-turn usage is captured.
+                                                let stop_reason = acp::extract_stop_reason(&res)
+                                                    .unwrap_or_else(|| "completed".to_string());
+                                                let result_event = acp_translate::acp_prompt_result_to_result(&res);
+                                                let ipc_msg = marsad_proto::IpcMsg::AgentEvent {
+                                                    session_id: sid.clone(),
+                                                    event: result_event,
+                                                };
+                                                let encoded = marsad_proto::encode_ipc(&ipc_msg);
+                                                let subs = subs_fifo.lock().unwrap();
+                                                subs.iter().for_each(|s| {
+                                                    let _ = s.send(encoded.clone());
+                                                });
+                                                eprintln!(
+                                                    "marsad-agent: session {sid} opencode session/prompt result: {stop_reason}"
+                                                );
                                             }
                                         }
                                     }

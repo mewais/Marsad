@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 /// - `model`      — the model name to embed in synthesized events.
 ///
 /// Every `Some(v)` returned MUST pass `marsad_proto::parse_stream_line`.
-pub fn acp_update_to_stream_json(update: &Value, session_id: &str, model: &str) -> Option<Value> {
+pub fn acp_update_to_stream_json(update: &Value, session_id: &str, _model: &str) -> Option<Value> {
     let type_str = update.get("type").and_then(|t| t.as_str())?;
 
     match type_str {
@@ -264,6 +264,34 @@ pub fn acp_update_to_stream_json(update: &Value, session_id: &str, model: &str) 
             }))
         }
 
+        // ── usage_update → system/usage_update canonical event ───────────────
+        "usage_update" => {
+            // ACP shape: {type:"usage_update", cost:{amount, currency}, size, used}
+            // Emit canonical: {type:"system", subtype:"usage_update",
+            //   cost_usd:<amount if currency==USD else 0>, context_used:<used>, context_size:<size>}
+            let cost = update.get("cost");
+            let currency = cost
+                .and_then(|c| c.get("currency"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let cost_usd = if currency == "USD" {
+                cost.and_then(|c| c.get("amount"))
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            let context_used = update.get("used").and_then(|v| v.as_u64()).unwrap_or(0);
+            let context_size = update.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+            Some(json!({
+                "type": "system",
+                "subtype": "usage_update",
+                "cost_usd": cost_usd,
+                "context_used": context_used,
+                "context_size": context_size,
+            }))
+        }
+
         // ── user_message_chunk → skip (echoed user content) ──────────────────
         "user_message_chunk" => None,
 
@@ -341,6 +369,51 @@ pub fn acp_init_to_system_init(
 /// | `"request_limit_exceeded"` | `result/error_during_execution`             |
 /// | anything else              | `result/error_during_execution`             |
 ///
+/// Build a full `result` stream event from a `session/prompt` RESULT object,
+/// mapping BOTH the `stopReason` AND the (UNSTABLE, optional) per-turn
+/// `usage: {inputTokens, outputTokens, cachedReadTokens, cachedWriteTokens,
+/// thoughtTokens}` into the claude-shaped result usage. Missing `usage` → zeros
+/// (defensive: some ACP agents don't populate it yet). Contract signature —
+/// implemented in Phase-2 usage hookup; body filled by the coder.
+pub fn acp_prompt_result_to_result(result: &Value) -> Value {
+    // Extract stopReason and build the base result event using the existing helper.
+    let stop_reason = result
+        .get("stopReason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("completed");
+    let mut out = acp_stop_reason_to_result(stop_reason);
+
+    // Extract per-turn usage (UNSTABLE/optional — default to zeros if absent).
+    let usage = result.get("usage");
+    let input_tokens = usage
+        .and_then(|u| u.get("inputTokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let output_tokens = usage
+        .and_then(|u| u.get("outputTokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_read = usage
+        .and_then(|u| u.get("cachedReadTokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_write = usage
+        .and_then(|u| u.get("cachedWriteTokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    // Overlay the mapped usage block on the result event.
+    // thoughtTokens and totalTokens are informational only — not mapped.
+    out["usage"] = json!({
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_write,
+    });
+
+    out
+}
+
 /// The returned value MUST pass `marsad_proto::parse_stream_line` as a `Result`.
 pub fn acp_stop_reason_to_result(stop_reason: &str) -> Value {
     match stop_reason {

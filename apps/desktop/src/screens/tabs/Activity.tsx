@@ -1449,8 +1449,46 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
   // Plan entries from ACP plan mode (opencode `session/update{plan}`).
   const planEntries = sv.plan_entries ?? [];
 
+  // Current mode indicator (opencode ACP `current_mode_update`). Shown only
+  // when the mode is a non-empty string so it stays absent for non-opencode
+  // sessions (or before the first mode update).
+  const currentMode = sv.current_mode;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      {/* Current mode badge — shown when opencode reports an active mode. */}
+      {currentMode && (
+        <div
+          data-testid="session-mode"
+          style={{
+            flexShrink: 0,
+            padding: "5px 24px",
+            background: "var(--panel2)",
+            borderBottom: "1px solid var(--border)",
+            display: "flex",
+            alignItems: "center",
+            gap: 7,
+            fontSize: "calc(12px * var(--fs,1))",
+            color: "var(--txt3)",
+          }}
+        >
+          <span
+            style={{
+              fontWeight: 700,
+              padding: "1px 7px",
+              borderRadius: 5,
+              background: "var(--panel)",
+              border: "1px solid var(--border2)",
+              color: "var(--txt2)",
+              fontSize: "calc(11.5px * var(--fs,1))",
+              letterSpacing: 0.2,
+            }}
+          >
+            {currentMode}
+          </span>
+          <span>mode</span>
+        </div>
+      )}
       {/* ACP plan entries (opencode plan mode) — rendered above the transcript
           when present so the live plan is always visible without scrolling. */}
       {planEntries.length > 0 && (

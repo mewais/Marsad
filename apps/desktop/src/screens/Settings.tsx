@@ -639,11 +639,13 @@ function buildAgentCommands(
   claudeBin: string,
   codexCmd: string,
   geminiCmd: string,
+  opencodeCmd = "",
 ): Array<[string, string]> {
   const out: Array<[string, string]> = [];
   if (claudeBin.trim()) out.push(["claude", claudeBin.trim()]);
   if (codexCmd.trim()) out.push(["codex", codexCmd.trim()]);
   if (geminiCmd.trim()) out.push(["gemini", geminiCmd.trim()]);
+  if (opencodeCmd.trim()) out.push(["opencode", opencodeCmd.trim()]);
   return out;
 }
 
@@ -771,6 +773,7 @@ function HostsTab() {
   const [addClaudeBin, setAddClaudeBin] = useState("");
   const [addCodexCmd, setAddCodexCmd] = useState("");
   const [addGeminiCmd, setAddGeminiCmd] = useState("");
+  const [addOpencodeCmd, setAddOpencodeCmd] = useState("");
   const [addSetup, setAddSetup] = useState("");
   const [addEnv, setAddEnv] = useState("");
 
@@ -782,6 +785,7 @@ function HostsTab() {
   const [localClaudeBin, setLocalClaudeBin] = useState("");
   const [localCodexCmd, setLocalCodexCmd] = useState("");
   const [localGeminiCmd, setLocalGeminiCmd] = useState("");
+  const [localOpencodeCmd, setLocalOpencodeCmd] = useState("");
   const [localSetup, setLocalSetup] = useState("");
   const [localEnv, setLocalEnv] = useState("");
   const [localBusy, setLocalBusy] = useState(false);
@@ -790,12 +794,13 @@ function HostsTab() {
   // Re-sync the local-machine fields whenever the localhost config changes
   // (e.g. after restore on launch or a save round-trip via vm-update).
   const localCmds = agentCommandsToMap(localHost?.agent_commands);
-  const localKey = `${localHost?.claude_bin ?? ""}|${localHost?.setup ?? ""}|${envToText(localHost?.env)}|${localCmds.codex ?? ""}|${localCmds.gemini ?? ""}`;
+  const localKey = `${localHost?.claude_bin ?? ""}|${localHost?.setup ?? ""}|${envToText(localHost?.env)}|${localCmds.codex ?? ""}|${localCmds.gemini ?? ""}|${localCmds.opencode ?? ""}`;
   useEffect(() => {
     const cmds = agentCommandsToMap(localHost?.agent_commands);
     setLocalClaudeBin(localHost?.claude_bin ?? cmds.claude ?? "");
     setLocalCodexCmd(cmds.codex ?? "");
     setLocalGeminiCmd(cmds.gemini ?? "");
+    setLocalOpencodeCmd(cmds.opencode ?? "");
     setLocalSetup(localHost?.setup ?? "");
     setLocalEnv(envToText(localHost?.env));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -812,7 +817,7 @@ function HostsTab() {
         localSetup.trim(),
         parseEnv(localEnv),
         undefined,
-        buildAgentCommands(localClaudeBin, localCodexCmd, localGeminiCmd),
+        buildAgentCommands(localClaudeBin, localCodexCmd, localGeminiCmd, localOpencodeCmd),
       );
       setLocalSaved(true);
       window.setTimeout(() => setLocalSaved(false), 2500);
@@ -852,7 +857,7 @@ function HostsTab() {
         addClaudeBin.trim(),
         addSetup.trim(),
         parseEnv(addEnv),
-        buildAgentCommands(addClaudeBin, addCodexCmd, addGeminiCmd),
+        buildAgentCommands(addClaudeBin, addCodexCmd, addGeminiCmd, addOpencodeCmd),
       );
       // The host list refreshes via the "hosts" vm-update; clear the form.
       setLabel("");
@@ -860,6 +865,7 @@ function HostsTab() {
       setAddClaudeBin("");
       setAddCodexCmd("");
       setAddGeminiCmd("");
+      setAddOpencodeCmd("");
       setAddSetup("");
       setAddEnv("");
     } catch (e) {
@@ -974,6 +980,17 @@ function HostsTab() {
             value={localGeminiCmd}
             onChange={(e) => setLocalGeminiCmd(e.target.value)}
             placeholder="gemini"
+            className="mono"
+            style={fieldInput}
+          />
+        </div>
+        <div>
+          <div style={fieldLabel}>opencode command</div>
+          <input
+            data-testid="local-opencode-cmd"
+            value={localOpencodeCmd}
+            onChange={(e) => setLocalOpencodeCmd(e.target.value)}
+            placeholder="opencode"
             className="mono"
             style={fieldInput}
           />
@@ -1185,6 +1202,17 @@ function HostsTab() {
             value={addGeminiCmd}
             onChange={(e) => setAddGeminiCmd(e.target.value)}
             placeholder="gemini"
+            className="mono"
+            style={fieldInput}
+          />
+        </div>
+        <div>
+          <div style={fieldLabel}>opencode command</div>
+          <input
+            data-testid="host-add-opencode-cmd"
+            value={addOpencodeCmd}
+            onChange={(e) => setAddOpencodeCmd(e.target.value)}
+            placeholder="opencode"
             className="mono"
             style={fieldInput}
           />

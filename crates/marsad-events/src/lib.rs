@@ -522,6 +522,23 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
             state
         }
 
+        // opencode ACP: cost + context window usage update. Purely informational —
+        // sets cost_usd and context_pct from the latest values. Replaces (not
+        // accumulates): ACP emits cumulative totals, so the latest is authoritative.
+        // Does NOT change phase. Same Stale/Detached totality-no-op rule as others.
+        StreamMsg::UsageUpdate(uu) => {
+            if stale_or_detached {
+                return state;
+            }
+            state.cost_usd = uu.cost_usd;
+            // Compute context_pct from used/size; guard against divide-by-zero.
+            if uu.context_size > 0 {
+                let pct = (uu.context_used as f64 / uu.context_size as f64 * 100.0) as f32;
+                state.context_pct = pct.min(100.0);
+            }
+            state
+        }
+
         // ControlResponse is outbound (no-op); Unknown is forward-compat (no-op).
         // Both are preserved as-is regardless of phase (including Stale/Detached).
         StreamMsg::ControlResponse(_) | StreamMsg::Unknown(_) => state,

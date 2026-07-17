@@ -511,6 +511,25 @@ pub struct SlashUpdate {
     pub slash_commands: Vec<SlashCommandInfo>,
 }
 
+/// A `{"type":"system","subtype":"usage_update",...}` event — opencode emitted
+/// a cost + context window usage update (ACP `session/update{type:"usage_update"}`).
+/// All fields default for defensive decoding (UNSTABLE / optional).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageUpdate {
+    /// Marsad session id (tagged in by acp_translate; absent on raw wire → empty).
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Running cost in USD (0 when non-USD or absent).
+    #[serde(default)]
+    pub cost_usd: f64,
+    /// Tokens currently used in the context window.
+    #[serde(default)]
+    pub context_used: u64,
+    /// Total context window size in tokens.
+    #[serde(default)]
+    pub context_size: u64,
+}
+
 // ---------------------------------------------------------------------------
 // CompactMetadata / CompactBoundary (U3b — context-compaction events)
 // ---------------------------------------------------------------------------
@@ -606,6 +625,8 @@ pub enum StreamMsg {
     ModeUpdate(ModeUpdate),
     /// opencode ACP: `system/slash_update` — mid-session slash command catalog replacement.
     SlashUpdate(SlashUpdate),
+    /// opencode ACP: `system/usage_update` — cost + context window usage update.
+    UsageUpdate(UsageUpdate),
     Unknown(serde_json::Value),
 }
 
@@ -1356,6 +1377,9 @@ pub fn parse_stream_line(line: &str) -> Result<StreamMsg, ProtoError> {
         }
         "system" if obj.get("subtype").and_then(|v| v.as_str()) == Some("slash_update") => {
             from_val("slash_update", value).map(StreamMsg::SlashUpdate)
+        }
+        "system" if obj.get("subtype").and_then(|v| v.as_str()) == Some("usage_update") => {
+            from_val("usage_update", value).map(StreamMsg::UsageUpdate)
         }
         "system" => Ok(StreamMsg::Unknown(value)),
         "assistant" => from_val("assistant", value).map(StreamMsg::Assistant),
