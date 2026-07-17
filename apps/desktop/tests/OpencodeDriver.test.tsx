@@ -4,7 +4,7 @@
  * Spec: docs/specs/opencode-acp.md §4 (gates), §5 (features), §7 (frontend).
  *
  * Covers:
- *   1. "opencode" appears as a launchable driver in NewSession (render + button).
+ *   1. "opencode" appears as a launchable driver in NodeModal (render + button).
  *   2. GateOverlay renders ACP permission_suggestions VERBATIM (name field, not
  *      the claude behavior/rules shape).  Clicking one calls answerGate with that
  *      option (so the backend can reply with optionId).
@@ -19,7 +19,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { VmProvider, VmState } from "../src/bridge/useVm";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { GateOverlay } from "../src/screens/GateOverlay";
-import { NewSession } from "../src/screens/NewSession";
+import { NodeModal } from "../src/screens/NodeModal";
 import { ActivityTab } from "../src/screens/tabs/Activity";
 import { MOCK_SNAPSHOT } from "../src/bridge/mockFixture";
 import type { AppSnapshot, SessionView } from "../src/bridge/types";
@@ -102,12 +102,12 @@ function renderGate(
   );
 }
 
-/** Render NewSession modal (screen = "new-session"). */
-function renderNewSession(snapshotOverride?: Partial<AppSnapshot>) {
+/** Render NodeModal (screen = "node-modal"). */
+function renderNodeModal(snapshotOverride?: Partial<AppSnapshot>) {
   const snapshot: AppSnapshot = { ...MOCK_SNAPSHOT, ...snapshotOverride };
   const preloaded: Partial<VmState> = {
     snapshot,
-    screen: "new-session",
+    screen: "node-modal",
     selectedId: null,
     tab: "Activity",
     filter: "All",
@@ -116,11 +116,13 @@ function renderNewSession(snapshotOverride?: Partial<AppSnapshot>) {
     capabilities: {
       "opencode::local": opencodeCapabilities("local"),
     },
+    nodeModalCtx: { wsId: "ws-1", wsName: "Test WS", isFirstNode: true },
+    draftWsId: null,
   };
   return render(
     <ThemeProvider initialTheme="dark">
       <VmProvider initialState={preloaded}>
-        <NewSession />
+        <NodeModal />
       </VmProvider>
     </ThemeProvider>
   );
@@ -130,40 +132,39 @@ function renderNewSession(snapshotOverride?: Partial<AppSnapshot>) {
 // §1 — "opencode" appears in the driver picker
 // ---------------------------------------------------------------------------
 
-describe("NewSession — opencode driver", () => {
-  it("renders a driver button for opencode (data-testid='ns-driver-opencode')", () => {
-    // NewSession renders one button per entry in DRIVERS with
-    // data-testid="ns-driver-{id}".  The scaffold already added "opencode" to
-    // DRIVERS, so this should PASS immediately and confirms the driver is
-    // offered in the UI.
-    renderNewSession();
-    const btn = screen.getByTestId("ns-driver-opencode");
+describe("NodeModal — opencode driver", () => {
+  it("renders a driver button for opencode (data-testid='nm-driver-opencode')", () => {
+    // NodeModal renders one button per entry in DRIVERS with
+    // data-testid="nm-driver-{id}".  DRIVERS includes "opencode", so this
+    // should PASS immediately and confirms the driver is offered in the UI.
+    renderNodeModal();
+    const btn = screen.getByTestId("nm-driver-opencode");
     expect(btn).toBeTruthy();
   });
 
   it("the opencode driver button has non-empty label text", () => {
-    renderNewSession();
-    const btn = screen.getByTestId("ns-driver-opencode");
+    renderNodeModal();
+    const btn = screen.getByTestId("nm-driver-opencode");
     expect(btn.textContent?.trim().length).toBeGreaterThan(0);
   });
 
   it("the opencode driver button is enabled when capabilities mark it available", () => {
-    renderNewSession();
-    const btn = screen.getByTestId("ns-driver-opencode") as HTMLButtonElement;
+    renderNodeModal();
+    const btn = screen.getByTestId("nm-driver-opencode") as HTMLButtonElement;
     // cli_available + launchable = true in the seeded capabilities.
     expect(btn.disabled).toBe(false);
   });
 
   it("clicking the opencode driver button does not throw and leaves it in the DOM", () => {
-    renderNewSession();
-    const btn = screen.getByTestId("ns-driver-opencode");
+    renderNodeModal();
+    const btn = screen.getByTestId("nm-driver-opencode");
     fireEvent.click(btn);
-    expect(screen.getByTestId("ns-driver-opencode")).toBeTruthy();
+    expect(screen.getByTestId("nm-driver-opencode")).toBeTruthy();
   });
 
   it("the opencode driver button label contains 'opencode'", () => {
-    renderNewSession();
-    const btn = screen.getByTestId("ns-driver-opencode");
+    renderNodeModal();
+    const btn = screen.getByTestId("nm-driver-opencode");
     // The spec (§7) says label:"opencode" for this driver.
     expect(btn.textContent?.toLowerCase()).toContain("opencode");
   });

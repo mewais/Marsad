@@ -1,6 +1,6 @@
 /**
  * RENDER PROOF — the Marsad launch UX gated on REAL per-host capability
- * discovery (launchable + cli_available), covering NodeModal and NewSession.
+ * discovery (launchable + cli_available), covering NodeModal.
  *
  * The new contract (this file pins it):
  *   1. REAL caps (launchable:true, cli_available:true, models with annotations)
@@ -23,7 +23,6 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { VmProvider, VmState } from "../src/bridge/useVm";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { NodeModal } from "../src/screens/NodeModal";
-import { NewSession } from "../src/screens/NewSession";
 import { MOCK_SNAPSHOT } from "../src/bridge/mockFixture";
 import type { CapabilitiesView } from "../src/bridge/types";
 
@@ -116,21 +115,6 @@ function renderNodeModal(capabilities: Record<string, CapabilitiesView>) {
   );
 }
 
-function renderNewSession(capabilities: Record<string, CapabilitiesView>) {
-  const preloaded: Partial<VmState> = {
-    snapshot: MOCK_SNAPSHOT,
-    screen: "new-session",
-    capabilities,
-  };
-  return render(
-    <ThemeProvider initialTheme="dark">
-      <VmProvider initialState={preloaded}>
-        <NewSession />
-      </VmProvider>
-    </ThemeProvider>
-  );
-}
-
 describe("NodeModal — real capability gating", () => {
   it("real caps + project typed → model annotations render AND Launch is ENABLED", () => {
     renderNodeModal(realClaudeCaps(HOST));
@@ -197,51 +181,5 @@ describe("NodeModal — real capability gating", () => {
     const custom = screen.getByTestId("nm-model-freetext") as HTMLInputElement;
     fireEvent.change(custom, { target: { value: "my-custom-model" } });
     expect((screen.getByTestId("nm-model-freetext") as HTMLInputElement).value).toBe("my-custom-model");
-  });
-});
-
-describe("NewSession — real capability gating", () => {
-  it("real caps + project typed → model annotations render AND Launch is ENABLED", () => {
-    renderNewSession(realClaudeCaps(HOST));
-    fireEvent.click(screen.getByTestId(`ns-host-${HOST}`));
-    expect((screen.getByTestId("ns-driver-claude") as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.getByTestId("ns-model-opus").textContent).toContain("claude-opus-4.8[1m]");
-    fireEvent.change(screen.getByTestId("ns-project-input"), {
-      target: { value: "~/code/release" },
-    });
-    expect((screen.getByTestId("ns-launch-btn") as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it("caps ABSENT → loading indicator shows; Launch not hard-greyed on availability", () => {
-    renderNewSession({});
-    expect(screen.getByTestId("ns-model-loading")).toBeTruthy();
-    expect(screen.queryByTestId("ns-model-empty-hint")).toBeNull();
-    expect((screen.getByTestId("ns-driver-claude") as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.change(screen.getByTestId("ns-project-input"), {
-      target: { value: "~/code/release" },
-    });
-    expect((screen.getByTestId("ns-launch-btn") as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it("gemini (launchable:false) → greyed", () => {
-    renderNewSession(realClaudeCaps(HOST));
-    fireEvent.click(screen.getByTestId(`ns-host-${HOST}`));
-    expect((screen.getByTestId("ns-driver-gemini") as HTMLButtonElement).disabled).toBe(true);
-  });
-
-  it("launchable driver with cli_available:false → greyed with the note", () => {
-    renderNewSession(cliMissingClaude(HOST));
-    fireEvent.click(screen.getByTestId(`ns-host-${HOST}`));
-    expect((screen.getByTestId("ns-driver-claude") as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByTestId("ns-driver-unavailable-note")).toBeTruthy();
-  });
-
-  it("picking `opus` leaves the custom free-text input EMPTY (placeholder 'Type your own')", () => {
-    renderNewSession(realClaudeCaps(HOST));
-    fireEvent.click(screen.getByTestId(`ns-host-${HOST}`));
-    fireEvent.click(screen.getByTestId("ns-model-opus"));
-    const custom = screen.getByTestId("ns-model-freetext") as HTMLInputElement;
-    expect(custom.value).toBe("");
-    expect(custom.placeholder).toBe("Type your own");
   });
 });

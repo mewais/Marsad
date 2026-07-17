@@ -16,23 +16,7 @@ import { Toggle } from "../components/Toggle";
 import { getAutostart, setAutostart, addHost, updateHost, removeHost, connectHostInteractive, listWslDistros, getSettings, setSettings, parseEnv, DEFAULT_SETTINGS } from "../bridge/api";
 import type { CapabilitiesView, ModelInfo, Settings, NotifPref } from "../bridge/types";
 import type { Driver } from "../bridge/workstreamTypes";
-
-// Fixed enum of drivers (mirrors `Driver` in workstreamTypes.ts) — NOT model
-// data, so not a capabilities-gate violation. Per-driver models/availability
-// are capabilities-driven wherever shown.
-const DRIVERS: { id: Driver; label: string }[] = [
-  { id: "claude", label: "Claude Code" },
-  { id: "codex", label: "Codex" },
-  { id: "gemini", label: "Gemini" },
-];
-
-/** Per-driver accent (design tokens `--d-claude/--d-codex/--d-gemini`). */
-const DRIVER_COLOR: Record<Driver, string> = {
-  claude: "var(--d-claude, #d97757)",
-  codex: "var(--d-codex, #3fb6a8)",
-  gemini: "var(--d-gemini, #9b8cf0)",
-  opencode: "var(--d-opencode, #f0a050)",
-};
+import { DRIVERS, DRIVER_COLOR } from "../bridge/drivers";
 
 // ---------------------------------------------------------------------------
 // Types

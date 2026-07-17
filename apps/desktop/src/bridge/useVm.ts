@@ -68,7 +68,6 @@ export type Screen =
   | "graph"
   | "session"
   | "gate"
-  | "new-session"
   | "new-workstream"
   | "node-modal"
   | "settings";

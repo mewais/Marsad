@@ -174,7 +174,6 @@ function Breadcrumbs() {
 
 interface AppShellProps {
   children: React.ReactNode;
-  onNewSession?: () => void;
   onOpenSettings?: () => void;
 }
 

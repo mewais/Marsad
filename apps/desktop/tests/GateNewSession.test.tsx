@@ -1,17 +1,16 @@
 /**
- * GateOverlay + NewSession — behavioral Vitest/RTL tests.
+ * GateOverlay + NodeModal — behavioral Vitest/RTL tests.
  *
  * Pattern mirrors shell.test.tsx / Overview.test.tsx:
  *   inject MOCK_SNAPSHOT via VmProvider initialState, wrap in ThemeProvider,
  *   assert real behavior. API calls are mocked with vi.mock.
  */
-import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { VmProvider, VmContext, VmState } from "../src/bridge/useVm";
+import { VmProvider, VmState } from "../src/bridge/useVm";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { GateOverlay } from "../src/screens/GateOverlay";
-import { NewSession } from "../src/screens/NewSession";
+import { NodeModal } from "../src/screens/NodeModal";
 import { MOCK_SNAPSHOT } from "../src/bridge/mockFixture";
 import type { AppSnapshot } from "../src/bridge/types";
 
@@ -79,7 +78,7 @@ function renderGate(
 
 // A capability catalog covering the three MOCK_SNAPSHOT hosts, standing in
 // for what a real capabilities probe would report (dynamic-capabilities.md
-// §U2) — NewSession's model picker only ever reads from `state.capabilities`.
+// §U2) — NodeModal's model picker only ever reads from `state.capabilities`.
 function testModelCapabilities(hostId: string) {
   return {
     driver: "claude",
@@ -102,12 +101,12 @@ function testModelCapabilities(hostId: string) {
   };
 }
 
-/** Render NewSession modal (screen = "new-session"). */
-function renderNewSession(snapshotOverride?: Partial<AppSnapshot>) {
+/** Render NodeModal (screen = "node-modal"). */
+function renderNodeModal(snapshotOverride?: Partial<AppSnapshot>) {
   const snapshot: AppSnapshot = { ...MOCK_SNAPSHOT, ...snapshotOverride };
   const preloaded: Partial<VmState> = {
     snapshot,
-    screen: "new-session",
+    screen: "node-modal",
     selectedId: null,
     tab: "Activity",
     filter: "All",
@@ -118,11 +117,13 @@ function renderNewSession(snapshotOverride?: Partial<AppSnapshot>) {
       "claude::hetzner": testModelCapabilities("hetzner"),
       "claude::gpu": testModelCapabilities("gpu"),
     },
+    nodeModalCtx: { wsId: "ws-1", wsName: "Test WS", isFirstNode: true },
+    draftWsId: null,
   };
   return render(
     <ThemeProvider initialTheme="dark">
       <VmProvider initialState={preloaded}>
-        <NewSession />
+        <NodeModal />
       </VmProvider>
     </ThemeProvider>
   );
@@ -391,112 +392,104 @@ describe("GateOverlay — closed state", () => {
 });
 
 // ---------------------------------------------------------------------------
-// NewSession — pickers render
+// NodeModal — pickers render
 // ---------------------------------------------------------------------------
 
-describe("NewSession — pickers render", () => {
+describe("NodeModal — pickers render", () => {
   it("renders project directory input", () => {
-    renderNewSession();
-    expect(screen.getByTestId("ns-project-input")).toBeTruthy();
+    renderNodeModal();
+    expect(screen.getByTestId("nm-project-input")).toBeTruthy();
   });
 
   it("renders recent dir chips", () => {
-    renderNewSession();
+    renderNodeModal();
     // At least one recent dir chip
     expect(screen.getByText("~/projects/api")).toBeTruthy();
   });
 
   it("clicking a recent dir chip fills the project input", () => {
-    renderNewSession();
+    renderNodeModal();
     fireEvent.click(screen.getByText("~/projects/api"));
-    const input = screen.getByTestId("ns-project-input") as HTMLInputElement;
+    const input = screen.getByTestId("nm-project-input") as HTMLInputElement;
     expect(input.value).toBe("~/projects/api");
   });
 
   it("renders host pickers for all hosts in snapshot", () => {
-    renderNewSession();
+    renderNodeModal();
     // MOCK_SNAPSHOT has 3 hosts: local, hetzner, gpu
-    expect(screen.getByTestId("ns-host-local")).toBeTruthy();
-    expect(screen.getByTestId("ns-host-hetzner")).toBeTruthy();
-    expect(screen.getByTestId("ns-host-gpu")).toBeTruthy();
+    expect(screen.getByTestId("nm-host-local")).toBeTruthy();
+    expect(screen.getByTestId("nm-host-hetzner")).toBeTruthy();
+    expect(screen.getByTestId("nm-host-gpu")).toBeTruthy();
   });
 
   it("renders model picker buttons", () => {
-    renderNewSession();
-    expect(screen.getByTestId("ns-model-claude-haiku-4-5")).toBeTruthy();
-    expect(screen.getByTestId("ns-model-claude-sonnet-4-6")).toBeTruthy();
-    expect(screen.getByTestId("ns-model-claude-opus-4-8")).toBeTruthy();
+    renderNodeModal();
+    expect(screen.getByTestId("nm-model-claude-haiku-4-5")).toBeTruthy();
+    expect(screen.getByTestId("nm-model-claude-sonnet-4-6")).toBeTruthy();
+    expect(screen.getByTestId("nm-model-claude-opus-4-8")).toBeTruthy();
   });
 
   it("renders posture picker buttons", () => {
-    renderNewSession();
-    expect(screen.getByTestId("ns-posture-ask")).toBeTruthy();
-    expect(screen.getByTestId("ns-posture-auto")).toBeTruthy();
-    expect(screen.getByTestId("ns-posture-full")).toBeTruthy();
+    renderNodeModal();
+    expect(screen.getByTestId("nm-posture-ask")).toBeTruthy();
+    expect(screen.getByTestId("nm-posture-auto")).toBeTruthy();
+    expect(screen.getByTestId("nm-posture-full")).toBeTruthy();
   });
 
   it("renders first prompt textarea", () => {
-    renderNewSession();
-    expect(screen.getByTestId("ns-first-prompt")).toBeTruthy();
+    renderNodeModal();
+    expect(screen.getByTestId("nm-first-prompt")).toBeTruthy();
   });
 
   it("renders Launch button", () => {
-    renderNewSession();
-    expect(screen.getByTestId("ns-launch-btn")).toBeTruthy();
-  });
-
-  it("renders 'Manage hosts →' link", () => {
-    renderNewSession();
-    expect(screen.getByTestId("ns-manage-hosts")).toBeTruthy();
-    expect(screen.getByTestId("ns-manage-hosts").textContent).toContain(
-      "Manage hosts"
-    );
+    renderNodeModal();
+    expect(screen.getByTestId("nm-launch-btn")).toBeTruthy();
   });
 });
 
 // ---------------------------------------------------------------------------
-// NewSession — Launch behavior
+// NodeModal — Launch behavior
 // ---------------------------------------------------------------------------
 
-describe("NewSession — launch behavior", () => {
+describe("NodeModal — launch behavior", () => {
   it("Launch button is disabled when project is empty", () => {
-    renderNewSession();
-    const btn = screen.getByTestId("ns-launch-btn") as HTMLButtonElement;
+    renderNodeModal();
+    const btn = screen.getByTestId("nm-launch-btn") as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
   });
 
   it("Launch button is enabled once project is filled", () => {
-    renderNewSession();
-    const input = screen.getByTestId("ns-project-input");
+    renderNodeModal();
+    const input = screen.getByTestId("nm-project-input");
     fireEvent.change(input, { target: { value: "~/projects/new-app" } });
-    const btn = screen.getByTestId("ns-launch-btn") as HTMLButtonElement;
+    const btn = screen.getByTestId("nm-launch-btn") as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
   });
 
   it("clicking Launch calls launchSession with selected values", async () => {
-    renderNewSession();
+    renderNodeModal();
 
     // Fill project
-    fireEvent.change(screen.getByTestId("ns-project-input"), {
+    fireEvent.change(screen.getByTestId("nm-project-input"), {
       target: { value: "~/projects/test" },
     });
 
     // Pick Opus model
-    fireEvent.click(screen.getByTestId("ns-model-claude-opus-4-8"));
+    fireEvent.click(screen.getByTestId("nm-model-claude-opus-4-8"));
 
     // Pick 'ask' posture
-    fireEvent.click(screen.getByTestId("ns-posture-ask"));
+    fireEvent.click(screen.getByTestId("nm-posture-ask"));
 
     // Pick hetzner host
-    fireEvent.click(screen.getByTestId("ns-host-hetzner"));
+    fireEvent.click(screen.getByTestId("nm-host-hetzner"));
 
     // Fill first prompt
-    fireEvent.change(screen.getByTestId("ns-first-prompt"), {
+    fireEvent.change(screen.getByTestId("nm-first-prompt"), {
       target: { value: "Add unit tests" },
     });
 
     // Launch
-    fireEvent.click(screen.getByTestId("ns-launch-btn"));
+    fireEvent.click(screen.getByTestId("nm-launch-btn"));
 
     await vi.waitFor(() => {
       expect(getLaunchSession()).toHaveBeenCalledWith(
@@ -512,67 +505,27 @@ describe("NewSession — launch behavior", () => {
   });
 
   it("Launch with no first prompt omits first_prompt from call", async () => {
-    renderNewSession();
+    renderNodeModal();
 
-    fireEvent.change(screen.getByTestId("ns-project-input"), {
+    fireEvent.change(screen.getByTestId("nm-project-input"), {
       target: { value: "~/projects/test" },
     });
 
-    fireEvent.click(screen.getByTestId("ns-launch-btn"));
+    fireEvent.click(screen.getByTestId("nm-launch-btn"));
 
     await vi.waitFor(() => {
       const call = getLaunchSession().mock.calls[0][0];
       expect(call.first_prompt).toBeUndefined();
     });
   });
-
-  it("'Manage hosts →' navigates to settings screen", () => {
-    // Capture dispatch via VmContext consumer (imported at top of file)
-    let capturedScreen: string | undefined;
-
-    function StateCapture({ children }: { children: React.ReactNode }) {
-      return (
-        <VmContext.Consumer>
-          {(ctx) => {
-            if (ctx) capturedScreen = ctx.state.screen;
-            return <>{children}</>;
-          }}
-        </VmContext.Consumer>
-      );
-    }
-
-    const snapshot: AppSnapshot = { ...MOCK_SNAPSHOT };
-    const preloaded: Partial<VmState> = {
-      snapshot,
-      screen: "new-session",
-      selectedId: null,
-      tab: "Activity",
-      filter: "All",
-      search: "",
-      wsMenuOpen: false,
-    };
-
-    render(
-      <ThemeProvider initialTheme="dark">
-        <VmProvider initialState={preloaded}>
-          <StateCapture>
-            <NewSession />
-          </StateCapture>
-        </VmProvider>
-      </ThemeProvider>
-    );
-
-    fireEvent.click(screen.getByTestId("ns-manage-hosts"));
-    expect(capturedScreen).toBe("settings");
-  });
 });
 
 // ---------------------------------------------------------------------------
-// NewSession — closed state
+// NodeModal — closed state
 // ---------------------------------------------------------------------------
 
-describe("NewSession — closed state", () => {
-  it("does not render modal content when screen is not 'new-session'", () => {
+describe("NodeModal — closed state", () => {
+  it("does not render modal content when screen is not 'node-modal'", () => {
     const preloaded: Partial<VmState> = {
       snapshot: MOCK_SNAPSHOT,
       screen: "overview",
@@ -581,14 +534,15 @@ describe("NewSession — closed state", () => {
       filter: "All",
       search: "",
       wsMenuOpen: false,
+      nodeModalCtx: { wsId: "ws-1", wsName: "Test WS", isFirstNode: true },
     };
     render(
       <ThemeProvider initialTheme="dark">
         <VmProvider initialState={preloaded}>
-          <NewSession />
+          <NodeModal />
         </VmProvider>
       </ThemeProvider>
     );
-    expect(screen.queryByTestId("ns-launch-btn")).toBeNull();
+    expect(screen.queryByTestId("nm-launch-btn")).toBeNull();
   });
 });

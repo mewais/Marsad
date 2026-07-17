@@ -14,14 +14,15 @@
  * render an honest "not fetched yet" state for it — NOT a formatted 1970
  * timestamp, which would misrepresent an epoch-0 sentinel as real data.
  *
- * There is no staleness-rendering surface in NewSession.tsx today (no
- * capabilities consumption at all) — this suite is RED until U2 lands it.
+ * NodeModal renders the capabilities staleness label ("as of …" / "Not
+ * fetched yet") next to the Resume toggle, sourced from the selected
+ * (driver, host) capabilities' `fetched_at_ms`.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { VmProvider, VmState } from "../src/bridge/useVm";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
-import { NewSession } from "../src/screens/NewSession";
+import { NodeModal } from "../src/screens/NodeModal";
 import { MOCK_SNAPSHOT } from "../src/bridge/mockFixture";
 import type { AppSnapshot } from "../src/bridge/types";
 import { capsMap, makeCapabilities, type CapabilitiesViewFixture } from "./fixtures/capabilities";
@@ -43,22 +44,24 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderNewSession(caps: CapabilitiesViewFixture[]) {
+function renderNodeModal(caps: CapabilitiesViewFixture[]) {
   const snapshot: AppSnapshot = { ...MOCK_SNAPSHOT };
   const preloaded = {
     snapshot,
-    screen: "new-session",
+    screen: "node-modal",
     selectedId: null,
     tab: "Activity",
     filter: "All",
     search: "",
     wsMenuOpen: false,
     capabilities: capsMap(caps),
+    nodeModalCtx: { wsId: "ws-1", wsName: "Test WS", isFirstNode: true },
+    draftWsId: null,
   } as unknown as Partial<VmState>;
   return render(
     <ThemeProvider initialTheme="dark">
       <VmProvider initialState={preloaded}>
-        <NewSession />
+        <NodeModal />
       </VmProvider>
     </ThemeProvider>
   );
@@ -66,7 +69,7 @@ function renderNewSession(caps: CapabilitiesViewFixture[]) {
 
 describe("Capabilities staleness — 'as of <fetched_at_ms>' rendering", () => {
   it("a fresh fetched_at_ms renders an 'as of …' staleness label", () => {
-    renderNewSession([
+    renderNodeModal([
       makeCapabilities({
         driver: "claude",
         host_id: "local",
@@ -75,28 +78,28 @@ describe("Capabilities staleness — 'as of <fetched_at_ms>' rendering", () => {
       }),
     ]);
 
-    fireEvent.change(screen.getByTestId("ns-project-input"), { target: { value: "~/projects/api" } });
-    fireEvent.click(screen.getByTestId("ns-resume-toggle"));
+    fireEvent.change(screen.getByTestId("nm-project-input"), { target: { value: "~/projects/api" } });
+    fireEvent.click(screen.getByTestId("nm-resume-toggle"));
 
-    const label = screen.getByTestId("ns-capabilities-staleness");
+    const label = screen.getByTestId("nm-capabilities-staleness");
     expect(label.textContent).toMatch(/as of/i);
   });
 
   it("fetched_at_ms: 0 (never probed) renders an honest 'not fetched yet' state, not a formatted 1970 date", () => {
-    renderNewSession([
+    renderNodeModal([
       makeCapabilities({ driver: "claude", host_id: "local", fetched_at_ms: 0 }),
     ]);
 
-    fireEvent.change(screen.getByTestId("ns-project-input"), { target: { value: "~/projects/api" } });
-    fireEvent.click(screen.getByTestId("ns-resume-toggle"));
+    fireEvent.change(screen.getByTestId("nm-project-input"), { target: { value: "~/projects/api" } });
+    fireEvent.click(screen.getByTestId("nm-resume-toggle"));
 
-    const label = screen.getByTestId("ns-capabilities-staleness");
+    const label = screen.getByTestId("nm-capabilities-staleness");
     expect(label.textContent).not.toMatch(/1970/);
     expect(label.textContent).toMatch(/never|not (yet )?fetched|no data yet/i);
   });
 
   it("two different (driver,host) capability snapshots render independent staleness labels", () => {
-    renderNewSession([
+    renderNodeModal([
       makeCapabilities({
         driver: "claude",
         host_id: "local",
@@ -111,13 +114,13 @@ describe("Capabilities staleness — 'as of <fetched_at_ms>' rendering", () => {
       }),
     ]);
 
-    fireEvent.change(screen.getByTestId("ns-project-input"), { target: { value: "~/projects/api" } });
-    fireEvent.click(screen.getByTestId("ns-resume-toggle"));
+    fireEvent.change(screen.getByTestId("nm-project-input"), { target: { value: "~/projects/api" } });
+    fireEvent.click(screen.getByTestId("nm-resume-toggle"));
 
-    expect(screen.getByTestId("ns-capabilities-staleness").textContent).toMatch(/as of/i);
+    expect(screen.getByTestId("nm-capabilities-staleness").textContent).toMatch(/as of/i);
 
-    fireEvent.click(screen.getByTestId("ns-host-hetzner"));
+    fireEvent.click(screen.getByTestId("nm-host-hetzner"));
 
-    expect(screen.getByTestId("ns-capabilities-staleness").textContent).toMatch(/never|not (yet )?fetched|no data yet/i);
+    expect(screen.getByTestId("nm-capabilities-staleness").textContent).toMatch(/never|not (yet )?fetched|no data yet/i);
   });
 });

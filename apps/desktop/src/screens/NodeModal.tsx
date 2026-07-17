@@ -19,6 +19,7 @@ import { useVm } from "../bridge/useVm";
 import { launchSession, fetchGraph, capsKey, getSettings, refreshCapabilities } from "../bridge/api";
 import type { CapabilitiesView, DiscoveredSession, ModelCatalog } from "../bridge/types";
 import type { Driver, GraphNode } from "../bridge/workstreamTypes";
+import { DRIVERS, DRIVER_COLOR } from "../bridge/drivers";
 import { Modal } from "../components/Modal";
 
 // ---------------------------------------------------------------------------
@@ -26,24 +27,6 @@ import { Modal } from "../components/Modal";
 // ---------------------------------------------------------------------------
 
 const EMPTY_MODEL_CATALOG: ModelCatalog = { models: [], source: "Observed", free_text: true };
-
-/** Fixed enum of drivers Marsad knows about (mirrors `Driver` in
- *  workstreamTypes.ts) — NOT model data, so this is not a capabilities-gate
- *  violation. Availability/models for each ARE capabilities-driven below. */
-const DRIVERS: { id: Driver; label: string }[] = [
-  { id: "claude", label: "Claude Code" },
-  { id: "codex", label: "Codex" },
-  { id: "gemini", label: "Gemini" },
-];
-
-/** Per-driver accent (design tokens `--d-claude/--d-codex/--d-gemini`, with
- *  literal fallbacks matching Board/GraphScreen's driverColor map). */
-const DRIVER_COLOR: Record<Driver, string> = {
-  claude: "var(--d-claude, #d97757)",
-  codex: "var(--d-codex, #3fb6a8)",
-  gemini: "var(--d-gemini, #9b8cf0)",
-  opencode: "var(--d-opencode, #f0a050)",
-};
 
 const POSTURES: { value: "ask" | "auto" | "full"; label: string }[] = [
   { value: "ask", label: "Ask each time" },
@@ -65,6 +48,13 @@ function relativeTime(epochMs: number): string {
 function sessionLabel(s: DiscoveredSession): string {
   const snippet = s.snippet.length > 50 ? s.snippet.slice(0, 50) + "…" : s.snippet;
   return `${relativeTime(s.modified_ms)} · ${snippet}`;
+}
+
+/** "as of …" / "not fetched yet" staleness label. `fetched_at_ms: 0` is the
+ *  "never successfully probed" sentinel — never rendered as a 1970 date. */
+function formatStaleness(fetchedAtMs: number): string {
+  if (!fetchedAtMs) return "Not fetched yet";
+  return `as of ${relativeTime(fetchedAtMs)}`;
 }
 
 const sectionLabel: React.CSSProperties = {
@@ -276,6 +266,11 @@ export function NodeModal() {
   const visibleSessions = allSessions.filter(
     (s) => s.project == null || s.project === projectTrim
   );
+  // agy-style `project: null` entries aren't scoped to a requested project —
+  // they always render under "unknown project". String-project entries are
+  // filtered to the chosen project.
+  const unknownProjectSessions = visibleSessions.filter((s) => s.project == null);
+  const knownProjectSessions = visibleSessions.filter((s) => s.project != null);
   // #5 loading — caps absent for the selected (driver, host) ⇒ real discovery
   // is in flight. Drives the model-list + resume-list spinners.
   const capsLoading = driverCaps === undefined;
@@ -683,6 +678,14 @@ export function NodeModal() {
             <span style={{ fontSize: "calc(13.5px * var(--fs,1))", color: "var(--txt2)", fontWeight: 500 }}>
               Continue or resume a previous session
             </span>
+            {resume && (
+              <span
+                data-testid="nm-capabilities-staleness"
+                style={{ marginLeft: "auto", fontSize: "calc(12.5px * var(--fs,1))", color: "var(--txt3)" }}
+              >
+                {formatStaleness(fetchedAtMs)}
+              </span>
+            )}
           </div>
 
           {resume && (
@@ -706,7 +709,7 @@ export function NodeModal() {
               >
                 Continue most recent
               </div>
-              {visibleSessions.map((s) => {
+              {knownProjectSessions.map((s) => {
                 const selected = selectedResume === s.id;
                 return (
                   <div
@@ -719,6 +722,36 @@ export function NodeModal() {
                   </div>
                 );
               })}
+              {unknownProjectSessions.length > 0 && (
+                <>
+                  <div
+                    data-testid="nm-resume-unknown-project"
+                    style={{
+                      marginTop: 4,
+                      fontSize: "calc(11.5px * var(--fs,1))",
+                      fontWeight: 700,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                      color: "var(--txt3)",
+                    }}
+                  >
+                    Unknown project
+                  </div>
+                  {unknownProjectSessions.map((s) => {
+                    const selected = selectedResume === s.id;
+                    return (
+                      <div
+                        key={s.id}
+                        data-testid={`nm-resume-session-${s.id}`}
+                        onClick={() => setSelectedResume(s.id)}
+                        style={pickerBtnStyle(selected)}
+                      >
+                        {sessionLabel(s)}
+                      </div>
+                    );
+                  })}
+                </>
+              )}
               {loadingSessions && (
                 <div
                   data-testid="nm-resume-loading"
@@ -796,6 +829,24 @@ export function NodeModal() {
         <div style={{ display: "flex", gap: 14 }}>
           <div style={{ flex: 1 }}>
             <div style={sectionLabel}>Model</div>
+            {modelCatalog.source === "Observed" && modelCatalog.models.length > 0 && (
+              <div
+                data-testid="nm-model-unverified-badge"
+                style={{
+                  fontSize: "calc(11px * var(--fs,1))",
+                  fontWeight: 700,
+                  color: "var(--needs, #d9a441)",
+                  background: "var(--accent-bg)",
+                  border: "1px solid var(--border2)",
+                  borderRadius: 6,
+                  padding: "3px 7px",
+                  display: "inline-block",
+                  marginBottom: 6,
+                }}
+              >
+                Unverified — models seen in past sessions
+              </div>
+            )}
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {modelCatalog.models.map((m) => {
                 const selected = model === m.id;

@@ -11,7 +11,6 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { VmProvider, VmState } from "../src/bridge/useVm";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { NodeModal } from "../src/screens/NodeModal";
-import { NewSession } from "../src/screens/NewSession";
 import { MOCK_SNAPSHOT } from "../src/bridge/mockFixture";
 import type { CapabilitiesView } from "../src/bridge/types";
 
@@ -61,21 +60,6 @@ function renderNodeModal(capabilities: Record<string, CapabilitiesView>) {
   );
 }
 
-function renderNewSession(capabilities: Record<string, CapabilitiesView>) {
-  const preloaded: Partial<VmState> = {
-    snapshot: MOCK_SNAPSHOT,
-    screen: "new-session",
-    capabilities,
-  };
-  return render(
-    <ThemeProvider initialTheme="dark">
-      <VmProvider initialState={preloaded}>
-        <NewSession />
-      </VmProvider>
-    </ThemeProvider>
-  );
-}
-
 describe("NodeModal — discovery-in-flight optimism", () => {
   it("ABSENT capabilities: claude driver is NOT greyed and has no unavailable note", () => {
     renderNodeModal({});
@@ -107,35 +91,5 @@ describe("NodeModal — discovery-in-flight optimism", () => {
       target: { value: "~/code/release" },
     });
     expect((screen.getByTestId("nm-launch-btn") as HTMLButtonElement).disabled).toBe(true);
-  });
-});
-
-describe("NewSession — discovery-in-flight optimism", () => {
-  it("ABSENT capabilities: claude driver is NOT greyed and no unavailable note", () => {
-    renderNewSession({});
-    const claudeBtn = screen.getByTestId("ns-driver-claude") as HTMLButtonElement;
-    expect(claudeBtn.disabled).toBe(false);
-    expect(screen.queryByTestId("ns-driver-unavailable-note")).toBeNull();
-  });
-
-  it("ABSENT capabilities: loading indicator shows (not the empty hint)", () => {
-    renderNewSession({});
-    expect(screen.getByTestId("ns-model-loading")).toBeTruthy();
-    expect(screen.queryByTestId("ns-model-empty-hint")).toBeNull();
-  });
-
-  it("ABSENT capabilities: Launch is enabled once a project is set", () => {
-    renderNewSession({});
-    expect((screen.getByTestId("ns-launch-btn") as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.change(screen.getByTestId("ns-project-input"), {
-      target: { value: "~/code/proj" },
-    });
-    expect((screen.getByTestId("ns-launch-btn") as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it("PRESENT caps (cli_available:false): claude driver is greyed with the unavailable note", () => {
-    renderNewSession(cliMissingClaude("local"));
-    expect((screen.getByTestId("ns-driver-claude") as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByTestId("ns-driver-unavailable-note")).toBeTruthy();
   });
 });

@@ -1,7 +1,7 @@
 /**
  * Batch-fix frontend tests:
  *   #3/#4 — design-mode entry on a new / empty workstream (launch unblocker).
- *   #4/#2 — NodeModal + NewSession driver picker + Settings default pre-pick,
+ *   #4/#2 — NodeModal driver picker + Settings default pre-pick,
  *           driver passed through to launchSession.
  *   #1    — Settings per-driver host command-override fields.
  *   #2    — Settings session defaults: default driver + per-driver model + posture.
@@ -18,7 +18,6 @@ import { VmProvider, VmContext, VmState } from "../src/bridge/useVm";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { GraphScreenConnected } from "../src/screens/graph/GraphScreenConnected";
 import { NodeModal } from "../src/screens/NodeModal";
-import { NewSession } from "../src/screens/NewSession";
 import { Settings } from "../src/screens/Settings";
 import { SessionDetail } from "../src/screens/SessionDetail";
 import { BoardScreen } from "../src/screens/BoardScreen";
@@ -285,35 +284,28 @@ describe("#4/#2 NodeModal — driver + defaults", () => {
 });
 
 // ---------------------------------------------------------------------------
-// #4 — NewSession driver picker + driver passthrough
+// #4 — NodeModal driver picker + driver passthrough (migrated from NewSession)
 // ---------------------------------------------------------------------------
 
-describe("#4 NewSession — driver picker", () => {
-  function renderNS(capabilities: Record<string, CapabilitiesView>) {
-    const preloaded: Partial<VmState> = {
-      snapshot: MOCK_SNAPSHOT,
-      screen: "new-session",
-      capabilities,
-    };
-    return render(
-      <ThemeProvider initialTheme="dark">
-        <VmProvider initialState={preloaded}>
-          <NewSession />
-        </VmProvider>
-      </ThemeProvider>
-    );
-  }
-
+describe("#4 NodeModal — driver picker", () => {
   it("renders a driver picker; gemini disabled; claude enabled", () => {
-    renderNS(caps("local", ["m-a"]));
-    expect((screen.getByTestId("ns-driver-claude") as HTMLButtonElement).disabled).toBe(false);
-    expect((screen.getByTestId("ns-driver-gemini") as HTMLButtonElement).disabled).toBe(true);
+    renderNodeModal(caps("local", ["m-a"]));
+    expect((screen.getByTestId("nm-driver-claude") as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId("nm-driver-gemini") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("renders a button for all four known drivers (claude, codex, gemini, opencode)", () => {
+    renderNodeModal(caps("local", ["m-a"]));
+    expect(screen.getByTestId("nm-driver-claude")).toBeTruthy();
+    expect(screen.getByTestId("nm-driver-codex")).toBeTruthy();
+    expect(screen.getByTestId("nm-driver-gemini")).toBeTruthy();
+    expect(screen.getByTestId("nm-driver-opencode")).toBeTruthy();
   });
 
   it("passes the driver to launchSession", async () => {
-    renderNS(caps("local", ["m-a"]));
-    fireEvent.change(screen.getByTestId("ns-project-input"), { target: { value: "~/code/x" } });
-    fireEvent.click(screen.getByTestId("ns-launch-btn"));
+    renderNodeModal(caps("local", ["m-a"]));
+    fireEvent.change(screen.getByTestId("nm-project-input"), { target: { value: "~/code/x" } });
+    fireEvent.click(screen.getByTestId("nm-launch-btn"));
     await waitFor(() => {
       expect(launchSession).toHaveBeenCalledWith(expect.objectContaining({ driver: "claude" }));
     });
