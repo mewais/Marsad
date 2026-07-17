@@ -69,6 +69,23 @@ describe("sessionStatus — single source of truth", () => {
     expect(sessionConnHint(sv({ conn_health: "Connected" }), down)).toBe("Disconnected");
   });
 
+  it("a PAUSED session never shows a conn hint — pause is not reconnecting", () => {
+    // The real bug: a manually-paused session flashed "Reconnecting". Liveness-first:
+    // once live=false there is nothing to reconnect to, so no hint — even if a stale
+    // conn_health raced the pause OR the host still reads Connecting/Unreachable.
+    const connecting = [{ id: "h", status: "Connecting" }];
+    expect(sessionConnHint(sv({ live: false, conn_health: "Reconnecting" }), connecting)).toBeNull();
+    expect(sessionConnHint(sv({ live: false, conn_health: "Unstable" }), connecting)).toBeNull();
+    const down = [{ id: "h", status: "Unreachable" }];
+    expect(sessionConnHint(sv({ live: false, conn_health: "Connected" }), down)).toBeNull();
+    // aggregate over all-paused members → no hint, regardless of member conn_health.
+    const agg = aggregateCardStatus(
+      [sv({ id: "a", live: false, conn_health: "Reconnecting" }), sv({ id: "b", live: false, conn_health: "Unstable" })],
+      down
+    );
+    expect(agg.connHint).toBeNull();
+  });
+
   it("aggregateCardStatus: Pause if ANY member live; worst conn hint wins", () => {
     const hosts = [{ id: "h", status: "Connected" }];
     // one live + one paused → card can Pause (some live).

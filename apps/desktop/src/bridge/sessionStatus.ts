@@ -31,11 +31,19 @@ export function canPause(sv: SessionView): boolean {
 /**
  * Per-session connection hint (Reconnecting / Unstable / Disconnected), from the
  * session's own `conn_health` preferred over the coarse host poll. `null` = clean.
+ *
+ * Liveness-first, exactly like Badge/severity: a PAUSED session has no
+ * connectivity state to show — it was stopped on purpose, there is nothing to
+ * reconnect to. Returning null here also suppresses the host-status fallback
+ * (a paused session on a host that still reads "Connecting" must not show
+ * "Reconnecting"), and belt-and-suspenders any stale conn_health that raced a
+ * pause on the backend.
  */
 export function sessionConnHint(
   sv: SessionView,
   hosts: readonly HostLike[]
 ): ConnHint | null {
+  if (isPaused(sv)) return null;
   return connHintForSession(sv.conn_health, hosts, sv.host_id);
 }
 

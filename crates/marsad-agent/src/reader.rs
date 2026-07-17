@@ -1445,6 +1445,15 @@ pub(crate) fn spawn_session_reader(
                 _ => break 'reconnect, // local session or no exec prefix → stop
             };
 
+            // A COMMANDED stop (pause / supersede) is NOT a connection blip. The
+            // kill that ends a pause EOFs this stream too, so if the cancel token is
+            // already set the drop we just saw is that intentional kill — exit
+            // WITHOUT emitting Reconnecting/Unstable (which would paint a paused
+            // session "reconnecting"). handle_stop_session sets the token before the
+            // kill, so this check is deterministic; a real SSH drop leaves it unset.
+            if cancel.load(Ordering::SeqCst) {
+                break 'reconnect;
+            }
             eprintln!("marsad-agent: session {sid} connection lost, probing liveness");
             // Emit the drop health via the pure state machine: a drop that never
             // restabilized this attach (no lines) is a FLAP → Unstable; otherwise a

@@ -322,14 +322,17 @@ impl Agent {
         // host from the store, so the kill works either way. The persisted record is
         // KEPT so the session remains resumable.
         let container_name = format!("marsad-{session_id}");
-        self.kill_container(&session_id, &container_name);
-        // Cancel the reader thread so a lingering reconnect-probe loop exits at
-        // once instead of backing off for up to 30 min and stacking with the
-        // reader a later Resume spawns (the "14 readers for one session" churn on
-        // a flapping host). The kill above also EOFs the stream; this makes the
-        // teardown prompt and race-free.
+        // Signal the reader BEFORE killing: the kill EOFs the stream, and a reader
+        // that sees EOF races to emit conn_on_drop() → Reconnecting/Unstable. It
+        // has no other way to tell a COMMANDED stop from an SSH drop, so the cancel
+        // token IS that signal — set it first and the reader's pre-drop cancel check
+        // (reader.rs) exits silently instead of painting a paused session
+        // "reconnecting". Also stops a lingering reconnect-probe loop from backing
+        // off for up to 30 min and stacking with a later Resume's reader (the
+        // "14 readers for one session" churn on a flapping host).
         #[cfg(not(coverage))]
         crate::reader::cancel_reader(&session_id);
+        self.kill_container(&session_id, &container_name);
         // WAVE 3b: a stopped session's pty (if the Terminal tab was ever
         // opened for it) must not outlive the session — kill + reap it too.
         // Same "kept for resumability" spirit as the container above: the
