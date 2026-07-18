@@ -740,11 +740,7 @@ function computeGate(
       lead: "Permission request",
       summary: `${g.Permission.command} in ${g.Permission.cwd}`,
       decision_id: g.Permission.request_id,
-      is_permission: true,
-      is_elicitation: g.Permission.is_elicitation,
-      is_plan: false,
       is_edit: false,
-      is_question: false,
       diff_rows: [],
     };
   }
@@ -755,11 +751,7 @@ function computeGate(
       lead: "Plan for approval",
       summary: g.Plan.summary,
       decision_id: g.Plan.request_id,
-      is_permission: false,
-      is_elicitation: false,
-      is_plan: true,
       is_edit: false,
-      is_question: false,
       diff_rows: [],
     };
   }
@@ -775,11 +767,7 @@ function computeGate(
       lead: "Wants your input",
       summary,
       decision_id: g.Question.request_id,
-      is_permission: false,
-      is_elicitation: false,
-      is_plan: false,
       is_edit: false,
-      is_question: true,
       diff_rows: [],
     };
   }
@@ -801,11 +789,7 @@ function computeGate(
       lead: "File edit",
       summary: g.Edit.file,
       decision_id: g.Edit.request_id,
-      is_permission: false,
-      is_elicitation: false,
-      is_plan: false,
       is_edit: true,
-      is_question: false,
       diff_rows,
     };
   }

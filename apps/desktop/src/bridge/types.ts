@@ -501,14 +501,10 @@ export interface GateVM {
    *  permission gate. Used as the decision id so distinct gates in one session
    *  aren't collapsed by idempotency dedup. */
   decision_id: string;
-  is_permission: boolean;
-  /** True when this permission gate came from an MCP elicitation — the UI hides
-   *  "Approve all this session" for these (the button flips claude's posture,
-   *  which does not stop the MCP server from re-asking). */
-  is_elicitation: boolean;
-  is_plan: boolean;
+  /** Still read by Changes.tsx to fold an edit gate's diff into the Changes tab.
+   *  The other per-kind flags were dropped when GateOverlay stopped branching on
+   *  kind (normalizeGate keys off the raw Gate union instead). */
   is_edit: boolean;
-  is_question: boolean;
   diff_rows: SideRow[];
 }
 
