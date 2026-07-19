@@ -170,7 +170,11 @@ pub fn encode_notification(method: &str, params: Value) -> String {
 /// so opencode never sends fs/* or terminal/* to us.
 pub fn initialize_params(client_name: &str, client_version: &str) -> Value {
     json!({
-        "protocolVersion": "1",
+        // ACP protocolVersion is an INTEGER, not a string. opencode validates it
+        // strictly: a string "1" is rejected with -32602 "Invalid params: expected
+        // number, received string", breaking the whole handshake. Verified against
+        // opencode 1.18: the integer 1 makes initialize succeed.
+        "protocolVersion": 1,
         "clientInfo": {
             "name": client_name,
             "version": client_version,

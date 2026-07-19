@@ -339,8 +339,9 @@ fn encode_notification_round_trip_via_parse() {
 fn initialize_params_has_protocol_version() {
     let p = initialize_params("Marsad", "1.0.0");
     assert!(p.get("protocolVersion").is_some(), "initialize_params must include protocolVersion");
-    // Spec §2: protocolVersion = "1"
-    assert_eq!(p["protocolVersion"], json!("1"));
+    // ACP protocolVersion is an INTEGER (1), not a string — opencode rejects a
+    // string with -32602 "expected number, received string" (verified vs opencode 1.18).
+    assert_eq!(p["protocolVersion"], json!(1));
 }
 
 #[test]

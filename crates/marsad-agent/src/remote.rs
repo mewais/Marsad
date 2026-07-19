@@ -869,17 +869,37 @@ pub fn remote_writer_argv(prefix: &[String], dir: &str) -> Vec<String> {
     argv
 }
 
-/// Build the argv for the reader child: `tail -n0 --pid=<pid> -f <dir>/out.log`
-/// with its stdout piped to the agent. `-n0` streams only NEW lines (history comes
-/// from `TranscriptBackfill`); `--pid=<claude>` makes `tail` EOF when the detached
-/// claude dies (stop/crash/kill) so the reader tears down cleanly instead of
-/// hanging "alive". `pid` + `dir` are resolved literals (see
-/// `remote_resolve_pid_dir`); passed as separate argv tokens — NO shell, NO
-/// quotes, NO `$()` — to survive Rust→`wsl.exe`/`ssh.exe` arg passing.
-pub fn remote_reader_argv(prefix: &[String], pid: &str, dir: &str) -> Vec<String> {
+/// Build the argv for the reader child: `tail [-n0 | -n +1] --pid=<pid> -f
+/// <dir>/out.log` with its stdout piped to the agent.
+///
+/// `from_start` picks the offset:
+/// - `false` → `-n0`: stream only NEW lines. Correct for claude/codex (history
+///   comes from `TranscriptBackfill`) and for ANY reconnect (out.log has already
+///   accumulated; re-reading would replay).
+/// - `true` → `-n +1`: read the WHOLE file from line 1, then follow. Required for
+///   an opencode ACP session's FIRST attach: the `initialize`/`session/new`
+///   responses (which carry the ACP `sessionId`) are ONE-SHOT and are written the
+///   instant opencode answers — often BEFORE a freshly-spawned remote `tail`
+///   process is actually watching. `-n0` then silently drops them and the sessionId
+///   is never learned (prompts queue forever, "connected but nothing happens").
+///   A fresh session's out.log is empty→handshake, so reading from line 1 is
+///   complete and cannot replay.
+///
+/// `--pid=<claude>` makes `tail` EOF when the detached process dies
+/// (stop/crash/kill) so the reader tears down cleanly instead of hanging "alive".
+/// `pid` + `dir` are resolved literals (see `remote_resolve_pid_dir`); passed as
+/// separate argv tokens — NO shell, NO quotes, NO `$()` — to survive
+/// Rust→`wsl.exe`/`ssh.exe` arg passing.
+pub fn remote_reader_argv(prefix: &[String], pid: &str, dir: &str, from_start: bool) -> Vec<String> {
     let mut argv = prefix.to_vec();
     argv.push("tail".to_string());
-    argv.push("-n0".to_string());
+    if from_start {
+        // `-n +1` = start at line 1 (whole file), then -f follows.
+        argv.push("-n".to_string());
+        argv.push("+1".to_string());
+    } else {
+        argv.push("-n0".to_string());
+    }
     argv.push(format!("--pid={pid}"));
     argv.push("-f".to_string());
     argv.push(format!("{dir}/out.log"));

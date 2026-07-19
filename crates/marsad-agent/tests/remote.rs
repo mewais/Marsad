@@ -364,7 +364,7 @@ fn writer_argv_is_shellfree_tee() {
 fn reader_argv_is_shellfree_tail_with_pid() {
     for target in ["user@host", "wsl:Ubuntu", "plink:etx"] {
         let prefix = exec_prefix_for(Some(target)).expect("prefix");
-        let argv = remote_reader_argv(&prefix, "12345", ABS_DIR);
+        let argv = remote_reader_argv(&prefix, "12345", ABS_DIR, false);
         assert!(argv.iter().any(|a| a == "tail"), "tail: {argv:?}");
         assert!(argv.iter().any(|a| a == "-n0"), "-n0: {argv:?}");
         assert!(
@@ -375,6 +375,24 @@ fn reader_argv_is_shellfree_tail_with_pid() {
             argv.iter().any(|a| a == &format!("{ABS_DIR}/out.log")),
             "literal out.log path: {argv:?}"
         );
+        assert_no_shell_or_quotes(&argv);
+    }
+}
+
+#[test]
+fn reader_argv_from_start_reads_whole_file_not_n0() {
+    // opencode first-attach must read from line 1 so the one-shot ACP handshake
+    // responses aren't missed by a late-attaching remote tail.
+    for target in ["user@host", "wsl:Ubuntu", "plink:etx"] {
+        let prefix = exec_prefix_for(Some(target)).expect("prefix");
+        let argv = remote_reader_argv(&prefix, "12345", ABS_DIR, true);
+        assert!(argv.iter().any(|a| a == "tail"), "tail: {argv:?}");
+        // -n +1 (whole file), NOT -n0.
+        assert!(argv.iter().any(|a| a == "-n"), "-n flag: {argv:?}");
+        assert!(argv.iter().any(|a| a == "+1"), "+1 offset: {argv:?}");
+        assert!(!argv.iter().any(|a| a == "-n0"), "must NOT use -n0: {argv:?}");
+        assert!(argv.iter().any(|a| a == "--pid=12345"), "literal --pid: {argv:?}");
+        assert!(argv.iter().any(|a| a == "-f"), "-f follow: {argv:?}");
         assert_no_shell_or_quotes(&argv);
     }
 }

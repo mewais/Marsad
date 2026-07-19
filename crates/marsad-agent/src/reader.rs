@@ -405,8 +405,15 @@ pub(crate) fn spawn_session_reader(
                     children.lock().unwrap().insert(sid.clone(), writer_child);
 
                     // ── Spawn reader child ─────────────────────────────────────
-                    // Streams only NEW out.log lines (tail -n0 = skip historical).
-                    let reader_argv = remote_reader_argv(&prefix, &claude_pid, &abs_dir);
+                    // Streams NEW out.log lines (tail -n0), EXCEPT an opencode ACP
+                    // session's first attach, which must read from the start so the
+                    // one-shot initialize/session/new responses (the ACP sessionId)
+                    // are never missed by a late-attaching remote tail (see
+                    // remote_reader_argv). Reconnects stay -n0 (no replay; sessionId
+                    // already known).
+                    let read_from_start = is_first_attach && driver == "opencode";
+                    let reader_argv =
+                        remote_reader_argv(&prefix, &claude_pid, &abs_dir, read_from_start);
                     let r_bin = resolve_remote_bin(&reader_argv[0]);
                     let mut r_cmd = Command::new(&r_bin);
                     r_cmd
