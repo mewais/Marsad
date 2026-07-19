@@ -562,6 +562,45 @@ pub fn acp_options_to_suggestions(options: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// Build the stream-json `control_request` event that surfaces an opencode ACP
+/// `session/request_permission` in the UI as a `can_use_tool` gate.
+///
+/// The shape MUST match `marsad_proto::parse_stream_line`/`parse_control_request`:
+/// `request_id` at the TOP LEVEL, and the inner `request` keyed by **`subtype`**
+/// (not `type`) == `"can_use_tool"`. An earlier hand-rolled shape (nested
+/// `request_id`, inner `type`) never parsed, so no gate ever surfaced and every
+/// opencode permission request left the session stuck "working". This helper
+/// exists so that contract is unit-tested (round-tripped through parse_stream_line).
+///
+/// opencode's `toolCall` carries `title`/`kind`/`toolCallId`/`rawInput` — there is
+/// NO `toolName`/`input` — so we read those; `options` become
+/// `permission_suggestions` verbatim (each `{ optionId, name, kind }`).
+pub fn acp_permission_to_control_request_event(request_id: &str, params: &Value) -> Value {
+    let tool_call = params.get("toolCall").cloned().unwrap_or_else(|| json!({}));
+    let tool_name = tool_call
+        .get("title")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| tool_call.get("kind").and_then(|v| v.as_str()))
+        .unwrap_or("permission");
+    let input_val = tool_call
+        .get("rawInput")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let permission_suggestions =
+        acp_options_to_suggestions(&params.get("options").cloned().unwrap_or_else(|| json!([])));
+    json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": tool_name,
+            "input": input_val,
+            "permission_suggestions": permission_suggestions,
+        }
+    })
+}
+
 // ── Compaction detection ──────────────────────────────────────────────────────
 
 /// Return `true` if `update` is opencode's compaction notification.

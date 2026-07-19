@@ -18,6 +18,55 @@ use marsad_agent::acp::{
 };
 use serde_json::{json, Value};
 
+// ── acp_permission_to_control_request_event: surfaces as a can_use_tool gate ───
+//
+// Regression: the hand-rolled control_request the reader used to emit had the
+// wrong shape (nested request_id, inner `type` instead of `subtype`), so
+// parse_control_request never matched → no gate surfaced → opencode sessions
+// stuck "working" on every permission request. This round-trips the helper's
+// output through parse_stream_line to pin the exact contract.
+
+#[test]
+fn acp_permission_event_round_trips_to_a_can_use_tool_control_request() {
+    // opencode's REAL session/request_permission params shape.
+    let params = json!({
+        "sessionId": "ses_x",
+        "toolCall": {
+            "toolCallId": "toolu_1",
+            "title": "/work/mewais/Naseej",
+            "kind": "other",
+            "rawInput": { "filepath": "/work/mewais/Naseej" }
+        },
+        "options": [
+            { "optionId": "once",   "kind": "allow_once",   "name": "Allow once" },
+            { "optionId": "always", "kind": "allow_always", "name": "Always allow" },
+            { "optionId": "reject", "kind": "reject_once",  "name": "Reject" }
+        ]
+    });
+    let ev = marsad_agent::acp_translate::acp_permission_to_control_request_event("0", &params);
+    let line = serde_json::to_string(&ev).expect("serialize");
+    let parsed = marsad_proto::parse_stream_line(&line).expect("must parse as a stream line");
+    match parsed {
+        marsad_proto::StreamMsg::ControlRequest(req) => {
+            assert_eq!(req.request_id, "0", "request_id must survive at top level");
+            assert_eq!(
+                req.permission_suggestions.len(),
+                3,
+                "the ACP options must carry through as permission_suggestions"
+            );
+            // The option names/ids are preserved verbatim for the UI + answer path.
+            assert!(line.contains("Allow once") && line.contains("\"optionId\":\"once\""));
+            // tool_name is the human title (not the old "unknown_tool").
+            assert!(
+                req.tool_name.contains("Naseej"),
+                "tool_name should be the toolCall title; got {}",
+                req.tool_name
+            );
+        }
+        other => panic!("expected ControlRequest (a gate), got {other:?}"),
+    }
+}
+
 // ── parse_acp_line: Request ───────────────────────────────────────────────────
 
 #[test]

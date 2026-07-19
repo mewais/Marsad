@@ -1097,25 +1097,14 @@ pub(crate) fn spawn_session_reader(
                                         // We encode the gate into the canonical control_request shape
                                         // that marsad_proto expects. For opencode, we synthesise a
                                         // stream-json `can_use_tool` control_request shape.
-                                        let tool_call = params.get("toolCall").cloned().unwrap_or(serde_json::json!({}));
-                                        let tool_name = tool_call.get("toolName").and_then(|v| v.as_str()).unwrap_or("unknown_tool");
-                                        let tool_use_id = tool_call.get("toolUseId").and_then(|v| v.as_str()).unwrap_or("");
-                                        let input_str = tool_call.get("input").and_then(|v| v.as_str()).unwrap_or("{}");
-                                        let input_val: serde_json::Value = serde_json::from_str(input_str).unwrap_or(serde_json::json!({}));
-                                        let options = params.get("options").cloned().unwrap_or(serde_json::json!([]));
-                                        let permission_suggestions = acp_translate::acp_options_to_suggestions(&options);
-
-                                        let gate_event = serde_json::json!({
-                                            "type": "control_request",
-                                            "request": {
-                                                "type": "can_use_tool",
-                                                "request_id": acp_request_id,
-                                                "tool_name": tool_name,
-                                                "tool_use_id": tool_use_id,
-                                                "input": input_val,
-                                                "permission_suggestions": permission_suggestions,
-                                            }
-                                        });
+                                        // Surface the gate as a stream-json control_request that
+                                        // parse_control_request accepts (request_id top-level,
+                                        // inner subtype=can_use_tool). Built by a tested helper so
+                                        // the shape can't silently drift again.
+                                        let gate_event = acp_translate::acp_permission_to_control_request_event(
+                                            &acp_request_id,
+                                            &params,
+                                        );
                                         let ipc_msg = marsad_proto::IpcMsg::AgentEvent {
                                             session_id: sid.clone(),
                                             event: gate_event,
