@@ -773,6 +773,38 @@ mod opencode_argv_tests {
     }
 
     #[test]
+    fn remote_run_cmd_opencode_launches_acp_not_claude() {
+        // Regression: the remote durable launch used to build claude_argv for ALL
+        // non-codex drivers, so a remote opencode session launched `claude` (with
+        // the opencode model) while the reader spoke ACP → nothing worked.
+        use marsad_agent::build_remote_run_cmd;
+        let spec = opencode_spec("amd-anthropic/Claude-Sonnet-5", None);
+        let cmd = build_remote_run_cmd(&spec);
+        assert!(
+            cmd.contains("opencode") && cmd.contains("acp"),
+            "remote opencode run_cmd must launch `opencode acp`; got: {cmd}"
+        );
+        assert!(
+            !cmd.contains("claude"),
+            "remote opencode run_cmd must NOT launch claude; got: {cmd}"
+        );
+        assert!(
+            !cmd.contains("--model"),
+            "opencode acp takes no --model flag; got: {cmd}"
+        );
+    }
+
+    #[test]
+    fn remote_run_cmd_claude_still_launches_claude() {
+        use marsad_agent::build_remote_run_cmd;
+        let mut spec = opencode_spec("claude-opus-4-8", None);
+        spec.driver = "claude".to_string();
+        let cmd = build_remote_run_cmd(&spec);
+        assert!(cmd.contains("claude"), "remote claude run_cmd must launch claude; got: {cmd}");
+        assert!(!cmd.contains("opencode"), "claude run_cmd must not mention opencode; got: {cmd}");
+    }
+
+    #[test]
     fn opencode_argv_is_exactly_bin_then_acp() {
         // The whole invocation is `<bin> acp` — nothing else. Any extra arg risks
         // the acp subcommand rejecting it (strict yargs).

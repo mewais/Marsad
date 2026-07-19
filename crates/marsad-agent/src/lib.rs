@@ -33,7 +33,7 @@ mod wasl;
 #[cfg(not(coverage))]
 use remote::REMOTE_RUNTIME_DIR;
 
-pub use driver::{claude_argv, opencode_argv, posture_to_mode};
+pub use driver::{build_remote_run_cmd, claude_argv, opencode_argv, posture_to_mode};
 pub use reader::{
     assistant_has_file_modifying_tool_use, conn_on_drop, conn_on_probe, reconnect_backoff_next,
     ProbeAction, ProbeStep, RECONNECT_INITIAL_BACKOFF_SECS, RECONNECT_MAX_BACKOFF_SECS,
@@ -754,20 +754,10 @@ impl Agent {
                 //   claude.pid here is the eval-loop's pid, not a codex process, but the
                 //   operational semantics (kill the holder, SIGTERM + rm -rf the dir) are
                 //   the same.
-                let run_cmd = if spec.driver == "codex" {
-                    build_remote_codex_eval_loop(
-                        &spec.project,
-                        spec.setup.as_deref(),
-                        &spec.env,
-                    )
-                } else {
-                    build_remote_spawn_cmd(
-                        &spec.project,
-                        &claude_argv(&spec),
-                        spec.setup.as_deref(),
-                        &spec.env,
-                    )
-                };
+                // Per-driver remote run-command (codex eval-loop / `opencode acp` /
+                // claude). Dispatched in one tested helper so opencode can't silently
+                // fall back to claude again (see driver::build_remote_run_cmd).
+                let run_cmd = driver::build_remote_run_cmd(&spec);
                 self.session_run_cmds
                     .0
                     .lock()

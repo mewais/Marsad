@@ -735,6 +735,30 @@ pub fn session_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
     }
 }
 
+/// Build the run-command body for a REMOTE durable session, dispatched by driver.
+///
+/// - `"codex"`    → the eval-loop (`build_remote_codex_eval_loop`)
+/// - `"opencode"` → `opencode acp` wrapped by `build_remote_spawn_cmd`
+/// - anything else (`"claude"`, default) → `claude_argv` wrapped by `build_remote_spawn_cmd`
+///
+/// Extracted from the launch flow so this per-driver dispatch is UNIT-TESTED: a
+/// regression once shipped where every non-codex driver used `claude_argv`, so a
+/// remote opencode session launched `claude` (with the opencode model) while the
+/// reader spoke ACP — the process was claude, fed JSON-RPC it couldn't parse, and
+/// nothing reached out.log ("connected, stuck on Loading Transcript").
+pub fn build_remote_run_cmd(spec: &marsad_proto::LaunchSpec) -> String {
+    if spec.driver == "codex" {
+        crate::remote::build_remote_codex_eval_loop(&spec.project, spec.setup.as_deref(), &spec.env)
+    } else {
+        let argv = if spec.driver == "opencode" {
+            opencode_argv(spec)
+        } else {
+            claude_argv(spec)
+        };
+        crate::remote::build_remote_spawn_cmd(&spec.project, &argv, spec.setup.as_deref(), &spec.env)
+    }
+}
+
 // ── codex sandbox helper ──────────────────────────────────────────────────────
 
 /// Return the sandbox CLI fragment for a posture, ONLY for fresh (first-turn)
