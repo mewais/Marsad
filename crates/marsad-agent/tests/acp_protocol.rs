@@ -751,30 +751,38 @@ mod opencode_argv_tests {
     }
 
     #[test]
-    fn opencode_argv_includes_model() {
+    fn opencode_argv_omits_model_flag() {
+        // `opencode acp` REJECTS `--model` (verified against opencode 1.18: the
+        // acp subcommand's yargs is strict and prints usage + exits on an unknown
+        // flag, in either position). Passing it killed every model-selected launch.
+        // So the model must NOT appear in the argv at all — opencode owns model
+        // selection in ACP mode.
         let spec = opencode_spec("anthropic/claude-opus-4-5", None);
         let argv = opencode_argv(&spec);
-        // The model must appear somewhere in the argv.
         assert!(
-            argv.contains(&"anthropic/claude-opus-4-5".to_string()),
-            "opencode_argv must thread the model through argv; got: {:?}",
+            !argv.iter().any(|a| a == "--model" || a == "-m"),
+            "opencode_argv must NOT pass a --model/-m flag (acp rejects it); got: {:?}",
+            argv
+        );
+        assert!(
+            !argv.contains(&"anthropic/claude-opus-4-5".to_string()),
+            "opencode_argv must NOT thread the model id (acp has no model flag); got: {:?}",
             argv
         );
     }
 
     #[test]
-    fn opencode_argv_acp_before_model_flag() {
-        // "acp" must come before any model-related flags (it's the subcommand).
+    fn opencode_argv_is_exactly_bin_then_acp() {
+        // The whole invocation is `<bin> acp` — nothing else. Any extra arg risks
+        // the acp subcommand rejecting it (strict yargs).
         let spec = opencode_spec("some-model", None);
         let argv = opencode_argv(&spec);
-        let acp_pos = argv.iter().position(|a| a == "acp")
-            .expect("'acp' must be in argv");
-        // argv[0] is the bin; acp should be argv[1] (the subcommand) or at least early.
-        assert!(acp_pos >= 1, "acp subcommand position must be at index >= 1");
-        // acp must come before any --model flag if present
-        if let Some(model_pos) = argv.iter().position(|a| a == "--model" || a == "-m") {
-            assert!(acp_pos < model_pos, "'acp' must appear before the model flag");
-        }
+        assert_eq!(
+            argv,
+            vec!["opencode".to_string(), "acp".to_string()],
+            "opencode_argv must be exactly [bin, \"acp\"]; got: {:?}",
+            argv
+        );
     }
 
     #[test]

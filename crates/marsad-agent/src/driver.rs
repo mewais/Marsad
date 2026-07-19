@@ -701,25 +701,25 @@ pub fn codex_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
 
 /// Build the `opencode acp` invocation for a persistent session launch.
 ///
-/// opencode is launched as a PERSISTENT process (bidirectional channel via
+/// opencode is launched as a PERSISTENT process (bidirectional ACP channel via
 /// stdin/stdout), NOT an eval-loop. Binary is resolved from
 /// `LaunchSpec.claude_bin` (default `"opencode"`), same as codex reuses it.
 ///
-/// The spawn command shape is: `opencode acp [--model <model>]`
-/// (exact flags TBD per opencode's ACP CLI spec; body is todo!()).
+/// The invocation is exactly `opencode acp` — no more. Verified against opencode
+/// 1.18 (`opencode acp --help`): the `acp` subcommand accepts ONLY
+/// --port/--hostname/--cwd/--log-level/--print-logs/--pure/--mdns/--cors, and
+/// REJECTS `--model` (yargs strict: it prints usage and exits, in either flag
+/// position). Appending `--model <model>` is why sessions never started — opencode
+/// died at launch. In ACP mode opencode owns model selection (its configured
+/// default); a per-session override would need a supported ACP path (session
+/// config / modes), not a CLI flag. `spec.model` is intentionally unused here.
 pub fn opencode_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
     let bin = spec
         .claude_bin
         .as_deref()
         .unwrap_or("opencode")
         .to_string();
-    let mut argv = vec![bin, "acp".to_string()];
-    // Pass the model if one was specified.
-    if !spec.model.is_empty() {
-        argv.push("--model".to_string());
-        argv.push(spec.model.clone());
-    }
-    argv
+    vec![bin, "acp".to_string()]
 }
 
 /// Dispatch to the correct argv builder based on `spec.driver`.
