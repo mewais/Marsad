@@ -431,6 +431,14 @@ pub struct Core {
     /// has reported (agents + versioned models loaded), then flips to `Connected`.
     /// Cleared when the host goes Unreachable so a reconnect re-discovers.
     caps_loaded: HashMap<String, std::collections::HashSet<String>>,
+    /// Per-host marker that a FRESH capability discovery has been kicked off this
+    /// online session. DISTINCT from `caps_loaded`, which is also populated by the
+    /// persisted caps replayed from disk on startup — so on a restart `caps_loaded`
+    /// looks "fully loaded" from stale data and would suppress re-probing. This
+    /// marker is only set by an actual connect-time trigger, so first-Connected
+    /// always re-probes (picking up a CLI installed since the last run), regardless
+    /// of persisted caps. Cleared on Unreachable so a reconnect re-triggers.
+    discovery_triggered: std::collections::HashSet<String>,
     /// X3 (docs/specs/wasl-connector.md §5.2): pending Wasl gates, keyed by
     /// (host_id, gate_id). Node-authoritative: entries are added by
     /// `WaslGateRequested` and removed ONLY by `WaslGateDecided` (incl.
@@ -521,6 +529,7 @@ impl Core {
             active_profile: None,
             capabilities: HashMap::new(),
             caps_loaded: HashMap::new(),
+            discovery_triggered: std::collections::HashSet::new(),
             wasl_gates: std::collections::BTreeMap::new(),
         })
     }
@@ -963,13 +972,17 @@ impl Core {
                     HostStatus::Connecting
                 };
                 self.hosts.set_status(id, effective);
-                // Kick off discovery exactly once per online session: the presence
-                // of a `caps_loaded` entry is the "already triggered" marker, so
-                // repeated health ticks while Connecting don't re-probe. Cleared on
-                // Unreachable below, so a reconnect re-discovers.
-                if !fully && !self.caps_loaded.contains_key(id) {
-                    self.caps_loaded
-                        .insert(id.to_string(), std::collections::HashSet::new());
+                // Kick off a FRESH all-driver discovery exactly once per online
+                // session, on the first Connected — even when `fully` is already
+                // true from PERSISTED caps restored on restart. Those persisted
+                // caps still display immediately (the host flips Connected with no
+                // wait); this background probe freshens them so a CLI installed
+                // since the last run is picked up (the WSL/SSH staleness bug). We
+                // gate on `discovery_triggered` — NOT `caps_loaded`, which the
+                // persisted replay also fills — so a restart genuinely re-probes.
+                // `insert` returns true only the first time, so repeated health
+                // ticks don't re-probe. Cleared on Unreachable so reconnect re-runs.
+                if self.discovery_triggered.insert(id.to_string()) {
                     self.refresh_capabilities(Some(id.to_string()), None, None);
                 }
             }
@@ -977,6 +990,7 @@ impl Core {
                 // Went offline → forget its discovery so a reconnect re-probes
                 // cleanly (and the host correctly returns to Connecting first).
                 self.caps_loaded.remove(id);
+                self.discovery_triggered.remove(id);
                 self.hosts.set_status(id, HostStatus::Unreachable);
             }
             other => {

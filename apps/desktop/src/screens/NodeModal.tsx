@@ -168,15 +168,21 @@ export function NodeModal() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Capability discovery (agents + versioned models) is loaded at connect time —
-  // a host only reaches "Connected" once every driver's caps have landed. Do NOT
-  // re-run it from the modal when it's already present: on a slow remote (etx
-  // ~47s) that redoes the whole probe AND races the path-scoped session probe.
-  // Fire ONLY when the exact (driver, host) pair is still absent, and with NO
-  // project (this is "what agents/models exist", not a session listing).
+  // Capability discovery (agents + versioned models). Re-probe when we have NO
+  // data yet, OR when the cached result says this LAUNCHABLE driver's CLI isn't
+  // available — a negative verdict is exactly what goes stale after the user
+  // installs the CLI, and nothing else re-probes a remote host, so an old
+  // "not available" would otherwise stick forever (the WSL-opencode bug). A
+  // POSITIVE result (CLI found) stays cached so we don't redo the whole slow
+  // remote probe (etx ~47s) or race the path-scoped session probe on every open.
+  // Non-launchable drivers (e.g. gemini) are never re-probed — they can't launch
+  // regardless. NO project here (this is "what agents/models exist").
   useEffect(() => {
     if (!open) return;
-    if (state.capabilities[capsKey(driver, hostId)] !== undefined) return;
+    const caps = state.capabilities[capsKey(driver, hostId)];
+    const staleNegative =
+      caps !== undefined && caps.launchable && caps.cli_available !== true;
+    if (caps !== undefined && !staleNegative) return;
     refreshCapabilities({ host_id: hostId, driver });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, hostId, driver]);

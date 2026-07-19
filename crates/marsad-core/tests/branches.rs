@@ -848,6 +848,73 @@ fn reconnect_to_connected_triggers_capability_preload() {
 }
 
 // ---------------------------------------------------------------------------
+// The staleness fix: a host whose caps look "fully loaded" from PERSISTED data
+// restored on restart must STILL re-probe on the first Connected of the session.
+// Otherwise a CLI installed since the last run (the WSL/SSH opencode bug) stays
+// invisible forever — the persisted caps suppress the connect-time re-probe.
+// This is why the trigger keys off `discovery_triggered`, not `caps_loaded`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn connect_reprobes_even_when_persisted_caps_already_fully_loaded() {
+    use marsad_core::HostStatus;
+
+    let (mut core, mut peer) = make_core();
+    let u = core
+        .add_host("srv", "wslssh:Ubuntu:narval", None, None, Vec::new(), Vec::new())
+        .expect("add host");
+    let host_id = u
+        .iter()
+        .find_map(|up| match up {
+            VmUpdate::Hosts(hs) => hs
+                .iter()
+                .find(|h| h.target == "wslssh:Ubuntu:narval")
+                .map(|h| h.id.clone()),
+            _ => None,
+        })
+        .expect("host id");
+
+    // Simulate persisted caps replayed on startup: every PROBED_DRIVER lands
+    // BEFORE the host connects, so it looks fully-loaded from stale on-disk data.
+    let caps_line = |driver: &str| {
+        format!(
+            r#"{{"type":"CapabilitiesUpdate","host_id":"{host_id}","driver":"{driver}","capabilities":{{"driver":"{driver}","host_id":"{host_id}","cli_available":true,"launchable":true,"models":{{"models":[],"source":"Observed","free_text":true}},"session_scope":null,"sessions":[],"fetched_at_ms":0,"errors":[]}}}}"#
+        )
+    };
+    for d in ["claude", "codex", "gemini"] {
+        core.on_agent_line(&caps_line(d)).expect("seed persisted caps");
+    }
+    let _ = peer.drain_outbound(); // discard add_host + seeding traffic
+
+    // First Connected of the session → a FRESH all-driver probe must still fire.
+    core.set_host_status(&host_id, HostStatus::Connected);
+    let out = peer.drain_outbound();
+    let refreshes = out.iter().filter(|l| l.contains("RefreshCapabilities")).count();
+    assert_eq!(
+        refreshes, 1,
+        "a fully-loaded (persisted-caps) host must STILL re-probe on first Connected; got {out:?}"
+    );
+
+    // Once per session: a repeat Connected tick must NOT re-probe.
+    core.set_host_status(&host_id, HostStatus::Connected);
+    let out2 = peer.drain_outbound();
+    assert!(
+        !out2.iter().any(|l| l.contains("RefreshCapabilities")),
+        "a repeat Connected (no transition) must not re-probe; got {out2:?}"
+    );
+
+    // Drop + reconnect re-triggers a fresh probe.
+    core.set_host_status(&host_id, HostStatus::Unreachable);
+    let _ = peer.drain_outbound();
+    core.set_host_status(&host_id, HostStatus::Connected);
+    let out3 = peer.drain_outbound();
+    assert!(
+        out3.iter().any(|l| l.contains("RefreshCapabilities")),
+        "reconnect after a drop must re-probe; got {out3:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // A reachable host stays Connecting until EVERY probed driver's caps land, then
 // flips to Connected (agents + versioned models loaded). No optimism.
 // ---------------------------------------------------------------------------
