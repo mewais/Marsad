@@ -984,6 +984,7 @@ pub(crate) fn spawn_session_reader(
                                     request_id: cr.request_id,
                                     input: cr.input,
                                     elicitation: cr.elicitation_message.is_some(),
+                                    acp_response_id: None,
                                 });
                             }
                         }
@@ -1059,58 +1060,54 @@ pub(crate) fn spawn_session_reader(
                                         // session/request_permission: capture as pending gate.
                                         // The ACP request `id` is stored as `request_id` in the
                                         // PendingGate so `handle_answer_gate` can reply to it.
+                                        // Raw ACP JSON-RPC id (e.g. 0) — needed to reply to
+                                        // opencode. It is NOT unique across sessions (the first
+                                        // permission of every session is id 0), so it must NOT be
+                                        // the gate's routing id.
                                         let acp_request_id = id.to_string();
-                                        let gate = acp_translate::acp_permission_to_gate(&params);
-
-                                        // The gate's own `request_id` field comes from acp_permission_to_gate
-                                        // (uses toolUseId). We ALSO need to store the raw ACP JSON-RPC id
-                                        // so we can write the response. We store it as the PendingGate's
-                                        // request_id (overriding the toolUseId) so handle_answer_gate
-                                        // can use it directly for the JSON-RPC reply.
-                                        let gate_request_id = match &gate {
-                                            marsad_gates::Gate::Permission { request_id, .. } => {
-                                                request_id.clone()
-                                            }
-                                            _ => acp_request_id.clone(),
-                                        };
+                                        // Routing id = opencode's toolCallId (unique per tool call),
+                                        // falling back to a session-scoped composite. This becomes the
+                                        // frontend decision_id AND the core ledger dedup key, so it
+                                        // MUST be unique — using the raw ACP id "0" made the core
+                                        // ledger treat every session's first gate as "already seen"
+                                        // and silently drop the answer (gate never sent, never cleared).
+                                        let unique_id = acp_translate::acp_gate_routing_id(
+                                            &sid,
+                                            &acp_request_id,
+                                            &params,
+                                        );
 
                                         {
                                             let mut gates = pending_fifo.lock().unwrap();
                                             let queue = gates.entry(sid.clone()).or_default();
-                                            let dup = queue
-                                                .iter()
-                                                .any(|g| g.request_id == gate_request_id);
+                                            let dup = queue.iter().any(|g| g.request_id == unique_id);
                                             if dup {
                                                 eprintln!(
-                                                    "marsad-agent: session {sid} opencode gate DUPLICATE ignored ({})",
-                                                    gate_request_id
+                                                    "marsad-agent: session {sid} opencode gate DUPLICATE ignored ({unique_id})"
                                                 );
                                             } else {
                                                 eprintln!(
-                                                    "marsad-agent: session {sid} opencode gate captured (acp_id={acp_request_id}, gate_id={gate_request_id}, {} now queued)",
+                                                    "marsad-agent: session {sid} opencode gate captured (acp_id={acp_request_id}, gate_id={unique_id}, {} now queued)",
                                                     queue.len() + 1
                                                 );
-                                                // Store the raw ACP JSON-RPC id string as the
-                                                // PendingGate.request_id so handle_answer_gate can
-                                                // write `encode_response(id, ...)` to the writer.
+                                                // request_id = the UNIQUE routing id; the raw ACP id is
+                                                // kept in acp_response_id so handle_answer_gate replies
+                                                // to opencode with the correct JSON-RPC id.
                                                 queue.push_back(PendingGate {
-                                                    request_id: acp_request_id.clone(),
+                                                    request_id: unique_id.clone(),
                                                     input: params.clone(),
                                                     elicitation: false,
+                                                    acp_response_id: Some(acp_request_id.clone()),
                                                 });
                                             }
                                         }
 
-                                        // Broadcast the gate as an AgentEvent so the GUI renders it.
-                                        // We encode the gate into the canonical control_request shape
-                                        // that marsad_proto expects. For opencode, we synthesise a
-                                        // stream-json `can_use_tool` control_request shape.
                                         // Surface the gate as a stream-json control_request that
                                         // parse_control_request accepts (request_id top-level,
-                                        // inner subtype=can_use_tool). Built by a tested helper so
-                                        // the shape can't silently drift again.
+                                        // inner subtype=can_use_tool). Uses the SAME unique_id so the
+                                        // frontend decision_id matches the pending gate for answering.
                                         let gate_event = acp_translate::acp_permission_to_control_request_event(
-                                            &acp_request_id,
+                                            &unique_id,
                                             &params,
                                         );
                                         let ipc_msg = marsad_proto::IpcMsg::AgentEvent {

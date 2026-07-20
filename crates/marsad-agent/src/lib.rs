@@ -406,12 +406,23 @@ impl fmt::Debug for AcpSessionsWrap {
 #[cfg(not(coverage))]
 #[derive(Clone)]
 struct PendingGate {
+    /// The gate's ROUTING id — must be globally unique (it becomes the frontend
+    /// `decision_id` and the core ledger's dedup key). For claude this is the
+    /// control-request id (a UUID). For opencode it is the toolCall id (unique per
+    /// tool call) — NOT the raw ACP JSON-RPC id, which is `0` for the first
+    /// permission of every session and would collide across sessions in the ledger
+    /// (→ answers silently deduped as "already seen").
     request_id: String,
     input: serde_json::Value,
     /// True if this gate answers an MCP `elicitation` request (answered with
     /// `{action}`) rather than a `can_use_tool` request (`{behavior,
     /// updatedInput}`). See `handle_answer_gate`.
     elicitation: bool,
+    /// opencode ACP only: the RAW JSON-RPC `id` of the `session/request_permission`
+    /// request (e.g. `0`), needed to `encode_response` back to opencode. Kept
+    /// separate from `request_id` because that id is not unique across sessions.
+    /// `None` for claude/codex gates.
+    acp_response_id: Option<String>,
 }
 
 /// Per-session pending-gate registry. Shared (Arc) between the FIFO reader

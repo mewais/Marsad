@@ -76,6 +76,21 @@ fn acp_permission_event_round_trips_to_a_can_use_tool_control_request() {
     }
 }
 
+#[test]
+fn acp_gate_routing_id_is_unique_never_the_raw_zero() {
+    use marsad_agent::acp_translate::acp_gate_routing_id;
+    // With a toolCallId → use it verbatim (unique per tool call).
+    let with_tc = json!({ "toolCall": { "toolCallId": "toolu_abc123" } });
+    assert_eq!(acp_gate_routing_id("session-A", "0", &with_tc), "toolu_abc123");
+    // Two sessions whose raw ACP id is both 0 must NOT collide (the dedup bug).
+    let bare = json!({ "toolCall": { "kind": "other" } });
+    let a = acp_gate_routing_id("session-A", "0", &bare);
+    let b = acp_gate_routing_id("session-B", "0", &bare);
+    assert_ne!(a, b, "gate ids for different sessions must differ even when ACP id is 0");
+    assert_ne!(a, "0", "routing id must never be the bare ACP id 0");
+    assert!(a.contains("session-A"));
+}
+
 // ── parse_acp_line: Request ───────────────────────────────────────────────────
 
 #[test]

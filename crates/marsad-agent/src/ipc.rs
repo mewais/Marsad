@@ -806,11 +806,12 @@ impl Agent {
                         option_id.as_deref(),
                     );
 
-                    // Parse the stored ACP request id back as a JSON Value.
-                    let acp_req_id: serde_json::Value =
-                        serde_json::from_str(&gate.request_id).unwrap_or_else(|_| {
-                            serde_json::Value::String(gate.request_id.clone())
-                        });
+                    // Reply with the RAW ACP JSON-RPC id (stored separately from the
+                    // unique routing request_id). Parse it back to its JSON type so a
+                    // numeric id like 0 correlates (opencode sent `"id":0`, not "0").
+                    let raw_id = gate.acp_response_id.as_deref().unwrap_or(&gate.request_id);
+                    let acp_req_id: serde_json::Value = serde_json::from_str(raw_id)
+                        .unwrap_or_else(|_| serde_json::Value::String(raw_id.to_string()));
 
                     let response_line = crate::acp::encode_response(acp_req_id, result_val);
                     let writers = self.session_writers.0.lock().unwrap();

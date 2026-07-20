@@ -575,6 +575,22 @@ pub fn acp_options_to_suggestions(options: &Value) -> Vec<Value> {
 /// opencode's `toolCall` carries `title`/`kind`/`toolCallId`/`rawInput` — there is
 /// NO `toolName`/`input` — so we read those; `options` become
 /// `permission_suggestions` verbatim (each `{ optionId, name, kind }`).
+/// The globally-unique ROUTING id for an opencode permission gate — the toolCall's
+/// `toolCallId` (unique per tool call) when present, else a session-scoped
+/// composite. NEVER the raw ACP JSON-RPC id: that is `0` for the first permission
+/// request of every session, so using it as the gate id makes the core dedup
+/// ledger treat every session's first gate as "already seen" and silently drop
+/// the answer. `acp_request_id` is only the fallback discriminator.
+pub fn acp_gate_routing_id(sid: &str, acp_request_id: &str, params: &Value) -> String {
+    params
+        .get("toolCall")
+        .and_then(|tc| tc.get("toolCallId"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("{sid}:acp:{acp_request_id}"))
+}
+
 pub fn acp_permission_to_control_request_event(request_id: &str, params: &Value) -> Value {
     let tool_call = params.get("toolCall").cloned().unwrap_or_else(|| json!({}));
     let kind = tool_call.get("kind").and_then(|v| v.as_str()).unwrap_or("");
