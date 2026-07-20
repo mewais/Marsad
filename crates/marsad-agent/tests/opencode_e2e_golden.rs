@@ -99,3 +99,85 @@ fn real_opencode_turn_renders_text_tool_gate_and_ends_without_error() {
         other => panic!("prompt result must parse as StreamMsg::Result, got {other:?}"),
     }
 }
+
+/// A subagent (`task` tool) lifecycle, replaying the reader's stateful
+/// translation, must produce a Running-then-Done subagent grouped by the core —
+/// exactly like a claude `Task` tool_use + `tool_result`. These are the REAL
+/// wire lines captured from a live opencode session (title "task", enriched to a
+/// description, completed via tool_call_update status). Before the fix these
+/// arrived as plain "task" tool rows and never created a subagent.
+#[test]
+fn real_opencode_subagent_task_groups_running_then_done() {
+    use marsad_agent::acp_translate::{
+        acp_subagent_parse_update, acp_subagent_pending_id, acp_subagent_task_tool_use,
+        acp_subagent_tool_result,
+    };
+    use marsad_events::SubagentStatus;
+    use std::collections::HashSet;
+
+    let mut state = SessionState::initial();
+    let mut ids: HashSet<String> = HashSet::new();
+    let mut created: HashSet<String> = HashSet::new();
+    let mut done: HashSet<String> = HashSet::new();
+
+    // Mirror the reader's subagent state machine, reducing every emitted event.
+    let mut feed = |state: SessionState, raw: &str| -> SessionState {
+        let msg = parse_acp_line(raw).expect("subagent line parses as ACP");
+        let AcpMessage::Notification { params, .. } = msg else {
+            panic!("expected notification");
+        };
+        let update = extract_update(&params).expect("has update");
+        let mut st = state;
+        let mut emit = |st: SessionState, sj: serde_json::Value| -> SessionState {
+            let line = serde_json::to_string(&sj).unwrap();
+            match parse_stream_line(&line) {
+                Ok(m) => reduce(st, Event::Stream(m)),
+                Err(e) => panic!("emitted stream-json failed to parse: {e}\n{line}"),
+            }
+        };
+        if let Some(id) = acp_subagent_pending_id(update) {
+            ids.insert(id);
+            return st;
+        }
+        if let Some(su) = acp_subagent_parse_update(update) {
+            if ids.contains(&su.tool_call_id) {
+                if !created.contains(&su.tool_call_id) {
+                    if let Some(name) = &su.name {
+                        st = emit(st, acp_subagent_task_tool_use(&su.tool_call_id, name, &su.raw_input));
+                        created.insert(su.tool_call_id.clone());
+                    }
+                }
+                if su.status == "completed" && !done.contains(&su.tool_call_id) {
+                    if !created.contains(&su.tool_call_id) {
+                        let name = su.name.clone().unwrap_or_else(|| "subagent".to_string());
+                        st = emit(st, acp_subagent_task_tool_use(&su.tool_call_id, &name, &su.raw_input));
+                        created.insert(su.tool_call_id.clone());
+                    }
+                    let text = su.result_text.clone().unwrap_or_default();
+                    st = emit(st, acp_subagent_tool_result(&su.tool_call_id, &text));
+                    done.insert(su.tool_call_id.clone());
+                }
+            }
+        }
+        st
+    };
+
+    // 1. The bare `task` tool_call: marks the subagent, creates NOTHING yet.
+    state = feed(state, r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_real","update":{"sessionUpdate":"tool_call","toolCallId":"toolu_task_1","title":"task","kind":"think","status":"pending","locations":[],"rawInput":{}}}}"#);
+    assert!(state.subagents.is_empty(), "bare `task` call must not create a subagent yet");
+
+    // 2. Enriched update carries the description → one Running subagent, named.
+    state = feed(state, r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_real","update":{"sessionUpdate":"tool_call_update","toolCallId":"toolu_task_1","title":"Explore ArchAttention repo","kind":"think","status":"in_progress","rawInput":{"description":"Explore ArchAttention repo","prompt":"Explore the repository thoroughly."}}}}"#);
+    assert_eq!(state.subagents.len(), 1, "enriched update creates exactly one subagent");
+    assert_eq!(state.subagents[0].name, "Explore ArchAttention repo", "name comes from the task description");
+    assert_eq!(state.subagents[0].status, SubagentStatus::Running, "subagent is Running while in_progress");
+
+    // 3. A second in_progress update must NOT create a duplicate subagent.
+    state = feed(state, r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_real","update":{"sessionUpdate":"tool_call_update","toolCallId":"toolu_task_1","title":"Explore ArchAttention repo","kind":"think","status":"in_progress","rawInput":{"description":"Explore ArchAttention repo","prompt":"..."}}}}"#);
+    assert_eq!(state.subagents.len(), 1, "repeat updates must not duplicate the subagent");
+
+    // 4. Completion → the subagent flips to Done (via the emitted tool_result).
+    state = feed(state, r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_real","update":{"sessionUpdate":"tool_call_update","toolCallId":"toolu_task_1","title":"Explore ArchAttention repo","status":"completed","content":[{"type":"content","content":{"type":"text","text":"<task_result>Report on the repo.</task_result>"}}]}}}"#);
+    assert_eq!(state.subagents.len(), 1, "still exactly one subagent after completion");
+    assert_eq!(state.subagents[0].status, SubagentStatus::Done, "completed update marks the subagent Done");
+}

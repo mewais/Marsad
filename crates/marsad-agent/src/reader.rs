@@ -330,6 +330,17 @@ pub(crate) fn spawn_session_reader(
             };
         }
 
+        // opencode spawns subagents via its `task` tool, surfaced as a
+        // tool_call/tool_call_update lifecycle. We re-emit that as claude's
+        // canonical `Task` tool_use + `tool_result` so marsad_events groups it
+        // like a claude subagent. These sets keep create/complete idempotent
+        // across reconnect replays (declared outside the reconnect loop on
+        // purpose — a subagent can span a reconnect).
+        let mut acp_sub_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut acp_sub_created: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut acp_sub_done: std::collections::HashSet<String> = std::collections::HashSet::new();
+
         'reconnect: loop {
             // Superseded (a newer reader took over) or stopped (paused) → exit now,
             // don't attach/re-probe.
@@ -1074,6 +1085,82 @@ pub(crate) fn spawn_session_reader(
                                             // usage…): the current text message is done,
                                             // flush it first so ordering is preserved.
                                             flush_acp_text!();
+
+                                            // opencode subagents: re-emit the `task`
+                                            // tool lifecycle as claude's canonical Task
+                                            // tool_use + tool_result so the core groups
+                                            // it identically. The raw `task` rows are
+                                            // suppressed (we `continue`) — one clean
+                                            // Task row + the subagent group instead.
+                                            if let Some(id) =
+                                                acp_translate::acp_subagent_pending_id(update)
+                                            {
+                                                // The bare `task` tool_call has no
+                                                // description yet; just mark the id and
+                                                // emit the create from the first enriched
+                                                // update below.
+                                                acp_sub_ids.insert(id);
+                                                continue;
+                                            }
+                                            if let Some(su) =
+                                                acp_translate::acp_subagent_parse_update(update)
+                                            {
+                                                if acp_sub_ids.contains(&su.tool_call_id) {
+                                                    // Emit the Task tool_use once, as soon
+                                                    // as we have a name for the subagent.
+                                                    if !acp_sub_created.contains(&su.tool_call_id) {
+                                                        if let Some(name) = &su.name {
+                                                            emit_event(
+                                                                acp_translate::acp_subagent_task_tool_use(
+                                                                    &su.tool_call_id,
+                                                                    name,
+                                                                    &su.raw_input,
+                                                                ),
+                                                            );
+                                                            acp_sub_created
+                                                                .insert(su.tool_call_id.clone());
+                                                        }
+                                                    }
+                                                    // On completion, emit the tool_result
+                                                    // once (marks the subagent Done).
+                                                    if su.status == "completed"
+                                                        && !acp_sub_done.contains(&su.tool_call_id)
+                                                    {
+                                                        // Guarantee a create even if no
+                                                        // named update was seen first.
+                                                        if !acp_sub_created
+                                                            .contains(&su.tool_call_id)
+                                                        {
+                                                            let name = su
+                                                                .name
+                                                                .clone()
+                                                                .unwrap_or_else(|| {
+                                                                    "subagent".to_string()
+                                                                });
+                                                            emit_event(
+                                                                acp_translate::acp_subagent_task_tool_use(
+                                                                    &su.tool_call_id,
+                                                                    &name,
+                                                                    &su.raw_input,
+                                                                ),
+                                                            );
+                                                            acp_sub_created
+                                                                .insert(su.tool_call_id.clone());
+                                                        }
+                                                        let text =
+                                                            su.result_text.clone().unwrap_or_default();
+                                                        emit_event(
+                                                            acp_translate::acp_subagent_tool_result(
+                                                                &su.tool_call_id,
+                                                                &text,
+                                                            ),
+                                                        );
+                                                        acp_sub_done.insert(su.tool_call_id.clone());
+                                                    }
+                                                    // Suppress the raw subagent tool rows.
+                                                    continue;
+                                                }
+                                            }
                                             // Compaction detection: bump the boundary event.
                                             if acp_translate::detect_compaction(update) {
                                                 eprintln!(

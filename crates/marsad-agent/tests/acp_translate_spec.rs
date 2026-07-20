@@ -161,6 +161,38 @@ fn agent_thought_chunk_produces_thinking_content_block() {
     parse(&out);
 }
 
+/// Real opencode carries reasoning under `content.text` (like agent_message_chunk),
+/// NOT a top-level `thinking` field. The translator must read that.
+#[test]
+fn agent_thought_chunk_reads_content_text_field() {
+    let update = json!({
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "thought-003",
+        "content": { "type": "text", "text": "Reasoning about the repo." }
+    });
+    let out = acp_update_to_stream_json(&update, SESSION_ID, MODEL).unwrap();
+    assert_eq!(out["message"]["content"][0]["type"], "thinking");
+    assert_eq!(
+        out["message"]["content"][0]["thinking"], "Reasoning about the repo.",
+        "thought text must be read from content.text"
+    );
+}
+
+/// opencode emits blank thought deltas (empty content.text). These must be
+/// dropped (None) so they don't spawn empty "thinking" bubbles in the transcript.
+#[test]
+fn agent_thought_chunk_empty_is_dropped() {
+    let update = json!({
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "thought-004",
+        "content": { "type": "text", "text": "" }
+    });
+    assert!(
+        acp_update_to_stream_json(&update, SESSION_ID, MODEL).is_none(),
+        "an empty thought chunk must translate to None"
+    );
+}
+
 // ── tool_call ─────────────────────────────────────────────────────────────────
 
 /// A `tool_call` update must produce an `assistant` message with a `tool_use`

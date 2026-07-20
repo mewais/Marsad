@@ -72,10 +72,20 @@ pub fn acp_update_to_stream_json(update: &Value, session_id: &str, _model: &str)
 
         // ── agent_thought_chunk → assistant thinking block ────────────────────
         "agent_thought_chunk" => {
+            // opencode carries reasoning under `content.text` (same shape as
+            // agent_message_chunk), NOT a top-level `thinking` field. Read that
+            // first; fall back to `thinking` for spec-compliant agents. Skip
+            // empty thoughts so opencode's blank reasoning deltas don't spawn
+            // empty "thinking" bubbles in the transcript.
             let thinking = update
-                .get("thinking")
+                .get("content")
+                .and_then(|c| c.get("text"))
                 .and_then(|v| v.as_str())
+                .or_else(|| update.get("thinking").and_then(|v| v.as_str()))
                 .unwrap_or("");
+            if thinking.is_empty() {
+                return None;
+            }
             let message_id = update
                 .get("messageId")
                 .and_then(|v| v.as_str())
@@ -556,6 +566,159 @@ pub fn acp_assistant_message(msg_id: &str, text: &str) -> Value {
                 "cache_read_input_tokens": 0,
                 "cache_creation_input_tokens": 0,
             }
+        }
+    })
+}
+
+// ── opencode subagents (the `task` tool) ────────────────────────────────────
+// opencode spawns a subagent through its `task` tool, surfaced over ACP as a
+// tool_call/tool_call_update lifecycle rather than claude's Task tool_use +
+// tool_result. These helpers let the reader re-emit that lifecycle as claude's
+// canonical shapes, so marsad_events groups the subagent identically (Running →
+// Done, listed at the bottom of the transcript) with NO driver-specific logic in
+// the core.
+
+/// A parsed opencode subagent `tool_call`/`tool_call_update`.
+pub struct AcpSubagentUpdate {
+    /// The ACP toolCallId — the stable identity across the lifecycle.
+    pub tool_call_id: String,
+    /// "pending" | "in_progress" | "completed" | "failed" | "" (absent).
+    pub status: String,
+    /// Human name for the subagent (the task's `description`), when known.
+    pub name: Option<String>,
+    /// The task input (`{ description, prompt, ... }`), `{}` if absent.
+    pub raw_input: Value,
+    /// The subagent's returned text (flattened from the completed `content`),
+    /// when present.
+    pub result_text: Option<String>,
+}
+
+/// If `update` is the opencode `task` tool_call that STARTS a subagent (its
+/// `title` is literally `"task"`), return its toolCallId. The reader tracks this
+/// id so subsequent updates for the same call are recognised as subagent events.
+pub fn acp_subagent_pending_id(update: &Value) -> Option<String> {
+    let kind = update
+        .get("sessionUpdate")
+        .or_else(|| update.get("type"))
+        .and_then(|v| v.as_str())?;
+    if kind != "tool_call" {
+        return None;
+    }
+    if update.get("title").and_then(|v| v.as_str()) != Some("task") {
+        return None;
+    }
+    update
+        .get("toolCallId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Parse a `tool_call`/`tool_call_update` into an `AcpSubagentUpdate`. The reader
+/// only acts on this when the toolCallId is already tracked as a subagent (see
+/// `acp_subagent_pending_id`), so this stays a pure extractor.
+pub fn acp_subagent_parse_update(update: &Value) -> Option<AcpSubagentUpdate> {
+    let kind = update
+        .get("sessionUpdate")
+        .or_else(|| update.get("type"))
+        .and_then(|v| v.as_str())?;
+    if kind != "tool_call" && kind != "tool_call_update" {
+        return None;
+    }
+    let tool_call_id = update
+        .get("toolCallId")
+        .and_then(|v| v.as_str())?
+        .to_string();
+    let status = update
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let raw_input = update.get("rawInput").cloned().unwrap_or_else(|| json!({}));
+    // Name: the task `description` (present once opencode enriches the call);
+    // else the update `title` when it is no longer the bare "task" placeholder.
+    let name = raw_input
+        .get("description")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            update
+                .get("title")
+                .and_then(|v| v.as_str())
+                .filter(|t| !t.is_empty() && *t != "task")
+        })
+        .map(|s| s.to_string());
+    // Completed updates carry `content: [{ type:"content", content:{ type:"text",
+    // text } }]`; flatten the text so the parent can keep the subagent's result.
+    let result_text = update
+        .get("content")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| {
+                    item.get("content")
+                        .and_then(|c| c.get("text"))
+                        .and_then(|t| t.as_str())
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .filter(|s| !s.is_empty());
+    Some(AcpSubagentUpdate {
+        tool_call_id,
+        status,
+        name,
+        raw_input,
+        result_text,
+    })
+}
+
+/// Build claude's canonical `Task` tool_use (assistant message) for a subagent.
+/// marsad_events sees `name == "Task"` and pushes a Running subagent whose
+/// display name comes from `input.description`. The message id is derived from
+/// the toolCallId so reconnect replays dedup to a single entry.
+pub fn acp_subagent_task_tool_use(tool_call_id: &str, name: &str, raw_input: &Value) -> Value {
+    let mut input = raw_input.clone();
+    let has_desc = input
+        .get("description")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    if !has_desc {
+        match input.as_object_mut() {
+            Some(obj) => {
+                obj.insert("description".to_string(), json!(name));
+            }
+            None => input = json!({ "description": name }),
+        }
+    }
+    json!({
+        "type": "assistant",
+        "message": {
+            "id": format!("msg_task_{}", tool_call_id),
+            "role": "assistant",
+            "content": [ { "type": "tool_use", "id": tool_call_id, "name": "Task", "input": input } ],
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            }
+        }
+    })
+}
+
+/// Build claude's canonical `tool_result` (user message) that COMPLETES a
+/// subagent. marsad_events matches `tool_use_id` back to the Task and flips it to
+/// Done. Deliberately carries NO Text block, so it is not mistaken for a human
+/// reply (which would advance/clear an open gate).
+pub fn acp_subagent_tool_result(tool_call_id: &str, text: &str) -> Value {
+    json!({
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [
+                { "type": "tool_result", "tool_use_id": tool_call_id, "content": text, "is_error": false }
+            ]
         }
     })
 }
