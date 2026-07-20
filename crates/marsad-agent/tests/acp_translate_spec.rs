@@ -11,8 +11,8 @@
 //!   `marsad_proto::parse_stream_line`, assert the correct `StreamMsg` variant.
 
 use marsad_agent::acp_translate::{
-    acp_init_to_system_init, acp_options_to_suggestions,
-    acp_stop_reason_to_result, acp_update_to_stream_json, detect_compaction,
+    acp_assistant_message, acp_init_to_system_init, acp_options_to_suggestions,
+    acp_stop_reason_to_result, acp_text_chunk, acp_update_to_stream_json, detect_compaction,
 };
 use marsad_gates::Gate;
 use marsad_proto::{parse_stream_line, StreamMsg};
@@ -773,4 +773,80 @@ fn detect_compaction_meta_compacted_false_returns_false() {
 fn detect_compaction_empty_update_returns_false() {
     let update = json!({});
     assert!(!detect_compaction(&update), "empty update must not be detected as compaction");
+}
+
+// ── acp_text_chunk / acp_assistant_message ──────────────────────────────────
+// opencode streams one assistant reply as many `agent_message_chunk` deltas that
+// share a `messageId`. The reader accumulates the raw text of same-id deltas and
+// emits ONE assistant message so the transcript shows one bubble, not many.
+
+/// A text `agent_message_chunk` yields `(messageId, raw_text)` — untrimmed, so
+/// consecutive deltas concatenate with the spacing opencode intended.
+#[test]
+fn acp_text_chunk_returns_message_id_and_raw_text() {
+    let update = json!({
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg-abc",
+        "content": { "type": "text", "text": " for codeb" }
+    });
+    let got = acp_text_chunk(&update).expect("text chunk must be recognised");
+    assert_eq!(got.0, "msg-abc", "messageId must be extracted verbatim");
+    assert_eq!(got.1, " for codeb", "text must be RAW (leading space preserved)");
+}
+
+/// Non-text updates (tool_call, thought, non-text content) return `None` so they
+/// fall through to normal translation instead of being swallowed as text.
+#[test]
+fn acp_text_chunk_ignores_non_text_updates() {
+    let tool_call = json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "t1",
+        "title": "glob",
+    });
+    assert!(acp_text_chunk(&tool_call).is_none(), "tool_call is not a text chunk");
+
+    let thought = json!({
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "m1",
+        "thinking": "hmm",
+    });
+    assert!(acp_text_chunk(&thought).is_none(), "thought chunk is not text");
+
+    let non_text = json!({
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "m2",
+        "content": { "type": "image", "data": "..." }
+    });
+    assert!(acp_text_chunk(&non_text).is_none(), "non-text content is not text");
+}
+
+/// The accumulated message MUST be byte-for-byte identical to what
+/// `acp_update_to_stream_json` produces for a single chunk carrying the whole
+/// text — so downstream `parse_stream_line`/reduce renders exactly one bubble.
+#[test]
+fn acp_assistant_message_matches_single_chunk_shape() {
+    let combined = json!({
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg-1",
+        "content": { "type": "text", "text": "Hello, world" }
+    });
+    let single_shot = acp_update_to_stream_json(&combined, "sid-1", "")
+        .expect("single chunk translates");
+    let accumulated = acp_assistant_message("msg-1", "Hello, world");
+    assert_eq!(
+        accumulated, single_shot,
+        "accumulated assistant message must match the single-chunk shape exactly"
+    );
+}
+
+/// The accumulated message round-trips through `parse_stream_line` as ONE
+/// assistant text message.
+#[test]
+fn acp_assistant_message_round_trips_as_one_assistant_message() {
+    let msg = acp_assistant_message("msg-1", "chunk one two three");
+    let line = serde_json::to_string(&msg).unwrap();
+    match parse_stream_line(&line) {
+        Ok(StreamMsg::Assistant(_)) => {}
+        other => panic!("expected one Assistant message, got {other:?}"),
+    }
 }

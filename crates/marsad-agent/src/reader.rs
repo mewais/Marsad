@@ -301,6 +301,35 @@ pub(crate) fn spawn_session_reader(
             }
         };
 
+        // Emit an arbitrary translated stream-json event to subscribers.
+        let emit_event = |event: serde_json::Value| {
+            let line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::AgentEvent {
+                session_id: sid.clone(),
+                event,
+            });
+            if let Ok(subs) = subs_fifo.lock() {
+                for s in subs.iter() {
+                    let _ = s.send(line.clone());
+                }
+            }
+        };
+
+        // opencode streams ONE assistant reply as many `agent_message_chunk`
+        // deltas that share a message id. We ACCUMULATE them here and emit a single
+        // complete assistant message (on the next message id, any non-text update,
+        // a request/result, or stream end) — otherwise each tiny delta became its
+        // own transcript bubble. `flush_acp_text!()` emits + clears the buffer.
+        let mut acp_text_buf: Option<(String, String)> = None;
+        macro_rules! flush_acp_text {
+            () => {
+                if let Some((mid, txt)) = acp_text_buf.take() {
+                    if !txt.is_empty() {
+                        emit_event(crate::acp_translate::acp_assistant_message(&mid, &txt));
+                    }
+                }
+            };
+        }
+
         'reconnect: loop {
             // Superseded (a newer reader took over) or stopped (paused) → exit now,
             // don't attach/re-probe.
@@ -929,10 +958,14 @@ pub(crate) fn spawn_session_reader(
                                 "marsad-agent: session {sid} reader EOF after {lines_seen} line(s)"
                             );
                         }
+                        // Emit any assistant text still buffered before we stop.
+                        flush_acp_text!();
                         break;
                     }
                     Err(e) => {
                         eprintln!("marsad-agent: session {sid} reader ERROR after {lines_seen} line(s): {e}");
+                        // Emit any assistant text still buffered before we stop.
+                        flush_acp_text!();
                         break;
                     }
                     Ok(_) => {
@@ -1020,6 +1053,27 @@ pub(crate) fn spawn_session_reader(
                                 acp::AcpMessage::Notification { method, params } => {
                                     if method == "session/update" {
                                         if let Some(update) = acp::extract_update(&params) {
+                                            // A streamed text delta → accumulate into
+                                            // the current assistant message instead of
+                                            // emitting one bubble per delta.
+                                            if let Some((mid, txt)) =
+                                                acp_translate::acp_text_chunk(update)
+                                            {
+                                                match &mut acp_text_buf {
+                                                    Some((cur, buf)) if *cur == mid => {
+                                                        buf.push_str(&txt)
+                                                    }
+                                                    _ => {
+                                                        flush_acp_text!();
+                                                        acp_text_buf = Some((mid, txt));
+                                                    }
+                                                }
+                                                continue;
+                                            }
+                                            // Any OTHER update (tool_call, plan, mode,
+                                            // usage…): the current text message is done,
+                                            // flush it first so ordering is preserved.
+                                            flush_acp_text!();
                                             // Compaction detection: bump the boundary event.
                                             if acp_translate::detect_compaction(update) {
                                                 eprintln!(
@@ -1036,15 +1090,7 @@ pub(crate) fn spawn_session_reader(
                                                     update, &sid, model_str,
                                                 )
                                             {
-                                                let ipc_msg = marsad_proto::IpcMsg::AgentEvent {
-                                                    session_id: sid.clone(),
-                                                    event: translated,
-                                                };
-                                                let encoded = marsad_proto::encode_ipc(&ipc_msg);
-                                                let subs = subs_fifo.lock().unwrap();
-                                                subs.iter().for_each(|s| {
-                                                    let _ = s.send(encoded.clone());
-                                                });
+                                                emit_event(translated);
                                             }
                                         }
                                     } else {
@@ -1056,6 +1102,9 @@ pub(crate) fn spawn_session_reader(
 
                                 // ── Request (agent→client) ─────────────────────────────────
                                 acp::AcpMessage::Request { id, method, params } => {
+                                    // A gate interrupts the reply — flush any buffered
+                                    // assistant text before the gate event.
+                                    flush_acp_text!();
                                     if acp::is_permission_request(&method) {
                                         // session/request_permission: capture as pending gate.
                                         // The ACP request `id` is stored as `request_id` in the
@@ -1128,6 +1177,9 @@ pub(crate) fn spawn_session_reader(
 
                                 // ── Response ──────────────────────────────────────────────
                                 acp::AcpMessage::Response { id, result } => {
+                                    // A prompt result (end_turn) ends the turn — flush
+                                    // any buffered assistant text before the result.
+                                    flush_acp_text!();
                                     // Correlate by id. id=1 → initialize result.
                                     // id=2 → session/new or session/load result.
                                     // id>=3 → session/prompt result (one per turn).

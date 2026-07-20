@@ -515,19 +515,51 @@ pub fn acp_options_to_suggestions(options: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// Build the stream-json `control_request` event that surfaces an opencode ACP
-/// `session/request_permission` in the UI as a `can_use_tool` gate.
-///
-/// The shape MUST match `marsad_proto::parse_stream_line`/`parse_control_request`:
-/// `request_id` at the TOP LEVEL, and the inner `request` keyed by **`subtype`**
-/// (not `type`) == `"can_use_tool"`. An earlier hand-rolled shape (nested
-/// `request_id`, inner `type`) never parsed, so no gate ever surfaced and every
-/// opencode permission request left the session stuck "working". This helper
-/// exists so that contract is unit-tested (round-tripped through parse_stream_line).
-///
-/// opencode's `toolCall` carries `title`/`kind`/`toolCallId`/`rawInput` — there is
-/// NO `toolName`/`input` — so we read those; `options` become
-/// `permission_suggestions` verbatim (each `{ optionId, name, kind }`).
+/// If `update` is an `agent_message_chunk` carrying a text block, return
+/// `(messageId, raw_text)`. Text is RAW (untrimmed) so consecutive streamed deltas
+/// concatenate with correct spacing. `None` for any other update (or non-text
+/// content). Used by the reader to ACCUMULATE opencode's many per-turn deltas into
+/// one assistant message instead of emitting one transcript bubble per delta.
+pub fn acp_text_chunk(update: &Value) -> Option<(String, String)> {
+    let kind = update
+        .get("sessionUpdate")
+        .or_else(|| update.get("type"))
+        .and_then(|v| v.as_str())?;
+    if kind != "agent_message_chunk" {
+        return None;
+    }
+    let content = update.get("content")?;
+    if content.get("type").and_then(|v| v.as_str()) != Some("text") {
+        return None;
+    }
+    let text = content.get("text").and_then(|v| v.as_str()).unwrap_or("");
+    let msg_id = update
+        .get("messageId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("acp-msg")
+        .to_string();
+    Some((msg_id, text.to_string()))
+}
+
+/// Build a complete assistant stream-json message from an accumulated text buffer
+/// (same shape the `agent_message_chunk` arm produces, but for the whole message).
+pub fn acp_assistant_message(msg_id: &str, text: &str) -> Value {
+    json!({
+        "type": "assistant",
+        "message": {
+            "id": format!("msg_{}", msg_id),
+            "role": "assistant",
+            "content": [ { "type": "text", "text": text } ],
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            }
+        }
+    })
+}
+
 /// The globally-unique ROUTING id for an opencode permission gate — the toolCall's
 /// `toolCallId` (unique per tool call) when present, else a session-scoped
 /// composite. NEVER the raw ACP JSON-RPC id: that is `0` for the first permission
@@ -544,6 +576,19 @@ pub fn acp_gate_routing_id(sid: &str, acp_request_id: &str, params: &Value) -> S
         .unwrap_or_else(|| format!("{sid}:acp:{acp_request_id}"))
 }
 
+/// Build the stream-json `control_request` event that surfaces an opencode ACP
+/// `session/request_permission` in the UI as a `can_use_tool` gate.
+///
+/// The shape MUST match `marsad_proto::parse_stream_line`/`parse_control_request`:
+/// `request_id` at the TOP LEVEL, and the inner `request` keyed by **`subtype`**
+/// (not `type`) == `"can_use_tool"`. An earlier hand-rolled shape (nested
+/// `request_id`, inner `type`) never parsed, so no gate ever surfaced and every
+/// opencode permission request left the session stuck "working". This helper
+/// exists so that contract is unit-tested (round-tripped through parse_stream_line).
+///
+/// opencode's `toolCall` carries `title`/`kind`/`toolCallId`/`rawInput` — there is
+/// NO `toolName`/`input` — so we read those; `options` become
+/// `permission_suggestions` verbatim (each `{ optionId, name, kind }`).
 pub fn acp_permission_to_control_request_event(request_id: &str, params: &Value) -> Value {
     let tool_call = params.get("toolCall").cloned().unwrap_or_else(|| json!({}));
     let kind = tool_call.get("kind").and_then(|v| v.as_str()).unwrap_or("");
