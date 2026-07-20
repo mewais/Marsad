@@ -21,7 +21,14 @@ use serde_json::{json, Value};
 ///
 /// Every `Some(v)` returned MUST pass `marsad_proto::parse_stream_line`.
 pub fn acp_update_to_stream_json(update: &Value, session_id: &str, _model: &str) -> Option<Value> {
-    let type_str = update.get("type").and_then(|t| t.as_str())?;
+    // ACP tags the update kind in `sessionUpdate` (real opencode wire field).
+    // Fall back to `type` for legacy/synthetic callers. Reading only `type` — as
+    // the original code did — meant EVERY real opencode update returned None, so
+    // nothing (assistant text, tool calls, plans) ever reached the transcript.
+    let type_str = update
+        .get("sessionUpdate")
+        .or_else(|| update.get("type"))
+        .and_then(|t| t.as_str())?;
 
     match type_str {
         // ── agent_message_chunk → assistant text block ────────────────────────
@@ -97,31 +104,29 @@ pub fn acp_update_to_stream_json(update: &Value, session_id: &str, _model: &str)
 
         // ── tool_call → assistant tool_use block ──────────────────────────────
         "tool_call" => {
-            let tool_name = update
-                .get("toolName")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown_tool");
-            let tool_use_id = update
-                .get("toolUseId")
+            // opencode's tool_call: { toolCallId, title, kind, status, rawInput }
+            // — NOT claude's toolName/toolUseId/input. `title` is the human label
+            // ("glob", "README.md"), `kind` the category, `rawInput` the args.
+            let tool_id = update
+                .get("toolCallId")
                 .and_then(|v| v.as_str())
                 .unwrap_or("toolu-acp-0");
-            // `input` in ACP is a JSON string; parse it into a Value.
-            let input_str = update
-                .get("input")
+            let tool_name = update
+                .get("title")
                 .and_then(|v| v.as_str())
-                .unwrap_or("{}");
-            let input: Value = serde_json::from_str(input_str).unwrap_or(json!({}));
-            // Generate a stable message id from the toolUseId so the assistant
-            // block is uniquely keyed.
+                .filter(|s| !s.is_empty())
+                .or_else(|| update.get("kind").and_then(|v| v.as_str()))
+                .unwrap_or("tool");
+            let input = update.get("rawInput").cloned().unwrap_or_else(|| json!({}));
             Some(json!({
                 "type": "assistant",
                 "message": {
-                    "id": format!("msg_tool_{}", tool_use_id),
+                    "id": format!("msg_tool_{}", tool_id),
                     "role": "assistant",
                     "content": [
                         {
                             "type": "tool_use",
-                            "id": tool_use_id,
+                            "id": tool_id,
                             "name": tool_name,
                             "input": input,
                         }
@@ -138,42 +143,39 @@ pub fn acp_update_to_stream_json(update: &Value, session_id: &str, _model: &str)
 
         // ── tool_call_update → assistant tool_use/tool_result block ──────────
         "tool_call_update" => {
-            let tool_use_id = update
-                .get("toolUseId")
+            // opencode's tool_call_update: { toolCallId, status, title?, kind?,
+            // rawInput?, content? }. On completion it carries a `content` array of
+            // { type:"content", content:{ type:"text", text } }. Same field names as
+            // tool_call (NOT toolName/toolUseId/input).
+            let tool_id = update
+                .get("toolCallId")
                 .and_then(|v| v.as_str())
                 .unwrap_or("toolu-acp-upd");
             let tool_name = update
-                .get("toolName")
+                .get("title")
                 .and_then(|v| v.as_str())
-                .unwrap_or("unknown_tool");
-            // `input` in ACP is a JSON string; parse it into a Value.
-            let input_str = update
-                .get("input")
-                .and_then(|v| v.as_str())
-                .unwrap_or("{}");
-            let input: Value = serde_json::from_str(input_str).unwrap_or(json!({}));
+                .filter(|s| !s.is_empty())
+                .or_else(|| update.get("kind").and_then(|v| v.as_str()))
+                .unwrap_or("tool");
+            let input = update.get("rawInput").cloned().unwrap_or_else(|| json!({}));
 
-            // content is an array of items; we pass them through
+            // content is an array of items; we pass them through so the transcript
+            // can show the tool's output.
             let content_arr = update
                 .get("content")
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
 
-            // Build a content block representing this update.
-            // For simplicity, we emit an assistant message with a tool_use block
-            // that carries the input and content (diff/text) so Core/UI can
-            // render it. This matches the "same tool_use/tool_result shapes
-            // claude emits" requirement in spec §3.
             Some(json!({
                 "type": "assistant",
                 "message": {
-                    "id": format!("msg_toolupd_{}", tool_use_id),
+                    "id": format!("msg_toolupd_{}", tool_id),
                     "role": "assistant",
                     "content": [
                         {
                             "type": "tool_use",
-                            "id": tool_use_id,
+                            "id": tool_id,
                             "name": tool_name,
                             "input": input,
                             "content": content_arr,
@@ -475,11 +477,16 @@ pub fn acp_stop_reason_to_result(stop_reason: &str) -> Value {
             },
             "permission_denials": [],
         }),
-        other => json!({
+        // The ACP PromptResponse stopReasons — end_turn (the normal success!),
+        // max_tokens, max_turn_requests, refusal — and ANY other/unknown reason are
+        // turn COMPLETIONS, not errors. Flagging them as errors marked every
+        // successful opencode turn as "Error" (only auth_required /
+        // request_limit_exceeded above are genuine failures). Default to success so
+        // a new/unmapped reason is never false-flagged.
+        _ => json!({
             "type": "result",
-            "subtype": "error_during_execution",
-            "is_error": true,
-            "result": format!("ACP session stopped with reason: {other}"),
+            "subtype": "success",
+            "is_error": false,
             "total_cost_usd": 0.0,
             "num_turns": 1,
             "usage": {
@@ -495,60 +502,6 @@ pub fn acp_stop_reason_to_result(stop_reason: &str) -> Value {
 
 // ── session/request_permission → Gate ────────────────────────────────────────
 
-/// Map a `session/request_permission` params object into a Marsad
-/// `Gate::Permission` with the ACP options carried verbatim in
-/// `permission_suggestions`.
-///
-/// # Parameters
-/// - `params` — the `params` field of the `session/request_permission` request.
-///
-/// The gate's `request_id` is used as the key to route the human's answer back
-/// to the pending ACP JSON-RPC request id.
-pub fn acp_permission_to_gate(params: &Value) -> marsad_gates::Gate {
-    let tool_call = params.get("toolCall").cloned().unwrap_or(json!({}));
-    let tool_name = tool_call
-        .get("toolName")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown_tool");
-    let tool_use_id = tool_call
-        .get("toolUseId")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let input_str = tool_call
-        .get("input")
-        .and_then(|v| v.as_str())
-        .unwrap_or("{}");
-
-    // Build a human-readable command description from the tool name and input.
-    let command = format!("{} {}", tool_name, input_str);
-
-    // Build an explanation from the tool name (shown to the user).
-    let explanation = format!(
-        "opencode is requesting permission to run {} (toolUseId: {})",
-        tool_name, tool_use_id
-    );
-
-    // request_id: use toolUseId as the routing key (or a fallback).
-    let request_id = if tool_use_id.is_empty() {
-        format!("acp-perm-{}", tool_name)
-    } else {
-        tool_use_id.to_string()
-    };
-
-    let options = params.get("options").cloned().unwrap_or(json!([]));
-    let permission_suggestions = acp_options_to_suggestions(&options);
-
-    marsad_gates::Gate::Permission {
-        request_id,
-        command,
-        cwd: String::new(),
-        risk: String::new(),
-        explanation,
-        is_elicitation: false,
-        elicitation_choices: vec![],
-        permission_suggestions,
-    }
-}
 
 /// Extract the ACP `options[]` array from a `session/request_permission` params
 /// and return it as a `Vec<Value>` suitable for `permission_suggestions`.

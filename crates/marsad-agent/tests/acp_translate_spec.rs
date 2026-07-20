@@ -11,7 +11,7 @@
 //!   `marsad_proto::parse_stream_line`, assert the correct `StreamMsg` variant.
 
 use marsad_agent::acp_translate::{
-    acp_init_to_system_init, acp_options_to_suggestions, acp_permission_to_gate,
+    acp_init_to_system_init, acp_options_to_suggestions,
     acp_stop_reason_to_result, acp_update_to_stream_json, detect_compaction,
 };
 use marsad_gates::Gate;
@@ -167,36 +167,37 @@ fn agent_thought_chunk_produces_thinking_content_block() {
 /// content block carrying the correct id, name, and parsed input.
 #[test]
 fn tool_call_produces_assistant_with_tool_use_block() {
+    // Real opencode tool_call shape: sessionUpdate + toolCallId/title/kind/rawInput.
     let update = json!({
-        "type": "tool_call",
-        "toolName": "Bash",
-        "toolUseId": "toolu-acp-bash-001",
-        "input": "{\"command\": \"echo hello\"}"
+        "sessionUpdate": "tool_call",
+        "toolCallId": "toolu-acp-bash-001",
+        "title": "echo hello",
+        "kind": "execute",
+        "rawInput": { "command": "echo hello" }
     });
     let out = acp_update_to_stream_json(&update, SESSION_ID, MODEL).unwrap();
     assert_eq!(out["type"], "assistant");
     let content = &out["message"]["content"][0];
     assert_eq!(content["type"], "tool_use");
     assert_eq!(content["id"], "toolu-acp-bash-001");
-    assert_eq!(content["name"], "Bash");
-    // Input must be parsed from the JSON string
+    // name = the human `title` (never the old "unknown_tool").
+    assert_eq!(content["name"], "echo hello");
     assert_eq!(content["input"]["command"], "echo hello");
-    // parse_stream_line round-trip
     assert!(matches!(parse(&out), StreamMsg::Assistant(_)));
 }
 
-/// `tool_call` for a non-Bash tool (e.g. a custom MCP tool) must also work.
+/// `tool_call` name falls back to `kind` when there is no title.
 #[test]
-fn tool_call_custom_tool_name_is_preserved() {
+fn tool_call_falls_back_to_kind_for_name() {
     let update = json!({
-        "type": "tool_call",
-        "toolName": "mcp__files__read_file",
-        "toolUseId": "toolu-mcp-read-007",
-        "input": "{\"path\": \"/etc/hosts\"}"
+        "sessionUpdate": "tool_call",
+        "toolCallId": "toolu-mcp-read-007",
+        "kind": "read",
+        "rawInput": { "path": "/etc/hosts" }
     });
     let out = acp_update_to_stream_json(&update, SESSION_ID, MODEL).unwrap();
     let content = &out["message"]["content"][0];
-    assert_eq!(content["name"], "mcp__files__read_file");
+    assert_eq!(content["name"], "read", "no title → use kind");
     assert_eq!(content["id"], "toolu-mcp-read-007");
     assert_eq!(content["input"]["path"], "/etc/hosts");
     assert!(matches!(parse(&out), StreamMsg::Assistant(_)));
@@ -208,25 +209,25 @@ fn tool_call_custom_tool_name_is_preserved() {
 /// tool-result shape.  The output must parse as an `assistant` message
 /// (carrying the tool_use or tool_result block).
 #[test]
-fn tool_call_update_diff_produces_file_change_shape() {
+fn tool_call_update_content_produces_assistant_block() {
+    // Real opencode tool_call_update on completion: sessionUpdate + toolCallId +
+    // status + title/kind + a `content` array of { type:"content", content:{…} }.
     let update = json!({
-        "type": "tool_call_update",
-        "toolUseId": "toolu-edit-acp-002",
-        "toolName": "Edit",
-        "input": "{\"path\": \"/home/user/myproject/main.rs\"}",
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "toolu-edit-acp-002",
+        "status": "completed",
+        "title": "main.rs",
+        "kind": "edit",
+        "rawInput": { "filePath": "/home/user/myproject/main.rs" },
         "content": [
-            {
-                "type": "diff",
-                "file": "/home/user/myproject/main.rs",
-                "patch": "@@ -1,3 +1,4 @@\n fn main() {\n+    println!(\"hello\");\n }\n"
-            }
+            { "type": "content", "content": { "type": "text", "text": "edited main.rs" } }
         ]
     });
     let out = acp_update_to_stream_json(&update, SESSION_ID, MODEL).unwrap();
-    // Must be an assistant message (tool_use or tool_result block)
-    assert_eq!(out["type"], "assistant", "diff tool_call_update must be assistant");
+    assert_eq!(out["type"], "assistant", "tool_call_update must be assistant");
     assert!(matches!(parse(&out), StreamMsg::Assistant(_)));
-    // The diff info must be present somewhere in the content
+    let block = &out["message"]["content"][0];
+    assert_eq!(block["name"], "main.rs", "name = title, not unknown_tool");
     let content_arr = out["message"]["content"].as_array().unwrap();
     assert!(!content_arr.is_empty(), "content must not be empty");
 }
@@ -470,12 +471,25 @@ fn stop_reason_request_limit_exceeded_produces_result_error() {
     assert!(matches!(parse(&out), StreamMsg::Result(_)));
 }
 
-/// An unrecognised stop reason falls back to result/error.
+/// `"end_turn"` is opencode's NORMAL success completion — it must NOT be an error.
+/// (Regression: it used to fall into the unknown→error arm, so every successful
+/// opencode turn showed as "Error".)
 #[test]
-fn stop_reason_unknown_falls_back_to_result_error() {
+fn stop_reason_end_turn_produces_result_success() {
+    let out = acp_stop_reason_to_result("end_turn");
+    assert_eq!(out["type"], "result");
+    assert_eq!(out["subtype"], "success", "end_turn → subtype=success");
+    assert_eq!(out["is_error"], false, "end_turn → is_error=false");
+    assert!(matches!(parse(&out), StreamMsg::Result(_)));
+}
+
+/// An unrecognised stop reason defaults to SUCCESS — a normal turn completion is
+/// never a hard error, and an unmapped reason must not be false-flagged.
+#[test]
+fn stop_reason_unknown_defaults_to_result_success() {
     let out = acp_stop_reason_to_result("something_unexpected");
     assert_eq!(out["type"], "result");
-    assert_eq!(out["is_error"], true);
+    assert_eq!(out["is_error"], false, "unknown stop reason must not be an error");
     assert!(matches!(parse(&out), StreamMsg::Result(_)));
 }
 
@@ -593,156 +607,6 @@ fn acp_init_mcp_servers_field_present() {
         "mcp_servers field must be present in system/init"
     );
     assert!(matches!(parse(&out), StreamMsg::SystemInit(_)));
-}
-
-// =============================================================================
-// acp_permission_to_gate
-// =============================================================================
-
-fn make_permission_params() -> Value {
-    json!({
-        "sessionId": SESSION_ID,
-        "toolCall": {
-            "toolName": "Bash",
-            "toolUseId": "toolu-perm-001",
-            "input": "{\"command\": \"rm -rf /tmp/junk\"}"
-        },
-        "options": [
-            { "optionId": "opt-allow-once",   "name": "Allow once",    "kind": "allow_once"   },
-            { "optionId": "opt-allow-always",  "name": "Allow always",  "kind": "allow_always" },
-            { "optionId": "opt-reject-once",   "name": "Reject once",   "kind": "reject_once"  },
-            { "optionId": "opt-reject-always", "name": "Reject always", "kind": "reject_always"}
-        ]
-    })
-}
-
-/// The returned gate must be a `Gate::Permission` (not Plan, Edit, or Question).
-#[test]
-fn acp_permission_to_gate_returns_permission_variant() {
-    let params = make_permission_params();
-    let gate = acp_permission_to_gate(&params);
-    assert!(
-        matches!(gate, Gate::Permission { .. }),
-        "acp_permission_to_gate must return Gate::Permission, got: {gate:?}"
-    );
-}
-
-/// The ACP `options[]` must be carried VERBATIM in `permission_suggestions`,
-/// preserving `optionId`, `name`, and `kind` for each entry.
-#[test]
-fn acp_permission_to_gate_options_verbatim_in_permission_suggestions() {
-    let params = make_permission_params();
-    let gate = acp_permission_to_gate(&params);
-    let Gate::Permission { permission_suggestions, .. } = gate else {
-        panic!("expected Gate::Permission");
-    };
-    assert_eq!(
-        permission_suggestions.len(),
-        4,
-        "all 4 ACP options must be present in permission_suggestions"
-    );
-    // Verify each option by checking optionId, name, kind
-    let expected = [
-        ("opt-allow-once",   "Allow once",    "allow_once"),
-        ("opt-allow-always", "Allow always",  "allow_always"),
-        ("opt-reject-once",  "Reject once",   "reject_once"),
-        ("opt-reject-always","Reject always", "reject_always"),
-    ];
-    for (i, (exp_id, exp_name, exp_kind)) in expected.iter().enumerate() {
-        let opt = &permission_suggestions[i];
-        assert_eq!(
-            opt["optionId"].as_str().unwrap_or(""),
-            *exp_id,
-            "option[{i}].optionId mismatch"
-        );
-        assert_eq!(
-            opt["name"].as_str().unwrap_or(""),
-            *exp_name,
-            "option[{i}].name mismatch"
-        );
-        assert_eq!(
-            opt["kind"].as_str().unwrap_or(""),
-            *exp_kind,
-            "option[{i}].kind mismatch"
-        );
-    }
-}
-
-/// The gate `command` field must reflect the toolCall (toolName + input).
-#[test]
-fn acp_permission_to_gate_command_reflects_tool_call() {
-    let params = make_permission_params();
-    let gate = acp_permission_to_gate(&params);
-    let Gate::Permission { command, .. } = &gate else {
-        panic!("expected Gate::Permission");
-    };
-    // The command must contain the tool name "Bash" at minimum.
-    assert!(
-        command.contains("Bash") || command.contains("rm -rf"),
-        "gate command must reflect the toolCall (Bash / rm -rf), got: {command:?}"
-    );
-}
-
-/// The gate `explanation` must be non-empty.
-#[test]
-fn acp_permission_to_gate_explanation_non_empty() {
-    let params = make_permission_params();
-    let gate = acp_permission_to_gate(&params);
-    let Gate::Permission { explanation, .. } = &gate else {
-        panic!("expected Gate::Permission");
-    };
-    assert!(
-        !explanation.is_empty(),
-        "gate explanation must not be empty"
-    );
-}
-
-/// The gate `request_id` must be non-empty (it routes the human's answer back
-/// to the pending ACP JSON-RPC request).
-#[test]
-fn acp_permission_to_gate_request_id_non_empty() {
-    let params = make_permission_params();
-    let gate = acp_permission_to_gate(&params);
-    let Gate::Permission { request_id, .. } = &gate else {
-        panic!("expected Gate::Permission");
-    };
-    assert!(!request_id.is_empty(), "gate request_id must not be empty");
-}
-
-/// Options must not be renamed, invented, or re-ordered. This test builds a
-/// params with a custom option list and verifies verbatim preservation.
-#[test]
-fn acp_permission_to_gate_no_invented_options() {
-    let params = json!({
-        "sessionId": SESSION_ID,
-        "toolCall": {
-            "toolName": "Edit",
-            "toolUseId": "toolu-edit-perm-999",
-            "input": "{\"path\": \"/etc/passwd\"}"
-        },
-        "options": [
-            { "optionId": "custom-opt-A", "name": "Proceed carefully", "kind": "allow_once" },
-            { "optionId": "custom-opt-B", "name": "Never again",        "kind": "reject_always" }
-        ]
-    });
-    let gate = acp_permission_to_gate(&params);
-    let Gate::Permission { permission_suggestions, .. } = gate else {
-        panic!("expected Gate::Permission");
-    };
-    // Exactly the two provided options, verbatim
-    assert_eq!(permission_suggestions.len(), 2, "must carry exactly 2 options");
-    assert_eq!(
-        permission_suggestions[0]["optionId"],
-        "custom-opt-A",
-        "first option must be 'custom-opt-A'"
-    );
-    assert_eq!(
-        permission_suggestions[1]["optionId"],
-        "custom-opt-B",
-        "second option must be 'custom-opt-B'"
-    );
-    assert_eq!(permission_suggestions[0]["name"], "Proceed carefully");
-    assert_eq!(permission_suggestions[1]["name"], "Never again");
 }
 
 // =============================================================================
