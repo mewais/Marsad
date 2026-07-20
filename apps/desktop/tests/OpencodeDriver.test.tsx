@@ -225,32 +225,29 @@ describe("GateOverlay — ACP permission options (verbatim name) [RED]", () => {
     ).toContain("Reject");
   });
 
-  it("clicking an ACP option calls answerGate with the option's optionId at the top level", async () => {
-    // RED: the current handleAllowSuggestion re-uses the claude path and sends
-    // permission_updates:[suggestion] — there is no top-level `optionId` field.
-    // A coder must add an ACP-specific branch that calls answerGate with
-    // optionId surfaced directly (e.g. { session_id, optionId: "a", ... }).
+  it("clicking an ACP option calls answerGate with the optionId inside permission_updates", async () => {
+    // The chosen optionId travels in permission_updates (the agent reads
+    // permission_updates.optionId; the wire AnswerGate has no top-level optionId).
     renderGate("s01", withAcpSuggestions(ACP_OPTIONS));
     fireEvent.click(screen.getByTestId("approve-suggestion-0"));
     await vi.waitFor(() => {
       expect(getAnswerGate()).toHaveBeenCalledWith(
         expect.objectContaining({
           session_id: "s01",
-          optionId: ACP_OPTIONS[0].optionId,
+          permission_updates: { optionId: ACP_OPTIONS[0].optionId },
         })
       );
     });
   });
 
   it("clicking the second ACP option calls answerGate with that option's optionId", async () => {
-    // RED: same as above — no top-level optionId in the current call shape.
     renderGate("s01", withAcpSuggestions(ACP_OPTIONS));
     fireEvent.click(screen.getByTestId("approve-suggestion-1"));
     await vi.waitFor(() => {
       expect(getAnswerGate()).toHaveBeenCalledWith(
         expect.objectContaining({
           session_id: "s01",
-          optionId: ACP_OPTIONS[1].optionId,
+          permission_updates: { optionId: ACP_OPTIONS[1].optionId },
         })
       );
     });

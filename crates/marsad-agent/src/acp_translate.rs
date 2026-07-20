@@ -577,16 +577,40 @@ pub fn acp_options_to_suggestions(options: &Value) -> Vec<Value> {
 /// `permission_suggestions` verbatim (each `{ optionId, name, kind }`).
 pub fn acp_permission_to_control_request_event(request_id: &str, params: &Value) -> Value {
     let tool_call = params.get("toolCall").cloned().unwrap_or_else(|| json!({}));
-    let tool_name = tool_call
-        .get("title")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .or_else(|| tool_call.get("kind").and_then(|v| v.as_str()))
-        .unwrap_or("permission");
-    let input_val = tool_call
+    let kind = tool_call.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    let title = tool_call.get("title").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Build the gate `input` from opencode's `rawInput` so the UI shows WHAT is
+    // being approved, not just a bare path:
+    //  - `tool_name` = the action KIND (read / edit / execute / other …) so the
+    //    user sees the category (the whole point of issue: "is it bash or read?").
+    //  - normalize opencode's `filepath` → `path` so describe_tool_request renders
+    //    "<kind> <path>" for the command line (execute already carries `command`,
+    //    shown verbatim).
+    //  - `description` = "<kind>: <title>" so the explanation body states the action
+    //    + opencode's own human summary.
+    let mut input = tool_call
         .get("rawInput")
+        .and_then(|v| v.as_object())
         .cloned()
-        .unwrap_or_else(|| json!({}));
+        .unwrap_or_default();
+    if !input.contains_key("command")
+        && !input.contains_key("path")
+        && !input.contains_key("file_path")
+    {
+        if let Some(fp) = input.get("filepath").cloned() {
+            input.insert("path".to_string(), fp);
+        }
+    }
+    let description = match (kind.is_empty(), title.is_empty()) {
+        (false, false) => format!("{kind}: {title}"),
+        (true, false) => title.to_string(),
+        (false, true) => format!("permission to {kind}"),
+        (true, true) => "opencode permission request".to_string(),
+    };
+    input.insert("description".to_string(), json!(description));
+
+    let tool_name = if kind.is_empty() { "opencode" } else { kind };
     let permission_suggestions =
         acp_options_to_suggestions(&params.get("options").cloned().unwrap_or_else(|| json!([])));
     json!({
@@ -595,7 +619,7 @@ pub fn acp_permission_to_control_request_event(request_id: &str, params: &Value)
         "request": {
             "subtype": "can_use_tool",
             "tool_name": tool_name,
-            "input": input_val,
+            "input": Value::Object(input),
             "permission_suggestions": permission_suggestions,
         }
     })

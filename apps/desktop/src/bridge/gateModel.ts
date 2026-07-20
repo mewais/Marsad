@@ -351,11 +351,15 @@ export function responseToAnswer(
         deny_reason: text?.trim() || undefined,
       });
     case "acpOption":
+      // The chosen ACP optionId MUST travel inside `permission_updates` — the
+      // agent reads it from `permission_updates.optionId` (ipc.rs), and the wire
+      // AnswerGate has no top-level `optionId` field (a top-level one is silently
+      // dropped, which left every opencode gate answered with optionId=None).
       return answerGate({
         session_id,
         decision_id,
         allow: true,
-        optionId: response.optionId,
+        permission_updates: { optionId: response.optionId },
       });
     case "elicitation":
       return answerGate({

@@ -338,13 +338,15 @@ describe("responseToAnswer", () => {
     });
   });
 
-  it("acpOption → answerGate allow:true + optionId", async () => {
+  it("acpOption → answerGate allow:true + optionId inside permission_updates", async () => {
+    // The optionId MUST travel inside permission_updates — the agent reads it from
+    // permission_updates.optionId (the wire AnswerGate has no top-level optionId).
     await responseToAnswer(S, D, R, { type: "acpOption", optionId: "b" });
     expect(api.answerGate).toHaveBeenCalledWith({
       session_id: S,
       decision_id: D,
       allow: true,
-      optionId: "b",
+      permission_updates: { optionId: "b" },
     });
   });
 

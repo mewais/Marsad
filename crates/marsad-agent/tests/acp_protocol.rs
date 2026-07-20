@@ -56,11 +56,20 @@ fn acp_permission_event_round_trips_to_a_can_use_tool_control_request() {
             );
             // The option names/ids are preserved verbatim for the UI + answer path.
             assert!(line.contains("Allow once") && line.contains("\"optionId\":\"once\""));
-            // tool_name is the human title (not the old "unknown_tool").
+            // tool_name is the action KIND (so the user sees read/edit/execute/…),
+            // not the old "unknown_tool".
+            assert_eq!(req.tool_name, "other", "tool_name should be the toolCall kind");
+            // The target + a "<kind>: <title>" description are surfaced in input so
+            // the gate shows WHAT is being approved, not just a bare path.
+            let desc = req.input.get("description").and_then(|v| v.as_str()).unwrap_or("");
             assert!(
-                req.tool_name.contains("Naseej"),
-                "tool_name should be the toolCall title; got {}",
-                req.tool_name
+                desc.contains("Naseej") && desc.contains("other"),
+                "description should state the kind + target; got {desc:?}"
+            );
+            assert_eq!(
+                req.input.get("path").and_then(|v| v.as_str()),
+                Some("/work/mewais/Naseej"),
+                "opencode `filepath` must be normalized to `path` for the command line"
             );
         }
         other => panic!("expected ControlRequest (a gate), got {other:?}"),
