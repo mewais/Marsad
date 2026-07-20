@@ -795,7 +795,15 @@ pub(crate) fn spawn_session_reader(
             // On reconnect after a connection drop (is_first_attach == false) we do
             // NOT re-run the backfill: the transcript already streamed; re-running
             // it would duplicate all previous turns in the UI.
-            if is_first_attach {
+            //
+            // OPENCODE: skip this entirely. This backfill reads claude's on-disk
+            // transcript (`~/.claude/projects/<project>/<uuid>.jsonl`), which an
+            // opencode session does NOT own — and when a claude AND an opencode
+            // session share a project dir, it would splice the CLAUDE session's
+            // transcript under the opencode session (opencode header + claude
+            // transcript — a real cross-wire bug). opencode history comes from the
+            // ACP stream (session/load replay on resume, live session/update events).
+            if is_first_attach && driver != "opencode" {
                 if let Some((project, uuid)) = &transcript_hint {
                     if let Some(target) = host_target.as_deref() {
                         let script = remote_transcript_script(project, uuid.as_deref());

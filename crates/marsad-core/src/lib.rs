@@ -663,9 +663,18 @@ impl Core {
             if self.sessions.contains_key(&s.id) {
                 continue;
             }
-            let transcript = match &s.session_id {
-                Some(sid) if !sid.is_empty() => self.transcript.session(&s.project, sid),
-                _ => self.transcript.most_recent(&s.project),
+            // opencode owns no claude `~/.claude` transcript — its history comes
+            // from the ACP stream. Reading the project's claude transcript here
+            // would splice a CO-LOCATED claude session's history under an opencode
+            // session (opencode header + claude transcript). Matches the guard in
+            // the agent reader's remote backfill.
+            let transcript = if s.driver == "opencode" {
+                Vec::new()
+            } else {
+                match &s.session_id {
+                    Some(sid) if !sid.is_empty() => self.transcript.session(&s.project, sid),
+                    _ => self.transcript.most_recent(&s.project),
+                }
             };
             let mut state = SessionState::initial();
             // Two-axis model: the ACTIVITY of a restored session is idle → Done
@@ -713,7 +722,7 @@ impl Core {
             // rather than zero. Remote sessions get their usage from the agent's
             // UsageUpdate IPC (remote_usage_script). The first live `result` event
             // will authoritatively replace these estimates via reduce_result.
-            if is_local {
+            if is_local && s.driver != "opencode" {
                 if let Some(sid) = s.session_id.as_deref().filter(|s| !s.is_empty()) {
                     let usage_agg = self.transcript.session_usage(&s.project, sid);
                     if !usage_agg.is_empty() {

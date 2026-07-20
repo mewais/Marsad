@@ -2584,6 +2584,95 @@ fn load_sessions_seeds_usage_for_local_session() {
 }
 
 // ---------------------------------------------------------------------------
+// opencode must NOT inherit claude's on-disk transcript/usage on load.
+// An opencode session owns no ~/.claude transcript; when it shares a project dir
+// with a claude session, the claude data would bleed in (opencode header + claude
+// transcript/usage). Sibling of the reader's remote-backfill guard.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn load_sessions_does_not_seed_claude_usage_for_opencode() {
+    struct FakeUsage;
+    impl marsad_core::TranscriptReader for FakeUsage {
+        fn session(&self, _p: &str, _id: &str) -> Vec<marsad_events::TranscriptEntry> {
+            Vec::new()
+        }
+        fn most_recent(&self, _p: &str) -> Vec<marsad_events::TranscriptEntry> {
+            Vec::new()
+        }
+        fn session_usage(
+            &self,
+            _p: &str,
+            _id: &str,
+        ) -> std::collections::HashMap<String, marsad_core::discovery::ModelUsageSummary> {
+            let mut m = std::collections::HashMap::new();
+            m.insert(
+                "claude-opus-4-8".to_string(),
+                marsad_core::discovery::ModelUsageSummary {
+                    input_tokens: 40_000,
+                    output_tokens: 8_000,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                    cost_usd: 3.0,
+                },
+            );
+            m
+        }
+    }
+
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed.upsert_session(&PersistedSession {
+        id: "oc-session".to_string(),
+        session_id: Some("uuid-oc".to_string()),
+        name: "oc-session".to_string(),
+        host_id: "local".to_string(),
+        host_target: None,
+        claude_bin: None,
+        setup: None,
+        env: Vec::new(),
+        project: "/proj/ArchAttention".to_string(),
+        branch: "main".to_string(),
+        model: "amd-anthropic/Claude-Sonnet-5".to_string(),
+        last_phase: "Done".to_string(),
+        posture: None,
+        disallowed_tools: vec![],
+        driver: "opencode".to_string(),
+        slash_commands: vec![],
+        tools: vec![],
+        mcp_servers: vec![],
+    })
+    .expect("seed opencode session");
+
+    let (a, _b) = LoopbackFake::pair();
+    let cfg = CoreConfig {
+        agent_endpoint: "loopback://test".to_string(),
+        data_root: "/tmp/marsad-test".to_string(),
+    };
+    let mut core = Core::with_deps(
+        cfg,
+        Box::new(a),
+        Box::new(marsad_core::RealGit),
+        Box::new(FakeUsage),
+        Box::new(backend),
+    )
+    .expect("with_deps");
+    core.load_sessions().expect("load_sessions");
+
+    let tokens = core
+        .snapshot()
+        .sessions
+        .into_iter()
+        .find(|s| s.id == "oc-session")
+        .expect("opencode session present after load")
+        .tokens;
+    assert_eq!(
+        tokens, 0,
+        "an opencode session must NOT be seeded from claude transcript usage; got {tokens}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Bug A regression: live result event must NOT clobber whole-conversation totals
 // ---------------------------------------------------------------------------
 
