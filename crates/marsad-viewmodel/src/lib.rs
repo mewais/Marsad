@@ -124,6 +124,11 @@ pub struct SessionView {
     /// most recent `system/mode_update` event. `None` before the first mode_update.
     #[serde(default)]
     pub current_mode: Option<String>,
+    /// The AVAILABLE agent modes for this session, agent-reported (opencode's
+    /// configOptions, claude's version-derived list). The UI renders these instead
+    /// of a hardcoded posture list; `current_mode` marks the active one.
+    #[serde(default)]
+    pub available_modes: Vec<marsad_proto::SessionMode>,
 }
 
 fn default_posture() -> String {

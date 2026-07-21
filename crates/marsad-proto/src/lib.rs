@@ -154,6 +154,12 @@ pub struct SystemInit {
     pub mcp_servers: Vec<McpServerInfo>,
     #[serde(rename = "permissionMode")]
     pub permission_mode: String,
+    /// claude's own version string (from `claude_code_version` in the init line).
+    /// Used to derive the AVAILABLE permission modes, since claude reports only
+    /// the CURRENT `permissionMode`, never the full list, and the set is
+    /// version-dependent (older claude lacks some modes). Empty for non-claude.
+    #[serde(default, rename = "claude_code_version")]
+    pub claude_code_version: String,
     #[serde(default, deserialize_with = "deserialize_slash_commands")]
     pub slash_commands: Vec<SlashCommandInfo>,
 }
@@ -502,6 +508,34 @@ pub struct ModeUpdate {
     pub current_mode: String,
 }
 
+/// One selectable agent mode, exactly as the agent reports it (opencode's
+/// `configOptions.mode` options, or claude's version-derived permission modes).
+/// NEVER a hardcoded Marsad list — the agent is the source of truth.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionMode {
+    /// The wire id used to select the mode (e.g. "plan", "build", "acceptEdits").
+    pub id: String,
+    /// Human label for the UI (e.g. "Plan", "Accept edits"). May equal `id`.
+    pub label: String,
+    /// One-line description of what the mode does. May be empty.
+    #[serde(default)]
+    pub description: String,
+}
+
+/// A `{"type":"system","subtype":"modes_update",...}` event — the AVAILABLE mode
+/// list and/or the current mode for a session. Both drivers emit it: opencode
+/// from `configOptions.mode` (full list + current), claude from a version-derived
+/// list on init and a current-only update on `system/status`. An empty
+/// `available_modes` means "leave the list unchanged, just update `current_mode`".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModesUpdate {
+    pub session_id: String,
+    #[serde(default)]
+    pub available_modes: Vec<SessionMode>,
+    #[serde(default)]
+    pub current_mode: Option<String>,
+}
+
 /// A `{"type":"system","subtype":"slash_update",...}` event — opencode emitted
 /// a fresh catalog of available slash commands (mid-session replacement).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -623,6 +657,9 @@ pub enum StreamMsg {
     PlanUpdate(PlanUpdate),
     /// opencode ACP: `system/mode_update` — current session mode changed.
     ModeUpdate(ModeUpdate),
+    /// `system/modes_update` — the available mode list and/or current mode
+    /// (opencode configOptions, claude version-derived + status changes).
+    ModesUpdate(ModesUpdate),
     /// opencode ACP: `system/slash_update` — mid-session slash command catalog replacement.
     SlashUpdate(SlashUpdate),
     /// opencode ACP: `system/usage_update` — cost + context window usage update.
@@ -854,6 +891,15 @@ pub enum IpcMsg {
     SendPrompt {
         session_id: String,
         text: String,
+    },
+    /// Change a session config option on the running agent (opencode ACP
+    /// `session/set_config_option`): `config_id` is "model" or "mode", `value`
+    /// the option's wire value. The agent applies it and the reader surfaces the
+    /// agent-confirmed new state — no optimistic local update.
+    SetSessionConfigOption {
+        session_id: String,
+        config_id: String,
+        value: String,
     },
     /// Typed form of the raw `Interrupt` line. Stops the current turn via
     /// claude's `interrupt` control_request; never kills the session.
@@ -1380,6 +1426,30 @@ pub fn parse_stream_line(line: &str) -> Result<StreamMsg, ProtoError> {
         }
         "system" if obj.get("subtype").and_then(|v| v.as_str()) == Some("usage_update") => {
             from_val("usage_update", value).map(StreamMsg::UsageUpdate)
+        }
+        "system" if obj.get("subtype").and_then(|v| v.as_str()) == Some("modes_update") => {
+            from_val("modes_update", value).map(StreamMsg::ModesUpdate)
+        }
+        // claude re-emits `{"type":"system","subtype":"status","permissionMode":…}`
+        // whenever the mode changes mid-turn (e.g. it enters plan mode on its own).
+        // Surface it as a current-only ModesUpdate so the live mode follows. Other
+        // `status` events (no permissionMode) stay Unknown.
+        "system"
+            if obj.get("subtype").and_then(|v| v.as_str()) == Some("status")
+                && obj.get("permissionMode").and_then(|v| v.as_str()).is_some() =>
+        {
+            Ok(StreamMsg::ModesUpdate(ModesUpdate {
+                session_id: obj
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                available_modes: Vec::new(),
+                current_mode: obj
+                    .get("permissionMode")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+            }))
         }
         "system" => Ok(StreamMsg::Unknown(value)),
         "assistant" => from_val("assistant", value).map(StreamMsg::Assistant),

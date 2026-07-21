@@ -36,6 +36,9 @@ fn make_session(id: &str, name: &str) -> PersistedSession {
         posture: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
+        tools: vec![],
+        mcp_servers: vec![],
+        slash_commands: vec![],
     }
 }
 
@@ -77,6 +80,15 @@ fn sv(id: &str, cost: f64, tokens: u64, state: Phase) -> SessionView {
         mcp_servers: vec![],
         slash_commands: vec![],
         posture: "ask".to_string(),
+        driver: "claude".to_string(),
+        live: true,
+        conn_health: "Connected".to_string(),
+        end_reason: None,
+        plan_entries: vec![],
+        current_mode: None,
+        available_modes: vec![],
+        shell_running: false,
+        subagent_list: vec![],
     }
 }
 

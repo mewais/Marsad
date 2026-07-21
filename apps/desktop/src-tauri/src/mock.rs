@@ -162,6 +162,7 @@ pub fn seeded_mock() -> MockState {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
         // Needs attention — plan gate
         SessionView {
@@ -199,6 +200,7 @@ pub fn seeded_mock() -> MockState {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
         // Error — edit gate shown for reference
         SessionView {
@@ -236,6 +238,7 @@ pub fn seeded_mock() -> MockState {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
         // Working sessions
         SessionView {
@@ -273,6 +276,7 @@ pub fn seeded_mock() -> MockState {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
         SessionView {
             id: "s05".to_string(),
@@ -309,6 +313,7 @@ pub fn seeded_mock() -> MockState {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
         SessionView {
             id: "s06".to_string(),
@@ -345,6 +350,7 @@ pub fn seeded_mock() -> MockState {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
         // Done sessions
         SessionView {
@@ -382,6 +388,7 @@ pub fn seeded_mock() -> MockState {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
         SessionView {
             id: "s08".to_string(),
@@ -418,6 +425,7 @@ pub fn seeded_mock() -> MockState {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
         SessionView {
             id: "s09".to_string(),
@@ -454,6 +462,7 @@ pub fn seeded_mock() -> MockState {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
         // Stale session
         SessionView {
@@ -491,6 +500,7 @@ pub fn seeded_mock() -> MockState {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
     ];
 

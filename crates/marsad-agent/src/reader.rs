@@ -1327,15 +1327,48 @@ pub(crate) fn spawn_session_reader(
                                                         });
                                                     }
 
-                                                    // Deliver first_prompt as session/prompt (if any).
+                                                    // Surface opencode's mode list + current from the
+                                                    // session/new (or session/load) configOptions.
+                                                    if let Some(mu) = acp_translate::acp_config_modes_update(&sid, &res) {
+                                                        emit_event(mu);
+                                                    }
+
+                                                    // Apply the New-Session model pick — opencode acp
+                                                    // rejects --model, so the supported path is
+                                                    // set_config_option AFTER session/new. Truthful:
+                                                    // only when the pick is a real option AND differs
+                                                    // from the current. Done BEFORE the first prompt so
+                                                    // the first turn runs on the chosen model.
                                                     if is_first_attach {
+                                                        use std::io::Write;
+                                                        if let Some(spec) = opencode_spec.as_ref() {
+                                                            let want = spec.model.trim();
+                                                            if !want.is_empty() {
+                                                                let (current, valid) = acp_translate::acp_config_model_values(&res);
+                                                                if valid.iter().any(|v| v == want) && current.as_deref() != Some(want) {
+                                                                    let params = serde_json::json!({
+                                                                        "sessionId": acp_session_id,
+                                                                        "configId": "model",
+                                                                        "value": want,
+                                                                    });
+                                                                    let line = acp::encode_request(serde_json::json!(3u64), "session/set_config_option", params);
+                                                                    let mut w = writer.lock().unwrap();
+                                                                    let _ = w.write_all(line.as_bytes());
+                                                                    let _ = w.write_all(b"\n");
+                                                                    let _ = w.flush();
+                                                                    eprintln!("marsad-agent: session {sid} opencode applied launch model {want}");
+                                                                } else if !valid.is_empty() && !valid.iter().any(|v| v == want) {
+                                                                    eprintln!("marsad-agent: session {sid} opencode launch model {want:?} not in options — left at {current:?}");
+                                                                }
+                                                            }
+                                                        }
+
+                                                        // Deliver first_prompt as session/prompt (id 4,
+                                                        // after the optional model-set at id 3).
                                                         if let Some(ref prompt) = first_prompt {
-                                                            use std::io::Write;
-                                                            // Next request id: 3 (initialize=1, session/new=2).
-                                                            let prompt_req_id = serde_json::json!(3u64);
                                                             let prompt_params = acp::session_prompt_params(&acp_session_id, prompt);
                                                             let prompt_line = acp::encode_request(
-                                                                prompt_req_id,
+                                                                serde_json::json!(4u64),
                                                                 "session/prompt",
                                                                 prompt_params,
                                                             );
@@ -1354,6 +1387,16 @@ pub(crate) fn spawn_session_reader(
                                                         "marsad-agent: session {sid} opencode session/new result missing sessionId: {res}"
                                                     );
                                                 }
+                                            } else if res.get("configOptions").is_some() {
+                                                // A set_config_option result (model/mode changed) —
+                                                // NOT a prompt turn. It echoes the authoritative new
+                                                // configOptions; surface the mode list + current.
+                                                if let Some(mu) = acp_translate::acp_config_modes_update(&sid, &res) {
+                                                    emit_event(mu);
+                                                }
+                                                eprintln!(
+                                                    "marsad-agent: session {sid} opencode set_config_option result applied"
+                                                );
                                             } else {
                                                 // session/prompt result: extract stopReason + usage, broadcast.
                                                 // Use acp_prompt_result_to_result so per-turn usage is captured.

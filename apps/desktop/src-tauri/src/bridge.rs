@@ -254,6 +254,22 @@ pub fn send_prompt(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub fn set_session_config_option(
+    state: State<'_, ManagedState>,
+    id: String,
+    config_id: String,
+    value: String,
+) -> Result<(), String> {
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    match &mut *guard {
+        AppState::Live(core) => core
+            .set_session_config_option(&id, &config_id, &value)
+            .map_err(map_err),
+        AppState::Mock(_) => Ok(()),
+    }
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub fn interrupt(state: State<'_, ManagedState>, id: String) -> Result<(), String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     match &mut *guard {

@@ -570,6 +570,70 @@ pub fn acp_assistant_message(msg_id: &str, text: &str) -> Value {
     })
 }
 
+/// Extract opencode's `configOptions.mode` group (present in `session/new`,
+/// `session/load`, and `session/set_config_option` results) into a canonical
+/// `system/modes_update` stream-json event: the available modes + current. Returns
+/// None when there is no `mode` config group. `container` is the object that holds
+/// `configOptions`.
+pub fn acp_config_modes_update(sid: &str, container: &Value) -> Option<Value> {
+    let opts = container.get("configOptions")?.as_array()?;
+    let group = opts
+        .iter()
+        .find(|o| o.get("id").and_then(|v| v.as_str()) == Some("mode"))?;
+    let current = group.get("currentValue").and_then(|v| v.as_str());
+    let available: Vec<Value> = group
+        .get("options")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|o| {
+                    let id = o.get("value").and_then(|v| v.as_str())?;
+                    let label = o.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+                    let desc = o.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                    Some(json!({ "id": id, "label": label, "description": desc }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(json!({
+        "type": "system",
+        "subtype": "modes_update",
+        "session_id": sid,
+        "available_modes": available,
+        "current_mode": current,
+    }))
+}
+
+/// The opencode `model` config group's current value and the set of valid option
+/// values, from a result/params object carrying `configOptions`. Used to apply the
+/// New-Session model pick truthfully (only when it's a real option) after
+/// `session/new`. Returns `(current, valid_values)`; empties when absent.
+pub fn acp_config_model_values(container: &Value) -> (Option<String>, Vec<String>) {
+    let Some(opts) = container.get("configOptions").and_then(|v| v.as_array()) else {
+        return (None, Vec::new());
+    };
+    let Some(group) = opts
+        .iter()
+        .find(|o| o.get("id").and_then(|v| v.as_str()) == Some("model"))
+    else {
+        return (None, Vec::new());
+    };
+    let current = group
+        .get("currentValue")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let values = group
+        .get("options")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|o| o.get("value").and_then(|v| v.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    (current, values)
+}
+
 // ── opencode subagents (the `task` tool) ────────────────────────────────────
 // opencode spawns a subagent through its `task` tool, surfaced over ACP as a
 // tool_call/tool_call_update lifecycle rather than claude's Task tool_use +

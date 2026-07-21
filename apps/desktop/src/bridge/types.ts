@@ -303,6 +303,20 @@ export interface SessionView {
    * Optional for back-compat; absent before the first mode update.
    */
   current_mode?: string;
+  /**
+   * Available agent modes for this session, agent-reported (opencode's
+   * configOptions, claude's version-derived list). The Config panel renders
+   * these instead of a hardcoded posture list; `current_mode` marks the active
+   * one. Absent/empty before the first init/config.
+   */
+  available_modes?: SessionMode[];
+}
+
+/** One selectable agent mode, exactly as the agent reports it. */
+export interface SessionMode {
+  id: string;
+  label: string;
+  description?: string;
 }
 
 /** Mirrors marsad_proto::CompactMetadata — one context-compaction event. */

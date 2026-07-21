@@ -127,6 +127,15 @@ fn fold_qa_stream_into_session_state_and_viewmodel() {
         mcp_servers: vec![],
         slash_commands: vec![],
         posture: "ask".to_string(),
+        driver: "claude".to_string(),
+        live: true,
+        conn_health: "Connected".to_string(),
+        end_reason: state.end_reason.clone(),
+        plan_entries: state.plan_entries.clone(),
+        current_mode: state.current_mode.clone(),
+        available_modes: state.available_modes.clone(),
+        shell_running: false,
+        subagent_list: vec![],
     };
 
     let snapshot = AppSnapshot {

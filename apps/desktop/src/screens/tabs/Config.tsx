@@ -4,7 +4,13 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { useVm } from "../../bridge/useVm";
-import { restartSession, saveTemplate, listTemplates, capsForDriverHost } from "../../bridge/api";
+import {
+  restartSession,
+  saveTemplate,
+  listTemplates,
+  capsForDriverHost,
+  setSessionConfigOption,
+} from "../../bridge/api";
 import type { PersistedTemplate } from "../../bridge/types";
 
 // ---------------------------------------------------------------------------
@@ -338,6 +344,117 @@ export function ConfigTab() {
             })}
           </div>
         </div>
+
+        {/* Session mode — AGENT-REPORTED (never hardcoded). opencode's modes come
+            from configOptions; claude's from its version. The current mode is live
+            (follows the agent, e.g. claude entering plan mode on its own). opencode
+            is switchable in place; claude/others reflect-only (no wired setter). */}
+        {selectedSession && (selectedSession.available_modes?.length ?? 0) > 0 && (() => {
+          const modes = selectedSession.available_modes ?? [];
+          const current = selectedSession.current_mode;
+          const isOpencode = (selectedSession.driver ?? "claude") === "opencode";
+          return (
+            <div>
+              <div
+                style={{
+                  fontSize: "calc(14.5px * var(--fs,1))",
+                  fontWeight: 700,
+                  marginBottom: 9,
+                  color: "var(--txt2)",
+                }}
+              >
+                Session mode
+                {!isOpencode && (
+                  <span
+                    style={{
+                      marginLeft: 8,
+                      fontSize: "calc(12px * var(--fs,1))",
+                      fontWeight: 500,
+                      color: "var(--txt3)",
+                    }}
+                  >
+                    (agent-controlled — reflects the live mode)
+                  </span>
+                )}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                {modes.map((m) => {
+                  const active = current === m.id;
+                  const clickable = isOpencode;
+                  return (
+                    <div
+                      key={m.id}
+                      data-testid={`mode-${m.id}`}
+                      data-active={active ? "true" : "false"}
+                      onClick={
+                        clickable && !active
+                          ? () => setSessionConfigOption(selectedSession.id, "mode", m.id)
+                          : undefined
+                      }
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 11,
+                        padding: "12px 14px",
+                        borderRadius: 10,
+                        cursor: clickable && !active ? "pointer" : "default",
+                        border: active
+                          ? "1px solid var(--accent)"
+                          : "1px solid var(--border)",
+                        background: active ? "var(--accent-bg)" : "var(--panel2)",
+                        opacity: clickable || active ? 1 : 0.85,
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 16,
+                          height: 16,
+                          borderRadius: "50%",
+                          border: `2px solid ${active ? "var(--accent)" : "var(--border2)"}`,
+                          flexShrink: 0,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: 7,
+                            height: 7,
+                            borderRadius: "50%",
+                            background: active ? "var(--accent)" : "transparent",
+                          }}
+                        />
+                      </span>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: "calc(15px * var(--fs,1))" }}>
+                          {m.label || m.id}
+                          {active && (
+                            <span
+                              style={{
+                                marginLeft: 8,
+                                fontSize: "calc(10.5px * var(--fs,1))",
+                                fontWeight: 700,
+                                color: "var(--accent2)",
+                              }}
+                            >
+                              ● current
+                            </span>
+                          )}
+                        </div>
+                        {m.description && (
+                          <div style={{ fontSize: "calc(13.5px * var(--fs,1))", color: "var(--txt3)" }}>
+                            {m.description}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Tools (real list from system/init — toggleable; unchecked = disallowed) */}
         {sessionTools.length > 0 && (

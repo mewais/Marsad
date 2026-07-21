@@ -243,6 +243,12 @@ pub struct SessionState {
     /// most recent `system/mode_update` event. `None` before the first mode_update.
     #[serde(default)]
     pub current_mode: Option<String>,
+    /// The AVAILABLE agent modes for this session, agent-reported (never a
+    /// hardcoded list). opencode fills it from `configOptions.mode`; claude from a
+    /// version-derived table (it only reports the current mode). Empty until the
+    /// first init/config. The current selection is `current_mode`.
+    #[serde(default)]
+    pub available_modes: Vec<marsad_proto::SessionMode>,
 }
 
 impl SessionState {
@@ -275,6 +281,7 @@ impl SessionState {
             interrupt_requested: false,
             plan_entries: Vec::new(),
             current_mode: None,
+            available_modes: Vec::new(),
         }
     }
 
@@ -392,6 +399,49 @@ pub fn reduce(state: SessionState, event: Event) -> SessionState {
     }
 }
 
+/// The AVAILABLE permission modes for a claude session, derived from its version.
+/// claude reports only the CURRENT `permissionMode` on the wire — never the full
+/// list — and the set is version-dependent (older claude lacks `bypassPermissions`,
+/// i.e. "full autonomy"). This version table is the ONLY non-wire mode source in
+/// the system, and it exists solely because claude, unlike opencode, does not
+/// advertise its modes. Labels use claude's own terminology (truthful, not a
+/// re-invented ask/auto/full abstraction).
+pub fn claude_available_modes(version: &str) -> Vec<marsad_proto::SessionMode> {
+    let m = |id: &str, label: &str, desc: &str| marsad_proto::SessionMode {
+        id: id.to_string(),
+        label: label.to_string(),
+        description: desc.to_string(),
+    };
+    let mut modes = vec![
+        m("default", "Default", "Prompt before edits and commands."),
+        m(
+            "acceptEdits",
+            "Accept edits",
+            "Apply edits automatically; commands still ask.",
+        ),
+        m("plan", "Plan", "Read-only planning; propose a plan before acting."),
+    ];
+    if claude_supports_bypass(version) {
+        modes.push(m(
+            "bypassPermissions",
+            "Bypass permissions",
+            "Act without asking. Use only in throwaway sandboxes.",
+        ));
+    }
+    modes
+}
+
+/// Whether a claude version offers the `bypassPermissions` ("full autonomy") mode.
+/// Present across modern claude (1.x+); a parseable major of 0 drops it, and an
+/// unrecognized/blank version assumes modern (the common case). Best-effort — the
+/// exact historical cutoff is refinable; it never affects opencode.
+fn claude_supports_bypass(version: &str) -> bool {
+    match version.split('.').next().and_then(|s| s.parse::<u32>().ok()) {
+        Some(major) => major >= 1,
+        None => true,
+    }
+}
+
 fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> SessionState {
     use marsad_proto::StreamMsg;
 
@@ -408,7 +458,16 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
             state.tools = init.tools;
             state.mcp_servers = init.mcp_servers;
             state.slash_commands = init.slash_commands;
-            state.permission_mode = Some(init.permission_mode);
+            state.permission_mode = Some(init.permission_mode.clone());
+            // claude reports only the CURRENT permissionMode; derive the available
+            // list from its version and treat permissionMode as the current
+            // selection. opencode's synthesized init carries no version — its modes
+            // arrive via ModesUpdate (from configOptions), so don't clobber here.
+            if !init.claude_code_version.is_empty() {
+                state.available_modes =
+                    claude_available_modes(&init.claude_code_version);
+                state.current_mode = Some(init.permission_mode);
+            }
             state.phase = Phase::Working;
             // Fresh init = a new turn is beginning; drop any stale end reason /
             // pending interrupt from a prior turn.
@@ -523,6 +582,23 @@ fn reduce_stream(mut state: SessionState, msg: marsad_proto::StreamMsg) -> Sessi
                 return state;
             }
             state.current_mode = Some(mu.current_mode);
+            state
+        }
+
+        // The available mode list and/or current mode. opencode sends the full
+        // list + current (from configOptions); claude's `system/status` sends a
+        // current-only update (empty list). An empty list leaves the existing list
+        // intact — it's a "current changed" signal, not a wipe.
+        StreamMsg::ModesUpdate(mu) => {
+            if stale_or_detached {
+                return state;
+            }
+            if !mu.available_modes.is_empty() {
+                state.available_modes = mu.available_modes;
+            }
+            if let Some(cm) = mu.current_mode {
+                state.current_mode = Some(cm);
+            }
             state
         }
 

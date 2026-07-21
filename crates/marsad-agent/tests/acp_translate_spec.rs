@@ -11,8 +11,9 @@
 //!   `marsad_proto::parse_stream_line`, assert the correct `StreamMsg` variant.
 
 use marsad_agent::acp_translate::{
-    acp_assistant_message, acp_init_to_system_init, acp_options_to_suggestions,
-    acp_stop_reason_to_result, acp_text_chunk, acp_update_to_stream_json, detect_compaction,
+    acp_assistant_message, acp_config_model_values, acp_config_modes_update, acp_init_to_system_init,
+    acp_options_to_suggestions, acp_stop_reason_to_result, acp_text_chunk, acp_update_to_stream_json,
+    detect_compaction,
 };
 use marsad_gates::Gate;
 use marsad_proto::{parse_stream_line, StreamMsg};
@@ -881,4 +882,71 @@ fn acp_assistant_message_round_trips_as_one_assistant_message() {
         Ok(StreamMsg::Assistant(_)) => {}
         other => panic!("expected one Assistant message, got {other:?}"),
     }
+}
+
+// ── opencode configOptions → modes_update / model values ────────────────────
+// A real opencode session/new (or set_config_option) result carries
+// `configOptions` with a "mode" and "model" select. These translate the mode
+// group into a canonical modes_update, and expose the model current+options for
+// the truthful launch-apply.
+
+fn config_options_result() -> Value {
+    json!({
+        "sessionId": "ses_x",
+        "configOptions": [
+            {
+                "id": "model",
+                "name": "Model",
+                "category": "model",
+                "type": "select",
+                "currentValue": "amd-anthropic/Claude-Sonnet-5",
+                "options": [
+                    {"value": "amd-anthropic/Claude-Sonnet-5", "name": "Sonnet 5"},
+                    {"value": "amd-anthropic/Claude-Opus-4.8", "name": "Opus 4.8"}
+                ]
+            },
+            {
+                "id": "mode",
+                "name": "Session Mode",
+                "category": "mode",
+                "type": "select",
+                "currentValue": "build",
+                "options": [
+                    {"value": "build", "name": "build", "description": "The default agent."},
+                    {"value": "plan", "name": "plan", "description": "Plan mode. Disallows all edit tools."}
+                ]
+            }
+        ]
+    })
+}
+
+#[test]
+fn config_modes_update_extracts_mode_group() {
+    let mu = acp_config_modes_update("ses_x", &config_options_result())
+        .expect("mode group present");
+    assert_eq!(mu["type"], "system");
+    assert_eq!(mu["subtype"], "modes_update");
+    assert_eq!(mu["current_mode"], "build");
+    let modes = mu["available_modes"].as_array().unwrap();
+    assert_eq!(modes.len(), 2);
+    assert_eq!(modes[0]["id"], "build");
+    assert_eq!(modes[1]["id"], "plan");
+    assert_eq!(modes[1]["description"], "Plan mode. Disallows all edit tools.");
+    // Round-trips into the reducer as a ModesUpdate.
+    let line = serde_json::to_string(&mu).unwrap();
+    assert!(matches!(parse_stream_line(&line), Ok(StreamMsg::ModesUpdate(_))));
+}
+
+#[test]
+fn config_modes_update_none_without_mode_group() {
+    let no_mode = json!({ "configOptions": [ { "id": "model", "options": [] } ] });
+    assert!(acp_config_modes_update("s", &no_mode).is_none());
+}
+
+#[test]
+fn config_model_values_returns_current_and_options() {
+    let (current, valid) = acp_config_model_values(&config_options_result());
+    assert_eq!(current.as_deref(), Some("amd-anthropic/Claude-Sonnet-5"));
+    assert!(valid.contains(&"amd-anthropic/Claude-Opus-4.8".to_string()));
+    assert_eq!(valid.len(), 2);
 }

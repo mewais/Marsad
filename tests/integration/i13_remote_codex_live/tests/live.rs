@@ -300,7 +300,7 @@ fn latest_sv(updates: &[VmUpdate], id: &str) -> Option<SessionView> {
 fn assistant_says(sv: &SessionView, needle: &str) -> bool {
     let needle = needle.to_lowercase();
     sv.transcript.iter().any(|e| {
-        matches!(e, marsad_events::TranscriptEntry::Assistant { text }
+        matches!(e, marsad_events::TranscriptEntry::Assistant { text, .. }
             if text.to_lowercase().contains(&needle))
     })
 }

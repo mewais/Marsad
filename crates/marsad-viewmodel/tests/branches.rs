@@ -62,6 +62,7 @@ fn make_session(
         end_reason: None,
         plan_entries: vec![],
         current_mode: None,
+        available_modes: vec![],
     }
 }
 
@@ -374,6 +375,7 @@ fn ctx_warn_false_at_74_pct() {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -429,6 +431,7 @@ fn ctx_warn_true_at_75_pct() {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],
@@ -602,6 +605,7 @@ fn ctx_warn_true_at_100_pct() {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         }],
         hosts: vec![host("local", "localhost")],
         workspaces: vec![],

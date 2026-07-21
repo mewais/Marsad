@@ -150,6 +150,21 @@ export async function sendPrompt(id: string, text: string): Promise<void> {
 }
 
 /**
+ * Change a session config option on the running agent (opencode: "model" /
+ * "mode"). Fire-and-forget: the agent applies it and the new state arrives back
+ * on the session stream — we never optimistically mutate local state.
+ */
+export async function setSessionConfigOption(
+  id: string,
+  configId: string,
+  value: string
+): Promise<void> {
+  if (!isTauri()) return;
+  const invoke = await getInvoke();
+  await invoke("set_session_config_option", { id, config_id: configId, value });
+}
+
+/**
  * Run a `!<command>` shell command on the session's host (local or remote)
  * and inject the command + output into the session transcript.
  * Does NOT send anything to Claude — this is purely a local/remote shell exec

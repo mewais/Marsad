@@ -1628,6 +1628,24 @@ impl Core {
         })
     }
 
+    /// Change a session config option (opencode: model / mode) on the running
+    /// agent. Fire-and-forget: the agent applies it via ACP and the reader
+    /// surfaces the agent-confirmed new state — we do NOT optimistically mutate
+    /// local state (truthful; the agent could reject or normalize the value).
+    pub fn set_session_config_option(
+        &mut self,
+        id: &str,
+        config_id: &str,
+        value: &str,
+    ) -> Result<(), CoreError> {
+        self.require_session(id)?;
+        self.send_ipc(&IpcMsg::SetSessionConfigOption {
+            session_id: id.to_string(),
+            config_id: config_id.to_string(),
+            value: value.to_string(),
+        })
+    }
+
     pub fn interrupt(&mut self, id: &str) -> Result<(), CoreError> {
         self.require_session(id)?;
         // Record that WE initiated this interrupt so the resulting error turn is
@@ -3271,6 +3289,7 @@ impl Core {
             end_reason: s.end_reason,
             plan_entries: s.plan_entries.clone(),
             current_mode: s.current_mode.clone(),
+            available_modes: s.available_modes.clone(),
         }
     }
 }

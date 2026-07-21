@@ -73,6 +73,11 @@ impl Agent {
             marsad_proto::IpcMsg::SendPrompt { session_id, text } => {
                 self.handle_send_prompt(&session_id, &text)
             }
+            marsad_proto::IpcMsg::SetSessionConfigOption {
+                session_id,
+                config_id,
+                value,
+            } => self.handle_set_session_config_option(&session_id, &config_id, &value),
             marsad_proto::IpcMsg::Interrupt { session_id } => self.handle_interrupt(&session_id),
             marsad_proto::IpcMsg::AnswerGate {
                 session_id,
@@ -343,6 +348,86 @@ impl Agent {
         self.sessions.remove(&session_id);
         let event = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionStopped { session_id });
         Ok(vec![event])
+    }
+
+    /// Change a session config option on the running agent. Currently opencode
+    /// only: sends ACP `session/set_config_option {sessionId, configId, value}`.
+    /// The agent's reply (echoed configOptions) is parsed by the reader, which
+    /// surfaces the confirmed new state — we do not mutate anything here.
+    fn handle_set_session_config_option(
+        &mut self,
+        session_id: &str,
+        config_id: &str,
+        value: &str,
+    ) -> Result<Vec<String>, AgentError> {
+        if !self.sessions.contains_key(session_id) {
+            return Err(AgentError::Protocol(format!(
+                "SetSessionConfigOption: unknown session {session_id}"
+            )));
+        }
+        #[cfg(not(coverage))]
+        {
+            use std::io::Write;
+            let driver = self
+                .store
+                .0
+                .restore()
+                .ok()
+                .and_then(|r| r.sessions.into_iter().find(|s| s.id == session_id))
+                .map(|s| s.driver)
+                .unwrap_or_else(|| "claude".to_string());
+            if driver != "opencode" {
+                // claude mode-setting over the control channel is a separate,
+                // unverified API — not wired yet. Don't fake it.
+                eprintln!(
+                    "marsad-agent: session {session_id} set_config_option ignored — driver {driver} has no wired setter"
+                );
+                return Ok(vec![]);
+            }
+            let acp_session_id = self.acp_sessions.0.lock().unwrap().get(session_id).cloned();
+            let Some(acp_sid) = acp_session_id else {
+                eprintln!(
+                    "marsad-agent: session {session_id} set_config_option DROPPED — ACP sessionId not yet known"
+                );
+                return Ok(vec![]);
+            };
+            // Millis-based id > the reserved handshake ids (1/2/3), matching
+            // handle_send_prompt's scheme.
+            let req_id = serde_json::json!(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_millis() as u64
+                    + 200u64
+            );
+            let params = serde_json::json!({
+                "sessionId": acp_sid,
+                "configId": config_id,
+                "value": value,
+            });
+            let line = crate::acp::encode_request(req_id, "session/set_config_option", params);
+            let writers = self.session_writers.0.lock().unwrap();
+            if let Some(shared) = writers.get(session_id) {
+                let mut writer = shared.lock().unwrap();
+                match writer
+                    .write_all(line.as_bytes())
+                    .and_then(|_| writer.write_all(b"\n"))
+                    .and_then(|_| writer.flush())
+                {
+                    Ok(()) => eprintln!(
+                        "marsad-agent: session {session_id} opencode set_config_option {config_id}={value}"
+                    ),
+                    Err(e) => eprintln!(
+                        "marsad-agent: session {session_id} opencode set_config_option WRITE FAILED: {e}"
+                    ),
+                }
+            } else {
+                eprintln!(
+                    "marsad-agent: session {session_id} set_config_option DROPPED — writer not ready"
+                );
+            }
+        }
+        Ok(vec![])
     }
 
     fn handle_send_prompt(

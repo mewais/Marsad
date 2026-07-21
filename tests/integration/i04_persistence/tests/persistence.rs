@@ -72,6 +72,9 @@ fn make_session(id: &str, session_id: Option<&str>) -> PersistedSession {
         posture: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
+        tools: vec![],
+        mcp_servers: vec![],
+        slash_commands: vec![],
     }
 }
 

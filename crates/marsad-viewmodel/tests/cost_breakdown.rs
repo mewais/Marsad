@@ -86,6 +86,7 @@ fn sv(id: &str, host_id: &str, cost_usd: f64, cost_estimated: bool) -> SessionVi
         end_reason: None,
         plan_entries: vec![],
         current_mode: None,
+        available_modes: vec![],
     }
 }
 

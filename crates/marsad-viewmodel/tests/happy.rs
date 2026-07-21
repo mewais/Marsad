@@ -90,6 +90,7 @@ fn representative_snapshot() -> AppSnapshot {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
         SessionView {
             id: "s2".to_string(),
@@ -130,6 +131,7 @@ fn representative_snapshot() -> AppSnapshot {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
         SessionView {
             id: "s3".to_string(),
@@ -170,6 +172,7 @@ fn representative_snapshot() -> AppSnapshot {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
         SessionView {
             id: "s4".to_string(),
@@ -210,6 +213,7 @@ fn representative_snapshot() -> AppSnapshot {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
         SessionView {
             id: "s5".to_string(),
@@ -250,6 +254,7 @@ fn representative_snapshot() -> AppSnapshot {
             end_reason: None,
             plan_entries: vec![],
             current_mode: None,
+            available_modes: vec![],
         },
     ];
 
@@ -857,6 +862,7 @@ fn session_view_new_fields_populated() {
         end_reason: None,
         plan_entries: vec![],
         current_mode: None,
+        available_modes: vec![],
     };
     let sv2 = sv.clone();
     assert_eq!(sv, sv2);
@@ -902,6 +908,7 @@ fn session_view_new_fields_empty_by_default_in_literal() {
         end_reason: None,
         plan_entries: vec![],
         current_mode: None,
+        available_modes: vec![],
     };
     assert!(sv.tools.is_empty());
     assert!(sv.mcp_servers.is_empty());

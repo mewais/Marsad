@@ -238,6 +238,7 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             bridge::stop_session,
             bridge::remove_session,
             bridge::send_prompt,
+            bridge::set_session_config_option,
             bridge::interrupt,
             bridge::answer_gate,
             bridge::answer_wasl_gate,
