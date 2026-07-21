@@ -73,7 +73,8 @@ fn claude_status_updates_current_mode_without_wiping_list() {
     assert!(list_len > 0);
 
     // claude enters plan mode on its own → a system/status carries the new mode.
-    let status = r#"{"type":"system","subtype":"status","status":null,"permissionMode":"plan","session_id":"s"}"#;
+    // This is a VERBATIM line captured from a real claude 2.1.165 session log.
+    let status = r#"{"type":"system","subtype":"status","status":null,"permissionMode":"plan","uuid":"5f9f71b0-0f1f-42fa-a720-862986dda561","session_id":"d44785ed-3206-4e64-b617-14681915728c"}"#;
     st = reduce(st, stream(status));
     assert_eq!(st.current_mode.as_deref(), Some("plan"), "status updates current");
     assert_eq!(

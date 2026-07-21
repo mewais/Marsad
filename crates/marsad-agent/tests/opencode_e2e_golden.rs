@@ -10,8 +10,8 @@
 
 use marsad_agent::acp::{extract_update, parse_acp_line, AcpMessage};
 use marsad_agent::acp_translate::{
-    acp_gate_routing_id, acp_permission_to_control_request_event, acp_prompt_result_to_result,
-    acp_update_to_stream_json,
+    acp_config_model_values, acp_config_modes_update, acp_gate_routing_id,
+    acp_permission_to_control_request_event, acp_prompt_result_to_result, acp_update_to_stream_json,
 };
 use marsad_events::{reduce, Event, Phase, SessionState};
 use marsad_proto::{parse_stream_line, StreamMsg};
@@ -180,4 +180,60 @@ fn real_opencode_subagent_task_groups_running_then_done() {
     state = feed(state, r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_real","update":{"sessionUpdate":"tool_call_update","toolCallId":"toolu_task_1","title":"Explore ArchAttention repo","status":"completed","content":[{"type":"content","content":{"type":"text","text":"<task_result>Report on the repo.</task_result>"}}]}}}"#);
     assert_eq!(state.subagents.len(), 1, "still exactly one subagent after completion");
     assert_eq!(state.subagents[0].status, SubagentStatus::Done, "completed update marks the subagent Done");
+}
+
+/// SEAM TEST on REAL captured bytes: the exact `session/new` and
+/// `session/set_config_option` result objects from a live opencode 1.18 session
+/// (model options trimmed to 2 for readability; the `mode` group is verbatim).
+/// Drives them through the SAME path the reader uses — acp_config_modes_update →
+/// parse_stream_line → reduce — proving the available mode list surfaces and a
+/// live mode switch (build → plan) reflects. This is the integration seam the
+/// isolated unit tests don't cover.
+#[test]
+fn real_opencode_config_surfaces_modes_and_reflects_switch() {
+    // Real `session/new` result.result (currentValue mode = build).
+    let new_result: serde_json::Value = serde_json::from_str(
+        r#"{"sessionId":"ses_07d65356dffet1wWuTdzwI41aa","configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"amd-anthropic/Claude-Sonnet-5","options":[{"value":"amd-anthropic/Claude-Haiku-4.5","name":"AMD Gateway (Anthropic format)/Claude Haiku 4.5"},{"value":"amd-anthropic/Claude-Opus-4.8","name":"AMD Gateway (Anthropic format)/Claude Opus 4.8"}]},{"id":"mode","name":"Session Mode","category":"mode","type":"select","currentValue":"build","options":[{"value":"build","name":"build","description":"The default agent. Executes tools based on configured permissions."},{"value":"plan","name":"plan","description":"Plan mode. Disallows all edit tools."}]}]}"#,
+    )
+    .unwrap();
+
+    // Read path: the reader emits acp_config_modes_update(sid, new_result).
+    let mu = acp_config_modes_update(SID, &new_result).expect("mode group present on real result");
+    let line = serde_json::to_string(&mu).unwrap();
+    let mut state = SessionState::initial();
+    match parse_stream_line(&line) {
+        Ok(m) => state = reduce(state, Event::Stream(m)),
+        Err(e) => panic!("real modes_update failed to parse: {e}\n{line}"),
+    }
+    let ids: Vec<String> = state.available_modes.iter().map(|m| m.id.clone()).collect();
+    assert_eq!(ids, vec!["build", "plan"], "real opencode modes surface");
+    assert_eq!(state.current_mode.as_deref(), Some("build"), "initial mode = build");
+
+    // Launch model-apply gate: the pick must be a REAL option value.
+    let (current, valid) = acp_config_model_values(&new_result);
+    assert_eq!(current.as_deref(), Some("amd-anthropic/Claude-Sonnet-5"));
+    assert!(valid.iter().any(|v| v == "amd-anthropic/Claude-Opus-4.8"));
+
+    // Write path result: real `session/set_config_option` result (mode → plan),
+    // fed through the SAME translation the reader applies to it.
+    let setcfg: serde_json::Value = serde_json::from_str(
+        r#"{"configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"amd-anthropic/Claude-Sonnet-5","options":[{"value":"amd-anthropic/Claude-Haiku-4.5","name":"AMD Gateway (Anthropic format)/Claude Haiku 4.5"},{"value":"amd-anthropic/Claude-Opus-4.8","name":"AMD Gateway (Anthropic format)/Claude Opus 4.8"}]},{"id":"mode","name":"Session Mode","category":"mode","type":"select","currentValue":"plan","options":[{"value":"build","name":"build","description":"The default agent. Executes tools based on configured permissions."},{"value":"plan","name":"plan","description":"Plan mode. Disallows all edit tools."}]}]}"#,
+    )
+    .unwrap();
+    let mu2 = acp_config_modes_update(SID, &setcfg).expect("mode group on set result");
+    let line2 = serde_json::to_string(&mu2).unwrap();
+    match parse_stream_line(&line2) {
+        Ok(m) => state = reduce(state, Event::Stream(m)),
+        Err(e) => panic!("set_config modes_update failed to parse: {e}\n{line2}"),
+    }
+    assert_eq!(
+        state.current_mode.as_deref(),
+        Some("plan"),
+        "a live mode switch (set_config_option → plan) reflects in state"
+    );
+    assert_eq!(
+        state.available_modes.iter().map(|m| m.id.clone()).collect::<Vec<_>>(),
+        vec!["build", "plan"],
+        "the list is unchanged by the switch"
+    );
 }
