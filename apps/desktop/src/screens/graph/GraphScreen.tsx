@@ -110,6 +110,12 @@ export interface GraphScreenProps {
    *  host link surfaces as Reconnecting/Disconnected without changing the
    *  session's lifecycle). Omitted ⇒ no hints. */
   hosts?: Host[];
+
+  /** Number of DESIGN-MODE DRAFT nodes authored client-side (not yet launched).
+   *  Drives the observable `design-draft-count` seam in the Design panel's
+   *  "Agents (N)" heading. Omitted ⇒ falls back to the graph's node count (so a
+   *  caller that merges drafts into `graph.nodes` still reads correctly). */
+  draftCount?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +139,7 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
     onResumeWorkstream,
     onDeleteWorkstream,
     hosts = [],
+    draftCount,
   } = props;
 
   // Host-derived connectivity (NOT lifecycle): map a node's host id → its live
@@ -1038,6 +1045,7 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
               </div>
             </div>
             <div
+              data-testid="design-draft-count"
               style={{
                 fontSize: "calc(10px * var(--fs,1))",
                 fontWeight: 700,
@@ -1047,7 +1055,7 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
                 marginBottom: 9,
               }}
             >
-              Agents ({graph.nodes.length})
+              Agents ({draftCount ?? graph.nodes.length})
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {graph.nodes.map((n) => (
