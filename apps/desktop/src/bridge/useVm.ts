@@ -49,7 +49,7 @@ import {
   assignSession as apiAssignSession,
   setActiveProfile as apiSetActiveProfile,
 } from "./api";
-import type { BoardView, ConnKind, GraphView } from "./workstreamTypes";
+import type { BoardView, ConnKind, Driver, GraphView } from "./workstreamTypes";
 
 // ---------------------------------------------------------------------------
 // Screen / nav state (UI only — not in AppSnapshot)
@@ -86,6 +86,52 @@ export interface NodeModalCtx {
   /** True = the New-workstream "Single session" fast lane: launch routes
    *  straight to Level-3 and this node becomes the workstream's lead. */
   isFirstNode: boolean;
+  /** True = the graph's "Build it out" design-mode "＋ Add agent": the node is
+   *  authored INTO the draft workstream graph (assignSession under the ws), and
+   *  the confirm/launch affordance must NOT launch a standalone session — it
+   *  returns to the graph so more nodes/connections can be authored. Launch is a
+   *  separate, later, explicit "Confirm & launch" action. Falsy/absent = the
+   *  single-session fast lane (launch immediately, straight to Level-3). */
+  designMode?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Design-mode draft workstream (DESIGN_HANDOFF.md:183) — the nodes + edges the
+// user is AUTHORING in the "Build it out" design canvas BEFORE "Confirm &
+// launch". Nothing here has hit the real `marsad-core` yet: a DraftNode has NO
+// session id (a real id only exists post-launch — core.md:29), and a DraftEdge
+// references TEMP node ids. These live in the store (not GraphScreenConnected
+// component-local state) because the authoring flow navigates
+// graph → node-modal → graph, which unmounts GraphScreenConnected on every add;
+// component-local draft state would be wiped each time.
+// ---------------------------------------------------------------------------
+
+/** A node authored into the draft graph in design mode — no session launched
+ *  yet, so it carries only the launch config the modal collected. `tempId` is a
+ *  client-side placeholder id used to render the node + wire draft edges; it is
+ *  resolved to a real session id during "Confirm & launch". */
+export interface DraftNode {
+  tempId: string;
+  name: string;
+  project: string;
+  hostId: string;
+  driver: Driver;
+  model: string;
+  posture: "ask" | "auto" | "full";
+  firstPrompt?: string;
+  /** True for the first authored node — it becomes the workstream's lead. */
+  isLead: boolean;
+}
+
+/** A connection authored between two draft nodes — referencing their TEMP ids.
+ *  Submitted to the backend (with real ids) only after both endpoints are
+ *  launched + assigned during "Confirm & launch". */
+export interface DraftEdge {
+  tempId: string;
+  from: string;
+  to: string;
+  kind: ConnKind;
+  bi: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +183,11 @@ export interface VmState {
   // discarded so no empty workstream lingers on the Board. `null` when there is
   // no pending draft (the common case).
   draftWsId: string | null;
+  // Design-mode ("Build it out") draft authoring state — the nodes + edges being
+  // authored client-side BEFORE "Confirm & launch". See DraftNode/DraftEdge and
+  // DESIGN_HANDOFF.md:183. Empty in operate mode / when no draft is in flight.
+  draftNodes: DraftNode[];
+  draftEdges: DraftEdge[];
   // Optimistic placeholder for a just-launched session: set the instant we
   // SELECT_SESSION with the picked name/project (before the backend's real
   // SessionView arrives), so the header/breadcrumb show the real name and the
@@ -189,7 +240,15 @@ type Action =
   // BUG #2 — mark / clear the just-created empty "draft" workstream (a fresh
   // workstream that has no session yet). Set right after createWorkstream in
   // the New-workstream flow; cleared once it gains a session or is discarded.
-  | { type: "SET_DRAFT_WS"; wsId: string | null };
+  | { type: "SET_DRAFT_WS"; wsId: string | null }
+  // Design-mode draft authoring — pure client-side, no backend. ADD_DRAFT_NODE
+  // appends an authored node (and, when it's not the first, auto-wires a draft
+  // edge from the lead → the new node so a two-node draft carries a connection
+  // that materializes at Confirm time). ADD_DRAFT_EDGE records an explicit wire.
+  // CLEAR_DRAFT wipes both lists (after Confirm & launch, or on Discard).
+  | { type: "ADD_DRAFT_NODE"; node: DraftNode }
+  | { type: "ADD_DRAFT_EDGE"; edge: DraftEdge }
+  | { type: "CLEAR_DRAFT" };
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -401,6 +460,35 @@ function reducer(state: VmState, action: Action): VmState {
     case "SET_DRAFT_WS":
       return { ...state, draftWsId: action.wsId };
 
+    case "ADD_DRAFT_NODE": {
+      const draftNodes = [...state.draftNodes, action.node];
+      // Auto-wire each subsequent node to the lead (the first authored node), so
+      // a multi-node "Build it out" draft carries the controller/feeder graph
+      // the user is composing. Both endpoints are TEMP ids — this is a pure
+      // client-side draft edge; it materializes (with real ids) at Confirm time.
+      let draftEdges = state.draftEdges;
+      const lead = state.draftNodes[0];
+      if (lead) {
+        draftEdges = [
+          ...state.draftEdges,
+          {
+            tempId: `dedge-${action.node.tempId}`,
+            from: lead.tempId,
+            to: action.node.tempId,
+            kind: "data",
+            bi: false,
+          },
+        ];
+      }
+      return { ...state, draftNodes, draftEdges };
+    }
+
+    case "ADD_DRAFT_EDGE":
+      return { ...state, draftEdges: [...state.draftEdges, action.edge] };
+
+    case "CLEAR_DRAFT":
+      return { ...state, draftNodes: [], draftEdges: [] };
+
     default:
       return state;
   }
@@ -428,6 +516,8 @@ export const initialVmState: VmState = {
   activeProfile: null,
   nodeModalCtx: null,
   draftWsId: null,
+  draftNodes: [],
+  draftEdges: [],
   pendingSession: null,
   capabilities: {},
   waslGates: [],
@@ -496,6 +586,14 @@ export interface VmContextValue {
    *  workstream; cleared once it gains a session. `openBoard` discards a still-
    *  empty draft so no orphan lingers on the Board. */
   markDraftWorkstream: (id: string | null) => void;
+  /** Append an authored draft node to the design-mode draft (pure client-side —
+   *  NO backend call). When it's not the first node, a draft edge from the lead
+   *  is auto-wired. Returns the generated temp id. */
+  addDraftNode: (cfg: Omit<DraftNode, "tempId" | "isLead">) => string;
+  /** Record an explicit draft edge between two draft (temp) node ids. */
+  addDraftEdge: (edge: Omit<DraftEdge, "tempId">) => void;
+  /** Clear the whole design-mode draft (nodes + edges) — no backend call. */
+  clearDraft: () => void;
   /** Pause every session in a workstream (backend stops each process; they
    *  remain resumable). Refreshes board + open graph afterwards. */
   pauseWorkstream: (id: string) => Promise<void>;
@@ -525,6 +623,27 @@ const EMPTY_GROUPS: OverviewGroups = { attention: [], active: [], idle: [] };
 // ---------------------------------------------------------------------------
 // Helpers (mirrors marsad-viewmodel Rust logic)
 // ---------------------------------------------------------------------------
+
+/** Client-side temp id for a draft node (no session launched yet). Prefers
+ *  `crypto.randomUUID` (present in the Tauri webview); falls back to a
+ *  timestamp+counter so this never throws in an older environment or collides
+ *  when two nodes are authored within the same millisecond. */
+let draftIdCounter = 0;
+function genTempNodeId(): string {
+  draftIdCounter += 1;
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `draft-node-${crypto.randomUUID()}`;
+  }
+  return `draft-node-${Date.now()}-${draftIdCounter}`;
+}
+
+function genTempEdgeId(): string {
+  draftIdCounter += 1;
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `draft-edge-${crypto.randomUUID()}`;
+  }
+  return `draft-edge-${Date.now()}-${draftIdCounter}`;
+}
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -1095,6 +1214,26 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     dispatch({ type: "SET_DRAFT_WS", wsId: id });
   }, []);
 
+  const addDraftNode = React.useCallback(
+    (cfg: Omit<DraftNode, "tempId" | "isLead">): string => {
+      const tempId = genTempNodeId();
+      // First authored node = effective lead; reducer reads current length via
+      // the dispatched node's isLead flag, which we derive from live state here.
+      const isLead = state.draftNodes.length === 0;
+      dispatch({ type: "ADD_DRAFT_NODE", node: { tempId, isLead, ...cfg } });
+      return tempId;
+    },
+    [state.draftNodes.length]
+  );
+
+  const addDraftEdge = React.useCallback((edge: Omit<DraftEdge, "tempId">) => {
+    dispatch({ type: "ADD_DRAFT_EDGE", edge: { tempId: genTempEdgeId(), ...edge } });
+  }, []);
+
+  const clearDraft = React.useCallback(() => {
+    dispatch({ type: "CLEAR_DRAFT" });
+  }, []);
+
   const pauseWorkstream = React.useCallback(
     async (id: string) => {
       await apiPauseWorkstream(id);
@@ -1219,6 +1358,9 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     createWorkstream,
     deleteWorkstream,
     markDraftWorkstream,
+    addDraftNode,
+    addDraftEdge,
+    clearDraft,
     pauseWorkstream,
     resumeWorkstream,
     addConnection,

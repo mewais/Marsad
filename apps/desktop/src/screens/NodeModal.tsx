@@ -109,6 +109,8 @@ export function NodeModal() {
     goToGraph,
     deleteWorkstream,
     markDraftWorkstream,
+    addDraftNode,
+    addDraftEdge,
   } = useVm();
   const ctx = state.nodeModalCtx;
   const open = state.screen === "node-modal" && ctx !== null;
@@ -357,8 +359,61 @@ export function NodeModal() {
     dispatch({ type: "SET_SCREEN", screen: "board" });
   }
 
+  function handleAddToGraph() {
+    // Design-mode ("Build it out") add — a PURE CLIENT-SIDE draft add. NOTHING
+    // may hit the real `marsad-core` here: no launchSession / assignSession /
+    // addConnection / createWorkstream (DESIGN_HANDOFF.md:107,160,183). A draft
+    // node has NO session id — a real id only exists post-launch (core.md:29),
+    // and assign_session/add_connection require already-real ids
+    // (core-ext.md:69-72,82-85). We only append the authored config to the
+    // store's draft list; any explicitly-picked Controlled-by / Feeds-from wire
+    // to an EXISTING DRAFT node is recorded as a draft edge (temp ids). Actual
+    // materialization is the separate "Confirm & launch" action on the graph.
+    if (!ctx || busy) return;
+    if (!project.trim()) return;
+    if (!driverAvailable(driver)) return;
+
+    const typedName = name.trim();
+    if (!ctx.isFirstNode && !typedName) {
+      setLaunchError("Agent name is required");
+      return;
+    }
+
+    setLaunchError(null);
+    // This add authored a node into the workstream — it is no longer an empty
+    // draft, so cancelling afterwards must NOT discard the workstream (BUG #2).
+    launchedRef.current = true;
+    markDraftWorkstream(null);
+
+    const tempId = addDraftNode({
+      name: typedName || ctx.wsName || "Agent",
+      project: project.trim(),
+      hostId,
+      driver,
+      model,
+      posture,
+      firstPrompt: firstPrompt.trim() || undefined,
+    });
+    // Honor explicit Controlled-by / Feeds-from picks against existing DRAFT
+    // nodes — recorded as draft edges (temp ids), never a real addConnection.
+    if (controller) {
+      addDraftEdge({ from: controller, to: tempId, kind: "command", bi: false });
+    }
+    if (feeder) {
+      addDraftEdge({ from: feeder, to: tempId, kind: "data", bi: false });
+    }
+    // Back to the design canvas (the graph screen) so more nodes/connections
+    // can be authored — never a live single session, never the board.
+    dispatch({ type: "SET_SCREEN", screen: "graph" });
+  }
+
   async function handleLaunch() {
     if (!ctx || busy) return;
+    // Design-mode ("Build it out") add routes to the graph, never a launch.
+    if (ctx.designMode) {
+      handleAddToGraph();
+      return;
+    }
     if (!project.trim()) return;
     if (!driverAvailable(driver)) return;
 
