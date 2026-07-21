@@ -1700,6 +1700,25 @@ pub fn encode_control_request_interrupt(request_id: &str) -> String {
     serde_json::to_string(&wire).expect("interrupt request is always serializable")
 }
 
+/// Encode the control-protocol `set_permission_mode` request that changes claude's
+/// permission mode LIVE mid-session — no pause/resume, matching the TUI's Shift-Tab
+/// cycle. Shape verified against the Claude Agent SDK source (client → CLI):
+/// `{"type":"control_request","request_id":"X","request":{"subtype":"set_permission_mode","mode":"plan"}}`.
+/// `mode` is a raw permissionMode id (default|acceptEdits|plan|bypassPermissions).
+/// claude acks and re-emits the new mode on a `system/status` line, which flows
+/// back as a `ModesUpdate` so the current mode follows without a restart.
+pub fn encode_control_request_set_permission_mode(request_id: &str, mode: &str) -> String {
+    let wire = serde_json::json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "set_permission_mode",
+            "mode": mode,
+        }
+    });
+    serde_json::to_string(&wire).expect("set_permission_mode request is always serializable")
+}
+
 // ---------------------------------------------------------------------------
 // parse_ipc
 // ---------------------------------------------------------------------------

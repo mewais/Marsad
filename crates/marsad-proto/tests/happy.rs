@@ -469,6 +469,20 @@ fn encode_interrupt_request_shape() {
     assert_eq!(raw["request"]["subtype"], "interrupt");
 }
 
+#[test]
+fn encode_set_permission_mode_request_shape() {
+    // Shape verified against the Claude Agent SDK: subtype "set_permission_mode"
+    // + a raw permissionMode id in `mode`. This is claude's LIVE (no-restart)
+    // mode switch, sent to the CLI stdin like `interrupt`.
+    let encoded = marsad_proto::encode_control_request_set_permission_mode("req_sm", "plan");
+    let raw: serde_json::Value =
+        serde_json::from_str(&encoded).expect("encoded set_permission_mode must be valid JSON");
+    assert_eq!(raw["type"], "control_request");
+    assert_eq!(raw["request_id"], "req_sm");
+    assert_eq!(raw["request"]["subtype"], "set_permission_mode");
+    assert_eq!(raw["request"]["mode"], "plan");
+}
+
 // ---------------------------------------------------------------------------
 // IpcMsg happy paths — parse + encode round-trips
 // ---------------------------------------------------------------------------

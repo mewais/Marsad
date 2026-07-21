@@ -347,12 +347,16 @@ export function ConfigTab() {
 
         {/* Session mode — AGENT-REPORTED (never hardcoded). opencode's modes come
             from configOptions; claude's from its version. The current mode is live
-            (follows the agent, e.g. claude entering plan mode on its own). opencode
-            is switchable in place; claude/others reflect-only (no wired setter). */}
+            (follows the agent, e.g. claude entering plan mode on its own). Switched
+            in place with NO restart: opencode via set_config_option, claude via the
+            set_permission_mode control request. codex has no live setter. */}
         {selectedSession && (selectedSession.available_modes?.length ?? 0) > 0 && (() => {
           const modes = selectedSession.available_modes ?? [];
           const current = selectedSession.current_mode;
-          const isOpencode = (selectedSession.driver ?? "claude") === "opencode";
+          const driver = selectedSession.driver ?? "claude";
+          // Both opencode and claude switch modes live in place; the agent
+          // confirms and the current mode follows on the stream (no optimism).
+          const liveSwitch = driver === "opencode" || driver === "claude";
           return (
             <div>
               <div
@@ -364,7 +368,7 @@ export function ConfigTab() {
                 }}
               >
                 Session mode
-                {!isOpencode && (
+                {!liveSwitch && (
                   <span
                     style={{
                       marginLeft: 8,
@@ -380,7 +384,7 @@ export function ConfigTab() {
               <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                 {modes.map((m) => {
                   const active = current === m.id;
-                  const clickable = isOpencode;
+                  const clickable = liveSwitch;
                   return (
                     <div
                       key={m.id}

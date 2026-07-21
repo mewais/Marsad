@@ -376,9 +376,42 @@ impl Agent {
                 .and_then(|r| r.sessions.into_iter().find(|s| s.id == session_id))
                 .map(|s| s.driver)
                 .unwrap_or_else(|| "claude".to_string());
+            if driver == "claude" {
+                // claude: a LIVE mode switch (no restart) via the control protocol —
+                // set_permission_mode. Only `mode` is live-settable this way; `model`
+                // still requires a restart (handled by the Config "Apply" path).
+                if config_id != "mode" {
+                    eprintln!(
+                        "marsad-agent: session {session_id} claude set_config_option {config_id} not live-settable (use restart)"
+                    );
+                    return Ok(vec![]);
+                }
+                let line =
+                    marsad_proto::encode_control_request_set_permission_mode("req_setmode", value);
+                let writers = self.session_writers.0.lock().unwrap();
+                if let Some(shared) = writers.get(session_id) {
+                    let mut writer = shared.lock().unwrap();
+                    match writer
+                        .write_all(line.as_bytes())
+                        .and_then(|_| writer.write_all(b"\n"))
+                        .and_then(|_| writer.flush())
+                    {
+                        Ok(()) => eprintln!(
+                            "marsad-agent: session {session_id} claude set_permission_mode {value} (live)"
+                        ),
+                        Err(e) => eprintln!(
+                            "marsad-agent: session {session_id} claude set_permission_mode WRITE FAILED: {e}"
+                        ),
+                    }
+                } else {
+                    eprintln!(
+                        "marsad-agent: session {session_id} claude set_permission_mode DROPPED — no writer"
+                    );
+                }
+                return Ok(vec![]);
+            }
             if driver != "opencode" {
-                // claude mode-setting over the control channel is a separate,
-                // unverified API — not wired yet. Don't fake it.
+                // codex etc.: no wired live mode setter. Don't fake it.
                 eprintln!(
                     "marsad-agent: session {session_id} set_config_option ignored — driver {driver} has no wired setter"
                 );
