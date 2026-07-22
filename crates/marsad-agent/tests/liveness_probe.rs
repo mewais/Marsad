@@ -4,7 +4,7 @@
 //! what keeps an unreachable durable session from being falsely Paused.
 
 use marsad_agent::{
-    conn_on_drop, conn_on_probe, parse_liveness, Liveness, ProbeAction, LIVENESS_SENTINEL,
+    conn_on_drop, parse_liveness, reconnect_action, Liveness, ReconnectAction, LIVENESS_SENTINEL,
 };
 use marsad_proto::ConnHealth;
 
@@ -73,35 +73,21 @@ fn drop_is_unstable_when_it_never_restabilized() {
     assert_eq!(conn_on_drop(0), ConnHealth::Unstable);
 }
 
+// ── Signal-driven reconnect decision (from the reader child's exit, not a probe) ─
+
 #[test]
-fn probe_live_reattaches_without_emitting() {
-    let step = conn_on_probe(Liveness::Live, false);
-    assert_eq!(step.action, ProbeAction::Reattach);
-    assert_eq!(step.emit, None); // the re-attach emits Connected
+fn clean_reader_exit_means_process_died_pause() {
+    // `ssh … tail --pid=<pid>` returns 0 when the watched process dies → Pause.
+    assert_eq!(reconnect_action(Some(0), false), ReconnectAction::Pause);
 }
 
 #[test]
-fn probe_dead_pauses() {
-    let step = conn_on_probe(Liveness::Dead, false);
-    assert_eq!(step.action, ProbeAction::Pause);
-    // Only DEAD finalizes.
-    let step_maxed = conn_on_probe(Liveness::Dead, true);
-    assert_eq!(step_maxed.action, ProbeAction::Pause);
-}
-
-#[test]
-fn probe_unreachable_never_pauses_and_escalates_at_backoff_max() {
-    // Early (backoff still growing) → keep probing, show Reconnecting.
-    let early = conn_on_probe(Liveness::Unreachable, false);
-    assert_eq!(early.action, ProbeAction::KeepProbing);
-    assert_eq!(early.emit, Some(ConnHealth::Reconnecting));
-
-    // Sustained (backoff saturated) → keep probing, show Disconnected (NOT Paused).
-    let sustained = conn_on_probe(Liveness::Unreachable, true);
-    assert_eq!(sustained.action, ProbeAction::KeepProbing);
-    assert_eq!(sustained.emit, Some(ConnHealth::Disconnected));
-
-    // Unreachable is NEVER a Pause, at any backoff.
-    assert_ne!(conn_on_probe(Liveness::Unreachable, false).action, ProbeAction::Pause);
-    assert_ne!(conn_on_probe(Liveness::Unreachable, true).action, ProbeAction::Pause);
+fn transport_error_reattaches_not_pauses() {
+    // The REAL ETX signals: ssh dies 255 and/or its stderr shows "closed by remote
+    // host"/"Connection reset". Either → a network drop → Reattach (the durable
+    // setsid session is presumed alive, NEVER falsely Paused).
+    assert_eq!(reconnect_action(Some(255), false), ReconnectAction::Reattach);
+    assert_eq!(reconnect_action(Some(0), true), ReconnectAction::Reattach); // stderr overrides a 0
+    assert_eq!(reconnect_action(None, false), ReconnectAction::Reattach); // killed/unwaitable
+    assert_eq!(reconnect_action(Some(1), false), ReconnectAction::Reattach); // unknown nonzero
 }

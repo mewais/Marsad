@@ -51,12 +51,8 @@ pub(crate) fn cancel_reader(sid: &str) {
 /// Initial delay before the first liveness re-probe after a connection drop (seconds).
 pub const RECONNECT_INITIAL_BACKOFF_SECS: u64 = 3;
 
-/// Maximum delay between liveness probes (seconds).
+/// Maximum delay between reattach attempts (seconds).
 pub const RECONNECT_MAX_BACKOFF_SECS: u64 = 30;
-
-/// Timeout for each bounded liveness probe while the connection is down (seconds).
-/// Short so a host that is still unreachable doesn't stall the backoff loop.
-pub const RECONNECT_PROBE_TIMEOUT_SECS: u64 = 8;
 
 /// Compute the next backoff delay: double the current value, capped at
 /// `RECONNECT_MAX_BACKOFF_SECS`.
@@ -72,24 +68,6 @@ pub fn reconnect_backoff_next(current: u64) -> u64 {
 // functions are the WHOLE decision logic — no flap counter driving state at
 // attach, no verdict-string guessing. The reader just calls them and emits.
 
-/// What to do after a liveness probe during a reconnect, plus the health to emit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProbeStep {
-    /// Connection health to broadcast now (None = leave unchanged).
-    pub emit: Option<marsad_proto::ConnHealth>,
-    pub action: ProbeAction,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProbeAction {
-    /// Re-attach to the (live) session.
-    Reattach,
-    /// Process is confirmed gone → finalize the session to Paused.
-    Pause,
-    /// Couldn't confirm — keep probing (host presumed still hosting the session).
-    KeepProbing,
-}
-
 /// Health to emit when the stream DROPS. A drop right after a bare re-attach that
 /// never produced a line (`lines_seen == 0`) is a FLAP → `Unstable`; a drop from a
 /// connection that was actually working → a plain `Reconnecting` blip.
@@ -101,30 +79,39 @@ pub fn conn_on_drop(lines_seen: u64) -> marsad_proto::ConnHealth {
     }
 }
 
-/// Decide the next step from a probe verdict. `backoff_at_max` means we've been
-/// retrying long enough that the backoff has saturated — a still-Unreachable host
-/// at that point is a SUSTAINED outage → surface `Disconnected` (honest "lost
-/// contact", session presumed alive) rather than an endless "Reconnecting".
-/// Crucially, `Unreachable` NEVER pauses — only a definitive `Dead` does.
-pub fn conn_on_probe(verdict: crate::remote::Liveness, backoff_at_max: bool) -> ProbeStep {
-    use marsad_proto::ConnHealth;
-    match verdict {
-        crate::remote::Liveness::Live => ProbeStep {
-            emit: None, // the re-attach emits Connected
-            action: ProbeAction::Reattach,
-        },
-        crate::remote::Liveness::Dead => ProbeStep {
-            emit: None, // Paused (live=false) clears conn_health in core
-            action: ProbeAction::Pause,
-        },
-        crate::remote::Liveness::Unreachable => ProbeStep {
-            emit: Some(if backoff_at_max {
-                ConnHealth::Disconnected
-            } else {
-                ConnHealth::Reconnecting
-            }),
-            action: ProbeAction::KeepProbing,
-        },
+/// What to do when a remote reader's stream ends — decided from the reader child's
+/// OWN exit signal, not a separate fixed-timeout probe (see `reconnect_action`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconnectAction {
+    /// The connection dropped (transport error). The durable setsid session is
+    /// presumed alive → re-attach with backoff.
+    Reattach,
+    /// The remote process is gone (the `tail --pid` reader exited cleanly) →
+    /// finalize the session to Paused.
+    Pause,
+}
+
+/// Classify why a remote reader (`ssh … tail --pid=<pid> -f out.log`) stopped, from
+/// the reader child's exit code plus whether its stderr showed a connection error:
+/// - a captured connection error ("Connection reset", "closed by remote host", …)
+///   → the CONNECTION dropped → `Reattach`.
+/// - exit code 0, no connection error → the remote command (`tail --pid`) exited
+///   because the watched process DIED → `Pause`.
+/// - any other/unknown exit → a transport problem, NOT proof of death → `Reattach`
+///   (the durable session is presumed alive until a clean exit proves otherwise; a
+///   genuinely-unreachable host keeps failing fast so the backoff escalates
+///   Reconnecting → Disconnected, but it is NEVER falsely Paused).
+///
+/// This replaces gating re-attach on a fixed-timeout `probe_liveness`, which timed
+/// out on slow hosts (ETX's SSH round-trip is 4–26s vs an 8s probe) and stranded
+/// live sessions on `Disconnected`.
+pub fn reconnect_action(exit_code: Option<i32>, saw_conn_error: bool) -> ReconnectAction {
+    if saw_conn_error {
+        return ReconnectAction::Reattach;
+    }
+    match exit_code {
+        Some(0) => ReconnectAction::Pause,
+        _ => ReconnectAction::Reattach,
     }
 }
 
@@ -285,10 +272,10 @@ pub(crate) fn spawn_session_reader(
         let mut backoff_secs = RECONNECT_INITIAL_BACKOFF_SECS;
 
         // Per-session CONNECTION health (distinct from liveness). Emitted on REAL
-        // stream events via the pure state machine (`conn_on_drop`/`conn_on_probe`):
+        // stream events (`conn_on_drop` + the signal-driven `reconnect_action`):
         // attach → Connected; drop → Reconnecting/Unstable; sustained unreachable →
-        // Disconnected; DEAD → Paused. The UI uses it to show the true state and
-        // HARD-BLOCK sending into a broken pipe.
+        // Disconnected; process gone → Paused. The UI uses it to show the true state
+        // and HARD-BLOCK sending into a broken pipe.
         let emit_conn = |health: marsad_proto::ConnHealth| {
             let line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionConn {
                 session_id: sid.clone(),
@@ -347,6 +334,11 @@ pub(crate) fn spawn_session_reader(
             if cancel.load(Ordering::SeqCst) {
                 break 'reconnect;
             }
+            // Per-attempt flag: set by the reader child's stderr thread when it sees
+            // a transport error. Read at stream-end to distinguish a network drop
+            // (reattach) from a dead process (pause). Reset each iteration.
+            let saw_conn_error =
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             // ── Open and connect the transport ─────────────
             // Local session → platform FIFO/pipe transport
             // (tmux+FIFO on Unix, named pipe on Windows), yielding
@@ -478,14 +470,30 @@ pub(crate) fn spawn_session_reader(
                             break 'reconnect;
                         }
                     };
-                    // Stream reader's stderr to agent.log for diagnosis.
+                    // Stream reader's stderr to agent.log for diagnosis, AND flag a
+                    // transport error so the post-drop classifier can tell a network
+                    // drop from a dead process even in the rare case ssh exits 0.
+                    // (The reader child's exit code is the primary signal; this is
+                    // corroboration — see `reconnect_action`.)
                     if let Some(errpipe) = reader_child.stderr.take() {
                         let esid = sid.clone();
+                        let flag = saw_conn_error.clone();
                         std::thread::spawn(move || {
                             use std::io::BufRead;
                             let r = std::io::BufReader::new(errpipe);
                             for line in r.lines().map_while(Result::ok) {
                                 if !line.trim().is_empty() {
+                                    let l = line.to_ascii_lowercase();
+                                    if l.contains("connection reset")
+                                        || l.contains("closed by remote host")
+                                        || l.contains("connection to")
+                                        || l.contains("client_loop")
+                                        || l.contains("broken pipe")
+                                        || l.contains("timed out")
+                                        || l.contains("connection refused")
+                                    {
+                                        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                                    }
                                     eprintln!("marsad-agent: session {esid} reader-stderr: {line}");
                                 }
                             }
@@ -1611,22 +1619,39 @@ pub(crate) fn spawn_session_reader(
             if let Some(mut child) = children.lock().unwrap().remove(&sid) {
                 let _ = child.wait();
             }
-            // Reap the reader child (remote sessions: the `tail -n0 -f out.log` child)
-            // stored under the `"reader:<sid>"` key.
-            {
+            // Reap the reader child (remote sessions: the `ssh … tail --pid -f`
+            // child) stored under the `"reader:<sid>"` key. Capture its exit code
+            // FIRST — it's the authoritative signal for why the stream ended (ssh
+            // 255 = transport drop; the remote `tail --pid` exiting 0 = the watched
+            // process died). The stream already EOF'd, so the child has normally
+            // exited on its own; `try_wait` reads that. Only if it's somehow still
+            // running (e.g. a half-open connection) do we kill it — and a kill means
+            // it did NOT exit cleanly, i.e. treat as a transport drop, not death.
+            let reader_exit_code: Option<i32> = {
                 let reader_key = format!("reader:{sid}");
-                if let Some(mut rchild) = children.lock().unwrap().remove(&reader_key) {
-                    let _ = rchild.kill(); // tail -f never exits on its own; kill it.
-                    let _ = rchild.wait();
+                let child = children.lock().unwrap().remove(&reader_key);
+                if let Some(mut rchild) = child {
+                    match rchild.try_wait() {
+                        Ok(Some(status)) => status.code(),
+                        _ => {
+                            // Still running (or unwaitable): kill it. A killed reader
+                            // is NOT a clean exit → don't let it read as "process
+                            // died"; None routes to Reattach in `reconnect_action`.
+                            let _ = rchild.kill();
+                            let _ = rchild.wait();
+                            None
+                        }
+                    }
+                } else {
+                    None
                 }
-            }
-
-            // ── Remote reconnect: probe liveness, retry or stop ──────────────
-            // Only for REMOTE sessions.  Local sessions (host_target None) stop here.
-            let host = match host_target.as_deref() {
-                Some(h) if exec_prefix_for(Some(h)).is_some() => h,
-                _ => break 'reconnect, // local session or no exec prefix → stop
             };
+
+            // ── Remote reconnect: classify the stream-end, then reattach or stop ─
+            // Only for REMOTE sessions. Local sessions (host_target None) stop here.
+            if !matches!(host_target.as_deref(), Some(h) if exec_prefix_for(Some(h)).is_some()) {
+                break 'reconnect;
+            }
 
             // A COMMANDED stop (pause / supersede) is NOT a connection blip. The
             // kill that ends a pause EOFs this stream too, so if the cancel token is
@@ -1637,61 +1662,58 @@ pub(crate) fn spawn_session_reader(
             if cancel.load(Ordering::SeqCst) {
                 break 'reconnect;
             }
-            eprintln!("marsad-agent: session {sid} connection lost, probing liveness");
-            // Emit the drop health via the pure state machine: a drop that never
-            // restabilized this attach (no lines) is a FLAP → Unstable; otherwise a
-            // plain Reconnecting blip. This is what HARD-BLOCKS the composer.
-            emit_conn(conn_on_drop(lines_seen));
 
-            // Probe + backoff loop. Exits ONLY on: cancel (pause/supersede), or a
-            // definitive DEAD verdict (→ Paused). An Unreachable host NEVER pauses
-            // the session — the durable process is presumed alive; we keep probing
-            // at the steady backoff and surface Disconnected once it saturates,
-            // flipping back to Connected the instant the host answers LIVE.
-            loop {
-                if cancel.load(Ordering::SeqCst) {
+            // Decide from the reader child's OWN exit signal — NOT a fixed-timeout
+            // probe. A clean `tail --pid` exit (code 0, no connection error) means
+            // the watched process died → finalize (Pause). Any transport error
+            // (ssh 255 / a captured "connection reset" / "closed by remote host")
+            // means the connection dropped, not the process → reattach. This is the
+            // fix for slow hosts (ETX: 4–26s SSH round-trip) where an 8s probe timed
+            // out and stranded a LIVE session on Disconnected for ~25 min.
+            let saw_err = saw_conn_error.load(Ordering::SeqCst);
+            match reconnect_action(reader_exit_code, saw_err) {
+                ReconnectAction::Pause => {
+                    eprintln!(
+                        "marsad-agent: session {sid} reader exited cleanly (code {reader_exit_code:?}) — process gone, finalizing"
+                    );
                     break 'reconnect;
                 }
-
-                // Sleep before the next probe (always, to avoid busy-looping), in
-                // 1s increments so a cancel (pause/supersede) is honored within ~1s
-                // instead of after the full backoff.
-                eprintln!("marsad-agent: session {sid} still down, retrying in {backoff_secs}s");
-                for _ in 0..backoff_secs {
-                    if cancel.load(Ordering::SeqCst) {
-                        break 'reconnect;
-                    }
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                }
-                // Once the backoff has grown to its steady max, a still-unreachable
-                // host is a SUSTAINED outage (→ Disconnected, not endless Reconnecting).
-                let backoff_at_max = backoff_secs >= RECONNECT_MAX_BACKOFF_SECS;
-                backoff_secs = reconnect_backoff_next(backoff_secs);
-
-                let verdict = crate::remote::probe_liveness(
-                    host,
-                    &sid,
-                    std::time::Duration::from_secs(RECONNECT_PROBE_TIMEOUT_SECS),
-                );
-                let step = conn_on_probe(verdict, backoff_at_max);
-                if let Some(h) = step.emit {
-                    emit_conn(h);
-                }
-                match step.action {
-                    ProbeAction::Reattach => {
-                        eprintln!("marsad-agent: session {sid} reconnected live remote session");
+                ReconnectAction::Reattach => {
+                    // A connection that was actually working (produced lines) then
+                    // dropped is a fresh blip → reset the backoff so we retry fast. A
+                    // reattach that never streamed keeps the backoff growing, so a
+                    // genuinely-unreachable host escalates Reconnecting → Disconnected
+                    // (via the SAME state machine) — but is NEVER falsely Paused.
+                    if lines_seen > 0 {
                         backoff_secs = RECONNECT_INITIAL_BACKOFF_SECS;
-                        continue 'reconnect;
                     }
-                    ProbeAction::Pause => {
-                        eprintln!("marsad-agent: session {sid} probe DEAD — process gone, finalizing");
-                        break 'reconnect;
+                    let backoff_at_max = backoff_secs >= RECONNECT_MAX_BACKOFF_SECS;
+                    let health = if backoff_at_max {
+                        marsad_proto::ConnHealth::Disconnected
+                    } else {
+                        conn_on_drop(lines_seen)
+                    };
+                    // Cancel-guard: if a pause/supersede raced in during teardown, a
+                    // fresh reader may have already emitted Connected — don't clobber
+                    // it with a stale Reconnecting/Disconnected.
+                    if !cancel.load(Ordering::SeqCst) {
+                        emit_conn(health);
                     }
-                    ProbeAction::KeepProbing => {
-                        // Host unreachable — presume the durable session alive, keep going.
+                    eprintln!(
+                        "marsad-agent: session {sid} connection dropped (exit {reader_exit_code:?}, conn_err={saw_err}) — reattaching in {backoff_secs}s"
+                    );
+                    // Backoff before the reattach, in 1s increments so a cancel
+                    // (pause/supersede) is honored within ~1s.
+                    for _ in 0..backoff_secs {
+                        if cancel.load(Ordering::SeqCst) {
+                            break 'reconnect;
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(1));
                     }
+                    backoff_secs = reconnect_backoff_next(backoff_secs);
+                    continue 'reconnect; // re-open the transport + reader
                 }
-            } // probe loop
+            }
         } // 'reconnect loop
 
         // Whether THIS reader was superseded/stopped (vs it giving up on its own).

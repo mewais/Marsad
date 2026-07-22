@@ -35,9 +35,8 @@ use remote::REMOTE_RUNTIME_DIR;
 
 pub use driver::{build_remote_run_cmd, claude_argv, opencode_argv, posture_to_mode};
 pub use reader::{
-    assistant_has_file_modifying_tool_use, conn_on_drop, conn_on_probe, reconnect_backoff_next,
-    ProbeAction, ProbeStep, RECONNECT_INITIAL_BACKOFF_SECS, RECONNECT_MAX_BACKOFF_SECS,
-    RECONNECT_PROBE_TIMEOUT_SECS,
+    assistant_has_file_modifying_tool_use, conn_on_drop, reconnect_action, reconnect_backoff_next,
+    ReconnectAction, RECONNECT_INITIAL_BACKOFF_SECS, RECONNECT_MAX_BACKOFF_SECS,
 };
 pub use remote::{
     build_remote_codex_eval_loop, build_remote_spawn_cmd, exec_prefix_for,
