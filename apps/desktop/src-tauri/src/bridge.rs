@@ -743,6 +743,16 @@ pub fn connect_host_interactive(
 /// - otherwise → an `ssh` login. Deliberately NO `BatchMode` (interactive); the
 ///   `ControlPath` MUST match docs/remote-hosts.md exactly so automated
 ///   connections reuse the master socket.
+/// The one-shot remote command appended to an interactive `ssh` login so it runs,
+/// confirms auth + leaves the persistent ControlMaster, then EXITS — instead of
+/// dropping into an interactive remote shell that "sits at the prompt forever" and
+/// never returns to Marsad. `ssh` joins these trailing tokens into the remote
+/// command. Shared by the wslssh (MFA/Duo) and plain-ssh branches so both behave
+/// identically (one source of truth for the confirmation message).
+fn one_shot_confirm_cmd() -> [&'static str; 8] {
+    ["echo", "Marsad:", "connected.", "You", "can", "close", "this", "window."]
+}
+
 fn interactive_ssh_args(target: &str) -> Vec<String> {
     if let Some(inner) = target.strip_prefix("plink:") {
         return vec![
@@ -767,7 +777,7 @@ fn interactive_ssh_args(target: &str) -> Vec<String> {
         let distro = parts.next().unwrap_or("");
         let inner = parts.next().unwrap_or("");
         if !distro.is_empty() && !inner.is_empty() {
-            return vec![
+            let mut args = vec![
                 "wsl.exe".to_string(),
                 "-d".to_string(),
                 distro.to_string(),
@@ -781,17 +791,9 @@ fn interactive_ssh_args(target: &str) -> Vec<String> {
                 "-o".to_string(),
                 "ServerAliveInterval=30".to_string(),
                 inner.to_string(),
-                // One-shot remote command (ssh joins the trailing tokens): confirms
-                // auth + leaves the persistent master, then ssh exits.
-                "echo".to_string(),
-                "Marsad:".to_string(),
-                "connected.".to_string(),
-                "You".to_string(),
-                "can".to_string(),
-                "close".to_string(),
-                "this".to_string(),
-                "window.".to_string(),
             ];
+            args.extend(one_shot_confirm_cmd().iter().map(|s| s.to_string()));
+            return args;
         }
     }
     let mut args = vec!["ssh".to_string()];
@@ -816,6 +818,13 @@ fn interactive_ssh_args(target: &str) -> Vec<String> {
         "ServerAliveInterval=30".to_string(),
         target.to_string(),
     ]);
+    // One-shot remote command — IDENTICAL rationale to the wslssh path above: a
+    // bare `ssh <target>` opens an interactive shell that sits at the remote prompt
+    // forever ("connects but never goes back to Marsad"). Appending a command makes
+    // ssh authenticate (prompting for a password/MFA if the host needs it),
+    // establish the persistent ControlMaster (on Unix), print a confirmation, then
+    // EXIT. Key-based hosts (e.g. ETX) just skip the prompt.
+    args.extend(one_shot_confirm_cmd().iter().map(|s| s.to_string()));
     args
 }
 
@@ -1944,6 +1953,32 @@ pub fn pty_close(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interactive_ssh_plain_target_runs_one_shot_and_exits() {
+        // A bare `ssh <target>` opens an interactive shell that never returns
+        // ("connects but never goes back to Marsad"). The interactive connect MUST
+        // append a one-shot command so ssh authenticates, establishes the master,
+        // then EXITS — same as the wslssh/MFA path.
+        let args = interactive_ssh_args("etx");
+        assert_eq!(args[0], "ssh");
+        assert!(args.contains(&"etx".to_string()), "target present");
+        // The last tokens are the one-shot remote command (ssh joins them).
+        assert_eq!(args.last().map(String::as_str), Some("window."));
+        assert!(args.contains(&"echo".to_string()), "one-shot echo present so ssh exits");
+        // Sanity: `echo` comes AFTER the target (it's the remote command, not an -o).
+        let echo_i = args.iter().position(|a| a == "echo").unwrap();
+        let tgt_i = args.iter().position(|a| a == "etx").unwrap();
+        assert!(echo_i > tgt_i, "remote command follows the target");
+    }
+
+    #[test]
+    fn interactive_ssh_wslssh_target_still_one_shot() {
+        let args = interactive_ssh_args("wslssh:Ubuntu:narval");
+        assert_eq!(args[0], "wsl.exe");
+        assert!(args.contains(&"echo".to_string()), "wslssh one-shot preserved");
+        assert_eq!(args.last().map(String::as_str), Some("window."));
+    }
 
     #[test]
     fn wasl_outcome_approved_maps_to_approve() {
