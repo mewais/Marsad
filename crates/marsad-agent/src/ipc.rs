@@ -561,44 +561,32 @@ impl Agent {
                     entry.push((std::time::Instant::now(), bytes));
                 }
             } else if driver == "codex" {
-                // Codex follow-up turn: build the eval-loop command via codex_turn_cmd.
-                // Look up the cached spec and the stored thread_id (from thread.started).
-                let spec_opt = self.codex_specs.0.lock().unwrap().get(session_id).cloned();
+                // Codex follow-up turn (app-server): send a `turn/start` JSON-RPC
+                // request on the persistent thread. The threadId was captured from
+                // the thread/start response (stored in codex_threads by the reader).
                 let thread_id_opt = self.codex_threads.0.lock().unwrap().get(session_id).cloned();
-
-                if let Some(cs) = spec_opt {
-                    // Build a minimal LaunchSpec for codex_turn_cmd.
-                    let spec_for_cmd = marsad_proto::LaunchSpec {
-                        project: cs.project.clone(),
-                        host_id: "local".to_string(),
-                        host_target: None,
-                        claude_bin: cs.claude_bin.clone(),
-                        setup: None,
-                        env: vec![],
-                        model: cs.model.clone(),
-                        posture: cs.posture.clone(),
-                        first_prompt: None,
-                        mode: marsad_proto::LaunchMode::Fresh,
-                        name: None,
-                        disallowed_tools: vec![],
-                        wasl: false,
-                        driver: "codex".to_string(),
-                    };
-                    let cmd = crate::driver::codex_turn_cmd(
-                        &spec_for_cmd,
-                        thread_id_opt.as_deref(),
-                        text,
+                if let Some(tid) = thread_id_opt {
+                    use crate::codex_appserver as cx;
+                    // Millis-based id > the reserved handshake ids (1/2) and the
+                    // first turn (3), matching the opencode scheme.
+                    let req_id = serde_json::json!(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .subsec_millis() as u64
+                            + 100u64
                     );
+                    let line = crate::acp::encode_request(req_id, cx::TURN_START, cx::turn_start_params(&tid, text));
                     let writers = self.session_writers.0.lock().unwrap();
                     if let Some(shared) = writers.get(session_id) {
                         let mut writer = shared.lock().unwrap();
                         match writer
-                            .write_all(cmd.as_bytes())
+                            .write_all(line.as_bytes())
                             .and_then(|_| writer.write_all(b"\n"))
                             .and_then(|_| writer.flush())
                         {
                             Ok(()) => eprintln!(
-                                "marsad-agent: session {session_id} codex send_prompt delivered ({} chars) via eval-loop",
+                                "marsad-agent: session {session_id} codex send_prompt → turn/start ({} chars)",
                                 text.len()
                             ),
                             Err(e) => eprintln!(
@@ -607,12 +595,12 @@ impl Agent {
                         }
                     } else {
                         eprintln!(
-                            "marsad-agent: session {session_id} codex send_prompt DROPPED — no writer registered"
+                            "marsad-agent: session {session_id} codex send_prompt QUEUED — writer not ready"
                         );
                     }
                 } else {
                     eprintln!(
-                        "marsad-agent: session {session_id} codex send_prompt DROPPED — no cached spec (session launched before Stage 2?)"
+                        "marsad-agent: session {session_id} codex send_prompt DROPPED — threadId not yet known"
                     );
                 }
             } else {

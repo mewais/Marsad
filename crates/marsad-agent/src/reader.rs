@@ -68,6 +68,20 @@ pub fn reconnect_backoff_next(current: u64) -> u64 {
 // functions are the WHOLE decision logic — no flap counter driving state at
 // attach, no verdict-string guessing. The reader just calls them and emits.
 
+/// Map a Marsad posture to codex app-server `(approvalPolicy, sandbox)`.
+///
+/// PHASE A: `approvalPolicy` is `never` for every posture — codex self-limits to
+/// the posture's sandbox and never prompts, exactly matching today's eval-loop
+/// behavior (no HITL gates, no regression). PHASE B switches the gating postures
+/// to `on-request` and wires the approval ServerRequests to the gate pipeline.
+pub fn codex_posture_settings(posture: &marsad_proto::Posture) -> (&'static str, &'static str) {
+    match posture {
+        marsad_proto::Posture::FullAutonomy => ("never", "danger-full-access"),
+        marsad_proto::Posture::AutoApproveSafe => ("never", "workspace-write"),
+        marsad_proto::Posture::Ask => ("never", "read-only"),
+    }
+}
+
 /// Health to emit when the stream DROPS. A drop right after a bare re-attach that
 /// never produced a line (`lines_seen == 0`) is a FLAP → `Unstable`; a drop from a
 /// connection that was actually working → a plain `Reconnecting` blip.
@@ -727,6 +741,52 @@ pub(crate) fn spawn_session_reader(
                 eprintln!("marsad-agent: session {sid} opencode sent {session_method}");
             }
 
+            // ── codex app-server handshake (LAUNCH only, first attach only) ───
+            // Persistent JSON-RPC: `initialize` (id 1) → `initialized`
+            // (notification) → `thread/start` (id 2). thread/start carries the
+            // project cwd + model + posture-derived approvalPolicy/sandbox so the
+            // very first turn runs under the right settings. The thread id comes
+            // back on the id==2 response (handled in the read loop), which then
+            // delivers the first_prompt as a `turn/start`.
+            if driver == "codex" && send_init && is_first_attach {
+                use crate::acp;
+                use crate::codex_appserver as cx;
+                use std::io::Write;
+                let (model, approval, sandbox) = codex_spec
+                    .as_ref()
+                    .map(|cs| {
+                        let (a, s) = codex_posture_settings(&cs.posture);
+                        (cs.model.clone(), a, s)
+                    })
+                    .unwrap_or_else(|| (String::new(), "on-request", "read-only"));
+                let cwd = codex_spec.as_ref().map(|cs| cs.project.clone()).unwrap_or_else(|| ".".into());
+                let init_line = acp::encode_request(
+                    serde_json::json!(1u64),
+                    cx::INITIALIZE,
+                    cx::initialize_params("marsad", env!("CARGO_PKG_VERSION")),
+                );
+                let started_line =
+                    acp::encode_notification(cx::INITIALIZED, serde_json::Value::Null);
+                let ts_params = cx::thread_start_params(
+                    &cwd,
+                    Some(model.as_str()),
+                    Some(approval),
+                    Some(sandbox),
+                );
+                let ts_line = acp::encode_request(serde_json::json!(2u64), cx::THREAD_START, ts_params);
+                {
+                    let mut w = writer.lock().unwrap();
+                    let _ = w.write_all(init_line.as_bytes());
+                    let _ = w.write_all(b"\n");
+                    let _ = w.write_all(started_line.as_bytes());
+                    let _ = w.write_all(b"\n");
+                    let _ = w.write_all(ts_line.as_bytes());
+                    let _ = w.write_all(b"\n");
+                    let _ = w.flush();
+                }
+                eprintln!("marsad-agent: session {sid} codex sent initialize + thread/start");
+            }
+
             // Deliver the first_prompt (if any) immediately so the process receives its
             // initial task.  Only on the very first attach — on reconnect the process is
             // already running (a prompt was already sent) and re-sending would be wrong.
@@ -739,46 +799,14 @@ pub(crate) fn spawn_session_reader(
             //           known). The read loop below handles this delivery on the
             //           session/new response. We skip the first-prompt delivery here
             //           for opencode.
-            if is_first_attach && driver != "opencode" {
+            // CODEX: like opencode, the first_prompt is delivered as a `turn/start`
+            // AFTER the thread/start result arrives (so the threadId is known); the
+            // read loop handles that on the id==2 response. Skip here.
+            if is_first_attach && driver != "opencode" && driver != "codex" {
                 if let Some(ref prompt) = first_prompt {
                     use std::io::Write;
                     let plen = prompt.len();
-
-                    if driver == "codex" {
-                        // Codex first turn: build the eval-loop command and write it.
-                        if let Some(ref cs) = codex_spec {
-                            // Build a LaunchSpec-like value for codex_turn_cmd.
-                            // For first_prompt, thread_id is None (fresh turn).
-                            let spec_for_cmd = marsad_proto::LaunchSpec {
-                                project: cs.project.clone(),
-                                host_id: "local".to_string(),
-                                host_target: None,
-                                claude_bin: cs.claude_bin.clone(),
-                                setup: None,
-                                env: vec![],
-                                model: cs.model.clone(),
-                                posture: cs.posture.clone(),
-                                first_prompt: None,
-                                mode: marsad_proto::LaunchMode::Fresh,
-                                name: None,
-                                disallowed_tools: vec![],
-                                wasl: false,
-                                driver: "codex".to_string(),
-                            };
-                            let cmd = crate::driver::codex_turn_cmd(&spec_for_cmd, None, prompt);
-                            let mut w = writer.lock().unwrap();
-                            let _ = w.write_all(cmd.as_bytes());
-                            let _ = w.write_all(b"\n");
-                            let _ = w.flush();
-                            eprintln!(
-                                "marsad-agent: session {sid} codex delivered first turn cmd ({plen} chars)"
-                            );
-                        } else {
-                            eprintln!(
-                                "marsad-agent: session {sid} codex has no cached spec — first_prompt dropped"
-                            );
-                        }
-                    } else {
+                    {
                         // Claude: stream-json user message.
                         use marsad_proto::{encode_user_input, ContentBlock, UserInput};
                         let encoded = encode_user_input(&UserInput {
@@ -1432,39 +1460,92 @@ pub(crate) fn spawn_session_reader(
                             continue;
                         }
 
-                        // Stage 2 codex: translate the raw codex JSONL event into
-                        // a claude-stream-json Value. If translation yields None
-                        // (skip), do NOT broadcast this line (e.g. turn.started,
-                        // reasoning items). For thread.started, also stash the
-                        // thread_id in codex_threads so follow-up turns resume.
-                        let event: serde_json::Value = if driver == "codex" {
-                            // Stash thread_id for follow-up turns.
-                            if raw_value.get("type").and_then(|t| t.as_str()) == Some("thread.started") {
-                                if let Some(tid) = raw_value.get("thread_id").and_then(|v| v.as_str()) {
-                                    codex_threads.lock().unwrap().insert(sid.clone(), tid.to_string());
-                                    eprintln!(
-                                        "marsad-agent: session {sid} codex thread_id={tid} stored"
-                                    );
+                        // ── codex app-server (persistent JSON-RPC) ───────────────
+                        if driver == "codex" {
+                            use crate::acp;
+                            use crate::codex_appserver as cx;
+                            use crate::codex_translate;
+                            let msg = match cx::parse_line(raw) {
+                                Ok(m) => m,
+                                Err(e) => {
+                                    eprintln!("marsad-agent: session {sid} codex parse error: {e} (line: {raw})");
+                                    continue;
+                                }
+                            };
+                            match msg {
+                                acp::AcpMessage::Notification { method, params } => {
+                                    if let Some(sj) = codex_translate::codex_notification_to_stream_json(&method, &params, &sid) {
+                                        emit_event(sj);
+                                    }
+                                }
+                                acp::AcpMessage::Request { id, method, params } => {
+                                    // PHASE A: approvalPolicy is `never`, so approvals
+                                    // shouldn't fire. If one does, decline it so the
+                                    // turn never hangs. PHASE B replaces this with real
+                                    // gate capture + a human answer path.
+                                    let _ = &params;
+                                    eprintln!("marsad-agent: session {sid} codex server request {method} (phase-A auto-decline)");
+                                    let resp = if cx::is_legacy_approval(&method) {
+                                        acp::encode_response(id, cx::legacy_review_decision(false))
+                                    } else {
+                                        acp::encode_response(id, cx::approval_decision(false, false))
+                                    };
+                                    let mut w = writer.lock().unwrap();
+                                    let _ = w.write_all(resp.as_bytes());
+                                    let _ = w.write_all(b"\n");
+                                    let _ = w.flush();
+                                }
+                                acp::AcpMessage::Response { id, result } => {
+                                    let id_u = id.as_u64().unwrap_or(0);
+                                    match result {
+                                        Err(err_val) => eprintln!(
+                                            "marsad-agent: session {sid} codex error response id={id}: {err_val}"
+                                        ),
+                                        Ok(res) => {
+                                            if id_u == 2 {
+                                                // thread/start result: capture threadId,
+                                                // synthesize system/init, deliver the
+                                                // first turn as turn/start.
+                                                if let Some(tid) = cx::extract_thread_id(&res) {
+                                                    codex_threads.lock().unwrap().insert(sid.clone(), tid.clone());
+                                                    eprintln!("marsad-agent: session {sid} codex threadId={tid}");
+                                                    let model_str = codex_spec.as_ref().map(|c| c.model.clone()).unwrap_or_default();
+                                                    let cwd_str = codex_spec.as_ref().map(|c| c.project.clone()).unwrap_or_else(|| ".".to_string());
+                                                    emit_event(serde_json::json!({
+                                                        "type": "system", "subtype": "init",
+                                                        "session_id": sid, "model": model_str,
+                                                        "cwd": cwd_str, "tools": [],
+                                                        "permissionMode": "default",
+                                                    }));
+                                                    if is_first_attach {
+                                                        if let Some(ref prompt) = first_prompt {
+                                                            let tp = cx::turn_start_params(&tid, prompt);
+                                                            let line = acp::encode_request(serde_json::json!(3u64), cx::TURN_START, tp);
+                                                            let mut w = writer.lock().unwrap();
+                                                            let _ = w.write_all(line.as_bytes());
+                                                            let _ = w.write_all(b"\n");
+                                                            let _ = w.flush();
+                                                            eprintln!("marsad-agent: session {sid} codex sent first turn/start ({} chars)", prompt.len());
+                                                        }
+                                                    }
+                                                } else {
+                                                    eprintln!("marsad-agent: session {sid} codex thread/start missing thread.id: {res}");
+                                                }
+                                            }
+                                            // id==1 (initialize) / id>=3 (turn/start) →
+                                            // no action; the turn/completed notification
+                                            // carries the result.
+                                        }
+                                    }
                                 }
                             }
-                            // Translate to claude-stream-json shape.
-                            if let Some(cs) = codex_spec.as_ref() {
-                                match crate::codex::codex_event_to_stream_json(
-                                    &raw_value,
-                                    &cs.model,
-                                    &cs.project,
-                                    &cs.posture_mode,
-                                ) {
-                                    Some(translated) => translated,
-                                    None => continue, // skip — do not broadcast
-                                }
-                            } else {
-                                // No spec cached — broadcast raw (fallback, shouldn't happen).
-                                raw_value
-                            }
-                        } else {
-                            raw_value
-                        };
+                            continue;
+                        }
+
+                        // claude: raw stream-json, no translation. (codex uses the
+                        // app-server branch above and never reaches here; opencode
+                        // is fully handled above.)
+                        let event: serde_json::Value = raw_value;
 
                         // U1 (§3.2 trigger 4): a `system:init` line reports the
                         // model claude actually launched with — the only signal

@@ -722,14 +722,27 @@ pub fn opencode_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
     vec![bin, "acp".to_string()]
 }
 
+/// Build the `codex app-server` invocation for a PERSISTENT session launch.
+///
+/// Like opencode's `opencode acp`: codex runs as a long-lived JSON-RPC process
+/// (stdin/stdout, NDJSON — verified live against codex 0.142.5), NOT the one-shot
+/// `codex exec` eval-loop. Model/approval/sandbox are NOT CLI flags here — they are
+/// set per-thread via `thread/start`/`thread/settings/update` params (the reader
+/// sends them), so `spec.model`/`spec.posture` are intentionally unused in the argv.
+/// Binary from `LaunchSpec.claude_bin` (default `"codex"`).
+pub fn codex_appserver_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
+    let bin = spec.claude_bin.as_deref().unwrap_or("codex").to_string();
+    vec![bin, "app-server".to_string()]
+}
+
 /// Dispatch to the correct argv builder based on `spec.driver`.
 ///
-/// - `"codex"`    → [`codex_argv`]
+/// - `"codex"`    → [`codex_appserver_argv`] (persistent app-server)
 /// - `"opencode"` → [`opencode_argv`]
 /// - anything else (including `"claude"`, the default) → [`claude_argv`]
 pub fn session_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
     match spec.driver.as_str() {
-        "codex" => codex_argv(spec),
+        "codex" => codex_appserver_argv(spec),
         "opencode" => opencode_argv(spec),
         _ => claude_argv(spec),
     }
@@ -747,16 +760,12 @@ pub fn session_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
 /// reader spoke ACP — the process was claude, fed JSON-RPC it couldn't parse, and
 /// nothing reached out.log ("connected, stuck on Loading Transcript").
 pub fn build_remote_run_cmd(spec: &marsad_proto::LaunchSpec) -> String {
-    if spec.driver == "codex" {
-        crate::remote::build_remote_codex_eval_loop(&spec.project, spec.setup.as_deref(), &spec.env)
-    } else {
-        let argv = if spec.driver == "opencode" {
-            opencode_argv(spec)
-        } else {
-            claude_argv(spec)
-        };
-        crate::remote::build_remote_spawn_cmd(&spec.project, &argv, spec.setup.as_deref(), &spec.env)
-    }
+    let argv = match spec.driver.as_str() {
+        "codex" => codex_appserver_argv(spec),
+        "opencode" => opencode_argv(spec),
+        _ => claude_argv(spec),
+    };
+    crate::remote::build_remote_spawn_cmd(&spec.project, &argv, spec.setup.as_deref(), &spec.env)
 }
 
 // ── codex sandbox helper ──────────────────────────────────────────────────────
@@ -977,11 +986,20 @@ mod tests {
     // ── session_argv dispatch ─────────────────────────────────────────────────
 
     #[test]
-    fn session_argv_codex_driver_uses_codex_argv() {
+    fn session_argv_codex_driver_uses_app_server() {
+        // Codex now launches the PERSISTENT app-server (not the one-shot exec
+        // eval-loop) — the JSON-RPC session that gives it full Claude parity.
         let spec = base_spec(Posture::FullAutonomy, LaunchMode::Fresh, "codex");
         let argv = session_argv(&spec);
         assert_eq!(argv[0], "codex");
-        assert_eq!(argv[1], "exec");
+        assert_eq!(argv[1], "app-server");
+    }
+
+    #[test]
+    fn build_remote_run_cmd_codex_uses_app_server() {
+        let spec = base_spec(Posture::Ask, LaunchMode::Fresh, "codex");
+        let cmd = build_remote_run_cmd(&spec);
+        assert!(cmd.contains("app-server"), "remote codex launches app-server: {cmd}");
     }
 
     #[test]
