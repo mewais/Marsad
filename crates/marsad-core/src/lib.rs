@@ -18,6 +18,8 @@ use marsad_viewmodel::{AppSnapshot, FileChange, Filter, SessionView, Tab, Worksp
 use thiserror::Error;
 
 pub mod discovery;
+mod helpers;
+use helpers::*;
 
 // ---------------------------------------------------------------------------
 // Public re-exports (spec requirement: callers use marsad_core::{LaunchSpec, Posture})
@@ -3297,143 +3299,6 @@ impl Core {
 // ---------------------------------------------------------------------------
 // Private free functions
 // ---------------------------------------------------------------------------
-
-/// Map the per-session connection health enum to the string the SessionView
-/// carries to the UI ("Connected"/"Reconnecting"/"Unstable").
-fn conn_health_str(h: marsad_proto::ConnHealth) -> String {
-    match h {
-        marsad_proto::ConnHealth::Connected => "Connected",
-        marsad_proto::ConnHealth::Reconnecting => "Reconnecting",
-        marsad_proto::ConnHealth::Unstable => "Unstable",
-        marsad_proto::ConnHealth::Disconnected => "Disconnected",
-    }
-    .to_string()
-}
-
-/// Return a simple timestamp string for workspace `saved_at` fields.
-///
-/// Uses seconds-since-epoch; good enough for display and round-trips.
-/// Epoch milliseconds now — the timestamp stamped on LIVE transcript entries as
-/// they arrive (resumed/backfilled entries instead carry the JSONL's own time).
-fn now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
-fn chrono_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // Format as ISO-8601-ish: "2026-06-24T12:00:00Z" approximation.
-    // We produce a simple "just now" placeholder for display; the real timestamp
-    // is the epoch seconds encoded in the id for uniqueness.
-    format!("{secs}")
-}
-
-fn new_session_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(1);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    // Include the launch time so ids are UNIQUE ACROSS RESTARTS. A pure counter
-    // reset to 1 every process start, so each restart minted `session-…0001`
-    // again — and the durable remote dir `~/.marsad/<id>` then collided with a
-    // prior (possibly removed) session's, making old sessions appear to "come
-    // back". The seconds prefix makes every launch's ids distinct.
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format!("session-{secs:x}-{n:x}")
-}
-
-/// Human-friendly session name: the project directory's last path component
-/// (e.g. "/work/mewais/Marsad" -> "Marsad"). Falls back to the session id when
-/// the project is empty or has no usable basename.
-fn session_display_name(project: &str, id: &str) -> String {
-    match project.trim_end_matches('/').rsplit('/').next() {
-        Some(base) if !base.is_empty() => base.to_string(),
-        _ => id.to_string(),
-    }
-}
-
-/// Concise one-line summary of a pending gate, for the workstream board's
-/// attention card (so a needs-you card shows WHAT is asked, not just the name).
-fn gate_headline(gate: &marsad_gates::Gate) -> String {
-    use marsad_gates::Gate;
-    match gate {
-        Gate::Permission { command, .. } => format!("Wants to run: {command}"),
-        Gate::Plan { .. } => "Plan ready for your approval".to_string(),
-        Gate::Edit { file, .. } => format!("Wants to edit {file}"),
-        Gate::Question { questions, .. } => questions
-            .first()
-            .map(|q| q.question.clone())
-            .unwrap_or_else(|| "Wants your input".to_string()),
-        Gate::Handoff { summary, .. } => summary.clone(),
-    }
-}
-
-/// Map a `permissionMode` string from the claude `system/init` event to the
-/// canonical posture id used in `SessionView` and the Config tab.
-///
-/// - `"default"` → `"ask"` (Ask every time)
-/// - `"acceptEdits"` → `"auto"` (Auto-approve safe actions)
-/// - `"bypassPermissions"` → `"full"` (Full autonomy)
-/// - unknown / `None` → `"ask"` (safe fallback)
-fn permission_mode_to_posture(mode: Option<&str>) -> String {
-    match mode {
-        Some("acceptEdits") => "auto".to_string(),
-        Some("bypassPermissions") => "full".to_string(),
-        _ => "ask".to_string(),
-    }
-}
-
-/// Map a persisted proto-enum name (the `Posture` variant name stored in
-/// `PersistedSession.posture`) back to the `permissionMode` string that
-/// `SessionState` / `make_session_view` understand.
-///
-/// Values: `"Ask"` → `Some("default")`, `"AutoApproveSafe"` →
-/// `Some("acceptEdits")`, `"FullAutonomy"` → `Some("bypassPermissions")`,
-/// anything else / unknown → `None` (caller falls back to the default "ask").
-fn posture_name_to_permission_mode(name: &str) -> Option<&'static str> {
-    match name {
-        "Ask" => Some("default"),
-        "AutoApproveSafe" => Some("acceptEdits"),
-        "FullAutonomy" => Some("bypassPermissions"),
-        _ => None,
-    }
-}
-
-fn posture_to_permission_mode(posture: &Posture) -> &'static str {
-    match posture {
-        Posture::Ask => "default",
-        Posture::AutoApproveSafe => "autoApprove",
-        Posture::FullAutonomy => "bypassPermissions",
-    }
-}
-
-fn slash_cmd_name(cmd: &marsad_viewmodel::SlashCmd) -> &str {
-    use marsad_viewmodel::SlashCmd;
-    match cmd {
-        SlashCmd::Clear => "clear",
-        SlashCmd::Compact => "compact",
-        SlashCmd::Cost => "cost",
-        SlashCmd::Model => "model",
-        SlashCmd::Config => "config",
-        SlashCmd::Init => "init",
-        SlashCmd::Review => "review",
-        SlashCmd::Agents => "agents",
-        SlashCmd::Resume => "resume",
-        SlashCmd::Terminal => "terminal",
-        SlashCmd::Help => "help",
-        SlashCmd::Unknown(s) => s.as_str(),
-    }
-}
 
 #[cfg(test)]
 mod noop_ssh_tests {
