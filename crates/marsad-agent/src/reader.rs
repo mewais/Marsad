@@ -1568,12 +1568,7 @@ pub(crate) fn spawn_session_reader(
                                                     eprintln!("marsad-agent: session {sid} codex threadId={tid}");
                                                     let model_str = codex_spec.as_ref().map(|c| c.model.clone()).unwrap_or_default();
                                                     let cwd_str = codex_spec.as_ref().map(|c| c.project.clone()).unwrap_or_else(|| ".".to_string());
-                                                    emit_event(serde_json::json!({
-                                                        "type": "system", "subtype": "init",
-                                                        "session_id": sid, "model": model_str,
-                                                        "cwd": cwd_str, "tools": [],
-                                                        "permissionMode": "default",
-                                                    }));
+                                                    emit_event(crate::codex_translate::codex_system_init(&sid, &model_str, &cwd_str));
                                                     // Query the available collaboration
                                                     // modes (id 5) so the Config "Session
                                                     // mode" UI can render + live-switch.

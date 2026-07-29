@@ -191,6 +191,24 @@ pub fn codex_modes_from_collab_list(result: &Value, session_id: &str, current: O
     })
 }
 
+/// Synthesize the `system/init` stream-json event for a codex session once the
+/// `thread/start` result gives us the threadId. Mirrors opencode's
+/// `acp_init_to_system_init` (codex has no init line of its own, so we build one
+/// from the cached model/cwd) — this un-sticks the phase from Starting and seeds
+/// the model. `permissionMode` is "default" (codex's real gating is the sandbox +
+/// approvalPolicy set at thread/start, not a claude-style permission mode).
+pub fn codex_system_init(session_id: &str, model: &str, cwd: &str) -> Value {
+    json!({
+        "type": "system",
+        "subtype": "init",
+        "session_id": session_id,
+        "model": model,
+        "cwd": cwd,
+        "tools": [],
+        "permissionMode": "default",
+    })
+}
+
 // ── gates: codex approval ServerRequest → control_request ─────────────────────
 
 /// The globally-unique ROUTING id for a codex approval gate — the request's
