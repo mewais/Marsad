@@ -354,9 +354,10 @@ export function ConfigTab() {
           const modes = selectedSession.available_modes ?? [];
           const current = selectedSession.current_mode;
           const driver = selectedSession.driver ?? "claude";
-          // Both opencode and claude switch modes live in place; the agent
+          // opencode, claude, and codex all switch modes live in place; the agent
           // confirms and the current mode follows on the stream (no optimism).
-          const liveSwitch = driver === "opencode" || driver === "claude";
+          const liveSwitch =
+            driver === "opencode" || driver === "claude" || driver === "codex";
           return (
             <div>
               <div
