@@ -320,7 +320,6 @@ impl Agent {
                                 let spec = super::cached_codex_spec_from_persisted(
                                     s.model.clone(),
                                     s.project.clone(),
-                                    s.claude_bin.clone(),
                                     s.posture.as_deref(),
                                 );
                                 self.codex_specs
@@ -383,10 +382,9 @@ impl Agent {
                     // in-memory map is empty after a restart). Claude unchanged.
                     let reconnect_codex_spec = if s.driver == "codex" {
                         let spec = super::cached_codex_spec_from_persisted(
-                            s.model.clone(),
-                            s.project.clone(),
-                            s.claude_bin.clone(),
-                            s.posture.as_deref(),
+                                    s.model.clone(),
+                                    s.project.clone(),
+                                    s.posture.as_deref(),
                         );
                         self.codex_specs
                             .0

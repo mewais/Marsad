@@ -301,7 +301,6 @@ impl fmt::Debug for SessionRunCmdsWrap {
 pub(crate) struct CachedCodexSpec {
     pub model: String,
     pub project: String,
-    pub claude_bin: Option<String>,
     pub posture: marsad_proto::Posture,
 }
 
@@ -323,7 +322,6 @@ pub(crate) struct CachedCodexSpec {
 pub(crate) fn cached_codex_spec_from_persisted(
     model: String,
     project: String,
-    claude_bin: Option<String>,
     posture_str: Option<&str>,
 ) -> CachedCodexSpec {
     let posture = posture_str
@@ -337,7 +335,6 @@ pub(crate) fn cached_codex_spec_from_persisted(
     CachedCodexSpec {
         model,
         project,
-        claude_bin,
         posture,
     }
 }
@@ -802,7 +799,6 @@ impl Agent {
                 let cached = CachedCodexSpec {
                     model: spec.model.clone(),
                     project: spec.project.clone(),
-                    claude_bin: spec.claude_bin.clone(),
                     posture: spec.posture.clone(),
                 };
                 self.codex_specs
@@ -999,12 +995,10 @@ mod reconnect_spec_tests {
         let spec = cached_codex_spec_from_persisted(
             "codex-mini-latest".to_string(),
             "/tmp/proj".to_string(),
-            Some("codex".to_string()),
             Some("FullAutonomy"),
         );
         assert_eq!(spec.model, "codex-mini-latest");
         assert_eq!(spec.project, "/tmp/proj");
-        assert_eq!(spec.claude_bin.as_deref(), Some("codex"));
         assert_eq!(spec.posture, marsad_proto::Posture::FullAutonomy);
     }
 
@@ -1013,17 +1007,14 @@ mod reconnect_spec_tests {
         let spec = cached_codex_spec_from_persisted(
             "m".to_string(),
             "p".to_string(),
-            None,
             Some("AutoApproveSafe"),
         );
         assert_eq!(spec.posture, marsad_proto::Posture::AutoApproveSafe);
-        assert!(spec.claude_bin.is_none());
     }
 
     #[test]
     fn ask_posture_round_trips() {
-        let spec =
-            cached_codex_spec_from_persisted("m".into(), "p".into(), None, Some("Ask"));
+        let spec = cached_codex_spec_from_persisted("m".into(), "p".into(), Some("Ask"));
         assert_eq!(spec.posture, marsad_proto::Posture::Ask);
     }
 
@@ -1031,7 +1022,7 @@ mod reconnect_spec_tests {
     fn missing_posture_defaults_to_ask() {
         // A pre-posture persisted record (posture: None) must not panic and must
         // default to Ask — mirroring how `handle_resume` parses the field.
-        let spec = cached_codex_spec_from_persisted("m".into(), "p".into(), None, None);
+        let spec = cached_codex_spec_from_persisted("m".into(), "p".into(), None);
         assert_eq!(spec.posture, marsad_proto::Posture::Ask);
     }
 
@@ -1040,7 +1031,6 @@ mod reconnect_spec_tests {
         let spec = cached_codex_spec_from_persisted(
             "m".into(),
             "p".into(),
-            None,
             Some("NotARealPosture"),
         );
         assert_eq!(spec.posture, marsad_proto::Posture::Ask);
