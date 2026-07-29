@@ -19,6 +19,7 @@ pub mod acp;
 pub mod acp_translate;
 pub mod capabilities;
 pub mod codex;
+pub mod codex_appserver;
 #[cfg(not(coverage))]
 pub mod exec_shell;
 mod driver;
