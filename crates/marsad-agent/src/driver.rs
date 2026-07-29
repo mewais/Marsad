@@ -603,99 +603,6 @@ const WASL_MCP_CONFIG_FILENAME: &str = "wasl-mcp.json";
 
 // ── codex_argv ────────────────────────────────────────────────────────────────
 
-/// Build the exact `codex exec` (or `codex exec resume`) invocation for a session
-/// launch.
-///
-/// ## Verified shape (docs/specs/codex-research.md §a)
-///
-/// First-turn (Fresh):
-/// ```text
-/// codex exec --json --skip-git-repo-check -m <model> [--sandbox <tier>|--dangerously-bypass-approvals-and-sandbox]
-/// ```
-///
-/// Resume (Resume(id)):
-/// ```text
-/// codex exec resume <id> --json --skip-git-repo-check -m <model>
-/// ```
-/// Note: `codex exec resume` rejects `--sandbox` (arg-parse error, verified live in
-/// docs/specs/codex-research.md §a) — the sandbox flag is OMITTED on resume regardless
-/// of posture. Sandbox is fixed by the original thread's config on resume.
-///
-/// Continue (most recent session):
-/// ```text
-/// codex exec resume --last --json --skip-git-repo-check -m <model>
-/// ```
-/// Same sandbox omission rule as Resume.
-///
-/// ## Posture → sandbox mapping
-///
-/// | Posture          | Flag                                               |
-/// |------------------|-----------------------------------------------------|
-/// | `FullAutonomy`   | `--dangerously-bypass-approvals-and-sandbox`       |
-/// | `AutoApproveSafe`| `--sandbox workspace-write`                        |
-/// | `Ask`            | `--sandbox read-only`                              |
-///
-/// ## KEY LIMITATION
-///
-/// `codex exec` has NO interactive approval channel — `turn_context.approval_policy`
-/// is always `"never"` regardless of posture (verified live in §a). The `--sandbox`
-/// flag is the ONLY pre-turn risk control available in `codex exec` mode.
-/// Interactive approvals-as-protocol-messages only exist in `codex app-server` mode.
-/// This is a deliberate Stage 1 simplification; app-server integration is Stage 3+.
-///
-/// ## No prompt in argv
-///
-/// The prompt is NOT appended here — it is delivered per-turn via stdin.
-pub fn codex_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
-    // argv[0]: the configured binary override (same field as claude_bin) or the bare "codex" default.
-    let bin = spec
-        .claude_bin
-        .clone()
-        .unwrap_or_else(|| "codex".to_string());
-
-    // Determine whether this is a resume/continue (sandbox flag is omitted) or fresh.
-    let is_resume = !matches!(spec.mode, marsad_proto::LaunchMode::Fresh);
-
-    let mut argv = vec![bin, "exec".to_string()];
-
-    // For Resume(id) / Continue, insert the subcommand positionally right after "exec".
-    match &spec.mode {
-        marsad_proto::LaunchMode::Resume(id) => {
-            argv.push("resume".to_string());
-            argv.push(id.clone());
-        }
-        marsad_proto::LaunchMode::Continue => {
-            argv.push("resume".to_string());
-            argv.push("--last".to_string());
-        }
-        marsad_proto::LaunchMode::Fresh => {}
-    }
-
-    // Universal flags (always present for every mode).
-    argv.push("--json".to_string());
-    argv.push("--skip-git-repo-check".to_string());
-    argv.push("-m".to_string());
-    argv.push(spec.model.clone());
-
-    // Posture → sandbox/bypass, ONLY for Fresh (resume rejects --sandbox per §a).
-    if !is_resume {
-        match spec.posture {
-            marsad_proto::Posture::FullAutonomy => {
-                argv.push("--dangerously-bypass-approvals-and-sandbox".to_string());
-            }
-            marsad_proto::Posture::AutoApproveSafe => {
-                argv.push("--sandbox".to_string());
-                argv.push("workspace-write".to_string());
-            }
-            marsad_proto::Posture::Ask => {
-                argv.push("--sandbox".to_string());
-                argv.push("read-only".to_string());
-            }
-        }
-    }
-
-    argv
-}
 
 // ── opencode_argv ─────────────────────────────────────────────────────────────
 
@@ -770,94 +677,10 @@ pub fn build_remote_run_cmd(spec: &marsad_proto::LaunchSpec) -> String {
 
 // ── codex sandbox helper ──────────────────────────────────────────────────────
 
-/// Return the sandbox CLI fragment for a posture, ONLY for fresh (first-turn)
-/// invocations. Resumes must NOT include a sandbox flag (`codex exec resume`
-/// rejects `--sandbox` — verified live in docs/specs/codex-research.md §a).
-///
-/// Returns a `Vec` so it can be `.extend()`d into any argv or command string.
-pub fn codex_sandbox_flags(posture: &marsad_proto::Posture) -> Vec<&'static str> {
-    match posture {
-        marsad_proto::Posture::FullAutonomy => {
-            vec!["--dangerously-bypass-approvals-and-sandbox"]
-        }
-        marsad_proto::Posture::AutoApproveSafe => vec!["--sandbox", "workspace-write"],
-        marsad_proto::Posture::Ask => vec!["--sandbox", "read-only"],
-    }
-}
 
 // ── codex_turn_cmd ────────────────────────────────────────────────────────────
 
-/// Build one shell line to `eval` in the session's eval-loop container for a
-/// single codex turn.
-///
-/// ## Prompt encoding
-///
-/// The prompt is base64-encoded (no newlines) and decoded via
-/// `$(printf %s '<b64>' | base64 -d)` as the positional argument.
-/// This lets multi-line prompts survive the line-based FIFO protocol without
-/// quoting issues.
-///
-/// ## Fresh vs resume
-///
-/// - `thread_id = None` (first turn / fresh): builds
-///   `codex exec --json --skip-git-repo-check -m <model> <sandbox-flags> "$(...)"`.
-/// - `thread_id = Some(id)` (follow-up turn / resume): builds
-///   `codex exec resume <id> --json --skip-git-repo-check -m <model> "$(...)"`.
-///   The sandbox flag is intentionally OMITTED on resume — `codex exec resume`
-///   rejects it (docs/specs/codex-research.md §a).
-pub fn codex_turn_cmd(
-    spec: &marsad_proto::LaunchSpec,
-    thread_id: Option<&str>,
-    prompt: &str,
-) -> String {
-    use base64::{engine::general_purpose::STANDARD, Engine};
 
-    let bin = spec
-        .claude_bin
-        .as_deref()
-        .unwrap_or("codex")
-        .to_string();
-    let bin_q = posix_shell_quote(&bin);
-    let model_q = posix_shell_quote(&spec.model);
-
-    // Base64-encode the prompt (no line-wrap) so newlines survive the FIFO.
-    let b64 = STANDARD.encode(prompt.as_bytes());
-    // The decoded-prompt shell fragment wrapped in double-quotes so the shell
-    // passes the entire decoded string as ONE argument to codex.
-    let decoded = format!("\"$(printf %s '{}' | base64 -d)\"", b64);
-
-    match thread_id {
-        None => {
-            // Fresh / first turn: sandbox flags apply.
-            let sandbox_parts: Vec<String> = codex_sandbox_flags(&spec.posture)
-                .iter()
-                .map(|s| posix_shell_quote(s))
-                .collect();
-            let sandbox_str = format!(" {}", sandbox_parts.join(" "));
-            format!(
-                "{} exec --json --skip-git-repo-check -m {}{} {}",
-                bin_q, model_q, sandbox_str, decoded
-            )
-        }
-        Some(tid) => {
-            // Resume turn: NO sandbox flag (codex exec resume rejects --sandbox).
-            let tid_q = posix_shell_quote(tid);
-            format!(
-                "{} exec resume {} --json --skip-git-repo-check -m {} {}",
-                bin_q, tid_q, model_q, decoded
-            )
-        }
-    }
-}
-
-/// POSIX single-quote a string: wrap in `'...'`, replacing any embedded `'`
-/// with `'\''`. Used to safely embed arbitrary strings in shell eval lines.
-///
-/// Compiled in all build modes (used by `codex_turn_cmd`, which is always
-/// compiled so it can be unit-tested under coverage).
-pub fn posix_shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
-}
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -887,101 +710,21 @@ mod tests {
 
     // ── posix_shell_quote ─────────────────────────────────────────────────────
 
-    #[test]
-    fn posix_shell_quote_plain() {
-        assert_eq!(posix_shell_quote("hello"), "'hello'");
-    }
 
-    #[test]
-    fn posix_shell_quote_with_single_quote() {
-        assert_eq!(posix_shell_quote("it's"), r"'it'\''s'");
-    }
 
-    #[test]
-    fn posix_shell_quote_empty() {
-        assert_eq!(posix_shell_quote(""), "''");
-    }
 
     // ── codex_sandbox_flags ───────────────────────────────────────────────────
 
-    #[test]
-    fn sandbox_full_autonomy() {
-        let flags = codex_sandbox_flags(&Posture::FullAutonomy);
-        assert_eq!(flags, vec!["--dangerously-bypass-approvals-and-sandbox"]);
-    }
 
-    #[test]
-    fn sandbox_auto_approve_safe() {
-        let flags = codex_sandbox_flags(&Posture::AutoApproveSafe);
-        assert_eq!(flags, vec!["--sandbox", "workspace-write"]);
-    }
 
-    #[test]
-    fn sandbox_ask() {
-        let flags = codex_sandbox_flags(&Posture::Ask);
-        assert_eq!(flags, vec!["--sandbox", "read-only"]);
-    }
 
     // ── codex_argv ────────────────────────────────────────────────────────────
 
-    #[test]
-    fn codex_argv_fresh_full_autonomy() {
-        let spec = base_spec(Posture::FullAutonomy, LaunchMode::Fresh, "codex");
-        let argv = codex_argv(&spec);
-        assert_eq!(argv[0], "codex");
-        assert_eq!(argv[1], "exec");
-        assert!(argv.contains(&"--json".to_string()));
-        assert!(argv.contains(&"--skip-git-repo-check".to_string()));
-        assert!(argv.contains(&"-m".to_string()));
-        assert!(argv.contains(&"gpt-5-codex".to_string()));
-        assert!(argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
-        // No resume/--sandbox read-only
-        assert!(!argv.contains(&"resume".to_string()));
-        assert!(!argv.contains(&"read-only".to_string()));
-    }
 
-    #[test]
-    fn codex_argv_fresh_auto_approve_safe() {
-        let spec = base_spec(Posture::AutoApproveSafe, LaunchMode::Fresh, "codex");
-        let argv = codex_argv(&spec);
-        assert!(argv.contains(&"--sandbox".to_string()));
-        assert!(argv.contains(&"workspace-write".to_string()));
-    }
 
-    #[test]
-    fn codex_argv_fresh_ask() {
-        let spec = base_spec(Posture::Ask, LaunchMode::Fresh, "codex");
-        let argv = codex_argv(&spec);
-        assert!(argv.contains(&"--sandbox".to_string()));
-        assert!(argv.contains(&"read-only".to_string()));
-    }
 
-    #[test]
-    fn codex_argv_resume_no_sandbox() {
-        let spec = base_spec(Posture::FullAutonomy, LaunchMode::Resume("tid-123".to_string()), "codex");
-        let argv = codex_argv(&spec);
-        assert_eq!(argv[2], "resume");
-        assert_eq!(argv[3], "tid-123");
-        assert!(!argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
-        assert!(!argv.contains(&"--sandbox".to_string()));
-    }
 
-    #[test]
-    fn codex_argv_continue_no_sandbox() {
-        let spec = base_spec(Posture::FullAutonomy, LaunchMode::Continue, "codex");
-        let argv = codex_argv(&spec);
-        assert!(argv.contains(&"resume".to_string()));
-        assert!(argv.contains(&"--last".to_string()));
-        assert!(!argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
-    }
 
-    #[test]
-    fn codex_argv_custom_bin() {
-        let mut spec = base_spec(Posture::Ask, LaunchMode::Fresh, "codex");
-        spec.claude_bin = Some("/usr/local/bin/codex".to_string());
-        let argv = codex_argv(&spec);
-        assert_eq!(argv[0], "/usr/local/bin/codex");
-    }
 
     // ── session_argv dispatch ─────────────────────────────────────────────────
 
@@ -1019,41 +762,8 @@ mod tests {
 
     // ── codex_turn_cmd ────────────────────────────────────────────────────────
 
-    #[test]
-    fn codex_turn_cmd_fresh_includes_sandbox() {
-        let spec = base_spec(Posture::FullAutonomy, LaunchMode::Fresh, "codex");
-        let cmd = codex_turn_cmd(&spec, None, "hello world");
-        assert!(cmd.contains("exec"));
-        assert!(cmd.contains("--dangerously-bypass-approvals-and-sandbox"));
-        assert!(cmd.contains("base64"));
-        assert!(!cmd.contains("resume"));
-    }
 
-    #[test]
-    fn codex_turn_cmd_resume_no_sandbox() {
-        let spec = base_spec(Posture::FullAutonomy, LaunchMode::Fresh, "codex");
-        let cmd = codex_turn_cmd(&spec, Some("thread-abc"), "follow up");
-        assert!(cmd.contains("resume"));
-        assert!(cmd.contains("thread-abc"));
-        assert!(!cmd.contains("--dangerously-bypass-approvals-and-sandbox"));
-        assert!(!cmd.contains("--sandbox"));
-    }
 
-    #[test]
-    fn codex_turn_cmd_multiline_prompt_encoded() {
-        let spec = base_spec(Posture::Ask, LaunchMode::Fresh, "codex");
-        let cmd = codex_turn_cmd(&spec, None, "line1\nline2");
-        // Base64-encoded so no raw newline in the command line
-        assert!(!cmd.contains('\n'));
-        assert!(cmd.contains("base64 -d"));
-    }
 
-    #[test]
-    fn codex_turn_cmd_custom_bin() {
-        let mut spec = base_spec(Posture::Ask, LaunchMode::Fresh, "codex");
-        spec.claude_bin = Some("my-codex".to_string());
-        let cmd = codex_turn_cmd(&spec, None, "hi");
-        assert!(cmd.starts_with("'my-codex'"));
-    }
 }
 

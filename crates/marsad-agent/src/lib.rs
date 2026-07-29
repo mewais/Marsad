@@ -18,7 +18,6 @@ use marsad_store::{MemoryBackend, Store};
 pub mod acp;
 pub mod acp_translate;
 pub mod capabilities;
-pub mod codex;
 pub mod codex_appserver;
 pub mod codex_translate;
 #[cfg(not(coverage))]
@@ -41,7 +40,7 @@ pub use reader::{
     ReconnectAction, RECONNECT_INITIAL_BACKOFF_SECS, RECONNECT_MAX_BACKOFF_SECS,
 };
 pub use remote::{
-    build_remote_codex_eval_loop, build_remote_spawn_cmd, exec_prefix_for,
+    build_remote_spawn_cmd, exec_prefix_for,
     remote_durable_launch_script, remote_kill_script, remote_liveness_script, remote_reader_argv,
     remote_session_dir, remote_writer_argv,
 };

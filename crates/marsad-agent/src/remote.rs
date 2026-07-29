@@ -588,66 +588,6 @@ pub fn exec_prefix_for(host_target: Option<&str>) -> Option<Vec<String>> {
     Some(argv)
 }
 
-/// Build the eval-loop body written into the remote `run.sh` for a codex durable
-/// remote session.
-///
-/// The eval-loop is the long-lived "process" that keeps the durable session alive:
-/// it reads one shell command per line from stdin (wired from `in.fifo` by
-/// `start.sh`) and `eval`s it as a subprocess.  Per-turn, `codex_turn_cmd` output
-/// is written to `in.fifo` by the local writer child — the eval-loop runs it as
-/// `codex exec …` and the JSON output goes to stdout (captured by `start.sh`'s
-/// `>> out.log` redirection).
-///
-/// ## Key design notes
-///
-/// - `</dev/null` on each eval: prevents codex from reading the loop's stdin
-///   (the FIFO that the eval-loop itself reads commands from).  Without this,
-///   codex would consume the next command line from the FIFO and the loop would
-///   silently drop the following turn.
-/// - The loop's own stdin (`in.fifo`) and stdout/stderr (`out.log`) are wired by
-///   `start.sh` (identical to the claude remote path), so the run.sh body needs no
-///   explicit redirections — they are already in place.
-/// - `setup` + `env` exports precede the `cd` so the eval-loop inherits the full
-///   environment (e.g. `module load` wrappers, `OPENAI_API_KEY`).
-/// - The loop exits when `in.fifo`'s write-end is closed (keepalive killed or
-///   `remote_kill_script` run) — `read` returns non-zero → the loop terminates →
-///   `start.sh` exits → `tail --pid=<pid>` in the reader child gets EOF.
-///
-/// ## Compatibility
-///
-/// `remote_liveness_script` (checks `ka.pid` + `claude.pid`) and
-/// `remote_kill_script` (SIGTERM to both + dir removal) work byte-identically for
-/// codex — `claude.pid` here is the eval-loop's pid, not a claude process, but the
-/// operational semantics are identical.
-pub fn build_remote_codex_eval_loop(
-    project: &str,
-    setup: Option<&str>,
-    env: &[(String, String)],
-) -> String {
-    let mut body = String::new();
-    // Optional setup command, run before the loop starts.
-    if let Some(s) = setup.filter(|s| !s.is_empty()) {
-        body.push_str(s);
-        body.push('\n');
-    }
-    // One `export 'K'='V'` line per env pair.
-    for (k, v) in env {
-        body.push_str(&format!(
-            "export {}={}\n",
-            remote_shell_quote(k),
-            remote_shell_quote(v)
-        ));
-    }
-    // cd to the project dir, then run the eval-loop.
-    // `</dev/null` on each eval prevents codex from consuming the FIFO's next line.
-    // The loop's stdin is the FIFO (via start.sh), so `read` blocks until a command
-    // arrives then loops.  `IFS=` preserves whitespace in the command line.
-    body.push_str(&format!(
-        "cd {} && while IFS= read -r __cmd; do eval \"$__cmd\" </dev/null; done",
-        cd_target(project),
-    ));
-    body
-}
 
 /// Build the `claude` invocation written into the remote `run.sh` (which the remote
 /// tmux session runs via `bash -l run.sh < in.fifo > out.fifo 2>err.log`). Returns
