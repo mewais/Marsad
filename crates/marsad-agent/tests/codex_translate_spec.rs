@@ -134,3 +134,22 @@ fn gate_routing_id_falls_back_without_item_id() {
     let params = serde_json::json!({"command":"ls"});
     assert_eq!(codex_gate_routing_id("sid-7", "3", &params), "sid-7:codex:3");
 }
+
+// ── Phase D: collaborationMode/list → modes_update ──────────────────────────
+#[test]
+fn collab_mode_list_becomes_modes_update() {
+    use marsad_agent::codex_translate::codex_modes_from_collab_list;
+    let result = serde_json::json!({"data":[{"mode":"build","settings":{}},{"mode":"plan","settings":{}}]});
+    let mu = codex_modes_from_collab_list(&result, SID, Some("build"));
+    assert_eq!(mu["subtype"], "modes_update");
+    assert_eq!(mu["current_mode"], "build");
+    let st = feed(SessionState::initial(), "ignored", serde_json::json!({}));
+    let _ = st; // silence unused in this focused test
+    // round-trips into a ModesUpdate the reducer accepts
+    match parse_stream_line(&serde_json::to_string(&mu).unwrap()) {
+        Ok(StreamMsg::ModesUpdate(_)) => {}
+        other => panic!("expected ModesUpdate, got {other:?}"),
+    }
+    let ids: Vec<String> = mu["available_modes"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(ids, vec!["build","plan"]);
+}

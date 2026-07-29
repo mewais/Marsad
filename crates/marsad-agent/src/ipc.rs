@@ -410,8 +410,36 @@ impl Agent {
                 }
                 return Ok(vec![]);
             }
+            if driver == "codex" {
+                // codex app-server: a LIVE switch via thread/settings/update. Map
+                // config_id → the codex setting: "model" → model; "mode" →
+                // collaborationMode. The threadId was captured by the reader.
+                use crate::codex_appserver as cx;
+                let thread_id = self.codex_threads.0.lock().unwrap().get(session_id).cloned();
+                let Some(tid) = thread_id else {
+                    eprintln!("marsad-agent: session {session_id} codex set_config_option DROPPED — threadId not yet known");
+                    return Ok(vec![]);
+                };
+                let codex_field = match config_id {
+                    "mode" => "collaborationMode",
+                    other => other, // "model", "approvalPolicy", "sandboxPolicy", …
+                };
+                let req_id = serde_json::json!(
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_millis() as u64 + 300u64
+                );
+                let line = crate::acp::encode_request(req_id, cx::THREAD_SETTINGS_UPDATE, cx::settings_update_params(&tid, codex_field, value));
+                let writers = self.session_writers.0.lock().unwrap();
+                if let Some(shared) = writers.get(session_id) {
+                    let mut writer = shared.lock().unwrap();
+                    let _ = writer.write_all(line.as_bytes()).and_then(|_| writer.write_all(b"\n")).and_then(|_| writer.flush());
+                    eprintln!("marsad-agent: session {session_id} codex thread/settings/update {codex_field}={value}");
+                } else {
+                    eprintln!("marsad-agent: session {session_id} codex set_config_option DROPPED — no writer");
+                }
+                return Ok(vec![]);
+            }
             if driver != "opencode" {
-                // codex etc.: no wired live mode setter. Don't fake it.
+                // other drivers: no wired live setter. Don't fake it.
                 eprintln!(
                     "marsad-agent: session {session_id} set_config_option ignored — driver {driver} has no wired setter"
                 );

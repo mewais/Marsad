@@ -166,6 +166,31 @@ pub fn codex_turn_result(params: &Value) -> Value {
     }
 }
 
+/// Build a canonical `system/modes_update` from a `collaborationMode/list` result
+/// (`{data:[CollaborationMode{mode, settings}]}`). Each `mode` becomes an available
+/// mode; `current` is the mode whose id equals `current_mode` (or None).
+pub fn codex_modes_from_collab_list(result: &Value, session_id: &str, current: Option<&str>) -> Value {
+    let modes: Vec<Value> = result
+        .get("data")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    let id = m.get("mode").and_then(|v| v.as_str())?;
+                    Some(json!({ "id": id, "label": id, "description": "" }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    json!({
+        "type": "system",
+        "subtype": "modes_update",
+        "session_id": session_id,
+        "available_modes": modes,
+        "current_mode": current,
+    })
+}
+
 // ── gates: codex approval ServerRequest → control_request ─────────────────────
 
 /// The globally-unique ROUTING id for a codex approval gate — the request's

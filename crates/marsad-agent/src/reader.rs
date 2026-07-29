@@ -1552,6 +1552,16 @@ pub(crate) fn spawn_session_reader(
                                                         "cwd": cwd_str, "tools": [],
                                                         "permissionMode": "default",
                                                     }));
+                                                    // Query the available collaboration
+                                                    // modes (id 5) so the Config "Session
+                                                    // mode" UI can render + live-switch.
+                                                    {
+                                                        let ml = acp::encode_request(serde_json::json!(5u64), cx::COLLABORATION_MODE_LIST, serde_json::json!({}));
+                                                        let mut w = writer.lock().unwrap();
+                                                        let _ = w.write_all(ml.as_bytes());
+                                                        let _ = w.write_all(b"\n");
+                                                        let _ = w.flush();
+                                                    }
                                                     if is_first_attach {
                                                         if let Some(ref prompt) = first_prompt {
                                                             let tp = cx::turn_start_params(&tid, prompt);
@@ -1566,6 +1576,9 @@ pub(crate) fn spawn_session_reader(
                                                 } else {
                                                     eprintln!("marsad-agent: session {sid} codex thread/start missing thread.id: {res}");
                                                 }
+                                            } else if id_u == 5 {
+                                                // collaborationMode/list result → surface as modes_update.
+                                                emit_event(crate::codex_translate::codex_modes_from_collab_list(&res, &sid, None));
                                             }
                                             // id==1 (initialize) / id>=3 (turn/start) →
                                             // no action; the turn/completed notification
