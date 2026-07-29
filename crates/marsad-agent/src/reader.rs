@@ -70,15 +70,17 @@ pub fn reconnect_backoff_next(current: u64) -> u64 {
 
 /// Map a Marsad posture to codex app-server `(approvalPolicy, sandbox)`.
 ///
-/// PHASE A: `approvalPolicy` is `never` for every posture — codex self-limits to
-/// the posture's sandbox and never prompts, exactly matching today's eval-loop
-/// behavior (no HITL gates, no regression). PHASE B switches the gating postures
-/// to `on-request` and wires the approval ServerRequests to the gate pipeline.
+/// Map a Marsad posture to codex app-server `(approvalPolicy, sandbox)`.
+///
+/// `on-request` makes codex surface command/file approvals as HITL gates (Phase B).
+/// Full autonomy skips approvals and runs with a full-access sandbox. Ask uses a
+/// read-only sandbox so even reads-that-escape prompt; AutoApproveSafe lets edits
+/// happen in a workspace-write sandbox but still gates commands via on-request.
 pub fn codex_posture_settings(posture: &marsad_proto::Posture) -> (&'static str, &'static str) {
     match posture {
         marsad_proto::Posture::FullAutonomy => ("never", "danger-full-access"),
-        marsad_proto::Posture::AutoApproveSafe => ("never", "workspace-write"),
-        marsad_proto::Posture::Ask => ("never", "read-only"),
+        marsad_proto::Posture::AutoApproveSafe => ("on-request", "workspace-write"),
+        marsad_proto::Posture::Ask => ("on-request", "read-only"),
     }
 }
 
@@ -1479,21 +1481,43 @@ pub(crate) fn spawn_session_reader(
                                     }
                                 }
                                 acp::AcpMessage::Request { id, method, params } => {
-                                    // PHASE A: approvalPolicy is `never`, so approvals
-                                    // shouldn't fire. If one does, decline it so the
-                                    // turn never hangs. PHASE B replaces this with real
-                                    // gate capture + a human answer path.
-                                    let _ = &params;
-                                    eprintln!("marsad-agent: session {sid} codex server request {method} (phase-A auto-decline)");
-                                    let resp = if cx::is_legacy_approval(&method) {
-                                        acp::encode_response(id, cx::legacy_review_decision(false))
+                                    if cx::is_command_approval(&method) || cx::is_legacy_approval(&method) {
+                                        // Approval request → capture as a pending gate
+                                        // and surface it as a control_request, exactly
+                                        // like the opencode path. The raw JSON-RPC id is
+                                        // kept in acp_response_id so handle_answer_gate
+                                        // can reply with {decision}. The routing id
+                                        // (itemId) is the unique gate/decision id.
+                                        let raw_id = id.to_string();
+                                        let gate_id = crate::codex_translate::codex_gate_routing_id(&sid, &raw_id, &params);
+                                        {
+                                            let mut gates = pending_fifo.lock().unwrap();
+                                            let queue = gates.entry(sid.clone()).or_default();
+                                            if queue.iter().any(|g| g.request_id == gate_id) {
+                                                eprintln!("marsad-agent: session {sid} codex gate DUPLICATE ignored ({gate_id})");
+                                            } else {
+                                                eprintln!("marsad-agent: session {sid} codex gate captured (raw_id={raw_id}, gate_id={gate_id})");
+                                                queue.push_back(PendingGate {
+                                                    request_id: gate_id.clone(),
+                                                    input: params.clone(),
+                                                    elicitation: false,
+                                                    acp_response_id: Some(raw_id.clone()),
+                                                });
+                                            }
+                                        }
+                                        let gate_event = crate::codex_translate::codex_approval_to_control_request(&gate_id, &method, &params);
+                                        emit_event(gate_event);
                                     } else {
-                                        acp::encode_response(id, cx::approval_decision(false, false))
-                                    };
-                                    let mut w = writer.lock().unwrap();
-                                    let _ = w.write_all(resp.as_bytes());
-                                    let _ = w.write_all(b"\n");
-                                    let _ = w.flush();
+                                        // A non-approval server request (e.g. a question
+                                        // or elicitation) — Phase C. For now decline so
+                                        // the turn never hangs.
+                                        eprintln!("marsad-agent: session {sid} codex server request {method} (not yet wired; declining)");
+                                        let resp = acp::encode_response(id, cx::approval_decision(false, false));
+                                        let mut w = writer.lock().unwrap();
+                                        let _ = w.write_all(resp.as_bytes());
+                                        let _ = w.write_all(b"\n");
+                                        let _ = w.flush();
+                                    }
                                 }
                                 acp::AcpMessage::Response { id, result } => {
                                     let id_u = id.as_u64().unwrap_or(0);

@@ -943,6 +943,36 @@ impl Agent {
                 return Ok(vec![event]);
             }
 
+            if gate_driver == "codex" {
+                // codex app-server: reply to the approval ServerRequest with a
+                // `{decision}` result. allow → accept; deny → decline. The raw
+                // JSON-RPC id was stored in acp_response_id by the reader.
+                if let Some(gate) = pending {
+                    use crate::codex_appserver as cx;
+                    let raw_id = gate.acp_response_id.as_deref().unwrap_or(&gate.request_id);
+                    let req_id: serde_json::Value = serde_json::from_str(raw_id)
+                        .unwrap_or_else(|_| serde_json::Value::String(raw_id.to_string()));
+                    // "always allow" (a permission_updates suggestion) → acceptForSession.
+                    let for_session = permission_updates.is_some();
+                    let result_val = cx::approval_decision(allow, allow && for_session);
+                    let response_line = crate::acp::encode_response(req_id, result_val);
+                    let writers = self.session_writers.0.lock().unwrap();
+                    if let Some(shared) = writers.get(session_id) {
+                        let mut writer = shared.lock().unwrap();
+                        let _ = writer.write_all(response_line.as_bytes());
+                        let _ = writer.write_all(b"\n");
+                        let _ = writer.flush();
+                        eprintln!("marsad-agent: session {session_id} codex gate answered (allow={allow})");
+                    } else {
+                        eprintln!("marsad-agent: session {session_id} codex gate answer DROPPED — no writer");
+                    }
+                }
+                let event = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::GateAnswered {
+                    session_id: session_id.to_string(),
+                });
+                return Ok(vec![event]);
+            }
+
             if let Some(gate) = pending {
                 // An MCP elicitation is answered with `{action: accept|decline}`,
                 // NOT the can_use_tool `{behavior, updatedInput}` shape — sending

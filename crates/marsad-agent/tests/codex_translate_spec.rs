@@ -98,3 +98,39 @@ fn compacted_is_a_boundary() {
     let sj = tr("thread/compacted", &serde_json::json!({"threadId":SID}), SID).unwrap();
     assert_eq!(sj["subtype"], "compact_boundary");
 }
+
+// ── Phase B: approval requests → control_request gates ──────────────────────
+use marsad_agent::codex_translate::{codex_approval_to_control_request, codex_gate_routing_id};
+
+#[test]
+fn command_approval_becomes_a_can_use_tool_gate() {
+    let params = serde_json::json!({
+        "itemId":"item-9","threadId":"t","turnId":"u","command":"rm -rf /tmp/x","cwd":"/tmp","reason":"delete files"
+    });
+    let gid = codex_gate_routing_id(SID, "0", &params);
+    assert_eq!(gid, "item-9", "routing id = unique itemId");
+    let ev = codex_approval_to_control_request(&gid, "item/commandExecution/requestApproval", &params);
+    assert_eq!(ev["request"]["subtype"], "can_use_tool");
+    assert_eq!(ev["request"]["tool_name"], "shell");
+    assert_eq!(ev["request"]["input"]["command"], "rm -rf /tmp/x");
+    assert_eq!(ev["request_id"], "item-9");
+    // Round-trips through the proto control_request parser (the gate contract).
+    match parse_stream_line(&serde_json::to_string(&ev).unwrap()) {
+        Ok(StreamMsg::ControlRequest(_)) => {}
+        other => panic!("expected ControlRequest, got {other:?}"),
+    }
+}
+
+#[test]
+fn file_change_approval_is_apply_patch_gate() {
+    let params = serde_json::json!({"itemId":"item-1","changes":{"a.rs":{"update":"..."}}});
+    let ev = codex_approval_to_control_request("item-1", "item/fileChange/requestApproval", &params);
+    assert_eq!(ev["request"]["tool_name"], "apply_patch");
+    assert!(ev["request"]["input"].get("changes").is_some());
+}
+
+#[test]
+fn gate_routing_id_falls_back_without_item_id() {
+    let params = serde_json::json!({"command":"ls"});
+    assert_eq!(codex_gate_routing_id("sid-7", "3", &params), "sid-7:codex:3");
+}

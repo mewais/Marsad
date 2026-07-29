@@ -166,6 +166,68 @@ pub fn codex_turn_result(params: &Value) -> Value {
     }
 }
 
+// ── gates: codex approval ServerRequest → control_request ─────────────────────
+
+/// The globally-unique ROUTING id for a codex approval gate — the request's
+/// `itemId` (unique per item) when present, else a session-scoped composite from
+/// the raw JSON-RPC id. This becomes the frontend decision_id + core dedup key, so
+/// it must be unique (the raw id can repeat across sessions).
+pub fn codex_gate_routing_id(sid: &str, raw_id: &str, params: &Value) -> String {
+    params
+        .get("itemId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("{sid}:codex:{raw_id}"))
+}
+
+/// Build the stream-json `control_request` that surfaces a codex approval request
+/// (`item/commandExecution|fileChange|permissions/requestApproval`, or the legacy
+/// `execCommandApproval`/`applyPatchApproval`) as a `can_use_tool` gate. Shape
+/// matches `marsad_proto::parse_control_request` (top-level `request_id`, inner
+/// `subtype:"can_use_tool"`), identical to the opencode path.
+pub fn codex_approval_to_control_request(request_id: &str, method: &str, params: &Value) -> Value {
+    let (tool_name, mut input) = match method {
+        "item/fileChange/requestApproval" | "applyPatchApproval" => {
+            let changes = params
+                .get("changes")
+                .or_else(|| params.get("fileChanges"))
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            ("apply_patch", json!({ "changes": changes }))
+        }
+        "item/permissions/requestApproval" => {
+            ("permissions", params.clone())
+        }
+        // command execution (new + legacy) → a shell gate.
+        _ => {
+            let command = params.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            let cwd = params.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
+            ("shell", json!({ "command": command, "cwd": cwd }))
+        }
+    };
+    // A human-readable description for the gate body (codex may supply a `reason`).
+    if let Some(obj) = input.as_object_mut() {
+        let reason = params.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+        let desc = if reason.is_empty() {
+            format!("codex requests approval to {tool_name}")
+        } else {
+            reason.to_string()
+        };
+        obj.insert("description".to_string(), json!(desc));
+    }
+    json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": tool_name,
+            "input": input,
+            "permission_suggestions": [],
+        }
+    })
+}
+
 // ── canonical builders ────────────────────────────────────────────────────────
 
 fn assistant_thinking(id: &str, thinking: &str) -> Value {
