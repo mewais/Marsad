@@ -601,9 +601,6 @@ pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
 /// so the two sides can never drift.
 const WASL_MCP_CONFIG_FILENAME: &str = "wasl-mcp.json";
 
-// ── codex_argv ────────────────────────────────────────────────────────────────
-
-
 // ── opencode_argv ─────────────────────────────────────────────────────────────
 
 /// Build the `opencode acp` invocation for a persistent session launch.
@@ -657,7 +654,7 @@ pub fn session_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
 
 /// Build the run-command body for a REMOTE durable session, dispatched by driver.
 ///
-/// - `"codex"`    → the eval-loop (`build_remote_codex_eval_loop`)
+/// - `"codex"`    → `codex app-server` wrapped by `build_remote_spawn_cmd`
 /// - `"opencode"` → `opencode acp` wrapped by `build_remote_spawn_cmd`
 /// - anything else (`"claude"`, default) → `claude_argv` wrapped by `build_remote_spawn_cmd`
 ///
@@ -674,13 +671,6 @@ pub fn build_remote_run_cmd(spec: &marsad_proto::LaunchSpec) -> String {
     };
     crate::remote::build_remote_spawn_cmd(&spec.project, &argv, spec.setup.as_deref(), &spec.env)
 }
-
-// ── codex sandbox helper ──────────────────────────────────────────────────────
-
-
-// ── codex_turn_cmd ────────────────────────────────────────────────────────────
-
-
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -708,20 +698,7 @@ mod tests {
         }
     }
 
-    // ── posix_shell_quote ─────────────────────────────────────────────────────
-
-
-
-
     // ── codex_sandbox_flags ───────────────────────────────────────────────────
-
-
-
-
-    // ── codex_argv ────────────────────────────────────────────────────────────
-
-
-
 
 
 
@@ -759,11 +736,6 @@ mod tests {
         let argv = session_argv(&spec);
         assert_eq!(argv[0], "claude");
     }
-
-    // ── codex_turn_cmd ────────────────────────────────────────────────────────
-
-
-
 
 }
 

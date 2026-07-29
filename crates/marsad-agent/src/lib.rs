@@ -293,7 +293,7 @@ impl fmt::Debug for SessionRunCmdsWrap {
 }
 
 /// Minimal per-session spec cache for codex sessions — holds everything
-/// `codex_turn_cmd` needs to build follow-up turn commands, keyed by session_id.
+/// the reader's app-server handshake (thread/start) needs, keyed by session_id.
 /// Inserted at launch, read by `handle_send_prompt`, never cleared (small footprint).
 /// Production builds only — gated out of coverage.
 #[cfg(not(coverage))]
@@ -301,7 +301,6 @@ impl fmt::Debug for SessionRunCmdsWrap {
 pub(crate) struct CachedCodexSpec {
     pub model: String,
     pub project: String,
-    pub posture_mode: String,
     pub claude_bin: Option<String>,
     pub posture: marsad_proto::Posture,
 }
@@ -338,7 +337,6 @@ pub(crate) fn cached_codex_spec_from_persisted(
     CachedCodexSpec {
         model,
         project,
-        posture_mode: driver::posture_to_mode(&posture).to_string(),
         claude_bin,
         posture,
     }
@@ -368,13 +366,23 @@ impl fmt::Debug for CodexSpecsWrap {
     }
 }
 
-/// Per-session codex thread_id registry — keyed by session_id, holds the
-/// `thread_id` from codex's `thread.started` event so subsequent turns can
-/// `codex exec resume <id>` instead of fresh. Shared between the FIFO reader
-/// thread (which inserts the thread_id when it arrives) and `handle_send_prompt`
-/// (which reads it to build the turn command). Production builds only.
+/// Per-session codex app-server thread state — the `thread_id` (from the
+/// `thread/start` result, for `turn/start` / `thread/settings/update`) plus the
+/// current `turn_id` (from `turn/started`, for `turn/interrupt`; `None` between
+/// turns). Typed rather than overloading one string map with two value namespaces.
+#[derive(Clone, Default)]
+pub struct CodexThread {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+}
+
+/// Per-session codex thread registry — keyed by session_id. Shared between the
+/// reader thread (which sets thread_id on `thread/start` and turn_id on
+/// `turn/started`/`turn/completed`) and `handle_send_prompt`/`handle_interrupt`/
+/// `handle_set_session_config_option` (which read them to address JSON-RPC
+/// requests). Production builds only.
 #[cfg(not(coverage))]
-struct CodexThreadsWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>);
+struct CodexThreadsWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, CodexThread>>>);
 
 #[cfg(not(coverage))]
 impl fmt::Debug for CodexThreadsWrap {
@@ -428,7 +436,6 @@ struct PendingGate {
     /// `…/permissions/…`, `item/tool/requestUserInput`, `mcpServer/elicitation/request`).
     /// The answer path keys the JSON-RPC reply shape off it ({decision} vs
     /// {permissions} vs {answers} vs {action,content}). `None` for claude/opencode.
-    #[cfg(not(coverage))]
     codex_method: Option<String>,
 }
 
@@ -523,7 +530,7 @@ pub struct Agent {
     #[cfg(not(coverage))]
     session_run_cmds: SessionRunCmdsWrap,
     /// Per-session codex spec cache: model/project/posture for building
-    /// `codex_turn_cmd` in `handle_send_prompt`. Production builds only.
+    /// the reader's codex handshake. Production builds only.
     #[cfg(not(coverage))]
     codex_specs: CodexSpecsWrap,
     /// Per-session codex thread_id map: populated by the reader when
@@ -765,7 +772,7 @@ impl Agent {
                 // - codex: the eval-loop body `cd '<proj>' && while IFS= read -r __cmd; do
                 //   eval "$__cmd" </dev/null; done` — the long-lived process whose stdin is
                 //   in.fifo (wired by start.sh) and whose stdout is out.log. Per-turn
-                //   codex_turn_cmd output is written into in.fifo by the local writer child;
+                //   codex turn/start JSON-RPC is written into in.fifo by the local writer child;
                 //   the eval-loop runs each command as a `codex exec` subprocess, appending
                 //   JSONL to out.log (captured by start.sh's >> out.log redirection).
                 //   remote_liveness_script / remote_kill_script work byte-identically:
@@ -789,13 +796,12 @@ impl Agent {
             // spawned by `spawn_container` exactly like claude — no extra work here.
 
             // Cache codex spec for later turns (handle_send_prompt): both local and
-            // remote codex sessions need this so follow-up turns can build
-            // codex_turn_cmd with the right model/posture/project/bin.
+            // remote codex sessions need this so the reader's app-server handshake
+            // (thread/start) can set the right model/posture/project/bin.
             if spec.driver == "codex" {
                 let cached = CachedCodexSpec {
                     model: spec.model.clone(),
                     project: spec.project.clone(),
-                    posture_mode: driver::posture_to_mode(&spec.posture).to_string(),
                     claude_bin: spec.claude_bin.clone(),
                     posture: spec.posture.clone(),
                 };
@@ -1000,9 +1006,6 @@ mod reconnect_spec_tests {
         assert_eq!(spec.project, "/tmp/proj");
         assert_eq!(spec.claude_bin.as_deref(), Some("codex"));
         assert_eq!(spec.posture, marsad_proto::Posture::FullAutonomy);
-        // posture_mode is the codex/claude permission-mode string.
-        assert_eq!(spec.posture_mode, driver::posture_to_mode(&spec.posture));
-        assert_eq!(spec.posture_mode, "bypassPermissions");
     }
 
     #[test]
@@ -1014,7 +1017,6 @@ mod reconnect_spec_tests {
             Some("AutoApproveSafe"),
         );
         assert_eq!(spec.posture, marsad_proto::Posture::AutoApproveSafe);
-        assert_eq!(spec.posture_mode, "acceptEdits");
         assert!(spec.claude_bin.is_none());
     }
 
@@ -1023,7 +1025,6 @@ mod reconnect_spec_tests {
         let spec =
             cached_codex_spec_from_persisted("m".into(), "p".into(), None, Some("Ask"));
         assert_eq!(spec.posture, marsad_proto::Posture::Ask);
-        assert_eq!(spec.posture_mode, "default");
     }
 
     #[test]
@@ -1032,7 +1033,6 @@ mod reconnect_spec_tests {
         // default to Ask — mirroring how `handle_resume` parses the field.
         let spec = cached_codex_spec_from_persisted("m".into(), "p".into(), None, None);
         assert_eq!(spec.posture, marsad_proto::Posture::Ask);
-        assert_eq!(spec.posture_mode, "default");
     }
 
     #[test]

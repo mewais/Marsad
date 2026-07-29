@@ -125,9 +125,9 @@ impl Agent {
             /// Stage 2 codex: cached spec for the reader thread's first-prompt delivery.
             #[allow(dead_code)]
             codex_spec: Option<super::CachedCodexSpec>,
-            /// Stage 2 codex: shared thread_id map (Arc clone from Agent).
+            /// Stage 2 codex: shared thread/turn state map (Arc clone from Agent).
             #[allow(dead_code)]
-            codex_threads: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
+            codex_threads: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, crate::CodexThread>>>,
             /// opencode ACP: cached spec for the reader thread's ACP handshake.
             #[allow(dead_code)]
             opencode_spec: Option<super::CachedOpencodeSpec>,

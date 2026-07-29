@@ -415,7 +415,7 @@ impl Agent {
                 // config_id → the codex setting: "model" → model; "mode" →
                 // collaborationMode. The threadId was captured by the reader.
                 use crate::codex_appserver as cx;
-                let thread_id = self.codex_threads.0.lock().unwrap().get(session_id).cloned();
+                let thread_id = self.codex_threads.0.lock().unwrap().get(session_id).map(|c| c.thread_id.clone());
                 let Some(tid) = thread_id else {
                     eprintln!("marsad-agent: session {session_id} codex set_config_option DROPPED — threadId not yet known");
                     return Ok(vec![]);
@@ -592,7 +592,7 @@ impl Agent {
                 // Codex follow-up turn (app-server): send a `turn/start` JSON-RPC
                 // request on the persistent thread. The threadId was captured from
                 // the thread/start response (stored in codex_threads by the reader).
-                let thread_id_opt = self.codex_threads.0.lock().unwrap().get(session_id).cloned();
+                let thread_id_opt = self.codex_threads.0.lock().unwrap().get(session_id).map(|c| c.thread_id.clone());
                 if let Some(tid) = thread_id_opt {
                     use crate::codex_appserver as cx;
                     // Millis-based id > the reserved handshake ids (1/2) and the
@@ -797,10 +797,16 @@ impl Agent {
                 // no interrupt; the persistent app-server does.) Decline any pending
                 // gate first so codex isn't left waiting on an approval.
                 use crate::codex_appserver as cx;
-                let threads = self.codex_threads.0.lock().unwrap();
-                let thread_id = threads.get(session_id).cloned();
-                let turn_id = threads.get(&format!("{session_id}#turn")).cloned();
-                drop(threads);
+                let (thread_id, turn_id) = {
+                    let mut threads = self.codex_threads.0.lock().unwrap();
+                    match threads.get_mut(session_id) {
+                        // Take the turn_id and clear it: after we ask to interrupt,
+                        // that turn is done from our side, so it must not be reused as
+                        // a stale interrupt target if a turn/completed is missed.
+                        Some(c) => (Some(c.thread_id.clone()), c.turn_id.take()),
+                        None => (None, None),
+                    }
+                };
                 let writers = self.session_writers.0.lock().unwrap();
                 if let Some(shared) = writers.get(session_id) {
                     let mut writer = shared.lock().unwrap();
@@ -1005,7 +1011,6 @@ impl Agent {
                     let req_id: serde_json::Value = serde_json::from_str(raw_id)
                         .unwrap_or_else(|_| serde_json::Value::String(raw_id.to_string()));
                     let method = gate.codex_method.as_deref().unwrap_or("");
-                    let for_session = permission_updates.is_some();
                     let result_val = if method == cx::REQ_ELICITATION {
                         serde_json::json!({
                             "action": if allow { "accept" } else { "decline" },
@@ -1016,7 +1021,10 @@ impl Agent {
                     } else if cx::is_legacy_approval(method) {
                         cx::legacy_review_decision(allow)
                     } else {
-                        cx::approval_decision(allow, allow && for_session)
+                        // Command/file approval: accept | decline. (codex also supports
+                        // `acceptForSession` = "always allow"; that affordance isn't
+                        // surfaced in the gate's suggestions yet, so we don't fabricate it.)
+                        cx::approval_decision(allow, false)
                     };
                     let response_line = crate::acp::encode_response(req_id, result_val);
                     let writers = self.session_writers.0.lock().unwrap();

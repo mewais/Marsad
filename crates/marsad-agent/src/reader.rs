@@ -143,7 +143,10 @@ pub fn reconnect_action(exit_code: Option<i32>, saw_conn_error: bool) -> Reconne
 /// Pure logic (no IO), compiled in all build modes — covered by unit tests.
 pub fn assistant_has_file_modifying_tool_use(event: &serde_json::Value) -> bool {
     // File-modifying tools whose use signals a likely git-visible change.
-    const FILE_TOOLS: &[&str] = &["Bash", "Edit", "Write", "NotebookEdit", "MultiEdit"];
+    // claude tool names + codex app-server's (shell / apply_patch) + opencode kinds,
+    // so the mid-turn Changes probe fires for every driver.
+    const FILE_TOOLS: &[&str] =
+        &["Bash", "Edit", "Write", "NotebookEdit", "MultiEdit", "shell", "apply_patch"];
     let content = match event
         .get("message")
         .and_then(|m| m.get("content"))
@@ -227,12 +230,13 @@ pub(crate) fn spawn_session_reader(
     capability_provider: Option<std::sync::Arc<crate::capabilities::CapabilityProvider>>,
     // Stage 2 codex: driver discriminator ("codex" or "claude").
     driver: String,
-    // Stage 2 codex: cached spec for building codex_turn_cmd (first_prompt delivery
+    // codex app-server: cached spec (model/project/posture/bin) for the reader's
     // and translate-and-broadcast). None for claude sessions.
     codex_spec: Option<crate::CachedCodexSpec>,
-    // Stage 2 codex: shared map for storing the codex thread_id from thread.started.
-    // Shared with handle_send_prompt so follow-up turns use codex exec resume.
-    codex_threads: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
+    // codex app-server: shared thread/turn state (thread_id from thread/start,
+    // turn_id from turn/started). Shared with handle_send_prompt/handle_interrupt/
+    // handle_set_session_config_option to address JSON-RPC requests.
+    codex_threads: std::sync::Arc<std::sync::Mutex<HashMap<String, crate::CodexThread>>>,
     // opencode ACP: cached spec for the ACP handshake (initialize + session/new).
     // None for non-opencode sessions.
     opencode_spec: Option<crate::CachedOpencodeSpec>,
@@ -794,7 +798,7 @@ pub(crate) fn spawn_session_reader(
             // already running (a prompt was already sent) and re-sending would be wrong.
             //
             // CLAUDE: delivers as a stream-json user message on stdin.
-            // CODEX: delivers as a `codex_turn_cmd` eval-loop command on in.fifo;
+            // CODEX: delivers first_prompt as a `turn/start` after thread/start;
             //        the eval-loop container spawns `codex exec …` as a subprocess.
             // OPENCODE: first_prompt is delivered as a `session/prompt` ACP request
             //           AFTER the session/new result arrives (so the ACP sessionId is
@@ -1082,7 +1086,7 @@ pub(crate) fn spawn_session_reader(
                         //   translate via acp_translate; request_permission →
                         //   capture as pending gate + broadcast; session/new result
                         //   → stash ACP sessionId.
-                        // - "codex": translate JSONL via codex_event_to_stream_json.
+                        // - "codex": parse app-server JSON-RPC; translate via codex_translate.
                         // - everything else ("claude"): raw stream-json, no translation.
                         if driver == "opencode" {
                             use crate::acp;
@@ -1478,16 +1482,22 @@ pub(crate) fn spawn_session_reader(
                             };
                             match msg {
                                 acp::AcpMessage::Notification { method, params } => {
-                                    // Track the current turnId (for turn/interrupt),
-                                    // stored under a suffixed key in the shared thread
-                                    // registry so handle_interrupt (a different thread)
-                                    // can read it. Cleared when the turn completes.
+                                    // Track the current turnId (for turn/interrupt) on
+                                    // the session's thread state. Set on turn/started,
+                                    // cleared on turn/completed (which codex also emits
+                                    // for interrupted/failed turns — see codex_turn_result).
                                     if method == "turn/started" {
-                                        if let Some(tid) = cx::extract_turn_id(&params) {
-                                            codex_threads.lock().unwrap().insert(format!("{sid}#turn"), tid);
+                                        if let (Some(tid), Ok(mut m)) = (cx::extract_turn_id(&params), codex_threads.lock()) {
+                                            if let Some(entry) = m.get_mut(&sid) {
+                                                entry.turn_id = Some(tid);
+                                            }
                                         }
                                     } else if method == "turn/completed" {
-                                        codex_threads.lock().unwrap().remove(&format!("{sid}#turn"));
+                                        if let Ok(mut m) = codex_threads.lock() {
+                                            if let Some(entry) = m.get_mut(&sid) {
+                                                entry.turn_id = None;
+                                            }
+                                        }
                                     }
                                     if let Some(sj) = codex_translate::codex_notification_to_stream_json(&method, &params, &sid) {
                                         emit_event(sj);
@@ -1554,7 +1564,7 @@ pub(crate) fn spawn_session_reader(
                                                 // synthesize system/init, deliver the
                                                 // first turn as turn/start.
                                                 if let Some(tid) = cx::extract_thread_id(&res) {
-                                                    codex_threads.lock().unwrap().insert(sid.clone(), tid.clone());
+                                                    codex_threads.lock().unwrap().insert(sid.clone(), crate::CodexThread { thread_id: tid.clone(), turn_id: None });
                                                     eprintln!("marsad-agent: session {sid} codex threadId={tid}");
                                                     let model_str = codex_spec.as_ref().map(|c| c.model.clone()).unwrap_or_default();
                                                     let cwd_str = codex_spec.as_ref().map(|c| c.project.clone()).unwrap_or_else(|| ".".to_string());
