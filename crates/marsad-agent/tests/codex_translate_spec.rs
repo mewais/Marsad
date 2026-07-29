@@ -153,3 +153,57 @@ fn collab_mode_list_becomes_modes_update() {
     let ids: Vec<String> = mu["available_modes"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap().to_string()).collect();
     assert_eq!(ids, vec!["build","plan"]);
 }
+
+// ── Gap-closing: questions, elicitation, permissions ────────────────────────
+use marsad_agent::codex_translate::{
+    codex_question_to_control_request, codex_elicitation_to_control_request,
+    codex_answers_by_id, codex_permissions_response,
+};
+
+#[test]
+fn request_user_input_becomes_askuserquestion_gate() {
+    let params = serde_json::json!({
+        "itemId":"q-1","threadId":"t","turnId":"u",
+        "questions":[{"id":"q1","header":"Pick","question":"Which env?","options":[
+            {"label":"prod","description":"production"},{"label":"dev","description":"development"}]}]
+    });
+    let ev = codex_question_to_control_request("q-1", &params);
+    assert_eq!(ev["request"]["tool_name"], "AskUserQuestion");
+    assert_eq!(ev["request"]["input"]["questions"][0]["question"], "Which env?");
+    assert_eq!(ev["request"]["input"]["questions"][0]["options"][0]["label"], "prod");
+    match parse_stream_line(&serde_json::to_string(&ev).unwrap()) {
+        Ok(StreamMsg::ControlRequest(_)) => {}
+        other => panic!("expected ControlRequest, got {other:?}"),
+    }
+}
+
+#[test]
+fn answers_map_back_to_codex_question_ids() {
+    // Frontend answers by question TEXT; codex wants them by question ID.
+    let params = serde_json::json!({"questions":[{"id":"q1","question":"Which env?"},{"id":"q2","question":"Confirm?"}]});
+    let by_text = serde_json::json!({"Which env?":"prod","Confirm?":"yes"});
+    let out = codex_answers_by_id(&params, &by_text);
+    assert_eq!(out["q1"], "prod");
+    assert_eq!(out["q2"], "yes");
+}
+
+#[test]
+fn elicitation_becomes_elicitation_gate() {
+    let params = serde_json::json!({"message":"Grant access?","mode":"form","requestedSchema":{"type":"object"}});
+    let ev = codex_elicitation_to_control_request("e-1", &params);
+    assert_eq!(ev["request"]["subtype"], "elicitation");
+    assert_eq!(ev["request"]["message"], "Grant access?");
+    match parse_stream_line(&serde_json::to_string(&ev).unwrap()) {
+        Ok(StreamMsg::ControlRequest(_)) => {}
+        other => panic!("expected ControlRequest, got {other:?}"),
+    }
+}
+
+#[test]
+fn permissions_response_grants_on_allow_denies_on_reject() {
+    let params = serde_json::json!({"additionalPermissions":{"network":{}}});
+    let allow = codex_permissions_response(true, &params);
+    assert!(allow["permissions"].get("network").is_some());
+    let deny = codex_permissions_response(false, &params);
+    assert_eq!(deny["permissions"], serde_json::json!({}));
+}

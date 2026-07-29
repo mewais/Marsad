@@ -253,6 +253,103 @@ pub fn codex_approval_to_control_request(request_id: &str, method: &str, params:
     })
 }
 
+/// `item/tool/requestUserInput` → an AskUserQuestion `control_request` (the SAME
+/// gate claude's questions use). Codex `questions:[{id,question,header,options}]`
+/// map to `input.questions:[{question,header,multiSelect,options:[{label,description}]}]`.
+/// The codex `id`s are recovered from the stored params at answer time.
+pub fn codex_question_to_control_request(gate_id: &str, params: &Value) -> Value {
+    let questions: Vec<Value> = params
+        .get("questions")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|q| {
+                    let options: Vec<Value> = q
+                        .get("options")
+                        .and_then(|v| v.as_array())
+                        .map(|opts| {
+                            opts.iter()
+                                .map(|o| {
+                                    json!({
+                                        "label": o.get("label").or_else(|| o.get("value")).cloned().unwrap_or(json!("")),
+                                        "description": o.get("description").cloned().unwrap_or(json!("")),
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    json!({
+                        "question": q.get("question").cloned().unwrap_or(json!("")),
+                        "header": q.get("header").cloned().unwrap_or(json!("")),
+                        "multiSelect": false,
+                        "options": options,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    json!({
+        "type": "control_request",
+        "request_id": gate_id,
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": "AskUserQuestion",
+            "input": { "questions": questions },
+        }
+    })
+}
+
+/// `mcpServer/elicitation/request` → an `elicitation` control_request (the SAME
+/// gate claude's MCP elicitations use). Answered with `{action, content}`.
+pub fn codex_elicitation_to_control_request(gate_id: &str, params: &Value) -> Value {
+    json!({
+        "type": "control_request",
+        "request_id": gate_id,
+        "request": {
+            "subtype": "elicitation",
+            "mcp_server_name": params.get("mode").and_then(|v| v.as_str()).unwrap_or("codex"),
+            "message": params.get("message").cloned().unwrap_or(json!("")),
+            "requested_schema": params.get("requestedSchema").cloned(),
+        }
+    })
+}
+
+/// Build codex's `{permissions}` response for an `item/permissions/requestApproval`.
+/// On allow, grant the requested profile (best-effort passthrough of the params'
+/// proposed additions); on deny, grant nothing. `GrantedPermissionProfile` is
+/// `{fileSystem?, network?}` (both nullable), so an empty object is a valid "deny".
+pub fn codex_permissions_response(allow: bool, params: &Value) -> Value {
+    if allow {
+        let profile = params
+            .get("additionalPermissions")
+            .or_else(|| params.get("permissions"))
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        json!({ "permissions": profile })
+    } else {
+        json!({ "permissions": {} })
+    }
+}
+
+/// Build codex's `{answers}` map (keyed by the codex question `id`) from the
+/// frontend's answers-by-question-text map + the stored requestUserInput params.
+pub fn codex_answers_by_id(params: &Value, answers_by_text: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    if let (Some(qs), Some(ans)) = (
+        params.get("questions").and_then(|v| v.as_array()),
+        answers_by_text.as_object(),
+    ) {
+        for q in qs {
+            let text = q.get("question").and_then(|v| v.as_str()).unwrap_or("");
+            let id = q.get("id").and_then(|v| v.as_str()).unwrap_or(text);
+            if let Some(v) = ans.get(text) {
+                out.insert(id.to_string(), v.clone());
+            }
+        }
+    }
+    Value::Object(out)
+}
+
 // ── canonical builders ────────────────────────────────────────────────────────
 
 fn assistant_thinking(id: &str, thinking: &str) -> Value {

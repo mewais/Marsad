@@ -1067,6 +1067,7 @@ pub(crate) fn spawn_session_reader(
                                     input: cr.input,
                                     elicitation: cr.elicitation_message.is_some(),
                                     acp_response_id: None,
+                                    codex_method: None,
                                 });
                             }
                         }
@@ -1272,6 +1273,7 @@ pub(crate) fn spawn_session_reader(
                                                     input: params.clone(),
                                                     elicitation: false,
                                                     acp_response_id: Some(acp_request_id.clone()),
+                                                    codex_method: None,
                                                 });
                                             }
                                         }
@@ -1492,37 +1494,47 @@ pub(crate) fn spawn_session_reader(
                                     }
                                 }
                                 acp::AcpMessage::Request { id, method, params } => {
-                                    if cx::is_command_approval(&method) || cx::is_legacy_approval(&method) {
-                                        // Approval request → capture as a pending gate
-                                        // and surface it as a control_request, exactly
-                                        // like the opencode path. The raw JSON-RPC id is
-                                        // kept in acp_response_id so handle_answer_gate
-                                        // can reply with {decision}. The routing id
-                                        // (itemId) is the unique gate/decision id.
-                                        let raw_id = id.to_string();
-                                        let gate_id = crate::codex_translate::codex_gate_routing_id(&sid, &raw_id, &params);
+                                    use crate::codex_translate as ct;
+                                    // Every codex server request that needs a human maps
+                                    // to a Marsad gate: approvals (command/file/permissions
+                                    // + legacy) → can_use_tool; requestUserInput →
+                                    // AskUserQuestion; elicitation → elicitation. The
+                                    // codex `method` is stored on the PendingGate so the
+                                    // answer path replies in the right shape.
+                                    let raw_id = id.to_string();
+                                    let gate_id = ct::codex_gate_routing_id(&sid, &raw_id, &params);
+                                    let gate_event: Option<(serde_json::Value, bool)> =
+                                        if cx::is_command_approval(&method) || cx::is_legacy_approval(&method) {
+                                            Some((ct::codex_approval_to_control_request(&gate_id, &method, &params), false))
+                                        } else if method == cx::REQ_USER_INPUT {
+                                            Some((ct::codex_question_to_control_request(&gate_id, &params), false))
+                                        } else if method == cx::REQ_ELICITATION {
+                                            Some((ct::codex_elicitation_to_control_request(&gate_id, &params), true))
+                                        } else {
+                                            None
+                                        };
+                                    if let Some((event, is_elicit)) = gate_event {
                                         {
                                             let mut gates = pending_fifo.lock().unwrap();
                                             let queue = gates.entry(sid.clone()).or_default();
                                             if queue.iter().any(|g| g.request_id == gate_id) {
                                                 eprintln!("marsad-agent: session {sid} codex gate DUPLICATE ignored ({gate_id})");
                                             } else {
-                                                eprintln!("marsad-agent: session {sid} codex gate captured (raw_id={raw_id}, gate_id={gate_id})");
+                                                eprintln!("marsad-agent: session {sid} codex gate captured ({method}, gate_id={gate_id})");
                                                 queue.push_back(PendingGate {
                                                     request_id: gate_id.clone(),
                                                     input: params.clone(),
-                                                    elicitation: false,
+                                                    elicitation: is_elicit,
                                                     acp_response_id: Some(raw_id.clone()),
+                                                    codex_method: Some(method.clone()),
                                                 });
                                             }
                                         }
-                                        let gate_event = crate::codex_translate::codex_approval_to_control_request(&gate_id, &method, &params);
-                                        emit_event(gate_event);
+                                        emit_event(event);
                                     } else {
-                                        // A non-approval server request (e.g. a question
-                                        // or elicitation) — Phase C. For now decline so
-                                        // the turn never hangs.
-                                        eprintln!("marsad-agent: session {sid} codex server request {method} (not yet wired; declining)");
+                                        // An unrecognized server request → decline so the
+                                        // turn never hangs.
+                                        eprintln!("marsad-agent: session {sid} codex unhandled server request {method}; declining");
                                         let resp = acp::encode_response(id, cx::approval_decision(false, false));
                                         let mut w = writer.lock().unwrap();
                                         let _ = w.write_all(resp.as_bytes());

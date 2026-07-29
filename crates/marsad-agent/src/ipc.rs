@@ -993,17 +993,31 @@ impl Agent {
             }
 
             if gate_driver == "codex" {
-                // codex app-server: reply to the approval ServerRequest with a
-                // `{decision}` result. allow → accept; deny → decline. The raw
-                // JSON-RPC id was stored in acp_response_id by the reader.
+                // codex app-server: reply to the ServerRequest in the shape its
+                // method requires (keyed off the codex_method stored on the gate):
+                //   command/file approval → {decision: accept|acceptForSession|decline}
+                //   legacy exec/applyPatch → {decision: approved|denied}
+                //   permissions escalation → {permissions: <granted profile>}
+                //   elicitation            → {action: accept|decline, content}
                 if let Some(gate) = pending {
                     use crate::codex_appserver as cx;
                     let raw_id = gate.acp_response_id.as_deref().unwrap_or(&gate.request_id);
                     let req_id: serde_json::Value = serde_json::from_str(raw_id)
                         .unwrap_or_else(|_| serde_json::Value::String(raw_id.to_string()));
-                    // "always allow" (a permission_updates suggestion) → acceptForSession.
+                    let method = gate.codex_method.as_deref().unwrap_or("");
                     let for_session = permission_updates.is_some();
-                    let result_val = cx::approval_decision(allow, allow && for_session);
+                    let result_val = if method == cx::REQ_ELICITATION {
+                        serde_json::json!({
+                            "action": if allow { "accept" } else { "decline" },
+                            "content": elicitation_content.clone().unwrap_or_else(|| serde_json::json!({})),
+                        })
+                    } else if method == cx::REQ_PERMISSION_APPROVAL {
+                        crate::codex_translate::codex_permissions_response(allow, &gate.input)
+                    } else if cx::is_legacy_approval(method) {
+                        cx::legacy_review_decision(allow)
+                    } else {
+                        cx::approval_decision(allow, allow && for_session)
+                    };
                     let response_line = crate::acp::encode_response(req_id, result_val);
                     let writers = self.session_writers.0.lock().unwrap();
                     if let Some(shared) = writers.get(session_id) {
@@ -1011,7 +1025,7 @@ impl Agent {
                         let _ = writer.write_all(response_line.as_bytes());
                         let _ = writer.write_all(b"\n");
                         let _ = writer.flush();
-                        eprintln!("marsad-agent: session {session_id} codex gate answered (allow={allow})");
+                        eprintln!("marsad-agent: session {session_id} codex gate answered ({method}, allow={allow})");
                     } else {
                         eprintln!("marsad-agent: session {session_id} codex gate answer DROPPED — no writer");
                     }
@@ -1106,11 +1120,22 @@ impl Agent {
             };
 
             if let Some(gate) = pending {
-                let encoded = marsad_proto::encode_control_response_question(
-                    &gate.request_id,
-                    &gate.input,
-                    &answers,
-                );
+                // codex app-server: reply to item/tool/requestUserInput with
+                // {answers} keyed by the codex question id. claude: the AskUserQuestion
+                // control_response.
+                let encoded = if gate.codex_method.is_some() {
+                    let raw_id = gate.acp_response_id.as_deref().unwrap_or(&gate.request_id);
+                    let req_id: serde_json::Value = serde_json::from_str(raw_id)
+                        .unwrap_or_else(|_| serde_json::Value::String(raw_id.to_string()));
+                    let ans = crate::codex_translate::codex_answers_by_id(&gate.input, &answers);
+                    crate::acp::encode_response(req_id, serde_json::json!({ "answers": ans }))
+                } else {
+                    marsad_proto::encode_control_response_question(
+                        &gate.request_id,
+                        &gate.input,
+                        &answers,
+                    )
+                };
                 let writers = self.session_writers.0.lock().unwrap();
                 if let Some(shared) = writers.get(session_id) {
                     let mut writer = shared.lock().unwrap();

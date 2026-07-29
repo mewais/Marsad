@@ -419,10 +419,17 @@ struct PendingGate {
     /// updatedInput}`). See `handle_answer_gate`.
     elicitation: bool,
     /// opencode ACP only: the RAW JSON-RPC `id` of the `session/request_permission`
-    /// request (e.g. `0`), needed to `encode_response` back to opencode. Kept
-    /// separate from `request_id` because that id is not unique across sessions.
-    /// `None` for claude/codex gates.
+    /// request (e.g. `0`), needed to `encode_response` back to opencode. Codex also
+    /// uses it (the raw id of the approval ServerRequest). Kept separate from
+    /// `request_id` because that id is not unique across sessions. `None` for claude.
     acp_response_id: Option<String>,
+    /// codex app-server only: the ServerRequest method that raised this gate
+    /// (`item/commandExecution/requestApproval`, `…/fileChange/…`,
+    /// `…/permissions/…`, `item/tool/requestUserInput`, `mcpServer/elicitation/request`).
+    /// The answer path keys the JSON-RPC reply shape off it ({decision} vs
+    /// {permissions} vs {answers} vs {action,content}). `None` for claude/opencode.
+    #[cfg(not(coverage))]
+    codex_method: Option<String>,
 }
 
 /// Per-session pending-gate registry. Shared (Arc) between the FIFO reader
