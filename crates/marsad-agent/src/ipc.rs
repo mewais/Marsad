@@ -764,19 +764,40 @@ impl Agent {
                     );
                 }
             } else if driver == "codex" {
-                // Codex: interrupt is a documented no-op, and the eval-loop writer
-                // must not receive a control_response (it would corrupt the command
-                // sequence). Clearing the queue above is enough. Log and return ack.
-                if !pending.is_empty() {
-                    eprintln!(
-                        "marsad-agent: session {session_id} {} pending gate(s) cleared on interrupt (codex)",
-                        pending.len()
-                    );
+                // Codex app-server: a REAL interrupt — send `turn/interrupt`
+                // {threadId, turnId} for the in-flight turn. (The old eval-loop had
+                // no interrupt; the persistent app-server does.) Decline any pending
+                // gate first so codex isn't left waiting on an approval.
+                use crate::codex_appserver as cx;
+                let threads = self.codex_threads.0.lock().unwrap();
+                let thread_id = threads.get(session_id).cloned();
+                let turn_id = threads.get(&format!("{session_id}#turn")).cloned();
+                drop(threads);
+                let writers = self.session_writers.0.lock().unwrap();
+                if let Some(shared) = writers.get(session_id) {
+                    let mut writer = shared.lock().unwrap();
+                    for gate in &pending {
+                        let raw_id = gate.acp_response_id.as_deref().unwrap_or(&gate.request_id);
+                        let req_id: serde_json::Value = serde_json::from_str(raw_id)
+                            .unwrap_or_else(|_| serde_json::Value::String(raw_id.to_string()));
+                        let decline = crate::acp::encode_response(req_id, cx::approval_decision(false, false));
+                        let _ = writer.write_all(decline.as_bytes()).and_then(|_| writer.write_all(b"\n")).and_then(|_| writer.flush());
+                    }
+                    match (thread_id, turn_id) {
+                        (Some(tid), Some(uid)) => {
+                            let line = crate::acp::encode_request(
+                                serde_json::json!(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_millis() as u64 + 500),
+                                cx::TURN_INTERRUPT,
+                                cx::turn_interrupt_params(&tid, &uid),
+                            );
+                            let _ = writer.write_all(line.as_bytes()).and_then(|_| writer.write_all(b"\n")).and_then(|_| writer.flush());
+                            eprintln!("marsad-agent: session {session_id} codex turn/interrupt sent (turn={uid})");
+                        }
+                        _ => eprintln!("marsad-agent: session {session_id} codex interrupt — no in-flight turn to cancel"),
+                    }
+                } else {
+                    eprintln!("marsad-agent: session {session_id} codex interrupt DROPPED — no writer");
                 }
-                eprintln!(
-                    "marsad-agent: session {session_id} interrupt NO-OP for codex \
-                     (codex exec turns are one-shot; no interrupt protocol exists)"
-                );
             } else {
                 // Claude: decline the pending gate cleanly (if any), then send the
                 // interrupt control_request to end the turn. Both go to the same

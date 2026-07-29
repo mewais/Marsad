@@ -1476,6 +1476,17 @@ pub(crate) fn spawn_session_reader(
                             };
                             match msg {
                                 acp::AcpMessage::Notification { method, params } => {
+                                    // Track the current turnId (for turn/interrupt),
+                                    // stored under a suffixed key in the shared thread
+                                    // registry so handle_interrupt (a different thread)
+                                    // can read it. Cleared when the turn completes.
+                                    if method == "turn/started" {
+                                        if let Some(tid) = cx::extract_turn_id(&params) {
+                                            codex_threads.lock().unwrap().insert(format!("{sid}#turn"), tid);
+                                        }
+                                    } else if method == "turn/completed" {
+                                        codex_threads.lock().unwrap().remove(&format!("{sid}#turn"));
+                                    }
                                     if let Some(sj) = codex_translate::codex_notification_to_stream_json(&method, &params, &sid) {
                                         emit_event(sj);
                                     }
