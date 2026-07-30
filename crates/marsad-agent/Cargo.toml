@@ -32,6 +32,7 @@ marsad-store = { workspace = true }
 marsad-hosts = { workspace = true }
 marsad-notify = { workspace = true }
 marsad-wasl = { workspace = true }
+marsad-wasl-session = { workspace = true }
 # WAVE 3b — interactive PTY escape-hatch terminal (Terminal tab). Cross-platform
 # pty allocation + child spawning (real OS IO, gated `#[cfg(not(coverage))]` in
 # pty.rs); base64 encodes raw pty output bytes for the IPC wire (see

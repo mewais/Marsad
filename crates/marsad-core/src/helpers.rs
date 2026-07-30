@@ -128,3 +128,60 @@ pub(crate) fn slash_cmd_name(cmd: &marsad_viewmodel::SlashCmd) -> &str {
         SlashCmd::Unknown(s) => s.as_str(),
     }
 }
+
+/// X6 (§8, v3): build the `marsad_gates::Gate::Permission` a native Wasl gate
+/// maps onto. The real `WaslNativeGateDetail` is only `{summary, preview}` (no
+/// `gate_id`); per-occurrence identity is the `(turn_id, seq)`-derived `gate_key`
+/// (`native_gate_key`), passed in by the caller. The `command` encodes that
+/// `gate_key` via `native_gate_command(gate_key, detail)` so the derived
+/// `DecisionId` (which hashes `command` + `cwd`) is unique+stable per gate
+/// occurrence; `explanation` carries the CLI's preview; the claude-only fields
+/// are empty (a native permission prompt is a binary approve/deny with no
+/// cwd/risk/elicitation/suggestions).
+pub(crate) fn native_gate_permission(
+    gate_key: &str,
+    detail: &marsad_wasl_session::WaslNativeGateDetail,
+) -> marsad_gates::Gate {
+    marsad_gates::Gate::Permission {
+        request_id: gate_key.to_string(),
+        command: marsad_wasl_session::native_gate_command(gate_key, detail),
+        cwd: String::new(),
+        risk: String::new(),
+        explanation: detail.preview.clone(),
+        is_elicitation: false,
+        elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
+    }
+}
+
+/// X6 (§4.4, v3): peel every `WaslTurnReceipt::Duplicate { original }` layer and
+/// return the underlying original receipt. A `Duplicate` is a benign resent
+/// idempotency key — Wasl returns the ORIGINAL wrapped verbatim with no second
+/// injection — so its disposition is exactly the original's. Any non-`Duplicate`
+/// receipt is returned as-is.
+pub(crate) fn unwrap_duplicate_receipt(
+    receipt: &marsad_wasl_session::WaslTurnReceipt,
+) -> &marsad_wasl_session::WaslTurnReceipt {
+    let mut cur = receipt;
+    while let marsad_wasl_session::WaslTurnReceipt::Duplicate { original } = cur {
+        cur = original;
+    }
+    cur
+}
+
+/// X6 (§10.4): close out a Wasl turn's transcript entry exactly once. If a delta
+/// already opened an assistant entry, leave it as-is (no double-close/reopen); if
+/// none opened (the reply arrived only in the terminal event), append it now.
+/// Marks the post-terminal guard so a stray later delta is ignored.
+pub(crate) fn close_wasl_turn(record: &mut SessionRecord, reply: &str) {
+    if record.wasl_open_assistant.is_none() && !reply.is_empty() {
+        record
+            .transcript
+            .push(marsad_events::TranscriptEntry::Assistant {
+                text: reply.to_string(),
+                at: Some(now_ms()),
+            });
+    }
+    record.wasl_open_assistant = None;
+    record.wasl_turn_closed = true;
+}

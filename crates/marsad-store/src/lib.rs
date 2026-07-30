@@ -264,8 +264,10 @@ impl Backend for FsBackend {
         // alongside our key tree. Reading a socket file (`agent.sock`) errors and would
         // abort restore (→ hosts/sessions silently fail to load). Filter to our own
         // top-level categories so foreign files are never enumerated or read.
-        const STORE_CATEGORIES: [&str; 9] = [
+        const STORE_CATEGORIES: [&str; 10] = [
             "session",
+            // X6 Wasl Backend: Wasl-managed session binding records.
+            "waslbinding",
             "host",
             "workspace",
             "transcript",
@@ -365,6 +367,45 @@ pub struct PersistedSession {
 
 fn default_driver() -> String {
     "claude".to_string()
+}
+
+/// The persisted binding to a Wasl-managed session's underlying runtime
+/// (`wasl-backend-plan.md` §6.1). Persisted so `marsad-core`/the GUI can
+/// RECONNECT to a still-alive Wasl session after a restart, rather than losing
+/// track of it.
+///
+/// This is stored as its OWN keyed record (prefix `waslbinding:<session_id>`),
+/// NOT as a field on [`PersistedSession`]: adding a field to `PersistedSession`
+/// would break every existing struct literal in the frozen test suites (they
+/// list all fields explicitly, with no `..` spread). A separate record is fully
+/// additive and backward-compatible — an existing session simply has no binding
+/// record, which restores as `RuntimeOwner::MarsadManaged` (the default).
+///
+/// `marsad-store` must not depend on `marsad-wasl-session` (DAG), so the opaque
+/// Wasl target key is carried as a plain `serde_json::Value` (the same rule that
+/// keeps `marsad-proto` free of a `marsad-wasl-session` dependency).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PersistedWaslBinding {
+    /// The Marsad session id this binding belongs to (the record key too).
+    pub session_id: String,
+    /// Wasl-side stable target id (`target_id()`) — the handle to reattach to.
+    /// May be empty if not yet known at persist time.
+    #[serde(default)]
+    pub target_id: String,
+    /// The node the target lives on (local-first this phase).
+    #[serde(default)]
+    pub host_id: String,
+    /// The opaque Wasl target key used to re-obtain the client via
+    /// `WaslSessionProvider::get_or_start` on reconnect. Value-carried on purpose
+    /// (typed form lives in `marsad-wasl-session`).
+    #[serde(default)]
+    pub provider_key: serde_json::Value,
+    /// The last observed observe-stream sequence core folded for this session
+    /// before the restart. On reconnect, core re-issues `AttachWaslSession {
+    /// after_seq = last_seq }` so the stream resumes with no gap and no dup
+    /// (§6.1 step 2).
+    #[serde(default)]
+    pub last_seq: u64,
 }
 
 /// A single transcript event.
@@ -526,6 +567,10 @@ fn decode_payload<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> T {
 
 /// Key prefixes used in the backend.
 const PREFIX_SESSION: &str = "session:";
+/// Wasl-managed session binding records (X6, `wasl-backend-plan.md` §6.1). A
+/// SEPARATE record from `session:` so it is fully additive (no field added to
+/// `PersistedSession`).
+const PREFIX_WASL_BINDING: &str = "waslbinding:";
 const PREFIX_HOST: &str = "host:";
 const PREFIX_WORKSPACE: &str = "workspace:";
 const PREFIX_TRANSCRIPT: &str = "transcript:";
@@ -621,6 +666,50 @@ impl Store {
         let key = format!("{}{}", PREFIX_SESSION, id);
         self.backend.delete(&key)?;
         Ok(())
+    }
+
+    // ── Wasl Backend (X6) session bindings — additive, own record ────────────
+
+    /// Persist (insert or overwrite) a Wasl-managed session's runtime binding
+    /// (`wasl-backend-plan.md` §6.1). Keyed by `b.session_id` under
+    /// `waslbinding:` — a SEPARATE record from `session:` so it is fully additive
+    /// (no field added to [`PersistedSession`]).
+    pub fn upsert_wasl_binding(&mut self, b: &PersistedWaslBinding) -> Result<(), StoreError> {
+        let key = format!("{}{}", PREFIX_WASL_BINDING, b.session_id);
+        let bytes = encode(b);
+        self.backend.write(&key, &bytes)?;
+        Ok(())
+    }
+
+    /// Delete a persisted Wasl binding by session id (no-op if absent). Called
+    /// when a Wasl-managed session is removed.
+    pub fn delete_wasl_binding(&mut self, session_id: &str) -> Result<(), StoreError> {
+        let key = format!("{}{}", PREFIX_WASL_BINDING, session_id);
+        self.backend.delete(&key)?;
+        Ok(())
+    }
+
+    /// Restore all persisted Wasl bindings, keyed by session id. Self-contained
+    /// (its own `list`+`read`), so it neither touches [`Store::restore`]'s
+    /// dispatch loop nor requires a field on [`Restored`] — keeping the binding
+    /// addition fully backward-compatible with existing serialized state.
+    pub fn wasl_bindings(&self) -> Result<HashMap<String, PersistedWaslBinding>, StoreError> {
+        let keys = self.backend.list(PREFIX_WASL_BINDING)?;
+        let mut out = HashMap::new();
+        for key in keys {
+            if let Some(bytes) = self.backend.read(&key)? {
+                let version = blob_version(&bytes);
+                if version != SCHEMA_VERSION {
+                    return Err(StoreError::VersionMismatch {
+                        found: version,
+                        expected: SCHEMA_VERSION,
+                    });
+                }
+                let b: PersistedWaslBinding = decode_payload(&bytes);
+                out.insert(b.session_id.clone(), b);
+            }
+        }
+        Ok(out)
     }
 
     /// Delete a persisted workspace by id (no-op if absent).

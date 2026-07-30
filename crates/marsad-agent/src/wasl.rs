@@ -120,6 +120,108 @@ pub fn load_wasl_config(data_root: &str) -> Option<marsad_wasl::WaslOperatorsCon
 }
 
 // ---------------------------------------------------------------------------
+// X6 Wasl **Backend** — load_wasl_session_config + select_wasl_session_runtime
+// (docs/design/wasl-backend-plan.md §6.1/§7). The DIRECT analogue of
+// `load_wasl_config`, applied VERBATIM to the new, independent `session_runtimes`
+// key of the SAME `<data_root>/wasl.json` file: the X1 `operators[].url` reaches
+// the node's operator API; `session_runtimes[].base_url` reaches its
+// runtime-control API — related-but-distinct endpoints on the same node. The two
+// keys are fully independent (both `#[serde(default)]`): an X1-only `wasl.json`
+// is inert for the backend, and a backend-only `wasl.json` is inert for X1.
+// ---------------------------------------------------------------------------
+
+/// Read `<data_root>/wasl.json` and return its `session_runtimes` block. Same
+/// error-handling conventions as `load_wasl_config`, VERBATIM: absent file ->
+/// `None` (the inert path); malformed JSON -> `None` + one stderr line (config
+/// problems must never take the agent down); an absent/empty `session_runtimes`
+/// key -> `None` (same "nothing to wire" disposition as an empty list, and the
+/// independence guarantee for an X1-operators-only file); duplicate `host_id` ->
+/// first entry wins + stderr line (a Wasl node is per-host, so a daemon reaches
+/// ONE runtime-control endpoint per host); a `base_url` that isn't
+/// `http://ip:port` (one trailing slash tolerated + stripped, per
+/// `normalize_operator_url`) is dropped + stderr line, not fatal; if every entry
+/// drops out this way, `None`.
+pub fn load_wasl_session_config(
+    data_root: &str,
+) -> Option<marsad_wasl_session::WaslSessionRuntimesConfig> {
+    let path = std::path::Path::new(data_root).join("wasl.json");
+    let text = std::fs::read_to_string(&path).ok()?;
+
+    let parsed: marsad_wasl_session::WaslSessionRuntimesConfig = match serde_json::from_str(&text) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!(
+                "marsad-agent: malformed wasl config {}: {e}",
+                path.display()
+            );
+            return None;
+        }
+    };
+
+    if parsed.session_runtimes.is_empty() {
+        // Absent/empty `session_runtimes` -> inert. An X1-operators-only
+        // `wasl.json` lands here (its `session_runtimes` defaults to empty).
+        return None;
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    let mut runtimes = Vec::with_capacity(parsed.session_runtimes.len());
+    for mut entry in parsed.session_runtimes {
+        if !seen.insert(entry.host_id.clone()) {
+            eprintln!(
+                "marsad-agent: duplicate wasl session_runtime host_id {:?} in {} — first entry wins",
+                entry.host_id,
+                path.display()
+            );
+            continue;
+        }
+        match normalize_operator_url(&entry.base_url) {
+            Some(normalized) => {
+                entry.base_url = normalized;
+                runtimes.push(entry);
+            }
+            None => {
+                eprintln!(
+                    "marsad-agent: malformed wasl session_runtime base_url {:?} for host {:?} in {} \
+                     (must be http://ip:port, e.g. \"http://127.0.0.1:8788\") — runtime skipped",
+                    entry.base_url,
+                    entry.host_id,
+                    path.display()
+                );
+            }
+        }
+    }
+
+    if runtimes.is_empty() {
+        eprintln!(
+            "marsad-agent: wasl config {} has no usable session_runtimes after validation",
+            path.display()
+        );
+        return None;
+    }
+
+    Some(marsad_wasl_session::WaslSessionRuntimesConfig {
+        session_runtimes: runtimes,
+    })
+}
+
+/// Pure endpoint selector (unit-testable without sockets): pick the
+/// runtime-control entry for `host_id` — the serving host, local-first (§11).
+/// An unconfigured `host_id` -> `None` (never a default/wrong endpoint): the
+/// factory is never set for it, so a `LaunchWaslSession` for that host fails
+/// gracefully with the existing typed `Protocol` error, never a panic and never
+/// a silent wrong endpoint.
+pub fn select_wasl_session_runtime(
+    cfg: &marsad_wasl_session::WaslSessionRuntimesConfig,
+    host_id: &str,
+) -> Option<marsad_wasl_session::WaslSessionRuntimeEntry> {
+    cfg.session_runtimes
+        .iter()
+        .find(|entry| entry.host_id == host_id)
+        .cloned()
+}
+
+// ---------------------------------------------------------------------------
 // §4.2 — wasl_event_lines (pure mapping)
 // ---------------------------------------------------------------------------
 

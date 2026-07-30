@@ -10,6 +10,7 @@ members = [
     "crates/marsad-hosts",
     "crates/marsad-transport",
     "crates/marsad-wasl",
+    "crates/marsad-wasl-session",
     "crates/marsad-lifecycle",
     "crates/marsad-notify",
     "crates/marsad-workstream",
@@ -58,6 +59,7 @@ marsad-store = { path = "crates/marsad-store" }
 marsad-hosts = { path = "crates/marsad-hosts" }
 marsad-transport = { path = "crates/marsad-transport" }
 marsad-wasl = { path = "crates/marsad-wasl" }
+marsad-wasl-session = { path = "crates/marsad-wasl-session" }
 marsad-lifecycle = { path = "crates/marsad-lifecycle" }
 marsad-notify = { path = "crates/marsad-notify" }
 marsad-workstream = { path = "crates/marsad-workstream" }

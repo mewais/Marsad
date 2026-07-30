@@ -25,6 +25,21 @@ fn default_wasl_connector_factory(
     ))
 }
 
+/// Default `set_wasl_session_provider_factory` (docs/design/wasl-backend-plan.md
+/// §6.1/§7): a real `RealWaslSessionProvider` bound to the serving host's
+/// runtime-control endpoint. Only ever reached from `serve()`'s real-IO block —
+/// it builds a live HTTP client — so, like `default_wasl_connector_factory`, it
+/// lives here rather than in `wasl.rs` (which is compiled under coverage too).
+fn default_wasl_session_provider_factory(
+    entry: &marsad_wasl_session::WaslSessionRuntimeEntry,
+) -> Box<dyn marsad_wasl_session::WaslSessionProvider> {
+    Box::new(marsad_wasl_session::RealWaslSessionProvider::new(
+        marsad_wasl_session::WaslSessionClientConfig {
+            base_url: entry.base_url.clone(),
+        },
+    ))
+}
+
 impl Agent {
     /// Blocking event loop — real socket/pipe IO, excluded from the coverage
     /// build because it requires a live socket/pipe and loops forever.
@@ -466,6 +481,38 @@ impl Agent {
                     "marsad-agent: wasl connector started for host {} ({})",
                     entry.host_id, entry.url
                 );
+            }
+        }
+
+        // ── X6 Wasl Backend (Wasl-managed session) wiring ──────────────────
+        // (docs/design/wasl-backend-plan.md §6.1/§7). Strictly optional (§2
+        // load-bearing optionality): absent `<data_root>/wasl.json` OR an
+        // operators-only `wasl.json` (no `session_runtimes`) means
+        // `load_wasl_session_config` is `None`, no factory is ever set, and a
+        // `LaunchWaslSession` for any host fails gracefully with the existing
+        // typed `Protocol` error — never a panic, never a silent wrong endpoint.
+        //
+        // Local-first (§11): a daemon serves ONE host; select that host's
+        // runtime-control entry and register the ZERO-ARG provider factory over
+        // it (the Wasl target key travels on each `LaunchWaslSession`, so the
+        // provider needs no per-call argument). The provider itself is built
+        // lazily by `handle_launch_wasl_session` on the first launch that needs
+        // it, so no HTTP IO happens here unless a Wasl-backed session is ever
+        // launched. The `set_wasl_session_provider_factory` override (a test
+        // seam) takes precedence, exactly as the X1 factory override does above.
+        if self.wasl_session_provider_factory.0.is_none() {
+            if let Some(session_cfg) = crate::load_wasl_session_config(&data_root) {
+                // The serving host, local-first. Remote/cross-host Wasl backends
+                // are out of scope for this phase (§11).
+                if let Some(entry) = crate::select_wasl_session_runtime(&session_cfg, "local") {
+                    eprintln!(
+                        "marsad-agent: wasl session provider factory registered for host {} ({})",
+                        entry.host_id, entry.base_url
+                    );
+                    self.set_wasl_session_provider_factory(Box::new(move || {
+                        default_wasl_session_provider_factory(&entry)
+                    }));
+                }
             }
         }
 
@@ -919,6 +966,77 @@ impl Agent {
                 } else {
                     ("claude".to_string(), None, None)
                 };
+
+            // ── X6 Wasl Backend observe thread (docs/design/wasl-backend-plan.md
+            // §6.1) ────────────────────────────────────────────────────────────
+            // A just-accepted `LaunchWaslSession` gets a per-session observe
+            // thread that pumps the session's `attach(after_seq)` event stream and
+            // broadcasts the mapped `WaslSessionEvent` lines to every subscriber —
+            // byte-identical mechanics to `spawn_session_reader`'s "Broadcast to
+            // all subscribers". WITHOUT it a launched Wasl-managed session accepts
+            // prompts but no reply/transcript/native-gate/status change ever
+            // reaches core (the audit gap `wasl_session_observe.rs` closes).
+            //
+            // The client `Arc` in the registry is not `Send` (its trait is only
+            // `Send`, not `Sync`), so we obtain an independently-owned `Box<dyn
+            // WaslSessionClient>` (which IS `Send`) via create-or-reuse — the same
+            // live target the synchronous IPC arms drive. On a fresh launch nothing
+            // is persisted yet, so `persisted_last_seq == 0`. The thread loops the
+            // pure `pump_wasl_observe`, reconnecting with `reader.rs`'s existing
+            // backoff constants while `wasl_observe_should_reconnect` says so (a
+            // non-terminal disconnect while the Wasl session may still be alive);
+            // a terminal `SessionExited` ends the thread (Marsad does not own the
+            // process — there is nothing to reconnect to).
+            if out_lines.is_ok() && cmd.line.contains("\"LaunchWaslSession\"") {
+                if let Some((sid, key)) = serde_json::from_str::<serde_json::Value>(&cmd.line)
+                    .ok()
+                    .and_then(|v| {
+                        let sid = v.get("session_id")?.as_str()?.to_string();
+                        let key = v.get("wasl_target_key")?.clone();
+                        Some((sid, key))
+                    })
+                {
+                    // A fresh launch has no persisted binding yet → resume/reset
+                    // coincide at 0 (`wasl_reconnect_after_seq(_, 0)` == 0).
+                    match self.wasl_observe_client_and_after_seq(key, 0) {
+                        Ok((client, mut after_seq)) => {
+                            let subs_for_observe = Arc::clone(&subscribers);
+                            std::thread::spawn(move || {
+                                let client = client;
+                                let mut backoff = crate::RECONNECT_INITIAL_BACKOFF_SECS;
+                                loop {
+                                    let subs = Arc::clone(&subs_for_observe);
+                                    let mut emit = |line: String| {
+                                        if let Ok(s) = subs.lock() {
+                                            s.iter().for_each(|tx| {
+                                                let _ = tx.send(line.clone());
+                                            });
+                                        }
+                                    };
+                                    let end = crate::pump_wasl_observe(
+                                        &sid, &*client, after_seq, &mut emit,
+                                    );
+                                    if !crate::wasl_observe_should_reconnect(&end) {
+                                        // Terminal SessionExited — the process is
+                                        // Wasl's and is gone; end gracefully.
+                                        break;
+                                    }
+                                    // Bare disconnect: resume from the high-water
+                                    // seq after a bounded backoff (no gap/dup via
+                                    // Wasl's `events(after_seq)` replay).
+                                    after_seq = end.last_seq;
+                                    std::thread::sleep(std::time::Duration::from_secs(backoff));
+                                    backoff = crate::reconnect_backoff_next(backoff);
+                                }
+                            });
+                            eprintln!("marsad-agent: wasl observe thread started for session");
+                        }
+                        Err(e) => {
+                            eprintln!("marsad-agent: wasl observe thread not started: {e}");
+                        }
+                    }
+                }
+            }
 
             // Send reply; if the client thread is gone, ignore the error.
             let _ = cmd.reply_tx.send(AgentReply {

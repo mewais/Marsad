@@ -122,6 +122,46 @@ impl Agent {
                 outcome,
                 reason,
             } => self.handle_answer_wasl_gate(host_id, gate_id, outcome, reason),
+            // X6 Wasl Backend (docs/design/wasl-backend-plan.md §7): the six
+            // inbound `*Wasl*` session-control arms. Each routes to a
+            // `WaslSessionClient` in the per-session registry; every one that
+            // makes a potentially-blocking client call drops the map lock first
+            // (§8.1). See `wasl_session.rs`.
+            marsad_proto::IpcMsg::LaunchWaslSession {
+                session_id,
+                host_id,
+                wasl_target_key,
+                name,
+            } => self.handle_launch_wasl_session(session_id, host_id, wasl_target_key, name),
+            marsad_proto::IpcMsg::SendWaslPrompt {
+                session_id,
+                text,
+                idempotency_key,
+                busy_policy,
+                max_wait_ms,
+            } => self.handle_send_wasl_prompt(
+                session_id,
+                text,
+                idempotency_key,
+                busy_policy,
+                max_wait_ms,
+            ),
+            marsad_proto::IpcMsg::AttachWaslSession {
+                session_id,
+                after_seq,
+            } => self.handle_attach_wasl_session(session_id, after_seq),
+            marsad_proto::IpcMsg::AnswerWaslNativeGate {
+                session_id,
+                gate_id,
+                outcome,
+                reason,
+            } => self.handle_answer_wasl_native_gate(session_id, gate_id, outcome, reason),
+            marsad_proto::IpcMsg::InterruptWaslSession { session_id } => {
+                self.handle_interrupt_wasl_session(session_id)
+            }
+            marsad_proto::IpcMsg::StopWaslSession { session_id, drain } => {
+                self.handle_stop_wasl_session(session_id, drain)
+            }
             // WAVE 3b (pty escape-hatch terminal). `cols`/`rows` are dropped
             // here (destructured with `..`): the real spawn happens in
             // `serve.rs` (needs the `subscribers` broadcast list, which only

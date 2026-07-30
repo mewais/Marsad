@@ -361,6 +361,43 @@ impl TranscriptReader for RealTranscript {
 }
 
 // ---------------------------------------------------------------------------
+// RuntimeOwner (X6 — Wasl Backend, wasl-backend-plan.md §6.1)
+// ---------------------------------------------------------------------------
+
+/// Who owns this session's underlying runtime.
+///
+/// `MarsadManaged` = today's model (the agent owns a claude/codex/opencode
+/// process in a tmux/ConPTY container). `WaslManaged` = the NEW backend: the
+/// process is Wasl's; Marsad is a thin client of a Wasl `DeliveryTarget`.
+/// Defaults to `MarsadManaged` so every existing session and serialized record
+/// is unchanged (load-bearing optionality, §2).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum RuntimeOwner {
+    #[default]
+    MarsadManaged,
+    /// Carries the persisted binding so core can map Marsad-session-id ⇄
+    /// Wasl-target-id, route prompt/attach/gate/interrupt/stop to the right
+    /// client, AND reconnect to a still-alive Wasl session after a restart.
+    WaslManaged { binding: WaslSessionBinding },
+}
+
+/// The persisted identity of a Wasl-managed session's underlying target
+/// (§6.1). Persisted (via `marsad_store::PersistedWaslBinding`) because the Wasl
+/// session's lifetime is independent of Marsad's process lifetime: if core/the
+/// GUI restarts while the Wasl session is still alive, Marsad must reconnect to
+/// it rather than losing track of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WaslSessionBinding {
+    /// Wasl-side stable target id (`target_id()`) — the handle to reattach to.
+    pub target_id: String,
+    /// The node the target lives on. Local-first this phase.
+    pub host_id: String,
+    /// The opaque Wasl target key used to re-obtain the client via
+    /// `WaslSessionProvider::get_or_start` on reconnect. Relayed verbatim.
+    pub provider_key: serde_json::Value,
+}
+
+// ---------------------------------------------------------------------------
 // Per-session record
 // ---------------------------------------------------------------------------
 
@@ -407,6 +444,31 @@ struct SessionRecord {
     /// state. `live=false` (Paused) takes priority in the UI. Defaults to
     /// `Connected` (local sessions and until the agent says otherwise).
     conn_health: marsad_proto::ConnHealth,
+    /// X6 (Wasl Backend, §6.1): who owns this session's runtime. Default
+    /// `MarsadManaged` (today's model, unchanged); `WaslManaged` routes the
+    /// dedicated `*Wasl*` IPC family and folds the Wasl observe stream.
+    runtime_owner: RuntimeOwner,
+    /// X6: the highest observe-stream `seq` folded for this WaslManaged session
+    /// (the "last observed seq" of §6.1 step 2). On reconnect, `attach_session`
+    /// re-issues `AttachWaslSession { after_seq = wasl_last_seq }` so the stream
+    /// resumes with no gap and no dup. Persisted alongside the binding.
+    wasl_last_seq: u64,
+    /// X6: observe-stream seqs already folded, for dedup (a replay overlap after
+    /// an `ObserveLost`/reattach must not double-fold — §10.4).
+    wasl_seen_seqs: std::collections::HashSet<u64>,
+    /// X6: transcript index of the currently-open (in-progress) Wasl assistant
+    /// entry, so a run of `AssistantDelta`s APPENDS to the same entry rather than
+    /// creating one per delta (§10.4). `None` between turns.
+    wasl_open_assistant: Option<usize>,
+    /// X6: whether the most recent Wasl turn has seen its terminal event
+    /// (`TurnCompleted`/`TurnFailed`) with no newer `TurnAccepted` since. A delta
+    /// arriving while this is `true` is a POST-TERMINAL stray → ignored, not
+    /// folded (§10.4 defensive case). Cleared by the next `TurnAccepted`.
+    wasl_turn_closed: bool,
+    /// X6: pending native-gate details keyed by `gate_id`, so
+    /// `answer_wasl_native_gate` can reconstruct the exact `Gate::Permission`
+    /// (and thus the stable `DecisionId`) to record + relay.
+    wasl_native_gates: HashMap<String, marsad_wasl_session::WaslNativeGateDetail>,
 }
 
 // ---------------------------------------------------------------------------

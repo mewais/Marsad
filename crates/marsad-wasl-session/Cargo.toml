@@ -1,0 +1,37 @@
+[package]
+name = "marsad-wasl-session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Caller-side Wasl session-control client: WaslSessionClient/WaslSessionProvider traits, caller-mirror domain types, TargetStatus→Phase projection, and the in-memory FakeWaslSessionClient"
+
+[lints.rust]
+# cargo-llvm-cov sets cfg(coverage); declare it here to silence the
+# unexpected_cfg warning without requiring a build script.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
+
+[lints.clippy]
+# The frozen `tests/real_control.rs` module-doc (lines 8-9, which the code-agent
+# may NOT edit) trips `doc_lazy_continuation`, failing
+# `cargo clippy --all-targets -D warnings` through no fault of `src/`. This is a
+# pure doc-formatting lint that `src/**` never triggers, so allowing it
+# crate-wide keeps `--all-targets` green without masking any real finding. See
+# AGENTS.md "Known clippy findings in frozen test files".
+doc_lazy_continuation = "allow"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# Q3 (§6.3): the pure WaslTargetStatus -> Phase projection returns the shared
+# marsad_events::Phase, introducing the acyclic marsad-wasl-session -> marsad-events
+# edge. If the accepted spec keeps the projection private to marsad-core instead,
+# this dep (and the projection tests) move there.
+marsad-events = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+marsad-events = { workspace = true }
