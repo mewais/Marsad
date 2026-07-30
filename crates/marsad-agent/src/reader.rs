@@ -957,6 +957,11 @@ pub(crate) fn spawn_session_reader(
                                     elicitation: cr.elicitation_message.is_some(),
                                     acp_response_id: None,
                                     codex_method: None,
+                                    // The claude gate event IS this raw stream-json
+                                    // line (broadcast verbatim below) — store it so a
+                                    // reconnecting client can have the gate replayed.
+                                    event: serde_json::from_str(raw)
+                                        .unwrap_or_else(|_| serde_json::json!({ "raw": raw })),
                                 });
                             }
                         }
@@ -1163,6 +1168,12 @@ pub(crate) fn spawn_session_reader(
                                                     elicitation: false,
                                                     acp_response_id: Some(acp_request_id.clone()),
                                                     codex_method: None,
+                                                    // The translated control_request broadcast just
+                                                    // below — stored for replay on re-subscribe.
+                                                    event: acp_translate::acp_permission_to_control_request_event(
+                                                        &unique_id,
+                                                        &params,
+                                                    ),
                                                 });
                                             }
                                         }
@@ -1422,6 +1433,9 @@ pub(crate) fn spawn_session_reader(
                                                     elicitation: is_elicit,
                                                     acp_response_id: Some(raw_id.clone()),
                                                     codex_method: Some(method.clone()),
+                                                    // The translated control_request broadcast just
+                                                    // below — stored for replay on re-subscribe.
+                                                    event: event.clone(),
                                                 });
                                             }
                                         }

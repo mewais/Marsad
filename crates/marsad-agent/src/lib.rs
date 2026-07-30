@@ -434,6 +434,14 @@ struct PendingGate {
     /// The answer path keys the JSON-RPC reply shape off it ({decision} vs
     /// {permissions} vs {answers} vs {action,content}). `None` for claude/opencode.
     codex_method: Option<String>,
+    /// The exact gate event Value that was broadcast to subscribers as
+    /// `AgentEvent{session_id, event}` when this gate was raised (claude's raw
+    /// control_request, or the translated control_request for opencode/codex).
+    /// Retained so `handle_subscribe` can REPLAY the gate to a client that
+    /// (re)connects after the one-shot broadcast — e.g. a desktop restart while
+    /// the durable agent + a blocked session stay alive. Without replay the
+    /// reconnecting GUI never learns of a gate the session is still stuck on.
+    event: serde_json::Value,
 }
 
 /// Per-session pending-gate registry. Shared (Arc) between the FIFO reader

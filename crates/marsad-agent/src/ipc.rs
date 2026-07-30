@@ -185,6 +185,28 @@ impl Agent {
                 ));
             }
         }
+
+        // Replay every OPEN gate. A `can_use_tool`/permission gate is otherwise a
+        // one-shot broadcast to whoever was subscribed the instant it was raised.
+        // A desktop that restarts (reinstall/crash) while this durable daemon and a
+        // blocked session stay ALIVE re-subscribes here, but the adopted agent stays
+        // stuck on the gate and never re-emits it — so without this replay the gate
+        // is invisible in the new client and the session looks hung. `pending_gates`
+        // holds exactly the still-unanswered gates (each removed on answer), so we
+        // re-deliver each as the same `AgentEvent{session_id, event}` the reader
+        // originally broadcast; core's on_agent_line renders it and dedups by
+        // request_id, so a replay to an already-populated client is idempotent.
+        {
+            let gates = self.pending_gates.0.lock().unwrap();
+            for (sid, queue) in gates.iter() {
+                for gate in queue.iter() {
+                    out.push(marsad_proto::encode_ipc(&marsad_proto::IpcMsg::AgentEvent {
+                        session_id: sid.clone(),
+                        event: gate.event.clone(),
+                    }));
+                }
+            }
+        }
         Ok(out)
     }
 
@@ -251,5 +273,108 @@ fn parse_hook_event(
         "SessionEnd" => Ok(marsad_events::HookEvent::SessionEnd),
         "PreCompact" => Ok(marsad_events::HookEvent::PreCompact),
         other => Err(AgentError::Protocol(format!("unknown hook type: {other}"))),
+    }
+}
+
+// Gated to the same condition as `pending_gates`/`session_writers` (real-IO
+// registries exist only when `not(coverage)`), so the inline test compiles under
+// plain `cargo test` and is excluded from the coverage build like those fields.
+#[cfg(all(test, not(coverage)))]
+mod subscribe_gate_replay_tests {
+    use super::*;
+    use crate::{AgentConfig, ListenSpec, PendingGate};
+
+    fn fresh_agent() -> Agent {
+        Agent::with_fakes(
+            AgentConfig {
+                listen: ListenSpec::Stdio,
+                data_root: "/tmp/marsad-agent-test".to_string(),
+            },
+            Box::new(marsad_lifecycle::FakeContainer::new()),
+            Box::new(marsad_notify::CaptureNotifier::new()),
+            Box::new(marsad_store::Store::new(Box::new(
+                marsad_store::MemoryBackend::new(),
+            ))),
+        )
+        .expect("Agent::with_fakes must succeed")
+    }
+
+    fn seed_gate(a: &Agent, sid: &str, req: &str) {
+        a.pending_gates
+            .0
+            .lock()
+            .unwrap()
+            .entry(sid.to_string())
+            .or_default()
+            .push_back(PendingGate {
+                request_id: req.to_string(),
+                input: serde_json::json!({ "tool_name": "Bash" }),
+                elicitation: false,
+                acp_response_id: None,
+                codex_method: None,
+                event: serde_json::json!({
+                    "type": "control_request",
+                    "request_id": req,
+                    "request": { "subtype": "can_use_tool", "tool_name": "Bash" }
+                }),
+            });
+    }
+
+    fn agent_event_gates(out: &[String]) -> Vec<(String, serde_json::Value)> {
+        out.iter()
+            .filter_map(|l| match marsad_proto::parse_ipc(l) {
+                Ok(marsad_proto::IpcMsg::AgentEvent { session_id, event }) => {
+                    Some((session_id, event))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn subscribe_acks_then_replays_open_gate_as_agent_event() {
+        let mut a = fresh_agent();
+        seed_gate(&a, "s1", "req-1");
+
+        let out = a.handle_subscribe().expect("subscribe");
+
+        // First line is always the Subscribed ack.
+        assert!(matches!(
+            marsad_proto::parse_ipc(&out[0]),
+            Ok(marsad_proto::IpcMsg::Subscribed { .. })
+        ));
+        // The open gate is replayed as the same AgentEvent the reader broadcast.
+        let gates = agent_event_gates(&out);
+        assert_eq!(gates.len(), 1, "exactly one gate replayed");
+        assert_eq!(gates[0].0, "s1");
+        assert_eq!(gates[0].1["request_id"], "req-1");
+        assert_eq!(gates[0].1["request"]["subtype"], "can_use_tool");
+    }
+
+    #[test]
+    fn subscribe_replays_a_burst_and_is_not_consumed_on_re_subscribe() {
+        let mut a = fresh_agent();
+        // A single turn can block on a burst of gates (deque preserves all).
+        seed_gate(&a, "s1", "req-1");
+        seed_gate(&a, "s1", "req-2");
+
+        let first = a.handle_subscribe().expect("subscribe #1");
+        let second = a.handle_subscribe().expect("subscribe #2");
+
+        // Both open gates replayed, in order.
+        let g1 = agent_event_gates(&first);
+        assert_eq!(g1.len(), 2);
+        assert_eq!(g1[0].1["request_id"], "req-1");
+        assert_eq!(g1[1].1["request_id"], "req-2");
+        // The registry is the durable source of truth — NOT consumed by a replay,
+        // so a second (re)subscribe replays the still-open gates again.
+        assert_eq!(agent_event_gates(&second).len(), 2);
+    }
+
+    #[test]
+    fn subscribe_with_no_open_gates_replays_none() {
+        let mut a = fresh_agent();
+        let out = a.handle_subscribe().expect("subscribe");
+        assert!(agent_event_gates(&out).is_empty());
     }
 }
