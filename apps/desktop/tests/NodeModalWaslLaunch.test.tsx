@@ -17,7 +17,6 @@
  * + mocked api module). All api mocks forward to the real module for everything
  * not explicitly overridden.
  */
-import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { VmProvider, VmState } from "../src/bridge/useVm";
@@ -34,18 +33,18 @@ import type { CapabilitiesView } from "../src/bridge/types";
 
 const launchWaslSession = vi.fn(async (_args: unknown) => "mock-wasl-session-1");
 const launchSession = vi.fn(async (_args: unknown) => "mock-sess-1");
-const assignSession = vi.fn(async () => {});
+const assignSession = vi.fn(async (_args: unknown) => {});
 
 vi.mock("../src/bridge/api", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/bridge/api")>();
   return {
     ...original,
-    launchSession: (...args: unknown[]) => launchSession(...args),
+    launchSession: (args: unknown) => launchSession(args),
     // launchWaslSession does not exist yet in api.ts — the mock defines it so
     // the test can spy on it.  When the coder adds the real function the test
     // will wire through automatically.
-    launchWaslSession: (...args: unknown[]) => launchWaslSession(...args),
-    assignSession: (...args: unknown[]) => assignSession(...args),
+    launchWaslSession: (args: unknown) => launchWaslSession(args),
+    assignSession: (args: unknown) => assignSession(args),
     fetchGraph: vi.fn(async () => null),
     fetchBoard: vi.fn(async () => ({
       summary: { workstreams: 0, sessions: 0, hosts: 0 },
@@ -392,7 +391,6 @@ describe("api.ts — launchWaslSession export", () => {
   it("launchWaslSession is exported from src/bridge/api.ts", async () => {
     // RED: the function does not exist yet; the import will resolve undefined.
     const apiModule = await import("../src/bridge/api");
-    // @ts-expect-error — not yet in api.ts
     expect(typeof (apiModule as Record<string, unknown>).launchWaslSession).toBe("function");
   });
 });

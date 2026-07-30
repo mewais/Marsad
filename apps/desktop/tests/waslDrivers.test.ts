@@ -26,7 +26,6 @@ import { describe, it, expect } from "vitest";
 // load time even when named exports are absent.
 // ---------------------------------------------------------------------------
 
-// @ts-expect-error — isWaslDriver / waslProtocol do not exist yet
 import * as driversModule from "../src/bridge/drivers";
 
 const { DRIVERS, DRIVER_COLOR } = driversModule as {
