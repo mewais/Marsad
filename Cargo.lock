@@ -132,6 +132,7 @@ dependencies = [
  "marsad-store",
  "marsad-transport",
  "marsad-wasl",
+ "marsad-wasl-session",
  "portable-pty",
  "serde",
  "serde_json",
@@ -153,6 +154,7 @@ dependencies = [
  "marsad-transport",
  "marsad-viewmodel",
  "marsad-wasl",
+ "marsad-wasl-session",
  "marsad-workstream",
  "serde",
  "serde_json",
@@ -494,6 +496,16 @@ dependencies = [
 name = "marsad-wasl"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "marsad-wasl-session"
+version = "0.1.0"
+dependencies = [
+ "marsad-events",
  "serde",
  "serde_json",
  "thiserror",

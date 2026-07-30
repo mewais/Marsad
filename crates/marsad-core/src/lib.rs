@@ -354,6 +354,43 @@ impl TranscriptReader for RealTranscript {
 }
 
 // ---------------------------------------------------------------------------
+// RuntimeOwner (X6 — Wasl Backend, wasl-backend-plan.md §6.1)
+// ---------------------------------------------------------------------------
+
+/// Who owns this session's underlying runtime.
+///
+/// `MarsadManaged` = today's model (the agent owns a claude/codex/opencode
+/// process in a tmux/ConPTY container). `WaslManaged` = the NEW backend: the
+/// process is Wasl's; Marsad is a thin client of a Wasl `DeliveryTarget`.
+/// Defaults to `MarsadManaged` so every existing session and serialized record
+/// is unchanged (load-bearing optionality, §2).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum RuntimeOwner {
+    #[default]
+    MarsadManaged,
+    /// Carries the persisted binding so core can map Marsad-session-id ⇄
+    /// Wasl-target-id, route prompt/attach/gate/interrupt/stop to the right
+    /// client, AND reconnect to a still-alive Wasl session after a restart.
+    WaslManaged { binding: WaslSessionBinding },
+}
+
+/// The persisted identity of a Wasl-managed session's underlying target
+/// (§6.1). Persisted (via `marsad_store::PersistedWaslBinding`) because the Wasl
+/// session's lifetime is independent of Marsad's process lifetime: if core/the
+/// GUI restarts while the Wasl session is still alive, Marsad must reconnect to
+/// it rather than losing track of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WaslSessionBinding {
+    /// Wasl-side stable target id (`target_id()`) — the handle to reattach to.
+    pub target_id: String,
+    /// The node the target lives on. Local-first this phase.
+    pub host_id: String,
+    /// The opaque Wasl target key used to re-obtain the client via
+    /// `WaslSessionProvider::get_or_start` on reconnect. Relayed verbatim.
+    pub provider_key: serde_json::Value,
+}
+
+// ---------------------------------------------------------------------------
 // Per-session record
 // ---------------------------------------------------------------------------
 
@@ -400,6 +437,31 @@ struct SessionRecord {
     /// state. `live=false` (Paused) takes priority in the UI. Defaults to
     /// `Connected` (local sessions and until the agent says otherwise).
     conn_health: marsad_proto::ConnHealth,
+    /// X6 (Wasl Backend, §6.1): who owns this session's runtime. Default
+    /// `MarsadManaged` (today's model, unchanged); `WaslManaged` routes the
+    /// dedicated `*Wasl*` IPC family and folds the Wasl observe stream.
+    runtime_owner: RuntimeOwner,
+    /// X6: the highest observe-stream `seq` folded for this WaslManaged session
+    /// (the "last observed seq" of §6.1 step 2). On reconnect, `attach_session`
+    /// re-issues `AttachWaslSession { after_seq = wasl_last_seq }` so the stream
+    /// resumes with no gap and no dup. Persisted alongside the binding.
+    wasl_last_seq: u64,
+    /// X6: observe-stream seqs already folded, for dedup (a replay overlap after
+    /// an `ObserveLost`/reattach must not double-fold — §10.4).
+    wasl_seen_seqs: std::collections::HashSet<u64>,
+    /// X6: transcript index of the currently-open (in-progress) Wasl assistant
+    /// entry, so a run of `AssistantDelta`s APPENDS to the same entry rather than
+    /// creating one per delta (§10.4). `None` between turns.
+    wasl_open_assistant: Option<usize>,
+    /// X6: whether the most recent Wasl turn has seen its terminal event
+    /// (`TurnCompleted`/`TurnFailed`) with no newer `TurnAccepted` since. A delta
+    /// arriving while this is `true` is a POST-TERMINAL stray → ignored, not
+    /// folded (§10.4 defensive case). Cleared by the next `TurnAccepted`.
+    wasl_turn_closed: bool,
+    /// X6: pending native-gate details keyed by `gate_id`, so
+    /// `answer_wasl_native_gate` can reconstruct the exact `Gate::Permission`
+    /// (and thus the stable `DecisionId`) to record + relay.
+    wasl_native_gates: HashMap<String, marsad_wasl_session::WaslNativeGateDetail>,
 }
 
 // ---------------------------------------------------------------------------
@@ -599,9 +661,9 @@ impl Core {
             // (claude_bin/setup/env) is applied via update so the seeded entry
             // carries it, rather than appending a duplicate.
             if h.is_local {
-                let _ = self
-                    .hosts
-                    .update(&h.id, h.claude_bin, h.setup, h.env, None, h.agent_commands);
+                let _ =
+                    self.hosts
+                        .update(&h.id, h.claude_bin, h.setup, h.env, None, h.agent_commands);
             } else {
                 self.hosts.load_remote(
                     &h.id,
@@ -658,11 +720,31 @@ impl Core {
             .store
             .restore()
             .map_err(|e| CoreError::Agent(format!("restore sessions: {e:?}")))?;
+        // X6 (Wasl Backend, §6.1): restore the per-session Wasl runtime bindings
+        // so a WaslManaged session reloads as `WaslManaged` (routing the `*Wasl*`
+        // family) rather than degrading to `MarsadManaged`. Stored as their own
+        // records so this is fully additive to the existing session schema.
+        let wasl_bindings = self.store.wasl_bindings().unwrap_or_default();
         let mut updates = Vec::new();
         for s in restored.sessions {
             if self.sessions.contains_key(&s.id) {
                 continue;
             }
+            // Recover the runtime owner (and the last observed seq) from the
+            // persisted binding, if any. Absent binding → MarsadManaged (default).
+            let (runtime_owner, wasl_last_seq) = match wasl_bindings.get(&s.id) {
+                Some(b) => (
+                    RuntimeOwner::WaslManaged {
+                        binding: WaslSessionBinding {
+                            target_id: b.target_id.clone(),
+                            host_id: b.host_id.clone(),
+                            provider_key: b.provider_key.clone(),
+                        },
+                    },
+                    b.last_seq,
+                ),
+                None => (RuntimeOwner::MarsadManaged, 0),
+            };
             // opencode owns no claude `~/.claude` transcript — its history comes
             // from the ACP stream. Reading the project's claude transcript here
             // would splice a CO-LOCATED claude session's history under an opencode
@@ -726,15 +808,20 @@ impl Core {
                 if let Some(sid) = s.session_id.as_deref().filter(|s| !s.is_empty()) {
                     let usage_agg = self.transcript.session_usage(&s.project, sid);
                     if !usage_agg.is_empty() {
-                        let total_tokens: u64 = usage_agg.values().map(|u| {
-                            u.input_tokens
-                                .saturating_add(u.output_tokens)
-                                .saturating_add(u.cache_read_input_tokens)
-                                .saturating_add(u.cache_creation_input_tokens)
-                        }).sum();
+                        let total_tokens: u64 = usage_agg
+                            .values()
+                            .map(|u| {
+                                u.input_tokens
+                                    .saturating_add(u.output_tokens)
+                                    .saturating_add(u.cache_read_input_tokens)
+                                    .saturating_add(u.cache_creation_input_tokens)
+                            })
+                            .sum();
                         if total_tokens > 0 {
                             state.tokens = total_tokens;
-                            let window = state.model.as_deref()
+                            let window = state
+                                .model
+                                .as_deref()
                                 .map(marsad_events::SessionState::context_window_for)
                                 .unwrap_or(200_000);
                             let pct = (total_tokens as f64 / window as f64 * 100.0) as f32;
@@ -773,6 +860,12 @@ impl Core {
                     // it actually reconnects. No optimism — truth on confirmation.
                     live: false,
                     conn_health: marsad_proto::ConnHealth::Connected,
+                    runtime_owner,
+                    wasl_last_seq,
+                    wasl_seen_seqs: std::collections::HashSet::new(),
+                    wasl_open_assistant: None,
+                    wasl_turn_closed: false,
+                    wasl_native_gates: HashMap::new(),
                 },
             );
             let sv = self.make_session_view(&s.id, self.sessions.get(&s.id).unwrap());
@@ -1098,6 +1191,208 @@ impl Core {
         self.launch_session_with_id(id, spec)
     }
 
+    /// X6 (Wasl Backend, §6.1): launch a `WaslManaged` session — one whose
+    /// underlying process is owned END-TO-END by Wasl. Emits `LaunchWaslSession`
+    /// (NOT `LaunchSession` — no container/argv semantics apply), registers a
+    /// `RuntimeOwner::WaslManaged` record, and PERSISTS the `WaslSessionBinding`
+    /// (as its own store record) so a fresh `Core` over the same backend can
+    /// reconnect after a restart. Returns the Marsad session id.
+    pub fn launch_wasl_session(
+        &mut self,
+        host_id: &str,
+        wasl_target_key: serde_json::Value,
+        name: Option<String>,
+    ) -> Result<String, CoreError> {
+        let id = new_session_id();
+
+        // Drive the agent: build the WaslSessionClient behind its registry.
+        self.send_ipc(&IpcMsg::LaunchWaslSession {
+            session_id: id.clone(),
+            host_id: host_id.to_string(),
+            wasl_target_key: wasl_target_key.clone(),
+            name: name.clone(),
+        })?;
+
+        let binding = WaslSessionBinding {
+            // target_id is Wasl-assigned and learned on connect; unknown at launch
+            // time (the provider maps the key → a target inside the agent). Empty
+            // until a status/event surfaces it; the provider_key is what reconnect
+            // actually keys on.
+            target_id: String::new(),
+            host_id: host_id.to_string(),
+            provider_key: wasl_target_key.clone(),
+        };
+
+        // Persist a session record + the Wasl binding so a fresh Core restores
+        // this as WaslManaged (routing the `*Wasl*` family) and can reconnect.
+        // A WaslManaged session has no claude container/argv; the persisted
+        // `driver` is a display marker ("wasl") and every claude-only field is
+        // empty/default.
+        let custom_name = name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let persisted_name = custom_name.clone().unwrap_or_else(|| id.clone());
+        let persisted = marsad_store::PersistedSession {
+            id: id.clone(),
+            session_id: None,
+            name: persisted_name,
+            host_id: host_id.to_string(),
+            host_target: None,
+            claude_bin: None,
+            setup: None,
+            env: Vec::new(),
+            project: String::new(),
+            branch: "main".to_string(),
+            model: String::new(),
+            last_phase: "Starting".to_string(),
+            posture: None,
+            disallowed_tools: Vec::new(),
+            driver: "wasl".to_string(),
+            slash_commands: Vec::new(),
+            tools: Vec::new(),
+            mcp_servers: Vec::new(),
+        };
+        // Best-effort: a store error must not fail the launch (the session is
+        // already live in-memory + driven over IPC); reconnect degrades but the
+        // running session is unaffected. Mirrors the store-write disposition
+        // elsewhere in this file.
+        let _ = self.store.upsert_session(&persisted);
+        let _ = self
+            .store
+            .upsert_wasl_binding(&marsad_store::PersistedWaslBinding {
+                session_id: id.clone(),
+                target_id: binding.target_id.clone(),
+                host_id: binding.host_id.clone(),
+                provider_key: binding.provider_key.clone(),
+                last_seq: 0,
+            });
+
+        let mut state = SessionState::initial();
+        state.phase = Phase::Starting;
+        self.session_order.push(id.clone());
+        self.sessions.insert(
+            id.clone(),
+            SessionRecord {
+                project: String::new(),
+                host_id: host_id.to_string(),
+                state,
+                changes: Vec::new(),
+                transcript: Vec::new(),
+                seen_msg_ids: std::collections::HashSet::new(),
+                name: custom_name,
+                shell_running: false,
+                // Display driver only — the real driver is Wasl's (§6.1).
+                driver: "wasl".to_string(),
+                live: true,
+                conn_health: marsad_proto::ConnHealth::Connected,
+                runtime_owner: RuntimeOwner::WaslManaged { binding },
+                wasl_last_seq: 0,
+                wasl_seen_seqs: std::collections::HashSet::new(),
+                wasl_open_assistant: None,
+                wasl_turn_closed: false,
+                wasl_native_gates: HashMap::new(),
+            },
+        );
+
+        // Auto-create the single-node fast-lane workstream, mirroring
+        // launch_session_with_id, so a WaslManaged session shows on the board too.
+        if !self.membership.contains_key(&id) {
+            let record = self.sessions.get(&id).unwrap();
+            let ws_name = record
+                .name
+                .clone()
+                .unwrap_or_else(|| session_display_name(&record.project, &id));
+            let ws_id = format!("ws-{id}");
+            let ws = marsad_workstream::Workstream {
+                id: ws_id.clone(),
+                name: ws_name,
+                goal: String::new(),
+                profile: None,
+            };
+            let _ = self.store.upsert_workstream(&ws);
+            self.workstreams.push(ws);
+            self.membership.insert(id.clone(), ws_id.clone());
+            self.ws_leads.insert(ws_id, id.clone());
+            let _ = self.store.set_membership(&self.membership);
+        }
+
+        Ok(id)
+    }
+
+    /// X6 (§6.1): the runtime owner of `id`. Used by the centralized routing
+    /// methods and `answer_gate` to pick the MarsadManaged vs WaslManaged path.
+    fn runtime_owner(&self, id: &str) -> RuntimeOwner {
+        self.sessions
+            .get(id)
+            .map(|r| r.runtime_owner.clone())
+            .unwrap_or_default()
+    }
+
+    /// X6 centralized routing (§6.1): the RuntimeOwner match for "attach" happens
+    /// in EXACTLY ONE place. MarsadManaged → today's `AttachSession`; WaslManaged
+    /// → `AttachWaslSession { after_seq = wasl_last_seq }` (re-pump from the last
+    /// observed seq — the reconnect contract, §6.1 step 2).
+    fn attach_session_events(&mut self, id: &str) -> Result<(), CoreError> {
+        match self.runtime_owner(id) {
+            RuntimeOwner::MarsadManaged => self.send_ipc(&IpcMsg::AttachSession {
+                session_id: id.to_string(),
+            }),
+            RuntimeOwner::WaslManaged { .. } => {
+                let after_seq = self.sessions.get(id).map(|r| r.wasl_last_seq).unwrap_or(0);
+                self.send_ipc(&IpcMsg::AttachWaslSession {
+                    session_id: id.to_string(),
+                    after_seq,
+                })
+            }
+        }
+    }
+
+    /// X6 centralized routing (§6.1): the RuntimeOwner match for "interrupt".
+    fn interrupt_session_routed(&mut self, id: &str) -> Result<(), CoreError> {
+        match self.runtime_owner(id) {
+            RuntimeOwner::MarsadManaged => self.send_ipc(&IpcMsg::Interrupt {
+                session_id: id.to_string(),
+            }),
+            RuntimeOwner::WaslManaged { .. } => self.send_ipc(&IpcMsg::InterruptWaslSession {
+                session_id: id.to_string(),
+            }),
+        }
+    }
+
+    /// X6 centralized routing (§6.1): the RuntimeOwner match for "stop".
+    fn stop_session_routed(&mut self, id: &str) -> Result<(), CoreError> {
+        match self.runtime_owner(id) {
+            RuntimeOwner::MarsadManaged => self.send_ipc(&IpcMsg::StopSession {
+                session_id: id.to_string(),
+            }),
+            RuntimeOwner::WaslManaged { .. } => self.send_ipc(&IpcMsg::StopWaslSession {
+                session_id: id.to_string(),
+                drain: false,
+            }),
+        }
+    }
+
+    /// X6 centralized routing (§6.1): the RuntimeOwner match for "send prompt".
+    /// WaslManaged mints a fresh UUID idempotency key per human send (§4.4/§12 Q5)
+    /// and defaults to the Queue busy policy (§12 Q4).
+    fn send_session_prompt(&mut self, id: &str, text: &str) -> Result<(), CoreError> {
+        match self.runtime_owner(id) {
+            RuntimeOwner::MarsadManaged => self.send_ipc(&IpcMsg::SendPrompt {
+                session_id: id.to_string(),
+                text: text.to_string(),
+            }),
+            RuntimeOwner::WaslManaged { .. } => self.send_ipc(&IpcMsg::SendWaslPrompt {
+                session_id: id.to_string(),
+                text: text.to_string(),
+                idempotency_key: marsad_wasl_session::new_idempotency_key(),
+                busy_policy: "queue".to_string(),
+                max_wait_ms: 0,
+            }),
+        }
+    }
+
     /// Send the LaunchSession IPC for the given `id` and `spec`, seed the
     /// transcript, and register the session record.
     ///
@@ -1254,6 +1549,13 @@ impl Core {
                 // this to Paused if the launch never actually comes up.
                 live: true,
                 conn_health: marsad_proto::ConnHealth::Connected,
+                // A MarsadManaged launch (today's path) — unchanged behavior.
+                runtime_owner: RuntimeOwner::MarsadManaged,
+                wasl_last_seq: 0,
+                wasl_seen_seqs: std::collections::HashSet::new(),
+                wasl_open_assistant: None,
+                wasl_turn_closed: false,
+                wasl_native_gates: HashMap::new(),
             },
         );
 
@@ -1438,9 +1740,9 @@ impl Core {
 
     pub fn attach_session(&mut self, id: &str) -> Result<(), CoreError> {
         self.require_session(id)?;
-        self.send_ipc(&IpcMsg::AttachSession {
-            session_id: id.to_string(),
-        })
+        // X6 (§6.1): route by RuntimeOwner — MarsadManaged emits today's
+        // AttachSession; WaslManaged emits AttachWaslSession{after_seq}.
+        self.attach_session_events(id)
     }
 
     /// Stop a session: kill its running claude process (the agent drops the
@@ -1452,9 +1754,9 @@ impl Core {
     /// VmUpdates the bridge emits so the badge flips to Stale immediately.
     pub fn stop_session(&mut self, id: &str) -> Result<Vec<VmUpdate>, CoreError> {
         self.require_session(id)?;
-        self.send_ipc(&IpcMsg::StopSession {
-            session_id: id.to_string(),
-        })?;
+        // X6 (§6.1): route by RuntimeOwner — MarsadManaged emits StopSession;
+        // WaslManaged emits StopWaslSession.
+        self.stop_session_routed(id)?;
         // Mark the session not-live (Paused). require_session guarantees it
         // exists. `live=false` is the authoritative lifecycle flip; the phase is
         // also set Stale for legacy consumers, but the board/affordance now key
@@ -1492,6 +1794,10 @@ impl Core {
         self.store
             .delete_session(id)
             .map_err(|e| CoreError::Agent(format!("delete session: {e:?}")))?;
+        // X6: also drop any Wasl binding record so a removed WaslManaged session
+        // leaves no stale reconnect binding behind. Best-effort (its absence for a
+        // MarsadManaged session is a no-op).
+        let _ = self.store.delete_wasl_binding(id);
         self.sessions.remove(id);
         self.session_order.retain(|s| s != id);
 
@@ -1609,11 +1915,10 @@ impl Core {
         if !trimmed.is_empty() {
             // Safe: require_session above guarantees the entry exists.
             let rec = self.sessions.get_mut(id).unwrap();
-            rec.transcript
-                .push(marsad_events::TranscriptEntry::User {
-                    text: trimmed.to_string(),
-                    at: Some(now_ms()),
-                });
+            rec.transcript.push(marsad_events::TranscriptEntry::User {
+                text: trimmed.to_string(),
+                at: Some(now_ms()),
+            });
             // Optimistically enter Working the instant the user sends — don't wait
             // for claude's first token. Clears any prior end reason / stale
             // interrupt so a fresh turn starts clean. The stream re-drives phase
@@ -1622,10 +1927,9 @@ impl Core {
             rec.state.end_reason = None;
             rec.state.interrupt_requested = false;
         }
-        self.send_ipc(&IpcMsg::SendPrompt {
-            session_id: id.to_string(),
-            text: text.to_string(),
-        })
+        // X6 (§6.1): route by RuntimeOwner — MarsadManaged emits SendPrompt;
+        // WaslManaged emits SendWaslPrompt (fresh per-send UUID idempotency key).
+        self.send_session_prompt(id, text)
     }
 
     /// Change a session config option (opencode: model / mode) on the running
@@ -1661,9 +1965,9 @@ impl Core {
         // flag, but the agent dispatches purely on `type`: it hit
         // handle_stop_session, which KILLED the durable session AND never stopped
         // the turn (so the badge stayed "Working").
-        self.send_ipc(&IpcMsg::Interrupt {
-            session_id: id.to_string(),
-        })
+        //
+        // X6 (§6.1): route by RuntimeOwner — WaslManaged emits InterruptWaslSession.
+        self.interrupt_session_routed(id)
     }
 
     /// Answer an `AskUserQuestion` gate by sending the user's chosen answers to
@@ -1702,6 +2006,31 @@ impl Core {
     pub fn answer_gate(&mut self, decision: GateDecision) -> Result<Vec<VmUpdate>, CoreError> {
         let session_id = marsad_gates::route(&decision).to_string();
         self.require_session(&session_id)?;
+
+        // X6 (§6.1/§8): a WaslManaged session's gate is a native gate — route it
+        // to the dedicated native-gate answer path (which relays
+        // AnswerWaslNativeGate, not AnswerGate). Identify the gate by the
+        // session's current pending Permission's request_id (== the gate_id).
+        if matches!(
+            self.runtime_owner(&session_id),
+            RuntimeOwner::WaslManaged { .. }
+        ) {
+            let gate_id = self
+                .sessions
+                .get(&session_id)
+                .and_then(|r| match &r.state.gate {
+                    Some(marsad_gates::Gate::Permission { request_id, .. }) => {
+                        Some(request_id.clone())
+                    }
+                    _ => None,
+                });
+            if let Some(gate_id) = gate_id {
+                return self.answer_wasl_native_gate(&session_id, &gate_id, decision.decision);
+            }
+            // No pending native gate to answer → silent no-op (mirrors the
+            // benign "nothing to answer" disposition).
+            return Ok(vec![]);
+        }
 
         // Idempotency: already recorded → silent no-op (no duplicate IPC).
         if self.ledger.seen(&decision.id) {
@@ -1797,6 +2126,84 @@ impl Core {
             reason,
         })
         .map(|()| vec![])
+    }
+
+    /// X6 (Wasl Backend, §8): answer a NATIVE gate on a WaslManaged session.
+    /// SESSION-scoped (not host-scoped like the X1 operator gate): the gate is a
+    /// `Gate::Permission` in the session's own gate slot, exactly as an opencode
+    /// ACP permission is. Records the decision in the EXISTING `DecisionLedger`
+    /// (idempotent — a second answer, even a different verdict, is a silent
+    /// no-op) and emits ONE `AnswerWaslNativeGate`. Answering a gate that was
+    /// never requested is an error (the session-scoped analogue of
+    /// `UnknownWaslGate`), not a silent success.
+    ///
+    /// Does NOT touch the host-scoped `wasl_gates` / `VmUpdate::WaslGates` list —
+    /// that stays exclusively for X1 operator handoff gates (regression pin).
+    pub fn answer_wasl_native_gate(
+        &mut self,
+        session_id: &str,
+        gate_id: &str,
+        decision: marsad_gates::Decision,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        self.require_session(session_id)?;
+
+        // Reconstruct the exact Gate::Permission this native gate maps to, so the
+        // derived DecisionId is the SAME as the one the request path would use
+        // (the command encodes gate_id via native_gate_command → stable+unique).
+        // A gate that was never requested (no stored detail) is an error.
+        let detail = self
+            .sessions
+            .get(session_id)
+            .and_then(|r| r.wasl_native_gates.get(gate_id).cloned())
+            .ok_or_else(|| CoreError::UnknownWaslGate(format!("{session_id}/{gate_id}")))?;
+        let gate = native_gate_permission(gate_id, &detail);
+
+        let gd = match &decision {
+            marsad_gates::Decision::Approve => marsad_gates::approve(session_id, &gate),
+            marsad_gates::Decision::Reject { reason } => {
+                marsad_gates::reject(session_id, &gate, reason)
+            }
+        };
+
+        // Idempotency: identical to answer_gate — seen → silent no-op, no
+        // duplicate IPC. `decision_id` is content-stable over (session_id,
+        // command+cwd), so approve-then-deny of the same gate is ALSO deduped.
+        if self.ledger.seen(&gd.id) {
+            return Ok(vec![]);
+        }
+        // record() cannot return DuplicateDecision here because seen() is false.
+        self.ledger.record(&gd).unwrap();
+
+        let (outcome, reason) = match gd.decision {
+            marsad_gates::Decision::Approve => ("approved".to_string(), None),
+            marsad_gates::Decision::Reject { reason } => ("denied".to_string(), Some(reason)),
+        };
+        self.send_ipc(&IpcMsg::AnswerWaslNativeGate {
+            session_id: session_id.to_string(),
+            gate_id: gate_id.to_string(),
+            outcome,
+            reason,
+        })?;
+
+        // Optimistically clear the pending gate now so the card disappears the
+        // instant the human answers (mirrors answer_gate). The Wasl observe
+        // stream stays the source of truth (a follow-on status/event re-drives
+        // phase/gate).
+        // NOTE: the gate DETAIL stays in `wasl_native_gates` on purpose — a
+        // second answer for the same gate must reconstruct the same DecisionId so
+        // the ledger dedup makes it a silent no-op (rather than erroring as an
+        // unknown gate). Only the UI-facing gate slot is cleared.
+        if let Some(record) = self.sessions.get_mut(session_id) {
+            record.state.clear_gate_on_answer();
+        }
+        let sv = self.make_session_view(session_id, self.sessions.get(session_id).unwrap());
+        let snap = self.snapshot();
+        let groups = marsad_viewmodel::group_overview(&snap);
+        Ok(vec![
+            VmUpdate::Session(sv),
+            VmUpdate::Overview(groups),
+            VmUpdate::Board(self.board()),
+        ])
     }
 
     pub fn run_slash(
@@ -2478,6 +2885,27 @@ impl Core {
             // X3: serve-loop ack for `AnswerWaslGate` — joins the existing
             // ack no-op list.
             IpcMsg::WaslGateAnswered { .. } => Ok(vec![]),
+            // X6 (Wasl Backend, §6.3/§7): a WaslManaged session's advisory status
+            // changed — project it onto the existing Phase (NO new variant).
+            IpcMsg::WaslSessionStatus { session_id, status } => {
+                self.handle_wasl_session_status(session_id, status)
+            }
+            // X6 (§7/§8/§10.4): one normalized observe event — fold it into the
+            // transcript + native-gate projection.
+            IpcMsg::WaslSessionEvent {
+                session_id,
+                seq,
+                event,
+            } => self.handle_wasl_session_event(session_id, seq, event),
+            // X6 (§10.4): a prompt receipt — surface queued/rejected outcomes
+            // visibly (not a silent drop).
+            IpcMsg::WaslPromptReceipt {
+                session_id,
+                receipt,
+            } => self.handle_wasl_prompt_receipt(session_id, receipt),
+            // X6: serve-loop ack for `AnswerWaslNativeGate` — no-op (the follow-on
+            // status/event is authoritative), joining the ack no-op list.
+            IpcMsg::WaslNativeGateAnswered { .. } => Ok(vec![]),
             // Command acks legitimately arrive on the subscriber connection.
             IpcMsg::SessionLaunched { .. }
             | IpcMsg::SessionResumed { .. }
@@ -2496,6 +2924,273 @@ impl Core {
                 "misdirected IPC message on agent channel: {other:?}"
             ))),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // X6 — Wasl Backend inbound folding (wasl-backend-plan.md §6.3/§7/§8/§10.4)
+    // -----------------------------------------------------------------------
+
+    /// Project a WaslManaged session's advisory status onto the EXISTING `Phase`
+    /// (§6.3), using the REAL `marsad_wasl_session::project_status_to_phase` (not
+    /// a reimplementation) — so the projection stays in one place. Unknown
+    /// session → tolerant no-op; malformed status Value → tolerant no-op (a
+    /// future/garbled status must not error the reader loop).
+    fn handle_wasl_session_status(
+        &mut self,
+        session_id: String,
+        status: serde_json::Value,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        if !self.sessions.contains_key(&session_id) {
+            return Ok(vec![]);
+        }
+        let st: marsad_wasl_session::WaslTargetStatus = match serde_json::from_value(status) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("marsad-core: WaslSessionStatus for {session_id}: bad status: {e}");
+                return Ok(vec![]);
+            }
+        };
+        let phase = marsad_wasl_session::project_status_to_phase(&st);
+        let live = marsad_wasl_session::status_is_live(&st);
+        let record = self.sessions.get_mut(&session_id).unwrap();
+        record.state.phase = phase;
+        record.live = live;
+        let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
+        Ok(vec![VmUpdate::Session(sv)])
+    }
+
+    /// Fold ONE normalized Wasl observe event into the session's transcript +
+    /// native-gate projection (§7/§8/§10.4). Handles every §10.4 edge case:
+    /// dedup by `seq`, delta-append to one entry, single terminal close,
+    /// post-terminal delta ignore, and native-gate → `Gate::Permission`. Unknown
+    /// session / malformed event / duplicate seq → tolerant no-op.
+    fn handle_wasl_session_event(
+        &mut self,
+        session_id: String,
+        seq: u64,
+        event: serde_json::Value,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        if !self.sessions.contains_key(&session_id) {
+            // An event for a session core never launched: tolerant no-op (no
+            // panic, no cross-session corruption).
+            return Ok(vec![]);
+        }
+        let ev: marsad_wasl_session::WaslSessionEvent = match serde_json::from_value(event) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("marsad-core: WaslSessionEvent for {session_id}: bad event: {e}");
+                return Ok(vec![]);
+            }
+        };
+
+        // Dedup by seq: a replay overlap after an ObserveLost/reattach must fold
+        // exactly once. A duplicate seq is a silent no-op (no updates).
+        {
+            let record = self.sessions.get_mut(&session_id).unwrap();
+            if !record.wasl_seen_seqs.insert(seq) {
+                return Ok(vec![]);
+            }
+            // Advance the "last observed seq" (§6.1 step 2) and persist it so a
+            // reconnect re-attaches from here. Best-effort persist.
+            if seq > record.wasl_last_seq {
+                record.wasl_last_seq = seq;
+            }
+        }
+        self.persist_wasl_last_seq(&session_id);
+
+        use marsad_wasl_session::WaslSessionEventKind as K;
+        let record = self.sessions.get_mut(&session_id).unwrap();
+        match ev.kind {
+            K::TurnAccepted { .. } => {
+                // A new turn begins: it is now in-flight (Working), a fresh
+                // assistant entry will open on the first delta, and the
+                // post-terminal guard is cleared.
+                record.state.phase = Phase::Working;
+                record.wasl_turn_closed = false;
+                record.wasl_open_assistant = None;
+            }
+            K::AssistantDelta { text, .. } => {
+                // Post-terminal stray (a delta after this turn's TurnCompleted /
+                // TurnFailed with no newer TurnAccepted) → ignored, never folded.
+                if !record.wasl_turn_closed {
+                    match record.wasl_open_assistant {
+                        Some(idx) => {
+                            if let Some(marsad_events::TranscriptEntry::Assistant {
+                                text: existing,
+                                ..
+                            }) = record.transcript.get_mut(idx)
+                            {
+                                existing.push_str(&text);
+                            }
+                        }
+                        None => {
+                            record
+                                .transcript
+                                .push(marsad_events::TranscriptEntry::Assistant {
+                                    text,
+                                    at: Some(now_ms()),
+                                });
+                            record.wasl_open_assistant = Some(record.transcript.len() - 1);
+                        }
+                    }
+                }
+            }
+            K::ToolStarted { name, .. } => {
+                record
+                    .transcript
+                    .push(marsad_events::TranscriptEntry::Tool {
+                        name,
+                        input: String::new(),
+                        at: Some(now_ms()),
+                    });
+            }
+            K::ToolFinished { .. } => {
+                // Tool completion carries no new transcript content Marsad folds;
+                // the ToolStarted row already recorded the activity.
+            }
+            K::NativeGateRequested { turn_id, detail } => {
+                // Map to the EXISTING Gate::Permission pipeline (§8), session
+                // scoped. Per-occurrence identity is (turn_id, seq) (§8, v3): the
+                // real detail has no gate_id, and turn_id alone is NOT unique per
+                // gate (two native gates can fire in one turn), so the event's own
+                // `seq` is combined with turn_id via native_gate_key. Store the
+                // detail keyed by that gate_key so answer_wasl_native_gate can
+                // reconstruct the same gate (→ stable+unique DecisionId).
+                let gate_key = marsad_wasl_session::native_gate_key(&turn_id, seq);
+                let gate = native_gate_permission(&gate_key, &detail);
+                record.wasl_native_gates.insert(gate_key, detail);
+                record.state.gate = Some(gate);
+                record.state.phase = Phase::Needs;
+            }
+            K::TurnCompleted { reply, .. } => {
+                close_wasl_turn(record, &reply);
+                // A completed turn is not awaiting input.
+                record.state.phase = Phase::Done;
+            }
+            K::TurnFailed { error, .. } => {
+                close_wasl_turn(record, &error);
+                record.state.phase = Phase::Error;
+            }
+            // Informational lifecycle/correlation events Marsad folds no
+            // transcript content from (§4.4, v3): SessionReady is the connect
+            // ping; TurnQueued/StatusChanged/NativeGateResolved/TurnCancelled/
+            // TurnExpired are correlation/status signals whose UI effect (queued
+            // indicator, phase) is already driven by the WaslSessionStatus
+            // projection and the receipt path, so folding them here would
+            // double-count. No-op (never a transcript row, never a panic).
+            K::SessionReady { .. }
+            | K::TurnQueued { .. }
+            | K::NativeGateResolved { .. }
+            | K::TurnCancelled { .. }
+            | K::TurnExpired { .. }
+            | K::StatusChanged { .. } => {}
+            K::SessionExited { .. } => {
+                record.live = false;
+                record.state.phase = Phase::Done;
+            }
+            K::ObserveLost { .. } => {
+                record.state.phase = Phase::Detached;
+            }
+            K::Unknown(tag) => {
+                eprintln!("marsad-core: WaslSessionEvent for {session_id}: unknown kind '{tag}'");
+            }
+        }
+
+        let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
+        Ok(vec![VmUpdate::Session(sv)])
+    }
+
+    /// Persist the WaslManaged session's advanced `wasl_last_seq` into its store
+    /// binding so a reconnect re-attaches from the last observed seq (§6.1).
+    /// Best-effort — a store error never fails event folding.
+    fn persist_wasl_last_seq(&mut self, session_id: &str) {
+        // Caller (`handle_wasl_session_event`) verified the session exists
+        // immediately before calling, and the single-threaded `&mut self` call
+        // path removes nothing in between — so the session is always present.
+        let r = self
+            .sessions
+            .get(session_id)
+            .expect("persist_wasl_last_seq called with a session verified present by the caller");
+        let (binding, last_seq) = match &r.runtime_owner {
+            RuntimeOwner::WaslManaged { binding } => (binding.clone(), r.wasl_last_seq),
+            RuntimeOwner::MarsadManaged => return,
+        };
+        let _ = self
+            .store
+            .upsert_wasl_binding(&marsad_store::PersistedWaslBinding {
+                session_id: session_id.to_string(),
+                target_id: binding.target_id,
+                host_id: binding.host_id,
+                provider_key: binding.provider_key,
+                last_seq,
+            });
+    }
+
+    /// Surface a Wasl prompt receipt VISIBLY (§10.4): a `Queued`/`RejectedBusy`
+    /// receipt is a toast + session update, not a silent drop. A `Queued` prompt
+    /// is NOT shown as an in-flight (Working) turn — only `TurnAccepted`/`Started`
+    /// makes it in-flight. Unknown session / malformed receipt → tolerant no-op.
+    fn handle_wasl_prompt_receipt(
+        &mut self,
+        session_id: String,
+        receipt: serde_json::Value,
+    ) -> Result<Vec<VmUpdate>, CoreError> {
+        if !self.sessions.contains_key(&session_id) {
+            return Ok(vec![]);
+        }
+        let r: marsad_wasl_session::WaslTurnReceipt = match serde_json::from_value(receipt) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("marsad-core: WaslPromptReceipt for {session_id}: bad receipt: {e}");
+                return Ok(vec![]);
+            }
+        };
+        use marsad_wasl_session::WaslTurnReceipt as R;
+        // v3: a `Duplicate { original }` is a benign resent idempotency key — Wasl
+        // returned the ORIGINAL receipt wrapped verbatim with no second injection.
+        // The wrapper is transparent to disposition: unwrap it (recursively, in
+        // case of nesting) and surface whatever the original was (a Started stays
+        // Working, a RejectedBusy still surfaces the busy signal, …), never a
+        // spurious error.
+        let effective = unwrap_duplicate_receipt(&r);
+        let (toast, phase): (Option<(String, String)>, Option<Phase>) = match effective {
+            R::Started { .. } => (None, Some(Phase::Working)),
+            R::Queued { position, .. } => (
+                Some((
+                    "⏳".to_string(),
+                    format!("Prompt queued (position {position})"),
+                )),
+                // A merely-queued prompt is NOT in-flight — leave the calm bucket.
+                Some(Phase::Done),
+            ),
+            R::RejectedBusy { .. } => (
+                Some((
+                    "⚠".to_string(),
+                    "Session busy — prompt rejected".to_string(),
+                )),
+                Some(Phase::Done),
+            ),
+            R::RejectedUnavailable { .. } => (
+                Some((
+                    "⚠".to_string(),
+                    "Session unavailable — prompt rejected".to_string(),
+                )),
+                Some(Phase::Error),
+            ),
+            // `unwrap_duplicate_receipt` already peeled every Duplicate layer, so
+            // the effective receipt is never a Duplicate here. Keep the match
+            // exhaustive without a real branch.
+            R::Duplicate { .. } => (None, None),
+        };
+        if let (Some(p), Some(record)) = (phase, self.sessions.get_mut(&session_id)) {
+            record.state.phase = p;
+        }
+        let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());
+        let mut updates = vec![VmUpdate::Session(sv)];
+        if let Some((icon, text)) = toast {
+            updates.push(VmUpdate::Toast { icon, text });
+        }
+        Ok(updates)
     }
 
     /// Apply a remote transcript backfill: parse the agent-shipped `.jsonl` into
@@ -2559,12 +3254,15 @@ impl Core {
             // attach/reconnect, and then GROW as new result events arrive
             // (reduce_result replaces state.tokens with the authoritative value).
             if record.state.tokens == 0 {
-                let total_tokens: u64 = model_usage_agg.values().map(|s| {
-                    s.input_tokens
-                        .saturating_add(s.output_tokens)
-                        .saturating_add(s.cache_read_input_tokens)
-                        .saturating_add(s.cache_creation_input_tokens)
-                }).sum();
+                let total_tokens: u64 = model_usage_agg
+                    .values()
+                    .map(|s| {
+                        s.input_tokens
+                            .saturating_add(s.output_tokens)
+                            .saturating_add(s.cache_read_input_tokens)
+                            .saturating_add(s.cache_creation_input_tokens)
+                    })
+                    .sum();
                 if total_tokens > 0 {
                     record.state.tokens = total_tokens;
                     // Also seed cost_usd (used directly in make_session_view when
@@ -2572,7 +3270,10 @@ impl Core {
                     // since we're only setting estimated rows, so make_session_view
                     // will sum the model_usage rows instead; leave cost_usd = 0.0).
                     // Recompute context_pct from the seeded token total.
-                    let window = record.state.model.as_deref()
+                    let window = record
+                        .state
+                        .model
+                        .as_deref()
                         .map(marsad_events::SessionState::context_window_for)
                         .unwrap_or(200_000);
                     let pct = (total_tokens as f64 / window as f64 * 100.0) as f32;
@@ -2752,12 +3453,16 @@ impl Core {
         // the accumulated total on attach rather than starting from zero.
         // A subsequent live `result` event will authoritatively replace this.
         if record.state.tokens == 0 {
-            let total_tokens: u64 = rows.iter().map(|r| {
-                r.input_tokens.saturating_add(r.output_tokens)
-            }).sum();
+            let total_tokens: u64 = rows
+                .iter()
+                .map(|r| r.input_tokens.saturating_add(r.output_tokens))
+                .sum();
             if total_tokens > 0 {
                 record.state.tokens = total_tokens;
-                let window = record.state.model.as_deref()
+                let window = record
+                    .state
+                    .model
+                    .as_deref()
                     .map(marsad_events::SessionState::context_window_for)
                     .unwrap_or(200_000);
                 let pct = (total_tokens as f64 / window as f64 * 100.0) as f32;
@@ -3005,8 +3710,8 @@ impl Core {
             // The workstream board's attention card derives from phase + pending
             // gate; refresh it only when one of those actually changed (a gate
             // appeared/cleared or the phase moved) — never on every token.
-            let board_changed = record.state.phase != old_phase
-                || record.state.gate.is_some() != old_gate_present;
+            let board_changed =
+                record.state.phase != old_phase || record.state.gate.is_some() != old_gate_present;
             (
                 record.project.clone(),
                 record.host_id.clone(),
@@ -3035,19 +3740,28 @@ impl Core {
             let (claude_sid, slash_cmds, tools, mcp_servers) = self
                 .sessions
                 .get(&session_id)
-                .map(|r| (
-                    r.state.session_id.clone(),
-                    r.state.slash_commands.clone(),
-                    r.state.tools.clone(),
-                    r.state.mcp_servers.clone(),
-                ))
+                .map(|r| {
+                    (
+                        r.state.session_id.clone(),
+                        r.state.slash_commands.clone(),
+                        r.state.tools.clone(),
+                        r.state.mcp_servers.clone(),
+                    )
+                })
                 .unwrap_or_default();
-            let has_sid = claude_sid.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+            let has_sid = claude_sid
+                .as_deref()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
             if has_sid || !slash_cmds.is_empty() || !tools.is_empty() || !mcp_servers.is_empty() {
                 // Load the persisted session, update fields, write back.
                 if let Ok(restored) = self.store.restore() {
-                    if let Some(mut ps) = restored.sessions.into_iter().find(|s| s.id == session_id) {
-                        if has_sid && ps.driver == "claude" && ps.session_id.as_deref() != claude_sid.as_deref() {
+                    if let Some(mut ps) = restored.sessions.into_iter().find(|s| s.id == session_id)
+                    {
+                        if has_sid
+                            && ps.driver == "claude"
+                            && ps.session_id.as_deref() != claude_sid.as_deref()
+                        {
                             ps.session_id = claude_sid;
                         }
                         ps.slash_commands = slash_cmds;
@@ -3069,15 +3783,21 @@ impl Core {
             if let Some(sid) = record.state.session_id.as_deref().filter(|s| !s.is_empty()) {
                 let usage_agg = self.transcript.session_usage(&project, sid);
                 if !usage_agg.is_empty() {
-                    let total_tokens: u64 = usage_agg.values().map(|u| {
-                        u.input_tokens
-                            .saturating_add(u.output_tokens)
-                            .saturating_add(u.cache_read_input_tokens)
-                            .saturating_add(u.cache_creation_input_tokens)
-                    }).sum();
+                    let total_tokens: u64 = usage_agg
+                        .values()
+                        .map(|u| {
+                            u.input_tokens
+                                .saturating_add(u.output_tokens)
+                                .saturating_add(u.cache_read_input_tokens)
+                                .saturating_add(u.cache_creation_input_tokens)
+                        })
+                        .sum();
                     if total_tokens > 0 {
                         record.state.tokens = total_tokens;
-                        let window = record.state.model.as_deref()
+                        let window = record
+                            .state
+                            .model
+                            .as_deref()
                             .map(marsad_events::SessionState::context_window_for)
                             .unwrap_or(200_000);
                         let pct = (total_tokens as f64 / window as f64 * 100.0) as f32;
@@ -3297,6 +4017,63 @@ impl Core {
 // ---------------------------------------------------------------------------
 // Private free functions
 // ---------------------------------------------------------------------------
+
+/// X6 (§8, v3): build the `marsad_gates::Gate::Permission` a native Wasl gate
+/// maps onto. The real `WaslNativeGateDetail` is only `{summary, preview}` (no
+/// `gate_id`); per-occurrence identity is the `(turn_id, seq)`-derived `gate_key`
+/// (`native_gate_key`), passed in by the caller. The `command` encodes that
+/// `gate_key` via `native_gate_command(gate_key, detail)` so the derived
+/// `DecisionId` (which hashes `command` + `cwd`) is unique+stable per gate
+/// occurrence; `explanation` carries the CLI's preview; the claude-only fields
+/// are empty (a native permission prompt is a binary approve/deny with no
+/// cwd/risk/elicitation/suggestions).
+fn native_gate_permission(
+    gate_key: &str,
+    detail: &marsad_wasl_session::WaslNativeGateDetail,
+) -> marsad_gates::Gate {
+    marsad_gates::Gate::Permission {
+        request_id: gate_key.to_string(),
+        command: marsad_wasl_session::native_gate_command(gate_key, detail),
+        cwd: String::new(),
+        risk: String::new(),
+        explanation: detail.preview.clone(),
+        is_elicitation: false,
+        elicitation_choices: Vec::new(),
+        permission_suggestions: Vec::new(),
+    }
+}
+
+/// X6 (§4.4, v3): peel every `WaslTurnReceipt::Duplicate { original }` layer and
+/// return the underlying original receipt. A `Duplicate` is a benign resent
+/// idempotency key — Wasl returns the ORIGINAL wrapped verbatim with no second
+/// injection — so its disposition is exactly the original's. Any non-`Duplicate`
+/// receipt is returned as-is.
+fn unwrap_duplicate_receipt(
+    receipt: &marsad_wasl_session::WaslTurnReceipt,
+) -> &marsad_wasl_session::WaslTurnReceipt {
+    let mut cur = receipt;
+    while let marsad_wasl_session::WaslTurnReceipt::Duplicate { original } = cur {
+        cur = original;
+    }
+    cur
+}
+
+/// X6 (§10.4): close out a Wasl turn's transcript entry exactly once. If a delta
+/// already opened an assistant entry, leave it as-is (no double-close/reopen); if
+/// none opened (the reply arrived only in the terminal event), append it now.
+/// Marks the post-terminal guard so a stray later delta is ignored.
+fn close_wasl_turn(record: &mut SessionRecord, reply: &str) {
+    if record.wasl_open_assistant.is_none() && !reply.is_empty() {
+        record
+            .transcript
+            .push(marsad_events::TranscriptEntry::Assistant {
+                text: reply.to_string(),
+                at: Some(now_ms()),
+            });
+    }
+    record.wasl_open_assistant = None;
+    record.wasl_turn_closed = true;
+}
 
 /// Map the per-session connection health enum to the string the SessionView
 /// carries to the UI ("Connected"/"Reconnecting"/"Unstable").

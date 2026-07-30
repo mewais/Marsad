@@ -1179,6 +1179,124 @@ pub enum IpcMsg {
         gate_id: String,
     },
 
+    // ── Wasl backend (Wasl-managed session, docs/design/wasl-backend-plan.md §7) ──
+    // A DIFFERENT feature from the X1 operator connector above: here the
+    // session's process is owned end-to-end by Wasl; Marsad is a thin client of
+    // a Wasl DeliveryTarget (prompt / observe / native-gate / interrupt / stop).
+    // Payloads whose typed form lives in `marsad-wasl-session` are carried as
+    // `serde_json::Value` ON PURPOSE (proto must not depend on that crate, DAG).
+    // ── GUI/core → agent ─────────────────────────────────────────────────────────
+    /// NEW: start a Wasl-managed session. The agent constructs a
+    /// `WaslSessionClient` via the provider factory (fake in tests; real later)
+    /// and registers it under `session_id`. No argv, no container — the process
+    /// is Wasl's. `wasl_target_key` selects the Wasl target (protocol + context).
+    /// Analogue of `LaunchSession` for the `WaslManaged` owner. Identity:
+    /// `session_id`, `host_id` (required → SchemaMismatch when absent).
+    LaunchWaslSession {
+        session_id: String,
+        host_id: String,
+        /// Opaque Wasl target key (protocol id + context). Value ON PURPOSE
+        /// (typed form `WaslTargetKey` lives in marsad-wasl-session). Relayed
+        /// verbatim to `WaslSessionProvider::get_or_start`; also persisted into
+        /// the `WaslSessionBinding` (§6.1) as `provider_key` for reconnect.
+        #[serde(default)]
+        wasl_target_key: serde_json::Value,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// NEW: prompt a Wasl-managed session (Wasl `send`, source LocalHuman).
+    /// Carries the busy policy and idempotency key so the agent builds a
+    /// `WaslTurnRequest`. Analogue of `SendPrompt`. `text` is REQUIRED (mirrors
+    /// `SendPrompt.text`): a prompt with no text is not a meaningful send, so a
+    /// missing `text` is a SchemaMismatch.
+    SendWaslPrompt {
+        session_id: String,
+        text: String,
+        #[serde(default)]
+        idempotency_key: String,
+        /// "queue" | "reject" | "queue_related" (+ max_wait_ms); default queue.
+        #[serde(default)]
+        busy_policy: String,
+        #[serde(default)]
+        max_wait_ms: u64,
+    },
+    /// NEW: (re)subscribe to a Wasl session's observe stream from a sequence.
+    /// Analogue of `AttachSession`; the agent (re)pumps `attach(after_seq)` on
+    /// the per-session observe thread.
+    AttachWaslSession {
+        session_id: String,
+        #[serde(default)]
+        after_seq: u64,
+    },
+    /// NEW: resolve a native gate (Wasl `gate approve|deny`, §8) — the SAME
+    /// human decision the gate UI produces, routed to `resolve_native_gate`.
+    /// Identity: `session_id`, `gate_id` (required). `outcome` is REQUIRED
+    /// ("approved" | "denied", relayed as `WaslGateDecision`).
+    AnswerWaslNativeGate {
+        session_id: String,
+        gate_id: String,
+        outcome: String,
+        /// Denial reason. ALWAYS serialized (null when absent), like
+        /// `AnswerWaslGate.reason` / `LaunchSession.first_prompt`.
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    /// NEW: interrupt the active turn (Wasl `cancel_turn`). Analogue of
+    /// `Interrupt`.
+    InterruptWaslSession {
+        session_id: String,
+    },
+    /// NEW: stop the session (Wasl `shutdown`). `drain` = Drain else Immediate.
+    /// Analogue of `StopSession`.
+    StopWaslSession {
+        session_id: String,
+        #[serde(default)]
+        drain: bool,
+    },
+
+    // ── agent → GUI/core ──────────────────────────────────────────────────────────
+    /// NEW broadcast: a Wasl session's advisory status changed. Carries the raw
+    /// status kind + fields as a Value; core projects it to `Phase` (§6.3).
+    /// Emitted on every status transition the observe thread sees (and on
+    /// connect).
+    WaslSessionStatus {
+        session_id: String,
+        /// Verbatim `WaslTargetStatus`; Value ON PURPOSE (typed form in
+        /// marsad-wasl-session).
+        #[serde(default)]
+        status: serde_json::Value,
+    },
+    /// NEW broadcast: one normalized observe event (assistant delta / tool /
+    /// turn lifecycle / native-gate / exit / observe-lost). Value-carried; core
+    /// folds it into the transcript + gate projection. The Wasl analogue of a
+    /// claude `StreamMsg` line. `seq` is REQUIRED (no `#[serde(default)]`): it is
+    /// the replay/dedup/ordering key (§6.1/§10.4); an event with no sequence
+    /// cannot be folded gap/dup-free, so a missing `seq` is a SchemaMismatch, not
+    /// a silent 0.
+    WaslSessionEvent {
+        session_id: String,
+        seq: u64,
+        #[serde(default)]
+        event: serde_json::Value,
+    },
+    /// NEW ack (serve-loop reply to `SendWaslPrompt`): carries the `TurnReceipt`
+    /// so the UI can show queued/rejected outcomes. NOT the reply (that arrives
+    /// as `WaslSessionEvent`::TurnCompleted).
+    WaslPromptReceipt {
+        session_id: String,
+        /// Verbatim `WaslTurnReceipt`; Value ON PURPOSE.
+        #[serde(default)]
+        receipt: serde_json::Value,
+    },
+    /// NEW ack (serve-loop reply to `AnswerWaslNativeGate`): the decision was
+    /// RELAYED to the client (not proof the CLI accepted it — the follow-on
+    /// `WaslSessionStatus`/`WaslSessionEvent` is authoritative, mirroring X1's
+    /// `WaslGateAnswered` semantics). Identity: `session_id`, `gate_id`.
+    WaslNativeGateAnswered {
+        session_id: String,
+        gate_id: String,
+    },
+
     // ── PTY (WAVE 3b — interactive raw-shell escape hatch, Terminal tab) ────
     // A SEPARATE channel from the claude driver: this streams a real
     // interactive shell (local or the session's existing SSH/WSL host), NOT
@@ -1775,6 +1893,16 @@ pub fn parse_ipc(line: &str) -> Result<IpcMsg, ProtoError> {
         "WaslGateDecided",
         "WaslObservation",
         "WaslGateAnswered",
+        "LaunchWaslSession",
+        "SendWaslPrompt",
+        "AttachWaslSession",
+        "AnswerWaslNativeGate",
+        "InterruptWaslSession",
+        "StopWaslSession",
+        "WaslSessionStatus",
+        "WaslSessionEvent",
+        "WaslPromptReceipt",
+        "WaslNativeGateAnswered",
         "PtyStart",
         "PtyInput",
         "PtyResize",

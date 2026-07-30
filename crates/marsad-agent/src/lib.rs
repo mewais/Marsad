@@ -19,9 +19,9 @@ pub mod acp;
 pub mod acp_translate;
 pub mod capabilities;
 pub mod codex;
+mod driver;
 #[cfg(not(coverage))]
 pub mod exec_shell;
-mod driver;
 mod ipc;
 mod pty;
 mod reader;
@@ -29,6 +29,7 @@ mod remote;
 #[cfg(not(coverage))]
 mod serve;
 mod wasl;
+mod wasl_session;
 
 #[cfg(not(coverage))]
 use remote::REMOTE_RUNTIME_DIR;
@@ -44,12 +45,18 @@ pub use remote::{
     remote_durable_launch_script, remote_kill_script, remote_liveness_script, remote_reader_argv,
     remote_session_dir, remote_writer_argv,
 };
-pub use remote::{parse_liveness, Liveness, LIVENESS_SENTINEL};
 #[cfg(not(coverage))]
 pub use remote::{
     fetch_remote_session_list, probe_liveness, run_remote_script, run_remote_script_bounded,
 };
-pub use wasl::{load_wasl_config, wasl_event_lines};
+pub use remote::{parse_liveness, Liveness, LIVENESS_SENTINEL};
+pub use wasl::{
+    load_wasl_config, load_wasl_session_config, select_wasl_session_runtime, wasl_event_lines,
+};
+pub use wasl_session::{
+    pump_wasl_observe, wasl_observe_should_reconnect, wasl_reconnect_after_seq,
+    wasl_session_event_lines, wasl_session_status_line, WaslObserveEnd,
+};
 
 // WAVE 3b — pty escape-hatch terminal. `default_shell`/`pty_exec_argv` are
 // pure and always compiled; the real spawn/resize API is production-only
@@ -187,6 +194,62 @@ fn empty_wasl_connector_map() -> WaslConnectorMap {
 // in marsad-wasl). Storing the closure here is not IO.
 type WaslConnectorFactory = Option<wasl::WaslConnectorFactoryFn>;
 opaque_debug_wrap!(WaslConnectorFactoryWrap(WaslConnectorFactory));
+
+// ── Wasl Backend (X6) — WaslSessionClient/WaslSessionProvider registry ─────────
+//
+// The "Wasl Backend" feature (docs/design/wasl-backend-plan.md §6.1): a session
+// whose underlying process is owned END-TO-END by Wasl, driven through a
+// `marsad_wasl_session::WaslSessionClient`. STRUCTURALLY IDENTICAL to the X1
+// `wasl_connectors` registry above (`Arc<Mutex<HashMap<..>>>`, always-compiled
+// — NOT `#[cfg(not(coverage))]`-gated — so `handle_ipc`'s `*Wasl*` arms
+// observably branch on registry membership under coverage instrumentation too,
+// exactly as the `WaslConnectorsWrap` doc comment explains for the operator
+// registry).
+//
+// Keyed by MARSAD session id (not host_id — a Wasl-managed session is a
+// session-scoped runtime owner). The value is `Arc<dyn WaslSessionClient>` (not
+// `Box`) for the SAME lock-hygiene reason as `WaslConnectorMap` (§8.1): every
+// `*Wasl*` `handle_ipc` arm clones the `Arc` handle out and DROPS the map lock
+// BEFORE calling any potentially-blocking client method (`prompt`,
+// `resolve_native_gate`, `interrupt`, `shutdown`), so a wedged Wasl peer can
+// never freeze the serve loop or stall an unrelated session's operations.
+type WaslSessionClientMap = std::sync::Arc<
+    std::sync::Mutex<HashMap<String, std::sync::Arc<dyn marsad_wasl_session::WaslSessionClient>>>,
+>;
+opaque_debug_wrap!(WaslSessionClientsWrap(WaslSessionClientMap));
+
+// `WaslSessionClient: Send` (not `Send + Sync`), so `Arc<dyn WaslSessionClient>`
+// is neither `Send` nor `Sync` on its own — clippy's `arc_with_non_send_sync`
+// flags nesting it in the outer `Arc<Mutex<..>>`. Same disposition as
+// `empty_wasl_connector_map`: not a real hazard (the whole registry lives on the
+// single serve/command thread that owns `Agent`), the `Arc` wrapping exists only
+// so the `*Wasl*` arms can clone a handle out and drop the map lock before the
+// blocking client call.
+#[allow(clippy::arc_with_non_send_sync)]
+fn empty_wasl_session_client_map() -> WaslSessionClientMap {
+    std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))
+}
+
+// The provider the agent uses to `get_or_start` a `WaslSessionClient` on a
+// `LaunchWaslSession`. Registered directly (`register_wasl_session_provider`,
+// the analogue of `register_wasl_connector`) or built lazily on first launch via
+// the factory (`set_wasl_session_provider_factory`, the analogue of
+// `set_wasl_connector_factory`). Always compiled — the launch path must be
+// reachable under coverage, and constructing a provider performs no IO by itself
+// (only `serve()`'s observe threads do real IO, and that block is
+// `#[cfg(not(coverage))]`).
+type WaslSessionProviderSlot = Option<Box<dyn marsad_wasl_session::WaslSessionProvider>>;
+opaque_debug_wrap!(WaslSessionProviderWrap(WaslSessionProviderSlot));
+
+/// The `set_wasl_session_provider_factory` parameter type, aliased so clippy's
+/// `type_complexity` lint doesn't fire on the setter signature. Unlike the X1
+/// connector factory, the Wasl session provider factory is ZERO-arg: the Wasl
+/// target key travels on each `LaunchWaslSession`, so the provider needs no
+/// per-call argument (see the test file's seam note).
+pub type WaslSessionProviderFactoryFn =
+    Box<dyn Fn() -> Box<dyn marsad_wasl_session::WaslSessionProvider> + Send>;
+type WaslSessionProviderFactory = Option<WaslSessionProviderFactoryFn>;
+opaque_debug_wrap!(WaslSessionProviderFactoryWrap(WaslSessionProviderFactory));
 
 // Real-IO container wrapper — production builds only.
 // Uses the same opaque Debug pattern so `derive(Debug)` on `Agent` compiles.
@@ -536,6 +599,15 @@ pub struct Agent {
     wasl_connectors: WaslConnectorsWrap,
     /// Wasl connector-factory override test seam (X2). Always compiled.
     wasl_connector_factory: WaslConnectorFactoryWrap,
+    /// Wasl Backend (X6): per-session `WaslSessionClient` registry, keyed by
+    /// Marsad session id. Always compiled — see `WaslSessionClientsWrap`.
+    wasl_session_clients: WaslSessionClientsWrap,
+    /// Wasl Backend (X6): the registered `WaslSessionProvider` (direct
+    /// registration seam). Always compiled.
+    wasl_session_provider: WaslSessionProviderWrap,
+    /// Wasl Backend (X6): the provider-factory override test seam. Always
+    /// compiled.
+    wasl_session_provider_factory: WaslSessionProviderFactoryWrap,
 }
 
 impl Agent {
@@ -595,11 +667,18 @@ impl Agent {
             #[cfg(not(coverage))]
             codex_specs: CodexSpecsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
             #[cfg(not(coverage))]
-            codex_threads: CodexThreadsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
+            codex_threads: CodexThreadsWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
             #[cfg(not(coverage))]
-            acp_sessions: AcpSessionsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
+            acp_sessions: AcpSessionsWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
             wasl_connectors: WaslConnectorsWrap(empty_wasl_connector_map()),
             wasl_connector_factory: WaslConnectorFactoryWrap(None),
+            wasl_session_clients: WaslSessionClientsWrap(empty_wasl_session_client_map()),
+            wasl_session_provider: WaslSessionProviderWrap(None),
+            wasl_session_provider_factory: WaslSessionProviderFactoryWrap(None),
         })
     }
 
@@ -660,10 +739,17 @@ impl Agent {
                 HashMap::new(),
             ))),
             codex_specs: CodexSpecsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
-            codex_threads: CodexThreadsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
-            acp_sessions: AcpSessionsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
+            codex_threads: CodexThreadsWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
+            acp_sessions: AcpSessionsWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
             wasl_connectors: WaslConnectorsWrap(empty_wasl_connector_map()),
             wasl_connector_factory: WaslConnectorFactoryWrap(None),
+            wasl_session_clients: WaslSessionClientsWrap(empty_wasl_session_client_map()),
+            wasl_session_provider: WaslSessionProviderWrap(None),
+            wasl_session_provider_factory: WaslSessionProviderFactoryWrap(None),
         })
     }
 
@@ -944,7 +1030,6 @@ impl Agent {
 mod reconnect_spec_tests {
     use super::*;
 
-
     #[test]
     fn drain_fresh_prompts_keeps_all_in_order_regardless_of_age() {
         let now = std::time::Instant::now();
@@ -952,11 +1037,11 @@ mod reconnect_spec_tests {
         // user sent must survive a slow/long outage and be delivered on re-attach.
         let items = vec![
             (now - std::time::Duration::from_secs(1), b"first\n".to_vec()),
+            (now - std::time::Duration::from_secs(600), b"old\n".to_vec()),
             (
-                now - std::time::Duration::from_secs(600),
-                b"old\n".to_vec(),
+                now - std::time::Duration::from_secs(2),
+                b"second\n".to_vec(),
             ),
-            (now - std::time::Duration::from_secs(2), b"second\n".to_vec()),
         ];
         let out = drain_fresh_prompts(items, now);
         // All kept, in original order (bounded only by PENDING_PROMPT_MAX).
@@ -978,7 +1063,10 @@ mod reconnect_spec_tests {
         assert_eq!(out.len(), PENDING_PROMPT_MAX);
         // The oldest 3 (p0,p1,p2) are dropped; first kept is p3.
         assert_eq!(out[0], b"p3\n".to_vec());
-        assert_eq!(out[PENDING_PROMPT_MAX - 1], format!("p{}\n", n - 1).into_bytes());
+        assert_eq!(
+            out[PENDING_PROMPT_MAX - 1],
+            format!("p{}\n", n - 1).into_bytes()
+        );
     }
 
     #[test]
@@ -1013,8 +1101,7 @@ mod reconnect_spec_tests {
 
     #[test]
     fn ask_posture_round_trips() {
-        let spec =
-            cached_codex_spec_from_persisted("m".into(), "p".into(), None, Some("Ask"));
+        let spec = cached_codex_spec_from_persisted("m".into(), "p".into(), None, Some("Ask"));
         assert_eq!(spec.posture, marsad_proto::Posture::Ask);
         assert_eq!(spec.posture_mode, "default");
     }
@@ -1030,12 +1117,8 @@ mod reconnect_spec_tests {
 
     #[test]
     fn unknown_posture_string_defaults_to_ask() {
-        let spec = cached_codex_spec_from_persisted(
-            "m".into(),
-            "p".into(),
-            None,
-            Some("NotARealPosture"),
-        );
+        let spec =
+            cached_codex_spec_from_persisted("m".into(), "p".into(), None, Some("NotARealPosture"));
         assert_eq!(spec.posture, marsad_proto::Posture::Ask);
     }
 }

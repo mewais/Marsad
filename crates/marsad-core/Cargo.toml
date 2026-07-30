@@ -37,6 +37,7 @@ marsad-lifecycle = { workspace = true }
 marsad-viewmodel = { workspace = true }
 marsad-workstream = { workspace = true }
 marsad-wasl = { workspace = true }
+marsad-wasl-session = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

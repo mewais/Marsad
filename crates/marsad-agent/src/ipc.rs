@@ -117,6 +117,46 @@ impl Agent {
                 outcome,
                 reason,
             } => self.handle_answer_wasl_gate(host_id, gate_id, outcome, reason),
+            // X6 Wasl Backend (docs/design/wasl-backend-plan.md §7): the six
+            // inbound `*Wasl*` session-control arms. Each routes to a
+            // `WaslSessionClient` in the per-session registry; every one that
+            // makes a potentially-blocking client call drops the map lock first
+            // (§8.1). See `wasl_session.rs`.
+            marsad_proto::IpcMsg::LaunchWaslSession {
+                session_id,
+                host_id,
+                wasl_target_key,
+                name,
+            } => self.handle_launch_wasl_session(session_id, host_id, wasl_target_key, name),
+            marsad_proto::IpcMsg::SendWaslPrompt {
+                session_id,
+                text,
+                idempotency_key,
+                busy_policy,
+                max_wait_ms,
+            } => self.handle_send_wasl_prompt(
+                session_id,
+                text,
+                idempotency_key,
+                busy_policy,
+                max_wait_ms,
+            ),
+            marsad_proto::IpcMsg::AttachWaslSession {
+                session_id,
+                after_seq,
+            } => self.handle_attach_wasl_session(session_id, after_seq),
+            marsad_proto::IpcMsg::AnswerWaslNativeGate {
+                session_id,
+                gate_id,
+                outcome,
+                reason,
+            } => self.handle_answer_wasl_native_gate(session_id, gate_id, outcome, reason),
+            marsad_proto::IpcMsg::InterruptWaslSession { session_id } => {
+                self.handle_interrupt_wasl_session(session_id)
+            }
+            marsad_proto::IpcMsg::StopWaslSession { session_id, drain } => {
+                self.handle_stop_wasl_session(session_id, drain)
+            }
             // WAVE 3b (pty escape-hatch terminal). `cols`/`rows` are dropped
             // here (destructured with `..`): the real spawn happens in
             // `serve.rs` (needs the `subscribers` broadcast list, which only
@@ -510,10 +550,11 @@ impl Agent {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .subsec_millis() as u64
-                            + 100u64  // ensure > 3
+                            + 100u64 // ensure > 3
                     );
                     let prompt_params = crate::acp::session_prompt_params(&acp_sid, text);
-                    let prompt_line = crate::acp::encode_request(req_id, "session/prompt", prompt_params);
+                    let prompt_line =
+                        crate::acp::encode_request(req_id, "session/prompt", prompt_params);
                     let writers = self.session_writers.0.lock().unwrap();
                     if let Some(shared) = writers.get(session_id) {
                         let mut writer = shared.lock().unwrap();
@@ -564,7 +605,13 @@ impl Agent {
                 // Codex follow-up turn: build the eval-loop command via codex_turn_cmd.
                 // Look up the cached spec and the stored thread_id (from thread.started).
                 let spec_opt = self.codex_specs.0.lock().unwrap().get(session_id).cloned();
-                let thread_id_opt = self.codex_threads.0.lock().unwrap().get(session_id).cloned();
+                let thread_id_opt = self
+                    .codex_threads
+                    .0
+                    .lock()
+                    .unwrap()
+                    .get(session_id)
+                    .cloned();
 
                 if let Some(cs) = spec_opt {
                     // Build a minimal LaunchSpec for codex_turn_cmd.
@@ -735,10 +782,8 @@ impl Agent {
                     for gate in &pending {
                         let cancel_result = crate::acp::request_permission_response(None);
                         // Parse the stored request id back as a JSON Value.
-                        let acp_req_id: serde_json::Value =
-                            serde_json::from_str(&gate.request_id).unwrap_or_else(|_| {
-                                serde_json::Value::String(gate.request_id.clone())
-                            });
+                        let acp_req_id: serde_json::Value = serde_json::from_str(&gate.request_id)
+                            .unwrap_or_else(|_| serde_json::Value::String(gate.request_id.clone()));
                         let cancel_line = crate::acp::encode_response(acp_req_id, cancel_result);
                         let _ = writer.write_all(cancel_line.as_bytes());
                         let _ = writer.write_all(b"\n");
@@ -874,14 +919,13 @@ impl Agent {
             let pending = {
                 let mut gates = self.pending_gates.0.lock().unwrap();
                 let taken = gates.get_mut(session_id).and_then(|queue| {
-                    let idx = queue
-                        .iter()
-                        .position(|g| g.request_id == request_id)
-                        .or(if request_id.is_empty() && !queue.is_empty() {
+                    let idx = queue.iter().position(|g| g.request_id == request_id).or(
+                        if request_id.is_empty() && !queue.is_empty() {
                             Some(0)
                         } else {
                             None
-                        });
+                        },
+                    );
                     idx.and_then(|i| queue.remove(i))
                 });
                 // Drop the session's entry entirely once its queue is empty.
@@ -920,9 +964,7 @@ impl Agent {
                         None
                     };
 
-                    let result_val = crate::acp::request_permission_response(
-                        option_id.as_deref(),
-                    );
+                    let result_val = crate::acp::request_permission_response(option_id.as_deref());
 
                     // Reply with the RAW ACP JSON-RPC id (stored separately from the
                     // unique routing request_id). Parse it back to its JSON type so a
@@ -967,7 +1009,11 @@ impl Agent {
                     marsad_proto::encode_control_response_elicitation(
                         &gate.request_id,
                         allow,
-                        if allow { elicitation_content.clone() } else { None },
+                        if allow {
+                            elicitation_content.clone()
+                        } else {
+                            None
+                        },
                     )
                 } else {
                     let resp = marsad_proto::ControlResponse {
@@ -978,7 +1024,11 @@ impl Agent {
                         // Echo the chosen "always allow …" suggestion VERBATIM so
                         // claude persists the rule it itself offered. None → a plain
                         // one-time allow (or a deny).
-                        updated_permissions: if allow { permission_updates.clone() } else { None },
+                        updated_permissions: if allow {
+                            permission_updates.clone()
+                        } else {
+                            None
+                        },
                     };
                     marsad_proto::encode_control_response(&resp)
                 };
@@ -1022,14 +1072,13 @@ impl Agent {
             let pending = {
                 let mut gates = self.pending_gates.0.lock().unwrap();
                 let taken = gates.get_mut(session_id).and_then(|queue| {
-                    let idx = queue
-                        .iter()
-                        .position(|g| g.request_id == request_id)
-                        .or(if request_id.is_empty() && !queue.is_empty() {
+                    let idx = queue.iter().position(|g| g.request_id == request_id).or(
+                        if request_id.is_empty() && !queue.is_empty() {
                             Some(0)
                         } else {
                             None
-                        });
+                        },
+                    );
                     idx.and_then(|i| queue.remove(i))
                 });
                 if gates.get(session_id).is_some_and(|q| q.is_empty()) {
@@ -1162,21 +1211,20 @@ impl Agent {
         // currently adopted in the in-memory `sessions` map: a Stale/reconnected/
         // resumed session must still be able to open a terminal. Gating on the
         // in-memory map silently dropped PtyStart for those (black-screen bug).
-        let known = self.sessions.contains_key(&session_id)
-            || {
-                #[cfg(not(coverage))]
-                {
-                    self.store
-                        .0
-                        .restore()
-                        .map(|r| r.sessions.iter().any(|s| s.id == session_id))
-                        .unwrap_or(false)
-                }
-                #[cfg(coverage)]
-                {
-                    false
-                }
-            };
+        let known = self.sessions.contains_key(&session_id) || {
+            #[cfg(not(coverage))]
+            {
+                self.store
+                    .0
+                    .restore()
+                    .map(|r| r.sessions.iter().any(|s| s.id == session_id))
+                    .unwrap_or(false)
+            }
+            #[cfg(coverage)]
+            {
+                false
+            }
+        };
         if !known {
             return Err(AgentError::Protocol(format!(
                 "PtyStart: unknown session {session_id}"
