@@ -118,6 +118,12 @@ export interface GraphScreenProps {
    *  "Agents (N)" heading. Omitted ⇒ falls back to the graph's node count (so a
    *  caller that merges drafts into `graph.nodes` still reads correctly). */
   draftCount?: number;
+
+  /** A design-time connection-validation error message to surface in the graph
+   *  panel (from validateConnection or a rejected addConnection). When set,
+   *  a `data-testid="design-conn-error"` banner is rendered. `null`/`undefined`
+   *  ⇒ no banner. */
+  designError?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +148,7 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
     onDeleteWorkstream,
     hosts = [],
     draftCount,
+    designError,
   } = props;
 
   // Host-derived connectivity (NOT lifecycle): map a node's host id → its live
@@ -987,6 +994,27 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
           {graph.name}
         </div>
         <div style={{ fontSize: "calc(11.5px * var(--fs,1))", color: "var(--txt3)", marginTop: 3 }}>{graph.goal}</div>
+
+        {/* Connection-validation error banner — shown whenever designError is set,
+            regardless of design/operate mode (real-edge rejections surface here too). */}
+        {designError != null && designError !== "" && (
+          <div
+            data-testid="design-conn-error"
+            style={{
+              margin: "12px 0",
+              padding: "10px 12px",
+              borderRadius: 9,
+              background: "var(--error-bg)",
+              border: "1px solid var(--error)",
+              color: "var(--error)",
+              fontSize: "calc(11.5px * var(--fs,1))",
+              fontWeight: 600,
+              wordBreak: "break-word",
+            }}
+          >
+            {designError}
+          </div>
+        )}
 
         {designMode ? (
           <>

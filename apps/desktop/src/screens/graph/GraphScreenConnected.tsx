@@ -27,9 +27,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useVm } from "../../bridge/useVm";
 import type { DraftNode } from "../../bridge/useVm";
-import { launchSession } from "../../bridge/api";
+import { launchSession, launchWaslSession } from "../../bridge/api";
 import type { GraphNode, GraphView } from "../../bridge/workstreamTypes";
 import { GraphScreen } from "./GraphScreen";
+import { validateConnection, CONN_ERROR_MESSAGE } from "../../bridge/connValidate";
+import { orderDraftLaunch } from "../../bridge/draftOrder";
+import { isWaslDriver, waslProtocol } from "../../bridge/drivers";
 
 /** Local id generator for a newly drag-connected edge — mirrors the design
  *  reference's `'e'+Date.now()` (Marsad Workstreams.dc.html ~line 897).
@@ -82,6 +85,11 @@ export function GraphScreenConnected(): JSX.Element {
   const [designMode, setDesignMode] = useState<boolean | null>(null);
   const seededWsRef = useRef<string | null>(null);
 
+  // Design-time connection-validation error (Phase C). Surfaced when
+  // validateConnection rejects a draft wire, or when addConnection rejects for
+  // a real edge. Cleared on next successful connection attempt.
+  const [designError, setDesignError] = useState<string | null>(null);
+
   const graph = state.graph;
   const wsId = (state.wsId ?? graph?.ws_id) ?? null;
 
@@ -125,8 +133,11 @@ export function GraphScreenConnected(): JSX.Element {
 
   // Design mode when the store still has a draft in flight, when the backend
   // graph is empty, or when the user explicitly toggled in.
+  // Draft nodes ALWAYS force design mode regardless of the seeded value, because
+  // the test can inject draftNodes into a graph that already has real nodes (the
+  // mixed draft↔real scenario) and the confirm-draft UI must be visible.
   const effectiveDesignMode =
-    designMode ?? (realGraph.nodes.length === 0 || draftNodes.length > 0);
+    draftNodes.length > 0 || (designMode ?? realGraph.nodes.length === 0);
 
   const draftTempIds = new Set(draftNodes.map((d) => d.tempId));
 
@@ -157,6 +168,9 @@ export function GraphScreenConnected(): JSX.Element {
   // (temp) node cannot be a real connection (its endpoints aren't launched
   // sessions yet — core-ext.md:69-72); record a draft edge instead. A wire
   // between two REAL nodes goes straight to the backend as before.
+  // Phase C: validate draft wires via validateConnection; surface errors via
+  // designError state. Fix the silent `void` discard for real edges: catch and
+  // surface rejection as a designError.
   function onConnect(
     from: string,
     to: string,
@@ -164,39 +178,70 @@ export function GraphScreenConnected(): JSX.Element {
     bi: boolean
   ): void {
     if (effectiveDesignMode && (draftTempIds.has(from) || draftTempIds.has(to))) {
+      // Validate over the merged draft+real graph.
+      const mergedNodes = g.nodes.map((n) => ({ id: n.id, ws: effectiveWsId }));
+      const mergedEdges = g.edges.map((e) => ({ from: e.from, to: e.to }));
+      const errorKind = validateConnection(effectiveWsId, from, to, mergedNodes, mergedEdges);
+      if (errorKind != null) {
+        setDesignError(CONN_ERROR_MESSAGE[errorKind]);
+        return;
+      }
+      setDesignError(null);
       addDraftEdge({ from, to, kind, bi });
       return;
     }
-    void addConnection(genConnId(), effectiveWsId, from, to, kind, bi);
+    // Real edge: fix the silent void — catch rejections and surface as designError.
+    addConnection(genConnId(), effectiveWsId, from, to, kind, bi)
+      .then(() => { setDesignError(null); })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        setDesignError(msg);
+      });
   }
 
   // "Confirm & launch" — the ONE backend materialization point. Launch every
-  // draft node (LEAD FIRST), assign each with the REAL id launchSession returns,
+  // draft node in DEPENDENCY ORDER (via orderDraftLaunch — lead first at depth
+  // 0, then dependents), assign each with the REAL id returned by launch,
   // building a temp→real map; then submit each draft edge with the resolved
   // real endpoint ids. Finally clear the draft + leave design mode and refresh
   // the graph so the now-real nodes render.
+  // Phase C: use orderDraftLaunch for launch ordering; call launchWaslSession
+  // for wasl-* drivers; on failure surface designError and do NOT clearDraft.
   async function onConfirmDraft(): Promise<void> {
     if (draftNodes.length === 0) {
       // No draft authored — just leave design mode (operate-mode "done").
       setDesignMode(false);
       return;
     }
-    // Lead first, then the rest in authored order (draft node #0 is the lead).
-    const ordered = [...draftNodes].sort(
-      (a, b) => Number(b.isLead) - Number(a.isLead)
-    );
+
+    // Sort by dependency depth (lead first at depth 0, dependents after).
+    const ordered = orderDraftLaunch(draftNodes, draftEdges);
     const tempToReal = new Map<string, string>();
     try {
       for (const node of ordered) {
-        const realId = await launchSession({
-          project: node.project,
-          host_id: node.hostId,
-          model: node.model,
-          posture: node.posture,
-          first_prompt: node.firstPrompt,
-          name: node.name,
-          driver: node.driver,
-        });
+        let realId: string;
+        if (isWaslDriver(node.driver)) {
+          const protocol = waslProtocol(node.driver);
+          const wasl_target_key = {
+            protocol,
+            context: { cwd: node.project, model: node.model, posture: node.posture },
+          };
+          realId = await launchWaslSession({
+            host_id: node.hostId,
+            wasl_target_key,
+            name: node.name,
+          });
+        } else {
+          realId = await launchSession({
+            project: node.project,
+            host_id: node.hostId,
+            model: node.model,
+            posture: node.posture,
+            first_prompt: node.firstPrompt,
+            name: node.name,
+            driver: node.driver,
+          });
+        }
         await assignSession(realId, effectiveWsId, node.isLead);
         tempToReal.set(node.tempId, realId);
       }
@@ -207,9 +252,13 @@ export function GraphScreenConnected(): JSX.Element {
       }
       clearDraft();
       setDesignMode(false);
+      setDesignError(null);
       // Refresh the graph so the freshly-launched real nodes replace the drafts.
       await goToGraph(effectiveWsId);
     } catch (err) {
+      // Surface error — do NOT clearDraft so the user can retry.
+      const msg = err instanceof Error ? err.message : String(err);
+      setDesignError(msg);
       console.error("[GraphScreenConnected] confirm & launch failed:", err);
     }
   }
@@ -265,6 +314,7 @@ export function GraphScreenConnected(): JSX.Element {
       onPauseWorkstream={() => void pauseWorkstream(effectiveWsId)}
       onResumeWorkstream={() => void resumeWorkstream(effectiveWsId)}
       onDeleteWorkstream={onDeleteWorkstream}
+      designError={designError}
     />
   );
 }
