@@ -222,6 +222,90 @@ pub fn select_wasl_session_runtime(
 }
 
 // ---------------------------------------------------------------------------
+// B1 scaffold — WaslNode managed-runtime config + port helpers
+// (docs/design/wasl-backend-plan.md §node-spawn)
+// ---------------------------------------------------------------------------
+
+/// Configuration for rendering a `wasl-node` TOML config file. Pure and
+/// always compiled (no IO) so the node-spawn path can be tested without real
+/// sockets or OS processes.
+pub struct WaslNodeConfig<'a> {
+    /// Host identity — the `host_id` string this daemon is serving.
+    pub host_id: &'a str,
+    /// The `control_bind` address the node binds for its runtime-control HTTP
+    /// endpoint (`http://ip:port`). Deterministic per host so a durable node is
+    /// rediscoverable after a restart.
+    pub control_bind: &'a str,
+    /// The default A2A protocol the node advertises (e.g. `"claude"`).
+    pub default_protocol: &'a str,
+    /// Absolute path to the `claude` binary, if known. `None` → the node
+    /// picks the binary from its own `PATH`.
+    pub claude_bin: Option<&'a str>,
+    /// Absolute path to the `opencode` binary, if known.
+    pub opencode_bin: Option<&'a str>,
+}
+
+/// Render a `wasl-node` TOML config from `cfg`. Pure: no filesystem IO, always
+/// compiled. Generates the `[identity]` + `[runtime]` blocks that `wasl-mcpd
+/// --config <path>` reads.
+///
+/// TOML shape (Phase-B B1, matching the Phase-A `wasl-mcp` config the smoke
+/// verified):
+///
+/// ```toml
+/// [identity]
+/// host_id = "<host_id>"
+///
+/// [runtime]
+/// kind = "managed"
+/// control_bind = "<control_bind>"
+/// default_protocol = "<default_protocol>"
+/// claude_bin = "<path>"      # only when Some
+/// opencode_bin = "<path>"    # only when Some
+/// ```
+pub fn render_wasl_node_toml(cfg: &WaslNodeConfig) -> String {
+    let mut out = String::new();
+    // [identity] block — host identity so the node knows which host it serves.
+    out.push_str("[identity]\n");
+    out.push_str(&format!("host_id = {:?}\n", cfg.host_id));
+    out.push('\n');
+    // [runtime] block — the managed-runtime kind + control endpoint + protocol defaults.
+    out.push_str("[runtime]\n");
+    out.push_str("kind = \"managed\"\n");
+    out.push_str(&format!("control_bind = {:?}\n", cfg.control_bind));
+    out.push_str(&format!("default_protocol = {:?}\n", cfg.default_protocol));
+    if let Some(bin) = cfg.claude_bin {
+        out.push_str(&format!("claude_bin = {:?}\n", bin));
+    }
+    if let Some(bin) = cfg.opencode_bin {
+        out.push_str(&format!("opencode_bin = {:?}\n", bin));
+    }
+    out
+}
+
+/// Compute a deterministic loopback `control_bind` address for `host_id`
+/// (`http://127.0.0.1:<port>`). Deterministic so a durable wasl-node on a
+/// host is always reachable at the same address after a process restart (the
+/// Marsad agent can re-register the factory without re-spawning the node).
+///
+/// Port derivation: FNV-1a hash of `host_id` mapped into the range
+/// `[47000, 47999]` (1000-port window, far from well-known services,
+/// distinct per host with high probability).
+pub fn wasl_control_bind(host_id: &str) -> String {
+    // FNV-1a 32-bit hash — simple, stable, dependency-free.
+    const FNV_OFFSET: u32 = 2_166_136_261;
+    const FNV_PRIME: u32 = 16_777_619;
+    let mut hash = FNV_OFFSET;
+    for byte in host_id.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    // Map into [47000, 47999]: 1000-port window.
+    let port = 47_000u32 + (hash % 1_000);
+    format!("http://127.0.0.1:{port}")
+}
+
+// ---------------------------------------------------------------------------
 // §4.2 — wasl_event_lines (pure mapping)
 // ---------------------------------------------------------------------------
 

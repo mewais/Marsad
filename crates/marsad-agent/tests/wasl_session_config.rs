@@ -93,8 +93,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use marsad_agent::{
-    load_wasl_session_config, select_wasl_session_runtime, Agent, AgentConfig, AgentError,
-    ListenSpec,
+    load_wasl_session_config, select_wasl_session_runtime, Agent, AgentConfig, ListenSpec,
 };
 use marsad_lifecycle::FakeContainer;
 use marsad_notify::CaptureNotifier;
@@ -544,74 +543,134 @@ fn every_configured_host_resolves_to_its_own_endpoint() {
 }
 
 // ===========================================================================
-// Part 4 — absent = inert: no config file (or no `session_runtimes` key) → the
-// production factory path is never engaged, and a `LaunchWaslSession` for a host
-// with no configured runtime-control endpoint fails GRACEFULLY with a clear
-// typed error — never a panic, never a silent default/wrong endpoint. (§2
-// load-bearing optionality; §11 local-first.)
+// Part 4 — absent `session_runtimes` → Phase-B adopt-or-spawn path: when no
+// pre-configured runtime-control endpoint exists (no `wasl.json`, or only the X1
+// `operators` key), a `LaunchWaslSession` for a LOCAL host triggers Phase B's
+// `ensure_wasl_runtime_node` — Marsad ADOPTS-OR-SPAWNS a managed `wasl-mcpd`
+// node via the Container seam instead of returning a typed "no provider"
+// Protocol error. The spawn is visible in the FakeContainer call log.
+//
+// Because no real HTTP server answers on the spawned node's control_bind
+// (`FakeContainer` does not start a real process), the launch STILL returns
+// `Err` — but the failure mode is a CONNECTION/transport error at
+// `get_or_start`, not the old "no wasl configured" Protocol error.
+//
+// What changed from Phase A:
+//   BEFORE (old contract): absent config → inert → typed Protocol error, no spawn.
+//   NOW   (Phase B):       absent config → adopt-or-spawn via Container → connection
+//                          error (no live node). The load_wasl_session_config(…)==None
+//                          sanity check is UNCHANGED (that helper's behavior is
+//                          unchanged — absent/operators-only still loads as None;
+//                          None now triggers spawn, not inertness).
+//
+// RED status: `ensure_wasl_runtime_node` is `todo!()`, so no spawn happens yet
+// and the old Err path fires instead of the Container adopt-or-spawn. The
+// Container call-log assertions FAIL because no spawn occurred. The coder makes
+// them green by implementing the real adopt-or-spawn logic.
 // ===========================================================================
 
 /// No `wasl.json` at all → `load_wasl_session_config` is `None` → serve() never
-/// sets a session-provider factory → a `LaunchWaslSession` fails with the
-/// EXISTING typed `Protocol` error ("no wasl session provider registered", per
-/// `handle_launch_wasl_session`), not a panic and not a silent success against
-/// some default endpoint. This is the whole "absent = inert, and inert means a
-/// clear typed failure if hand-fed a launch anyway" contract.
+/// pre-sets a session-provider factory. A `LaunchWaslSession` for a LOCAL host
+/// in this state triggers Phase B: `ensure_wasl_runtime_node` is called and
+/// attempts to adopt-or-spawn a managed `wasl-mcpd-runtime-local` node via the
+/// Container seam. Since `FakeContainer` does not start a real process, the
+/// launch fails gracefully (connection/transport error) — never a panic, never
+/// a silent success. The Container call log must show the probe and spawn.
+///
+/// RED: `ensure_wasl_runtime_node` is `todo!()` → the Container calls never
+/// happen and the spawn assertions fail. The coder wires the real logic.
 #[test]
-fn absent_config_leaves_launch_failing_gracefully_with_typed_error() {
+fn absent_config_local_launch_adopts_or_spawns_a_node_then_fails_without_a_live_node() {
     let tmp = tempdir();
-    // Sanity: the config really is absent → None (the serve() guard's condition).
+    // Sanity: the config helper's behavior is unchanged — absent file → None.
+    // (None now means "spawn a local node," not "inert.")
     assert_eq!(
         load_wasl_session_config(tmp.str()),
         None,
-        "no wasl.json must load as None so serve() never engages the factory path"
+        "no wasl.json must load as None; what changed is that None now triggers spawn, not inertness"
     );
 
-    // A daemon in this state (no factory ever set) is exactly a fresh Agent.
+    // A fresh agent (no factory, no provider pre-set) with a FakeContainer that
+    // does NOT start a real process, so the managed node has no live HTTP server.
     let mut agent = make_agent();
-    let err = agent
-        .handle_ipc(&launch_wasl_line(
-            "sess-unwired",
-            "local",
-            serde_json::json!({"ctx": "x"}),
-        ))
-        .expect_err("with no runtime configured, a LaunchWaslSession must fail — not panic");
+    let result = agent.handle_ipc(&launch_wasl_line(
+        "sess-spawn-absent",
+        "local",
+        serde_json::json!({"ctx": "x"}),
+    ));
+
+    // The launch must fail gracefully (no panic), but the failure is now a
+    // connection/transport error from get_or_start — NOT the old Protocol error.
     assert!(
-        matches!(err, AgentError::Protocol(_)),
-        "an unconfigured Wasl backend must fail with a typed Protocol error, got {err:?}"
+        result.is_err(),
+        "LaunchWaslSession must still fail (FakeContainer has no live HTTP server), \
+         but must not panic"
+    );
+
+    // The Container call log must show the adopt-or-spawn attempt for the managed
+    // runtime node — proving Phase B's path was entered.
+    // RED: no spawn logic yet, so the log is empty and these assertions fail.
+    let calls = agent.container_calls();
+    assert!(
+        calls.iter().any(|c| c.starts_with("exists:wasl-mcpd-runtime-local")),
+        "ensure_wasl_runtime_node must probe the Container for the managed runtime node; \
+         calls: {calls:?}"
     );
     assert!(
-        err.to_string().to_lowercase().contains("wasl"),
-        "the error must name wasl as the reason it could not launch; got: {err}"
+        calls.iter().any(|c| c.starts_with("spawn:wasl-mcpd-runtime-local")),
+        "an absent managed runtime node must be SPAWNED via the Container seam; \
+         calls: {calls:?}"
     );
 }
 
 /// The `session_runtimes`-absent (X1-operators-only) `wasl.json` variant of the
-/// same guarantee: the presence of the OTHER Wasl key must not accidentally wire
-/// the backend, and a launch still fails gracefully.
+/// same Phase-B guarantee: the presence of the OTHER Wasl key must not
+/// accidentally pre-wire the backend, and `load_wasl_session_config` stays None.
+/// But a `LaunchWaslSession` for a LOCAL host STILL triggers
+/// `ensure_wasl_runtime_node` (Phase B adopt-or-spawn), not the old inert path.
+///
+/// RED: `ensure_wasl_runtime_node` is `todo!()` → no Container calls → spawn
+/// assertions fail.
 #[test]
-fn operators_only_config_leaves_backend_inert_and_launch_fails_gracefully() {
+fn operators_only_config_local_launch_adopts_or_spawns_a_node_then_fails_without_a_live_node() {
     let tmp = tempdir();
     write_wasl_json(
         &tmp,
         br#"{"operators":[{"host_id":"local","url":"http://127.0.0.1:8787"}]}"#,
     );
+    // Sanity: operators-only still loads as None — unchanged helper behavior.
+    // (None now triggers spawn, not inertness.)
     assert_eq!(
         load_wasl_session_config(tmp.str()),
         None,
-        "an operators-only wasl.json must leave the backend inert (None)"
+        "an operators-only wasl.json must load as None; None now triggers spawn, not inertness"
     );
 
+    // Fresh agent — no pre-set factory, FakeContainer has no live HTTP server.
     let mut agent = make_agent();
-    let err = agent
-        .handle_ipc(&launch_wasl_line(
-            "sess-x1only",
-            "local",
-            serde_json::json!({"ctx": "x"}),
-        ))
-        .expect_err("an operators-only config must not wire the backend; the launch must fail");
+    let result = agent.handle_ipc(&launch_wasl_line(
+        "sess-x1only-spawn",
+        "local",
+        serde_json::json!({"ctx": "x"}),
+    ));
+
+    // Graceful failure — connection error, not panic.
     assert!(
-        matches!(err, AgentError::Protocol(_)),
-        "expected a typed Protocol error, got {err:?}"
+        result.is_err(),
+        "LaunchWaslSession must fail (no live node behind FakeContainer) but must not panic"
+    );
+
+    // Container log must show the adopt-or-spawn attempt.
+    // RED: no spawn logic yet → log is empty → assertions fail.
+    let calls = agent.container_calls();
+    assert!(
+        calls.iter().any(|c| c.starts_with("exists:wasl-mcpd-runtime-local")),
+        "ensure_wasl_runtime_node must probe the Container for the managed runtime node; \
+         calls: {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|c| c.starts_with("spawn:wasl-mcpd-runtime-local")),
+        "an absent managed runtime node must be SPAWNED via the Container seam; \
+         calls: {calls:?}"
     );
 }

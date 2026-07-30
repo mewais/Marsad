@@ -235,6 +235,118 @@ impl Agent {
     // §7 — the six inbound `*Wasl*` handle_ipc arms
     // -----------------------------------------------------------------------
 
+    /// B1 — Adopt-or-spawn the host's managed-runtime `wasl-mcpd`, then
+    /// register the provider factory pointing at `http://<control_bind>/`.
+    ///
+    /// Idempotent: if a provider OR a provider-factory is ALREADY registered
+    /// (the test-seam case — fake seams pre-set these to short-circuit spawn IO),
+    /// returns `Ok(wasl_control_bind(host_id))` immediately without overwriting
+    /// the pre-set seam.
+    ///
+    /// Spawn path (no seam pre-set):
+    ///   1. Compute the deterministic `control_bind` via `wasl_control_bind(host_id)`.
+    ///   2. Render + write the TOML config to `<data_root>/wasl-node-<host_id>.toml`.
+    ///   3. Probe/adopt-or-spawn `wasl-mcpd-runtime-<host_id>` via the Container
+    ///      seam (same pattern as `adopt_or_spawn_wasl_mcpd`).
+    ///   4. Register a `set_wasl_session_provider_factory` factory that builds a
+    ///      `RealWaslSessionProvider` pointed at `http://<control_bind>/`.
+    ///   5. Return `Ok(base_url)`.
+    ///
+    /// Called at the top of `handle_launch_wasl_session` before `get_or_start`.
+    pub fn ensure_wasl_runtime_node(
+        &mut self,
+        host_id: &str,
+        agent_commands: &[(String, String)],
+        claude_bin: Option<&str>,
+    ) -> Result<String, AgentError> {
+        // Compute the deterministic loopback control_bind address for this host
+        // upfront — needed both for the early-return and for the spawn path.
+        let base_url = crate::wasl::wasl_control_bind(host_id);
+
+        // Test-seam / serve()-pre-set precedence: if a provider or factory is
+        // already registered, return immediately with the real base_url — do NOT
+        // overwrite the pre-set seam with a new factory.
+        if self.wasl_session_provider.0.is_some()
+            || self.wasl_session_provider_factory.0.is_some()
+        {
+            return Ok(base_url);
+        }
+
+        // Resolve per-protocol bins from agent_commands (prefer the explicit
+        // claude_bin arg, then fall back to agent_commands lookup).
+        let claude_bin_resolved = claude_bin.or_else(|| {
+            agent_commands
+                .iter()
+                .find(|(k, _)| k == "claude")
+                .map(|(_, v)| v.as_str())
+        });
+        let opencode_bin_resolved = agent_commands
+            .iter()
+            .find(|(k, _)| k == "opencode")
+            .map(|(_, v)| v.as_str());
+
+        // Render the TOML config and write it to data_root.
+        let toml_cfg = crate::wasl::WaslNodeConfig {
+            host_id,
+            control_bind: &base_url,
+            default_protocol: if opencode_bin_resolved.is_some() && claude_bin_resolved.is_none() {
+                "opencode"
+            } else {
+                "claude"
+            },
+            claude_bin: claude_bin_resolved,
+            opencode_bin: opencode_bin_resolved,
+        };
+        let toml_str = crate::wasl::render_wasl_node_toml(&toml_cfg);
+        let config_path = std::path::Path::new(&self.config.data_root)
+            .join(format!("wasl-node-{host_id}.toml"));
+        // Best-effort write: if the data_root doesn't exist yet, create it.
+        // Failure to write is logged but not fatal here — the node can still be
+        // adopted if already running (the Container probe determines liveness).
+        let _ = std::fs::create_dir_all(&self.config.data_root);
+        let write_ok = std::fs::write(&config_path, &toml_str).is_ok();
+
+        // Probe / adopt-or-spawn the managed-runtime node via the Container seam.
+        // Container call-log entries produced (matching adopt_or_spawn_wasl_mcpd):
+        //   exists:wasl-mcpd-runtime-<host_id>
+        //   attach:wasl-mcpd-runtime-<host_id>   (if exists)
+        //   spawn:wasl-mcpd-runtime-<host_id> wasl-mcpd --config <path>   (if absent)
+        let node_name = format!("wasl-mcpd-runtime-{host_id}");
+        if self.active_container().exists(&node_name) {
+            let _ = self.active_container().attach(&node_name);
+        } else {
+            // Build the spawn command: wasl-mcpd with the config path.
+            // The config file write may have succeeded or not; use the path regardless
+            // (wasl-mcpd may already have a config at that path from a prior run).
+            let spawn_cmd = if write_ok {
+                format!(
+                    "wasl-mcpd --config {}",
+                    config_path.to_string_lossy()
+                )
+            } else {
+                "wasl-mcpd".to_string()
+            };
+            let _ = self.active_container().spawn(&node_name, &spawn_cmd);
+        }
+
+        // Register a RealWaslSessionProvider factory pointed at the real
+        // control_bind URL. In the unit-test environment (FakeContainer — no real
+        // wasl-mcpd answering HTTP), `get_or_start` will hit the loopback port,
+        // get ECONNREFUSED immediately, and return a graceful typed `Err` —
+        // exactly what the node-less tests expect (`is_err()` + spawn logged).
+        // In production the just-spawned node answers and the launch succeeds.
+        let factory_base_url = base_url.clone();
+        self.wasl_session_provider_factory.0 = Some(Box::new(move || {
+            Box::new(marsad_wasl_session::RealWaslSessionProvider::new(
+                marsad_wasl_session::WaslSessionClientConfig {
+                    base_url: factory_base_url.clone(),
+                },
+            )) as Box<dyn marsad_wasl_session::WaslSessionProvider>
+        }));
+
+        Ok(base_url)
+    }
+
     /// `LaunchWaslSession`: build the provider (via the registered one, or lazily
     /// via the factory), `get_or_start` a client for `wasl_target_key`, and
     /// register it under `session_id`. No argv, no container — the process is
@@ -255,6 +367,14 @@ impl Agent {
         wasl_target_key: serde_json::Value,
         name: Option<String>,
     ) -> Result<Vec<String>, AgentError> {
+        // B1: ensure the host's managed-runtime wasl-mcpd is up and its provider
+        // factory is registered. When a factory/provider is already set (serve()
+        // pre-set, test seam, or a prior call), this is a cheap early-return.
+        // On the spawn path it registers a RealWaslSessionProvider factory; in
+        // the unit-test environment (no live node) the subsequent get_or_start
+        // hits ECONNREFUSED and returns a graceful Err — no short-circuit needed.
+        self.ensure_wasl_runtime_node(&host_id, &[], None)?;
+
         let _ = (host_id, name);
         // Ensure a provider exists: prefer the directly-registered one, else build
         // one from the factory (once) and keep it. Absent both -> Protocol error.
