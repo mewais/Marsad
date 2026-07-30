@@ -1760,3 +1760,371 @@ fn remove_session_drops_session_membership_and_auto_workstream() {
         "ghost workstream card must be gone after remove"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase C gap 1 — remove_session cascade + regression pins
+// ---------------------------------------------------------------------------
+
+// Helper: check whether a connection id exists in the store via restore().
+fn connection_in_store(backend: &MemoryBackend, conn_id: &str) -> bool {
+    let store = marsad_store::Store::new(Box::new(backend.clone()));
+    store
+        .restore()
+        .expect("restore for connection check")
+        .connections
+        .iter()
+        .any(|c| c.id == conn_id)
+}
+
+/// **RED** (gap 1 — cascade not implemented):
+/// Launch 3 sessions, assign all to one workstream, add A→B and B→C.
+/// remove_session(B) must drop BOTH edges (B is touched by both), update the
+/// graph + board snapshot, AND delete both connection keys from the store.
+#[test]
+fn remove_session_cascades_connections_touching_removed_node() {
+    let backend = MemoryBackend::new();
+    let mut core = core_with_backend(backend.clone());
+    let sa = launch(&mut core, "/proj/a");
+    let sb = launch(&mut core, "/proj/b");
+    let sc = launch(&mut core, "/proj/c");
+
+    core.create_workstream("ws-cascade".to_string(), "Cascade".to_string(), String::new(), None)
+        .expect("create ws");
+    core.assign_session(&sa, "ws-cascade", true).expect("assign A");
+    core.assign_session(&sb, "ws-cascade", false).expect("assign B");
+    core.assign_session(&sc, "ws-cascade", false).expect("assign C");
+
+    core.add_connection(
+        "conn-ab".to_string(),
+        "ws-cascade".to_string(),
+        sa.clone(),
+        sb.clone(),
+        ConnKind::Data,
+        false,
+    )
+    .expect("add A->B");
+    core.add_connection(
+        "conn-bc".to_string(),
+        "ws-cascade".to_string(),
+        sb.clone(),
+        sc.clone(),
+        ConnKind::Data,
+        false,
+    )
+    .expect("add B->C");
+
+    // Precondition: both edges visible.
+    let graph_before = core.graph("ws-cascade").expect("graph before");
+    assert_eq!(graph_before.edges.len(), 2, "precondition: 2 edges");
+
+    // Remove the middle node B.
+    let updates = core.remove_session(&sb).expect("remove_session B");
+
+    // 1a. graph() for the workstream no longer contains either edge.
+    let graph_after = core.graph("ws-cascade").expect("graph after");
+    assert!(
+        !graph_after.edges.iter().any(|e| e.id == "conn-ab"),
+        "conn-ab (A->B) must be dropped from graph after remove_session(B)"
+    );
+    assert!(
+        !graph_after.edges.iter().any(|e| e.id == "conn-bc"),
+        "conn-bc (B->C) must be dropped from graph after remove_session(B)"
+    );
+    assert!(
+        graph_after.edges.is_empty(),
+        "no edges should remain after removing B"
+    );
+
+    // 1b. Board update is included in the returned updates.
+    let board = board_from(&updates);
+    assert!(board.all.iter().any(|c| c.id == "ws-cascade"), "board update present");
+
+    // 1c. Store must have deleted both connection records.
+    assert!(
+        !connection_in_store(&backend, "conn-ab"),
+        "conn-ab must be deleted from store after remove_session(B)"
+    );
+    assert!(
+        !connection_in_store(&backend, "conn-bc"),
+        "conn-bc must be deleted from store after remove_session(B)"
+    );
+}
+
+/// **RED** (gap 1 — cascade not implemented):
+/// Variant: session A is an endpoint of only ONE edge (A→C); session B is an
+/// endpoint of none. Removing A must drop only the A→C edge, leaving B→C
+/// (if any) untouched. Here we have A→C and check that it is dropped alone.
+#[test]
+fn remove_session_cascades_only_edges_touching_removed_node() {
+    let backend = MemoryBackend::new();
+    let mut core = core_with_backend(backend.clone());
+    let sa = launch(&mut core, "/proj/x1");
+    let sb = launch(&mut core, "/proj/x2");
+    let sc = launch(&mut core, "/proj/x3");
+
+    core.create_workstream("ws-partial".to_string(), "Partial".to_string(), String::new(), None)
+        .expect("create ws");
+    core.assign_session(&sa, "ws-partial", true).expect("assign A");
+    core.assign_session(&sb, "ws-partial", false).expect("assign B");
+    core.assign_session(&sc, "ws-partial", false).expect("assign C");
+
+    // A→C only. B is not connected to anything.
+    core.add_connection(
+        "conn-ac".to_string(),
+        "ws-partial".to_string(),
+        sa.clone(),
+        sc.clone(),
+        ConnKind::Data,
+        false,
+    )
+    .expect("add A->C");
+
+    // Precondition.
+    assert_eq!(
+        core.graph("ws-partial").unwrap().edges.len(),
+        1,
+        "one edge before remove"
+    );
+
+    // Remove A (source of the only edge).
+    core.remove_session(&sa).expect("remove A");
+
+    // The A→C edge must be gone from the graph.
+    let graph_after = core.graph("ws-partial").expect("graph after");
+    assert!(
+        graph_after.edges.is_empty(),
+        "conn-ac must be dropped when its source node (A) is removed"
+    );
+
+    // Store must not contain conn-ac.
+    assert!(
+        !connection_in_store(&backend, "conn-ac"),
+        "conn-ac must be deleted from store"
+    );
+
+    // B is still in the workstream — its membership should survive.
+    let nodes = core.nodes();
+    assert!(
+        nodes.iter().any(|n| n.id == sb),
+        "B (unrelated node) must remain after A is removed"
+    );
+}
+
+/// **RED** (gap 1 — cascade not implemented):
+/// remove_session on a node with NO connections must still succeed (Ok),
+/// cause no panic, and emit no spurious delete for connections.
+#[test]
+fn remove_session_no_connections_is_ok_no_spurious_deletes() {
+    let backend = MemoryBackend::new();
+    let mut core = core_with_backend(backend.clone());
+    let sa = launch(&mut core, "/proj/noconn");
+
+    // No connections exist. remove_session must return Ok without panicking.
+    let updates = core.remove_session(&sa).expect("remove_session with no connections");
+
+    // SessionRemoved must be in updates.
+    assert!(
+        updates.iter().any(|u| matches!(u, VmUpdate::SessionRemoved { id } if id == &sa)),
+        "SessionRemoved must still be emitted"
+    );
+
+    // Store has no connection records (nothing to spuriously delete).
+    let restored = marsad_store::Store::new(Box::new(backend.clone()))
+        .restore()
+        .expect("restore");
+    assert!(
+        restored.connections.is_empty(),
+        "no connections must exist in store after removing a session that had none"
+    );
+}
+
+/// **GREEN** (regression pin — stop_session does NOT cascade):
+/// Stopping a connected node leaves its edges intact. stop_session keeps the
+/// session resumable; cascading would destroy information incorrectly.
+#[test]
+fn stop_session_does_not_cascade_connections() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let sa = launch(&mut core, "/proj/stop1");
+    let sb = launch(&mut core, "/proj/stop2");
+
+    core.create_workstream("ws-stop".to_string(), "Stop".to_string(), String::new(), None)
+        .expect("create ws");
+    core.assign_session(&sa, "ws-stop", true).expect("assign A");
+    core.assign_session(&sb, "ws-stop", false).expect("assign B");
+    core.add_connection(
+        "conn-stop".to_string(),
+        "ws-stop".to_string(),
+        sa.clone(),
+        sb.clone(),
+        ConnKind::Data,
+        false,
+    )
+    .expect("add connection");
+
+    // stop_session A — keeps it resumable (Stale), must NOT drop the edge.
+    core.stop_session(&sa).expect("stop_session A");
+
+    let graph = core.graph("ws-stop").expect("graph after stop");
+    assert_eq!(
+        graph.edges.len(),
+        1,
+        "stop_session must NOT cascade-delete connections"
+    );
+    assert!(
+        graph.edges.iter().any(|e| e.id == "conn-stop"),
+        "conn-stop must survive stop_session"
+    );
+}
+
+/// **GREEN** (pin — add_connection error contract):
+/// `add_connection` returns `Err(CoreError::Connection(msg))` for each invalid
+/// case, and the `msg` string equals the `ConnError::Display` string exactly.
+/// This is the string the UI surfaces to the user — pinning it ensures a coder
+/// cannot silently change the message.
+#[test]
+fn add_connection_error_contract_pins_exact_messages() {
+    let mut core = core_with_backend(MemoryBackend::new());
+    let sa = launch(&mut core, "/proj/ec1");
+    let sb = launch(&mut core, "/proj/ec2");
+    let sc = launch(&mut core, "/proj/ec3");
+
+    core.create_workstream("ws-ec".to_string(), "EC".to_string(), String::new(), None)
+        .expect("create ws");
+    core.assign_session(&sa, "ws-ec", true).expect("assign A");
+    core.assign_session(&sb, "ws-ec", false).expect("assign B");
+    core.assign_session(&sc, "ws-ec", false).expect("assign C");
+
+    // ── SelfLoop ────────────────────────────────────────────────────────────
+    let err = core
+        .add_connection(
+            "c-self".to_string(),
+            "ws-ec".to_string(),
+            sa.clone(),
+            sa.clone(),
+            ConnKind::Data,
+            false,
+        )
+        .expect_err("SelfLoop must error");
+    let msg = match &err {
+        CoreError::Connection(m) => m.clone(),
+        other => panic!("expected CoreError::Connection, got {other:?}"),
+    };
+    assert_eq!(
+        msg,
+        "connection endpoints must not be the same node",
+        "SelfLoop Display string mismatch"
+    );
+
+    // ── UnknownEndpoint ──────────────────────────────────────────────────────
+    let err = core
+        .add_connection(
+            "c-unk".to_string(),
+            "ws-ec".to_string(),
+            sa.clone(),
+            "ghost-session".to_string(),
+            ConnKind::Data,
+            false,
+        )
+        .expect_err("UnknownEndpoint must error");
+    let msg = match &err {
+        CoreError::Connection(m) => m.clone(),
+        other => panic!("expected CoreError::Connection, got {other:?}"),
+    };
+    assert_eq!(
+        msg,
+        "connection endpoint is not a known node",
+        "UnknownEndpoint Display string mismatch"
+    );
+
+    // ── Duplicate ────────────────────────────────────────────────────────────
+    core.add_connection(
+        "c-first".to_string(),
+        "ws-ec".to_string(),
+        sa.clone(),
+        sb.clone(),
+        ConnKind::Data,
+        false,
+    )
+    .expect("first connection ok");
+    let err = core
+        .add_connection(
+            "c-dup".to_string(),
+            "ws-ec".to_string(),
+            sa.clone(),
+            sb.clone(),
+            ConnKind::Data,
+            false,
+        )
+        .expect_err("Duplicate must error");
+    let msg = match &err {
+        CoreError::Connection(m) => m.clone(),
+        other => panic!("expected CoreError::Connection, got {other:?}"),
+    };
+    assert_eq!(
+        msg,
+        "an identical connection already exists",
+        "Duplicate Display string mismatch"
+    );
+
+    // ── Cycle ─────────────────────────────────────────────────────────────────
+    // sa→sb already exists. Add sb→sc, then sc→sa closes a cycle.
+    core.add_connection(
+        "c-bc".to_string(),
+        "ws-ec".to_string(),
+        sb.clone(),
+        sc.clone(),
+        ConnKind::Data,
+        false,
+    )
+    .expect("sb->sc ok");
+    let err = core
+        .add_connection(
+            "c-cycle".to_string(),
+            "ws-ec".to_string(),
+            sc.clone(),
+            sa.clone(),
+            ConnKind::Data,
+            false,
+        )
+        .expect_err("Cycle must error");
+    let msg = match &err {
+        CoreError::Connection(m) => m.clone(),
+        other => panic!("expected CoreError::Connection, got {other:?}"),
+    };
+    assert_eq!(
+        msg,
+        "connection would create a dependency cycle",
+        "Cycle Display string mismatch"
+    );
+
+    // ── CrossWorkstream (indirect — UnknownEndpoint fires first) ─────────────
+    // The validate_connection function checks UnknownEndpoint before
+    // CrossWorkstream. Providing a node that IS known but belongs to a
+    // different workstream triggers CrossWorkstream. Launch a 4th session and
+    // assign it to a separate workstream so the endpoints are known but span two
+    // workstreams.
+    let sd = launch(&mut core, "/proj/ec4");
+    core.create_workstream("ws-ec2".to_string(), "EC2".to_string(), String::new(), None)
+        .expect("create ws2");
+    core.assign_session(&sd, "ws-ec2", true).expect("assign D to ws2");
+
+    let err = core
+        .add_connection(
+            "c-cross".to_string(),
+            "ws-ec".to_string(),
+            sa.clone(),
+            sd.clone(),
+            ConnKind::Data,
+            false,
+        )
+        .expect_err("CrossWorkstream must error");
+    let msg = match &err {
+        CoreError::Connection(m) => m.clone(),
+        other => panic!("expected CoreError::Connection, got {other:?}"),
+    };
+    assert_eq!(
+        msg,
+        "connection endpoints span more than one workstream",
+        "CrossWorkstream Display string mismatch"
+    );
+}

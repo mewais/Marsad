@@ -639,11 +639,25 @@ impl Core {
         self.ws_leads.remove(&auto_ws_id);
         let _ = self.store.set_membership(&self.membership);
 
+        // Cascade-delete every connection that touches the removed node (inbound
+        // OR outbound). Best-effort store deletes (mirror delete_workstream).
+        let dangling: Vec<String> = self
+            .connections
+            .iter()
+            .filter(|c| c.from == id || c.to == id)
+            .map(|c| c.id.clone())
+            .collect();
+        for cid in dangling {
+            let _ = self.store.delete_connection(&cid);
+        }
+        self.connections.retain(|c| c.from != id && c.to != id);
+
         let snap = self.snapshot();
         let groups = marsad_viewmodel::group_overview(&snap);
         Ok(vec![
             VmUpdate::SessionRemoved { id: id.to_string() },
             VmUpdate::Overview(groups),
+            VmUpdate::Board(self.board()),
         ])
     }
 
