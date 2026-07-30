@@ -137,6 +137,27 @@ pub fn launch_session(
     }
 }
 
+/// X6 (Wasl Backend) — launch a Wasl-managed session on `host_id`. The session's
+/// underlying process is owned end-to-end by the Wasl runtime; this command tells
+/// the agent to adopt-or-spawn the runtime node and get-or-start a
+/// `WaslSessionClient` for `wasl_target_key`. Mirrors `launch_session`'s
+/// lock/error-mapping shape exactly.
+#[tauri::command(rename_all = "snake_case")]
+pub fn launch_wasl_session(
+    state: State<'_, ManagedState>,
+    host_id: String,
+    wasl_target_key: serde_json::Value,
+    name: Option<String>,
+) -> Result<String, String> {
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    match &mut *guard {
+        AppState::Live(core) => core
+            .launch_wasl_session(&host_id, wasl_target_key, name)
+            .map_err(map_err),
+        AppState::Mock(_) => Ok("mock-wasl-session-001".to_string()),
+    }
+}
+
 /// U1/U2 (docs/specs/dynamic-capabilities.md §3.6) — initial snapshot of every
 /// (driver, host) capabilities entry for the `useVm` `capabilities` slice.
 /// Same lock-clone-return pattern as `board()`; the bridge holds no on-disk

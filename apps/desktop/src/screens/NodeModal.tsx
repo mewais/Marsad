@@ -16,10 +16,10 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { useVm } from "../bridge/useVm";
-import { launchSession, fetchGraph, capsKey, getSettings, refreshCapabilities } from "../bridge/api";
+import { launchSession, launchWaslSession, fetchGraph, capsKey, getSettings, refreshCapabilities } from "../bridge/api";
 import type { CapabilitiesView, DiscoveredSession, ModelCatalog } from "../bridge/types";
 import type { Driver, GraphNode } from "../bridge/workstreamTypes";
-import { DRIVERS, DRIVER_COLOR } from "../bridge/drivers";
+import { DRIVERS, DRIVER_COLOR, isWaslDriver, waslProtocol } from "../bridge/drivers";
 import { Modal } from "../components/Modal";
 
 // ---------------------------------------------------------------------------
@@ -426,25 +426,38 @@ export function NodeModal() {
 
     setBusy(true);
     setLaunchError(null);
-    const resumeArgs: { resume_session_id?: string; continue_recent?: boolean } = {};
-    if (resume) {
-      if (selectedResume === "continue") {
-        resumeArgs.continue_recent = true;
-      } else {
-        resumeArgs.resume_session_id = selectedResume;
-      }
-    }
     try {
-      const newId = await launchSession({
-        project: project.trim(),
-        host_id: hostId,
-        model,
-        posture,
-        first_prompt: firstPrompt.trim() || undefined,
-        name: sessionName,
-        driver,
-        ...resumeArgs,
-      });
+      let newId: string;
+      if (isWaslDriver(driver)) {
+        const wasl_target_key = {
+          protocol: waslProtocol(driver),
+          context: { cwd: project.trim(), model, posture },
+        };
+        newId = await launchWaslSession({
+          host_id: hostId,
+          wasl_target_key,
+          name: sessionName,
+        });
+      } else {
+        const resumeArgs: { resume_session_id?: string; continue_recent?: boolean } = {};
+        if (resume) {
+          if (selectedResume === "continue") {
+            resumeArgs.continue_recent = true;
+          } else {
+            resumeArgs.resume_session_id = selectedResume;
+          }
+        }
+        newId = await launchSession({
+          project: project.trim(),
+          host_id: hostId,
+          model,
+          posture,
+          first_prompt: firstPrompt.trim() || undefined,
+          name: sessionName,
+          driver,
+          ...resumeArgs,
+        });
+      }
       // A session now exists for this workstream — it is no longer an empty
       // draft, so cancelling afterwards must NOT discard it (BUG #2).
       launchedRef.current = true;
@@ -704,8 +717,8 @@ export function NodeModal() {
 
         {/* Resume / continue — #3, mirrors NewSession. Sourced from
             capabilities[(driver,host)].sessions (claude: scoped to the chosen
-            project). */}
-        <div>
+            project). Hidden for wasl drivers (wasl sessions don't resume). */}
+        {!isWaslDriver(driver) && <div>
           <div style={sectionLabel}>Resume</div>
           <div
             data-testid="nm-resume-toggle"
@@ -831,7 +844,7 @@ export function NodeModal() {
               )}
             </div>
           )}
-        </div>
+        </div>}
 
         {/* Controlled by / Feeds from — only when the workstream already has
             nodes to wire to (nmHasNodes). Single-select toggle each. */}

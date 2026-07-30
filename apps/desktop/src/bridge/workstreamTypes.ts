@@ -13,7 +13,7 @@
 // ---------------------------------------------------------------------------
 
 export type HeadState = "needs" | "error" | "working" | "done" | "paused";
-export type Driver = "claude" | "codex" | "gemini" | "opencode";
+export type Driver = "claude" | "codex" | "gemini" | "opencode" | "wasl-claude" | "wasl-opencode";
 
 export interface StateCounts {
   working: number;

@@ -233,6 +233,7 @@ fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
         .invoke_handler(tauri::generate_handler![
             bridge::snapshot,
             bridge::launch_session,
+            bridge::launch_wasl_session,
             bridge::resume_session,
             bridge::attach_session,
             bridge::stop_session,

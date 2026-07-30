@@ -119,6 +119,16 @@ export async function launchSession(args: {
   return invoke("launch_session", args) as Promise<string>;
 }
 
+export async function launchWaslSession(args: {
+  host_id: string;
+  wasl_target_key: unknown;
+  name?: string;
+}): Promise<string> {
+  if (!isTauri()) return "mock-wasl-session-new";
+  const invoke = await getInvoke();
+  return invoke("launch_wasl_session", args as Record<string, unknown>) as Promise<string>;
+}
+
 export async function resumeSession(id: string): Promise<void> {
   if (!isTauri()) return;
   const invoke = await getInvoke();
