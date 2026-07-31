@@ -16,9 +16,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    WaslBusyPolicy, WaslCancelReason, WaslCapabilities, WaslCausation, WaslGateDecision,
-    WaslNativeGateDetail, WaslSessionEventKind, WaslShutdownMode, WaslTargetStatus,
-    WaslTurnReceipt, WaslTurnRequest,
+    WaslAgentCard, WaslBusyPolicy, WaslCancelReason, WaslCapabilities, WaslCausation,
+    WaslGateDecision, WaslNativeGateDetail, WaslSessionEventKind, WaslShutdownMode,
+    WaslTargetStatus, WaslTurnReceipt, WaslTurnRequest,
 };
 
 // ===========================================================================
@@ -508,6 +508,59 @@ pub(crate) fn shutdown_request_body(mode: &WaslShutdownMode) -> String {
     };
     let body = serde_json::json!({ "mode": mode_str });
     serde_json::to_string(&body).expect("shutdown request always serializes")
+}
+
+// ===========================================================================
+// Peer CRUD — GET /v1/peers + POST /v1/peers + DELETE /v1/peers/:id.
+// ===========================================================================
+
+/// Wire shape for one peer entry (element of `GET /v1/peers` response and
+/// body of `POST /v1/peers`). `endpoint` is optional on both directions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PeerDto {
+    pub id: String,
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+}
+
+impl PeerDto {
+    pub(crate) fn into_public(self) -> WaslAgentCard {
+        WaslAgentCard {
+            id: self.id,
+            host: self.host,
+            endpoint: self.endpoint,
+        }
+    }
+
+    pub(crate) fn from_public(card: &WaslAgentCard) -> Self {
+        Self {
+            id: card.id.clone(),
+            host: card.host.clone(),
+            endpoint: card.endpoint.clone(),
+        }
+    }
+}
+
+/// Wire `GET /v1/peers` response body: `{"peers":[…]}`.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct PeersListDto {
+    pub peers: Vec<PeerDto>,
+}
+
+/// Serialize a [`WaslAgentCard`] to the wire `POST /v1/peers` body.
+pub(crate) fn register_peer_body(card: &WaslAgentCard) -> String {
+    let dto = PeerDto::from_public(card);
+    serde_json::to_string(&dto).expect("peer card always serializes")
+}
+
+/// Parse a `GET /v1/peers` response body into a sorted `Vec<WaslAgentCard>`.
+/// Returns `None` on a malformed body.
+pub(crate) fn peers_from_slice(bytes: &[u8]) -> Option<Vec<WaslAgentCard>> {
+    let dto: PeersListDto = serde_json::from_slice(bytes).ok()?;
+    let mut cards: Vec<WaslAgentCard> = dto.peers.into_iter().map(PeerDto::into_public).collect();
+    cards.sort_by(|a, b| a.id.cmp(&b.id));
+    Some(cards)
 }
 
 // ===========================================================================

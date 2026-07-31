@@ -248,6 +248,10 @@ struct ServerState {
     gate_responses: VecDeque<BufferedResponse>,
     shutdown_responses: VecDeque<BufferedResponse>,
     events_scripts: VecDeque<EventsScript>,
+    // Peer CRUD queues — GET /v1/peers, POST /v1/peers, DELETE /v1/peers/:id.
+    peers_list_responses: VecDeque<BufferedResponse>,
+    peers_register_responses: VecDeque<BufferedResponse>,
+    peers_delete_responses: VecDeque<BufferedResponse>,
     requests: Vec<RecordedRequest>,
     events_connections: usize,
 }
@@ -327,6 +331,35 @@ impl MockRuntimeServer {
     }
     pub fn push_events(&self, script: EventsScript) {
         self.state.lock().unwrap().events_scripts.push_back(script);
+    }
+
+    // -- Peer CRUD scripting helpers ----------------------------------------
+
+    /// Script the next `GET /v1/peers` response.
+    pub fn push_peers_list(&self, resp: BufferedResponse) {
+        self.state
+            .lock()
+            .unwrap()
+            .peers_list_responses
+            .push_back(resp);
+    }
+
+    /// Script the next `POST /v1/peers` response.
+    pub fn push_peers_register(&self, resp: BufferedResponse) {
+        self.state
+            .lock()
+            .unwrap()
+            .peers_register_responses
+            .push_back(resp);
+    }
+
+    /// Script the next `DELETE /v1/peers/:id` response.
+    pub fn push_peers_delete(&self, resp: BufferedResponse) {
+        self.state
+            .lock()
+            .unwrap()
+            .peers_delete_responses
+            .push_back(resp);
     }
 
     pub fn requests(&self) -> Vec<RecordedRequest> {
@@ -556,6 +589,39 @@ fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<ServerState>>) {
         let resp = {
             let mut st = state.lock().unwrap();
             pop_or(&mut st.create_responses, BufferedResponse::json(200, "{}"))
+        };
+        write_buffered_response(&mut stream, &resp);
+        return;
+    }
+
+    // Peer collection routes — GET /v1/peers, POST /v1/peers.
+    if method == "GET" && bare == "/v1/peers" {
+        let resp = {
+            let mut st = state.lock().unwrap();
+            pop_or(
+                &mut st.peers_list_responses,
+                BufferedResponse::json(200, r#"{"peers":[]}"#),
+            )
+        };
+        write_buffered_response(&mut stream, &resp);
+        return;
+    }
+    if method == "POST" && bare == "/v1/peers" {
+        let resp = {
+            let mut st = state.lock().unwrap();
+            pop_or(
+                &mut st.peers_register_responses,
+                BufferedResponse::empty(204),
+            )
+        };
+        write_buffered_response(&mut stream, &resp);
+        return;
+    }
+    // Peer per-id route — DELETE /v1/peers/:id.
+    if method == "DELETE" && bare.starts_with("/v1/peers/") {
+        let resp = {
+            let mut st = state.lock().unwrap();
+            pop_or(&mut st.peers_delete_responses, BufferedResponse::empty(204))
         };
         write_buffered_response(&mut stream, &resp);
         return;

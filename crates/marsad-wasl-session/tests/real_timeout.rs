@@ -95,6 +95,42 @@ fn provider_list_connection_refused_is_bounded_io_error() {
     assert!(matches!(err, WaslSessionError::Io(_)), "got {err:?}");
 }
 
+#[test]
+fn provider_unregister_peer_connection_refused_is_bounded_io_error() {
+    let base = unused_base_url();
+    let err = within_ceiling_value("unregister_peer (refused)", move || {
+        RealWaslSessionProvider::new(config_for(base)).unregister_peer("node-a")
+    })
+    .expect_err("refused → error");
+    assert!(matches!(err, WaslSessionError::Io(_)), "got {err:?}");
+}
+
+#[test]
+fn provider_register_peer_connection_refused_is_bounded_io_error() {
+    let base = unused_base_url();
+    let err = within_ceiling_value("register_peer (refused)", move || {
+        RealWaslSessionProvider::new(config_for(base)).register_peer(
+            marsad_wasl_session::WaslAgentCard {
+                id: "node-a".to_string(),
+                host: "host-a".to_string(),
+                endpoint: None,
+            },
+        )
+    })
+    .expect_err("refused → error");
+    assert!(matches!(err, WaslSessionError::Io(_)), "got {err:?}");
+}
+
+#[test]
+fn provider_list_peers_connection_refused_is_bounded_io_error() {
+    let base = unused_base_url();
+    let err = within_ceiling_value("list_peers (refused)", move || {
+        RealWaslSessionProvider::new(config_for(base)).list_peers()
+    })
+    .expect_err("refused → error");
+    assert!(matches!(err, WaslSessionError::Io(_)), "got {err:?}");
+}
+
 // ---------------------------------------------------------------------------
 // Wedged peer — accepts the connection, reads the request, never responds.
 // The CLIENT-side read deadline (not a server close) must bound the call.
@@ -111,6 +147,23 @@ fn get_or_start_wedged_peer_hits_read_deadline() {
         let _keep = server;
         RealWaslSessionProvider::new(config_for(base))
             .get_or_start(&WaslTargetKey(val(r#""ctx-42""#)))
+    })
+    .expect_err("a wedged peer must surface as a bounded Io error, not a hang");
+    assert!(
+        matches!(err, WaslSessionError::Io(_)),
+        "wedged peer → Io within the read deadline, got {err:?}"
+    );
+}
+
+#[test]
+fn unregister_peer_wedged_peer_hits_read_deadline() {
+    let server = MockRuntimeServer::start();
+    server.push_peers_delete(BufferedResponse::hang());
+    let base = server.base_url();
+
+    let err = within_ceiling_value("unregister_peer (wedged)", move || {
+        let _keep = server;
+        RealWaslSessionProvider::new(config_for(base)).unregister_peer("node-a")
     })
     .expect_err("a wedged peer must surface as a bounded Io error, not a hang");
     assert!(

@@ -66,7 +66,7 @@ pub use projection::{
 };
 pub use real::{RealWaslSessionClient, RealWaslSessionProvider, WaslSessionClientConfig};
 pub use types::{
-    WaslBusyPolicy, WaslCancelReason, WaslCapabilities, WaslCausation, WaslEventSeq,
+    WaslAgentCard, WaslBusyPolicy, WaslCancelReason, WaslCapabilities, WaslCausation, WaslEventSeq,
     WaslGateDecision, WaslNativeGateDetail, WaslSessionEvent, WaslSessionEventKind,
     WaslShutdownMode, WaslStreamItem, WaslTargetKey, WaslTargetSnapshot, WaslTargetStatus,
     WaslTurnId, WaslTurnReceipt, WaslTurnRequest,

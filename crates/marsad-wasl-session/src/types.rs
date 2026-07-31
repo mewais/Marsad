@@ -330,6 +330,21 @@ pub enum WaslStreamItem {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WaslTargetKey(pub serde_json::Value);
 
+/// Marsad's caller-side view of a Wasl peer node entry (Wasl
+/// `GET /v1/peers` element and `POST /v1/peers` body). Describes one agent node
+/// that the Wasl runtime knows about for peer-to-peer routing. `endpoint` is
+/// optional: `None` when the peer's HTTP control address is not yet known.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaslAgentCard {
+    /// The peer node's stable id.
+    pub id: String,
+    /// The peer node's hostname or address label.
+    pub host: String,
+    /// The peer node's HTTP control endpoint (e.g. `"http://10.0.0.2:8787"`),
+    /// or `None` when not yet known.
+    pub endpoint: Option<String>,
+}
+
 /// Caller-side mirror of Wasl's `TargetSnapshot` (`wasl-runtime-control/src/wire.rs`;
 /// fixture `target.json`), returned by [`crate::WaslSessionProvider::get_or_start`]
 /// (§4.3). There is NO `created` flag in real Wasl — `POST /v1/targets` is

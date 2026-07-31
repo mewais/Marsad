@@ -60,6 +60,7 @@
 //! and the two mapping helpers. That is the expected tests-first compile-failure
 //! (red-state) signal.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -71,7 +72,7 @@ use marsad_notify::CaptureNotifier;
 use marsad_proto::{encode_ipc, parse_ipc, IpcMsg};
 use marsad_store::{MemoryBackend, Store};
 use marsad_wasl_session::{
-    native_gate_key, FakeWaslSessionClient, FakeWaslSessionProvider, WaslCapabilities,
+    native_gate_key, FakeWaslSessionClient, FakeWaslSessionProvider, WaslAgentCard, WaslCapabilities,
     WaslEventStream, WaslGateDecision, WaslNativeGateDetail, WaslSessionClient, WaslSessionError,
     WaslSessionEvent, WaslSessionEventKind, WaslSessionProvider, WaslStreamItem, WaslTargetKey,
     WaslTargetSnapshot, WaslTargetStatus, WaslTurnId, WaslTurnReceipt,
@@ -196,6 +197,8 @@ fn stop_wasl_line(session_id: &str, drain: bool) -> String {
 struct SeededProvider {
     /// key-string → (client-factory-shared-state, times handed out).
     entries: Mutex<Vec<SeededEntry>>,
+    /// In-memory peer store for the three new peer CRUD methods.
+    peers: Mutex<BTreeMap<String, WaslAgentCard>>,
 }
 
 struct SeededEntry {
@@ -261,6 +264,7 @@ impl SeededProvider {
     fn new() -> Self {
         Self {
             entries: Mutex::new(Vec::new()),
+            peers: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -341,6 +345,19 @@ impl WaslSessionProvider for SeededProvider {
             .iter()
             .map(|e| e.target_id.clone())
             .collect())
+    }
+
+    fn register_peer(&self, card: WaslAgentCard) -> Result<(), WaslSessionError> {
+        self.peers.lock().unwrap().insert(card.id.clone(), card);
+        Ok(())
+    }
+
+    fn unregister_peer(&self, id: &str) -> Result<bool, WaslSessionError> {
+        Ok(self.peers.lock().unwrap().remove(id).is_some())
+    }
+
+    fn list_peers(&self) -> Result<Vec<WaslAgentCard>, WaslSessionError> {
+        Ok(self.peers.lock().unwrap().values().cloned().collect())
     }
 }
 
@@ -541,6 +558,15 @@ impl WaslSessionProvider for ArcProvider {
     }
     fn list(&self) -> Result<Vec<String>, WaslSessionError> {
         self.0.list()
+    }
+    fn register_peer(&self, card: WaslAgentCard) -> Result<(), WaslSessionError> {
+        self.0.register_peer(card)
+    }
+    fn unregister_peer(&self, id: &str) -> Result<bool, WaslSessionError> {
+        self.0.unregister_peer(id)
+    }
+    fn list_peers(&self) -> Result<Vec<WaslAgentCard>, WaslSessionError> {
+        self.0.list_peers()
     }
 }
 
@@ -1040,11 +1066,13 @@ impl WaslSessionClient for PanickingClient {
 /// is what the test proves stays unpoisoned.
 struct MixedProvider {
     started: Mutex<Vec<String>>,
+    peers: Mutex<BTreeMap<String, WaslAgentCard>>,
 }
 impl MixedProvider {
     fn new() -> Self {
         Self {
             started: Mutex::new(Vec::new()),
+            peers: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -1069,6 +1097,16 @@ impl WaslSessionProvider for MixedProvider {
     }
     fn list(&self) -> Result<Vec<String>, WaslSessionError> {
         Ok(self.started.lock().unwrap().clone())
+    }
+    fn register_peer(&self, card: WaslAgentCard) -> Result<(), WaslSessionError> {
+        self.peers.lock().unwrap().insert(card.id.clone(), card);
+        Ok(())
+    }
+    fn unregister_peer(&self, id: &str) -> Result<bool, WaslSessionError> {
+        Ok(self.peers.lock().unwrap().remove(id).is_some())
+    }
+    fn list_peers(&self) -> Result<Vec<WaslAgentCard>, WaslSessionError> {
+        Ok(self.peers.lock().unwrap().values().cloned().collect())
     }
 }
 
@@ -1235,6 +1273,15 @@ impl WaslSessionProvider for ArcMixed {
     }
     fn list(&self) -> Result<Vec<String>, WaslSessionError> {
         self.0.list()
+    }
+    fn register_peer(&self, card: WaslAgentCard) -> Result<(), WaslSessionError> {
+        self.0.register_peer(card)
+    }
+    fn unregister_peer(&self, id: &str) -> Result<bool, WaslSessionError> {
+        self.0.unregister_peer(id)
+    }
+    fn list_peers(&self) -> Result<Vec<WaslAgentCard>, WaslSessionError> {
+        self.0.list_peers()
     }
 }
 

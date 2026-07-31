@@ -17,9 +17,9 @@ use crate::client::{WaslEventStream, WaslSessionClient, WaslSessionProvider};
 use crate::error::WaslSessionError;
 use crate::sse::SseParser;
 use crate::types::{
-    WaslBusyPolicy, WaslCancelReason, WaslCapabilities, WaslEventSeq, WaslGateDecision,
-    WaslSessionEvent, WaslShutdownMode, WaslStreamItem, WaslTargetKey, WaslTargetSnapshot,
-    WaslTargetStatus, WaslTurnId, WaslTurnReceipt, WaslTurnRequest,
+    WaslAgentCard, WaslBusyPolicy, WaslCancelReason, WaslCapabilities, WaslEventSeq,
+    WaslGateDecision, WaslSessionEvent, WaslShutdownMode, WaslStreamItem, WaslTargetKey,
+    WaslTargetSnapshot, WaslTargetStatus, WaslTurnId, WaslTurnReceipt, WaslTurnRequest,
 };
 use crate::wire;
 use crate::wire_dto;
@@ -130,6 +130,40 @@ impl WaslSessionProvider for RealWaslSessionProvider {
         let snapshot: wire_dto::TargetsSnapshotDto = serde_json::from_slice(&resp)
             .map_err(|e| WaslSessionError::Protocol(format!("malformed targets snapshot: {e}")))?;
         Ok(snapshot.targets.into_iter().map(|t| t.target_id).collect())
+    }
+
+    fn register_peer(&self, card: WaslAgentCard) -> Result<(), WaslSessionError> {
+        let body = wire_dto::register_peer_body(&card);
+        let (status, resp) = wire::post_json_buffered(&self.config.base_url, "/v1/peers", &body)?;
+        if (200..300).contains(&status) {
+            Ok(())
+        } else {
+            Err(map_http_error(status, &resp))
+        }
+    }
+
+    fn unregister_peer(&self, id: &str) -> Result<bool, WaslSessionError> {
+        let path = format!("/v1/peers/{id}");
+        let (status, resp) = wire::delete_buffered(&self.config.base_url, &path)?;
+        if (200..300).contains(&status) {
+            // 204 No Content: the peer existed and was removed.
+            return Ok(true);
+        }
+        if status == 404 {
+            // 404 unknown_peer: the peer was already absent — NOT an error.
+            return Ok(false);
+        }
+        // Any other non-2xx non-404 is a genuine error (400 malformed, 500, …).
+        Err(map_http_error(status, &resp))
+    }
+
+    fn list_peers(&self) -> Result<Vec<WaslAgentCard>, WaslSessionError> {
+        let (status, resp) = wire::get_buffered(&self.config.base_url, "/v1/peers")?;
+        if !(200..300).contains(&status) {
+            return Err(map_http_error(status, &resp));
+        }
+        wire_dto::peers_from_slice(&resp)
+            .ok_or_else(|| WaslSessionError::Protocol("malformed peers list".to_string()))
     }
 }
 

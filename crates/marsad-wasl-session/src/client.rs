@@ -6,9 +6,9 @@
 
 use crate::error::WaslSessionError;
 use crate::types::{
-    WaslBusyPolicy, WaslCancelReason, WaslCapabilities, WaslEventSeq, WaslGateDecision,
-    WaslShutdownMode, WaslStreamItem, WaslTargetKey, WaslTargetSnapshot, WaslTargetStatus,
-    WaslTurnId, WaslTurnReceipt, WaslTurnRequest,
+    WaslAgentCard, WaslBusyPolicy, WaslCancelReason, WaslCapabilities, WaslEventSeq,
+    WaslGateDecision, WaslShutdownMode, WaslStreamItem, WaslTargetKey, WaslTargetSnapshot,
+    WaslTargetStatus, WaslTurnId, WaslTurnReceipt, WaslTurnRequest,
 };
 
 /// Pull-style observe stream (house style: std-blocking, thread-pumped — no
@@ -150,4 +150,22 @@ pub trait WaslSessionProvider: Send {
     /// List currently-known Wasl target ids on this node (Wasl
     /// `GET /v1/targets`).
     fn list(&self) -> Result<Vec<String>, WaslSessionError>;
+
+    /// Register or overwrite a peer node entry on this Wasl node (Wasl
+    /// `POST /v1/peers`). A `204 No Content` response maps to `Ok(())`; any
+    /// other non-2xx maps to the appropriate [`WaslSessionError`]. Idempotent:
+    /// a second call for the same `card.id` overwrites the previous entry.
+    fn register_peer(&self, card: WaslAgentCard) -> Result<(), WaslSessionError>;
+
+    /// Deregister a peer node by id (Wasl `DELETE /v1/peers/:id`).
+    /// `Ok(true)` when the peer existed and was removed (204); `Ok(false)`
+    /// when the peer was already absent (404 with `error:"unknown_peer"`) — a
+    /// 404 is NOT an error condition. Any other non-2xx maps to
+    /// [`WaslSessionError`].
+    fn unregister_peer(&self, id: &str) -> Result<bool, WaslSessionError>;
+
+    /// List all currently-known peer nodes on this Wasl node (Wasl
+    /// `GET /v1/peers`). Returns the list sorted by `id` ascending, mirroring
+    /// the Wasl wire contract.
+    fn list_peers(&self) -> Result<Vec<WaslAgentCard>, WaslSessionError>;
 }

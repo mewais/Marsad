@@ -192,6 +192,17 @@ fn write_get(
     stream.write_all(req.as_bytes()).map_err(io_err)
 }
 
+fn write_delete(
+    stream: &mut TcpStream,
+    addr: SocketAddr,
+    path: &str,
+) -> Result<(), WaslSessionError> {
+    let req = format!(
+        "DELETE {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(req.as_bytes()).map_err(io_err)
+}
+
 fn write_post_json(
     stream: &mut TcpStream,
     addr: SocketAddr,
@@ -503,6 +514,32 @@ pub(crate) fn post_json_buffered(
     let head = read_head(&mut stream)?;
     let resp_body = read_body_buffered(&mut stream, &head.headers, head.leftover);
     Ok((head.status, resp_body))
+}
+
+/// A `DELETE` that reads the full buffered response body. Returns
+/// `(status, body_bytes)`. Used for `DELETE /v1/peers/:id`.
+pub(crate) fn delete_buffered(
+    base_url: &str,
+    path: &str,
+) -> Result<(u16, Vec<u8>), WaslSessionError> {
+    // Same coverage contract as `get_buffered`: `parse_base_url` (always valid
+    // in tests) and `write_delete` (never fails against the mock) are folded
+    // under coverage. `connect`'s Err (refused) and `read_head`'s Err (wedged)
+    // would be covered if tests drive them; for now this DELETE path's tests
+    // only exercise the 204 and 404 cases, so `?` propagation is preserved in
+    // the real build and folded in coverage. See `AGENTS.md`.
+    #[cfg(not(coverage))]
+    let addr = parse_base_url(base_url)?;
+    #[cfg(coverage)]
+    let addr = assume_ok(parse_base_url(base_url));
+    let mut stream = connect(addr)?;
+    #[cfg(not(coverage))]
+    write_delete(&mut stream, addr, path)?;
+    #[cfg(coverage)]
+    assume_ok(write_delete(&mut stream, addr, path));
+    let head = read_head(&mut stream)?;
+    let body = read_body_buffered(&mut stream, &head.headers, head.leftover);
+    Ok((head.status, body))
 }
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@
 //! advanced by explicit `script_*` calls, not wall-clock — so tests are
 //! deterministic with no timing flakiness.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -12,10 +13,10 @@ use std::sync::{Arc, Mutex};
 use crate::client::{WaslEventStream, WaslSessionClient, WaslSessionProvider};
 use crate::error::WaslSessionError;
 use crate::types::{
-    WaslBusyPolicy, WaslCancelReason, WaslCapabilities, WaslEventSeq, WaslGateDecision,
-    WaslNativeGateDetail, WaslSessionEvent, WaslSessionEventKind, WaslShutdownMode, WaslStreamItem,
-    WaslTargetKey, WaslTargetSnapshot, WaslTargetStatus, WaslTurnId, WaslTurnReceipt,
-    WaslTurnRequest,
+    WaslAgentCard, WaslBusyPolicy, WaslCancelReason, WaslCapabilities, WaslEventSeq,
+    WaslGateDecision, WaslNativeGateDetail, WaslSessionEvent, WaslSessionEventKind,
+    WaslShutdownMode, WaslStreamItem, WaslTargetKey, WaslTargetSnapshot, WaslTargetStatus,
+    WaslTurnId, WaslTurnReceipt, WaslTurnRequest,
 };
 
 /// One recorded gate resolution: `(turn_id, decision)` — v3: resolution is keyed
@@ -359,9 +360,16 @@ impl ProviderEntry {
 /// (§5). `get_or_start` is idempotent per key: the first call for a key spawns a
 /// target (`created = true`); a later call for the SAME key reattaches to it
 /// (`created = false`, no second target). Fully-capable clients are handed out.
+///
+/// Also holds an in-memory peer registry (keyed by `WaslAgentCard.id`,
+/// `BTreeMap` so `list_peers` returns entries sorted by id ascending without a
+/// separate sort step).
 pub struct FakeWaslSessionProvider {
     entries: Mutex<HashMap<String, ProviderEntry>>,
     next_target: Mutex<u64>,
+    /// In-memory peer registry — `BTreeMap` keeps keys sorted ascending so
+    /// `list_peers` can collect values in order without a separate sort.
+    peers: Mutex<BTreeMap<String, WaslAgentCard>>,
 }
 
 impl FakeWaslSessionProvider {
@@ -370,6 +378,7 @@ impl FakeWaslSessionProvider {
         Self {
             entries: Mutex::new(HashMap::new()),
             next_target: Mutex::new(0),
+            peers: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -379,7 +388,12 @@ impl FakeWaslSessionProvider {
     /// returned [`WaslTargetSnapshot`] surfaces this `last_seq` (v3 — no `created`
     /// bool). A `last_seq >= persisted` drives the resume branch; a
     /// `last_seq < persisted` drives the replaced/reset branch.
-    pub fn script_pre_existing(&self, key: &WaslTargetKey, target_id: &str, last_seq: WaslEventSeq) {
+    pub fn script_pre_existing(
+        &self,
+        key: &WaslTargetKey,
+        target_id: &str,
+        last_seq: WaslEventSeq,
+    ) {
         let mut entries = self.entries.lock().unwrap();
         entries.insert(key_string(key), new_entry(target_id, key.clone(), last_seq));
     }
@@ -466,5 +480,25 @@ impl WaslSessionProvider for FakeWaslSessionProvider {
             .values()
             .map(|e| e.target_id.clone())
             .collect())
+    }
+
+    fn register_peer(&self, card: WaslAgentCard) -> Result<(), WaslSessionError> {
+        // Insert-or-overwrite by id. `BTreeMap::insert` always replaces an
+        // existing entry for the same key, matching the Wasl idempotent-overwrite
+        // contract.
+        self.peers.lock().unwrap().insert(card.id.clone(), card);
+        Ok(())
+    }
+
+    fn unregister_peer(&self, id: &str) -> Result<bool, WaslSessionError> {
+        // `BTreeMap::remove` returns `Some` when the key existed, `None` when
+        // absent — maps directly to `Ok(true)` / `Ok(false)`.
+        let was_present = self.peers.lock().unwrap().remove(id).is_some();
+        Ok(was_present)
+    }
+
+    fn list_peers(&self) -> Result<Vec<WaslAgentCard>, WaslSessionError> {
+        // `BTreeMap` iterates in ascending key order — no extra sort needed.
+        Ok(self.peers.lock().unwrap().values().cloned().collect())
     }
 }
