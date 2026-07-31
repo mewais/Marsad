@@ -433,13 +433,13 @@ fn launch_mode_default_serde_and_spec_default() {
     // A LaunchSpec serialized WITHOUT a `mode` field deserializes to Fresh
     // (the #[serde(default)] keeps older payloads working).
     let spec: LaunchSpec = serde_json::from_str(
-        r#"{"project":"/p","host_id":"local","model":"m","posture":"Ask","first_prompt":null}"#,
+        r#"{"project":"/p","host_id":"local","model":"m","first_prompt":null}"#,
     )
     .expect("LaunchSpec without mode must parse");
     assert_eq!(spec.mode, LaunchMode::Fresh);
     // And with an explicit resume mode.
     let resumed: LaunchSpec = serde_json::from_str(
-        r#"{"project":"/p","host_id":"local","model":"m","posture":"Ask","first_prompt":null,"mode":{"Resume":"abc"}}"#,
+        r#"{"project":"/p","host_id":"local","model":"m","first_prompt":null,"mode":{"Resume":"abc"}}"#,
     )
     .expect("LaunchSpec with resume mode must parse");
     assert_eq!(resumed.mode, LaunchMode::Resume("abc".to_string()));
@@ -495,7 +495,7 @@ fn parse_ipc_launch_session() {
     // `posture`. Replaced with the §2 minimal + maximal LaunchSession
     // goldens (full per-field pinned coverage now lives in
     // crates/marsad-proto/tests/ipc_typed.rs).
-    let minimal = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"Ask"}"#;
+    let minimal = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5"}"#;
     let msg = parse_ipc(minimal).expect("should parse minimal LaunchSession");
     match msg {
         IpcMsg::LaunchSession {
@@ -515,18 +515,18 @@ fn parse_ipc_launch_session() {
         other => panic!("expected LaunchSession after round-trip, got {other:?}"),
     }
 
-    let maximal = r#"{"type":"LaunchSession","session_id":"s-1","project":"/home/u/proj","cwd":"/home/u/proj","host_id":"hpc","host_target":"user@hpc.example.com","claude_bin":"genie","setup":"module load cuda","env":[["FOO","bar"]],"model":"claude-opus-4-8","posture":"Ask","permission_mode":"default","first_prompt":null,"resume_session_id":"uuid-xyz","name":"My run","disallowed_tools":["Bash"]}"#;
+    let maximal = r#"{"type":"LaunchSession","session_id":"s-1","project":"/home/u/proj","cwd":"/home/u/proj","host_id":"hpc","host_target":"user@hpc.example.com","claude_bin":"genie","setup":"module load cuda","env":[["FOO","bar"]],"model":"claude-opus-4-8","session_mode":"default","first_prompt":null,"resume_session_id":"uuid-xyz","name":"My run","disallowed_tools":["Bash"]}"#;
     let msg = parse_ipc(maximal).expect("should parse maximal LaunchSession");
     match msg {
         IpcMsg::LaunchSession {
             ref project,
             ref model,
-            ref posture,
+            ref session_mode,
             ..
         } => {
             assert_eq!(project, "/home/u/proj");
             assert_eq!(model, "claude-opus-4-8");
-            assert_eq!(*posture, marsad_proto::Posture::Ask);
+            assert_eq!(session_mode, "default");
         }
         other => panic!("expected LaunchSession, got {other:?}"),
     }
@@ -654,8 +654,7 @@ fn encode_ipc_all_variants_produce_valid_json() {
             setup: Some("module load cuda".to_string()),
             env: vec![("FOO".to_string(), "bar".to_string())],
             model: "claude-opus-4-8".to_string(),
-            posture: marsad_proto::Posture::Ask,
-            permission_mode: "default".to_string(),
+            session_mode: "default".to_string(),
             first_prompt: None,
             continue_: None,
             resume_session_id: Some("uuid-xyz".to_string()),
@@ -1106,12 +1105,12 @@ fn parse_system_init_tools_populated() {
 /// `LaunchSpec.disallowed_tools` defaults to empty when the field is absent.
 #[test]
 fn launch_spec_disallowed_tools_defaults_empty() {
-    use marsad_proto::{LaunchMode, LaunchSpec, Posture};
+    use marsad_proto::{LaunchMode, LaunchSpec};
     let spec = LaunchSpec {
         project: "/p".to_string(),
         host_id: "local".to_string(),
         model: "m".to_string(),
-        posture: Posture::Ask,
+        session_mode: "default".to_string(),
         first_prompt: None,
         mode: LaunchMode::Fresh,
         host_target: None,
@@ -1129,12 +1128,12 @@ fn launch_spec_disallowed_tools_defaults_empty() {
 /// `LaunchSpec.disallowed_tools` with values round-trips through serde.
 #[test]
 fn launch_spec_disallowed_tools_roundtrip() {
-    use marsad_proto::{LaunchMode, LaunchSpec, Posture};
+    use marsad_proto::{LaunchMode, LaunchSpec};
     let spec = LaunchSpec {
         project: "/p".to_string(),
         host_id: "local".to_string(),
         model: "m".to_string(),
-        posture: Posture::Ask,
+        session_mode: "default".to_string(),
         first_prompt: None,
         mode: LaunchMode::Fresh,
         host_target: None,
@@ -1155,7 +1154,7 @@ fn launch_spec_disallowed_tools_roundtrip() {
 #[test]
 fn launch_spec_disallowed_tools_absent_field_defaults() {
     use marsad_proto::LaunchSpec;
-    let json = r#"{"project":"/p","host_id":"local","model":"m","posture":"Ask","permissionMode":"default","mode":"Fresh"}"#;
+    let json = r#"{"project":"/p","host_id":"local","model":"m","mode":"Fresh"}"#;
     let spec: LaunchSpec = serde_json::from_str(json).unwrap();
     assert!(spec.disallowed_tools.is_empty());
 }

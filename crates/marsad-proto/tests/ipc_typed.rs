@@ -17,7 +17,7 @@
 /// compare parsed values, never raw bytes (except the encode→parse→re-encode
 /// stability check, which compares the crate's own output to itself)." Every
 /// comparison below follows that rule.
-use marsad_proto::{encode_ipc, parse_ipc, IpcMsg, LaunchMode, Posture, ProtoError};
+use marsad_proto::{encode_ipc, parse_ipc, IpcMsg, LaunchMode, ProtoError};
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -90,11 +90,11 @@ fn assert_variant_contract(golden: &str, expected: &IpcMsg) {
 // LaunchSession — full retyped struct (§2, §3, §6 item 5)
 // ---------------------------------------------------------------------------
 
-const LAUNCH_SESSION_MAXIMAL: &str = r#"{"type":"LaunchSession","session_id":"s-1","project":"/home/u/proj","cwd":"/home/u/proj","host_id":"hpc","host_target":"user@hpc.example.com","claude_bin":"genie","setup":"module load cuda","env":[["FOO","bar"]],"model":"claude-opus-4-8","posture":"Ask","permission_mode":"default","first_prompt":null,"resume_session_id":"uuid-xyz","name":"My run","disallowed_tools":["Bash"]}"#;
+const LAUNCH_SESSION_MAXIMAL: &str = r#"{"type":"LaunchSession","session_id":"s-1","project":"/home/u/proj","cwd":"/home/u/proj","host_id":"hpc","host_target":"user@hpc.example.com","claude_bin":"genie","setup":"module load cuda","env":[["FOO","bar"]],"model":"claude-opus-4-8","session_mode":"default","first_prompt":null,"resume_session_id":"uuid-xyz","name":"My run","disallowed_tools":["Bash"]}"#;
 
-const LAUNCH_SESSION_MINIMAL: &str = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"Ask"}"#;
+const LAUNCH_SESSION_MINIMAL: &str = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5"}"#;
 
-const LAUNCH_SESSION_CONTINUE: &str = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-8","posture":"Ask","continue":true}"#;
+const LAUNCH_SESSION_CONTINUE: &str = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-8","continue":true}"#;
 
 fn launch_session_maximal() -> IpcMsg {
     IpcMsg::LaunchSession {
@@ -107,8 +107,7 @@ fn launch_session_maximal() -> IpcMsg {
         setup: Some("module load cuda".to_string()),
         env: vec![("FOO".to_string(), "bar".to_string())],
         model: "claude-opus-4-8".to_string(),
-        posture: Posture::Ask,
-        permission_mode: "default".to_string(),
+        session_mode: "default".to_string(),
         first_prompt: None,
         continue_: None,
         resume_session_id: Some("uuid-xyz".to_string()),
@@ -130,8 +129,7 @@ fn launch_session_minimal() -> IpcMsg {
         setup: None,
         env: vec![],
         model: "claude-opus-4-5".to_string(),
-        posture: Posture::Ask,
-        permission_mode: String::new(),
+        session_mode: String::new(),
         first_prompt: None,
         continue_: None,
         resume_session_id: None,
@@ -153,8 +151,7 @@ fn launch_session_continue() -> IpcMsg {
         setup: None,
         env: vec![],
         model: "claude-opus-4-8".to_string(),
-        posture: Posture::Ask,
-        permission_mode: String::new(),
+        session_mode: String::new(),
         first_prompt: None,
         continue_: Some(true),
         resume_session_id: None,
@@ -175,9 +172,9 @@ fn launch_session_maximal_golden_contract() {
 /// Lines 2-3 of §2 are "the agent-test minimal launch corpus — they MUST
 /// keep parsing" (§2, note after the golden list): a PARSE-only golden (old
 /// / raw clients omit these keys). It is NOT what core's encoder reproduces
-/// byte-for-byte (`cwd`/`permission_mode` have no `skip_serializing_if`, so
-/// they are always emitted, even as `""`) — so this is asserted directly by
-/// parse equality rather than through `assert_variant_contract`'s
+/// byte-for-byte (`cwd` has no `skip_serializing_if`, so it is always
+/// emitted, even as `""`) — so this is asserted directly by parse equality
+/// rather than through `assert_variant_contract`'s
 /// golden-encode-Value-eq check.
 #[test]
 fn launch_session_minimal_golden_parses_to_defaults() {
@@ -273,8 +270,7 @@ fn launch_with(resume: Option<&str>, cont: Option<bool>) -> IpcMsg {
         setup: None,
         env: vec![],
         model: "m".to_string(),
-        posture: Posture::Ask,
-        permission_mode: String::new(),
+        session_mode: String::new(),
         first_prompt: None,
         continue_: cont,
         resume_session_id: resume.map(|s| s.to_string()),
@@ -943,19 +939,9 @@ fn unknown_ipc_type_is_unknown_discriminant_with_exact_type_string() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn launch_session_posture_as_number_is_schema_mismatch() {
-    let line = r#"{"type":"LaunchSession","project":"/p","model":"m","posture":99}"#;
-    let err = parse_ipc(line).expect_err("posture:99 must fail schema validation");
-    assert!(
-        matches!(err, ProtoError::SchemaMismatch { .. }),
-        "expected SchemaMismatch, got {err:?}"
-    );
-}
-
-#[test]
-fn launch_session_posture_unknown_string_is_schema_mismatch() {
-    let line = r#"{"type":"LaunchSession","project":"/p","model":"m","posture":"Nonsense"}"#;
-    let err = parse_ipc(line).expect_err("posture:\"Nonsense\" must fail schema validation");
+fn launch_session_session_mode_as_number_is_schema_mismatch() {
+    let line = r#"{"type":"LaunchSession","project":"/p","model":"m","session_mode":99}"#;
+    let err = parse_ipc(line).expect_err("session_mode:99 must fail schema validation");
     assert!(
         matches!(err, ProtoError::SchemaMismatch { .. }),
         "expected SchemaMismatch, got {err:?}"
@@ -964,8 +950,8 @@ fn launch_session_posture_unknown_string_is_schema_mismatch() {
 
 #[test]
 fn launch_session_missing_project_is_schema_mismatch() {
-    // §2: "Required on parse: `project`, `model`, `posture`".
-    let line = r#"{"type":"LaunchSession","model":"m","posture":"Ask"}"#;
+    // §2: "Required on parse: `project`, `model`".
+    let line = r#"{"type":"LaunchSession","model":"m"}"#;
     let err = parse_ipc(line).expect_err("missing project must fail schema validation");
     assert!(
         matches!(err, ProtoError::SchemaMismatch { .. }),
@@ -975,7 +961,7 @@ fn launch_session_missing_project_is_schema_mismatch() {
 
 #[test]
 fn launch_session_missing_model_is_schema_mismatch() {
-    let line = r#"{"type":"LaunchSession","project":"/p","posture":"Ask"}"#;
+    let line = r#"{"type":"LaunchSession","project":"/p"}"#;
     let err = parse_ipc(line).expect_err("missing model must fail schema validation");
     assert!(
         matches!(err, ProtoError::SchemaMismatch { .. }),

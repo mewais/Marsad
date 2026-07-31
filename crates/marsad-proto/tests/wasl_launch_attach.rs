@@ -28,7 +28,7 @@
 //! This file WILL fail to compile until that field exists. That is the
 //! expected tests-first signal for X4a (see crate map, ../AGENTS.md).
 
-use marsad_proto::{encode_ipc, parse_ipc, IpcMsg, LaunchMode, LaunchSpec, Posture};
+use marsad_proto::{encode_ipc, parse_ipc, IpcMsg, LaunchMode, LaunchSpec};
 
 // ---------------------------------------------------------------------------
 // Shared helpers (duplicated per this crate's existing per-file convention —
@@ -48,7 +48,7 @@ fn full_launch_spec(wasl: bool) -> LaunchSpec {
         project: "/home/user/proj".to_string(),
         host_id: "local".to_string(),
         model: "claude-opus-4-5".to_string(),
-        posture: Posture::Ask,
+        session_mode: "default".to_string(),
         first_prompt: None,
         mode: LaunchMode::Fresh,
         host_target: None,
@@ -68,10 +68,10 @@ fn full_launch_spec(wasl: bool) -> LaunchSpec {
 
 /// A pre-X4 wire line: only the fields `LaunchSpec` has ALWAYS required at
 /// parse time (no `#[serde(default)]`) are present — `project`, `host_id`,
-/// `model`, `posture`, `first_prompt`. No `wasl` key at all. Every existing
+/// `model`, `first_prompt`. No `wasl` key at all. Every existing
 /// producer (old core builds, hand-written fixtures) emits exactly this
 /// shape today.
-const LAUNCH_SPEC_NO_WASL_KEY: &str = r#"{"project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"Ask","first_prompt":null}"#;
+const LAUNCH_SPEC_NO_WASL_KEY: &str = r#"{"project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","first_prompt":null}"#;
 
 #[test]
 fn launch_spec_wasl_absent_from_wire_defaults_to_false() {
@@ -85,7 +85,7 @@ fn launch_spec_wasl_absent_from_wire_defaults_to_false() {
 
 #[test]
 fn launch_spec_wasl_explicit_true_parses() {
-    let json = r#"{"project":"/p","host_id":"local","model":"m","posture":"Ask","first_prompt":null,"wasl":true}"#;
+    let json = r#"{"project":"/p","host_id":"local","model":"m","first_prompt":null,"wasl":true}"#;
     let spec: LaunchSpec =
         serde_json::from_str(json).expect("LaunchSpec with wasl:true must parse");
     assert!(
@@ -96,7 +96,7 @@ fn launch_spec_wasl_explicit_true_parses() {
 
 #[test]
 fn launch_spec_wasl_explicit_false_parses() {
-    let json = r#"{"project":"/p","host_id":"local","model":"m","posture":"Ask","first_prompt":null,"wasl":false}"#;
+    let json = r#"{"project":"/p","host_id":"local","model":"m","first_prompt":null,"wasl":false}"#;
     let spec: LaunchSpec =
         serde_json::from_str(json).expect("LaunchSpec with wasl:false must parse");
     assert!(!spec.wasl);
@@ -130,11 +130,11 @@ fn launch_spec_wasl_false_serde_round_trips() {
 /// under tests/ compiles as its own crate; ipc_typed.rs is FROZEN and must
 /// not be edited). Re-pinning the exact bytes here proves the X4 `wasl`
 /// field addition does not disturb this pre-existing, byte-pinned oracle.
-const LAUNCH_SESSION_MAXIMAL: &str = r#"{"type":"LaunchSession","session_id":"s-1","project":"/home/u/proj","cwd":"/home/u/proj","host_id":"hpc","host_target":"user@hpc.example.com","claude_bin":"genie","setup":"module load cuda","env":[["FOO","bar"]],"model":"claude-opus-4-8","posture":"Ask","permission_mode":"default","first_prompt":null,"resume_session_id":"uuid-xyz","name":"My run","disallowed_tools":["Bash"]}"#;
+const LAUNCH_SESSION_MAXIMAL: &str = r#"{"type":"LaunchSession","session_id":"s-1","project":"/home/u/proj","cwd":"/home/u/proj","host_id":"hpc","host_target":"user@hpc.example.com","claude_bin":"genie","setup":"module load cuda","env":[["FOO","bar"]],"model":"claude-opus-4-8","session_mode":"default","first_prompt":null,"resume_session_id":"uuid-xyz","name":"My run","disallowed_tools":["Bash"]}"#;
 
-const LAUNCH_SESSION_MINIMAL: &str = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"Ask"}"#;
+const LAUNCH_SESSION_MINIMAL: &str = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5"}"#;
 
-const LAUNCH_SESSION_CONTINUE: &str = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-8","posture":"Ask","continue":true}"#;
+const LAUNCH_SESSION_CONTINUE: &str = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-8","continue":true}"#;
 
 #[test]
 fn frozen_launch_session_maximal_golden_still_parses_wasl_defaults_false() {
@@ -234,8 +234,7 @@ fn launch_session_constructed_with_wasl_true_round_trips() {
         setup: None,
         env: vec![],
         model: "claude-opus-4-5".to_string(),
-        posture: Posture::Ask,
-        permission_mode: String::new(),
+        session_mode: String::new(),
         first_prompt: None,
         continue_: None,
         resume_session_id: None,
