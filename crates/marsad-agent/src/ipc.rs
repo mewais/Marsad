@@ -214,9 +214,17 @@ impl Agent {
         // live reader attached (Resumed); one without does not (Paused). The GUI
         // applies these and shows the truth (Resume button, not a working spinner).
         {
+            // The set of tracked sessions is cfg-agnostic; only the live/paused
+            // determination reads the real-IO writer registry. Under coverage that
+            // registry is gated out and no reader threads exist, so a tracked
+            // session is reported not-live (the loop itself stays covered).
+            #[cfg(not(coverage))]
             let writers = self.session_writers.0.lock().unwrap();
             for sid in self.sessions.keys() {
+                #[cfg(not(coverage))]
                 let live = writers.contains_key(sid);
+                #[cfg(coverage)]
+                let live = false;
                 out.push(marsad_proto::encode_ipc(
                     &marsad_proto::IpcMsg::SessionLiveness {
                         session_id: sid.clone(),
@@ -236,6 +244,10 @@ impl Agent {
         // re-deliver each as the same `AgentEvent{session_id, event}` the reader
         // originally broadcast; core's on_agent_line renders it and dedups by
         // request_id, so a replay to an already-populated client is idempotent.
+        //
+        // Gated to production builds for the same reason as the liveness replay
+        // above: `pending_gates` is a `#[cfg(not(coverage))]` real-IO registry.
+        #[cfg(not(coverage))]
         {
             let gates = self.pending_gates.0.lock().unwrap();
             for (sid, queue) in gates.iter() {
