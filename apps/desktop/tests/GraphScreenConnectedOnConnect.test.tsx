@@ -120,7 +120,7 @@ function draftNodeA(): DraftNode {
     hostId: "local",
     driver: "claude",
     model: "claude-sonnet-latest",
-    posture: "auto",
+    session_mode: "",
     isLead: true,
   };
 }
@@ -133,7 +133,7 @@ function draftNodeB(): DraftNode {
     hostId: "local",
     driver: "claude",
     model: "claude-sonnet-latest",
-    posture: "auto",
+    session_mode: "",
     isLead: false,
   };
 }

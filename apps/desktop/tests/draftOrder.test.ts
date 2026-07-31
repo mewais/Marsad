@@ -35,7 +35,7 @@ function makeNode(overrides: Partial<DraftNode> & { tempId: string }): DraftNode
     hostId: overrides.hostId ?? "local",
     driver: overrides.driver ?? "claude",
     model: overrides.model ?? "claude-sonnet-latest",
-    posture: overrides.posture ?? "auto",
+    session_mode: overrides.session_mode ?? "",
     firstPrompt: overrides.firstPrompt,
     isLead: overrides.isLead ?? false,
   };

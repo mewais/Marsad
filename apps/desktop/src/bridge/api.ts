@@ -59,10 +59,10 @@ export const DEFAULT_SETTINGS: Settings = {
   restore_on_launch: true,
   confirm_before_stop: true,
   default_model: "claude-sonnet-latest",
-  default_posture: "ask",
   // #2 new fields: default_driver + default_models (absent ⇒ "claude"/[])
   default_driver: "claude",
   default_models: [],
+  default_modes: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ export async function launchSession(args: {
   project: string;
   host_id: string;
   model: string;
-  posture: "ask" | "auto" | "full";
+  session_mode: string;
   first_prompt?: string;
   resume_session_id?: string;
   continue_recent?: boolean;
@@ -609,7 +609,7 @@ export async function getFileDiff(
 // ---------------------------------------------------------------------------
 
 /**
- * Restart a session with a new model, posture, and disallowed tools.
+ * Restart a session with a new model, session_mode, and disallowed tools.
  *
  * Sends StopSession + LaunchSession (Resume or Continue) with the SAME
  * marsad session id so the UI row is preserved. Tools in `disallowed_tools`
@@ -618,7 +618,7 @@ export async function getFileDiff(
 export async function restartSession(args: {
   id: string;
   model: string;
-  posture: "ask" | "auto" | "full";
+  session_mode: string;
   disallowed_tools?: string[];
 }): Promise<void> {
   if (!isTauri()) return;
@@ -626,11 +626,11 @@ export async function restartSession(args: {
   await invoke("restart_session", args);
 }
 
-/** Persist a named config template (model + posture). */
+/** Persist a named config template (model + mode). */
 export async function saveTemplate(args: {
   name: string;
   model: string;
-  posture: "ask" | "auto" | "full";
+  mode: string;
 }): Promise<void> {
   if (!isTauri()) return;
   const invoke = await getInvoke();

@@ -279,12 +279,15 @@ describe("Settings — Session defaults tab", () => {
     expect(screen.getByTestId("defaults-model-claude-opus-4-8")).toBeTruthy();
   });
 
-  it("renders posture picker buttons: ask, auto, full", () => {
+  it("no hardcoded posture picker (mode section is capability-reported)", () => {
     renderSettings();
     fireEvent.click(screen.getByTestId("settings-tab-session-defaults"));
-    expect(screen.getByTestId("defaults-posture-ask")).toBeTruthy();
-    expect(screen.getByTestId("defaults-posture-auto")).toBeTruthy();
-    expect(screen.getByTestId("defaults-posture-full")).toBeTruthy();
+    // Hardcoded posture radios have been removed.
+    expect(screen.queryByTestId("defaults-posture-ask")).toBeNull();
+    expect(screen.queryByTestId("defaults-posture-auto")).toBeNull();
+    expect(screen.queryByTestId("defaults-posture-full")).toBeNull();
+    // Shows "No modes discovered" when capabilities report no modes.
+    expect(screen.getByText(/no modes discovered/i)).toBeTruthy();
   });
 
   it("clicking a model button selects it (border changes)", () => {
@@ -295,14 +298,6 @@ describe("Settings — Session defaults tab", () => {
     // After click, opus should be selected (accent border style applied)
     // We verify by checking it doesn't throw and the button exists
     expect(opusBtn).toBeTruthy();
-  });
-
-  it("clicking a posture button selects it", () => {
-    renderSettings();
-    fireEvent.click(screen.getByTestId("settings-tab-session-defaults"));
-    const askBtn = screen.getByTestId("defaults-posture-ask");
-    fireEvent.click(askBtn);
-    expect(askBtn).toBeTruthy();
   });
 });
 

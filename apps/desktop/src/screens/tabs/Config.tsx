@@ -1,5 +1,5 @@
 /**
- * Config tab — model selector buttons, permission posture radios,
+ * Config tab — model selector buttons, live session modes,
  * tools/connectors chips, Apply / Save-as-template actions.
  */
 import { useEffect, useMemo, useState } from "react";
@@ -16,30 +16,6 @@ import type { PersistedTemplate } from "../../bridge/types";
 // ---------------------------------------------------------------------------
 // Static options
 // ---------------------------------------------------------------------------
-
-type PostureId = "ask" | "auto" | "full";
-
-const POSTURE_OPTIONS: {
-  id: PostureId;
-  label: string;
-  desc: string;
-}[] = [
-  {
-    id: "ask",
-    label: "Ask every time",
-    desc: "Pause for approval before any action with side effects.",
-  },
-  {
-    id: "auto",
-    label: "Auto-approve safe actions",
-    desc: "Reads and edits run freely; commands & writes still ask.",
-  },
-  {
-    id: "full",
-    label: "Full autonomy",
-    desc: "Act without asking. Use only in throwaway sandboxes.",
-  },
-];
 
 // Status → color token for MCP server chips.
 function mcpStatusColor(status: string): string {
@@ -78,14 +54,12 @@ export function ConfigTab() {
 
   // Local state mirrors current session values; Apply restarts the session.
   // Initial values come from the selected session so the tab reflects the
-  // session's REAL posture/model rather than a hardcoded default.
+  // session's REAL model rather than a hardcoded default.
   const initialModel = selectedSession?.model ?? "";
-  const initialPosture = (selectedSession?.posture as PostureId) ?? "ask";
   const [selectedModel, setSelectedModel] = useState(initialModel);
   // The currently RUNNING model for this session (from system/init, never
   // overridden by the UI's "next restart" picker state).
   const runningModel = selectedSession?.model ?? "";
-  const [posture, setPosture] = useState<PostureId>(initialPosture);
   // #1 model free-text — the custom input is ONLY for a model NOT in the
   // catalog. Empty when the selected model matches a catalog entry (a picked
   // radio); shows the typed id only when it's a custom one. Prevents picking a
@@ -98,11 +72,10 @@ export function ConfigTab() {
   const sessionTools = selectedSession?.tools ?? [];
   const [disabledTools, setDisabledTools] = useState<Set<string>>(new Set());
 
-  // Re-sync model and posture whenever the selected session changes so each
+  // Re-sync model whenever the selected session changes so each
   // session shows its own real values, not values left over from the previous one.
   useEffect(() => {
     setSelectedModel(selectedSession?.model ?? "");
-    setPosture((selectedSession?.posture as PostureId) ?? "ask");
     setDisabledTools(new Set()); // reset tool overrides for the new session
   }, [selectedSession?.id]);
 
@@ -136,7 +109,8 @@ export function ConfigTab() {
       await restartSession({
         id: selectedSession.id,
         model: selectedModel,
-        posture,
+        // Preserve the running mode across a model-change restart.
+        session_mode: selectedSession.current_mode ?? "",
         disallowed_tools: Array.from(disabledTools),
       });
     } catch (e) {
@@ -152,7 +126,7 @@ export function ConfigTab() {
     setSaveBusy(true);
     setSaveError(null);
     try {
-      await saveTemplate({ name: name.trim(), model: selectedModel, posture });
+      await saveTemplate({ name: name.trim(), model: selectedModel, mode: selectedSession?.current_mode ?? "" });
       const updated = await listTemplates();
       setTemplates(updated);
     } catch (e) {
@@ -164,7 +138,6 @@ export function ConfigTab() {
 
   function applyTemplate(t: PersistedTemplate) {
     setSelectedModel(t.model);
-    setPosture(t.posture as PostureId);
   }
 
   return (
@@ -274,75 +247,6 @@ export function ConfigTab() {
               }}
             />
           )}
-        </div>
-
-        {/* Permission posture */}
-        <div>
-          <div
-            style={{
-              fontSize: "calc(14.5px * var(--fs,1))",
-              fontWeight: 700,
-              marginBottom: 9,
-              color: "var(--txt2)",
-            }}
-          >
-            Permission posture
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            {POSTURE_OPTIONS.map((p) => {
-              const active = posture === p.id;
-              return (
-                <div
-                  key={p.id}
-                  data-testid={`posture-${p.id}`}
-                  onClick={() => setPosture(p.id)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 11,
-                    padding: "12px 14px",
-                    borderRadius: 10,
-                    cursor: "pointer",
-                    border: active
-                      ? "1px solid var(--accent)"
-                      : "1px solid var(--border)",
-                    background: active ? "var(--accent-bg)" : "var(--panel2)",
-                  }}
-                >
-                  {/* Radio dot */}
-                  <span
-                    style={{
-                      width: 16,
-                      height: 16,
-                      borderRadius: "50%",
-                      border: `2px solid ${active ? "var(--accent)" : "var(--border2)"}`,
-                      flexShrink: 0,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 7,
-                        height: 7,
-                        borderRadius: "50%",
-                        background: active ? "var(--accent)" : "transparent",
-                      }}
-                    />
-                  </span>
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: "calc(15px * var(--fs,1))" }}>
-                      {p.label}
-                    </div>
-                    <div style={{ fontSize: "calc(13.5px * var(--fs,1))", color: "var(--txt3)" }}>
-                      {p.desc}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
         </div>
 
         {/* Session mode — AGENT-REPORTED (never hardcoded). opencode's modes come
@@ -587,7 +491,7 @@ export function ConfigTab() {
                     color: "var(--txt2)",
                     userSelect: "none" as const,
                   }}
-                  title={`${t.model} · ${t.posture}`}
+                  title={`${t.model}${t.mode ? ` · ${t.mode}` : ""}`}
                 >
                   {t.name}
                 </span>

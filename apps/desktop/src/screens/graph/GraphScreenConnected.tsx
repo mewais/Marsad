@@ -224,7 +224,7 @@ export function GraphScreenConnected(): JSX.Element {
           const protocol = waslProtocol(node.driver);
           const wasl_target_key = {
             protocol,
-            context: { cwd: node.project, model: node.model, posture: node.posture },
+            context: { cwd: node.project, model: node.model, session_mode: node.session_mode },
           };
           realId = await launchWaslSession({
             host_id: node.hostId,
@@ -236,7 +236,7 @@ export function GraphScreenConnected(): JSX.Element {
             project: node.project,
             host_id: node.hostId,
             model: node.model,
-            posture: node.posture,
+            session_mode: node.session_mode,
             first_prompt: node.firstPrompt,
             name: node.name,
             driver: node.driver,

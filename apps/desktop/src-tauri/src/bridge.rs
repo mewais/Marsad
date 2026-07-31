@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 use tauri::State;
 
-use marsad_core::{Core, CoreError, GitProbe, LaunchMode, LaunchSpec, PersistedSettings, PersistedTemplate, Posture, VmUpdate};
+use marsad_core::{Core, CoreError, GitProbe, LaunchMode, LaunchSpec, PersistedSettings, PersistedTemplate, VmUpdate};
 use marsad_gates::{Decision, DecisionId, GateDecision};
 use marsad_viewmodel::{AppSnapshot, CapabilitiesView};
 
@@ -84,7 +84,7 @@ pub fn launch_session(
     project: String,
     host_id: String,
     model: String,
-    posture: String,
+    session_mode: String,
     first_prompt: Option<String>,
     resume_session_id: Option<String>,
     continue_recent: Option<bool>,
@@ -99,11 +99,6 @@ pub fn launch_session(
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     match &mut *guard {
         AppState::Live(core) => {
-            let posture_val = match posture.as_str() {
-                "auto" => Posture::AutoApproveSafe,
-                "full" => Posture::FullAutonomy,
-                _ => Posture::Ask,
-            };
             // Non-empty resume id → resume that session; else continue-recent →
             // --continue; else a fresh session.
             let mode = if let Some(id) = resume_session_id.filter(|s| !s.is_empty()) {
@@ -123,7 +118,7 @@ pub fn launch_session(
                 setup: None,
                 env: Vec::new(),
                 model,
-                posture: posture_val,
+                session_mode,
                 first_prompt,
                 mode,
                 name,
@@ -556,9 +551,9 @@ fn default_settings_for_mock() -> PersistedSettings {
         restore_on_launch: true,
         confirm_before_stop: true,
         default_model: "claude-sonnet-latest".to_string(),
-        default_posture: "ask".to_string(),
         default_driver: "claude".to_string(),
         default_models: Vec::new(),
+        default_modes: Vec::new(),
     }
 }
 
@@ -1050,7 +1045,7 @@ pub fn commit(
 // Session config commands
 // ---------------------------------------------------------------------------
 
-/// Restart a session with a new model, posture, and disallowed tools.
+/// Restart a session with a new model, session_mode, and disallowed tools.
 ///
 /// Sends `StopSession` to kill the current claude process, then relaunches it
 /// with the SAME marsad session id (so the UI row is preserved) and resumes
@@ -1063,19 +1058,14 @@ pub fn restart_session(
     state: State<'_, ManagedState>,
     id: String,
     model: String,
-    posture: String,
+    session_mode: String,
     disallowed_tools: Option<Vec<String>>,
 ) -> Result<(), String> {
-    let posture_val = match posture.as_str() {
-        "auto" => Posture::AutoApproveSafe,
-        "full" => Posture::FullAutonomy,
-        _ => Posture::Ask,
-    };
     let disallowed = disallowed_tools.unwrap_or_default();
     let updates = {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
         match &mut *guard {
-            AppState::Live(core) => core.restart_session(&id, &model, posture_val, disallowed).map_err(map_err)?,
+            AppState::Live(core) => core.restart_session(&id, &model, session_mode, disallowed).map_err(map_err)?,
             AppState::Mock(_) => vec![],
         }
     };
@@ -1083,17 +1073,17 @@ pub fn restart_session(
     Ok(())
 }
 
-/// Persist a named config template (model + posture).
+/// Persist a named config template (model + mode).
 #[tauri::command(rename_all = "snake_case")]
 pub fn save_template(
     state: State<'_, ManagedState>,
     name: String,
     model: String,
-    posture: String,
+    mode: String,
 ) -> Result<(), String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     match &mut *guard {
-        AppState::Live(core) => core.save_template(&name, &model, &posture).map_err(map_err),
+        AppState::Live(core) => core.save_template(&name, &model, &mode).map_err(map_err),
         AppState::Mock(_) => Ok(()),
     }
 }

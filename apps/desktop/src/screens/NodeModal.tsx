@@ -17,7 +17,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useVm } from "../bridge/useVm";
 import { launchSession, launchWaslSession, fetchGraph, capsKey, getSettings, refreshCapabilities } from "../bridge/api";
-import type { CapabilitiesView, DiscoveredSession, ModelCatalog } from "../bridge/types";
+import type { CapabilitiesView, DiscoveredSession, ModelCatalog, SessionMode } from "../bridge/types";
 import type { Driver, GraphNode } from "../bridge/workstreamTypes";
 import { DRIVERS, DRIVER_COLOR, isWaslDriver, waslProtocol } from "../bridge/drivers";
 import { Modal } from "../components/Modal";
@@ -27,12 +27,6 @@ import { Modal } from "../components/Modal";
 // ---------------------------------------------------------------------------
 
 const EMPTY_MODEL_CATALOG: ModelCatalog = { models: [], source: "Observed", free_text: true };
-
-const POSTURES: { value: "ask" | "auto" | "full"; label: string }[] = [
-  { value: "ask", label: "Ask each time" },
-  { value: "auto", label: "Auto-approve safe" },
-  { value: "full", label: "Full autonomy" },
-];
 
 // Resume-label helpers (mirror NewSession's).
 function relativeTime(epochMs: number): string {
@@ -132,11 +126,13 @@ export function NodeModal() {
   const [userModifiedDriver, setUserModifiedDriver] = useState(false);
   const [model, setModel] = useState("");
   const [userModifiedModel, setUserModifiedModel] = useState(false);
-  const [posture, setPosture] = useState<"ask" | "auto" | "full">("auto");
+  const [sessionMode, setSessionMode] = useState("");
+  const [userModifiedSessionMode, setUserModifiedSessionMode] = useState(false);
   // #2 pre-pick — Settings-persisted defaults (default_driver / default_models
-  // per driver / default_posture) resolved on mount. Model defaults are keyed
+  // per driver / default_modes per driver) resolved on mount. Model defaults are keyed
   // by driver so switching driver picks that driver's default.
   const [defaultModels, setDefaultModels] = useState<Record<string, string>>({});
+  const [defaultModes, setDefaultModes] = useState<Record<string, string>>({});
   const [firstPrompt, setFirstPrompt] = useState("");
   const [controller, setController] = useState<string | null>(null);
   const [feeder, setFeeder] = useState<string | null>(null);
@@ -149,8 +145,8 @@ export function NodeModal() {
   const [selectedResume, setSelectedResume] = useState<string>("continue");
 
   // #2 pre-pick — load Settings defaults once on mount (default driver,
-  // per-driver default model, default posture). Absent settings degrade to the
-  // capabilities-first-model / "auto" fallbacks used before.
+  // per-driver default model, per-driver default mode). Absent settings degrade
+  // to the capabilities-first-model / backend-default fallbacks.
   useEffect(() => {
     getSettings()
       .then((s) => {
@@ -160,11 +156,12 @@ export function NodeModal() {
         // per-driver claude entry exists.
         if (dm.claude === undefined && s.default_model) dm.claude = s.default_model;
         setDefaultModels(dm);
+        const dmodes: Record<string, string> = {};
+        for (const [d, mode] of s.default_modes ?? []) dmodes[d] = mode;
+        setDefaultModes(dmodes);
         if (!userModifiedDriver && s.default_driver) {
           setDriver(s.default_driver as Driver);
         }
-        const p = s.default_posture as "ask" | "auto" | "full";
-        if (p === "ask" || p === "auto" || p === "full") setPosture(p);
       })
       .catch(() => {/* keep fallbacks on error */});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -264,6 +261,10 @@ export function NodeModal() {
   // one. Prevents picking `opus` from filling the box with "opus".
   const customModelValue = modelCatalog.models.some((m) => m.id === model) ? "" : model;
 
+  // Session-mode list from capabilities for the selected (driver, host).
+  // Empty list = backend default (no mode picker rendered).
+  const modeList: SessionMode[] = capsForDriver(driver)?.available_modes ?? [];
+
   // #3 resume — sessions come ONLY from capabilities[(driver, host)].sessions
   // (populated by scan_claude_sessions once a project is in scope). String-
   // project entries are filtered to the chosen project; agy-style null-project
@@ -328,6 +329,21 @@ export function NodeModal() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelCatalog.models, modelCatalog.free_text, userModifiedModel, defaultModels, driver]);
 
+  // Default session mode: Settings default_modes[driver] if present in modeList,
+  // else modeList[0]?.id, else "" (backend default). Mirror of model default logic.
+  useEffect(() => {
+    if (userModifiedSessionMode) return;
+    const pref = defaultModes[driver];
+    if (pref && modeList.some((m) => m.id === pref)) {
+      setSessionMode(pref);
+    } else if (modeList.length > 0) {
+      setSessionMode(modeList[0].id);
+    } else {
+      setSessionMode("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeList, userModifiedSessionMode, defaultModes, driver]);
+
   function selectModel(id: string) {
     setUserModifiedModel(true);
     setModel(id);
@@ -391,7 +407,7 @@ export function NodeModal() {
       hostId,
       driver,
       model,
-      posture,
+      session_mode: sessionMode,
       firstPrompt: firstPrompt.trim() || undefined,
     });
     // Honor explicit Controlled-by / Feeds-from picks against existing DRAFT
@@ -431,7 +447,7 @@ export function NodeModal() {
       if (isWaslDriver(driver)) {
         const wasl_target_key = {
           protocol: waslProtocol(driver),
-          context: { cwd: project.trim(), model, posture },
+          context: { cwd: project.trim(), model, session_mode: sessionMode },
         };
         newId = await launchWaslSession({
           host_id: hostId,
@@ -451,7 +467,7 @@ export function NodeModal() {
           project: project.trim(),
           host_id: hostId,
           model,
-          posture,
+          session_mode: sessionMode,
           first_prompt: firstPrompt.trim() || undefined,
           name: sessionName,
           driver,
@@ -899,7 +915,7 @@ export function NodeModal() {
           </div>
         )}
 
-        {/* Model + Permission posture */}
+        {/* Model + Session mode */}
         <div style={{ display: "flex", gap: 14 }}>
           <div style={{ flex: 1 }}>
             <div style={sectionLabel}>Model</div>
@@ -969,24 +985,32 @@ export function NodeModal() {
             )}
           </div>
 
-          <div style={{ flex: 1 }}>
-            <div style={sectionLabel}>Permission</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {POSTURES.map((p) => {
-                const selected = posture === p.value;
-                return (
-                  <button
-                    key={p.value}
-                    data-testid={`nm-posture-${p.value}`}
-                    onClick={() => setPosture(p.value)}
-                    style={pickerBtnStyle(selected)}
-                  >
-                    {p.label}
-                  </button>
-                );
-              })}
+          {modeList.length > 0 && (
+            <div style={{ flex: 1 }}>
+              <div style={sectionLabel}>Mode</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {modeList.map((m) => {
+                  const selected = sessionMode === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      data-testid={`nm-mode-${m.id}`}
+                      onClick={() => { setUserModifiedSessionMode(true); setSessionMode(m.id); }}
+                      style={pickerBtnStyle(selected)}
+                      title={m.description}
+                    >
+                      <div style={{ fontWeight: 600 }}>{m.label || m.id}</div>
+                      {m.description && (
+                        <div style={{ fontSize: "calc(12px * var(--fs,1))", color: selected ? "var(--accent2)" : "var(--txt3)", fontWeight: 400 }}>
+                          {m.description}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* First prompt */}

@@ -336,7 +336,8 @@ describe("SessionDetail — tab bar", () => {
   it("clicking Config tab renders Config content", () => {
     renderWith({ selectedId: "s04" });
     fireEvent.click(screen.getByTestId("tab-Config"));
-    expect(screen.getByText(/Permission posture/i)).toBeTruthy();
+    // Config tab renders the Model section
+    expect(screen.getByTestId("config-apply")).toBeTruthy();
   });
 
   it("clicking Usage tab renders Usage content", () => {
@@ -471,7 +472,7 @@ describe("UsageTab — context warning", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. Config tab — model buttons and posture radios render
+// 6. Config tab — model buttons render
 // ---------------------------------------------------------------------------
 
 describe("ConfigTab — model and posture", () => {
@@ -484,13 +485,13 @@ describe("ConfigTab — model and posture", () => {
     expect(screen.getByTestId("model-btn-claude-opus-4-8")).toBeTruthy();
   });
 
-  it("renders all three posture options", () => {
+  it("no hardcoded posture options (mode section is agent-reported or absent)", () => {
     renderWith({ selectedId: "s04" });
     fireEvent.click(screen.getByTestId("tab-Config"));
-
-    expect(screen.getByTestId("posture-ask")).toBeTruthy();
-    expect(screen.getByTestId("posture-auto")).toBeTruthy();
-    expect(screen.getByTestId("posture-full")).toBeTruthy();
+    // Posture radios have been removed; there are no posture-* testids.
+    expect(screen.queryByTestId("posture-ask")).toBeNull();
+    expect(screen.queryByTestId("posture-auto")).toBeNull();
+    expect(screen.queryByTestId("posture-full")).toBeNull();
   });
 
   it("clicking a model button changes selection (no api call yet)", () => {

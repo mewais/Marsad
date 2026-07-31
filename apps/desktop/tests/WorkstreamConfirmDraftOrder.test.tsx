@@ -9,7 +9,7 @@
  *
  *   2. onConfirmDraft calls `launchWaslSession` for `wasl-*` draft nodes,
  *      with the correct `wasl_target_key` shape:
- *        { protocol: waslProtocol(driver), context: { cwd, model, posture } }
+ *        { protocol: waslProtocol(driver), context: { cwd, model, session_mode } }
  *      and calls `launchSession` for non-wasl (`claude`, etc.) nodes.
  *
  *   3. temp→real edge resolution still works, including a draft↔real edge
@@ -140,7 +140,7 @@ function makeDraftNode(tempId: string, opts: Partial<DraftNode> = {}): DraftNode
     hostId: opts.hostId ?? "local",
     driver: opts.driver ?? "claude",
     model: opts.model ?? "claude-sonnet-latest",
-    posture: opts.posture ?? "auto",
+    session_mode: opts.session_mode ?? "",
     firstPrompt: opts.firstPrompt,
     isLead: opts.isLead ?? false,
   };
@@ -284,7 +284,7 @@ describe("onConfirmDraft — launchWaslSession for wasl-* draft nodes", () => {
       isLead: true,
       driver: "wasl-claude",
       model: "claude-sonnet-latest",
-      posture: "auto",
+      session_mode: "",
       project: "/code/wasl-proj",
       name: "Wasl Agent",
     });
@@ -307,7 +307,7 @@ describe("onConfirmDraft — launchWaslSession for wasl-* draft nodes", () => {
       isLead: true,
       driver: "wasl-claude",
       model: "claude-sonnet-latest",
-      posture: "auto",
+      session_mode: "",
       project: "/code/proj",
     });
 
@@ -335,7 +335,7 @@ describe("onConfirmDraft — launchWaslSession for wasl-* draft nodes", () => {
       driver: "wasl-claude",
       project,
       model: "claude-sonnet-latest",
-      posture: "auto",
+      session_mode: "",
     });
 
     renderGraphConnected({
@@ -363,7 +363,7 @@ describe("onConfirmDraft — launchWaslSession for wasl-* draft nodes", () => {
       isLead: true,
       driver: "wasl-claude",
       model,
-      posture: "auto",
+      session_mode: "",
       project: "/code/proj",
     });
 
@@ -386,12 +386,12 @@ describe("onConfirmDraft — launchWaslSession for wasl-* draft nodes", () => {
     );
   });
 
-  it("launchWaslSession context.posture === the draft node's posture", async () => {
-    const posture = "full";
+  it("launchWaslSession context.session_mode === the draft node's session_mode", async () => {
+    const session_mode = "plan";
     const waslNode = makeDraftNode("wasl-node", {
       isLead: true,
       driver: "wasl-claude",
-      posture,
+      session_mode,
       project: "/code/proj",
       model: "claude-sonnet-latest",
     });
@@ -409,7 +409,7 @@ describe("onConfirmDraft — launchWaslSession for wasl-* draft nodes", () => {
     expect(launchWaslSession).toHaveBeenCalledWith(
       expect.objectContaining({
         wasl_target_key: expect.objectContaining({
-          context: expect.objectContaining({ posture }),
+          context: expect.objectContaining({ session_mode }),
         }),
       })
     );
@@ -426,7 +426,7 @@ describe("onConfirmDraft — launchWaslSession for wasl-* draft nodes", () => {
       driver: "wasl-claude",
       project: "/code/wasl",
       model: "claude-sonnet-latest",
-      posture: "auto",
+      session_mode: "",
     });
 
     renderGraphConnected({
@@ -600,7 +600,7 @@ describe("onConfirmDraft — launch failure → draft not cleared + designError 
       driver: "wasl-claude",
       project: "/code/wasl",
       model: "claude-sonnet-latest",
-      posture: "auto",
+      session_mode: "",
     });
 
     const preloaded: Partial<VmState> = {

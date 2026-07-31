@@ -260,20 +260,13 @@ describe("#4/#2 NodeModal — driver + defaults", () => {
     });
   });
 
-  it("pre-picks the Settings default posture", async () => {
-    settingsFixture = { ...DEFAULT_SETTINGS, default_posture: "full" };
+  it("passes session_mode (empty when no modes in catalog) to launchSession", async () => {
+    // With no available_modes in the capability, sessionMode defaults to "".
     renderNodeModal(caps("local", ["m-a"]));
-    // Wait for the async Settings load; the "Full autonomy" posture button
-    // becomes the selected one (accent border).
-    await waitFor(() => {
-      const btn = screen.getByTestId("nm-posture-full") as HTMLButtonElement;
-      // Selected posture buttons render with the accent border/color.
-      expect(btn.style.color).toContain("accent");
-    });
     fireEvent.change(screen.getByTestId("nm-project-input"), { target: { value: "~/code/x" } });
     fireEvent.click(screen.getByTestId("nm-launch-btn"));
     await waitFor(() => {
-      expect(launchSession).toHaveBeenCalledWith(expect.objectContaining({ posture: "full" }));
+      expect(launchSession).toHaveBeenCalledWith(expect.objectContaining({ session_mode: "" }));
     });
   });
 

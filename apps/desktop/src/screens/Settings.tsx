@@ -14,7 +14,7 @@ import { useTheme } from "../theme/ThemeProvider";
 import { getUiScale, applyUiScale } from "../theme/uiScale";
 import { Toggle } from "../components/Toggle";
 import { getAutostart, setAutostart, addHost, updateHost, removeHost, connectHostInteractive, listWslDistros, getSettings, setSettings, parseEnv, DEFAULT_SETTINGS } from "../bridge/api";
-import type { CapabilitiesView, ModelInfo, Settings, NotifPref } from "../bridge/types";
+import type { CapabilitiesView, ModelInfo, SessionMode, Settings, NotifPref } from "../bridge/types";
 import type { Driver } from "../bridge/workstreamTypes";
 import { DRIVERS, DRIVER_COLOR } from "../bridge/drivers";
 
@@ -1301,24 +1301,6 @@ function HostsTab() {
 // Session defaults tab
 // ---------------------------------------------------------------------------
 
-const POSTURES: Array<{ key: "ask" | "auto" | "full"; label: string; desc: string }> = [
-  {
-    key: "ask",
-    label: "Ask every time",
-    desc: "You'll be prompted before any side-effecting action.",
-  },
-  {
-    key: "auto",
-    label: "Auto-approve safe actions",
-    desc: "Reads & edits run freely; commands and writes still ask.",
-  },
-  {
-    key: "full",
-    label: "Full autonomy",
-    desc: "Act without asking — sandboxes only.",
-  },
-];
-
 interface SessionDefaultsTabProps {
   /** The default driver applied to a fresh New Session / node ("claude" | …). */
   driver: Driver;
@@ -1326,11 +1308,12 @@ interface SessionDefaultsTabProps {
   /** Per-driver default model map (driver -> model slug). */
   models: Record<string, string>;
   onModelChange: (driver: Driver, m: string) => void;
-  posture: "ask" | "auto" | "full";
-  onPostureChange: (p: "ask" | "auto" | "full") => void;
+  /** Per-driver default mode map (driver -> mode id). */
+  modes: Record<string, string>;
+  onModeChange: (driver: Driver, modeId: string) => void;
   /** Live capabilities keyed by capsKey(driver, host) — the per-driver model
-   *  catalog is sourced from this (union across hosts), never a static import
-   *  (dynamic-capabilities.md §5). */
+   *  and mode catalogs are sourced from this (union across hosts), never a static
+   *  import (dynamic-capabilities.md §5). */
   capabilities: Record<string, CapabilitiesView>;
 }
 
@@ -1354,9 +1337,31 @@ function driverModelCatalog(
   return out;
 }
 
-function SessionDefaultsTab({ driver, onDriverChange, models, onModelChange, posture, onPostureChange, capabilities }: SessionDefaultsTabProps) {
+/** Union of a single driver's available_modes across every host, deduped by id —
+ *  the per-driver default-mode catalog. Capabilities-sourced (never a preset). */
+function driverModeCatalog(
+  capabilities: Record<string, CapabilitiesView>,
+  driver: Driver,
+): SessionMode[] {
+  const seen = new Set<string>();
+  const out: SessionMode[] = [];
+  for (const cap of Object.values(capabilities)) {
+    if (cap.driver !== driver) continue;
+    for (const m of cap.available_modes ?? []) {
+      if (!seen.has(m.id)) {
+        seen.add(m.id);
+        out.push(m);
+      }
+    }
+  }
+  return out;
+}
+
+function SessionDefaultsTab({ driver, onDriverChange, models, onModelChange, modes, onModeChange, capabilities }: SessionDefaultsTabProps) {
   const model = models[driver] ?? "";
   const driverModels = driverModelCatalog(capabilities, driver);
+  const driverModes = driverModeCatalog(capabilities, driver);
+  const currentMode = modes[driver] ?? "";
   return (
     <div style={{ maxWidth: 860, display: "flex", flexDirection: "column", gap: 22 }}>
       {/* Default agent / driver */}
@@ -1457,60 +1462,70 @@ function SessionDefaultsTab({ driver, onDriverChange, models, onModelChange, pos
         />
       </div>
 
-      {/* Default permission posture */}
+      {/* Default mode — per selected driver, capability-reported */}
       <div>
-        <div style={S.sectionLabelBold}>Default permission posture</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-          {POSTURES.map((p) => {
-            const active = posture === p.key;
-            return (
-              <div
-                key={p.key}
-                data-testid={`defaults-posture-${p.key}`}
-                onClick={() => onPostureChange(p.key)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 11,
-                  padding: "12px 14px",
-                  borderRadius: 10,
-                  cursor: "pointer",
-                  border: active ? "1px solid var(--accent)" : "1px solid var(--border2)",
-                  background: active ? "rgba(91,141,239,0.12)" : "var(--panel2)",
-                  transition: "all 0.15s",
-                }}
-              >
-                <span
+        <div style={S.sectionLabelBold}>
+          Default mode for {DRIVERS.find((d) => d.id === driver)?.label}
+        </div>
+        {driverModes.length === 0 ? (
+          <div style={{ fontSize: "calc(13.5px * var(--fs,1))", color: "var(--txt3)", fontStyle: "italic" }}>
+            No modes discovered for this agent yet.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            {driverModes.map((m) => {
+              const active = currentMode === m.id;
+              return (
+                <div
+                  key={m.id}
+                  data-testid={`defaults-mode-${m.id}`}
+                  onClick={() => onModeChange(driver, m.id)}
                   style={{
-                    width: 16,
-                    height: 16,
-                    borderRadius: "50%",
-                    border: `2px solid ${active ? "var(--accent)" : "var(--border2)"}`,
-                    flexShrink: 0,
                     display: "flex",
                     alignItems: "center",
-                    justifyContent: "center",
+                    gap: 11,
+                    padding: "12px 14px",
+                    borderRadius: 10,
+                    cursor: "pointer",
+                    border: active ? "1px solid var(--accent)" : "1px solid var(--border2)",
+                    background: active ? "rgba(91,141,239,0.12)" : "var(--panel2)",
+                    transition: "all 0.15s",
                   }}
                 >
                   <span
                     style={{
-                      width: 7,
-                      height: 7,
+                      width: 16,
+                      height: 16,
                       borderRadius: "50%",
-                      background: active ? "var(--accent)" : "transparent",
+                      border: `2px solid ${active ? "var(--accent)" : "var(--border2)"}`,
+                      flexShrink: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
                     }}
-                  />
-                </span>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: "calc(15px * var(--fs,1))", color: "var(--txt)" }}>
-                    {p.label}
+                  >
+                    <span
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: "50%",
+                        background: active ? "var(--accent)" : "transparent",
+                      }}
+                    />
+                  </span>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: "calc(15px * var(--fs,1))", color: "var(--txt)" }}>
+                      {m.label || m.id}
+                    </div>
+                    {m.description && (
+                      <div style={{ fontSize: "calc(13.5px * var(--fs,1))", color: "var(--txt3)" }}>{m.description}</div>
+                    )}
                   </div>
-                  <div style={{ fontSize: "calc(13.5px * var(--fs,1))", color: "var(--txt3)" }}>{p.desc}</div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div
@@ -1834,11 +1849,13 @@ export function Settings() {
   const [restoreOnLaunch, setRestoreOnLaunch] = useState(DEFAULT_SETTINGS.restore_on_launch);
   const [confirmBeforeStop, setConfirmBeforeStop] = useState(DEFAULT_SETTINGS.confirm_before_stop);
   const [defaultModel, setDefaultModel] = useState(DEFAULT_SETTINGS.default_model);
-  const [defaultPosture, setDefaultPosture] = useState<"ask" | "auto" | "full">(DEFAULT_SETTINGS.default_posture as "ask" | "auto" | "full");
   // #2 — default driver + per-driver default models. `defaultModels` is a
   // driver->model map in state; persisted as the `[driver, model]` pair list.
   const [defaultDriver, setDefaultDriver] = useState<Driver>((DEFAULT_SETTINGS.default_driver as Driver) ?? "claude");
   const [defaultModels, setDefaultModels] = useState<Record<string, string>>({});
+  // Per-driver default modes. `defaultModes` is a driver->mode map in state;
+  // persisted as the `[driver, mode_id]` pair list.
+  const [defaultModes, setDefaultModes] = useState<Record<string, string>>({});
 
   // Load settings from the backend once on mount.
   useEffect(() => {
@@ -1853,7 +1870,6 @@ export function Settings() {
         setRestoreOnLaunch(s.restore_on_launch);
         setConfirmBeforeStop(s.confirm_before_stop);
         setDefaultModel(s.default_model);
-        setDefaultPosture(s.default_posture as "ask" | "auto" | "full");
         setDefaultDriver((s.default_driver as Driver) ?? "claude");
         const dm: Record<string, string> = {};
         for (const [d, m] of s.default_models ?? []) dm[d] = m;
@@ -1861,6 +1877,9 @@ export function Settings() {
         // the per-driver picker pre-selects the previously-saved claude default.
         if (dm.claude === undefined && s.default_model) dm.claude = s.default_model;
         setDefaultModels(dm);
+        const dmodes: Record<string, string> = {};
+        for (const [d, mode] of s.default_modes ?? []) dmodes[d] = mode;
+        setDefaultModes(dmodes);
       })
       .catch((err) => console.error("[Settings] getSettings failed:", err));
   }, []);
@@ -1876,9 +1895,9 @@ export function Settings() {
       restore_on_launch: restoreOnLaunch,
       confirm_before_stop: confirmBeforeStop,
       default_model: defaultModel,
-      default_posture: defaultPosture,
       default_driver: defaultDriver,
       default_models: Object.entries(defaultModels),
+      default_modes: Object.entries(defaultModes),
       ...patch,
     };
     setSettings(next).catch((err) => console.error("[Settings] setSettings failed:", err));
@@ -1929,9 +1948,10 @@ export function Settings() {
     }
     persist(patch);
   }
-  function handleDefaultPostureChange(p: "ask" | "auto" | "full") {
-    setDefaultPosture(p);
-    persist({ default_posture: p });
+  function handleDefaultModeChange(d: Driver, modeId: string) {
+    const nextModes = { ...defaultModes, [d]: modeId };
+    setDefaultModes(nextModes);
+    persist({ default_modes: Object.entries(nextModes) });
   }
 
   return (
@@ -1975,8 +1995,8 @@ export function Settings() {
               onDriverChange={handleDefaultDriverChange}
               models={defaultModels}
               onModelChange={handleDefaultModelChange}
-              posture={defaultPosture}
-              onPostureChange={handleDefaultPostureChange}
+              modes={defaultModes}
+              onModeChange={handleDefaultModeChange}
               capabilities={vmState.capabilities}
             />
           )}

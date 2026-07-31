@@ -429,11 +429,10 @@ describe("NodeModal — pickers render", () => {
     expect(screen.getByTestId("nm-model-claude-opus-4-8")).toBeTruthy();
   });
 
-  it("renders posture picker buttons", () => {
+  it("renders no mode picker when capabilities have no available_modes", () => {
     renderNodeModal();
-    expect(screen.getByTestId("nm-posture-ask")).toBeTruthy();
-    expect(screen.getByTestId("nm-posture-auto")).toBeTruthy();
-    expect(screen.getByTestId("nm-posture-full")).toBeTruthy();
+    // Capabilities in this test fixture have no available_modes, so no mode picker renders.
+    expect(screen.queryByTestId(/nm-mode-/)).toBeNull();
   });
 
   it("renders first prompt textarea", () => {
@@ -477,9 +476,6 @@ describe("NodeModal — launch behavior", () => {
     // Pick Opus model
     fireEvent.click(screen.getByTestId("nm-model-claude-opus-4-8"));
 
-    // Pick 'ask' posture
-    fireEvent.click(screen.getByTestId("nm-posture-ask"));
-
     // Pick hetzner host
     fireEvent.click(screen.getByTestId("nm-host-hetzner"));
 
@@ -497,7 +493,7 @@ describe("NodeModal — launch behavior", () => {
           project: "~/projects/test",
           host_id: "hetzner",
           model: "claude-opus-4-8",
-          posture: "ask",
+          session_mode: "",
           first_prompt: "Add unit tests",
         })
       );

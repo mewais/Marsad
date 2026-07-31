@@ -254,8 +254,6 @@ export interface SessionView {
   mcp_servers: McpServerInfo[];
   /** Slash commands available in this session (from system/init). */
   slash_commands: SlashCommandInfo[];
-  /** Permission posture: "ask" | "auto" | "full" (from system/init permissionMode). */
-  posture: string;
   /** The agent driver running THIS session ("claude"/"codex"/…). The header
    *  labels the session by this, not the host's first capability driver. */
   driver?: string;
@@ -306,7 +304,7 @@ export interface SessionView {
   /**
    * Available agent modes for this session, agent-reported (opencode's
    * configOptions, claude's version-derived list). The Config panel renders
-   * these instead of a hardcoded posture list; `current_mode` marks the active
+   * these instead of a hardcoded mode list; `current_mode` marks the active
    * one. Absent/empty before the first init/config.
    */
   available_modes?: SessionMode[];
@@ -544,7 +542,6 @@ export interface Settings {
   restore_on_launch: boolean;
   confirm_before_stop: boolean;
   default_model: string;
-  default_posture: "ask" | "auto" | "full";
   /**
    * Default agent driver for new sessions ("claude" | "codex" | "gemini").
    * Absent in older persisted settings → defaults to "claude".
@@ -556,6 +553,12 @@ export interface Settings {
    * Falls back to `default_model` for the "claude" driver if absent.
    */
   default_models?: Array<[string, string]>;
+  /**
+   * Per-driver default mode ids, as `[driver, mode_id]` pairs.
+   * E.g. `[["claude", "plan"], ["opencode", "build"]]`.
+   * Empty list = no preference (backend default is used).
+   */
+  default_modes?: Array<[string, string]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -578,13 +581,13 @@ export interface SessionSummary {
 }
 
 // ---------------------------------------------------------------------------
-// PersistedTemplate — named config template (model + posture)
+// PersistedTemplate — named config template (model + mode)
 // ---------------------------------------------------------------------------
 
 export interface PersistedTemplate {
   name: string;
   model: string;
-  posture: "ask" | "auto" | "full";
+  mode: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -673,6 +676,8 @@ export interface CapabilitiesView {
   /** Unix epoch ms of the last successful probe; 0 = never (honest unknown). */
   fetched_at_ms: number;
   errors: string[];
+  /** Agent modes available for this driver, capability-reported. Empty when the driver exposes no modes. */
+  available_modes?: SessionMode[];
 }
 
 // ---------------------------------------------------------------------------

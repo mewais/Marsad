@@ -117,7 +117,7 @@ export interface DraftNode {
   hostId: string;
   driver: Driver;
   model: string;
-  posture: "ask" | "auto" | "full";
+  session_mode: string;
   firstPrompt?: string;
   /** True for the first authored node — it becomes the workstream's lead. */
   isLead: boolean;
@@ -806,7 +806,6 @@ function pendingToSessionView(p: PendingSession): SessionView {
     tools: [],
     mcp_servers: [],
     slash_commands: [],
-    posture: "ask",
     driver: p.driver,
     compactions: 0,
     last_compaction: null,
