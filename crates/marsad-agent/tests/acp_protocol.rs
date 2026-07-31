@@ -771,7 +771,7 @@ fn extract_update_type_available_commands_update() {
 mod opencode_argv_tests {
     use super::*;
     use marsad_agent::opencode_argv;
-    use marsad_proto::{LaunchMode, LaunchSpec, Posture};
+    use marsad_proto::{LaunchMode, LaunchSpec};
 
     /// Build a LaunchSpec for the opencode driver (used by opencode_argv tests).
     fn opencode_spec(model: &str, bin: Option<&str>) -> LaunchSpec {
@@ -779,7 +779,7 @@ mod opencode_argv_tests {
             project: "/proj".to_string(),
             host_id: "local".to_string(),
             model: model.to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: LaunchMode::Fresh,
             host_target: None,

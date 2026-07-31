@@ -72,7 +72,7 @@ impl Core {
             branch: "main".to_string(),
             model: String::new(),
             last_phase: "Starting".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: Vec::new(),
             driver: "wasl".to_string(),
             slash_commands: Vec::new(),
@@ -228,7 +228,6 @@ impl Core {
         id: String,
         spec: LaunchSpec,
     ) -> Result<String, CoreError> {
-        let permission_mode = posture_to_permission_mode(&spec.posture);
         // Forward the host so the agent runs the session on the right machine.
         // Resolve the remote execution target from the host id via the registry
         // (local/unknown hosts → None → the agent runs locally). An explicit
@@ -297,8 +296,7 @@ impl Core {
             setup,
             env,
             model: spec.model.clone(),
-            posture: spec.posture.clone(),
-            permission_mode: permission_mode.to_string(),
+            session_mode: spec.session_mode.clone(),
             first_prompt: spec.first_prompt.clone(),
             continue_: matches!(spec.mode, LaunchMode::Continue).then_some(true),
             resume_session_id: match &spec.mode {
@@ -340,22 +338,14 @@ impl Core {
         if !self.sessions.contains_key(&id) {
             self.session_order.push(id.clone());
         }
-        // Seed permission_mode from the launch posture so the Config tab shows
-        // the correct posture immediately — before the authoritative system/init
-        // event arrives (which will override it when it does).
-        // NOTE: We use `posture_name_to_permission_mode` (which maps proto enum
-        // variant names to the `permissionMode` values claude emits) rather than
-        // reusing `permission_mode` from `posture_to_permission_mode` above,
-        // because the IPC wire value ("autoApprove") differs from the value that
-        // claude reports in system/init ("acceptEdits"). The state value must
-        // match what `permission_mode_to_posture` recognises.
-        let display_permission_mode = posture_name_to_permission_mode(match &spec.posture {
-            Posture::Ask => "Ask",
-            Posture::AutoApproveSafe => "AutoApproveSafe",
-            Posture::FullAutonomy => "FullAutonomy",
-        });
+        // Seed permission_mode from the launch session_mode so the Config tab shows
+        // the correct mode immediately — before the authoritative system/init event
+        // arrives (which will override it when it does). An empty session_mode means
+        // "backend default" → leave permission_mode as None until system/init lands.
         let mut initial_state = SessionState::initial();
-        initial_state.permission_mode = display_permission_mode.map(str::to_string);
+        if !spec.session_mode.is_empty() {
+            initial_state.permission_mode = Some(spec.session_mode.clone());
+        }
         let driver = spec.driver.clone();
         self.sessions.insert(
             id.clone(),
@@ -410,7 +400,7 @@ impl Core {
         Ok(id)
     }
 
-    /// Restart a session with a new model, posture, and optionally a new set of
+    /// Restart a session with a new model, session_mode, and optionally a new set of
     /// disallowed tools.
     ///
     /// Sends `StopSession` to kill the running claude process, then re-launches
@@ -424,7 +414,7 @@ impl Core {
         &mut self,
         id: &str,
         model: &str,
-        posture: Posture,
+        session_mode: String,
         disallowed_tools: Vec<String>,
     ) -> Result<Vec<VmUpdate>, CoreError> {
         self.require_session(id)?;
@@ -472,7 +462,7 @@ impl Core {
             project,
             host_id,
             model: model.to_string(),
-            posture,
+            session_mode,
             first_prompt: None,
             mode,
             host_target: None,
@@ -498,19 +488,19 @@ impl Core {
         Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
     }
 
-    /// Persist a named config template (model + posture).
+    /// Persist a named config template (model + mode).
     ///
     /// Overwrites any existing template with the same name.
     pub fn save_template(
         &mut self,
         name: &str,
         model: &str,
-        posture: &str,
+        mode: &str,
     ) -> Result<(), CoreError> {
         let tmpl = marsad_store::PersistedTemplate {
             name: name.to_string(),
             model: model.to_string(),
-            posture: posture.to_string(),
+            mode: mode.to_string(),
         };
         self.store
             .upsert_template(&tmpl)
@@ -1138,15 +1128,11 @@ impl Core {
             state.phase = Phase::Done;
             state.model = Some(s.model.clone());
             state.session_id = s.session_id.clone();
-            // Restore the persisted posture so the Config tab shows the correct
-            // posture even when the live claude process does NOT re-emit
-            // system/init (reconnect after restart). Without this, permission_mode
-            // stays None and posture defaults to "ask" for every reconnected session.
-            state.permission_mode = s
-                .posture
-                .as_deref()
-                .and_then(posture_name_to_permission_mode)
-                .map(str::to_string);
+            // Restore the persisted mode so the Config tab shows the correct
+            // mode even when the live claude process does NOT re-emit system/init
+            // (reconnect after restart). Normalize legacy Posture enum-name values
+            // (e.g. "AutoApproveSafe" → "acceptEdits") from old records.
+            state.permission_mode = marsad_store::normalize_session_mode(s.mode.clone());
             // Restore slash_commands, tools, and mcp_servers from the last
             // system/init so Config/Composer are pre-populated on attach/reconnect
             // without waiting for a fresh system/init.

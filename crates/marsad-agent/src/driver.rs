@@ -1,4 +1,4 @@
-//! Build the `claude` invocation (`claude_argv`/`posture_to_mode`) and drive the
+//! Build the `claude` invocation (`claude_argv`) and drive the
 //! session container: `build_spawn_cmd` (the shell command handed to
 //! `Container::spawn`), `spawn_container`/`kill_container` (routing a session to
 //! the local platform container or to a remote host), and the store lookups
@@ -489,16 +489,6 @@ fn shell_quote(s: &str) -> String {
 
 // ── claude_argv ───────────────────────────────────────────────────────────────
 
-/// Map a `Posture` to the `--permission-mode` value passed to `claude`, and to
-/// the `permissionMode` field in synthesized `system/init` events for codex.
-pub fn posture_to_mode(posture: &marsad_proto::Posture) -> &'static str {
-    match posture {
-        marsad_proto::Posture::Ask => "default",
-        marsad_proto::Posture::AutoApproveSafe => "acceptEdits",
-        marsad_proto::Posture::FullAutonomy => "bypassPermissions",
-    }
-}
-
 /// Build the exact `claude` invocation for a session launch.
 ///
 /// `first_prompt` is intentionally NOT included here — in `--input-format
@@ -528,9 +518,15 @@ pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
         "--verbose".to_string(),
         "--model".to_string(),
         spec.model.clone(),
-        "--permission-mode".to_string(),
-        posture_to_mode(&spec.posture).to_string(),
     ];
+
+    // Pass --permission-mode ONLY when a non-empty mode id was requested.
+    // Empty = use claude's backend default (omit both flag and value so claude
+    // starts in its configured default mode — usually "default"/"ask").
+    if !spec.session_mode.is_empty() {
+        argv.push("--permission-mode".to_string());
+        argv.push(spec.session_mode.clone());
+    }
 
     // Route tool-permission prompts to the control-protocol stream so the GUI can
     // approve/deny them. `--permission-prompt-tool stdio` is the CLI sentinel that
@@ -677,14 +673,14 @@ pub fn build_remote_run_cmd(spec: &marsad_proto::LaunchSpec) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use marsad_proto::{LaunchMode, LaunchSpec, Posture};
+    use marsad_proto::{LaunchMode, LaunchSpec};
 
-    fn base_spec(posture: Posture, mode: LaunchMode, driver: &str) -> LaunchSpec {
+    fn base_spec(session_mode: &str, mode: LaunchMode, driver: &str) -> LaunchSpec {
         LaunchSpec {
             project: "/proj".to_string(),
             host_id: "local".to_string(),
             model: "gpt-5-codex".to_string(),
-            posture,
+            session_mode: session_mode.to_string(),
             first_prompt: None,
             mode,
             host_target: None,
@@ -698,18 +694,13 @@ mod tests {
         }
     }
 
-    // ── codex_sandbox_flags ───────────────────────────────────────────────────
-
-
-
-
     // ── session_argv dispatch ─────────────────────────────────────────────────
 
     #[test]
     fn session_argv_codex_driver_uses_app_server() {
         // Codex now launches the PERSISTENT app-server (not the one-shot exec
         // eval-loop) — the JSON-RPC session that gives it full Claude parity.
-        let spec = base_spec(Posture::FullAutonomy, LaunchMode::Fresh, "codex");
+        let spec = base_spec("", LaunchMode::Fresh, "codex");
         let argv = session_argv(&spec);
         assert_eq!(argv[0], "codex");
         assert_eq!(argv[1], "app-server");
@@ -717,14 +708,14 @@ mod tests {
 
     #[test]
     fn build_remote_run_cmd_codex_uses_app_server() {
-        let spec = base_spec(Posture::Ask, LaunchMode::Fresh, "codex");
+        let spec = base_spec("", LaunchMode::Fresh, "codex");
         let cmd = build_remote_run_cmd(&spec);
         assert!(cmd.contains("app-server"), "remote codex launches app-server: {cmd}");
     }
 
     #[test]
     fn session_argv_claude_driver_uses_claude_argv() {
-        let spec = base_spec(Posture::Ask, LaunchMode::Fresh, "claude");
+        let spec = base_spec("", LaunchMode::Fresh, "claude");
         let argv = session_argv(&spec);
         assert_eq!(argv[0], "claude");
         assert!(argv.contains(&"--print".to_string()));
@@ -732,10 +723,59 @@ mod tests {
 
     #[test]
     fn session_argv_unknown_driver_falls_back_to_claude() {
-        let spec = base_spec(Posture::Ask, LaunchMode::Fresh, "unknown_driver");
+        let spec = base_spec("", LaunchMode::Fresh, "unknown_driver");
         let argv = session_argv(&spec);
         assert_eq!(argv[0], "claude");
     }
 
+    // ── claude_argv: session_mode → --permission-mode ─────────────────────────
+
+    #[test]
+    fn claude_argv_empty_session_mode_omits_permission_mode_flag() {
+        // Empty mode = backend default → no --permission-mode flag in argv.
+        let spec = base_spec("", LaunchMode::Fresh, "claude");
+        let argv = claude_argv(&spec);
+        assert!(
+            !argv.contains(&"--permission-mode".to_string()),
+            "empty session_mode must NOT emit --permission-mode; got {argv:?}"
+        );
+    }
+
+    #[test]
+    fn claude_argv_plan_mode_emits_permission_mode_plan() {
+        let spec = base_spec("plan", LaunchMode::Fresh, "claude");
+        let argv = claude_argv(&spec);
+        let pm_pos = argv.iter().position(|a| a == "--permission-mode")
+            .expect("--permission-mode must be present for non-empty session_mode");
+        assert_eq!(argv[pm_pos + 1], "plan", "--permission-mode value must be the session_mode id");
+    }
+
+    #[test]
+    fn claude_argv_bypass_mode_emits_permission_mode_bypass() {
+        let spec = base_spec("bypassPermissions", LaunchMode::Fresh, "claude");
+        let argv = claude_argv(&spec);
+        let pm_pos = argv.iter().position(|a| a == "--permission-mode")
+            .expect("--permission-mode must be present for bypassPermissions");
+        assert_eq!(argv[pm_pos + 1], "bypassPermissions");
+    }
+
+    // ── codex_mode_settings ───────────────────────────────────────────────────
+
+    #[test]
+    fn codex_mode_settings_empty_mode_returns_default() {
+        use crate::reader::codex_mode_settings;
+        let (policy, sandbox) = codex_mode_settings("");
+        assert_eq!(policy, "on-request");
+        assert_eq!(sandbox, "workspace-write");
+    }
+
+    #[test]
+    fn codex_mode_settings_any_mode_returns_default() {
+        use crate::reader::codex_mode_settings;
+        // Codex modes are not discoverable yet; any mode id returns the same default.
+        let (policy, sandbox) = codex_mode_settings("plan");
+        assert_eq!(policy, "on-request");
+        assert_eq!(sandbox, "workspace-write");
+    }
 }
 

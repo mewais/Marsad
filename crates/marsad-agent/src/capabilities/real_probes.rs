@@ -142,6 +142,7 @@ impl CapabilityProbe for RealCodexProbe {
                 source: ModelListSource::Listed,
                 free_text: true,
             },
+            available_modes: vec![],
             session_scope: Some(SessionScope::AllKnown),
             sessions,
             fetched_at_ms: now_ms(),
@@ -191,6 +192,7 @@ impl CapabilityProbe for RealAgyProbe {
                 source: ModelListSource::Listed,
                 free_text: false,
             },
+            available_modes: vec![],
             session_scope: Some(SessionScope::AllKnown),
             sessions: vec![],
             fetched_at_ms: now_ms(),
@@ -224,7 +226,7 @@ impl CapabilityProbe for RealClaudeProbe {
         let script =
             build_claude_discovery_script(&command, ctx.setup.as_deref(), ctx.project.as_deref());
         let mut errors = Vec::new();
-        let (cli_available, models, sessions) =
+        let (cli_available, models, sessions, version) =
             match run_discovery(ctx.host_target.as_deref(), &script, ctx.deadline) {
                 Ok(out) => {
                     let secs = parse_discovery_sections(&out);
@@ -250,7 +252,8 @@ impl CapabilityProbe for RealClaudeProbe {
                         .into_iter()
                         .map(|id| ModelInfo { id, annotation: None })
                         .collect();
-                    let models = if parse_avail(secs.get("avail")) {
+                    let is_available = parse_avail(secs.get("avail"));
+                    let models = if is_available {
                         let resolved_ref: HashMap<&str, String> =
                             resolved.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
                         build_claude_model_catalog(&resolved_ref, &extra_observed)
@@ -260,15 +263,17 @@ impl CapabilityProbe for RealClaudeProbe {
                         // provider afterward, so nothing ever run is lost).
                         vec![]
                     };
+                    let ver = parse_claude_version(secs.get("version"));
                     (
-                        parse_avail(secs.get("avail")),
+                        is_available,
                         models,
                         parse_remote_claude_session_list(secs.get("sessions")),
+                        ver,
                     )
                 }
                 Err(e) => {
                     errors.push(format!("claude discovery: {e}"));
-                    (false, vec![], vec![])
+                    (false, vec![], vec![], String::new())
                 }
             };
         // Stamp the REQUESTED project onto every discovered session. The remote
@@ -295,6 +300,10 @@ impl CapabilityProbe for RealClaudeProbe {
             Some(p) if !p.trim().is_empty() => SessionScope::Projects(vec![p.to_string()]),
             _ => SessionScope::AllKnown,
         };
+        // Derive available modes from the probed claude version. An empty version
+        // (probe error / claude not installed) leaves available_modes empty — the
+        // UI shows no mode picker for this host, which is honest.
+        let available_modes = marsad_events::claude_available_modes(&version);
         Capabilities {
             driver: "claude".to_string(),
             host_id: ctx.host_id.clone(),
@@ -305,6 +314,7 @@ impl CapabilityProbe for RealClaudeProbe {
                 source: ModelListSource::Observed,
                 free_text: true,
             },
+            available_modes,
             session_scope: Some(session_scope),
             sessions,
             fetched_at_ms: now_ms(),
@@ -457,6 +467,7 @@ impl CapabilityProbe for RealOpencodeProbe {
                 source: ModelListSource::Listed,
                 free_text: true,
             },
+            available_modes: vec![],
             session_scope: Some(SessionScope::AllKnown),
             sessions,
             fetched_at_ms: now_ms(),

@@ -81,7 +81,6 @@ fn representative_snapshot() -> AppSnapshot {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
-            posture: "ask".to_string(),
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
@@ -122,7 +121,6 @@ fn representative_snapshot() -> AppSnapshot {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
-            posture: "ask".to_string(),
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
@@ -163,7 +161,6 @@ fn representative_snapshot() -> AppSnapshot {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
-            posture: "ask".to_string(),
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
@@ -204,7 +201,6 @@ fn representative_snapshot() -> AppSnapshot {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
-            posture: "ask".to_string(),
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
@@ -245,7 +241,6 @@ fn representative_snapshot() -> AppSnapshot {
             tools: vec![],
             mcp_servers: vec![],
             slash_commands: vec![],
-            posture: "ask".to_string(),
             subagent_list: vec![],
             shell_running: false,
             driver: "claude".to_string(),
@@ -751,6 +746,7 @@ fn capabilities_view_from_capabilities_maps_every_field_verbatim() {
             source: ModelListSource::Listed,
             free_text: true,
         },
+        available_modes: vec![],
         session_scope: Some(SessionScope::AllKnown),
         sessions: vec![DiscoveredSession {
             id: "sess-1".to_string(),
@@ -770,6 +766,7 @@ fn capabilities_view_from_capabilities_maps_every_field_verbatim() {
     assert_eq!(view.cli_available, caps.cli_available);
     assert_eq!(view.launchable, caps.launchable);
     assert_eq!(view.models, caps.models);
+    assert_eq!(view.available_modes, caps.available_modes);
     assert_eq!(view.session_scope, caps.session_scope);
     assert_eq!(view.sessions, caps.sessions);
     assert_eq!(view.sessions[0].project, None);
@@ -853,7 +850,6 @@ fn session_view_new_fields_populated() {
             description: "Clear".to_string(),
             argument_hint: "".to_string(),
         }],
-        posture: "auto".to_string(),
         subagent_list: vec![],
         shell_running: false,
         driver: "claude".to_string(),
@@ -899,7 +895,6 @@ fn session_view_new_fields_empty_by_default_in_literal() {
         tools: vec![],
         mcp_servers: vec![],
         slash_commands: vec![],
-        posture: "ask".to_string(),
         subagent_list: vec![],
         shell_running: false,
         driver: "claude".to_string(),
@@ -915,10 +910,10 @@ fn session_view_new_fields_empty_by_default_in_literal() {
     assert!(sv.slash_commands.is_empty());
 }
 
-/// Deserializing a SessionView JSON that omits `posture` uses the `default_posture()` fn → "ask".
+/// Deserializing a SessionView JSON that omits `available_modes` defaults to empty vec.
 #[test]
-fn session_view_posture_defaults_via_serde_when_missing() {
-    // Build minimal JSON without a `posture` field to trigger serde's default.
+fn session_view_available_modes_defaults_empty_via_serde() {
+    // Build minimal JSON without available_modes to trigger serde's default.
     let json = r#"{
         "id":"z","name":"z","host_id":"local","project":"/p","branch":"main",
         "model":"m","state":"Working","changed_files":0,"subagents":0,
@@ -927,8 +922,8 @@ fn session_view_posture_defaults_via_serde_when_missing() {
         "tools":[],"mcp_servers":[],"slash_commands":[]
     }"#;
     let sv: SessionView = serde_json::from_str(json).expect("must deserialize");
-    assert_eq!(
-        sv.posture, "ask",
-        "missing posture field must default to 'ask' via serde"
+    assert!(
+        sv.available_modes.is_empty(),
+        "missing available_modes must default to empty vec via serde"
     );
 }

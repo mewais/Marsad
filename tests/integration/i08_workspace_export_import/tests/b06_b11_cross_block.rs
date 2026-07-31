@@ -33,7 +33,7 @@ fn make_session(id: &str, name: &str) -> PersistedSession {
         model: "claude-opus-4-5".to_string(),
         last_phase: "done".to_string(),
 
-        posture: None,
+        mode: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         tools: vec![],
@@ -79,7 +79,7 @@ fn sv(id: &str, cost: f64, tokens: u64, state: Phase) -> SessionView {
         tools: vec![],
         mcp_servers: vec![],
         slash_commands: vec![],
-        posture: "ask".to_string(),
+        
         driver: "claude".to_string(),
         live: true,
         conn_health: "Connected".to_string(),

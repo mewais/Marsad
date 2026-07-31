@@ -38,7 +38,7 @@ fn make_agent() -> Agent {
 
 /// Launch a session and return the outbound IPC lines plus the parsed session_id.
 fn do_launch(agent: &mut Agent) -> (Vec<String>, String) {
-    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"Ask"}"#;
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5"}"#;
     let lines = agent.handle_ipc(line).expect("launch must succeed");
     let sid = extract_session_id(&lines);
     (lines, sid)
@@ -73,7 +73,7 @@ fn ipc_command_launch_session() {
 #[test]
 fn launch_session_honors_provided_session_id() {
     let mut agent = make_agent();
-    let line = r#"{"type":"LaunchSession","session_id":"ext-abc","project":"/p","host_id":"local","model":"claude-opus-4-8","posture":"Ask"}"#;
+    let line = r#"{"type":"LaunchSession","session_id":"ext-abc","project":"/p","host_id":"local","model":"claude-opus-4-8"}"#;
     let lines = agent.handle_ipc(line).expect("launch");
     assert!(
         lines
@@ -112,7 +112,7 @@ fn ipc_command_resume_session() {
 #[test]
 fn launch_session_continue_mode_spawns_continue() {
     let mut agent = make_agent();
-    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-8","posture":"Ask","continue":true}"#;
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-8","continue":true}"#;
     agent.handle_ipc(line).expect("launch continue");
     let last = agent
         .container_calls()
@@ -129,7 +129,7 @@ fn launch_session_continue_mode_spawns_continue() {
 #[test]
 fn launch_session_resume_id_mode_spawns_resume() {
     let mut agent = make_agent();
-    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-8","posture":"Ask","resume_session_id":"uuid-xyz"}"#;
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-8","resume_session_id":"uuid-xyz"}"#;
     agent.handle_ipc(line).expect("launch resume");
     let last = agent.container_calls().last().expect("spawn").clone();
     assert!(
@@ -142,7 +142,7 @@ fn launch_session_resume_id_mode_spawns_resume() {
 #[test]
 fn launch_session_empty_resume_id_is_fresh() {
     let mut agent = make_agent();
-    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-8","posture":"Ask","resume_session_id":""}"#;
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-8","resume_session_id":""}"#;
     agent.handle_ipc(line).expect("launch fresh");
     let last = agent.container_calls().last().expect("spawn").clone();
     // Fresh launch: no resume/continue flags (and no project positional — the
@@ -175,7 +175,7 @@ fn resume_session_tracked_without_claude_id_continues() {
             branch: "main".to_string(),
             model: "claude-opus-4-8".to_string(),
             last_phase: "Done".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -219,7 +219,7 @@ fn resume_session_tracked_with_claude_id_resumes() {
             branch: "main".to_string(),
             model: "claude-opus-4-8".to_string(),
             last_phase: "Done".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -263,7 +263,7 @@ fn resume_session_empty_claude_id_continues() {
             branch: "main".to_string(),
             model: "claude-opus-4-8".to_string(),
             last_phase: "Done".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -300,10 +300,10 @@ fn resume_session_unknown_returns_error() {
     );
 }
 
-/// Resuming a session with a persisted posture restores it (not just "Ask").
-/// Exercises the Some(...) branch in handle_resume_session's posture restoration.
+/// Resuming a session with a persisted mode restores it (not just the backend default).
+/// Exercises the Some(...) branch in handle_resume_session's mode restoration.
 #[test]
-fn resume_session_restores_persisted_posture() {
+fn resume_session_restores_persisted_mode() {
     let mut store = marsad_store::Store::new(Box::new(MemoryBackend::new()));
     store
         .upsert_session(&marsad_store::PersistedSession {
@@ -319,7 +319,7 @@ fn resume_session_restores_persisted_posture() {
             branch: "main".to_string(),
             model: "claude-opus-4-8".to_string(),
             last_phase: "Done".to_string(),
-            posture: Some("FullAutonomy".to_string()),
+            mode: Some("bypassPermissions".to_string()),
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -338,13 +338,13 @@ fn resume_session_restores_persisted_posture() {
     let result = agent.handle_ipc(r#"{"type":"ResumeSession","session_id":"posture-sess"}"#);
     assert!(
         result.is_ok(),
-        "ResumeSession with persisted posture must succeed; got {result:?}"
+        "ResumeSession with persisted mode must succeed; got {result:?}"
     );
-    // The spawn command should contain bypassPermissions (FullAutonomy's --permission-mode value).
+    // The spawn command should contain bypassPermissions (the persisted mode id).
     let last = agent.container_calls().last().expect("spawn").clone();
     assert!(
         last.contains("bypassPermissions"),
-        "FullAutonomy posture must produce bypassPermissions in spawn; got {last}"
+        "Persisted bypassPermissions mode must appear in spawn; got {last}"
     );
 }
 
@@ -542,7 +542,7 @@ fn reconcile_all_adopt_branch() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Working".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -599,7 +599,7 @@ fn reconcile_all_resume_branch() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Done".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -657,7 +657,7 @@ fn reconcile_all_stale_branch() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Error".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -718,7 +718,7 @@ fn reconcile_all_mixed_adopt_resume_stale() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Working".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -740,7 +740,7 @@ fn reconcile_all_mixed_adopt_resume_stale() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Done".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -762,7 +762,7 @@ fn reconcile_all_mixed_adopt_resume_stale() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Error".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -1016,7 +1016,7 @@ fn reconcile_all_adopt_phase_is_detached() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Working".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -1064,7 +1064,7 @@ fn reconcile_all_resume_phase_is_none() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Done".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -1112,7 +1112,7 @@ fn reconcile_all_stale_phase_is_stale() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Error".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -1158,50 +1158,49 @@ fn ipc_command_answer_gate_deny() {
     }
 }
 
-/// LaunchSession with `"posture":"AutoApproveSafe"` must be accepted (Ok) by handle_ipc.
+/// LaunchSession with `"session_mode":"acceptEdits"` must be accepted (Ok) by handle_ipc.
 #[test]
-fn handle_ipc_launch_auto_approve_safe_posture() {
+fn handle_ipc_launch_accept_edits_mode() {
     let mut agent = make_agent();
-    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"AutoApproveSafe"}"#;
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","session_mode":"acceptEdits"}"#;
     let result = agent.handle_ipc(line);
     assert!(
         result.is_ok(),
-        "LaunchSession with AutoApproveSafe posture must return Ok; got {result:?}"
+        "LaunchSession with acceptEdits mode must return Ok; got {result:?}"
     );
     let lines = result.unwrap();
     assert!(
         !lines.is_empty(),
-        "LaunchSession(AutoApproveSafe) must emit at least one outbound IPC event line"
+        "LaunchSession(acceptEdits) must emit at least one outbound IPC event line"
     );
 }
 
-/// LaunchSession with `"posture":"FullAutonomy"` must be accepted (Ok) by handle_ipc.
+/// LaunchSession with `"session_mode":"bypassPermissions"` must be accepted (Ok) by handle_ipc.
 #[test]
-fn handle_ipc_launch_full_autonomy_posture() {
+fn handle_ipc_launch_bypass_permissions_mode() {
     let mut agent = make_agent();
-    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"FullAutonomy"}"#;
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","session_mode":"bypassPermissions"}"#;
     let result = agent.handle_ipc(line);
     assert!(
         result.is_ok(),
-        "LaunchSession with FullAutonomy posture must return Ok; got {result:?}"
+        "LaunchSession with bypassPermissions mode must return Ok; got {result:?}"
     );
     let lines = result.unwrap();
     assert!(
         !lines.is_empty(),
-        "LaunchSession(FullAutonomy) must emit at least one outbound IPC event line"
+        "LaunchSession(bypassPermissions) must emit at least one outbound IPC event line"
     );
 }
 
-/// LaunchSession with an unknown posture string must return `Err(AgentError::Protocol(_))`.
-/// The posture field is a valid string but not a recognised enum variant.
+/// LaunchSession with empty `session_mode` (omitted) is accepted and launches at backend default.
 #[test]
-fn handle_ipc_launch_unknown_posture_is_protocol_error() {
+fn handle_ipc_launch_empty_session_mode_is_ok() {
     let mut agent = make_agent();
-    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"Nonsense"}"#;
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5"}"#;
     let result = agent.handle_ipc(line);
     assert!(
-        matches!(result, Err(AgentError::Protocol(_))),
-        "LaunchSession with unknown posture string must return AgentError::Protocol; got {result:?}"
+        result.is_ok(),
+        "LaunchSession with no session_mode must return Ok (backend default); got {result:?}"
     );
 }
 

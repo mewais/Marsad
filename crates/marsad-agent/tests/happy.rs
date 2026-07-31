@@ -43,7 +43,7 @@ fn basic_launch_spec() -> LaunchSpec {
         setup: None,
         env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
-        posture: marsad_proto::Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -62,7 +62,7 @@ fn launch_spec_with_prompt(prompt: &str) -> LaunchSpec {
         setup: None,
         env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
-        posture: marsad_proto::Posture::Ask,
+        session_mode: String::new(),
         first_prompt: Some(prompt.to_string()),
         mode: Default::default(),
         name: None,
@@ -176,38 +176,44 @@ fn claude_argv_no_prompt_when_none() {
     );
 }
 
-/// `claude_argv` with `Posture::Ask` must emit `--permission-mode` immediately followed by `default`.
+/// `claude_argv` with empty session_mode must NOT emit `--permission-mode` (backend default).
 #[test]
-fn claude_argv_permission_mode_ask() {
-    let spec = basic_launch_spec(); // posture: Posture::Ask
+fn claude_argv_empty_session_mode_omits_permission_mode() {
+    let spec = basic_launch_spec(); // session_mode: empty = backend default
+    let argv = claude_argv(&spec);
+    assert!(
+        !argv.contains(&"--permission-mode".to_string()),
+        "empty session_mode must NOT include --permission-mode flag; argv: {argv:?}"
+    );
+}
+
+/// `claude_argv` with session_mode "default" emits `--permission-mode default`.
+#[test]
+fn claude_argv_explicit_default_mode_emits_permission_mode() {
+    let mut spec = basic_launch_spec();
+    spec.session_mode = "default".to_string();
     let argv = claude_argv(&spec);
     let idx = argv
         .iter()
         .position(|a| a == "--permission-mode")
-        .expect("claude_argv must include --permission-mode flag");
+        .expect("explicit 'default' session_mode must include --permission-mode flag");
     assert_eq!(
         argv.get(idx + 1).map(String::as_str),
         Some("default"),
-        "--permission-mode value for Ask must be \"default\"; argv: {argv:?}"
+        "--permission-mode value must be 'default'; argv: {argv:?}"
     );
 }
 
-/// `claude_argv` with `Posture::Ask` must route permission prompts to the
-/// control stream via `--permission-prompt-tool stdio` (so the GUI can
-/// approve/deny). This is what makes claude emit `can_use_tool` control
-/// requests instead of auto-handling permissions.
+/// `--permission-prompt-tool stdio` is added ALWAYS (regardless of session_mode)
+/// so MCP-server-sourced HITL can route to a Marsad gate.
 #[test]
-fn claude_argv_ask_adds_permission_prompt_tool_stdio() {
-    let spec = basic_launch_spec(); // posture: Posture::Ask
+fn claude_argv_always_adds_permission_prompt_tool_stdio() {
+    let spec = basic_launch_spec();
     let argv = claude_argv(&spec);
-    let idx = argv
-        .iter()
-        .position(|a| a == "--permission-prompt-tool")
-        .expect("Ask posture must include --permission-prompt-tool; argv: {argv:?}");
-    assert_eq!(
-        argv.get(idx + 1).map(String::as_str),
-        Some("stdio"),
-        "--permission-prompt-tool value for Ask must be \"stdio\"; argv: {argv:?}"
+    let pos = argv.iter().position(|a| a == "--permission-prompt-tool");
+    assert!(
+        pos.is_some() && argv.get(pos.unwrap() + 1).map(String::as_str) == Some("stdio"),
+        "must always emit --permission-prompt-tool stdio; argv: {argv:?}"
     );
 }
 
@@ -249,38 +255,19 @@ fn claude_argv_resume_mode_uses_resume_id() {
     assert!(!argv.iter().any(|a| a == "--continue"));
 }
 
-/// `--permission-prompt-tool stdio` is added for EVERY posture so any approval
-/// request (including MCP-server-sourced HITL) can route to a Marsad gate, even
-/// under FullAutonomy/bypassPermissions where claude's own checks are skipped.
+/// `--permission-prompt-tool stdio` is added for EVERY session_mode so MCP-server-sourced
+/// HITL can route to a Marsad gate, even under bypassPermissions where claude's own checks
+/// are skipped.
 #[test]
-fn claude_argv_all_postures_add_permission_prompt_tool() {
-    for posture in [
-        marsad_proto::Posture::Ask,
-        marsad_proto::Posture::AutoApproveSafe,
-        marsad_proto::Posture::FullAutonomy,
-    ] {
-        let label = format!("{posture:?}");
-        let spec = LaunchSpec {
-            project: "/home/user/myproject".to_string(),
-            host_id: "local".to_string(),
-            host_target: None,
-            claude_bin: None,
-            setup: None,
-            env: Vec::new(),
-            model: "claude-opus-4-5".to_string(),
-            posture,
-            first_prompt: None,
-            mode: Default::default(),
-            name: None,
-            disallowed_tools: vec![],
-            wasl: false,
-        driver: "claude".to_string(),
-        };
+fn claude_argv_all_session_modes_add_permission_prompt_tool() {
+    for session_mode in ["", "default", "acceptEdits", "bypassPermissions", "plan"] {
+        let mut spec = basic_launch_spec();
+        spec.session_mode = session_mode.to_string();
         let argv = claude_argv(&spec);
         let pos = argv.iter().position(|a| a == "--permission-prompt-tool");
         assert!(
             pos.is_some() && argv.get(pos.unwrap() + 1).map(String::as_str) == Some("stdio"),
-            "posture {label} must emit --permission-prompt-tool stdio; argv: {argv:?}"
+            "session_mode={session_mode:?} must emit --permission-prompt-tool stdio; argv: {argv:?}"
         );
     }
 }
@@ -296,7 +283,7 @@ fn claude_argv_permission_mode_auto_approve_safe() {
         setup: None,
         env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
-        posture: marsad_proto::Posture::AutoApproveSafe,
+        session_mode: "acceptEdits".to_string(),
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -327,7 +314,7 @@ fn claude_argv_permission_mode_full_autonomy() {
         setup: None,
         env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
-        posture: marsad_proto::Posture::FullAutonomy,
+        session_mode: "bypassPermissions".to_string(),
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -781,7 +768,7 @@ fn reconcile_all_adopt_does_not_spawn() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Done".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -895,7 +882,7 @@ fn claude_argv_disallowed_tools_present_when_non_empty() {
         setup: None,
         env: vec![],
         model: "claude-opus-4-5".to_string(),
-        posture: marsad_proto::Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -926,7 +913,7 @@ fn claude_argv_disallowed_tools_absent_when_empty() {
         setup: None,
         env: vec![],
         model: "claude-opus-4-5".to_string(),
-        posture: marsad_proto::Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,

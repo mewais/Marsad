@@ -449,6 +449,7 @@ impl CapabilityProvider {
                 // host probe (mirrors RealClaudeProbe::launchable()).
                 launchable: true,
                 models: ModelCatalog::default(),
+                available_modes: vec![],
                 session_scope: None,
                 sessions: vec![],
                 fetched_at_ms: 0,

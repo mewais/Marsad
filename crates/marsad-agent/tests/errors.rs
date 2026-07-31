@@ -163,7 +163,7 @@ fn launch_spawn_failure_returns_spawn_error() {
         setup: None,
         env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
-        posture: marsad_proto::Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -422,7 +422,7 @@ fn reconcile_all_lifecycle_error_folds_into_stale() {
             branch: "main".to_string(),
             model: "claude-opus-4-5".to_string(),
             last_phase: "Working".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],
@@ -494,27 +494,20 @@ fn handle_ipc_attach_unknown_session_returns_error() {
 // ── parse_posture_value: non-string posture field ──────────────────────────────
 
 /// When `posture` is a non-string JSON value (e.g. an integer) but the rest of
-/// the LaunchSession message is valid, `parse_posture_value` hits the `None`
-/// branch on line 450 and returns `Err(AgentError::Protocol(_))`.
-///
-/// The previous schema-mismatch test used `{"posture":99}` WITHOUT a `model`
-/// field, which caused the `LaunchSessionMsg` serde deserialization to fail
-/// first (missing required `model`), never reaching `parse_posture_value`.
-/// This test supplies a fully-valid `LaunchSessionMsg` (project + model) so
-/// deserialization succeeds and control reaches `parse_posture_value`.
+/// A LaunchSession message with `model` as an integer (not a string) must
+/// return `AgentError::Protocol` — the wire schema requires `model` to be a string.
+/// (`posture` is removed from the protocol; unknown fields are simply ignored.)
 #[test]
-fn handle_ipc_launch_posture_non_string_returns_protocol_error() {
+fn handle_ipc_launch_model_non_string_returns_protocol_error() {
     let mut agent = make_agent_with_container(FakeContainer::new());
 
-    // `posture` is an integer — LaunchSessionMsg parses fine (no posture field
-    // in the struct), but parse_posture_value(&value["posture"]) gets a Number
-    // not a string, hitting the None arm (line 450).
+    // `model` must be a string per the wire contract; an integer is a SchemaMismatch.
     let result = agent.handle_ipc(
-        r#"{"type":"LaunchSession","project":"/p","host_id":"local","model":"m","posture":99}"#,
+        r#"{"type":"LaunchSession","project":"/p","host_id":"local","model":99}"#,
     );
     assert!(
         matches!(result, Err(AgentError::Protocol(_))),
-        "posture non-string must return AgentError::Protocol; got {result:?}"
+        "model non-string must return AgentError::Protocol; got {result:?}"
     );
 }
 
@@ -631,7 +624,7 @@ fn launch_spawn_failure_deterministic_container_name() {
         setup: None,
         env: Vec::new(),
         model: "m".to_string(),
-        posture: marsad_proto::Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -679,7 +672,7 @@ fn launch_upsert_failure_returns_lifecycle_error() {
         setup: None,
         env: Vec::new(),
         model: "m".to_string(),
-        posture: marsad_proto::Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -743,7 +736,7 @@ fn resume_session_launch_spawn_failure_propagates() {
             branch: "main".to_string(),
             model: "m".to_string(),
             last_phase: "Done".to_string(),
-            posture: None,
+            mode: None,
             disallowed_tools: vec![],
             driver: "claude".to_string(),
             slash_commands: vec![],

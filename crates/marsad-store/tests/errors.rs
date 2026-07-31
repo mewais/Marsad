@@ -33,7 +33,7 @@ fn make_session(id: &str) -> PersistedSession {
         branch: "main".to_string(),
         model: "claude-opus-4-5".to_string(),
         last_phase: "Done".to_string(),
-        posture: None,
+        mode: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         slash_commands: vec![],
@@ -500,9 +500,9 @@ fn backend_write_failure_propagates_from_upsert_settings() {
         restore_on_launch: true,
         confirm_before_stop: true,
         default_model: "claude-sonnet-4-6".to_string(),
-        default_posture: "ask".to_string(),
         default_driver: "claude".to_string(),
         default_models: Vec::new(),
+        default_modes: Vec::new(),
     };
     match store.upsert_settings(&settings) {
         Err(StoreError::Backend(_)) => {}
@@ -518,7 +518,7 @@ fn backend_write_failure_propagates_from_upsert_template() {
     let t = PersistedTemplate {
         name: "fail-tmpl".to_string(),
         model: "claude-sonnet-4-6".to_string(),
-        posture: "ask".to_string(),
+        mode: "default".to_string(),
     };
     match store.upsert_template(&t) {
         Err(StoreError::Backend(_)) => {}
@@ -548,9 +548,9 @@ fn notif_pref_and_persisted_settings_are_debug() {
         restore_on_launch: false,
         confirm_before_stop: true,
         default_model: "claude-opus-4-8".to_string(),
-        default_posture: "full".to_string(),
         default_driver: "claude".to_string(),
         default_models: Vec::new(),
+        default_modes: Vec::new(),
     };
     let _ = format!("{s:?}");
 }

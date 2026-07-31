@@ -24,7 +24,7 @@
 //! (marsad-store, marsad-transport, marsad-events, marsad-viewmodel) are
 //! already available to marsad-core's tests via existing [dependencies].
 
-use marsad_core::{Core, CoreConfig, CoreError, LaunchSpec, Posture, VmUpdate};
+use marsad_core::{Core, CoreConfig, CoreError, LaunchSpec,  VmUpdate};
 use marsad_events::Phase;
 use marsad_store::{BackendOp, MemoryBackend};
 use marsad_transport::LoopbackFake;
@@ -63,7 +63,7 @@ fn launch(core: &mut Core, project: &str) -> String {
         setup: None,
         env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -350,7 +350,7 @@ fn persisted_session_reappears_on_board_after_reload() {
                 branch: "main".to_string(),
                 model: "claude-opus-4-5".to_string(),
                 last_phase: "Done".to_string(),
-                posture: None,
+                mode: None,
                 disallowed_tools: vec![],
                 driver: "claude".to_string(),
                 slash_commands: vec![],
@@ -412,7 +412,7 @@ fn system_init_persists_claude_session_uuid_to_store() {
                 branch: "main".to_string(),
                 model: "claude-opus-4-5".to_string(),
                 last_phase: "Starting".to_string(),
-                posture: None,
+                mode: None,
                 disallowed_tools: vec![],
                 driver: "claude".to_string(),
                 slash_commands: vec![],
@@ -1489,12 +1489,12 @@ fn settings_round_trip_persists_new_fields() {
         restore_on_launch: true,
         confirm_before_stop: true,
         default_model: "claude-haiku-latest".to_string(),
-        default_posture: "auto".to_string(),
         default_driver: "codex".to_string(),
         default_models: vec![
             ("codex".to_string(), "codex-mini-latest".to_string()),
             ("claude".to_string(), "claude-haiku-latest".to_string()),
         ],
+        default_modes: vec![("claude".to_string(), "acceptEdits".to_string())],
     };
     core.set_settings(&s).expect("set_settings");
     let got = core.get_settings();
@@ -1570,7 +1570,7 @@ fn launch_with_driver_and_drain(
         setup: None,
         env: Vec::new(),
         model: "codex-mini-latest".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -1672,9 +1672,9 @@ fn restart_session_uses_supplied_model_not_settings_default() {
         restore_on_launch: true,
         confirm_before_stop: true,
         default_model: "settings-default-model".to_string(),
-        default_posture: "ask".to_string(),
         default_driver: "claude".to_string(),
         default_models: Vec::new(),
+        default_modes: Vec::new(),
     })
     .expect("set_settings");
 
@@ -1683,7 +1683,7 @@ fn restart_session_uses_supplied_model_not_settings_default() {
 
     // Restart with an explicit model — the persisted-session model in a real
     // flow. It must be the one that goes out on the wire.
-    core.restart_session(&id, "session-specific-model", Posture::Ask, vec![])
+    core.restart_session(&id, "session-specific-model", String::new(), vec![])
         .expect("restart_session");
     let out = peer.drain_outbound().join("\n");
     assert!(

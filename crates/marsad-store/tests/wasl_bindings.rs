@@ -57,7 +57,7 @@ fn make_session(id: &str) -> PersistedSession {
         branch: "main".to_string(),
         model: "claude-opus-4-5".to_string(),
         last_phase: "Done".to_string(),
-        posture: None,
+        mode: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         slash_commands: vec![],

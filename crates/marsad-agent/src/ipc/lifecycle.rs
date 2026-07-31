@@ -18,7 +18,7 @@ impl Agent {
         setup: Option<String>,
         env: Vec<(String, String)>,
         model: String,
-        posture: marsad_proto::Posture,
+        session_mode: String,
         first_prompt: Option<String>,
         mode: marsad_proto::LaunchMode,
         name: Option<String>,
@@ -36,7 +36,7 @@ impl Agent {
             project,
             host_id: host_id.unwrap_or_else(|| "local".to_string()),
             model,
-            posture,
+            session_mode,
             first_prompt,
             // Fresh / continue / resume-by-id, from optional IPC fields.
             mode,
@@ -135,16 +135,9 @@ impl Agent {
             project: persisted.project,
             host_id: persisted.host_id,
             model: persisted.model,
-            posture: persisted
-                .posture
-                .as_deref()
-                .and_then(|s| {
-                    serde_json::from_value::<marsad_proto::Posture>(serde_json::Value::String(
-                        s.to_string(),
-                    ))
-                    .ok()
-                })
-                .unwrap_or(marsad_proto::Posture::Ask),
+            // Restore the persisted mode (already normalized on load via
+            // `normalize_session_mode`). None → empty string = backend default.
+            session_mode: marsad_store::normalize_session_mode(persisted.mode).unwrap_or_default(),
             first_prompt,
             mode,
             host_target: persisted.host_target,
@@ -254,7 +247,7 @@ mod resume_liveness_tests {
 
     fn launch(agent: &mut Agent, sid: &str) {
         let line = format!(
-            r#"{{"type":"LaunchSession","session_id":"{sid}","project":"/p","host_id":"local","model":"claude-opus-4-8","posture":"Ask"}}"#
+            r#"{{"type":"LaunchSession","session_id":"{sid}","project":"/p","host_id":"local","model":"claude-opus-4-8"}}"#
         );
         agent.handle_ipc(&line).expect("launch");
     }

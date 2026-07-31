@@ -24,7 +24,7 @@
 //! PIN already-correct behavior (regression guards) — call these out
 //! explicitly so a future fix doesn't accidentally invert them.
 
-use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, Posture, VmUpdate};
+use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, VmUpdate};
 use marsad_transport::LoopbackFake;
 
 // ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ fn launch(core: &mut Core) -> String {
         setup: None,
         env: Vec::new(),
         model: "claude-sonnet-4-6".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: LaunchMode::Fresh,
         name: None,

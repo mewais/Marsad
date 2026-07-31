@@ -25,20 +25,14 @@ pub fn reconnect_backoff_next(current: u64) -> u64 {
 // functions are the WHOLE decision logic — no flap counter driving state at
 // attach, no verdict-string guessing. The reader just calls them and emits.
 
-/// Map a Marsad posture to codex app-server `(approvalPolicy, sandbox)`.
+/// Map a session mode id to codex app-server `(approvalPolicy, sandbox)`.
 ///
-/// Map a Marsad posture to codex app-server `(approvalPolicy, sandbox)`.
-///
-/// `on-request` makes codex surface command/file approvals as HITL gates (Phase B).
-/// Full autonomy skips approvals and runs with a full-access sandbox. Ask uses a
-/// read-only sandbox so even reads-that-escape prompt; AutoApproveSafe lets edits
-/// happen in a workspace-write sandbox but still gates commands via on-request.
-pub fn codex_posture_settings(posture: &marsad_proto::Posture) -> (&'static str, &'static str) {
-    match posture {
-        marsad_proto::Posture::FullAutonomy => ("never", "danger-full-access"),
-        marsad_proto::Posture::AutoApproveSafe => ("on-request", "workspace-write"),
-        marsad_proto::Posture::Ask => ("on-request", "read-only"),
-    }
+/// Codex's available modes are not discoverable from the CLI, so for now every mode
+/// id (including empty = backend default) maps to codex's sane default settings.
+/// // TODO(modes): source codex's real modes from the app-server when wired; until
+/// // then codex launches at this default and mode picking is disabled for codex.
+pub fn codex_mode_settings(_mode: &str) -> (&'static str, &'static str) {
+    ("on-request", "workspace-write")
 }
 
 /// Health to emit when the stream DROPS. A drop right after a bare re-attach that

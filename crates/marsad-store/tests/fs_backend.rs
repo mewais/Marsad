@@ -54,7 +54,7 @@ fn host_session_workspace_round_trip_across_restart() {
                 branch: "main".to_string(),
                 model: "claude-haiku-4-5-20251001".to_string(),
                 last_phase: "Starting".to_string(),
-                posture: None,
+                mode: None,
                 disallowed_tools: vec![],
                 driver: "claude".to_string(),
                 slash_commands: vec![],

@@ -2,7 +2,7 @@
 //!
 //! Covers:
 //! - Every VmUpdate variant (Overview, Session, Toast, HostHealth)
-//! - Every Posture variant (Ask, AutoApproveSafe, FullAutonomy)
+//! - Every session_mode variant (default/acceptEdits/bypassPermissions)
 //! - Every SlashCmd variant dispatched via run_slash
 //! - Workspace switch re-scopes the snapshot (set_workspace changes selected scope)
 //! - Idempotent re-answer_gate: answering the same gate twice routes once / is a no-op
@@ -13,7 +13,7 @@
 //!
 //! These tests WILL fail to compile until the code-agent implements `marsad_core`.
 
-use marsad_core::{Core, CoreConfig, LaunchSpec, Posture, VmUpdate};
+use marsad_core::{Core, CoreConfig, LaunchSpec, VmUpdate};
 use marsad_gates::{approve, reject, Gate};
 use marsad_transport::LoopbackFake;
 use marsad_viewmodel::SlashCmd;
@@ -35,7 +35,7 @@ fn make_core() -> (Core, LoopbackFake) {
     (core, b)
 }
 
-fn spec(project: &str, posture: Posture) -> LaunchSpec {
+fn spec(project: &str, session_mode: String) -> LaunchSpec {
     LaunchSpec {
         project: project.to_string(),
         host_id: "local".to_string(),
@@ -44,7 +44,7 @@ fn spec(project: &str, posture: Posture) -> LaunchSpec {
         setup: None,
         env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
-        posture,
+        session_mode,
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -80,33 +80,33 @@ fn ipc_result_success(session_id: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Every Posture variant dispatched via launch_session
+// Every session_mode variant dispatched via launch_session
 // ---------------------------------------------------------------------------
 
 #[test]
-fn posture_ask_launches_successfully() {
+fn session_mode_default_launches_successfully() {
     let (mut core, _peer) = make_core();
     let id = core
-        .launch_session(spec("p", Posture::Ask))
-        .expect("launch Ask");
+        .launch_session(spec("p", String::new()))
+        .expect("launch default mode");
     assert!(!id.is_empty());
 }
 
 #[test]
-fn posture_auto_approve_safe_launches_successfully() {
+fn session_mode_accept_edits_launches_successfully() {
     let (mut core, _peer) = make_core();
     let id = core
-        .launch_session(spec("p", Posture::AutoApproveSafe))
-        .expect("launch AutoApproveSafe");
+        .launch_session(spec("p", "acceptEdits".to_string()))
+        .expect("launch acceptEdits");
     assert!(!id.is_empty());
 }
 
 #[test]
-fn posture_full_autonomy_launches_successfully() {
+fn session_mode_bypass_permissions_launches_successfully() {
     let (mut core, _peer) = make_core();
     let id = core
-        .launch_session(spec("p", Posture::FullAutonomy))
-        .expect("launch FullAutonomy");
+        .launch_session(spec("p", "bypassPermissions".to_string()))
+        .expect("launch bypassPermissions");
     assert!(!id.is_empty());
 }
 
@@ -118,7 +118,7 @@ fn posture_full_autonomy_launches_successfully() {
 fn vm_update_overview_variant_reachable() {
     let (mut core, _peer) = make_core();
     let id = core
-        .launch_session(spec("proj-ov", Posture::Ask))
+        .launch_session(spec("proj-ov", String::new()))
         .expect("launch");
     let updates = core.on_agent_line(&ipc_init(&id)).expect("on_agent_line");
     let has_overview = updates.iter().any(|u| matches!(u, VmUpdate::Overview(_)));
@@ -132,7 +132,7 @@ fn vm_update_overview_variant_reachable() {
 fn vm_update_session_variant_reachable() {
     let (mut core, _peer) = make_core();
     let id = core
-        .launch_session(spec("proj-sess", Posture::Ask))
+        .launch_session(spec("proj-sess", String::new()))
         .expect("launch");
     let updates = core.on_agent_line(&ipc_init(&id)).expect("on_agent_line");
     let has_session = updates.iter().any(|u| matches!(u, VmUpdate::Session(_)));
@@ -155,7 +155,7 @@ fn assign_to_other_workstream_removes_orphaned_auto_ws() {
     core.create_workstream("ws-named".into(), "Named".into(), "goal".into(), None)
         .expect("create ws");
     let id = core
-        .launch_session(spec("proj-node", Posture::Ask))
+        .launch_session(spec("proj-node", String::new()))
         .expect("launch");
     // Before assign: the auto ws AND the named ws both exist.
     assert!(core.board().all.iter().any(|c| c.id == format!("ws-{id}")));
@@ -174,7 +174,7 @@ fn assign_to_other_workstream_removes_orphaned_auto_ws() {
 fn single_launch_produces_one_board_card() {
     let (mut core, _peer) = make_core();
     let id = core
-        .launch_session(spec("proj-solo", Posture::Ask))
+        .launch_session(spec("proj-solo", String::new()))
         .expect("launch");
     let board = core.board();
     assert_eq!(
@@ -211,7 +211,7 @@ fn vm_update_host_health_variant_is_constructible() {
 fn slash_roundtrip(cmd: SlashCmd) {
     let (mut core, mut peer) = make_core();
     let id = core
-        .launch_session(spec("slash-proj", Posture::Ask))
+        .launch_session(spec("slash-proj", String::new()))
         .expect("launch");
     let _ = peer.drain_outbound();
     core.run_slash(&id, cmd).expect("run_slash");
@@ -278,7 +278,7 @@ fn run_slash_help() {
 fn run_slash_unknown_dispatches_without_panic() {
     let (mut core, _peer) = make_core();
     let id = core
-        .launch_session(spec("slash-unk", Posture::Ask))
+        .launch_session(spec("slash-unk", String::new()))
         .expect("launch");
     // Unknown slash commands must not panic; may succeed or return an error
     let _result = core.run_slash(&id, SlashCmd::Unknown("/foobar".to_string()));
@@ -292,10 +292,10 @@ fn run_slash_unknown_dispatches_without_panic() {
 fn set_workspace_rescopes_snapshot() {
     let (mut core, _peer) = make_core();
     let id_a = core
-        .launch_session(spec("proj-ws-a", Posture::Ask))
+        .launch_session(spec("proj-ws-a", String::new()))
         .expect("launch a");
     let id_b = core
-        .launch_session(spec("proj-ws-b", Posture::Ask))
+        .launch_session(spec("proj-ws-b", String::new()))
         .expect("launch b");
 
     // Before set_workspace, snapshot has both sessions
@@ -325,7 +325,7 @@ fn set_workspace_rescopes_snapshot() {
 fn answer_gate_idempotent_second_call_is_noop() {
     let (mut core, mut peer) = make_core();
     let id = core
-        .launch_session(spec("proj-gate-idem", Posture::Ask))
+        .launch_session(spec("proj-gate-idem", String::new()))
         .expect("launch");
     let _ = peer.drain_outbound(); // consume launch IPC
 
@@ -377,7 +377,7 @@ fn answer_gate_different_decisions_are_not_idempotent() {
     // We test: two approve calls produce the same DecisionId, so the second is a no-op.
     let (mut core, mut peer) = make_core();
     let id = core
-        .launch_session(spec("proj-gate2", Posture::Ask))
+        .launch_session(spec("proj-gate2", String::new()))
         .expect("launch");
     let _ = peer.drain_outbound();
 
@@ -417,10 +417,10 @@ fn concurrent_sessions_do_not_cross_route() {
     let (mut core, _peer) = make_core();
 
     let id_x = core
-        .launch_session(spec("session-x", Posture::Ask))
+        .launch_session(spec("session-x", String::new()))
         .expect("launch x");
     let id_y = core
-        .launch_session(spec("session-y", Posture::Ask))
+        .launch_session(spec("session-y", String::new()))
         .expect("launch y");
 
     // Feed init events for both sessions
@@ -460,7 +460,7 @@ fn streamed_blocks_sharing_a_message_id_all_appear_and_dedup() {
     // the live transcript froze and only the restart backfill showed the reply).
     let (mut core, _peer) = make_core();
     let id = core
-        .launch_session(spec("s-stream", Posture::Ask))
+        .launch_session(spec("s-stream", String::new()))
         .expect("launch");
     let _ = core.on_agent_line(&ipc_init(&id)).expect("init");
 
@@ -499,12 +499,12 @@ fn streamed_blocks_sharing_a_message_id_all_appear_and_dedup() {
 #[test]
 fn snapshot_contains_all_launched_sessions() {
     let (mut core, _peer) = make_core();
-    let id1 = core.launch_session(spec("s1", Posture::Ask)).expect("l1");
+    let id1 = core.launch_session(spec("s1", String::new())).expect("l1");
     let id2 = core
-        .launch_session(spec("s2", Posture::AutoApproveSafe))
+        .launch_session(spec("s2", "acceptEdits".to_string()))
         .expect("l2");
     let id3 = core
-        .launch_session(spec("s3", Posture::FullAutonomy))
+        .launch_session(spec("s3", "bypassPermissions".to_string()))
         .expect("l3");
 
     let snap = core.snapshot();
@@ -524,7 +524,7 @@ fn session_update_after_init_reflects_working_phase() {
 
     let (mut core, _peer) = make_core();
     let id = core
-        .launch_session(spec("proj-phase", Posture::Ask))
+        .launch_session(spec("proj-phase", String::new()))
         .expect("launch");
 
     let updates = core.on_agent_line(&ipc_init(&id)).expect("init");
@@ -559,7 +559,7 @@ fn session_update_after_result_reflects_done_phase() {
 
     let (mut core, _peer) = make_core();
     let id = core
-        .launch_session(spec("proj-done-ph", Posture::Ask))
+        .launch_session(spec("proj-done-ph", String::new()))
         .expect("launch");
 
     let _ = core.on_agent_line(&ipc_init(&id)).expect("init");
@@ -598,7 +598,7 @@ fn session_update_after_control_request_reflects_needs_phase() {
 
     let (mut core, _peer) = make_core();
     let id = core
-        .launch_session(spec("proj-needs", Posture::Ask))
+        .launch_session(spec("proj-needs", String::new()))
         .expect("launch");
 
     let _ = core.on_agent_line(&ipc_init(&id)).expect("init");
@@ -636,7 +636,7 @@ fn session_update_after_control_request_reflects_needs_phase() {
 fn answer_gate_permission_gate_outbound_references_gate() {
     let (mut core, mut peer) = make_core();
     let id = core
-        .launch_session(spec("gate-perm", Posture::Ask))
+        .launch_session(spec("gate-perm", String::new()))
         .expect("launch");
     let _ = peer.drain_outbound();
 
@@ -663,7 +663,7 @@ fn answer_gate_clears_pending_gate_and_emits_session_update() {
     // disappears — it must NOT linger until a later stream message arrives.
     let (mut core, mut peer) = make_core();
     let id = core
-        .launch_session(spec("gate-clear", Posture::Ask))
+        .launch_session(spec("gate-clear", String::new()))
         .expect("launch");
     let _ = peer.drain_outbound();
 
@@ -709,7 +709,7 @@ fn answer_gate_clears_pending_gate_and_emits_session_update() {
 fn answer_gate_plan_gate_outbound_references_gate() {
     let (mut core, mut peer) = make_core();
     let id = core
-        .launch_session(spec("gate-plan", Posture::Ask))
+        .launch_session(spec("gate-plan", String::new()))
         .expect("launch");
     let _ = peer.drain_outbound();
 
@@ -728,7 +728,7 @@ fn answer_gate_plan_gate_outbound_references_gate() {
 fn answer_gate_edit_gate_outbound_references_gate() {
     let (mut core, mut peer) = make_core();
     let id = core
-        .launch_session(spec("gate-edit", Posture::Ask))
+        .launch_session(spec("gate-edit", String::new()))
         .expect("launch");
     let _ = peer.drain_outbound();
 
@@ -752,7 +752,7 @@ fn answer_gate_edit_gate_outbound_references_gate() {
 fn usage_update_null_usage_field_is_noop() {
     let (mut core, _peer) = make_core();
     let id = core
-        .launch_session(spec("/p", Posture::Ask))
+        .launch_session(spec("/p", String::new()))
         .expect("launch");
     // `usage` key absent → serde default = None → should return Ok(vec![])
     let line = format!(r#"{{"type":"UsageUpdate","session_id":"{id}"}}"#);
@@ -765,7 +765,7 @@ fn usage_update_null_usage_field_is_noop() {
 fn usage_update_array_usage_field_is_noop() {
     let (mut core, _peer) = make_core();
     let id = core
-        .launch_session(spec("/p", Posture::Ask))
+        .launch_session(spec("/p", String::new()))
         .expect("launch");
     // `usage` is an array instead of an object → as_object() returns None → no-op
     let line = format!(r#"{{"type":"UsageUpdate","session_id":"{id}","usage":[1,2,3]}}"#);
@@ -781,7 +781,7 @@ fn usage_update_array_usage_field_is_noop() {
 fn running_shell_command_shows_working_not_done() {
     let (mut core, _peer) = make_core();
     let id = core
-        .launch_session(spec("/p", Posture::Ask))
+        .launch_session(spec("/p", String::new()))
         .expect("launch");
     // Drive the session to a terminal phase (Done) via a success result.
     core.on_agent_line(&ipc_result_success(&id)).expect("result");

@@ -355,16 +355,13 @@ fn all_scenarios() {
     eprintln!("[i09/s1] ack: subscriber_id={subscriber_id}");
 
     // LaunchSession — send the raw JSON that matches the agent's handler expectations.
-    // NOTE: IpcMsg::LaunchSession serde fields are {cwd,model,permission_mode} but
-    // handle_launch_session reads {project,host_id,model,posture,first_prompt}.
-    // We send the raw JSON with the agent-handler-expected fields directly.
     let project_path = project_dir.to_string_lossy().to_string();
     let launch_msg = serde_json::json!({
         "type": "LaunchSession",
         "project": project_path,
         "host_id": "local",
         "model": "claude-opus-4-5",
-        "posture": "FullAutonomy",
+        "session_mode": "bypassPermissions",
         "first_prompt": "reply with the single word READY"
     });
     let launch_line = serde_json::to_string(&launch_msg).unwrap();

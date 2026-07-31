@@ -35,7 +35,7 @@ mod wasl_session;
 #[cfg(not(coverage))]
 use remote::REMOTE_RUNTIME_DIR;
 
-pub use driver::{build_remote_run_cmd, claude_argv, opencode_argv, posture_to_mode};
+pub use driver::{build_remote_run_cmd, claude_argv, opencode_argv};
 pub use reader::{
     assistant_has_file_modifying_tool_use, conn_on_drop, reconnect_action, reconnect_backoff_next,
     ReconnectAction, RECONNECT_INITIAL_BACKOFF_SECS, RECONNECT_MAX_BACKOFF_SECS,
@@ -386,7 +386,10 @@ impl fmt::Debug for SessionRunCmdsWrap {
 pub(crate) struct CachedCodexSpec {
     pub model: String,
     pub project: String,
-    pub posture: marsad_proto::Posture,
+    /// The raw session mode id (e.g. "acceptEdits", or "" for backend default).
+    /// Used by `handle_send_prompt` to pass the correct approvalPolicy/sandbox to
+    /// the codex app-server via `thread/start`. Maps via `codex_mode_settings`.
+    pub session_mode: String,
 }
 
 /// Rebuild a `CachedCodexSpec` from the persisted fields of a codex session.
@@ -399,28 +402,18 @@ pub(crate) struct CachedCodexSpec {
 /// `launch_with_id` cached) so codex sessions can take new prompts after a
 /// restart.
 ///
-/// `posture_str` is the persisted `PersistedSession::posture` string (`"Ask"` /
-/// `"AutoApproveSafe"` / `"FullAutonomy"`); it is parsed the same way `handle_resume`
-/// parses it (serde on the string), defaulting to `Ask` for missing/unknown
-/// values. Pure (no IO, no `self`) so it is unit-testable.
+/// `mode` is the persisted `PersistedSession::mode` (already normalized to a mode id).
+/// Pure (no IO, no `self`) so it is unit-testable.
 #[cfg(not(coverage))]
 pub(crate) fn cached_codex_spec_from_persisted(
     model: String,
     project: String,
-    posture_str: Option<&str>,
+    mode: Option<String>,
 ) -> CachedCodexSpec {
-    let posture = posture_str
-        .and_then(|s| {
-            serde_json::from_value::<marsad_proto::Posture>(serde_json::Value::String(
-                s.to_string(),
-            ))
-            .ok()
-        })
-        .unwrap_or(marsad_proto::Posture::Ask);
     CachedCodexSpec {
         model,
         project,
-        posture,
+        session_mode: mode.unwrap_or_default(),
     }
 }
 
@@ -925,7 +918,7 @@ impl Agent {
                 let cached = CachedCodexSpec {
                     model: spec.model.clone(),
                     project: spec.project.clone(),
-                    posture: spec.posture.clone(),
+                    session_mode: spec.session_mode.clone(),
                 };
                 self.codex_specs
                     .0
@@ -970,9 +963,7 @@ impl Agent {
             branch: "main".to_string(),
             model: spec.model.clone(),
             last_phase: "Starting".to_string(),
-            posture: serde_json::to_value(&spec.posture)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_string)),
+            mode: if spec.session_mode.is_empty() { None } else { Some(spec.session_mode.clone()) },
             disallowed_tools: spec.disallowed_tools.clone(),
             driver: spec.driver.clone(),
             slash_commands: vec![],
@@ -1124,48 +1115,49 @@ mod reconnect_spec_tests {
     }
 
     #[test]
-    fn rebuilds_full_autonomy_spec_from_persisted() {
+    fn rebuilds_bypass_permissions_spec_from_persisted() {
         let spec = cached_codex_spec_from_persisted(
             "codex-mini-latest".to_string(),
             "/tmp/proj".to_string(),
-            Some("FullAutonomy"),
+            Some("bypassPermissions".to_string()),
         );
         assert_eq!(spec.model, "codex-mini-latest");
         assert_eq!(spec.project, "/tmp/proj");
-        assert_eq!(spec.posture, marsad_proto::Posture::FullAutonomy);
+        assert_eq!(spec.session_mode, "bypassPermissions");
     }
 
     #[test]
-    fn rebuilds_auto_approve_safe_spec() {
+    fn rebuilds_accept_edits_spec() {
         let spec = cached_codex_spec_from_persisted(
             "m".to_string(),
             "p".to_string(),
-            Some("AutoApproveSafe"),
+            Some("acceptEdits".to_string()),
         );
-        assert_eq!(spec.posture, marsad_proto::Posture::AutoApproveSafe);
+        assert_eq!(spec.session_mode, "acceptEdits");
     }
 
     #[test]
-    fn ask_posture_round_trips() {
-        let spec = cached_codex_spec_from_persisted("m".into(), "p".into(), Some("Ask"));
-        assert_eq!(spec.posture, marsad_proto::Posture::Ask);
+    fn default_mode_round_trips() {
+        let spec = cached_codex_spec_from_persisted("m".into(), "p".into(), Some("default".to_string()));
+        assert_eq!(spec.session_mode, "default");
     }
 
     #[test]
-    fn missing_posture_defaults_to_ask() {
-        // A pre-posture persisted record (posture: None) must not panic and must
-        // default to Ask — mirroring how `handle_resume` parses the field.
+    fn missing_mode_defaults_to_empty() {
+        // A pre-mode persisted record (mode: None) must not panic and must
+        // default to empty (backend default).
         let spec = cached_codex_spec_from_persisted("m".into(), "p".into(), None);
-        assert_eq!(spec.posture, marsad_proto::Posture::Ask);
+        assert_eq!(spec.session_mode, "");
     }
 
     #[test]
-    fn unknown_posture_string_defaults_to_ask() {
+    fn any_mode_string_passes_through() {
+        // Any mode string is passed through verbatim — no validation here.
         let spec = cached_codex_spec_from_persisted(
             "m".into(),
             "p".into(),
-            Some("NotARealPosture"),
+            Some("plan".to_string()),
         );
-        assert_eq!(spec.posture, marsad_proto::Posture::Ask);
+        assert_eq!(spec.session_mode, "plan");
     }
 }

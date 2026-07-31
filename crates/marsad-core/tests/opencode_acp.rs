@@ -20,7 +20,7 @@
 //! that asserting on a not-yet-existing field compiles fine and fails at runtime
 //! with a clear message — never a compile error.
 
-use marsad_core::{Core, CoreConfig, LaunchSpec, Posture, VmUpdate};
+use marsad_core::{Core, CoreConfig, LaunchSpec, VmUpdate};
 use marsad_events::Phase;
 use marsad_store::MemoryBackend;
 use marsad_transport::LoopbackFake;
@@ -55,7 +55,7 @@ fn launch_opencode(core: &mut Core) -> String {
         setup: None,
         env: Vec::new(),
         model: "gpt-4o".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,

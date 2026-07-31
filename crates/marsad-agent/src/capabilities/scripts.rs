@@ -121,6 +121,19 @@ pub fn build_claude_discovery_script(
            | sort -u | head -20 \
            | while IFS= read -r m; do printf 'model\\t%s\\n' \"$m\"; done",
     );
+    // Version: capture `claude --version` output (first line) so the probe can
+    // derive the available permission modes via `claude_available_modes(version)`.
+    // Best-effort: if claude isn't installed or --version fails, the section body
+    // is empty and the caller leaves `available_modes` empty (loses the mode picker
+    // for this host, but never errors).
+    let version = section(
+        "version",
+        &format!(
+            "command -v {w} >/dev/null 2>&1 && {cmd} --version 2>/dev/null | head -1 || true",
+            w = sh_squote(word),
+            cmd = command,
+        ),
+    );
     // Sessions: only when a concrete project is in scope (claude's on-disk dir is
     // the project's real cwd, `/`→non-alnum encoded). Resolve the cwd on the host
     // and encode it there, matching `encode_project_dir` exactly.
@@ -148,7 +161,7 @@ pub fn build_claude_discovery_script(
         }
         _ => section("sessions", "true"),
     };
-    with_setup(setup, &format!("{avail}{env}{extra_models}{sessions}"))
+    with_setup(setup, &format!("{avail}{version}{env}{extra_models}{sessions}"))
 }
 
 /// Build the codex discovery script: after `setup`, availability of the resolved
@@ -270,6 +283,18 @@ pub fn parse_claude_env_models(body: &str) -> HashMap<String, String> {
         }
     }
     out
+}
+
+/// Parse the claude `version` section body into a plain version string suitable for
+/// `marsad_events::claude_available_modes(version)`. The section body is the first
+/// line of `claude --version`, which typically looks like `"1.0.42 (claude-code)"`.
+/// Returns the first non-empty trimmed line, or an empty string on missing/empty body.
+pub fn parse_claude_version(body: &str) -> String {
+    body.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+        .to_string()
 }
 
 /// Parse the claude `extra_models` section (`model<TAB>value` lines) into a

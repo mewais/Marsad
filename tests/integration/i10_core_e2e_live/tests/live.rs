@@ -32,7 +32,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use marsad_agent::{AgentConfig, ListenSpec};
-use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, Posture, VmUpdate};
+use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, VmUpdate};
 use marsad_events::Phase;
 use marsad_gates::approve;
 use marsad_transport::{LocalIpc, Transport};
@@ -257,7 +257,7 @@ fn live_model() -> String {
     std::env::var("MARSAD_LIVE_MODEL").unwrap_or_else(|_| "haiku".to_string())
 }
 
-fn spec(project: &str, first_prompt: &str, posture: Posture, mode: LaunchMode) -> LaunchSpec {
+fn spec(project: &str, first_prompt: &str, session_mode: String, mode: LaunchMode) -> LaunchSpec {
     LaunchSpec {
         project: project.to_string(),
         host_id: "local".to_string(),
@@ -266,7 +266,7 @@ fn spec(project: &str, first_prompt: &str, posture: Posture, mode: LaunchMode) -
         setup: None,
         env: Vec::new(),
         model: live_model(),
-        posture,
+        session_mode,
         first_prompt: Some(first_prompt.to_string()),
         mode,
         name: None,
@@ -358,7 +358,7 @@ fn full_loop() {
         .launch_session(spec(
             &project,
             "Reply with exactly the single word READY and nothing else.",
-            Posture::FullAutonomy,
+            "bypassPermissions".to_string(),
             LaunchMode::Fresh,
         ))
         .expect("launch A");
@@ -435,7 +435,7 @@ fn full_loop() {
             &project,
             "You MUST use the Bash tool. Using the Bash tool, run exactly this \
              command: echo hello-from-bash. Do not print anything else first.",
-            Posture::Ask,
+            String::new(),
             LaunchMode::Fresh,
         ))
         .expect("launch B");
@@ -510,7 +510,7 @@ fn full_loop() {
         .launch_session(spec(
             &project_c,
             "My favorite fruit is banana. Please reply OK to confirm you've noted it.",
-            Posture::FullAutonomy,
+            "bypassPermissions".to_string(),
             LaunchMode::Fresh,
         ))
         .expect("launch C");
@@ -526,7 +526,7 @@ fn full_loop() {
         .launch_session(spec(
             &project_c,
             "What did I say my favorite fruit was? Reply with one word.",
-            Posture::FullAutonomy,
+            "bypassPermissions".to_string(),
             LaunchMode::Continue,
         ))
         .expect("launch D (continue)");

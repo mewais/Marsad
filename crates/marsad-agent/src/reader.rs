@@ -655,10 +655,10 @@ pub(crate) fn spawn_session_reader(
                 let (model, approval, sandbox) = codex_spec
                     .as_ref()
                     .map(|cs| {
-                        let (a, s) = codex_posture_settings(&cs.posture);
+                        let (a, s) = codex_mode_settings(&cs.session_mode);
                         (cs.model.clone(), a, s)
                     })
-                    .unwrap_or_else(|| (String::new(), "on-request", "read-only"));
+                    .unwrap_or_else(|| (String::new(), "on-request", "workspace-write"));
                 let cwd = codex_spec.as_ref().map(|cs| cs.project.clone()).unwrap_or_else(|| ".".into());
                 let init_line = acp::encode_request(
                     serde_json::json!(1u64),

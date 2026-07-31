@@ -32,7 +32,7 @@ fn make_session(id: &str) -> PersistedSession {
         branch: "main".to_string(),
         model: "claude-opus-4-5".to_string(),
         last_phase: "Done".to_string(),
-        posture: None,
+        mode: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         slash_commands: vec![],
@@ -492,9 +492,9 @@ fn make_settings() -> PersistedSettings {
         restore_on_launch: true,
         confirm_before_stop: false,
         default_model: "claude-sonnet-4-6".to_string(),
-        default_posture: "ask".to_string(),
         default_driver: "claude".to_string(),
         default_models: Vec::new(),
+        default_modes: Vec::new(),
     }
 }
 
@@ -528,7 +528,7 @@ fn upsert_settings_overwrite_updates_fields() {
 }
 
 /// PERSISTENCE audit (GAP 2): the NEW session-default fields — `default_driver`,
-/// `default_models`, and `default_posture` — must survive a save+reload with
+/// `default_models`, and `default_modes` — must survive a save+reload with
 /// their NON-default values. The `make_settings` round-trip above uses default
 /// values (empty `default_models`, "claude" driver), which would still pass even
 /// if a bug dropped a non-default value. This test uses distinctive non-default
@@ -538,10 +538,12 @@ fn upsert_settings_persists_nondefault_new_fields() {
     let mut store = fresh_store();
     let mut s = make_settings();
     s.default_driver = "codex".to_string();
-    s.default_posture = "full".to_string();
     s.default_models = vec![
         ("codex".to_string(), "codex-mini-latest".to_string()),
         ("claude".to_string(), "claude-opus-4-8".to_string()),
+    ];
+    s.default_modes = vec![
+        ("claude".to_string(), "acceptEdits".to_string()),
     ];
     store
         .upsert_settings(&s)
@@ -553,16 +555,17 @@ fn upsert_settings_persists_nondefault_new_fields() {
         "default_driver must round-trip through persistence"
     );
     assert_eq!(
-        got.default_posture, "full",
-        "default_posture must round-trip through persistence"
-    );
-    assert_eq!(
         got.default_models,
         vec![
             ("codex".to_string(), "codex-mini-latest".to_string()),
             ("claude".to_string(), "claude-opus-4-8".to_string()),
         ],
         "default_models must round-trip through persistence"
+    );
+    assert_eq!(
+        got.default_modes,
+        vec![("claude".to_string(), "acceptEdits".to_string())],
+        "default_modes must round-trip through persistence"
     );
 }
 
@@ -597,7 +600,7 @@ fn make_template(name: &str) -> PersistedTemplate {
     PersistedTemplate {
         name: name.to_string(),
         model: "claude-sonnet-4-6".to_string(),
-        posture: "ask".to_string(),
+        mode: "default".to_string(),
     }
 }
 
@@ -621,7 +624,7 @@ fn upsert_template_preserves_all_fields() {
     let t = PersistedTemplate {
         name: "careful".to_string(),
         model: "claude-opus-4-8".to_string(),
-        posture: "full".to_string(),
+        mode: "bypassPermissions".to_string(),
     };
     store.upsert_template(&t).expect("upsert_template");
     let restored = store.restore().expect("restore");
@@ -631,7 +634,7 @@ fn upsert_template_preserves_all_fields() {
         .find(|tmpl| tmpl.name == "careful")
         .expect("template must exist");
     assert_eq!(found.model, "claude-opus-4-8");
-    assert_eq!(found.posture, "full");
+    assert_eq!(found.mode, "bypassPermissions");
 }
 
 #[test]
@@ -642,7 +645,7 @@ fn upsert_template_overwrites_same_name() {
     let t2 = PersistedTemplate {
         name: "my-tmpl".to_string(),
         model: "claude-haiku-4-5".to_string(),
-        posture: "auto".to_string(),
+        mode: "acceptEdits".to_string(),
     };
     store.upsert_template(&t2).expect("second upsert");
     let restored = store.restore().expect("restore");
@@ -671,24 +674,49 @@ fn persisted_template_derives_clone_eq_debug() {
 }
 
 // ---------------------------------------------------------------------------
-// posture field round-trip
+// mode field round-trip + legacy posture migration
 // ---------------------------------------------------------------------------
 
-/// PersistedSession.posture round-trips through the store.
-/// Covers the Some branch for the new field.
+/// PersistedSession.mode round-trips through the store (Some branch).
 #[test]
-fn upsert_session_posture_round_trips() {
+fn upsert_session_mode_round_trips() {
     let mut store = fresh_store();
-    let mut sess = make_session("posture-rt");
-    sess.posture = Some("FullAutonomy".to_string());
+    let mut sess = make_session("mode-rt");
+    sess.mode = Some("bypassPermissions".to_string());
     store.upsert_session(&sess).expect("upsert");
     let restored = store.restore().expect("restore");
     let found = restored
         .sessions
         .into_iter()
-        .find(|s| s.id == "posture-rt")
+        .find(|s| s.id == "mode-rt")
         .expect("session must exist");
-    assert_eq!(found.posture, Some("FullAutonomy".to_string()));
+    assert_eq!(found.mode, Some("bypassPermissions".to_string()));
+}
+
+/// A legacy record stored with key `"posture"` and value `"AutoApproveSafe"` loads
+/// correctly via the `#[serde(alias = "posture")]` on `PersistedSession.mode`, AND
+/// `normalize_session_mode` maps the legacy enum name to its mode id.
+#[test]
+fn legacy_posture_field_loads_and_normalizes() {
+    use marsad_store::normalize_session_mode;
+    let backend = marsad_store::MemoryBackend::new();
+    // Write a versioned blob with the OLD key name "posture" and a legacy enum value.
+    let old_json = r#"{"version":1,"payload":{"id":"legacy-sess","session_id":null,"name":"legacy-sess","host_id":"local","host_target":null,"project":"/p","branch":"main","model":"m","last_phase":"Done","posture":"AutoApproveSafe"}}"#;
+    backend
+        .write("session:legacy-sess", old_json.as_bytes())
+        .expect("write");
+    let store = Store::new(Box::new(backend));
+    let restored = store.restore().expect("restore");
+    let s = restored
+        .sessions
+        .iter()
+        .find(|s| s.id == "legacy-sess")
+        .expect("session must exist");
+    // The alias loads the "posture" key into the `mode` field.
+    assert_eq!(s.mode, Some("AutoApproveSafe".to_string()));
+    // normalize_session_mode maps legacy enum names → mode ids.
+    let normalized = normalize_session_mode(s.mode.clone());
+    assert_eq!(normalized, Some("acceptEdits".to_string()), "AutoApproveSafe should normalize to acceptEdits");
 }
 
 // ---------------------------------------------------------------------------
@@ -713,7 +741,7 @@ fn persisted_session_disallowed_tools_round_trips() {
         branch: "main".to_string(),
         model: "m".to_string(),
         last_phase: "Starting".to_string(),
-        posture: None,
+        mode: None,
         disallowed_tools: vec!["Bash".to_string(), "Edit".to_string()],
         driver: "claude".to_string(),
         slash_commands: vec![],

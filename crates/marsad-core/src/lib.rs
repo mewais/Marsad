@@ -27,12 +27,12 @@ mod workstreams;
 use helpers::*;
 
 // ---------------------------------------------------------------------------
-// Public re-exports (spec requirement: callers use marsad_core::{LaunchSpec, Posture})
+// Public re-exports
 // ---------------------------------------------------------------------------
 
 pub use discovery::SessionSummary;
 pub use marsad_hosts::{Host, HostStatus};
-pub use marsad_proto::{LaunchMode, LaunchSpec, Posture};
+pub use marsad_proto::{LaunchMode, LaunchSpec};
 pub use marsad_store::{NotifPref, PersistedSettings, PersistedTemplate};
 
 // ---------------------------------------------------------------------------
@@ -703,7 +703,6 @@ impl Core {
         } else {
             s.cost_usd
         };
-        let posture = permission_mode_to_posture(s.permission_mode.as_deref());
         // Build subagent_list: running subagents first (for prominence), then done.
         let mut subagent_list: Vec<marsad_viewmodel::SubagentView> = s
             .subagents
@@ -760,7 +759,6 @@ impl Core {
             tools: s.tools.clone(),
             mcp_servers: s.mcp_servers.clone(),
             slash_commands: s.slash_commands.clone(),
-            posture,
             subagent_list,
             shell_running: record.shell_running,
             driver: record.driver.clone(),

@@ -34,7 +34,7 @@ fn fresh_agent() -> Agent {
 
 /// Launch a session via the fake container and return its session_id.
 fn launch_a_session(agent: &mut Agent) -> String {
-    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5","posture":"Ask"}"#;
+    let line = r#"{"type":"LaunchSession","project":"/home/user/proj","host_id":"local","model":"claude-opus-4-5"}"#;
     let out = agent
         .handle_ipc(line)
         .expect("LaunchSession must succeed")

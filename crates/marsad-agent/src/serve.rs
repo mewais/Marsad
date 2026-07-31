@@ -341,7 +341,7 @@ impl Agent {
                                 let spec = super::cached_codex_spec_from_persisted(
                                     s.model.clone(),
                                     s.project.clone(),
-                                    s.posture.as_deref(),
+                                    marsad_store::normalize_session_mode(s.mode.clone()),
                                 );
                                 self.codex_specs
                                     .0
@@ -406,7 +406,7 @@ impl Agent {
                         let spec = super::cached_codex_spec_from_persisted(
                                     s.model.clone(),
                                     s.project.clone(),
-                                    s.posture.as_deref(),
+                                    marsad_store::normalize_session_mode(s.mode.clone()),
                         );
                         self.codex_specs
                             .0

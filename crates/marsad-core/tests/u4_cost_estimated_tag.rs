@@ -31,7 +31,7 @@
 //! ALL tests in this file are expected RED today — this is net-new work, not
 //! a partially-implemented feature.
 
-use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, Posture, VmUpdate};
+use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, VmUpdate};
 use marsad_transport::LoopbackFake;
 
 // ---------------------------------------------------------------------------
@@ -57,7 +57,7 @@ fn launch(core: &mut Core) -> String {
         setup: None,
         env: Vec::new(),
         model: "claude-sonnet-4-6".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: LaunchMode::Fresh,
         name: None,

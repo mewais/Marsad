@@ -82,12 +82,6 @@ pub struct SessionView {
     /// Slash commands available in this session (from the system/init event).
     #[serde(default)]
     pub slash_commands: Vec<marsad_proto::SlashCommandInfo>,
-    /// Permission posture for this session, derived from the system/init
-    /// `permissionMode` field: "default"→"ask", "acceptEdits"→"auto",
-    /// "bypassPermissions"→"full". Falls back to "ask" when unknown or before
-    /// the first system/init event.
-    #[serde(default = "default_posture")]
-    pub posture: String,
     /// The agent driver actually running THIS session ("claude"/"codex"/…).
     /// The header must label the session by its own driver, not the host's
     /// first-discovered capability driver (a host can offer several).
@@ -129,10 +123,6 @@ pub struct SessionView {
     /// of a hardcoded posture list; `current_mode` marks the active one.
     #[serde(default)]
     pub available_modes: Vec<marsad_proto::SessionMode>,
-}
-
-fn default_posture() -> String {
-    "ask".to_string()
 }
 
 fn default_driver() -> String {
@@ -221,6 +211,12 @@ pub struct CapabilitiesView {
     /// on — carried verbatim from `marsad_proto::Capabilities::launchable`.
     pub launchable: bool,
     pub models: marsad_proto::ModelCatalog,
+    /// The session modes this backend truly offers, discovered from the backend
+    /// (never a hardcoded Marsad list). claude fills it from its version; others
+    /// leave it empty (modes only knowable from a live session). Carried verbatim
+    /// from `marsad_proto::Capabilities::available_modes`.
+    #[serde(default)]
+    pub available_modes: Vec<marsad_proto::SessionMode>,
     pub session_scope: Option<marsad_proto::SessionScope>,
     pub sessions: Vec<marsad_proto::DiscoveredSession>,
     pub fetched_at_ms: u64,
@@ -235,6 +231,7 @@ impl From<marsad_proto::Capabilities> for CapabilitiesView {
             cli_available: c.cli_available,
             launchable: c.launchable,
             models: c.models,
+            available_modes: c.available_modes,
             session_scope: c.session_scope,
             sessions: c.sessions,
             fetched_at_ms: c.fetched_at_ms,

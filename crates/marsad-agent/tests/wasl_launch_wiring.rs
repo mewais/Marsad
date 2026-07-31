@@ -33,7 +33,7 @@ fn basic_launch_spec() -> LaunchSpec {
         setup: None,
         env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
-        posture: marsad_proto::Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,

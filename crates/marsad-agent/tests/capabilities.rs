@@ -1347,6 +1347,7 @@ impl CapabilityProbe for FakeProbe {
             cli_available: true,
             launchable: self.launchable(),
             models: Default::default(),
+            available_modes: vec![],
             session_scope: Some(if self.echo_scope {
                 ctx.scope.clone()
             } else {

@@ -334,10 +334,13 @@ pub struct PersistedSession {
     pub branch: String,
     pub model: String,
     pub last_phase: String,
-    /// Permission posture string ("Ask" | "AutoApproveSafe" | "FullAutonomy"),
-    /// persisted so RESUME restores the user's choice instead of defaulting to Ask.
-    #[serde(default)]
-    pub posture: Option<String>,
+    /// Backend mode id (e.g. "default", "acceptEdits", "plan", "bypassPermissions"),
+    /// persisted so RESUME restores the user's choice. `#[serde(alias = "posture")]`
+    /// lets old records that used the key `posture` (with legacy enum-name values like
+    /// "Ask"/"AutoApproveSafe"/"FullAutonomy") load transparently — the caller is
+    /// responsible for normalizing those legacy values via `normalize_session_mode`.
+    #[serde(default, alias = "posture")]
+    pub mode: Option<String>,
     /// Tools disabled for this session, persisted so RESUME applies the same set.
     /// `#[serde(default)]` keeps older records loading as empty (no tools disabled).
     #[serde(default)]
@@ -367,6 +370,21 @@ pub struct PersistedSession {
 
 fn default_driver() -> String {
     "claude".to_string()
+}
+
+/// Normalize a persisted session mode value: maps legacy `Posture` enum-name
+/// values (stored by older Marsad) to current mode ids, passes anything else
+/// through unchanged, and leaves `None` as `None`.
+///
+/// Legacy map: `"Ask"→"default"`, `"AutoApproveSafe"→"acceptEdits"`,
+/// `"FullAutonomy"→"bypassPermissions"`. Any other value is already a mode id.
+pub fn normalize_session_mode(mode: Option<String>) -> Option<String> {
+    mode.map(|m| match m.as_str() {
+        "Ask" => "default".to_string(),
+        "AutoApproveSafe" => "acceptEdits".to_string(),
+        "FullAutonomy" => "bypassPermissions".to_string(),
+        _ => m,
+    })
 }
 
 /// The persisted binding to a Wasl-managed session's underlying runtime
@@ -477,7 +495,6 @@ pub struct PersistedSettings {
     pub confirm_before_stop: bool,
     // Session defaults.
     pub default_model: String,
-    pub default_posture: String, // "ask" | "auto" | "full"
     /// Default driver for new sessions ("claude" | "codex" | "gemini").
     /// `#[serde(default)]` keeps older records loading as "claude".
     #[serde(default = "default_driver_str")]
@@ -487,21 +504,26 @@ pub struct PersistedSettings {
     /// `#[serde(default)]` keeps older records loading as empty (falls back to `default_model`).
     #[serde(default)]
     pub default_models: Vec<(String, String)>,
+    /// Per-driver default mode ids, as `(driver, mode_id)` pairs.
+    /// E.g. `[("claude", "acceptEdits"), ("codex", "on-request")]`.
+    /// `#[serde(default)]` keeps older records (no field) loading as empty → backend default.
+    #[serde(default)]
+    pub default_modes: Vec<(String, String)>,
 }
 
 fn default_driver_str() -> String {
     "claude".to_string()
 }
 
-/// A named config template (model + posture) for quick session configuration.
+/// A named config template (model + mode) for quick session configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PersistedTemplate {
     /// Human-readable name (used as the unique key).
     pub name: String,
     /// Model id string (e.g. "claude-sonnet-4-6").
     pub model: String,
-    /// Posture string: "ask" | "auto" | "full".
-    pub posture: String,
+    /// Backend mode id (e.g. "default", "acceptEdits", "bypassPermissions").
+    pub mode: String,
 }
 
 /// Everything reconstructed from the backend on launch.
@@ -1037,7 +1059,7 @@ impl Store {
                 branch: es.branch.clone(),
                 model: es.model.clone(),
                 last_phase: es.last_phase.clone(),
-                posture: None,
+                mode: None,
                 disallowed_tools: vec![],
                 driver: default_driver(),
                 slash_commands: vec![],

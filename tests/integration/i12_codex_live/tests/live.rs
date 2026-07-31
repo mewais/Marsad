@@ -24,7 +24,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use marsad_agent::{AgentConfig, ListenSpec};
-use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, Posture, VmUpdate};
+use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, VmUpdate};
 use marsad_events::Phase;
 use marsad_transport::{LocalIpc, Transport};
 use marsad_viewmodel::SessionView;
@@ -259,7 +259,7 @@ fn codex_spec(project: &str, first_prompt: &str) -> LaunchSpec {
         setup: None,
         env: Vec::new(),
         model: codex_model(),
-        posture: Posture::FullAutonomy,
+        session_mode: "bypassPermissions".to_string(),
         first_prompt: Some(first_prompt.to_string()),
         mode: LaunchMode::Fresh,
         name: None,

@@ -1,7 +1,7 @@
 //! Small pure helper functions used across the `Core` impl — timestamps, id
-//! minting, display-name derivation, gate headlines, and posture/permission-mode
-//! mappings. Extracted from `lib.rs` (behavior-identical); `use super::*` brings
-//! the crate's imports (`Posture`, etc.) into scope.
+//! minting, display-name derivation, gate headlines.
+//! Extracted from `lib.rs` (behavior-identical); `use super::*` brings
+//! the crate's imports into scope.
 
 use super::*;
 
@@ -78,36 +78,6 @@ pub(crate) fn gate_headline(gate: &marsad_gates::Gate) -> String {
             .map(|q| q.question.clone())
             .unwrap_or_else(|| "Wants your input".to_string()),
         Gate::Handoff { summary, .. } => summary.clone(),
-    }
-}
-
-/// Map a `permissionMode` string from the claude `system/init` event to the
-/// canonical posture id used in `SessionView` and the Config tab.
-pub(crate) fn permission_mode_to_posture(mode: Option<&str>) -> String {
-    match mode {
-        Some("acceptEdits") => "auto".to_string(),
-        Some("bypassPermissions") => "full".to_string(),
-        _ => "ask".to_string(),
-    }
-}
-
-/// Map a persisted `Posture` variant name (stored in `PersistedSession.posture`)
-/// back to the `permissionMode` string that `SessionState` / `make_session_view`
-/// understand. Unknown → `None` (caller falls back to "ask").
-pub(crate) fn posture_name_to_permission_mode(name: &str) -> Option<&'static str> {
-    match name {
-        "Ask" => Some("default"),
-        "AutoApproveSafe" => Some("acceptEdits"),
-        "FullAutonomy" => Some("bypassPermissions"),
-        _ => None,
-    }
-}
-
-pub(crate) fn posture_to_permission_mode(posture: &Posture) -> &'static str {
-    match posture {
-        Posture::Ask => "default",
-        Posture::AutoApproveSafe => "autoApprove",
-        Posture::FullAutonomy => "bypassPermissions",
     }
 }
 

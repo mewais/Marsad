@@ -69,7 +69,7 @@ fn make_session(id: &str, session_id: Option<&str>) -> PersistedSession {
         model: "claude-sonnet-4-5".to_string(),
         last_phase: "running".to_string(),
 
-        posture: None,
+        mode: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         tools: vec![],

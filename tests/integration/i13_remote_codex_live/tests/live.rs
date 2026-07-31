@@ -55,7 +55,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use marsad_agent::{AgentConfig, ListenSpec};
-use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, Posture, VmUpdate};
+use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, VmUpdate};
 use marsad_events::Phase;
 use marsad_transport::{LocalIpc, Transport};
 use marsad_viewmodel::SessionView;
@@ -324,7 +324,7 @@ fn remote_codex_spec(project: &str, host_target: &str, first_prompt: &str) -> La
             std::env::var("OPENAI_API_KEY").unwrap_or_default(),
         )],
         model: codex_model(),
-        posture: Posture::FullAutonomy,
+        session_mode: "bypassPermissions".to_string(),
         first_prompt: Some(first_prompt.to_string()),
         mode: LaunchMode::Fresh,
         name: None,

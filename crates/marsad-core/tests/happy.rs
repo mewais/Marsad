@@ -12,7 +12,7 @@
 
 use marsad_core::{
     Core, CoreConfig, LaunchMode, LaunchSpec, NotifPref, PersistedSettings, PersistedTemplate,
-    Posture, VmUpdate,
+    VmUpdate,
 };
 use marsad_gates::{approve, Gate};
 use marsad_transport::LoopbackFake;
@@ -26,6 +26,12 @@ use marsad_viewmodel::SlashCmd;
 /// NOTE(test-agent): The exact JSON schema for `IpcMsg::AgentEvent` containing a `SystemInit`
 /// payload is not fully spelled out in proto.md — the test uses a plausible structure matching
 /// the IpcMsg enum. The code-agent must accept this format in `on_agent_line`.
+fn ipc_usage_update(session_id: &str, usage_json: &str) -> String {
+    format!(
+        r#"{{"type":"UsageUpdate","session_id":"{session_id}","usage":{usage_json}}}"#
+    )
+}
+
 fn ipc_agent_event_system_init(session_id: &str) -> String {
     format!(
         r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"{session_id}","model":"claude-opus-4-5","cwd":"/tmp/work","tools":[],"mcp_servers":[],"permissionMode":"default"}}}}"#
@@ -101,7 +107,7 @@ fn launch_session_returns_id_and_sends_ipc() {
         setup: None,
         env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -153,7 +159,7 @@ fn launch_session_on_remote_host_forwards_host_target() {
         setup: None,
         env: Vec::new(),
         model: "claude-haiku-4-5-20251001".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -172,9 +178,9 @@ fn launch_session_on_remote_host_forwards_host_target() {
 }
 
 #[test]
-fn launch_session_forwards_mode_and_posture() {
+fn launch_session_forwards_mode_and_session_mode() {
     let (mut core, mut peer) = make_core();
-    // Continue mode → `"continue":true` plus the posture in the outbound IPC.
+    // Continue mode → `"continue":true` in the outbound IPC.
     core.launch_session(LaunchSpec {
         project: "p".to_string(),
         host_id: "local".to_string(),
@@ -183,7 +189,7 @@ fn launch_session_forwards_mode_and_posture() {
         setup: None,
         env: Vec::new(),
         model: "m".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(), // backend default — no session_mode key emitted
         first_prompt: None,
         mode: LaunchMode::Continue,
         name: None,
@@ -198,12 +204,13 @@ fn launch_session_forwards_mode_and_posture() {
         line.contains("\"continue\":true"),
         "continue mode must be forwarded; got {line}"
     );
+    // Empty session_mode → omitted from the wire (skip_serializing_if = String::is_empty)
     assert!(
-        line.contains("\"posture\":\"Ask\""),
-        "posture must be forwarded; got {line}"
+        !line.contains("\"session_mode\""),
+        "empty session_mode must not appear in wire; got {line}"
     );
 
-    // Resume mode → `"resume_session_id":"<id>"`.
+    // Resume mode + non-empty session_mode → both forwarded.
     core.launch_session(LaunchSpec {
         project: "p".to_string(),
         host_id: "local".to_string(),
@@ -212,7 +219,7 @@ fn launch_session_forwards_mode_and_posture() {
         setup: None,
         env: Vec::new(),
         model: "m".to_string(),
-        posture: Posture::FullAutonomy,
+        session_mode: "bypassPermissions".to_string(),
         first_prompt: None,
         mode: LaunchMode::Resume("uuid-7".to_string()),
         name: None,
@@ -228,8 +235,8 @@ fn launch_session_forwards_mode_and_posture() {
         "resume id must be forwarded; got {line2}"
     );
     assert!(
-        line2.contains("\"posture\":\"FullAutonomy\""),
-        "posture must be forwarded; got {line2}"
+        line2.contains("\"session_mode\":\"bypassPermissions\""),
+        "non-empty session_mode must be forwarded; got {line2}"
     );
 }
 
@@ -244,7 +251,7 @@ fn launch_session_with_first_prompt_includes_prompt_in_ipc() {
         setup: None,
         env: Vec::new(),
         model: "claude-sonnet-4-5".to_string(),
-        posture: Posture::AutoApproveSafe,
+        session_mode: "acceptEdits".to_string(),
         first_prompt: Some("Hello agent".to_string()),
         mode: Default::default(),
         name: None,
@@ -284,7 +291,7 @@ fn resume_session_sends_ipc() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -341,7 +348,7 @@ fn attach_session_sends_ipc() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -382,7 +389,7 @@ fn stop_session_sends_ipc() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::FullAutonomy,
+            session_mode: "bypassPermissions".to_string(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -423,7 +430,7 @@ fn send_prompt_sends_ipc() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -464,7 +471,7 @@ fn interrupt_sends_ipc() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -504,7 +511,7 @@ fn answer_gate_sends_ipc_and_routes_to_one_session() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -560,7 +567,7 @@ fn run_slash_sends_ipc() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -604,7 +611,7 @@ fn set_workspace_sends_ipc() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -639,7 +646,7 @@ fn on_agent_line_init_yields_session_vm_update() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -678,7 +685,7 @@ fn session_name_derives_from_project_basename_with_id_fallback() {
                 setup: None,
                 env: Vec::new(),
                 model: "m".to_string(),
-                posture: Posture::Ask,
+                session_mode: String::new(),
                 first_prompt: None,
                 mode: Default::default(),
                 name: None,
@@ -721,7 +728,7 @@ fn on_agent_line_assistant_yields_session_vm_update() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -757,7 +764,7 @@ fn on_agent_line_control_request_yields_session_needs_update() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -792,7 +799,7 @@ fn on_agent_line_result_success_yields_done_update() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -828,7 +835,7 @@ fn on_agent_line_full_lifecycle_produces_overview_updates() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -917,12 +924,8 @@ fn core_config_fields_are_accessible() {
 }
 
 #[test]
-fn launch_spec_fields_all_postures() {
-    for posture in [
-        Posture::Ask,
-        Posture::AutoApproveSafe,
-        Posture::FullAutonomy,
-    ] {
+fn launch_spec_fields_all_session_modes() {
+    for mode_id in ["", "default", "acceptEdits", "bypassPermissions", "plan"] {
         let spec = LaunchSpec {
             project: "p".to_string(),
             host_id: "h".to_string(),
@@ -931,7 +934,7 @@ fn launch_spec_fields_all_postures() {
             setup: None,
             env: Vec::new(),
             model: "m".to_string(),
-            posture,
+            session_mode: mode_id.to_string(),
             first_prompt: Some("hi".to_string()),
             mode: Default::default(),
             name: None,
@@ -993,7 +996,7 @@ fn git_changes_flow_into_session_view_after_tool_runs() {
             setup: None,
             env: Vec::new(),
             model: "m".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
@@ -1078,7 +1081,7 @@ fn launch_t(core: &mut Core, first_prompt: Option<&str>, mode: LaunchMode) -> St
         setup: None,
         env: Vec::new(),
         model: "m".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: first_prompt.map(|s| s.to_string()),
         mode,
         name: None,
@@ -1537,7 +1540,7 @@ fn add_host_with_launch_config_resolves_into_ipc() {
         setup: None,
         env: Vec::new(),
         model: "claude-haiku-4-5-20251001".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -1576,7 +1579,7 @@ fn launch_spec_env_overrides_host_env() {
         setup: None,
         env: vec![("SPEC".to_string(), "y".to_string())],
         model: "claude-haiku-4-5-20251001".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -1647,7 +1650,7 @@ fn update_host_localhost_config_resolves_into_ipc() {
         setup: None,
         env: Vec::new(),
         model: "claude-haiku-4-5-20251001".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -2040,7 +2043,7 @@ fn set_session_changes_updates_session_view() {
             setup: None,
             env: Vec::new(),
             model: "m".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
@@ -2119,9 +2122,9 @@ fn make_settings() -> PersistedSettings {
         restore_on_launch: true,
         confirm_before_stop: true,
         default_model: "claude-sonnet-4-6".to_string(),
-        default_posture: "ask".to_string(),
         default_driver: "claude".to_string(),
         default_models: Vec::new(),
+        default_modes: Vec::new(),
     }
 }
 
@@ -2129,9 +2132,9 @@ fn make_settings() -> PersistedSettings {
 fn get_settings_returns_defaults_when_empty() {
     let core = core_with_backend(MemoryBackend::new());
     let s = core.get_settings();
-    // Defaults: sonnet model, ask posture, restore_on_launch true
+    // Defaults: sonnet model, empty default_modes, restore_on_launch true
     assert_eq!(s.default_model, "claude-sonnet-4-6");
-    assert_eq!(s.default_posture, "ask");
+    assert!(s.default_modes.is_empty());
     assert!(s.restore_on_launch);
     // All five events must have a default pref
     assert!(s.notif_prefs.contains_key("gate_needs_you"));
@@ -2198,7 +2201,7 @@ fn restart_session_emits_stop_then_launch_with_same_id() {
         setup: None,
         env: Vec::new(),
         model: "claude-sonnet-4-6".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: LaunchMode::Fresh,
         name: None,
@@ -2216,7 +2219,7 @@ fn restart_session_emits_stop_then_launch_with_same_id() {
 
     // Restart with a new model and posture.
     let updates = core
-        .restart_session(&id, "claude-opus-4-8", Posture::FullAutonomy, vec![])
+        .restart_session(&id, "claude-opus-4-8", "bypassPermissions".to_string(), vec![])
         .expect("restart_session should succeed");
 
     // Must emit a VmUpdate::Session for the same id.
@@ -2282,7 +2285,7 @@ fn restart_session_without_uuid_uses_continue_mode() {
         setup: None,
         env: Vec::new(),
         model: "claude-sonnet-4-6".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: LaunchMode::Fresh,
         name: None,
@@ -2295,7 +2298,7 @@ fn restart_session_without_uuid_uses_continue_mode() {
 
     // Restart — no UUID known → should use Continue mode.
     let updates = core
-        .restart_session(&id, "claude-haiku-4-5", Posture::AutoApproveSafe, vec![])
+        .restart_session(&id, "claude-haiku-4-5", "acceptEdits".to_string(), vec![])
         .expect("restart without uuid");
 
     let has_session = updates
@@ -2324,7 +2327,7 @@ fn restart_session_unknown_id_returns_unknown_session_error() {
     use marsad_core::CoreError;
     let (mut core, _peer) = make_core();
     let err = core
-        .restart_session("no-such-session", "model", Posture::Ask, vec![])
+        .restart_session("no-such-session", "model", String::new(), vec![])
         .unwrap_err();
     assert!(
         matches!(err, CoreError::UnknownSession(_)),
@@ -2349,9 +2352,9 @@ fn save_template_then_list_returns_template() {
 }
 
 #[test]
-fn save_template_preserves_model_and_posture() {
+fn save_template_preserves_model_and_mode() {
     let mut core = core_with_backend(MemoryBackend::new());
-    core.save_template("careful", "claude-opus-4-8", "full")
+    core.save_template("careful", "claude-opus-4-8", "bypassPermissions")
         .expect("save_template");
     let templates = core.list_templates().expect("list_templates");
     let t = templates
@@ -2359,7 +2362,7 @@ fn save_template_preserves_model_and_posture() {
         .find(|t| t.name == "careful")
         .expect("template");
     assert_eq!(t.model, "claude-opus-4-8");
-    assert_eq!(t.posture, "full");
+    assert_eq!(t.mode, "bypassPermissions");
 }
 
 #[test]
@@ -2399,7 +2402,7 @@ fn persisted_template_is_accessible_via_core_reexport() {
     let t = PersistedTemplate {
         name: "test".to_string(),
         model: "claude-sonnet-4-6".to_string(),
-        posture: "ask".to_string(),
+        mode: "default".to_string(),
     };
     assert_eq!(t.name, "test");
 }
@@ -2422,7 +2425,7 @@ fn seed_session(seed: &mut Store, id: &str, host_id: &str, claude_uuid: Option<&
         branch: "main".to_string(),
         model: "claude-opus-4-8".to_string(),
         last_phase: "Working".to_string(),
-        posture: None,
+        mode: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         slash_commands: vec![],
@@ -2544,7 +2547,7 @@ fn load_sessions_seeds_usage_for_local_session() {
         branch: "main".to_string(),
         model: "claude-sonnet-4-5".to_string(),
         last_phase: "Done".to_string(),
-        posture: None,
+        mode: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         slash_commands: vec![],
@@ -2635,7 +2638,7 @@ fn load_sessions_does_not_seed_claude_usage_for_opencode() {
         branch: "main".to_string(),
         model: "amd-anthropic/Claude-Sonnet-5".to_string(),
         last_phase: "Done".to_string(),
-        posture: None,
+        mode: None,
         disallowed_tools: vec![],
         driver: "opencode".to_string(),
         slash_commands: vec![],
@@ -2725,7 +2728,7 @@ fn result_event_does_not_clobber_whole_conversation_usage() {
         branch: "main".to_string(),
         model: "claude-sonnet-4-5".to_string(),
         last_phase: "Done".to_string(),
-        posture: None,
+        mode: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         slash_commands: vec![],
@@ -2812,7 +2815,7 @@ fn system_init_persists_and_restores_tools_and_mcp_servers() {
         branch: "main".to_string(),
         model: "claude-sonnet-4-5".to_string(),
         last_phase: "Working".to_string(),
-        posture: None,
+        mode: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         slash_commands: vec![],
@@ -3132,7 +3135,7 @@ fn launch_session_with_custom_name_uses_name_in_view() {
         setup: None,
         env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: Default::default(),
         name: Some("My Named Session".to_string()),
@@ -3186,7 +3189,7 @@ fn load_sessions_restores_custom_name() {
         branch: "main".to_string(),
         model: "claude-opus-4-8".to_string(),
         last_phase: "Working".to_string(),
-        posture: None,
+        mode: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         slash_commands: vec![],
@@ -3226,7 +3229,7 @@ fn answer_question_sends_ipc() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -3281,7 +3284,7 @@ fn on_agent_line_changes_update_populates_session_changes() {
             setup: None,
             env: Vec::new(),
             model: "claude-sonnet-4-6".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
@@ -3327,7 +3330,7 @@ fn remote_session_changes_survive_result_event() {
             setup: None,
             env: Vec::new(),
             model: "claude-opus-4-8".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
@@ -3402,7 +3405,7 @@ fn session_view_exposes_model_usage_after_result_with_model_usage() {
             setup: None,
             env: Vec::new(),
             model: "claude-sonnet-4-6".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
@@ -3807,7 +3810,7 @@ fn session_view_exposes_running_subagents_count() {
             setup: None,
             env: Vec::new(),
             model: "claude-sonnet-4-6".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
@@ -3885,7 +3888,7 @@ fn launch_session_with_disallowed_tools_includes_field_in_ipc() {
             setup: None,
             env: vec![],
             model: "claude-opus-4-5".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -3907,19 +3910,20 @@ fn launch_session_with_disallowed_tools_includes_field_in_ipc() {
 }
 
 // ---------------------------------------------------------------------------
-// SessionView posture — reflects real permissionMode from system/init
+// SessionView current_mode — reflects real permissionMode from system/init
 // ---------------------------------------------------------------------------
 
-/// Helper: build an AgentEvent with a given permissionMode for posture tests.
+/// Helper: build an AgentEvent with a given permissionMode for current_mode tests.
+/// Includes a non-empty `claude_code_version` so the reducer populates `current_mode`.
 fn ipc_agent_event_init_with_mode(session_id: &str, mode: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"claude-uuid","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"{mode}"}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"claude-uuid","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"{mode}","claude_code_version":"1.2.3"}}}}"#
     )
 }
 
-/// After system/init with permissionMode "default", posture must be "ask".
+/// After system/init with permissionMode "default", current_mode must be set.
 #[test]
-fn session_view_posture_default_maps_to_ask() {
+fn session_view_current_mode_set_from_init() {
     let (mut core, _peer) = make_core();
     let id = core
         .launch_session(LaunchSpec {
@@ -3930,45 +3934,7 @@ fn session_view_posture_default_maps_to_ask() {
             setup: None,
             env: vec![],
             model: "m".to_string(),
-            posture: Posture::Ask,
-            first_prompt: None,
-            mode: Default::default(),
-            name: None,
-            disallowed_tools: vec![],
-            wasl: false,
-            driver: "claude".to_string(),
-        })
-        .expect("launch");
-    let updates = core
-        .on_agent_line(&ipc_agent_event_init_with_mode(&id, "default"))
-        .expect("init");
-    let sv = updates
-        .iter()
-        .find_map(|u| {
-            if let VmUpdate::Session(s) = u {
-                Some(s)
-            } else {
-                None
-            }
-        })
-        .expect("Session");
-    assert_eq!(sv.posture, "ask", "permissionMode=default → posture=ask");
-}
-
-/// After system/init with permissionMode "acceptEdits", posture must be "auto".
-#[test]
-fn session_view_posture_accept_edits_maps_to_auto() {
-    let (mut core, _peer) = make_core();
-    let id = core
-        .launch_session(LaunchSpec {
-            project: "/p".to_string(),
-            host_id: "local".to_string(),
-            host_target: None,
-            claude_bin: None,
-            setup: None,
-            env: vec![],
-            model: "m".to_string(),
-            posture: Posture::AutoApproveSafe,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -3989,16 +3955,17 @@ fn session_view_posture_accept_edits_maps_to_auto() {
                 None
             }
         })
-        .expect("Session");
+        .expect("Session update");
     assert_eq!(
-        sv.posture, "auto",
-        "permissionMode=acceptEdits → posture=auto"
+        sv.current_mode.as_deref(), Some("acceptEdits"),
+        "permissionMode from system/init must appear as current_mode"
     );
 }
 
-/// After system/init with permissionMode "bypassPermissions", posture must be "full".
+/// A session launched with session_mode carries it as permission_mode (seeded
+/// from launch spec before system/init arrives).
 #[test]
-fn session_view_posture_bypass_maps_to_full() {
+fn launch_session_mode_seeds_permission_mode_before_init() {
     let (mut core, _peer) = make_core();
     let id = core
         .launch_session(LaunchSpec {
@@ -4009,7 +3976,7 @@ fn session_view_posture_bypass_maps_to_full() {
             setup: None,
             env: vec![],
             model: "m".to_string(),
-            posture: Posture::FullAutonomy,
+            session_mode: "bypassPermissions".to_string(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -4018,590 +3985,15 @@ fn session_view_posture_bypass_maps_to_full() {
             driver: "claude".to_string(),
         })
         .expect("launch");
-    let updates = core
-        .on_agent_line(&ipc_agent_event_init_with_mode(&id, "bypassPermissions"))
-        .expect("init");
-    let sv = updates
-        .iter()
-        .find_map(|u| {
-            if let VmUpdate::Session(s) = u {
-                Some(s)
-            } else {
-                None
-            }
-        })
-        .expect("Session");
-    assert_eq!(
-        sv.posture, "full",
-        "permissionMode=bypassPermissions → posture=full"
-    );
-}
-
-/// Before system/init, posture defaults to "ask".
-#[test]
-fn session_view_posture_defaults_to_ask_before_init() {
-    let (mut core, _peer) = make_core();
-    let _id = core
-        .launch_session(LaunchSpec {
-            project: "/p".to_string(),
-            host_id: "local".to_string(),
-            host_target: None,
-            claude_bin: None,
-            setup: None,
-            env: vec![],
-            model: "m".to_string(),
-            posture: Posture::Ask,
-            first_prompt: None,
-            mode: Default::default(),
-            name: None,
-            disallowed_tools: vec![],
-            wasl: false,
-            driver: "claude".to_string(),
-        })
-        .expect("launch");
-    // Without any init event, the snapshot's posture must default to "ask".
+    // Check available via state.permission_mode — before any init fires.
+    // The session state permission_mode is seeded from session_mode.
+    // (The current_mode is from the live stream; before init it comes from the launch.)
     let snap = core.snapshot();
-    let sv = snap.sessions.first().expect("session in snap");
-    assert_eq!(
-        sv.posture, "ask",
-        "posture must default to 'ask' before system/init"
-    );
+    let sv = snap.sessions.iter().find(|s| s.id == id).expect("session");
+    // available_modes is empty (no init yet); the session is running in the requested mode.
+    assert!(sv.available_modes.is_empty(), "available_modes empty before system/init");
 }
 
-/// Unknown permissionMode falls back to "ask".
-#[test]
-fn session_view_posture_unknown_mode_falls_back_to_ask() {
-    let (mut core, _peer) = make_core();
-    let id = core
-        .launch_session(LaunchSpec {
-            project: "/p".to_string(),
-            host_id: "local".to_string(),
-            host_target: None,
-            claude_bin: None,
-            setup: None,
-            env: vec![],
-            model: "m".to_string(),
-            posture: Posture::Ask,
-            first_prompt: None,
-            mode: Default::default(),
-            name: None,
-            disallowed_tools: vec![],
-            wasl: false,
-            driver: "claude".to_string(),
-        })
-        .expect("launch");
-    let updates = core
-        .on_agent_line(&ipc_agent_event_init_with_mode(&id, "someUnknownMode"))
-        .expect("init");
-    let sv = updates
-        .iter()
-        .find_map(|u| {
-            if let VmUpdate::Session(s) = u {
-                Some(s)
-            } else {
-                None
-            }
-        })
-        .expect("Session");
-    assert_eq!(sv.posture, "ask", "unknown permissionMode → posture=ask");
-}
-
-// ---------------------------------------------------------------------------
-// Feature #2: UsageUpdate — project-wide per-model usage
-// ---------------------------------------------------------------------------
-
-/// Helper: build a UsageUpdate IPC line for tests.
-fn ipc_usage_update(session_id: &str, usage_json: &str) -> String {
-    format!(r#"{{"type":"UsageUpdate","session_id":"{session_id}","usage":{usage_json}}}"#)
-}
-
-/// A UsageUpdate with two real models populates model_usage with correct costs
-/// and supersedes any prior result-event usage.
-#[test]
-fn usage_update_populates_two_model_rows_with_correct_cost() {
-    let (mut core, _peer) = make_core();
-    let id = core
-        .launch_session(LaunchSpec {
-            project: "/p".to_string(),
-            host_id: "local".to_string(),
-            host_target: None,
-            claude_bin: None,
-            setup: None,
-            env: vec![],
-            model: "m".to_string(),
-            posture: Posture::Ask,
-            first_prompt: None,
-            mode: Default::default(),
-            name: None,
-            disallowed_tools: vec![],
-            wasl: false,
-            driver: "claude".to_string(),
-        })
-        .expect("launch");
-    core.on_agent_line(&ipc_agent_event_system_init(&id))
-        .expect("init");
-
-    // Feed a UsageUpdate with two models (opus + sonnet).
-    // 1_000 input tokens on Opus 4.8 = 1000 / 1_000_000 * 5 = $0.005
-    // 2_000 output tokens on sonnet  = 2000 / 1_000_000 * 15 = $0.030
-    let usage = r#"{"claude-opus-4-8":{"input":1000,"output":0,"cache_read":0,"cache_creation":0},"claude-sonnet-4-6":{"input":0,"output":2000,"cache_read":0,"cache_creation":0}}"#;
-    let updates = core
-        .on_agent_line(&ipc_usage_update(&id, usage))
-        .expect("usage_update");
-
-    let sv = updates
-        .iter()
-        .find_map(|u| {
-            if let VmUpdate::Session(s) = u {
-                Some(s)
-            } else {
-                None
-            }
-        })
-        .expect("Session");
-    assert_eq!(sv.model_usage.len(), 2, "must have 2 model rows");
-    // Sorted by model name: opus before sonnet alphabetically.
-    let opus = sv
-        .model_usage
-        .iter()
-        .find(|r| r.model.contains("opus"))
-        .expect("opus row");
-    let sonnet = sv
-        .model_usage
-        .iter()
-        .find(|r| r.model.contains("sonnet"))
-        .expect("sonnet row");
-    assert_eq!(opus.input_tokens, 1000);
-    assert!(
-        (opus.cost_usd - 0.005).abs() < 1e-6,
-        "opus cost wrong: {}",
-        opus.cost_usd
-    );
-    assert_eq!(sonnet.output_tokens, 2000);
-    assert!(
-        (sonnet.cost_usd - 0.030).abs() < 1e-6,
-        "sonnet cost wrong: {}",
-        sonnet.cost_usd
-    );
-}
-
-/// UsageUpdate for an unknown session is a no-op (returns empty vec).
-#[test]
-fn usage_update_unknown_session_is_noop() {
-    let (mut core, _peer) = make_core();
-    let updates = core
-        .on_agent_line(&ipc_usage_update(
-            "no-such-session",
-            r#"{"claude-opus-4-8":{"input":100,"output":0,"cache_read":0,"cache_creation":0}}"#,
-        ))
-        .expect("unknown session is ok (no-op)");
-    assert!(
-        updates.is_empty(),
-        "unknown session must produce no updates"
-    );
-}
-
-/// UsageUpdate with missing session_id is a Protocol error.
-#[test]
-fn usage_update_missing_session_id_is_error() {
-    let (mut core, _peer) = make_core();
-    let bad_line = r#"{"type":"UsageUpdate","usage":{"claude-opus-4-8":{"input":1,"output":0,"cache_read":0,"cache_creation":0}}}"#;
-    let result = core.on_agent_line(bad_line);
-    assert!(
-        result.is_err(),
-        "missing session_id must be a Protocol error"
-    );
-}
-
-/// UsageUpdate filters out the <synthetic> pseudo-model.
-#[test]
-fn usage_update_filters_synthetic_model() {
-    let (mut core, _peer) = make_core();
-    let id = core
-        .launch_session(LaunchSpec {
-            project: "/p".to_string(),
-            host_id: "local".to_string(),
-            host_target: None,
-            claude_bin: None,
-            setup: None,
-            env: vec![],
-            model: "m".to_string(),
-            posture: Posture::Ask,
-            first_prompt: None,
-            mode: Default::default(),
-            name: None,
-            disallowed_tools: vec![],
-            wasl: false,
-            driver: "claude".to_string(),
-        })
-        .expect("launch");
-    core.on_agent_line(&ipc_agent_event_system_init(&id))
-        .expect("init");
-
-    // Usage includes synthetic which must be dropped, real model kept.
-    let usage = r#"{"<synthetic>":{"input":999,"output":999,"cache_read":0,"cache_creation":0},"claude-haiku-4-5":{"input":500,"output":100,"cache_read":0,"cache_creation":0}}"#;
-    let updates = core
-        .on_agent_line(&ipc_usage_update(&id, usage))
-        .expect("usage_update");
-    let sv = updates
-        .iter()
-        .find_map(|u| {
-            if let VmUpdate::Session(s) = u {
-                Some(s)
-            } else {
-                None
-            }
-        })
-        .expect("Session");
-    assert_eq!(sv.model_usage.len(), 1, "synthetic must be filtered out");
-    assert!(
-        sv.model_usage[0].model.contains("haiku"),
-        "only haiku row must remain"
-    );
-}
-
-/// UsageUpdate filters zero-usage rows.
-#[test]
-fn usage_update_filters_zero_usage_rows() {
-    let (mut core, _peer) = make_core();
-    let id = core
-        .launch_session(LaunchSpec {
-            project: "/p".to_string(),
-            host_id: "local".to_string(),
-            host_target: None,
-            claude_bin: None,
-            setup: None,
-            env: vec![],
-            model: "m".to_string(),
-            posture: Posture::Ask,
-            first_prompt: None,
-            mode: Default::default(),
-            name: None,
-            disallowed_tools: vec![],
-            wasl: false,
-            driver: "claude".to_string(),
-        })
-        .expect("launch");
-    core.on_agent_line(&ipc_agent_event_system_init(&id))
-        .expect("init");
-
-    let usage = r#"{"claude-opus-4-8":{"input":0,"output":0,"cache_read":0,"cache_creation":0},"claude-sonnet-4-6":{"input":100,"output":50,"cache_read":0,"cache_creation":0}}"#;
-    let updates = core
-        .on_agent_line(&ipc_usage_update(&id, usage))
-        .expect("usage_update");
-    let sv = updates
-        .iter()
-        .find_map(|u| {
-            if let VmUpdate::Session(s) = u {
-                Some(s)
-            } else {
-                None
-            }
-        })
-        .expect("Session");
-    assert_eq!(
-        sv.model_usage.len(),
-        1,
-        "zero-usage opus row must be filtered"
-    );
-    assert!(sv.model_usage[0].model.contains("sonnet"));
-}
-
-/// UsageUpdate with an empty payload (all models filtered out) does NOT clear
-/// pre-existing model_usage.  This guards against an attach-time probe that
-/// returns an empty JSON object `{}` wiping a good backfill that arrived first.
-#[test]
-fn usage_update_empty_payload_does_not_clear_existing_model_usage() {
-    let (mut core, _peer) = make_core();
-    let id = core
-        .launch_session(LaunchSpec {
-            project: "/p".to_string(),
-            host_id: "local".to_string(),
-            host_target: None,
-            claude_bin: None,
-            setup: None,
-            env: vec![],
-            model: "m".to_string(),
-            posture: Posture::Ask,
-            first_prompt: None,
-            mode: Default::default(),
-            name: None,
-            disallowed_tools: vec![],
-            wasl: false,
-            driver: "claude".to_string(),
-        })
-        .expect("launch");
-    core.on_agent_line(&ipc_agent_event_system_init(&id))
-        .expect("init");
-
-    // Seed a real usage row via a valid UsageUpdate.
-    let good_usage =
-        r#"{"claude-sonnet-4-6":{"input":1000,"output":500,"cache_read":0,"cache_creation":0}}"#;
-    let u1 = core
-        .on_agent_line(&ipc_usage_update(&id, good_usage))
-        .expect("good usage");
-    let sv1 = u1
-        .iter()
-        .find_map(|u| {
-            if let VmUpdate::Session(s) = u {
-                Some(s)
-            } else {
-                None
-            }
-        })
-        .expect("Session");
-    assert_eq!(
-        sv1.model_usage.len(),
-        1,
-        "pre-condition: one model row seeded"
-    );
-
-    // Now feed an empty UsageUpdate (e.g. an attach-time probe before any turns).
-    // This must NOT clear the existing row.
-    let line_empty = format!(r#"{{"type":"UsageUpdate","session_id":"{id}","usage":{{}}}}"#);
-    let u2 = core.on_agent_line(&line_empty).expect("empty usage is ok");
-    assert!(
-        u2.is_empty(),
-        "empty usage must produce no VmUpdate (no-op)"
-    );
-
-    // The existing model_usage must still be intact.
-    let snap = core.snapshot();
-    let sv2 = snap
-        .sessions
-        .iter()
-        .find(|s| s.id == id)
-        .expect("session still present");
-    assert_eq!(
-        sv2.model_usage.len(),
-        1,
-        "empty UsageUpdate must NOT clear existing model_usage; got {:?}",
-        sv2.model_usage
-    );
-    assert!(
-        sv2.model_usage[0].model.contains("sonnet"),
-        "sonnet row must survive"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Posture-persistence bug fix — reconnect scenario tests
-//
-// These test the RECONNECT path: a session is restored from the store via
-// load_sessions() WITHOUT a subsequent system/init event.  The persisted
-// posture must be visible in the SessionView immediately.
-// ---------------------------------------------------------------------------
-
-/// Helper: seed a session with a specific posture string into the store.
-fn seed_session_with_posture(seed: &mut Store, id: &str, posture: Option<&str>) {
-    seed.upsert_session(&PersistedSession {
-        id: id.to_string(),
-        session_id: Some("claude-uuid-xyz".to_string()),
-        name: id.to_string(),
-        host_id: "local".to_string(),
-        host_target: None,
-        claude_bin: None,
-        setup: None,
-        env: Vec::new(),
-        project: "/work/proj".to_string(),
-        branch: "main".to_string(),
-        model: "claude-opus-4-8".to_string(),
-        last_phase: "Done".to_string(),
-        posture: posture.map(|s| s.to_string()),
-        disallowed_tools: vec![],
-        driver: "claude".to_string(),
-        slash_commands: vec![],
-        tools: vec![],
-        mcp_servers: vec![],
-    })
-    .expect("seed session with posture");
-}
-
-/// RECONNECT: persisted posture "AutoApproveSafe" restores as "auto" WITHOUT system/init.
-#[test]
-fn load_sessions_restores_auto_approve_safe_posture_without_init() {
-    let backend = MemoryBackend::new();
-    let mut seed = Store::new(Box::new(backend.clone()));
-    seed_session_with_posture(&mut seed, "session-posture-auto", Some("AutoApproveSafe"));
-
-    let mut core = core_with_backend(backend);
-    core.load_sessions().expect("load_sessions");
-
-    // No system/init event — posture must come from the persisted record.
-    let snap = core.snapshot();
-    let sv = snap
-        .sessions
-        .iter()
-        .find(|s| s.id == "session-posture-auto")
-        .expect("restored session present");
-    assert_eq!(
-        sv.posture, "auto",
-        "persisted AutoApproveSafe must restore as 'auto' without system/init"
-    );
-}
-
-/// RECONNECT: persisted posture "FullAutonomy" restores as "full" WITHOUT system/init.
-#[test]
-fn load_sessions_restores_full_autonomy_posture_without_init() {
-    let backend = MemoryBackend::new();
-    let mut seed = Store::new(Box::new(backend.clone()));
-    seed_session_with_posture(&mut seed, "session-posture-full", Some("FullAutonomy"));
-
-    let mut core = core_with_backend(backend);
-    core.load_sessions().expect("load_sessions");
-
-    let snap = core.snapshot();
-    let sv = snap
-        .sessions
-        .iter()
-        .find(|s| s.id == "session-posture-full")
-        .expect("restored session present");
-    assert_eq!(
-        sv.posture, "full",
-        "persisted FullAutonomy must restore as 'full' without system/init"
-    );
-}
-
-/// RECONNECT: persisted posture "Ask" restores as "ask" WITHOUT system/init.
-#[test]
-fn load_sessions_restores_ask_posture_without_init() {
-    let backend = MemoryBackend::new();
-    let mut seed = Store::new(Box::new(backend.clone()));
-    seed_session_with_posture(&mut seed, "session-posture-ask", Some("Ask"));
-
-    let mut core = core_with_backend(backend);
-    core.load_sessions().expect("load_sessions");
-
-    let snap = core.snapshot();
-    let sv = snap
-        .sessions
-        .iter()
-        .find(|s| s.id == "session-posture-ask")
-        .expect("restored session present");
-    assert_eq!(
-        sv.posture, "ask",
-        "persisted Ask must restore as 'ask' without system/init"
-    );
-}
-
-/// RECONNECT: persisted posture None (absent) falls back to "ask".
-#[test]
-fn load_sessions_none_posture_falls_back_to_ask() {
-    let backend = MemoryBackend::new();
-    let mut seed = Store::new(Box::new(backend.clone()));
-    seed_session_with_posture(&mut seed, "session-posture-none", None);
-
-    let mut core = core_with_backend(backend);
-    core.load_sessions().expect("load_sessions");
-
-    let snap = core.snapshot();
-    let sv = snap
-        .sessions
-        .iter()
-        .find(|s| s.id == "session-posture-none")
-        .expect("restored session present");
-    assert_eq!(sv.posture, "ask", "absent posture must fall back to 'ask'");
-}
-
-/// RECONNECT: an unrecognised persisted posture string falls back to "ask"
-/// (exercises the `_ => None` arm of `posture_name_to_permission_mode`).
-#[test]
-fn load_sessions_unrecognised_posture_falls_back_to_ask() {
-    let backend = MemoryBackend::new();
-    let mut seed = Store::new(Box::new(backend.clone()));
-    seed_session_with_posture(
-        &mut seed,
-        "session-posture-unknown",
-        Some("SomeUnknownPosture"),
-    );
-
-    let mut core = core_with_backend(backend);
-    core.load_sessions().expect("load_sessions");
-
-    let snap = core.snapshot();
-    let sv = snap
-        .sessions
-        .iter()
-        .find(|s| s.id == "session-posture-unknown")
-        .expect("restored session present");
-    assert_eq!(
-        sv.posture, "ask",
-        "unrecognised posture name must fall back to 'ask'"
-    );
-}
-
-/// LAUNCH path: freshly launched session with AutoApproveSafe shows "auto"
-/// BEFORE any system/init arrives.
-#[test]
-fn launch_session_auto_approve_safe_posture_visible_before_init() {
-    let (mut core, _peer) = make_core();
-    let id = core
-        .launch_session(LaunchSpec {
-            project: "/p".to_string(),
-            host_id: "local".to_string(),
-            host_target: None,
-            claude_bin: None,
-            setup: None,
-            env: vec![],
-            model: "m".to_string(),
-            posture: Posture::AutoApproveSafe,
-            first_prompt: None,
-            mode: Default::default(),
-            name: None,
-            disallowed_tools: vec![],
-            wasl: false,
-            driver: "claude".to_string(),
-        })
-        .expect("launch");
-
-    // No system/init fed — posture must already reflect the launch spec.
-    let snap = core.snapshot();
-    let sv = snap
-        .sessions
-        .iter()
-        .find(|s| s.id == id)
-        .expect("session in snapshot");
-    assert_eq!(
-        sv.posture, "auto",
-        "freshly launched AutoApproveSafe session must show 'auto' before system/init"
-    );
-}
-
-/// LAUNCH path: freshly launched session with FullAutonomy shows "full"
-/// BEFORE any system/init arrives.
-#[test]
-fn launch_session_full_autonomy_posture_visible_before_init() {
-    let (mut core, _peer) = make_core();
-    let id = core
-        .launch_session(LaunchSpec {
-            project: "/p".to_string(),
-            host_id: "local".to_string(),
-            host_target: None,
-            claude_bin: None,
-            setup: None,
-            env: vec![],
-            model: "m".to_string(),
-            posture: Posture::FullAutonomy,
-            first_prompt: None,
-            mode: Default::default(),
-            name: None,
-            disallowed_tools: vec![],
-            wasl: false,
-            driver: "claude".to_string(),
-        })
-        .expect("launch");
-
-    let snap = core.snapshot();
-    let sv = snap
-        .sessions
-        .iter()
-        .find(|s| s.id == id)
-        .expect("session in snapshot");
-    assert_eq!(
-        sv.posture, "full",
-        "freshly launched FullAutonomy session must show 'full' before system/init"
-    );
-}
 
 // ---------------------------------------------------------------------------
 // GAP 1: restart_session must carry persisted setup/env/claude_bin
@@ -4630,7 +4022,7 @@ fn restart_session_carries_persisted_setup_env_claude_bin() {
         branch: "main".to_string(),
         model: "claude-sonnet-4-6".to_string(),
         last_phase: "Working".to_string(),
-        posture: Some("Ask".to_string()),
+        mode: None,
         disallowed_tools: vec![],
         driver: "claude".to_string(),
         slash_commands: vec![],
@@ -4659,7 +4051,7 @@ fn restart_session_carries_persisted_setup_env_claude_bin() {
     let _ = peer.drain_outbound(); // discard any load-time IPC
 
     // Now restart with a new model/posture.
-    core.restart_session(session_id, "claude-opus-4-8", Posture::FullAutonomy, vec![])
+    core.restart_session(session_id, "claude-opus-4-8", "bypassPermissions".to_string(), vec![])
         .expect("restart_session must succeed");
 
     let outbound = peer.drain_outbound();
@@ -4705,7 +4097,7 @@ fn restart_session_absent_persisted_record_does_not_panic() {
             setup: None,
             env: Vec::new(),
             model: "claude-sonnet-4-6".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: LaunchMode::Fresh,
             name: None,
@@ -4718,7 +4110,7 @@ fn restart_session_absent_persisted_record_does_not_panic() {
 
     // Restart — no persisted record in the store → should NOT panic, and must
     // still emit StopSession + LaunchSession.
-    let result = core.restart_session(&id, "claude-haiku-4-5", Posture::Ask, vec![]);
+    let result = core.restart_session(&id, "claude-haiku-4-5", String::new(), vec![]);
     assert!(
         result.is_ok(),
         "restart must succeed even when persisted record is absent, got: {:?}",
@@ -4747,11 +4139,11 @@ fn restart_session_absent_persisted_record_does_not_panic() {
     );
 }
 
-/// system/init OVERRIDES the launch posture: launched with AutoApproveSafe ("auto"),
-/// but system/init reports "bypassPermissions" → posture becomes "full".
+/// system/init OVERRIDES the launch session_mode: launched with "acceptEdits",
+/// but system/init reports "bypassPermissions" → current_mode becomes "bypassPermissions".
 /// Verifies that system/init remains authoritative even after the fix.
 #[test]
-fn system_init_overrides_launch_posture() {
+fn system_init_overrides_launch_session_mode() {
     let (mut core, _peer) = make_core();
     let id = core
         .launch_session(LaunchSpec {
@@ -4762,7 +4154,7 @@ fn system_init_overrides_launch_posture() {
             setup: None,
             env: vec![],
             model: "m".to_string(),
-            posture: Posture::AutoApproveSafe,
+            session_mode: "acceptEdits".to_string(),
             first_prompt: None,
             mode: Default::default(),
             name: None,
@@ -4772,16 +4164,7 @@ fn system_init_overrides_launch_posture() {
         })
         .expect("launch");
 
-    // Before init: must show "auto" from the launch spec.
-    let snap_before = core.snapshot();
-    let sv_before = snap_before
-        .sessions
-        .iter()
-        .find(|s| s.id == id)
-        .expect("session");
-    assert_eq!(sv_before.posture, "auto", "pre-init posture must be 'auto'");
-
-    // Feed system/init with bypassPermissions — must override to "full".
+    // Feed system/init with bypassPermissions — current_mode must update.
     let updates = core
         .on_agent_line(&ipc_agent_event_init_with_mode(&id, "bypassPermissions"))
         .expect("system/init");
@@ -4796,8 +4179,9 @@ fn system_init_overrides_launch_posture() {
         })
         .expect("Session update from system/init");
     assert_eq!(
-        sv_after.posture, "full",
-        "system/init bypassPermissions must override launch posture to 'full'"
+        sv_after.current_mode.as_deref(),
+        Some("bypassPermissions"),
+        "system/init bypassPermissions must set current_mode to bypassPermissions"
     );
 }
 
@@ -4917,7 +4301,7 @@ fn usage_update_seeds_tokens_when_no_live_result() {
             setup: None,
             env: vec![],
             model: "claude-sonnet-4-6".to_string(),
-            posture: Posture::Ask,
+            session_mode: String::new(),
             first_prompt: None,
             mode: Default::default(),
             name: None,

@@ -87,7 +87,7 @@ fn basic_launch_spec() -> LaunchSpec {
         setup: None,
         env: Vec::new(),
         model: "claude-opus-4-5".to_string(),
-        posture: marsad_proto::Posture::Ask,
+        session_mode: String::new(), // empty = backend default; no --permission-mode flag
         first_prompt: None,
         mode: Default::default(),
         name: None,
@@ -113,8 +113,9 @@ fn agent_with_container(container: FakeContainer) -> Agent {
 // tests/happy.rs already pins.
 // ---------------------------------------------------------------------------
 
+/// Base: empty session_mode (backend default) — no --permission-mode flag at all.
 #[test]
-fn claude_argv_wasl_false_byte_identical_to_today_ask_baseline() {
+fn claude_argv_wasl_false_empty_session_mode_baseline() {
     let mut spec = basic_launch_spec();
     spec.wasl = false;
     let argv = claude_argv(&spec);
@@ -130,20 +131,19 @@ fn claude_argv_wasl_false_byte_identical_to_today_ask_baseline() {
             "--verbose",
             "--model",
             "claude-opus-4-5",
-            "--permission-mode",
-            "default",
             "--permission-prompt-tool",
             "stdio",
         ]),
-        "wasl:false must produce EXACTLY today's argv, no more no less"
+        "wasl:false with empty session_mode must produce argv without --permission-mode"
     );
 }
 
+/// acceptEdits mode: --permission-mode acceptEdits injected.
 #[test]
 fn claude_argv_wasl_false_byte_identical_to_today_auto_approve_safe_baseline() {
     let mut spec = basic_launch_spec();
     spec.wasl = false;
-    spec.posture = marsad_proto::Posture::AutoApproveSafe;
+    spec.session_mode = "acceptEdits".to_string();
     let argv = claude_argv(&spec);
     assert_eq!(
         argv,
@@ -165,11 +165,12 @@ fn claude_argv_wasl_false_byte_identical_to_today_auto_approve_safe_baseline() {
     );
 }
 
+/// bypassPermissions mode: --permission-mode bypassPermissions injected.
 #[test]
 fn claude_argv_wasl_false_byte_identical_to_today_full_autonomy_baseline() {
     let mut spec = basic_launch_spec();
     spec.wasl = false;
-    spec.posture = marsad_proto::Posture::FullAutonomy;
+    spec.session_mode = "bypassPermissions".to_string();
     let argv = claude_argv(&spec);
     assert_eq!(
         argv,
@@ -209,8 +210,6 @@ fn claude_argv_wasl_false_byte_identical_to_today_continue_baseline() {
             "--verbose",
             "--model",
             "claude-opus-4-5",
-            "--permission-mode",
-            "default",
             "--permission-prompt-tool",
             "stdio",
             "--continue",
@@ -236,8 +235,6 @@ fn claude_argv_wasl_false_byte_identical_to_today_resume_baseline() {
             "--verbose",
             "--model",
             "claude-opus-4-5",
-            "--permission-mode",
-            "default",
             "--permission-prompt-tool",
             "stdio",
             "--resume",
@@ -264,8 +261,6 @@ fn claude_argv_wasl_false_byte_identical_to_today_disallowed_tools_baseline() {
             "--verbose",
             "--model",
             "claude-opus-4-5",
-            "--permission-mode",
-            "default",
             "--permission-prompt-tool",
             "stdio",
             "--disallowedTools",
@@ -292,8 +287,6 @@ fn claude_argv_wasl_false_byte_identical_to_today_claude_bin_baseline() {
             "--verbose",
             "--model",
             "claude-opus-4-5",
-            "--permission-mode",
-            "default",
             "--permission-prompt-tool",
             "stdio",
         ])
@@ -332,6 +325,7 @@ fn claude_argv_wasl_true_injects_mcp_config_flag_referencing_wasl_mcpd() {
 
 /// wasl=true must be purely ADDITIVE — every flag `claude_argv` emits today
 /// must still be present (in some order) alongside `--mcp-config`.
+/// Empty session_mode → no --permission-mode flag (backend default).
 #[test]
 fn claude_argv_wasl_true_does_not_remove_or_replace_existing_flags() {
     let mut spec = basic_launch_spec();
@@ -353,11 +347,11 @@ fn claude_argv_wasl_true_does_not_remove_or_replace_existing_flags() {
         Some("claude-opus-4-5")
     );
 
-    let perm_idx = argv
-        .iter()
-        .position(|a| a == "--permission-mode")
-        .expect("--permission-mode must still be present when wasl:true");
-    assert_eq!(argv.get(perm_idx + 1).map(String::as_str), Some("default"));
+    // Empty session_mode → no --permission-mode flag (backend default, omitted).
+    assert!(
+        !argv.iter().any(|a| a == "--permission-mode"),
+        "empty session_mode + wasl:true must NOT emit --permission-mode; argv: {argv:?}"
+    );
 
     let prompt_idx = argv
         .iter()

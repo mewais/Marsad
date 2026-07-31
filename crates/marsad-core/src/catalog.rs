@@ -352,9 +352,9 @@ impl Core {
             restore_on_launch: true,
             confirm_before_stop: true,
             default_model: "claude-sonnet-4-6".to_string(),
-            default_posture: "ask".to_string(),
             default_driver: "claude".to_string(),
             default_models: Vec::new(),
+            default_modes: Vec::new(),
         }
     }
 

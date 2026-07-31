@@ -13,7 +13,7 @@
 //! `marsad_viewmodel::workstream_cost_breakdown`). That is the expected
 //! tests-first signal.
 
-use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, Posture};
+use marsad_core::{Core, CoreConfig, LaunchMode, LaunchSpec, };
 use marsad_store::MemoryBackend;
 use marsad_transport::LoopbackFake;
 
@@ -46,7 +46,7 @@ fn launch(core: &mut Core, project: &str, host_id: &str) -> String {
         setup: None,
         env: Vec::new(),
         model: "claude-sonnet-4-6".to_string(),
-        posture: Posture::Ask,
+        session_mode: String::new(),
         first_prompt: None,
         mode: LaunchMode::Fresh,
         name: None,
