@@ -58,6 +58,29 @@ const TWO_QUESTIONS: SessionView = {
   },
 } as SessionView;
 
+const ONE_QUESTION: SessionView = {
+  ...MOCK_SNAPSHOT.sessions[0],
+  id: "sQ1",
+  name: "single-q",
+  state: "Needs",
+  gate: {
+    Question: {
+      request_id: "req-single",
+      questions: [
+        {
+          question: "Which approach?",
+          header: "Approach",
+          multi_select: false,
+          options: [
+            { label: "Approach A", description: "the safe one" },
+            { label: "Approach B", description: "the fast one" },
+          ],
+        },
+      ],
+    },
+  },
+} as SessionView;
+
 function renderGate(session: SessionView) {
   const snapshot: AppSnapshot = {
     ...MOCK_SNAPSHOT,
@@ -104,6 +127,44 @@ describe("GateOverlay — multiple questions", () => {
         expect.objectContaining({
           request_id: "req-multi",
           answers: { "Which database?": "Postgres", "Which cache?": "Redis" },
+        })
+      );
+    });
+  });
+});
+
+describe("GateOverlay — lone single-select question", () => {
+  // Regression guard: a lone single-select question still fires a preset option
+  // immediately (no Submit needed) — the ergonomic tap-to-answer path.
+  it("fires a preset option immediately", async () => {
+    renderGate(ONE_QUESTION);
+    fireEvent.click(screen.getByText("Approach A"));
+    await vi.waitFor(() => {
+      expect(api.answerQuestion).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request_id: "req-single",
+          answers: { "Which approach?": "Approach A" },
+        })
+      );
+    });
+  });
+
+  // THE BUG: choosing "Other…" opens a custom-answer field but, because the
+  // Submit button was suppressed for a lone single-select question, a typed
+  // custom answer had no way to be sent. There must be a Submit that sends it.
+  it("lets a custom 'Other' answer be submitted", async () => {
+    renderGate(ONE_QUESTION);
+    fireEvent.click(screen.getByText("Other…"));
+    fireEvent.change(screen.getByPlaceholderText("Type a custom answer"), {
+      target: { value: "My own approach" },
+    });
+    // Before the fix this button did not exist → getByTestId throws (RED).
+    fireEvent.click(screen.getByTestId("question-submit-btn"));
+    await vi.waitFor(() => {
+      expect(api.answerQuestion).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request_id: "req-single",
+          answers: { "Which approach?": "My own approach" },
         })
       );
     });

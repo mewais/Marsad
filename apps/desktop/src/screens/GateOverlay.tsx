@@ -165,6 +165,13 @@ export function GateOverlay() {
     normalized.prompts.length === 1 &&
     !normalized.prompts[0].multiSelect;
 
+  // A lone single-select question fires a preset option immediately, so its
+  // Submit button is normally hidden. But choosing "Other…" opens a custom-answer
+  // field WITHOUT firing — so once any Other field is open, Submit must be shown
+  // (else a typed custom answer can never be sent). Keyed on the presence of an
+  // Other field, which `onSelect` opens for the "other" option.
+  const otherActive = Object.keys(otherText).length > 0;
+
   return (
     /* ── Backdrop ── */
     <div
@@ -745,7 +752,7 @@ export function GateOverlay() {
                   {normalized.skip.label}
                 </button>
               )}
-              {!loneSingle && normalized.submit && (
+              {(!loneSingle || otherActive) && normalized.submit && (
                 <button
                   data-testid="question-submit-btn"
                   onClick={() => void onSubmitQuestions()}
