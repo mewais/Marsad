@@ -129,6 +129,10 @@ pub(crate) fn spawn_session_reader(
     // (or session/load) result. Shared with handle_send_prompt / handle_interrupt /
     // handle_answer_gate so they can address subsequent ACP requests.
     acp_sessions: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
+    // Reader-liveness registry (see `LiveReaders`). This reader inserts its sid
+    // here on spawn and removes it when it gives up (unless superseded), so the
+    // resume guard knows whether a live reader owns the session.
+    live_readers: super::LiveReaders,
 ) {
     // `run_command` is only used when the caller signals that a launch script
     // was not yet run (i.e. not provided to spawn_container).  For the durable
@@ -145,6 +149,11 @@ pub(crate) fn spawn_session_reader(
             old.store(true, Ordering::SeqCst);
         }
     }
+    // Mark this session as having a live reader (the resume guard's signal).
+    // Idempotent with the synchronous insert in `launch_with_id`; also covers the
+    // startup-reconnect path, which spawns readers without going through
+    // `launch_with_id`. Removed on give-up below (unless superseded).
+    live_readers.lock().unwrap().insert(sid.clone());
 
     let session_dir = std::path::PathBuf::from(&data_root)
         .join("sessions")
@@ -1772,6 +1781,13 @@ pub(crate) fn spawn_session_reader(
                 .unwrap_or(false)
             {
                 m.remove(&sid);
+                // This reader is still the current one for the session (NOT
+                // superseded by a fresh reader that took over) and it has given up
+                // (re)attaching. Clear the liveness marker so a subsequent resume
+                // relaunches (re-spawning a reader, which drains any queued
+                // prompts) instead of no-op'ing forever. A superseded reader must
+                // NOT clear it — the newer reader owns the session's liveness.
+                live_readers.lock().unwrap().remove(&sid);
             }
         }
 

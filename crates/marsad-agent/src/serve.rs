@@ -184,6 +184,12 @@ impl Agent {
         // FIFO threads (which insert when claude emits a `can_use_tool`).
         let pending_gates_for_fifo = Arc::clone(&self.pending_gates.0);
 
+        // ── Reader-liveness registry ───────────────────────────────────────
+        // Shared across the serve thread (the resume guard + launch_with_id) and
+        // the reader threads (which insert on spawn, remove on give-up). The
+        // resume guard keys on this, so a reader-give-up pause resumes correctly.
+        let live_readers_for_fifo = Arc::clone(&self.live_readers);
+
         // ── Stage 2 codex thread_id registry ───────────────────────────────
         // Shared across the serve thread (handle_send_prompt, which reads
         // thread_id to build resume commands) and the FIFO reader threads
@@ -365,6 +371,7 @@ impl Agent {
                                 Arc::clone(&codex_threads_for_reader),
                                 None, // opencode_spec: not re-sent on reconnect
                                 Arc::clone(&acp_sessions_for_reader),
+                                Arc::clone(&self.live_readers),
                             );
                             eprintln!("marsad-agent: reconnected live remote session {}", s.id);
                         }
@@ -429,6 +436,7 @@ impl Agent {
                         Arc::clone(&codex_threads_for_reader),
                         None, // opencode_spec: not re-sent on reconnect
                         Arc::clone(&acp_sessions_for_reader),
+                        Arc::clone(&self.live_readers),
                     );
                     eprintln!("marsad-agent: reconnected live session {}", s.id);
                 }
@@ -574,6 +582,7 @@ impl Agent {
                 let pty_entries_for_client = Arc::clone(&pty_entries_for_reader);
                 let codex_threads_for_client = Arc::clone(&codex_threads_for_reader);
                 let acp_sessions_for_client = Arc::clone(&acp_sessions_for_reader);
+                let live_readers_for_client = Arc::clone(&live_readers_for_fifo);
 
                 // Split the client into independent write and read halves so
                 // each thread has exclusive ownership — no Mutex required.
@@ -693,6 +702,7 @@ impl Agent {
                                                 Arc::clone(&codex_threads_for_client),
                                                 reply.opencode_spec,
                                                 Arc::clone(&acp_sessions_for_client),
+                                                Arc::clone(&live_readers_for_client),
                                             );
                                         }
 
@@ -805,17 +815,19 @@ impl Agent {
             let is_resume = cmd.line.contains("\"ResumeSession\"");
 
             // Double-launch guard (see handle_resume_session). Capture BEFORE
-            // handle_ipc whether the resume target is already tracked live: if so,
-            // the handler no-ops (no relaunch) and we must NOT extract a
+            // handle_ipc whether the resume target already has a LIVE reader: if
+            // so, the handler no-ops (no relaunch) and we must NOT extract a
             // new_session_id below — otherwise the client thread would spawn a
-            // second reader onto the already-attached session. `self.sessions` is
-            // the authoritative synchronous signal (populated by startup reconnect
-            // before this loop runs).
+            // second reader onto the already-attached session. The signal is
+            // `live_readers` (reader liveness), NOT `self.sessions` (which is only
+            // cleared by an explicit Stop) — so a reader-give-up pause resumes
+            // correctly instead of no-op'ing forever. Populated synchronously by
+            // launch_with_id + the startup reconnect before this loop runs.
             let resume_already_live = is_resume
                 && serde_json::from_str::<serde_json::Value>(&cmd.line)
                     .ok()
                     .and_then(|v| v["session_id"].as_str().map(|s| s.to_string()))
-                    .map(|sid| self.sessions.contains_key(&sid))
+                    .map(|sid| self.live_readers.lock().unwrap().contains(&sid))
                     .unwrap_or(false);
 
             // For a launch OR resume, capture the first_prompt BEFORE handle_ipc

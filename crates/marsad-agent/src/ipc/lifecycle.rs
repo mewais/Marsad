@@ -72,19 +72,28 @@ impl Agent {
         session_id: String,
         first_prompt: Option<String>,
     ) -> Result<Vec<String>, AgentError> {
-        // Already-live guard (the double-launch fix). If this session is already
-        // tracked live — reconnected at startup, or never stopped — a resume MUST
-        // NOT relaunch: `launch_with_id` re-runs the durable script
+        // Already-live guard (the double-launch fix). If this session has a LIVE
+        // reader — reconnected at startup, or never stopped — a resume MUST NOT
+        // relaunch: `launch_with_id` re-runs the durable script
         // (`rm -f in.fifo; mkfifo in.fifo`), clobbering the FIFO the existing
         // reader is attached to. That spawns a SECOND claude + reader fighting
         // over one session dir (the duplicate-reader / duplicate-gate / stray-
-        // interrupt flakiness). `self.sessions` is populated synchronously by the
-        // startup reconnect BEFORE any command is processed, so it is an
-        // authoritative "is a reader attached" signal here. No-op re-ack; the
-        // serve loop suppresses the duplicate reader spawn for this case too.
+        // interrupt flakiness).
+        //
+        // The signal is `live_readers`, NOT `self.sessions`: `self.sessions` is
+        // only cleared by an explicit Stop, so a session whose reader gave up on a
+        // connection-drop/liveness pause stayed in `self.sessions` and this guard
+        // no-op'd EVERY resume — never re-spawning a reader, stranding the next
+        // prompt in the pending-prompt queue until a full restart. `live_readers`
+        // is cleared when the reader gives up, so a paused session's resume falls
+        // through to relaunch (re-spawning the reader, which drains the queue)
+        // while a genuinely-attached session still no-ops. It is populated
+        // synchronously by `launch_with_id` and the startup reconnect BEFORE any
+        // command is processed, so it is authoritative here. The serve loop
+        // suppresses the duplicate reader spawn for the no-op case too.
         // (`first_prompt` on an already-live session is intentionally dropped —
         // a running session takes prompts via SendPrompt, not a resume.)
-        if self.sessions.contains_key(&session_id) {
+        if self.live_readers.lock().unwrap().contains(&session_id) {
             eprintln!(
                 "marsad-agent: resume {session_id} ignored — already live (no relaunch, no duplicate reader)"
             );
@@ -202,7 +211,127 @@ impl Agent {
         #[cfg(not(coverage))]
         crate::pty::teardown_session(&session_id, &self.pty_entries.0);
         self.sessions.remove(&session_id);
+        // Clear the reader-liveness marker too: an explicit stop means no reader
+        // is expected, so a later resume MUST relaunch (not no-op). The reader's
+        // own give-up path also clears this, but that lags by up to a backoff
+        // interval; removing it here makes a stop→resume deterministic.
+        self.live_readers.lock().unwrap().remove(&session_id);
         let event = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::SessionStopped { session_id });
         Ok(vec![event])
+    }
+}
+
+#[cfg(test)]
+mod resume_liveness_tests {
+    //! Regression tests for the pause/resume prompt-delivery bug: after a
+    //! connection-drop/liveness pause the reader thread dies (de-registering its
+    //! writer) but `self.sessions` stayed populated, so the resume guard no-op'd
+    //! forever and the next prompt was stranded in `pending_prompts`. The guard
+    //! now keys on reader LIVENESS (`live_readers`), not `self.sessions`.
+    //!
+    //! These drive the fake agent through the exact state transitions: launch
+    //! marks the session reader-live; clearing `live_readers` (without touching
+    //! `self.sessions`) reproduces the post-give-up state; a live entry
+    //! reproduces a genuinely-attached session (the double-launch case).
+
+    use crate::{Agent, AgentConfig, ListenSpec};
+    use marsad_lifecycle::FakeContainer;
+    use marsad_notify::CaptureNotifier;
+    use marsad_store::{MemoryBackend, Store};
+
+    fn agent() -> Agent {
+        Agent::with_fakes(
+            AgentConfig {
+                listen: ListenSpec::Stdio,
+                data_root: "/tmp/marsad-agent-resume-liveness-test".to_string(),
+            },
+            Box::new(FakeContainer::new()),
+            Box::new(CaptureNotifier::new()),
+            Box::new(Store::new(Box::new(MemoryBackend::new()))),
+        )
+        .expect("with_fakes")
+    }
+
+    fn launch(agent: &mut Agent, sid: &str) {
+        let line = format!(
+            r#"{{"type":"LaunchSession","session_id":"{sid}","project":"/p","host_id":"local","model":"claude-opus-4-8","posture":"Ask"}}"#
+        );
+        agent.handle_ipc(&line).expect("launch");
+    }
+
+    fn resume(agent: &mut Agent, sid: &str) {
+        let line = format!(r#"{{"type":"ResumeSession","session_id":"{sid}"}}"#);
+        agent.handle_ipc(&line).expect("resume");
+    }
+
+    /// THE BUG: a session whose reader gave up (liveness cleared) but is still
+    /// tracked in `self.sessions` MUST relaunch on resume — otherwise no reader
+    /// is ever re-spawned and the next prompt is stranded. Asserts a fresh
+    /// container spawn happens on resume. RED against the old `self.sessions`
+    /// guard (which no-op'd); GREEN once the guard keys on `live_readers`.
+    #[test]
+    fn resume_after_reader_giveup_relaunches() {
+        let mut a = agent();
+        launch(&mut a, "s1");
+        let after_launch = a.container_calls().len();
+        // Reproduce the post-give-up state: reader dead (liveness cleared) but the
+        // session is still tracked (self.sessions unchanged — exactly the bug).
+        a.live_readers.lock().unwrap().remove("s1");
+        assert!(
+            a.sessions.contains_key("s1"),
+            "precondition: session still tracked after simulated give-up"
+        );
+        resume(&mut a, "s1");
+        let after_resume = a.container_calls().len();
+        assert!(
+            after_resume > after_launch,
+            "resume after reader give-up MUST relaunch (spawn a container) so a \
+             reader re-attaches and drains queued prompts; container_calls \
+             {after_launch} -> {after_resume} (no relaunch = the stranded-prompt bug)"
+        );
+    }
+
+    /// ANTI-REGRESSION (double-launch guard): a session with a LIVE reader must
+    /// NOT relaunch on resume — that would spawn a duplicate claude/reader
+    /// fighting over one session dir. Asserts no new container spawn.
+    #[test]
+    fn resume_with_live_reader_is_noop() {
+        let mut a = agent();
+        launch(&mut a, "s2");
+        let after_launch = a.container_calls().len();
+        assert!(
+            a.live_readers.lock().unwrap().contains("s2"),
+            "precondition: launch marks the session reader-live"
+        );
+        resume(&mut a, "s2");
+        assert_eq!(
+            a.container_calls().len(),
+            after_launch,
+            "resume of a session with a live reader must be a no-op (no duplicate \
+             reader/claude)"
+        );
+    }
+
+    /// An explicit stop clears the liveness marker, so a later resume relaunches.
+    /// Also proves `handle_stop_session` removes `live_readers` (without which the
+    /// guard would no-op a stopped session's resume once it keys on liveness).
+    #[test]
+    fn stop_clears_liveness_then_resume_relaunches() {
+        let mut a = agent();
+        launch(&mut a, "s3");
+        let after_launch = a.container_calls().len();
+        let stop = r#"{"type":"StopSession","session_id":"s3"}"#;
+        a.handle_ipc(stop).expect("stop");
+        assert!(
+            !a.live_readers.lock().unwrap().contains("s3"),
+            "stop must clear the reader-liveness marker"
+        );
+        resume(&mut a, "s3");
+        let after_resume = a.container_calls().len();
+        assert!(
+            after_resume > after_launch,
+            "resume after an explicit stop must relaunch; container_calls \
+             {after_launch} -> {after_resume}"
+        );
     }
 }

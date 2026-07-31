@@ -290,6 +290,27 @@ struct SessionWritersWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, Shared
 pub(crate) type PendingPrompts =
     std::sync::Arc<std::sync::Mutex<HashMap<String, Vec<(std::time::Instant, Vec<u8>)>>>>;
 
+/// Sessions that currently have a live reader thread — OR a (re)launch in flight
+/// that is about to spawn one. This is the authoritative "a resume must NOT
+/// relaunch" signal: inserted synchronously at (re)launch (`launch_with_id`) and
+/// at every reader (re)spawn, and cleared when the reader gives up
+/// (`spawn_session_reader`'s give-up path) or the session is stopped
+/// (`handle_stop_session`).
+///
+/// It REPLACES the old `self.sessions`-based resume guard. `self.sessions` is
+/// only ever removed by an explicit Stop, so a session whose reader gave up on a
+/// connection-drop/liveness pause stayed in `self.sessions` forever — the resume
+/// guard then no-op'd every resume, never re-spawned a reader, and the next
+/// prompt sat in `pending_prompts` undrained until a full Marsad restart. Keying
+/// the guard on reader liveness instead lets a paused session's resume relaunch
+/// (re-spawning the reader, which drains the queue) while a genuinely-attached
+/// session's resume still no-ops (no duplicate reader/claude).
+///
+/// NOT `#[cfg(not(coverage))]`: the resume guard (`handle_resume_session`) is
+/// compiled in every build, so this field must exist in every build too.
+pub(crate) type LiveReaders =
+    std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>;
+
 /// Max queued prompts retained per session (most-recent wins).
 #[cfg(not(coverage))]
 pub(crate) const PENDING_PROMPT_MAX: usize = 64;
@@ -558,6 +579,10 @@ pub struct Agent {
     #[allow(dead_code)]
     config: AgentConfig,
     sessions: HashMap<String, SessionRecord>,
+    /// Sessions with a live/being-launched reader thread (see `LiveReaders`).
+    /// The resume guard keys on this, NOT `sessions`, so a reader-give-up pause
+    /// resumes correctly instead of no-op'ing and stranding the next prompt.
+    live_readers: LiveReaders,
     next_id: u64,
     /// The injected (or default) fake container (always present for unit tests).
     container: ContainerWrap,
@@ -658,6 +683,9 @@ impl Agent {
         Ok(Agent {
             config: cfg,
             sessions: HashMap::new(),
+            live_readers: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
             next_id: 1,
             container: ContainerWrap(container),
             notifier: NotifierWrap(notifier),
@@ -736,6 +764,9 @@ impl Agent {
         Ok(Agent {
             config: cfg,
             sessions: HashMap::new(),
+            live_readers: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
             next_id: 1,
             // Fake container slot: unused in real-io mode but kept to satisfy the
             // type (container_calls() is a no-op here; integration tests assert
@@ -959,6 +990,11 @@ impl Agent {
                 marsad_id: session_id.clone(),
             },
         );
+        // Mark a reader as live/in-flight for this session SYNCHRONOUSLY (in the
+        // agent thread, before the async reader spawn), so a concurrent resume for
+        // the same id no-ops instead of relaunching a duplicate. Cleared when the
+        // reader gives up or the session is stopped. See `LiveReaders`.
+        self.live_readers.lock().unwrap().insert(session_id.clone());
         Ok(session_id)
     }
 
