@@ -24,12 +24,12 @@
 //! (marsad-store, marsad-transport, marsad-events, marsad-viewmodel) are
 //! already available to marsad-core's tests via existing [dependencies].
 
-use marsad_core::{Core, CoreConfig, CoreError, LaunchSpec,  VmUpdate};
+use marsad_core::{peers_for_node, Core, CoreConfig, CoreError, LaunchSpec, NodePeers, VmUpdate};
 use marsad_events::Phase;
 use marsad_store::{BackendOp, MemoryBackend};
 use marsad_transport::LoopbackFake;
 use marsad_viewmodel::EdgeStatus;
-use marsad_workstream::{ConnKind, Driver};
+use marsad_workstream::{ConnKind, Connection, Driver};
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors `core_with_backend` in tests/happy.rs)
@@ -2127,4 +2127,128 @@ fn add_connection_error_contract_pins_exact_messages() {
         "connection endpoints span more than one workstream",
         "CrossWorkstream Display string mismatch"
     );
+}
+
+// ---------------------------------------------------------------------------
+// peers_for_node — pure topology helper
+// ---------------------------------------------------------------------------
+
+/// Helper: build a minimal Connection with only the fields peers_for_node uses.
+fn mk_conn(id: &str, from: &str, to: &str) -> Connection {
+    Connection {
+        id: id.to_string(),
+        ws: "ws-test".to_string(),
+        from: from.to_string(),
+        to: to.to_string(),
+        kind: ConnKind::Data,
+        bi: false,
+        gate: None,
+    }
+}
+
+#[test]
+fn peers_for_node_empty_connections_gives_empty_peers() {
+    let result = peers_for_node("node-a", &[]);
+    assert!(result.outbound.is_empty(), "outbound must be empty");
+    assert!(result.inbound.is_empty(), "inbound must be empty");
+}
+
+#[test]
+fn peers_for_node_node_not_present_gives_empty_peers() {
+    let conns = vec![mk_conn("c1", "node-b", "node-c")];
+    let result = peers_for_node("node-a", &conns);
+    assert!(result.outbound.is_empty(), "outbound must be empty");
+    assert!(result.inbound.is_empty(), "inbound must be empty");
+}
+
+#[test]
+fn peers_for_node_only_outbound_edges() {
+    // node-a → node-b, node-a → node-c
+    let conns = vec![
+        mk_conn("c1", "node-a", "node-b"),
+        mk_conn("c2", "node-a", "node-c"),
+        mk_conn("c3", "node-x", "node-y"), // unrelated
+    ];
+    let result = peers_for_node("node-a", &conns);
+    assert_eq!(result.outbound, vec!["node-b", "node-c"]);
+    assert!(result.inbound.is_empty(), "inbound must be empty");
+}
+
+#[test]
+fn peers_for_node_only_inbound_edges() {
+    // node-b → node-a, node-c → node-a
+    let conns = vec![
+        mk_conn("c1", "node-b", "node-a"),
+        mk_conn("c2", "node-c", "node-a"),
+        mk_conn("c3", "node-x", "node-y"), // unrelated
+    ];
+    let result = peers_for_node("node-a", &conns);
+    assert!(result.outbound.is_empty(), "outbound must be empty");
+    assert_eq!(result.inbound, vec!["node-b", "node-c"]);
+}
+
+#[test]
+fn peers_for_node_both_inbound_and_outbound() {
+    // node-a → node-b (outbound), node-c → node-a (inbound)
+    let conns = vec![
+        mk_conn("c1", "node-a", "node-b"),
+        mk_conn("c2", "node-c", "node-a"),
+    ];
+    let result = peers_for_node("node-a", &conns);
+    assert_eq!(result.outbound, vec!["node-b"]);
+    assert_eq!(result.inbound, vec!["node-c"]);
+}
+
+#[test]
+fn peers_for_node_duplicate_edges_are_deduplicated() {
+    // Two edges node-a → node-b (e.g. different ids but same endpoints)
+    let conns = vec![
+        mk_conn("c1", "node-a", "node-b"),
+        mk_conn("c2", "node-a", "node-b"),
+        mk_conn("c3", "node-z", "node-a"),
+        mk_conn("c4", "node-z", "node-a"),
+    ];
+    let result = peers_for_node("node-a", &conns);
+    assert_eq!(result.outbound, vec!["node-b"]);
+    assert_eq!(result.inbound, vec!["node-z"]);
+}
+
+#[test]
+fn peers_for_node_results_are_sorted_ascending() {
+    // Outbound: node-a → node-z, node-a → node-b, node-a → node-m
+    // Inbound:  node-q → node-a, node-d → node-a
+    let conns = vec![
+        mk_conn("c1", "node-a", "node-z"),
+        mk_conn("c2", "node-a", "node-b"),
+        mk_conn("c3", "node-a", "node-m"),
+        mk_conn("c4", "node-q", "node-a"),
+        mk_conn("c5", "node-d", "node-a"),
+    ];
+    let result = peers_for_node("node-a", &conns);
+    assert_eq!(result.outbound, vec!["node-b", "node-m", "node-z"]);
+    assert_eq!(result.inbound, vec!["node-d", "node-q"]);
+}
+
+#[test]
+fn peers_for_node_self_edge_is_ignored() {
+    // node-a → node-a must not appear in either list
+    let conns = vec![
+        mk_conn("c1", "node-a", "node-a"),
+        mk_conn("c2", "node-a", "node-b"),
+    ];
+    let result = peers_for_node("node-a", &conns);
+    assert_eq!(result.outbound, vec!["node-b"]);
+    assert!(result.inbound.is_empty(), "inbound must be empty");
+}
+
+#[test]
+fn peers_for_node_unrelated_edges_are_excluded() {
+    // Only edges between node-x and node-y; node-a appears in none
+    let conns = vec![
+        mk_conn("c1", "node-x", "node-y"),
+        mk_conn("c2", "node-y", "node-x"),
+    ];
+    let result = peers_for_node("node-a", &conns);
+    assert!(result.outbound.is_empty(), "outbound must be empty");
+    assert!(result.inbound.is_empty(), "inbound must be empty");
 }

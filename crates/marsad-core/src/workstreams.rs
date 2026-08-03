@@ -390,3 +390,44 @@ impl Core {
         vec![VmUpdate::Board(self.board())]
     }
 }
+
+// ---------------------------------------------------------------------------
+// Peer topology helper — pure, no I/O
+// ---------------------------------------------------------------------------
+
+/// The peers of a node derived from the workstream connections.
+///
+/// `outbound` = nodes that `node_id` is wired to send to
+///              (edges where `from == node_id`, collecting `to`).
+/// `inbound`  = nodes wired to send to `node_id`
+///              (edges where `to == node_id`, collecting `from`).
+///
+/// Both slices are de-duplicated and sorted ascending for determinism.
+/// A self-edge (`from == to == node_id`) is ignored — a node is not its own peer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodePeers {
+    pub outbound: Vec<String>,
+    pub inbound: Vec<String>,
+}
+
+/// Return the peer topology for `node_id` derived from the given connection
+/// slice. Pure function: no state mutations, no I/O.
+pub fn peers_for_node(node_id: &str, connections: &[marsad_workstream::Connection]) -> NodePeers {
+    let mut outbound: Vec<String> = connections
+        .iter()
+        .filter(|c| c.from == node_id && c.to != node_id)
+        .map(|c| c.to.clone())
+        .collect();
+    outbound.sort();
+    outbound.dedup();
+
+    let mut inbound: Vec<String> = connections
+        .iter()
+        .filter(|c| c.to == node_id && c.from != node_id)
+        .map(|c| c.from.clone())
+        .collect();
+    inbound.sort();
+    inbound.dedup();
+
+    NodePeers { outbound, inbound }
+}

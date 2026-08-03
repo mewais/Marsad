@@ -34,6 +34,7 @@ pub use discovery::SessionSummary;
 pub use marsad_hosts::{Host, HostStatus};
 pub use marsad_proto::{LaunchMode, LaunchSpec};
 pub use marsad_store::{NotifPref, PersistedSettings, PersistedTemplate};
+pub use workstreams::{peers_for_node, NodePeers};
 
 // ---------------------------------------------------------------------------
 // CoreError
