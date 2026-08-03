@@ -193,6 +193,7 @@ dependencies = [
  "marsad-proto",
  "serde",
  "serde_json",
+ "wasit-core",
 ]
 
 [[package]]

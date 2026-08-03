@@ -1,83 +1,16 @@
-//! B02 `marsad-events` — happy path tests.
+//! marsad-events — happy path tests over `wasit_core::AgentEvent`.
 //!
-//! StreamMsg values are constructed by parsing JSON strings via `parse_stream_line`
-//! (the only public constructor in marsad-proto). This keeps tests black-box against
-//! both B01 and B02 without depending on private/unnamed inner struct types.
-//!
-//! Covers:
-//! - `SessionState::initial()` field invariants
-//! - Full nominal lifecycle: Starting → Working (SystemInit) → Working (assistant)
-//!   → Needs (ControlRequest) → Working (user answer) → Done (Result/Success)
-//! - Usage accumulation across assistant message + result
-//! - cost_usd updated from Result
-//! - context_pct computed and > 0 after real usage
-//! - last_action set by ToolUse
-//! - Subagent SubagentStop hook → Done
-//! - All HookEvent variants: SessionStart, Stop, Notification, PreToolUse, PostToolUse, PreCompact
+//! Wave 1: the reducer folds the rich `AgentEvent` model (built directly here via
+//! the `common` helpers) instead of parsing raw claude stream-json. Display-field
+//! extraction (a Bash gate's `$ …` command, elicitation fence parsing, question
+//! parsing) now lives in the wasit drivers — Marsad receives already-shaped
+//! gates — so those old parse-focused tests are gone; the gate tests here assert
+//! the reducer shapes a typed `GateRequest` into a `marsad_gates::Gate` correctly.
+
+mod common;
+use common::*;
 
 use marsad_events::{reduce, Event, HookEvent, Phase, SessionState, SubagentStatus};
-use marsad_proto::parse_stream_line;
-
-// ---------------------------------------------------------------------------
-// JSON helpers — build StreamMsg by parsing spec-valid JSON
-// ---------------------------------------------------------------------------
-
-fn stream(json: &str) -> Event {
-    let msg = parse_stream_line(json)
-        .unwrap_or_else(|e| panic!("test JSON failed to parse: {e:?}\njson: {json}"));
-    Event::Stream(msg)
-}
-
-fn system_init_json() -> &'static str {
-    r#"{"type":"system","subtype":"init","session_id":"sess-01","model":"claude-opus-4-5","cwd":"/tmp/work","tools":["Read","Write"],"mcp_servers":[],"permissionMode":"default"}"#
-}
-
-fn assistant_json(id: &str, input: u64, output: u64) -> String {
-    format!(
-        r#"{{"type":"assistant","message":{{"id":"{id}","content":[{{"type":"text","text":"Thinking…"}}],"usage":{{"input_tokens":{input},"output_tokens":{output},"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}"#
-    )
-}
-
-fn tool_use_assistant_json(id: &str, tool_name: &str) -> String {
-    format!(
-        r#"{{"type":"assistant","message":{{"id":"{id}","content":[{{"type":"tool_use","id":"tu-1","name":"{tool_name}","input":{{"path":"/etc/passwd"}}}}],"usage":{{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}"#
-    )
-}
-
-fn control_request_json(request_id: &str, tool_name: &str) -> String {
-    format!(
-        r#"{{"type":"control_request","request_id":"{request_id}","request":{{"subtype":"can_use_tool","tool_name":"{tool_name}","input":{{}}}}}}"#
-    )
-}
-
-/// Control request with a caller-supplied `input` object (raw JSON).
-fn control_request_json_with_input(request_id: &str, tool_name: &str, input: &str) -> String {
-    format!(
-        r#"{{"type":"control_request","request_id":"{request_id}","request":{{"subtype":"can_use_tool","tool_name":"{tool_name}","input":{input}}}}}"#
-    )
-}
-
-/// Extract the gate's command + explanation for assertions.
-fn gate_command_explanation(s: &SessionState) -> (String, String) {
-    match s.gate.as_ref().expect("gate present") {
-        marsad_gates::Gate::Permission {
-            command,
-            explanation,
-            ..
-        } => (command.clone(), explanation.clone()),
-        other => panic!("expected Permission gate, got {other:?}"),
-    }
-}
-
-fn user_json() -> &'static str {
-    r#"{"type":"user","message":{"content":[{"type":"text","text":"yes"}]}}"#
-}
-
-fn result_success_json(input: u64, output: u64, cost: f64) -> String {
-    format!(
-        r#"{{"type":"result","subtype":"success","is_error":false,"total_cost_usd":{cost},"usage":{{"input_tokens":{input},"output_tokens":{output},"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":1,"permission_denials":[]}}"#
-    )
-}
 
 // ---------------------------------------------------------------------------
 // initial()
@@ -100,13 +33,12 @@ fn initial_state_fields() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase::Starting → Phase::Working via SystemInit
+// Phase::Starting → Phase::Working via SessionInit
 // ---------------------------------------------------------------------------
 
 #[test]
-fn system_init_transitions_to_working() {
-    let s0 = SessionState::initial();
-    let s1 = reduce(s0, stream(system_init_json()));
+fn session_init_transitions_to_working() {
+    let s1 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
     assert_eq!(s1.phase, Phase::Working);
     assert_eq!(s1.session_id, Some("sess-01".to_string()));
     assert_eq!(s1.model, Some("claude-opus-4-5".to_string()));
@@ -114,243 +46,128 @@ fn system_init_transitions_to_working() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase::Working via assistant message
+// Phase::Working via assistant delta (no token accounting here anymore)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn assistant_message_keeps_working() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&assistant_json("msg-001", 100, 20)));
+fn assistant_delta_keeps_working() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let s1 = reduce(s0, ev(assistant_delta("Thinking…")));
     assert_eq!(s1.phase, Phase::Working);
-    assert_eq!(s1.tokens, 120); // 100 in + 20 out
+    // Usage no longer arrives on assistant deltas — tokens stay 0 until a
+    // UsageUpdate / TurnCompleted.
+    assert_eq!(s1.tokens, 0);
 }
 
 // ---------------------------------------------------------------------------
-// Phase::Needs via ControlRequest
+// Phase::Needs via a permission gate
 // ---------------------------------------------------------------------------
 
 #[test]
-fn control_request_transitions_to_needs() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&control_request_json("req-1", "Bash")));
+fn permission_gate_transitions_to_needs() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let s1 = reduce(s0, ev(permission_gate("req-1", "ls -la", "list files")));
     assert_eq!(s1.phase, Phase::Needs);
     assert!(s1.gate.is_some());
 }
 
-// Regression (gate flash-and-vanish): a pending gate means claude is BLOCKED
-// awaiting a human answer. A subsequent assistant message in the SAME turn
-// (claude reasoning / firing further parallel tool calls) must NOT flip the
-// phase back to Working — doing so silently dropped the gate's card off the
-// dashboard's attention bucket. Real MCP/opencode turns emit `control_request
-// → assistant` with no intervening `user` tool_result, so the gate must stay
-// Needs based on `gate.is_some()`, not on any stream heuristic.
+// Regression (gate flash-and-vanish): a pending gate means the agent is BLOCKED.
+// A subsequent assistant delta / tool call in the SAME turn must NOT flip the
+// phase back to Working — keyed on `gate.is_some()`.
 #[test]
-fn assistant_after_control_request_keeps_gate_needs() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&control_request_json("req-1", "Bash")));
+fn assistant_after_gate_keeps_needs() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let s1 = reduce(s0, ev(permission_gate("req-1", "ls", "list")));
     assert_eq!(s1.phase, Phase::Needs);
-    // No intervening `user` tool_result — assistant follows the gate directly.
-    let s2 = reduce(s1, stream(&assistant_json("msg-after-gate", 50, 10)));
+    let s2 = reduce(s1, ev(assistant_delta("still reasoning")));
     assert_eq!(
         s2.phase,
         Phase::Needs,
-        "an assistant message must not clobber a still-open gate"
+        "an assistant delta must not clobber a still-open gate"
     );
-    assert!(s2.gate.is_some(), "the gate must remain pending");
+    assert!(s2.gate.is_some());
 }
 
-// Regression: likewise a turn-level `result` is claude's, not the human's
+// Regression: a turn-level `TurnCompleted` is the agent's, not the human's
 // answer, so it must not mark the session Done out from under a pending gate.
+// But cost/tokens from the result are still recorded.
 #[test]
-fn result_after_control_request_keeps_gate_needs() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&control_request_json("req-1", "Bash")));
+fn turn_completed_after_gate_keeps_needs_but_records_cost() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let s1 = reduce(s0, ev(permission_gate("req-1", "ls", "list")));
     assert_eq!(s1.phase, Phase::Needs);
-    let s2 = reduce(s1, stream(&result_success_json(100, 20, 1.0)));
-    assert_eq!(
-        s2.phase,
-        Phase::Needs,
-        "a result must not clobber a still-open gate"
-    );
-    assert!(s2.gate.is_some(), "the gate must remain pending");
-    // But cost/tokens from the result are still recorded.
+    let s2 = reduce(s1, ev(turn_success(usage(100, 20, 0, 0, 1.0))));
+    assert_eq!(s2.phase, Phase::Needs, "a result must not clobber an open gate");
+    assert!(s2.gate.is_some());
     assert_eq!(s2.cost_usd, 1.0);
 }
 
+// ---------------------------------------------------------------------------
+// The reducer shapes a typed Permission GateRequest into a marsad_gates::Gate,
+// passing command/explanation VERBATIM (wasit computed them) and falling back to
+// the session cwd when the request carries none.
+// ---------------------------------------------------------------------------
+
 #[test]
-fn bash_gate_shows_the_actual_command_not_the_tool_name() {
-    // Regression: the gate used to display the tool name ("Bash") instead of the
-    // shell command the user is being asked to approve.
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+fn permission_gate_carries_command_and_explanation_verbatim() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/home/user/project"));
     let s1 = reduce(
         s0,
-        stream(&control_request_json_with_input(
-            "req-1",
-            "Bash",
-            r#"{"command":"rm -rf /tmp/x","description":"Delete the temp dir"}"#,
-        )),
+        ev(permission_gate("req-1", "rm -rf /tmp/x", "Delete the temp dir")),
     );
-    let (command, explanation) = gate_command_explanation(&s1);
-    assert_eq!(command, "rm -rf /tmp/x");
-    assert_eq!(explanation, "Delete the temp dir");
+    match s1.gate.as_ref().expect("gate present") {
+        marsad_gates::Gate::Permission {
+            command,
+            explanation,
+            cwd,
+            ..
+        } => {
+            assert_eq!(command, "rm -rf /tmp/x");
+            assert_eq!(explanation, "Delete the temp dir");
+            // cwd was empty on the request → falls back to the session cwd.
+            assert_eq!(cwd, "/home/user/project");
+        }
+        other => panic!("expected Permission gate, got {other:?}"),
+    }
 }
 
 #[test]
-fn file_tool_gate_shows_tool_and_path() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+fn permission_gate_uses_request_cwd_when_present() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/session/cwd"));
     let s1 = reduce(
         s0,
-        stream(&control_request_json_with_input(
+        ev(permission_gate_full(
             "req-2",
             "Read",
-            r#"{"file_path":"/etc/hosts"}"#,
+            "Read /etc/hosts",
+            "/gate/cwd",
+            "",
+            false,
+            vec![],
+            vec![],
         )),
     );
-    let (command, explanation) = gate_command_explanation(&s1);
-    assert_eq!(command, "Read /etc/hosts");
-    // No description in input → generic explanation.
-    assert_eq!(explanation, "Tool use request: Read");
-}
-
-#[test]
-fn web_tool_gate_shows_tool_and_url() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(
-        s0,
-        stream(&control_request_json_with_input(
-            "req-3",
-            "WebFetch",
-            r#"{"url":"https://example.com"}"#,
-        )),
-    );
-    let (command, _) = gate_command_explanation(&s1);
-    assert_eq!(command, "WebFetch https://example.com");
-}
-
-#[test]
-fn unknown_tool_gate_falls_back_to_tool_name() {
-    // Empty input (and an empty command string) → bare tool name, never blank.
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(
-        s0,
-        stream(&control_request_json_with_input(
-            "req-4",
-            "SomeMcpTool",
-            r#"{"command":"","other":1}"#,
-        )),
-    );
-    let (command, _) = gate_command_explanation(&s1);
-    assert_eq!(command, "SomeMcpTool");
-}
-
-fn elicitation_request_json(request_id: &str, server: &str, message: &str) -> String {
-    let msg = serde_json::Value::String(message.to_string()).to_string();
-    format!(
-        r#"{{"type":"control_request","request_id":"{request_id}","request":{{"subtype":"elicitation","mcp_server_name":"{server}","message":{msg},"mode":"form","requested_schema":{{"type":"object","properties":{{}}}}}}}}"#
-    )
-}
-
-#[test]
-fn elicitation_gate_extracts_fenced_command_and_keeps_full_message() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let message = "**Command requires approval**\n\nPattern matched: `*git push*`\n\n```\ncd /proj && git push\n```\n\nAllow it to run?";
-    let s1 = reduce(
-        s0,
-        stream(&elicitation_request_json("eli-1", "hares", message)),
-    );
-    assert_eq!(s1.phase, Phase::Needs);
-    let (command, explanation) = gate_command_explanation(&s1);
-    // Fenced command still extracted for the `$ …` line …
-    assert_eq!(command, "cd /proj && git push");
-    // … and the FULL prompt is kept as the explanation (not a generic line), so
-    // nothing in the server's justification is hidden.
-    assert_eq!(explanation, message);
-}
-
-#[test]
-fn elicitation_without_fence_has_empty_command_and_full_explanation() {
-    // A request_path_access-style prompt: no fenced command, path/mode/reason in
-    // the body. The command line must be EMPTY (UI hides the block) and the full
-    // prompt — including the requested path — must be the explanation.
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let message = "Access OUTSIDE the sandbox requested.\n\nPath: /mnt/c/Users/mohewais/Desktop\nMode: rw\nReason: copy the installer";
-    let s1 = reduce(
-        s0,
-        stream(&elicitation_request_json("eli-2", "hares", message)),
-    );
-    let (command, explanation) = gate_command_explanation(&s1);
-    assert_eq!(command, "", "path-access gate must have no `$ …` command line");
-    assert_eq!(explanation, message);
-    assert!(
-        explanation.contains("/mnt/c/Users/mohewais/Desktop"),
-        "the requested path must be visible in the gate, got: {explanation}"
-    );
-}
-
-#[test]
-fn elicitation_gate_empty_message_is_blank_not_panicking() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&elicitation_request_json("eli-3", "srv", "")));
-    let (command, _) = gate_command_explanation(&s1);
-    assert_eq!(command, "");
-}
-
-#[test]
-fn elicitation_gate_unterminated_fence_has_empty_command() {
-    // Opening fence but no closing fence → not a real block → empty command
-    // (the full prompt is shown as the explanation instead).
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(
-        s0,
-        stream(&elicitation_request_json(
-            "eli-4",
-            "srv",
-            "Run this?\n```\nrm -rf x",
-        )),
-    );
-    let (command, explanation) = gate_command_explanation(&s1);
-    assert_eq!(command, "");
-    assert_eq!(explanation, "Run this?\n```\nrm -rf x");
-}
-
-#[test]
-fn elicitation_gate_fence_with_only_whitespace_has_empty_command() {
-    // Fenced block present but empty/whitespace → empty command.
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(
-        s0,
-        stream(&elicitation_request_json(
-            "eli-5",
-            "srv",
-            "Header\n```\n   \n```",
-        )),
-    );
-    let (command, _) = gate_command_explanation(&s1);
-    assert_eq!(command, "");
-}
-
-#[test]
-fn elicitation_gate_fence_without_following_newline_has_empty_command() {
-    // An opening ``` with no newline after it (no real block) → empty command.
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(
-        s0,
-        stream(&elicitation_request_json(
-            "eli-6",
-            "srv",
-            "Allow it? ```inline",
-        )),
-    );
-    let (command, _) = gate_command_explanation(&s1);
-    assert_eq!(command, "");
+    match s1.gate.as_ref().expect("gate present") {
+        marsad_gates::Gate::Permission { cwd, .. } => assert_eq!(cwd, "/gate/cwd"),
+        other => panic!("expected Permission gate, got {other:?}"),
+    }
 }
 
 #[test]
 fn elicitation_gate_sets_is_elicitation_true() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
     let s1 = reduce(
         s0,
-        stream(&elicitation_request_json("eli-e1", "hares", "Approve?")),
+        ev(permission_gate_full(
+            "eli-1",
+            "mcp__hares__run",
+            "",
+            "",
+            "Approve?",
+            true,
+            vec![],
+            vec![],
+        )),
     );
     match s1.gate.as_ref().expect("gate present") {
         marsad_gates::Gate::Permission { is_elicitation, .. } => {
@@ -362,8 +179,8 @@ fn elicitation_gate_sets_is_elicitation_true() {
 
 #[test]
 fn can_use_tool_gate_sets_is_elicitation_false() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&control_request_json("req-tool", "Bash")));
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let s1 = reduce(s0, ev(permission_gate("req-tool", "ls", "list")));
     match s1.gate.as_ref().expect("gate present") {
         marsad_gates::Gate::Permission { is_elicitation, .. } => {
             assert!(!is_elicitation, "can_use_tool gate must have is_elicitation==false");
@@ -373,51 +190,64 @@ fn can_use_tool_gate_sets_is_elicitation_false() {
 }
 
 #[test]
-fn empty_primary_arg_falls_back_to_tool_name() {
-    // A present-but-empty primary arg (e.g. file_path:"") must not produce a
-    // trailing-space "Read " — it falls through to the bare tool name.
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+fn elicitation_choices_pass_through() {
+    use wasit_core::ElicitationChoice;
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let choices = vec![
+        ElicitationChoice {
+            key: "grant".to_string(),
+            value: "session".to_string(),
+            label: "This session".to_string(),
+        },
+        ElicitationChoice {
+            key: "grant".to_string(),
+            value: "once".to_string(),
+            label: "Just once".to_string(),
+        },
+    ];
     let s1 = reduce(
         s0,
-        stream(&control_request_json_with_input(
-            "req-5",
-            "Read",
-            r#"{"file_path":""}"#,
+        ev(permission_gate_full(
+            "eli-c",
+            "mcp__x",
+            "",
+            "",
+            "Grant?",
+            true,
+            choices.clone(),
+            vec![],
         )),
     );
-    let (command, _) = gate_command_explanation(&s1);
-    assert_eq!(command, "Read");
+    match s1.gate.as_ref().expect("gate present") {
+        marsad_gates::Gate::Permission {
+            elicitation_choices,
+            ..
+        } => {
+            assert_eq!(elicitation_choices.len(), 2);
+            assert_eq!(elicitation_choices[0].value, "session");
+            assert_eq!(elicitation_choices[1].value, "once");
+        }
+        other => panic!("expected Permission gate, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Phase::Needs → Phase::Working via user turn (gate cleared)
+// Phase::Done via TurnCompleted/Success
 // ---------------------------------------------------------------------------
 
 #[test]
-fn user_turn_clears_needs_and_gate() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&control_request_json("req-1", "Bash")));
-    assert_eq!(s1.phase, Phase::Needs);
-    let s2 = reduce(s1, stream(user_json()));
-    assert_eq!(s2.phase, Phase::Working);
-    assert!(s2.gate.is_none());
-}
-
-// ---------------------------------------------------------------------------
-// Phase::Done via Result/Success
-// ---------------------------------------------------------------------------
-
-#[test]
-fn result_success_transitions_to_done() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&assistant_json("msg-001", 100, 20)));
-    let s2 = reduce(s1, stream(&result_success_json(100, 20, 1.23)));
+fn turn_success_transitions_to_done() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let s1 = reduce(s0, ev(assistant_delta("done")));
+    let s2 = reduce(s1, ev(turn_success(usage(100, 20, 0, 0, 1.23))));
     assert_eq!(s2.phase, Phase::Done);
     assert!(s2.cost_usd > 0.0);
+    // Cumulative tokens from the authoritative TurnCompleted usage.
+    assert_eq!(s2.tokens, 120);
 }
 
 // ---------------------------------------------------------------------------
-// Full lifecycle: Starting → Working → Needs → Working → Done
+// Full lifecycle: Starting → Working → Needs → Working (gate answered) → Done
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -425,48 +255,52 @@ fn full_nominal_lifecycle() {
     let mut s = SessionState::initial();
     assert_eq!(s.phase, Phase::Starting);
 
-    s = reduce(s, stream(system_init_json()));
+    s = reduce(s, ev(session_init("sess-01", "claude-opus-4-5", "/tmp/work")));
     assert_eq!(s.phase, Phase::Working);
 
-    s = reduce(s, stream(&assistant_json("msg-A", 200, 50)));
+    s = reduce(s, ev(assistant_delta("working")));
     assert_eq!(s.phase, Phase::Working);
 
-    s = reduce(s, stream(&control_request_json("req-1", "Read")));
+    s = reduce(s, ev(permission_gate("req-1", "ls", "list")));
     assert_eq!(s.phase, Phase::Needs);
 
-    s = reduce(s, stream(user_json()));
+    // The human answers via the optimistic clear (control channel, not a stream
+    // event — the old `user` turn no longer clears gates).
+    s.clear_gate_on_answer();
     assert_eq!(s.phase, Phase::Working);
     assert!(s.gate.is_none());
 
-    s = reduce(s, stream(&assistant_json("msg-B", 300, 80)));
+    s = reduce(s, ev(assistant_delta("more work")));
     assert_eq!(s.phase, Phase::Working);
 
-    s = reduce(s, stream(&result_success_json(500, 130, 2.50)));
+    s = reduce(s, ev(turn_success(usage(500, 130, 0, 0, 2.50))));
     assert_eq!(s.phase, Phase::Done);
     assert!(s.cost_usd > 0.0);
 }
 
 // ---------------------------------------------------------------------------
-// Usage accumulation: distinct message ids accumulate
+// Usage snapshot: UsageUpdate replaces (not accumulates) the token total
 // ---------------------------------------------------------------------------
 
 #[test]
-fn usage_accumulates_over_multiple_assistant_messages() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&assistant_json("msg-001", 100, 10)));
-    let s2 = reduce(s1, stream(&assistant_json("msg-002", 200, 20)));
-    // 110 + 220 = 330
-    assert_eq!(s2.tokens, 330);
+fn usage_update_is_a_snapshot_not_accumulation() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let s1 = reduce(s0, ev(usage_update(usage(100, 10, 0, 0, 0.1), None)));
+    assert_eq!(s1.tokens, 110);
+    // A later snapshot REPLACES — it does not add to the previous 110.
+    let s2 = reduce(s1, ev(usage_update(usage(200, 20, 0, 0, 0.2), None)));
+    assert_eq!(s2.tokens, 220);
+    assert!((s2.cost_usd - 0.2).abs() < 1e-9);
 }
 
 // ---------------------------------------------------------------------------
-// cost_usd updated from Result
+// cost_usd updated from TurnCompleted
 // ---------------------------------------------------------------------------
 
 #[test]
-fn cost_updated_from_result() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&result_success_json(100, 10, 0.42)));
+fn cost_updated_from_turn_completed() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let s1 = reduce(s0, ev(turn_success(usage(100, 10, 0, 0, 0.42))));
     assert!(
         (s1.cost_usd - 0.42).abs() < 1e-9,
         "expected cost 0.42, got {}",
@@ -475,20 +309,22 @@ fn cost_updated_from_result() {
 }
 
 // ---------------------------------------------------------------------------
-// last_action updated by ToolUse assistant content
+// last_action updated by ToolCallStarted
 // ---------------------------------------------------------------------------
 
 #[test]
-fn last_action_set_by_tool_use() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&tool_use_assistant_json("msg-001", "Read")));
-    let action = s1
-        .last_action
-        .expect("last_action must be set after ToolUse");
-    assert!(
-        action.contains("Read"),
-        "expected 'Read' in last_action, got: {action}"
+fn last_action_set_by_tool_call() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let s1 = reduce(
+        s0,
+        ev(tool_call(
+            "Read",
+            "tu-1",
+            serde_json::json!({"path": "/etc/passwd"}),
+        )),
     );
+    let action = s1.last_action.expect("last_action must be set after a tool call");
+    assert!(action.contains("Read"), "expected 'Read' in last_action, got: {action}");
 }
 
 // ---------------------------------------------------------------------------
@@ -497,7 +333,7 @@ fn last_action_set_by_tool_use() {
 
 #[test]
 fn subagent_stop_hook_marks_done() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
     let s1 = reduce(
         s0,
         Event::Hook(HookEvent::SubagentStop {
@@ -510,34 +346,25 @@ fn subagent_stop_hook_marks_done() {
 }
 
 // ---------------------------------------------------------------------------
-// HookEvent::SessionStart — total, no panic
+// Hooks
 // ---------------------------------------------------------------------------
 
 #[test]
 fn hook_session_start_is_total() {
-    let s0 = SessionState::initial();
-    let s1 = reduce(s0, Event::Hook(HookEvent::SessionStart));
+    let s1 = reduce(SessionState::initial(), Event::Hook(HookEvent::SessionStart));
     let _ = s1; // must not panic
 }
 
-// ---------------------------------------------------------------------------
-// HookEvent::Stop → Phase::Done
-// ---------------------------------------------------------------------------
-
 #[test]
 fn hook_stop_transitions_to_done() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
     let s1 = reduce(s0, Event::Hook(HookEvent::Stop));
     assert_eq!(s1.phase, Phase::Done);
 }
 
-// ---------------------------------------------------------------------------
-// HookEvent::Notification → Phase::Needs
-// ---------------------------------------------------------------------------
-
 #[test]
 fn hook_notification_transitions_to_needs() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
     let s1 = reduce(
         s0,
         Event::Hook(HookEvent::Notification {
@@ -547,13 +374,9 @@ fn hook_notification_transitions_to_needs() {
     assert_eq!(s1.phase, Phase::Needs);
 }
 
-// ---------------------------------------------------------------------------
-// HookEvent::PreToolUse and PostToolUse — phase stays Working
-// ---------------------------------------------------------------------------
-
 #[test]
 fn hook_pre_post_tool_use_keeps_working() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
     let s1 = reduce(
         s0,
         Event::Hook(HookEvent::PreToolUse {
@@ -570,285 +393,240 @@ fn hook_pre_post_tool_use_keeps_working() {
     assert_eq!(s2.phase, Phase::Working);
 }
 
-// ---------------------------------------------------------------------------
-// HookEvent::PreCompact — total, phase unchanged
-// ---------------------------------------------------------------------------
-
 #[test]
 fn hook_pre_compact_is_total_and_working() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
     let s1 = reduce(s0, Event::Hook(HookEvent::PreCompact));
     assert_eq!(s1.phase, Phase::Working);
 }
 
 // ---------------------------------------------------------------------------
-// model_usage — populated from result event's modelUsage map
+// model_usage — populated from TurnCompleted per_model (replace)
 // ---------------------------------------------------------------------------
 
-/// A result event with modelUsage populates state.model_usage (replace).
 #[test]
-fn result_with_model_usage_populates_state() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let result_json = r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.268,"usage":{"input_tokens":11,"output_tokens":155,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"num_turns":1,"permission_denials":[],"modelUsage":{"claude-sonnet-4.6[1m]":{"inputTokens":11,"outputTokens":155,"costUSD":0.268}}}"#;
-    let s1 = reduce(s0, stream(result_json));
-    assert!(
-        !s1.model_usage.is_empty(),
-        "model_usage must be populated from result"
+fn turn_completed_with_per_model_populates_state() {
+    use std::collections::HashMap;
+    use wasit_core::ModelUsage;
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let mut per_model = HashMap::new();
+    per_model.insert(
+        "claude-sonnet-4.6[1m]".to_string(),
+        ModelUsage {
+            input_tokens: 11,
+            output_tokens: 155,
+            cost_usd: 0.268,
+            estimated: false,
+        },
     );
-    let mu = s1
-        .model_usage
-        .get("claude-sonnet-4.6[1m]")
-        .expect("key must exist");
+    let s1 = reduce(s0, ev(turn_success_per_model(usage(11, 155, 0, 0, 0.268), per_model)));
+    assert!(!s1.model_usage.is_empty(), "model_usage must be populated");
+    let mu = s1.model_usage.get("claude-sonnet-4.6[1m]").expect("key must exist");
     assert_eq!(mu.input_tokens, 11);
     assert_eq!(mu.output_tokens, 155);
     assert!((mu.cost_usd - 0.268).abs() < 1e-9);
 }
 
 // ---------------------------------------------------------------------------
-// tools / mcp_servers / slash_commands — populated from system/init
+// tools / mcp_servers / slash_commands — populated from SessionInit
 // ---------------------------------------------------------------------------
 
-/// A system/init event with tools, mcp_servers, and slash_commands populates all three.
 #[test]
-fn system_init_populates_tools_mcp_servers_slash_commands() {
+fn session_init_populates_tools_mcp_servers_slash_commands() {
     use marsad_proto::{McpServerInfo, SlashCommandInfo};
-    let json = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":["Read","Bash","Edit"],"mcp_servers":[{"name":"hares","status":"failed"},{"name":"hub","status":"connected"}],"permissionMode":"default","slash_commands":[{"name":"/clear","description":"Clear conversation history","argumentHint":""},{"name":"/model","description":"Switch model","argumentHint":"model-name"}]}"#;
-    let s0 = SessionState::initial();
-    let s1 = reduce(s0, stream(json));
+    let init = session_init_full(
+        "s1",
+        "m",
+        "/",
+        vec!["Read".into(), "Bash".into(), "Edit".into()],
+        vec![
+            McpServerInfo {
+                name: "hares".to_string(),
+                status: "failed".to_string(),
+            },
+            McpServerInfo {
+                name: "hub".to_string(),
+                status: "connected".to_string(),
+            },
+        ],
+        vec![
+            SlashCommandInfo {
+                name: "/clear".to_string(),
+                description: "Clear conversation history".to_string(),
+                argument_hint: "".to_string(),
+            },
+            SlashCommandInfo {
+                name: "/model".to_string(),
+                description: "Switch model".to_string(),
+                argument_hint: "model-name".to_string(),
+            },
+        ],
+    );
+    let s1 = after_init(init);
     assert_eq!(s1.tools, vec!["Read", "Bash", "Edit"]);
     assert_eq!(s1.mcp_servers.len(), 2);
-    assert_eq!(
-        s1.mcp_servers[0],
-        McpServerInfo {
-            name: "hares".to_string(),
-            status: "failed".to_string()
-        }
-    );
-    assert_eq!(
-        s1.mcp_servers[1],
-        McpServerInfo {
-            name: "hub".to_string(),
-            status: "connected".to_string()
-        }
-    );
+    assert_eq!(s1.mcp_servers[0].name, "hares");
+    assert_eq!(s1.mcp_servers[0].status, "failed");
+    assert_eq!(s1.mcp_servers[1].name, "hub");
     assert_eq!(s1.slash_commands.len(), 2);
-    assert_eq!(
-        s1.slash_commands[0],
-        SlashCommandInfo {
-            name: "/clear".to_string(),
-            description: "Clear conversation history".to_string(),
-            argument_hint: "".to_string()
-        }
-    );
+    assert_eq!(s1.slash_commands[0].name, "/clear");
     assert_eq!(s1.slash_commands[1].name, "/model");
     assert_eq!(s1.slash_commands[1].argument_hint, "model-name");
 }
 
-/// Initial state has empty tools, mcp_servers, slash_commands, and permission_mode None.
 #[test]
 fn initial_state_new_fields_empty() {
     let s = SessionState::initial();
     assert!(s.tools.is_empty());
     assert!(s.mcp_servers.is_empty());
     assert!(s.slash_commands.is_empty());
-    assert!(
-        s.permission_mode.is_none(),
-        "initial permission_mode must be None"
-    );
+    assert!(s.permission_mode.is_none());
 }
 
 // ---------------------------------------------------------------------------
-// permission_mode — stored from system/init permissionMode
+// permission_mode — stored from SessionInit
 // ---------------------------------------------------------------------------
 
 #[test]
-fn system_init_stores_permission_mode_default() {
-    // "default" permissionMode (Ask posture)
-    let json = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"default"}"#;
-    let s = reduce(SessionState::initial(), stream(json));
+fn session_init_stores_permission_mode_default() {
+    let s = after_init(session_init_mode("s1", "m", "/", "default"));
     assert_eq!(s.permission_mode, Some("default".to_string()));
 }
 
 #[test]
-fn system_init_stores_permission_mode_accept_edits() {
-    // "acceptEdits" permissionMode (Auto posture)
-    let json = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"acceptEdits"}"#;
-    let s = reduce(SessionState::initial(), stream(json));
+fn session_init_stores_permission_mode_accept_edits() {
+    let s = after_init(session_init_mode("s1", "m", "/", "acceptEdits"));
     assert_eq!(s.permission_mode, Some("acceptEdits".to_string()));
 }
 
 #[test]
-fn system_init_stores_permission_mode_bypass() {
-    // "bypassPermissions" permissionMode (Full posture)
-    let json = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"bypassPermissions"}"#;
-    let s = reduce(SessionState::initial(), stream(json));
+fn session_init_stores_permission_mode_bypass() {
+    let s = after_init(session_init_mode("s1", "m", "/", "bypassPermissions"));
     assert_eq!(s.permission_mode, Some("bypassPermissions".to_string()));
 }
 
-/// system/init with string-array slash_commands populates correctly.
-#[test]
-fn system_init_slash_commands_string_array_populates() {
-    let json = r#"{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"default","slash_commands":["clear","compact"]}"#;
-    let s1 = reduce(SessionState::initial(), stream(json));
-    assert_eq!(s1.slash_commands.len(), 2);
-    assert_eq!(s1.slash_commands[0].name, "/clear");
-    assert_eq!(s1.slash_commands[1].name, "/compact");
-}
-
 // ---------------------------------------------------------------------------
-// Feature #3 — Running subagents via Task tool_use / tool_result
+// Subagents via ToolCallStarted(is_subagent) / ToolCallFinished
 // ---------------------------------------------------------------------------
 
-fn task_tool_use_json(msg_id: &str, tool_use_id: &str, subagent_type: &str) -> String {
-    serde_json::json!({
-        "type": "assistant",
-        "message": {
-            "id": msg_id,
-            "content": [{
-                "type": "tool_use",
-                "id": tool_use_id,
-                "name": "Task",
-                "input": {
-                    "subagent_type": subagent_type,
-                    "description": "Do some work"
-                }
-            }],
-            "usage": {"input_tokens": 10, "output_tokens": 5,
-                      "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
-        }
-    })
-    .to_string()
-}
-
-fn task_tool_result_json(tool_use_id: &str) -> String {
-    serde_json::json!({
-        "type": "user",
-        "message": {
-            "content": [{
-                "type": "tool_result",
-                "tool_use_id": tool_use_id,
-                "content": "done"
-            }]
-        }
-    })
-    .to_string()
-}
-
-/// A Task tool_use with subagent_type marks a subagent as Running.
 #[test]
-fn task_tool_use_marks_subagent_running() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+fn subagent_call_marks_subagent_running() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
     let s1 = reduce(
         s0,
-        stream(&task_tool_use_json("m-task-1", "tu-task-1", "researcher")),
+        ev(subagent_call(
+            "tu-task-1",
+            serde_json::json!({"subagent_type": "researcher", "description": "Do work"}),
+            None,
+        )),
     );
     assert_eq!(s1.subagents.len(), 1);
-    let agent = &s1.subagents[0];
-    assert_eq!(agent.name, "researcher");
-    assert_eq!(agent.status, SubagentStatus::Running);
+    assert_eq!(s1.subagents[0].name, "researcher");
+    assert_eq!(s1.subagents[0].status, SubagentStatus::Running);
 }
 
-/// A Task tool_result matching the tool_use id marks the subagent as Done.
 #[test]
-fn task_tool_result_marks_subagent_done() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+fn tool_finished_marks_subagent_done() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
     let s1 = reduce(
         s0,
-        stream(&task_tool_use_json("m-task-2", "tu-task-2", "coder")),
+        ev(subagent_call(
+            "tu-task-2",
+            serde_json::json!({"subagent_type": "coder"}),
+            None,
+        )),
     );
     assert_eq!(s1.subagents[0].status, SubagentStatus::Running);
-
-    let s2 = reduce(s1, stream(&task_tool_result_json("tu-task-2")));
+    let s2 = reduce(s1, ev(tool_finished("tu-task-2", "Task", true)));
     assert_eq!(s2.subagents[0].status, SubagentStatus::Done);
 }
 
-/// A tool_result for an unknown tool_use_id (not a Task) is a no-op.
 #[test]
-fn task_tool_result_unknown_id_is_noop() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&task_tool_result_json("unknown-tu-id")));
+fn tool_finished_unknown_id_is_noop() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let s1 = reduce(s0, ev(tool_finished("unknown-tu-id", "Task", true)));
     assert!(s1.subagents.is_empty());
 }
 
-/// Task tool_use uses description when subagent_type is absent.
 #[test]
-fn task_tool_use_uses_description_fallback() {
-    let json = serde_json::json!({
-        "type": "assistant",
-        "message": {
-            "id": "m-fb",
-            "content": [{
-                "type": "tool_use",
-                "id": "tu-fb",
-                "name": "Task",
-                "input": { "description": "analyze codebase" }
-            }],
-            "usage": {"input_tokens": 1, "output_tokens": 1,
-                      "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
-        }
-    })
-    .to_string();
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&json));
+fn subagent_call_uses_description_fallback() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let s1 = reduce(
+        s0,
+        ev(subagent_call(
+            "tu-fb",
+            serde_json::json!({"description": "analyze codebase"}),
+            None,
+        )),
+    );
     assert_eq!(s1.subagents[0].name, "analyze codebase");
     assert_eq!(s1.subagents[0].status, SubagentStatus::Running);
 }
 
-/// Task tool_use with no subagent_type or description falls back to "subagent".
 #[test]
-fn task_tool_use_uses_default_name_when_input_empty() {
-    let json = serde_json::json!({
-        "type": "assistant",
-        "message": {
-            "id": "m-def",
-            "content": [{
-                "type": "tool_use",
-                "id": "tu-def",
-                "name": "Task",
-                "input": {}
-            }],
-            "usage": {"input_tokens": 1, "output_tokens": 1,
-                      "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
-        }
-    })
-    .to_string();
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    let s1 = reduce(s0, stream(&json));
+fn subagent_call_uses_default_name_when_input_empty() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let s1 = reduce(s0, ev(subagent_call("tu-def", serde_json::json!({}), None)));
     assert_eq!(s1.subagents[0].name, "subagent");
 }
 
-/// Two Task tool_uses then both tool_results: both resolve to Done.
 #[test]
-fn two_task_tool_uses_both_resolve_to_done() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
+fn subagent_carries_model_override() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
     let s1 = reduce(
         s0,
-        stream(&task_tool_use_json("m-t3a", "tu-t3a", "worker-a")),
+        ev(subagent_call(
+            "tu-m",
+            serde_json::json!({"subagent_type": "worker"}),
+            Some("claude-haiku".to_string()),
+        )),
+    );
+    assert_eq!(s1.subagents[0].model.as_deref(), Some("claude-haiku"));
+}
+
+#[test]
+fn two_subagents_both_resolve_to_done() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let s1 = reduce(
+        s0,
+        ev(subagent_call(
+            "tu-a",
+            serde_json::json!({"subagent_type": "worker-a"}),
+            None,
+        )),
     );
     let s2 = reduce(
         s1,
-        stream(&task_tool_use_json("m-t3b", "tu-t3b", "worker-b")),
+        ev(subagent_call(
+            "tu-b",
+            serde_json::json!({"subagent_type": "worker-b"}),
+            None,
+        )),
     );
     assert_eq!(s2.subagents.len(), 2);
     assert_eq!(s2.subagents[0].status, SubagentStatus::Running);
     assert_eq!(s2.subagents[1].status, SubagentStatus::Running);
 
-    let s3 = reduce(s2, stream(&task_tool_result_json("tu-t3a")));
+    let s3 = reduce(s2, ev(tool_finished("tu-a", "Task", true)));
     assert_eq!(s3.subagents[0].status, SubagentStatus::Done);
     assert_eq!(s3.subagents[1].status, SubagentStatus::Running);
 
-    let s4 = reduce(s3, stream(&task_tool_result_json("tu-t3b")));
+    let s4 = reduce(s3, ev(tool_finished("tu-b", "Task", true)));
     assert_eq!(s4.subagents[0].status, SubagentStatus::Done);
     assert_eq!(s4.subagents[1].status, SubagentStatus::Done);
 }
 
-/// SubagentStop hook from the hook system still records a Done subagent (secondary signal).
 #[test]
-fn subagent_stop_hook_still_records_done_alongside_task_tracking() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json()));
-    // Start a task-tracked subagent
-    let s1 = reduce(s0, stream(&task_tool_use_json("m-t4", "tu-t4", "helper")));
-    // Also receive a SubagentStop hook for a different subagent (untracked by Task)
+fn subagent_stop_hook_still_records_done_alongside_call_tracking() {
+    let s0 = after_init(session_init("sess-01", "claude-opus-4-5", "/tmp/work"));
+    let s1 = reduce(
+        s0,
+        ev(subagent_call(
+            "tu-t4",
+            serde_json::json!({"subagent_type": "helper"}),
+            None,
+        )),
+    );
     let s2 = reduce(
         s1,
         Event::Hook(HookEvent::SubagentStop {
@@ -856,9 +634,7 @@ fn subagent_stop_hook_still_records_done_alongside_task_tracking() {
         }),
     );
     assert_eq!(s2.subagents.len(), 2);
-    // The hook-recorded one is Done
     assert_eq!(s2.subagents[1].status, SubagentStatus::Done);
     assert_eq!(s2.subagents[1].name, "external-agent");
-    // The task-tracked one is still Running
     assert_eq!(s2.subagents[0].status, SubagentStatus::Running);
 }

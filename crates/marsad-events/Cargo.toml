@@ -13,3 +13,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 marsad-proto = { workspace = true }
 marsad-gates = { workspace = true }
+wasit-core = { path = "../../Wasit/crates/wasit-core" }

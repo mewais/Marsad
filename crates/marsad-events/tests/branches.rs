@@ -1,53 +1,19 @@
-//! B02 `marsad-events` — branch coverage.
+//! marsad-events — branch coverage over `AgentEvent`.
 //!
-//! Covers every Phase variant, the DEDUP-by-message-id invariant, context_pct
-//! clamp to 100, context_window_for's two branches ([1m] suffix vs default),
-//! every HookEvent variant, and Stale/Detached preservation.
-//!
-//! Key invariants explicitly tested and labelled:
-//!   DEDUP — folding the same assistant message id twice must NOT double-count tokens.
-//!   CLAMP — context_pct must never exceed 100.0 even when tokens > context_window.
+//! Covers every Phase variant, the usage-SNAPSHOT invariant (Wave 1 replaced the
+//! old per-message-id DEDUP accumulation — usage now arrives as authoritative
+//! snapshots via UsageUpdate/TurnCompleted), context_pct clamp to 100,
+//! context_window_for's two branches ([1m] vs default), every HookEvent variant,
+//! Stale/Detached preservation, and Question/Plan gate shaping.
+
+mod common;
+use common::*;
 
 use marsad_events::{reduce, Event, HookEvent, Phase, SessionState, SubagentStatus};
-use marsad_proto::parse_stream_line;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn stream(json: &str) -> Event {
-    let msg = parse_stream_line(json)
-        .unwrap_or_else(|e| panic!("test JSON failed to parse: {e:?}\njson: {json}"));
-    Event::Stream(msg)
-}
-
-fn system_init_for_model(model: &str) -> String {
-    format!(
-        r#"{{"type":"system","subtype":"init","session_id":"sess-br","model":"{model}","cwd":"/tmp","tools":[],"mcp_servers":[],"permissionMode":"default"}}"#
-    )
-}
-
-fn assistant_json(id: &str, input: u64, output: u64) -> String {
-    format!(
-        r#"{{"type":"assistant","message":{{"id":"{id}","content":[{{"type":"text","text":"x"}}],"usage":{{"input_tokens":{input},"output_tokens":{output},"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}"#
-    )
-}
-
-fn result_success_json() -> &'static str {
-    r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.5,"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"num_turns":1,"permission_denials":[]}"#
-}
-
-fn result_error_json(subtype: &str) -> String {
-    format!(
-        r#"{{"type":"result","subtype":"{subtype}","is_error":false,"total_cost_usd":0.01,"usage":{{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":1,"permission_denials":[]}}"#
-    )
-}
+use wasit_core::EndReason as WEndReason;
 
 fn init_with_model(model: &str) -> SessionState {
-    reduce(
-        SessionState::initial(),
-        stream(&system_init_for_model(model)),
-    )
+    after_init(session_init("sess-br", model, "/tmp"))
 }
 
 // ---------------------------------------------------------------------------
@@ -60,28 +26,20 @@ fn phase_starting_is_initial() {
 }
 
 #[test]
-fn phase_working_reachable_via_system_init() {
-    let s = init_with_model("claude-opus-4-5");
-    assert_eq!(s.phase, Phase::Working);
+fn phase_working_reachable_via_session_init() {
+    assert_eq!(init_with_model("claude-opus-4-5").phase, Phase::Working);
 }
 
 #[test]
-fn phase_needs_reachable_via_control_request() {
-    let s0 = init_with_model("claude-opus-4-5");
-    let s1 = reduce(
-        s0,
-        stream(
-            r#"{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{}}}"#,
-        ),
-    );
+fn phase_needs_reachable_via_gate() {
+    let s1 = reduce(init_with_model("claude-opus-4-5"), ev(permission_gate("req-1", "ls", "list")));
     assert_eq!(s1.phase, Phase::Needs);
 }
 
 #[test]
 fn phase_needs_reachable_via_notification_hook() {
-    let s0 = init_with_model("claude-opus-4-5");
     let s1 = reduce(
-        s0,
+        init_with_model("claude-opus-4-5"),
         Event::Hook(HookEvent::Notification {
             message: "Something needs attention".to_string(),
         }),
@@ -90,30 +48,32 @@ fn phase_needs_reachable_via_notification_hook() {
 }
 
 #[test]
-fn phase_error_reachable_via_error_during_execution() {
-    let s0 = init_with_model("claude-opus-4-5");
-    let s1 = reduce(s0, stream(&result_error_json("error_during_execution")));
+fn phase_error_reachable_via_execution_error() {
+    let s1 = reduce(
+        init_with_model("claude-opus-4-5"),
+        ev(turn_end(WEndReason::ExecutionError, usage(10, 2, 0, 0, 0.01))),
+    );
     assert_eq!(s1.phase, Phase::Error);
 }
 
 #[test]
 fn phase_error_reachable_via_max_turns() {
-    let s0 = init_with_model("claude-opus-4-5");
-    let s1 = reduce(s0, stream(&result_error_json("error_max_turns")));
+    let s1 = reduce(
+        init_with_model("claude-opus-4-5"),
+        ev(turn_end(WEndReason::MaxTurns, usage(10, 2, 0, 0, 0.01))),
+    );
     assert_eq!(s1.phase, Phase::Error);
 }
 
 #[test]
-fn phase_done_reachable_via_result_success() {
-    let s0 = init_with_model("claude-opus-4-5");
-    let s1 = reduce(s0, stream(result_success_json()));
+fn phase_done_reachable_via_turn_success() {
+    let s1 = reduce(init_with_model("claude-opus-4-5"), ev(turn_success(usage(100, 20, 0, 0, 0.5))));
     assert_eq!(s1.phase, Phase::Done);
 }
 
 #[test]
 fn phase_done_reachable_via_stop_hook() {
-    let s0 = init_with_model("claude-opus-4-5");
-    let s1 = reduce(s0, Event::Hook(HookEvent::Stop));
+    let s1 = reduce(init_with_model("claude-opus-4-5"), Event::Hook(HookEvent::Stop));
     assert_eq!(s1.phase, Phase::Done);
 }
 
@@ -121,7 +81,6 @@ fn phase_done_reachable_via_stop_hook() {
 fn phase_stale_set_externally_and_preserved_by_hook() {
     let mut s = init_with_model("claude-opus-4-5");
     s.phase = Phase::Stale;
-    // A non-superseding hook (PreCompact) should preserve Stale
     let s1 = reduce(s, Event::Hook(HookEvent::PreCompact));
     assert_eq!(s1.phase, Phase::Stale);
 }
@@ -135,71 +94,63 @@ fn phase_detached_set_externally_and_preserved_by_hook() {
 }
 
 #[test]
-fn phase_stale_preserved_by_unknown_stream() {
+fn phase_stale_preserved_by_unknown_event() {
     let mut s = init_with_model("claude-opus-4-5");
     s.phase = Phase::Stale;
-    let s1 = reduce(s, stream(r#"{"type":"future_msg","data":1}"#));
+    let s1 = reduce(
+        s,
+        ev(wasit_core::AgentEvent::Unknown {
+            raw: serde_json::json!({"type": "future_msg"}),
+        }),
+    );
     assert_eq!(s1.phase, Phase::Stale);
 }
 
 #[test]
-fn phase_detached_preserved_by_unknown_stream() {
+fn phase_detached_preserved_by_unknown_event() {
     let mut s = init_with_model("claude-opus-4-5");
     s.phase = Phase::Detached;
-    let s1 = reduce(s, stream(r#"{"type":"future_msg","data":1}"#));
+    let s1 = reduce(
+        s,
+        ev(wasit_core::AgentEvent::Unknown {
+            raw: serde_json::json!({"type": "future_msg"}),
+        }),
+    );
     assert_eq!(s1.phase, Phase::Detached);
 }
 
 // ---------------------------------------------------------------------------
-// DEDUP-BY-MESSAGE-ID
-// Folding the same assistant message id twice must NOT double-count tokens.
-// This is the critical spec invariant: "dedup assistant usage by message id".
+// Usage SNAPSHOT (Wave 1) — UsageUpdate/TurnCompleted replace, never accumulate.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn dedup_same_id_does_not_double_count() {
-    // [DEDUP] Core invariant test.
+fn usage_update_snapshot_replaces_not_accumulates() {
     let s0 = init_with_model("claude-opus-4-5");
-
-    let s1 = reduce(s0, stream(&assistant_json("msg-dup", 100, 20)));
-    let tokens_after_first = s1.tokens;
-    assert_eq!(tokens_after_first, 120, "first fold: 100+20=120");
-
-    // Fold the SAME message id again — must NOT increase the token count.
-    let s2 = reduce(s1, stream(&assistant_json("msg-dup", 100, 20)));
-    assert_eq!(
-        s2.tokens, tokens_after_first,
-        "[DEDUP] folding msg-dup twice must not increase token count: \
-         first={tokens_after_first} second={}",
-        s2.tokens
-    );
+    let s1 = reduce(s0, ev(usage_update(usage(100, 20, 0, 0, 0.0), None)));
+    assert_eq!(s1.tokens, 120, "first snapshot: 100+20=120");
+    // A repeat/refresh snapshot with the same totals stays 120 (replace).
+    let s2 = reduce(s1, ev(usage_update(usage(100, 20, 0, 0, 0.0), None)));
+    assert_eq!(s2.tokens, 120, "a repeated snapshot must not double-count");
 }
 
 #[test]
-fn dedup_different_ids_do_accumulate() {
-    // [DEDUP] Different message ids MUST each contribute their tokens.
+fn later_snapshot_reflects_new_cumulative_total() {
     let s0 = init_with_model("claude-opus-4-5");
-    let s1 = reduce(s0, stream(&assistant_json("msg-A", 100, 20))); // 120
-    let s2 = reduce(s1, stream(&assistant_json("msg-B", 200, 30))); // 230
-    assert_eq!(s2.tokens, 350, "msg-A (120) + msg-B (230) = 350");
+    let s1 = reduce(s0, ev(usage_update(usage(100, 20, 0, 0, 0.0), None))); // 120
+    let s2 = reduce(s1, ev(usage_update(usage(300, 50, 0, 0, 0.0), None))); // 350 (new cumulative)
+    assert_eq!(s2.tokens, 350);
 }
 
 #[test]
-fn dedup_triple_replay_still_no_double_count() {
-    // [DEDUP] Even three replays of the same id stay deduped.
+fn turn_completed_snapshots_cumulative_total() {
     let s0 = init_with_model("claude-opus-4-5");
-    let s1 = reduce(s0, stream(&assistant_json("msg-trip", 50, 10))); // 60
-    let s2 = reduce(s1, stream(&assistant_json("msg-trip", 50, 10))); // still 60
-    let s3 = reduce(s2, stream(&assistant_json("msg-trip", 50, 10))); // still 60
-    assert_eq!(
-        s3.tokens, 60,
-        "[DEDUP] three replays of msg-trip must stay at 60 tokens, got {}",
-        s3.tokens
-    );
+    let s1 = reduce(s0, ev(turn_success(usage(50, 10, 0, 0, 0.0)))); // 60
+    let s2 = reduce(s1, ev(turn_success(usage(50, 10, 0, 0, 0.0)))); // still 60 (snapshot)
+    assert_eq!(s2.tokens, 60);
 }
 
 // ---------------------------------------------------------------------------
-// context_pct clamp to 100
+// context_pct clamp to 100 (derived from tokens when no explicit context_pct)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -207,10 +158,8 @@ fn context_pct_computed_roughly_at_half_window() {
     let model = "claude-opus-4-5";
     let window = SessionState::context_window_for(model);
     assert!(window > 0);
-
-    let s0 = init_with_model(model);
     let half = window / 2;
-    let s1 = reduce(s0, stream(&assistant_json("msg-half", half, 0)));
+    let s1 = reduce(init_with_model(model), ev(usage_update(usage(half, 0, 0, 0, 0.0), None)));
     assert!(
         (s1.context_pct - 50.0).abs() < 2.0,
         "expected ~50% context at half-window, got {}",
@@ -220,42 +169,24 @@ fn context_pct_computed_roughly_at_half_window() {
 
 #[test]
 fn context_pct_clamped_to_100_on_overflow() {
-    // [CLAMP] Feeding 2× the window must clamp to exactly 100.0.
     let model = "claude-opus-4-5";
     let window = SessionState::context_window_for(model);
-    let s0 = init_with_model(model);
-    let s1 = reduce(s0, stream(&assistant_json("msg-over", window * 2, 0)));
-    assert_eq!(
-        s1.context_pct, 100.0,
-        "[CLAMP] context_pct must be clamped to 100.0 when tokens exceed window, got {}",
-        s1.context_pct
-    );
+    let s1 = reduce(init_with_model(model), ev(usage_update(usage(window * 2, 0, 0, 0, 0.0), None)));
+    assert_eq!(s1.context_pct, 100.0, "context_pct must clamp to 100.0 on overflow");
 }
 
 #[test]
-fn context_pct_never_exceeds_100_after_many_messages() {
-    // [CLAMP] Accumulating many large messages across different ids.
-    let model = "claude-haiku-3-5";
-    let window = SessionState::context_window_for(model);
-    let mut s = init_with_model(model);
-    for i in 0u64..5 {
-        s = reduce(s, stream(&assistant_json(&format!("msg-{i}"), window, 0)));
-    }
-    assert!(
-        s.context_pct <= 100.0,
-        "[CLAMP] context_pct exceeded 100 after accumulation: {}",
-        s.context_pct
+fn context_pct_from_explicit_value_is_clamped() {
+    // opencode reports context_pct directly; the reducer clamps to [0,100].
+    let s1 = reduce(
+        init_with_model("gpt-4o"),
+        ev(usage_update(usage(1, 1, 0, 0, 0.0), Some(150.0))),
     );
+    assert_eq!(s1.context_pct, 100.0);
 }
 
 // ---------------------------------------------------------------------------
 // context_window_for: [1m] suffix vs 200_000 default
-//
-// There is no verified per-model context-window table (see the doc comment
-// on context_window_for) — every model string Claude Code has been observed
-// to report falls back to the 200_000 default, and only the fixture-verified
-// "[1m]" suffix (fixtures/streams/qa.ndjson) signals 1_000_000. These tests
-// cover exactly those two branches.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -266,41 +197,25 @@ fn context_window_for_named_models_without_1m_suffix_default_to_200_000() {
         "claude-sonnet-4-6",
         "claude-haiku-3-5",
         "claude-opus-4-8",
-        "claude-3-opus-20240229",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022",
-        "claude-3-haiku-20240307",
         "hypothetical-future-model-xyz-999",
     ];
     for model in &models {
-        let w = SessionState::context_window_for(model);
         assert_eq!(
-            w, 200_000,
-            "context_window_for({model}) must default to 200_000, got {w}"
+            SessionState::context_window_for(model),
+            200_000,
+            "context_window_for({model}) must default to 200_000"
         );
     }
 }
 
 #[test]
 fn context_window_for_1m_suffix_returns_1_000_000() {
-    // The "[1m]" suffix signals a 1M-token context window.
-    // qa.ndjson modelUsage shows contextWindow=1000000 for "claude-opus-4.8[1m]".
-    let w = SessionState::context_window_for("claude-opus-4.8[1m]");
-    assert_eq!(
-        w, 1_000_000,
-        "1M-context model must return 1_000_000, got {w}"
-    );
+    assert_eq!(SessionState::context_window_for("claude-opus-4.8[1m]"), 1_000_000);
 }
 
 #[test]
 fn context_window_for_1m_suffix_on_any_model_name_returns_1_000_000() {
-    // The suffix check is a substring match, independent of the base model
-    // name — any model string carrying "[1m]" gets the 1M window.
-    let w = SessionState::context_window_for("claude-sonnet-4-6[1m]");
-    assert_eq!(
-        w, 1_000_000,
-        "any model with the [1m] suffix must return 1_000_000, got {w}"
-    );
+    assert_eq!(SessionState::context_window_for("claude-sonnet-4-6[1m]"), 1_000_000);
 }
 
 // ---------------------------------------------------------------------------
@@ -326,18 +241,15 @@ fn hook_all_variants_total() {
         Event::Hook(HookEvent::SessionStart),
         Event::Hook(HookEvent::PreCompact),
     ];
-    // Each hook applied to a fresh init state must not panic.
     for hook in hooks {
-        let s0 = init_with_model("claude-opus-4-5");
-        let _s1 = reduce(s0, hook);
+        let _s1 = reduce(init_with_model("claude-opus-4-5"), hook);
     }
 }
 
 #[test]
 fn hook_notification_gives_needs() {
-    let s0 = init_with_model("claude-opus-4-5");
     let s1 = reduce(
-        s0,
+        init_with_model("claude-opus-4-5"),
         Event::Hook(HookEvent::Notification {
             message: "confirm tool use".to_string(),
         }),
@@ -347,30 +259,27 @@ fn hook_notification_gives_needs() {
 
 #[test]
 fn hook_stop_gives_done() {
-    let s0 = init_with_model("claude-opus-4-5");
-    let s1 = reduce(s0, Event::Hook(HookEvent::Stop));
+    let s1 = reduce(init_with_model("claude-opus-4-5"), Event::Hook(HookEvent::Stop));
     assert_eq!(s1.phase, Phase::Done);
 }
 
 #[test]
 fn hook_subagent_stop_records_agent() {
-    let s0 = init_with_model("claude-opus-4-5");
     let s1 = reduce(
-        s0,
+        init_with_model("claude-opus-4-5"),
         Event::Hook(HookEvent::SubagentStop {
             name: "search-agent".to_string(),
         }),
     );
     let agent = s1.subagents.iter().find(|a| a.name == "search-agent");
-    assert!(agent.is_some(), "SubagentStop must record the subagent");
+    assert!(agent.is_some());
     assert_eq!(agent.unwrap().status, SubagentStatus::Done);
 }
 
 #[test]
 fn hook_pre_tool_use_keeps_working() {
-    let s0 = init_with_model("claude-opus-4-5");
     let s1 = reduce(
-        s0,
+        init_with_model("claude-opus-4-5"),
         Event::Hook(HookEvent::PreToolUse {
             tool: "Read".to_string(),
         }),
@@ -380,9 +289,8 @@ fn hook_pre_tool_use_keeps_working() {
 
 #[test]
 fn hook_post_tool_use_keeps_working() {
-    let s0 = init_with_model("claude-opus-4-5");
     let s1 = reduce(
-        s0,
+        init_with_model("claude-opus-4-5"),
         Event::Hook(HookEvent::PostToolUse {
             tool: "Read".to_string(),
         }),
@@ -392,205 +300,88 @@ fn hook_post_tool_use_keeps_working() {
 
 #[test]
 fn hook_session_start_total_from_starting() {
-    let s0 = SessionState::initial();
-    let s1 = reduce(s0, Event::Hook(HookEvent::SessionStart));
-    let _ = s1.phase; // must not panic
+    let s1 = reduce(SessionState::initial(), Event::Hook(HookEvent::SessionStart));
+    let _ = s1.phase;
 }
 
 #[test]
 fn hook_pre_compact_preserves_working() {
-    let s0 = init_with_model("claude-opus-4-5");
-    let s1 = reduce(s0, Event::Hook(HookEvent::PreCompact));
+    let s1 = reduce(init_with_model("claude-opus-4-5"), Event::Hook(HookEvent::PreCompact));
     assert_eq!(s1.phase, Phase::Working);
 }
 
 // ---------------------------------------------------------------------------
-// Stale / Detached: superseded ONLY by a real SystemInit; all other stream
-// messages (Assistant, User, Result, control) are totality no-ops.
+// Stale / Detached: superseded ONLY by a real SessionInit.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn stale_superseded_by_new_system_init() {
+fn stale_superseded_by_new_session_init() {
     let mut s = init_with_model("claude-opus-4-5");
     s.phase = Phase::Stale;
-    let s1 = reduce(
-        s,
-        stream(
-            r#"{"type":"system","subtype":"init","session_id":"sess-new","model":"claude-opus-4-5","cwd":"/tmp","tools":[],"mcp_servers":[],"permissionMode":"default"}"#,
-        ),
-    );
-    assert_eq!(s1.phase, Phase::Working, "SystemInit must supersede Stale");
+    let s1 = reduce(s, ev(session_init("sess-new", "claude-opus-4-5", "/tmp")));
+    assert_eq!(s1.phase, Phase::Working, "SessionInit must supersede Stale");
 }
 
 #[test]
-fn detached_superseded_by_new_system_init() {
+fn detached_superseded_by_new_session_init() {
     let mut s = init_with_model("claude-opus-4-5");
     s.phase = Phase::Detached;
-    let s1 = reduce(
-        s,
-        stream(
-            r#"{"type":"system","subtype":"init","session_id":"sess-new2","model":"claude-opus-4-5","cwd":"/tmp","tools":[],"mcp_servers":[],"permissionMode":"default"}"#,
-        ),
-    );
-    assert_eq!(
-        s1.phase,
-        Phase::Working,
-        "SystemInit must supersede Detached"
-    );
+    let s1 = reduce(s, ev(session_init("sess-new2", "claude-opus-4-5", "/tmp")));
+    assert_eq!(s1.phase, Phase::Working, "SessionInit must supersede Detached");
 }
 
 #[test]
-fn stale_preserved_by_assistant_stream() {
+fn stale_preserved_by_assistant_delta() {
     let mut s = init_with_model("claude-opus-4-5");
     s.phase = Phase::Stale;
-    let s1 = reduce(s, stream(&assistant_json("msg-stale-a", 50, 10)));
-    assert_eq!(s1.phase, Phase::Stale, "Assistant must not escape Stale");
+    let s1 = reduce(s, ev(assistant_delta("x")));
+    assert_eq!(s1.phase, Phase::Stale);
 }
 
 #[test]
-fn detached_preserved_by_assistant_stream() {
+fn detached_preserved_by_tool_call() {
     let mut s = init_with_model("claude-opus-4-5");
     s.phase = Phase::Detached;
-    let s1 = reduce(s, stream(&assistant_json("msg-detach-a", 50, 10)));
-    assert_eq!(
-        s1.phase,
-        Phase::Detached,
-        "Assistant must not escape Detached"
-    );
+    let s1 = reduce(s, ev(tool_call("Read", "t", serde_json::json!({}))));
+    assert_eq!(s1.phase, Phase::Detached);
 }
 
 #[test]
-fn stale_preserved_by_user_stream() {
+fn stale_preserved_by_turn_completed() {
     let mut s = init_with_model("claude-opus-4-5");
     s.phase = Phase::Stale;
-    let s1 = reduce(
-        s,
-        stream(r#"{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}"#),
-    );
-    assert_eq!(s1.phase, Phase::Stale, "User message must not escape Stale");
+    let s1 = reduce(s, ev(turn_success(usage(100, 20, 0, 0, 0.5))));
+    assert_eq!(s1.phase, Phase::Stale);
 }
 
 #[test]
-fn detached_preserved_by_user_stream() {
+fn detached_preserved_by_gate() {
     let mut s = init_with_model("claude-opus-4-5");
     s.phase = Phase::Detached;
-    let s1 = reduce(
-        s,
-        stream(r#"{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}"#),
-    );
-    assert_eq!(
-        s1.phase,
-        Phase::Detached,
-        "User message must not escape Detached"
-    );
+    let s1 = reduce(s, ev(permission_gate("req-detach", "ls", "list")));
+    assert_eq!(s1.phase, Phase::Detached);
+    assert!(s1.gate.is_none(), "a gate must not be enqueued while Detached");
 }
 
 #[test]
-fn stale_preserved_by_result_stream() {
-    let mut s = init_with_model("claude-opus-4-5");
-    s.phase = Phase::Stale;
-    let s1 = reduce(s, stream(result_success_json()));
-    assert_eq!(s1.phase, Phase::Stale, "Result must not escape Stale");
-}
-
-#[test]
-fn detached_preserved_by_result_stream() {
-    let mut s = init_with_model("claude-opus-4-5");
-    s.phase = Phase::Detached;
-    let s1 = reduce(s, stream(result_success_json()));
-    assert_eq!(s1.phase, Phase::Detached, "Result must not escape Detached");
-}
-
-#[test]
-fn stale_preserved_by_control_stream() {
-    let mut s = init_with_model("claude-opus-4-5");
-    s.phase = Phase::Stale;
-    let s1 = reduce(
-        s,
-        stream(
-            r#"{"type":"control_request","request_id":"req-stale","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{}}}"#,
-        ),
-    );
-    assert_eq!(
-        s1.phase,
-        Phase::Stale,
-        "Control request must not escape Stale"
-    );
-}
-
-#[test]
-fn detached_preserved_by_control_stream() {
-    let mut s = init_with_model("claude-opus-4-5");
-    s.phase = Phase::Detached;
-    let s1 = reduce(
-        s,
-        stream(
-            r#"{"type":"control_request","request_id":"req-detach","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{}}}"#,
-        ),
-    );
-    assert_eq!(
-        s1.phase,
-        Phase::Detached,
-        "Control request must not escape Detached"
-    );
-}
-
-#[test]
-fn stale_preserved_by_all_hooks_except_superseding() {
-    // All hook events (except none — there is no superseding hook) preserve Stale.
+fn stale_preserved_by_all_hooks() {
     let hooks = vec![
         Event::Hook(HookEvent::Stop),
-        Event::Hook(HookEvent::SubagentStop {
-            name: "a".to_string(),
-        }),
-        Event::Hook(HookEvent::PreToolUse {
-            tool: "Bash".to_string(),
-        }),
-        Event::Hook(HookEvent::PostToolUse {
-            tool: "Bash".to_string(),
-        }),
+        Event::Hook(HookEvent::SubagentStop { name: "a".to_string() }),
+        Event::Hook(HookEvent::PreToolUse { tool: "Bash".to_string() }),
+        Event::Hook(HookEvent::PostToolUse { tool: "Bash".to_string() }),
         Event::Hook(HookEvent::SessionStart),
         Event::Hook(HookEvent::PreCompact),
     ];
     for hook in hooks {
         let mut s = init_with_model("claude-opus-4-5");
         s.phase = Phase::Stale;
-        let s1 = reduce(s, hook);
-        assert_eq!(s1.phase, Phase::Stale, "hook event must preserve Stale");
-    }
-}
-
-#[test]
-fn detached_preserved_by_all_hooks_except_superseding() {
-    // All hook events preserve Detached.
-    let hooks = vec![
-        Event::Hook(HookEvent::Stop),
-        Event::Hook(HookEvent::SubagentStop {
-            name: "b".to_string(),
-        }),
-        Event::Hook(HookEvent::PreToolUse {
-            tool: "Write".to_string(),
-        }),
-        Event::Hook(HookEvent::PostToolUse {
-            tool: "Write".to_string(),
-        }),
-        Event::Hook(HookEvent::SessionStart),
-        Event::Hook(HookEvent::PreCompact),
-    ];
-    for hook in hooks {
-        let mut s = init_with_model("claude-opus-4-5");
-        s.phase = Phase::Detached;
-        let s1 = reduce(s, hook);
-        assert_eq!(
-            s1.phase,
-            Phase::Detached,
-            "hook event must preserve Detached"
-        );
+        assert_eq!(reduce(s, hook).phase, Phase::Stale);
     }
 }
 
 // ---------------------------------------------------------------------------
-// Derives: PartialEq, Clone, Debug compile-time checks
+// Derives
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -630,110 +421,22 @@ fn subagent_status_derives_clone_eq_debug() {
 }
 
 // ---------------------------------------------------------------------------
-// AskUserQuestion gate via control_request
+// Question / Plan gate shaping from typed GateRequest
 // ---------------------------------------------------------------------------
 
-fn system_init_json_br() -> &'static str {
-    r#"{"type":"system","subtype":"init","session_id":"sess-q","model":"claude-opus-4-5","cwd":"/tmp","tools":[],"mcp_servers":[],"permissionMode":"default"}"#
-}
-
-fn ask_user_question_json(request_id: &str) -> String {
-    let val = serde_json::json!({
-        "type": "control_request",
-        "request_id": request_id,
-        "request": {
-            "subtype": "can_use_tool",
-            "tool_name": "AskUserQuestion",
-            "input": {
-                "questions": [{
-                    "question": "Which option?",
-                    "header": "Choose",
-                    "multiSelect": false,
-                    "options": [
-                        {"label": "A", "description": "First"},
-                        {"label": "B", "description": "Second"}
-                    ]
-                }]
-            }
-        }
-    });
-    serde_json::to_string(&val).unwrap()
-}
-
-fn ask_user_question_multi_json(request_id: &str) -> String {
-    let val = serde_json::json!({
-        "type": "control_request",
-        "request_id": request_id,
-        "request": {
-            "subtype": "can_use_tool",
-            "tool_name": "AskUserQuestion",
-            "input": {
-                "questions": [{
-                    "question": "Pick all that apply?",
-                    "header": "Multi",
-                    "multiSelect": true,
-                    "options": [
-                        {"label": "X", "description": ""},
-                        {"label": "Y", "description": ""}
-                    ]
-                }]
-            }
-        }
-    });
-    serde_json::to_string(&val).unwrap()
-}
-
-fn ask_user_question_no_questions_json(request_id: &str) -> String {
-    let val = serde_json::json!({
-        "type": "control_request",
-        "request_id": request_id,
-        "request": {
-            "subtype": "can_use_tool",
-            "tool_name": "AskUserQuestion",
-            "input": {}
-        }
-    });
-    serde_json::to_string(&val).unwrap()
-}
-
-fn exit_plan_mode_json(request_id: &str) -> String {
-    // Build via serde_json to avoid raw-string escaping issues with embedded newlines.
-    let plan_body = "## The Plan\n\n1. Step one\n2. Step two";
-    let val = serde_json::json!({
-        "type": "control_request",
-        "request_id": request_id,
-        "request": {
-            "subtype": "can_use_tool",
-            "tool_name": "ExitPlanMode",
-            "input": { "plan": plan_body }
-        }
-    });
-    serde_json::to_string(&val).unwrap()
-}
-
-fn exit_plan_mode_no_plan_json(request_id: &str) -> String {
-    let val = serde_json::json!({
-        "type": "control_request",
-        "request_id": request_id,
-        "request": {
-            "subtype": "can_use_tool",
-            "tool_name": "ExitPlanMode",
-            "input": {}
-        }
-    });
-    serde_json::to_string(&val).unwrap()
-}
-
 #[test]
-fn ask_user_question_single_select_builds_question_gate() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json_br()));
-    let s1 = reduce(s0, stream(&ask_user_question_json("req-aq-1")));
+fn question_gate_single_select_builds_question_gate() {
+    let s0 = init_with_model("claude-opus-4-5");
+    let q = qprompt(
+        "Which option?",
+        "Choose",
+        false,
+        vec![("A", "First"), ("B", "Second")],
+    );
+    let s1 = reduce(s0, ev(question_gate("req-aq-1", vec![q])));
     assert_eq!(s1.phase, Phase::Needs);
     match s1.gate.as_ref().expect("gate must be set") {
-        marsad_gates::Gate::Question {
-            request_id,
-            questions,
-        } => {
+        marsad_gates::Gate::Question { request_id, questions } => {
             assert_eq!(request_id, "req-aq-1");
             assert_eq!(questions.len(), 1);
             assert_eq!(questions[0].question, "Which option?");
@@ -748,35 +451,30 @@ fn ask_user_question_single_select_builds_question_gate() {
 }
 
 #[test]
-fn ask_user_question_multi_select_builds_question_gate() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json_br()));
-    let s1 = reduce(s0, stream(&ask_user_question_multi_json("req-aq-2")));
-    assert_eq!(s1.phase, Phase::Needs);
+fn question_gate_multi_select_builds_question_gate() {
+    let s0 = init_with_model("claude-opus-4-5");
+    let q = qprompt("Pick all?", "Multi", true, vec![("X", ""), ("Y", "")]);
+    let s1 = reduce(s0, ev(question_gate("req-aq-2", vec![q])));
     match s1.gate.as_ref().expect("gate must be set") {
-        marsad_gates::Gate::Question { questions, .. } => {
-            assert!(questions[0].multi_select);
-        }
+        marsad_gates::Gate::Question { questions, .. } => assert!(questions[0].multi_select),
         other => panic!("expected Question gate, got {other:?}"),
     }
 }
 
 #[test]
-fn ask_user_question_empty_input_yields_empty_questions() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json_br()));
-    let s1 = reduce(s0, stream(&ask_user_question_no_questions_json("req-aq-3")));
-    assert_eq!(s1.phase, Phase::Needs);
+fn question_gate_empty_questions() {
+    let s0 = init_with_model("claude-opus-4-5");
+    let s1 = reduce(s0, ev(question_gate("req-aq-3", vec![])));
     match s1.gate.as_ref().expect("gate must be set") {
-        marsad_gates::Gate::Question { questions, .. } => {
-            assert!(questions.is_empty());
-        }
+        marsad_gates::Gate::Question { questions, .. } => assert!(questions.is_empty()),
         other => panic!("expected Question gate, got {other:?}"),
     }
 }
 
 #[test]
-fn exit_plan_mode_builds_plan_gate_with_markdown() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json_br()));
-    let s1 = reduce(s0, stream(&exit_plan_mode_json("req-ep-1")));
+fn plan_gate_builds_plan_gate_with_summary() {
+    let s0 = init_with_model("claude-opus-4-5");
+    let s1 = reduce(s0, ev(plan_gate("req-ep-1", "## The Plan\n\n1. Step one\n2. Step two")));
     assert_eq!(s1.phase, Phase::Needs);
     match s1.gate.as_ref().expect("gate must be set") {
         marsad_gates::Gate::Plan { summary, steps, .. } => {
@@ -788,10 +486,9 @@ fn exit_plan_mode_builds_plan_gate_with_markdown() {
 }
 
 #[test]
-fn exit_plan_mode_no_plan_field_yields_empty_summary() {
-    let s0 = reduce(SessionState::initial(), stream(system_init_json_br()));
-    let s1 = reduce(s0, stream(&exit_plan_mode_no_plan_json("req-ep-2")));
-    assert_eq!(s1.phase, Phase::Needs);
+fn plan_gate_empty_summary() {
+    let s0 = init_with_model("claude-opus-4-5");
+    let s1 = reduce(s0, ev(plan_gate("req-ep-2", "")));
     match s1.gate.as_ref().expect("gate must be set") {
         marsad_gates::Gate::Plan { summary, steps, .. } => {
             assert!(summary.is_empty());
@@ -799,4 +496,37 @@ fn exit_plan_mode_no_plan_field_yields_empty_summary() {
         }
         other => panic!("expected Plan gate, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Gate dedup + queue advance
+// ---------------------------------------------------------------------------
+
+#[test]
+fn duplicate_gate_request_id_is_ignored() {
+    let s0 = init_with_model("claude-opus-4-5");
+    let s1 = reduce(s0, ev(permission_gate("req-dup", "ls", "list")));
+    let s2 = reduce(s1, ev(permission_gate("req-dup", "ls", "list again")));
+    assert!(s2.gate.is_some());
+    assert!(s2.gate_queue.is_empty(), "a duplicate request_id must not queue");
+}
+
+#[test]
+fn second_distinct_gate_queues_and_advances() {
+    let mut s = init_with_model("claude-opus-4-5");
+    s = reduce(s, ev(permission_gate("req-1", "ls", "one")));
+    s = reduce(s, ev(permission_gate("req-2", "cat", "two")));
+    assert_eq!(s.gate_queue.len(), 1, "second gate waits behind the first");
+    // Answering the first advances to the second.
+    s.clear_gate_on_answer();
+    assert!(s.gate.is_some());
+    assert!(s.gate_queue.is_empty());
+    match s.gate.as_ref().unwrap() {
+        marsad_gates::Gate::Permission { request_id, .. } => assert_eq!(request_id, "req-2"),
+        other => panic!("expected the queued gate, got {other:?}"),
+    }
+    // Answering the last clears + flips back to Working.
+    s.clear_gate_on_answer();
+    assert!(s.gate.is_none());
+    assert_eq!(s.phase, Phase::Working);
 }

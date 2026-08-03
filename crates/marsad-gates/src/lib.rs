@@ -283,16 +283,43 @@ pub fn route(decision: &GateDecision) -> &str {
 }
 
 // ---------------------------------------------------------------------------
+// ControlResponse
+// ---------------------------------------------------------------------------
+
+/// The gate-domain representation of a human decision, ready to be encoded onto
+/// a driver's control channel.
+///
+/// Wave 0 of the wasit migration deleted the claude-stream-json `ControlResponse`
+/// from `marsad-proto` (control encoding now lives inside the wasit drivers, keyed
+/// on `wasit_core::GateDecision`). This local mirror keeps `to_control_response`
+/// — and its behavior — intact for the gate-domain callers: `allow`/`deny_reason`
+/// carry the decision, `request_id` passes the decision id through, and the
+/// `updated_input`/`updated_permissions` slots stay `None` here (the agent fills
+/// them from the pending `can_use_tool` request before it converts to the wasit
+/// `GateDecision` on the wire).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ControlResponse {
+    pub request_id: String,
+    pub allow: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deny_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_input: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_permissions: Option<serde_json::Value>,
+}
+
+// ---------------------------------------------------------------------------
 // to_control_response
 // ---------------------------------------------------------------------------
 
-/// Encode a `GateDecision` as a `marsad_proto::ControlResponse`.
+/// Encode a `GateDecision` as a `ControlResponse`.
 ///
 /// - `Approve` → `allow: true`, `deny_reason: None`
 /// - `Reject`  → `allow: false`, `deny_reason: Some(reason)`
-pub fn to_control_response(decision: &GateDecision) -> marsad_proto::ControlResponse {
+pub fn to_control_response(decision: &GateDecision) -> ControlResponse {
     match &decision.decision {
-        Decision::Approve => marsad_proto::ControlResponse {
+        Decision::Approve => ControlResponse {
             request_id: decision.id.0.clone(),
             allow: true,
             deny_reason: None,
@@ -302,7 +329,7 @@ pub fn to_control_response(decision: &GateDecision) -> marsad_proto::ControlResp
             updated_input: None,
             updated_permissions: None,
         },
-        Decision::Reject { reason } => marsad_proto::ControlResponse {
+        Decision::Reject { reason } => ControlResponse {
             request_id: decision.id.0.clone(),
             allow: false,
             deny_reason: Some(reason.clone()),

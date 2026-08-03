@@ -13,16 +13,20 @@ use thiserror::Error;
 // wire carries `AgentEvent` directly (see `IpcMsg::AgentEvent`), and downstream
 // Marsad crates match on the rich supporting types re-exported here.
 //
-// Types whose names DO NOT clash with an existing marsad-proto type are
-// re-exported under their own names. Types whose names WOULD clash with a
-// marsad-proto type of the same name (`SessionMode`, `McpServerInfo`,
-// `SlashCommandInfo`, `PlanEntry`, `ElicitationChoice`, `ModelUsage`,
-// `RateLimitInfo`) are NOT re-exported — downstream code imports those from
-// `wasit_core` directly to disambiguate. `Usage` clashes too, so it is
-// re-exported under the alias `WasitUsage`.
+// The rich supporting value-types are re-exported so downstream Marsad crates
+// keep using the `marsad_proto::X` names while the definitions live in
+// `wasit-core`. Wave 1 folded the old marsad-proto stream types away entirely,
+// so there is no longer a name clash to avoid — `SessionMode`, `McpServerInfo`,
+// `SlashCommandInfo`, `PlanEntry`, `ElicitationChoice`, `ModelUsage`, and
+// `RateLimitInfo` are now re-exported under their own names. `CompactionInfo` is
+// re-exported additionally under the alias `CompactMetadata` (its historical
+// marsad name; the field shape is identical). `Usage` is re-exported as
+// `WasitUsage` (its historical alias here).
 pub use wasit_core::{
-    AgentEvent, CompactionInfo, EndReason, GateDecision, GateRequest, QuestionAnswer,
-    QuestionOption, QuestionPrompt, ResumeMode, SpawnSpec, Usage as WasitUsage,
+    AgentEvent, CompactionInfo, CompactionInfo as CompactMetadata, ElicitationChoice, EndReason,
+    GateDecision, GateRequest, McpServerInfo, ModelUsage, PlanEntry, QuestionAnswer, QuestionOption,
+    QuestionPrompt, RateLimitInfo, ResumeMode, SessionMode, SlashCommandInfo, SpawnSpec,
+    Usage as WasitUsage,
 };
 
 // ---------------------------------------------------------------------------
@@ -124,22 +128,10 @@ pub struct LaunchSpec {
 }
 
 // ---------------------------------------------------------------------------
-// SessionMode (kept — used by Capabilities.available_modes)
+// SessionMode — re-exported from wasit-core (see the re-export block above).
+// `Capabilities.available_modes` uses that re-exported type; wasit's `SessionMode`
+// has the identical {id, label, description} shape.
 // ---------------------------------------------------------------------------
-
-/// One selectable agent mode, exactly as the agent reports it (opencode's
-/// `configOptions.mode` options, or claude's version-derived permission modes).
-/// NEVER a hardcoded Marsad list — the agent is the source of truth.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SessionMode {
-    /// The wire id used to select the mode (e.g. "plan", "build", "acceptEdits").
-    pub id: String,
-    /// Human label for the UI (e.g. "Plan", "Accept edits"). May equal `id`.
-    pub label: String,
-    /// One-line description of what the mode does. May be empty.
-    #[serde(default)]
-    pub description: String,
-}
 
 // ---------------------------------------------------------------------------
 // Capabilities (U1 — dynamic capability discovery, docs/specs/dynamic-capabilities.md §1)
