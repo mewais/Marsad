@@ -24,7 +24,7 @@
 //! (marsad-store, marsad-transport, marsad-events, marsad-viewmodel) are
 //! already available to marsad-core's tests via existing [dependencies].
 
-use marsad_core::{peers_for_node, Core, CoreConfig, CoreError, LaunchSpec, NodePeers, VmUpdate};
+use marsad_core::{peers_for_node, Core, CoreConfig, CoreError, LaunchSpec, VmUpdate};
 use marsad_events::Phase;
 use marsad_store::{BackendOp, MemoryBackend};
 use marsad_transport::LoopbackFake;
@@ -427,7 +427,7 @@ fn system_init_persists_claude_session_uuid_to_store() {
 
     // The real claude conversation UUID arrives via system/init (inner
     // `session_id`), distinct from the marsad routing id ("sess-uuid-1").
-    let init = r#"{"type":"AgentEvent","session_id":"sess-uuid-1","event":{"type":"system","subtype":"init","session_id":"claude-real-uuid-abc","model":"claude-opus-4-5","cwd":"/tmp/same-dir","tools":[],"mcp_servers":[],"permissionMode":"default"}}"#;
+    let init = r#"{"type":"AgentEvent","session_id":"sess-uuid-1","event":{"type":"session_init","native_session_id":"claude-real-uuid-abc","model":"claude-opus-4-5","cwd":"/tmp/same-dir","tools":[],"mcp_servers":[],"permission_mode":"default"}}"#;
     core.on_agent_line(init).expect("on_agent_line init");
 
     // The store must now record the claude UUID for this session (the --resume /
@@ -1147,11 +1147,11 @@ fn cw12_board_head_state_reflects_node_phase() {
     // tests/fakes.rs's agent_control_request), then check the board card's
     // head_state reflects it.
     let init_line = format!(
-        r#"{{"type":"AgentEvent","session_id":"{s1}","event":{{"type":"system","subtype":"init","session_id":"{s1}","model":"claude-opus-4-5","cwd":"/workspace","tools":["Read"],"mcp_servers":[],"permissionMode":"default"}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{s1}","event":{{"type":"session_init","native_session_id":"{s1}","model":"claude-opus-4-5","cwd":"/workspace","tools":["Read"],"mcp_servers":[],"permission_mode":"default"}}}}"#
     );
     core.on_agent_line(&init_line).expect("init event");
     let ctrl_line = format!(
-        r#"{{"type":"AgentEvent","session_id":"{s1}","event":{{"type":"control_request","request_id":"rq-hs","request":{{"subtype":"can_use_tool","tool_name":"Bash","input":{{"command":"ls"}}}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{s1}","event":{{"type":"gate_requested","gate":{{"gate_type":"permission","request_id":"rq-hs","tool_name":"Bash","command":"","cwd":"","explanation":"","raw_input":{{}}}}}}}}"#
     );
     core.on_agent_line(&ctrl_line)
         .expect("control_request event");

@@ -33,32 +33,32 @@ fn make_core() -> (Core, LoopbackFake) {
 
 fn agent_init(session_id: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"{session_id}","model":"claude-opus-4-5","cwd":"/workspace","tools":["Read","Write","Bash"],"mcp_servers":[],"permissionMode":"default"}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"session_init","native_session_id":"{session_id}","model":"claude-opus-4-5","cwd":"/workspace","tools":["Read","Write","Bash"],"mcp_servers":[],"permission_mode":"default"}}}}"#
     )
 }
 
 fn agent_assistant_text(session_id: &str, msg_id: &str, text: &str) -> String {
     let escaped = text.replace('"', "\\\"");
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"assistant","message":{{"id":"{msg_id}","content":[{{"type":"text","text":"{escaped}"}}],"usage":{{"input_tokens":200,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"assistant_delta","text":"{escaped}","message_id":"{msg_id}"}}}}"#
     )
 }
 
 fn agent_control_request(session_id: &str, request_id: &str, tool: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"control_request","request_id":"{request_id}","request":{{"subtype":"can_use_tool","tool_name":"{tool}","input":{{"command":"ls /etc"}}}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"gate_requested","gate":{{"gate_type":"permission","request_id":"{request_id}","tool_name":"{tool}","command":"ls /etc","cwd":"","explanation":"","raw_input":{{}}}}}}}}"#
     )
 }
 
 fn agent_result_success(session_id: &str, cost: f64) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"result","subtype":"success","is_error":false,"total_cost_usd":{cost},"usage":{{"input_tokens":200,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":2,"permission_denials":[]}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"turn_completed","usage":{{"input_tokens":200,"output_tokens":50,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":{cost}}}}}}}"#
     )
 }
 
 fn agent_result_error(session_id: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"result","subtype":"error_during_execution","is_error":true,"total_cost_usd":0.01,"usage":{{"input_tokens":50,"output_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":1,"permission_denials":[]}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"turn_completed","end_reason":"execution_error","usage":{{"input_tokens":50,"output_tokens":10,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":0.01}}}}}}"#
     )
 }
 
@@ -773,9 +773,9 @@ fn session_view_exposes_tools_mcp_slash_after_init() {
         .expect("launch");
     let _ = peer.drain_outbound();
 
-    // Deliver a rich system/init with tools, mcp_servers, and slash_commands.
+    // Deliver a rich session_init with tools, mcp_servers, and slash_commands.
     let init_line = format!(
-        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"system","subtype":"init","session_id":"claude-uuid","model":"claude-opus-4-5","cwd":"/work/proj","tools":["Read","Bash","Edit"],"mcp_servers":[{{"name":"hares","status":"failed"}},{{"name":"hub","status":"connected"}}],"permissionMode":"default","slash_commands":[{{"name":"/clear","description":"Clear conversation history","argumentHint":""}},{{"name":"/model","description":"Switch model","argumentHint":"model-name"}}]}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"session_init","native_session_id":"claude-uuid","model":"claude-opus-4-5","cwd":"/work/proj","tools":["Read","Bash","Edit"],"mcp_servers":[{{"name":"hares","status":"failed"}},{{"name":"hub","status":"connected"}}],"permission_mode":"default","slash_commands":[{{"name":"/clear","description":"Clear conversation history","argument_hint":""}},{{"name":"/model","description":"Switch model","argument_hint":"model-name"}}]}}}}"#
     );
     let updates = core.on_agent_line(&init_line).expect("on_agent_line");
 

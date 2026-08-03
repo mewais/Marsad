@@ -34,25 +34,25 @@ fn ipc_usage_update(session_id: &str, usage_json: &str) -> String {
 
 fn ipc_agent_event_system_init(session_id: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"{session_id}","model":"claude-opus-4-5","cwd":"/tmp/work","tools":[],"mcp_servers":[],"permissionMode":"default"}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"session_init","native_session_id":"{session_id}","model":"claude-opus-4-5","cwd":"/tmp/work","tools":[],"mcp_servers":[],"permission_mode":"default"}}}}"#
     )
 }
 
 fn ipc_agent_event_assistant(session_id: &str, msg_id: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"assistant","message":{{"id":"{msg_id}","content":[{{"type":"text","text":"Thinking..."}}],"usage":{{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"assistant_delta","text":"Thinking...","message_id":"{msg_id}"}}}}"#
     )
 }
 
 fn ipc_agent_event_control_request(session_id: &str, request_id: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"control_request","request_id":"{request_id}","request":{{"subtype":"can_use_tool","tool_name":"Bash","input":{{}}}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"gate_requested","gate":{{"gate_type":"permission","request_id":"{request_id}","tool_name":"Bash","command":"","cwd":"","explanation":"","raw_input":{{}}}}}}}}"#
     )
 }
 
 fn ipc_agent_event_result_success(session_id: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"result","subtype":"success","is_error":false,"total_cost_usd":1.23,"usage":{{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":1,"permission_denials":[]}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"turn_completed","usage":{{"input_tokens":100,"output_tokens":20,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":1.23}}}}}}"#
     )
 }
 
@@ -950,11 +950,11 @@ fn launch_spec_fields_all_session_modes() {
 // GitProbe seam — changes flow into the SessionView
 // ---------------------------------------------------------------------------
 
-/// AgentEvent carrying a tool_use assistant message (sets last_action → triggers
+/// AgentEvent carrying a tool_call_started (sets last_action → triggers
 /// a git re-probe in Core).
-fn ipc_agent_event_tool_use(session_id: &str, msg_id: &str) -> String {
+fn ipc_agent_event_tool_use(session_id: &str, _msg_id: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"assistant","message":{{"id":"{msg_id}","content":[{{"type":"tool_use","id":"tu-1","name":"Write","input":{{"path":"hello.txt"}}}}],"usage":{{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"tool_call_started","name":"Write","call_id":"tu-1","input":{{"path":"hello.txt"}}}}}}"#
     )
 }
 
@@ -1316,15 +1316,16 @@ fn transcript_assistant_empty_text_and_non_text_blocks_skipped() {
     let id = launch_t(&mut core, None, LaunchMode::Fresh);
     core.on_agent_line(&ipc_agent_event_system_init(&id))
         .unwrap();
-    // Whitespace-only text block (m3) and a tool_result block (m4) → no entries.
+    // Whitespace-only AssistantDelta (m3) and a ThinkingDelta (m4) → no entries.
     let empty_text = format!(
-        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"assistant","message":{{"id":"m3","content":[{{"type":"text","text":"   "}}],"usage":{{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"assistant_delta","text":"   ","message_id":"m3"}}}}"#
     );
-    let tool_result = format!(
-        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"assistant","message":{{"id":"m4","content":[{{"type":"tool_result","tool_use_id":"x","content":"ok"}}],"usage":{{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}}}"#
+    // ThinkingDelta is explicitly skipped (thinking blocks are not transcribed).
+    let thinking = format!(
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"thinking_delta","text":"some thought","message_id":"m4"}}}}"#
     );
     core.on_agent_line(&empty_text).unwrap();
-    let u = core.on_agent_line(&tool_result).unwrap();
+    let u = core.on_agent_line(&thinking).unwrap();
     assert!(last_sv(&u).transcript.is_empty());
 }
 
@@ -2184,7 +2185,7 @@ fn set_settings_overwrite_updates_model() {
 /// `state.session_id` (simulating what the real agent would send after launch).
 fn ipc_init_with_uuid(session_id: &str, claude_uuid: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"{claude_uuid}","model":"claude-opus-4-5","cwd":"/tmp","tools":[],"mcp_servers":[],"permissionMode":"default"}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"session_init","native_session_id":"{claude_uuid}","model":"claude-opus-4-5","cwd":"/tmp","tools":[],"mcp_servers":[],"permission_mode":"default"}}}}"#
     )
 }
 
@@ -2763,13 +2764,13 @@ fn result_event_does_not_clobber_whole_conversation_usage() {
         .expect("session present after load_sessions");
     assert!(seeded_tokens > 0, "session must be seeded with usage");
 
-    // Send a system/init to move the session out of Stale phase (required before
+    // Send a session_init to move the session out of Stale phase (required before
     // a result event is processed — stale sessions ignore non-init events).
-    let init_line = r#"{"type":"AgentEvent","session_id":"bug-a-session","event":{"type":"system","subtype":"init","session_id":"uuid-bug-a","model":"claude-sonnet-4-5","cwd":"/work/proj","tools":[],"mcp_servers":[],"permissionMode":"default","slash_commands":[]}}"#;
+    let init_line = r#"{"type":"AgentEvent","session_id":"bug-a-session","event":{"type":"session_init","native_session_id":"uuid-bug-a","model":"claude-sonnet-4-5","cwd":"/work/proj","tools":[],"mcp_servers":[],"permission_mode":"default"}}"#;
     core.on_agent_line(init_line).expect("on_agent_line (init)");
 
-    // Now deliver a small live `result` event (only 100+20 tokens, $0.001).
-    let small_result = r#"{"type":"AgentEvent","session_id":"bug-a-session","event":{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.001,"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"num_turns":1,"permission_denials":[]}}"#;
+    // Now deliver a small live `turn_completed` event (only 100+20 tokens, $0.001).
+    let small_result = r#"{"type":"AgentEvent","session_id":"bug-a-session","event":{"type":"turn_completed","usage":{"input_tokens":100,"output_tokens":20,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":0.001}}}"#;
     core.on_agent_line(small_result).expect("on_agent_line (result)");
 
     let sv = core
@@ -2839,8 +2840,8 @@ fn system_init_persists_and_restores_tools_and_mcp_servers() {
     .expect("with_deps");
     core.load_sessions().expect("load_sessions");
 
-    // Deliver a system/init with tools and mcp_servers.
-    let init_line = r#"{"type":"AgentEvent","session_id":"bug-b-session","event":{"type":"system","subtype":"init","session_id":"claude-uuid-b","model":"claude-sonnet-4-5","cwd":"/work/proj-b","tools":["Read","Bash"],"mcp_servers":[{"name":"hares","status":"connected"}],"permissionMode":"default","slash_commands":[]}}"#;
+    // Deliver a session_init with tools and mcp_servers.
+    let init_line = r#"{"type":"AgentEvent","session_id":"bug-b-session","event":{"type":"session_init","native_session_id":"claude-uuid-b","model":"claude-sonnet-4-5","cwd":"/work/proj-b","tools":["Read","Bash"],"mcp_servers":[{"name":"hares","status":"connected"}],"permission_mode":"default"}}"#;
     core.on_agent_line(init_line).expect("on_agent_line");
 
     // Verify the store now holds the persisted tools and mcp_servers.
@@ -3345,9 +3346,9 @@ fn remote_session_changes_survive_result_event() {
     );
     core.on_agent_line(&cu).expect("changes update");
 
-    // result event → should_probe; remote session must SKIP the local probe.
+    // turn_completed → should_probe; remote session must SKIP the local probe.
     let result = format!(
-        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0,"usage":{{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":1,"permission_denials":[]}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"turn_completed","usage":{{"input_tokens":1,"output_tokens":1,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":0.0}}}}}}"#
     );
     core.on_agent_line(&result).expect("result event");
 
@@ -3419,9 +3420,9 @@ fn session_view_exposes_model_usage_after_result_with_model_usage() {
     core.on_agent_line(&ipc_agent_event_system_init(&id))
         .expect("init");
 
-    // Feed a result event with modelUsage containing TWO models (so sort runs).
+    // Feed a turn_completed with per_model containing TWO models (so sort runs).
     let result_line = format!(
-        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.368,"usage":{{"input_tokens":21,"output_tokens":255,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":1,"permission_denials":[],"modelUsage":{{"claude-sonnet-4.6[1m]":{{"inputTokens":11,"outputTokens":155,"costUSD":0.268}},"claude-haiku-4-5":{{"inputTokens":10,"outputTokens":100,"costUSD":0.1}}}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"turn_completed","usage":{{"input_tokens":21,"output_tokens":255,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":0.368}},"per_model":{{"claude-sonnet-4.6[1m]":{{"input_tokens":11,"output_tokens":155,"cost_usd":0.268}},"claude-haiku-4-5":{{"input_tokens":10,"output_tokens":100,"cost_usd":0.1}}}}}}}}"#
     );
     let updates = core.on_agent_line(&result_line).expect("result");
     let sv = updates
@@ -3823,11 +3824,11 @@ fn session_view_exposes_running_subagents_count() {
     core.on_agent_line(&ipc_agent_event_system_init(&id))
         .expect("init");
 
-    // Feed a Task tool_use to start a running subagent.
+    // Feed a ToolCallStarted with is_subagent=true to start a running subagent.
     let task_line = format!(
-        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"assistant","message":{{"id":"m-task-view","content":[{{"type":"tool_use","id":"tu-task-view","name":"Task","input":{{"subagent_type":"researcher","description":"Do work"}}}}],"usage":{{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"tool_call_started","name":"Task","call_id":"tu-task-view","input":{{"subagent_type":"researcher","description":"Do work"}},"is_subagent":true}}}}"#
     );
-    let updates = core.on_agent_line(&task_line).expect("task tool_use");
+    let updates = core.on_agent_line(&task_line).expect("task tool_call_started");
     let sv = updates
         .iter()
         .find_map(|u| {
@@ -3841,14 +3842,14 @@ fn session_view_exposes_running_subagents_count() {
 
     assert_eq!(
         sv.running_subagents, 1,
-        "running_subagents must be 1 after Task tool_use"
+        "running_subagents must be 1 after ToolCallStarted(is_subagent=true)"
     );
 
-    // Now feed a tool_result to mark it done.
+    // Now feed a ToolCallFinished to mark it done.
     let result_line = format!(
-        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"tu-task-view","content":"completed"}}]}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"tool_call_finished","call_id":"tu-task-view","name":"Task","ok":true}}}}"#
     );
-    let updates2 = core.on_agent_line(&result_line).expect("tool_result");
+    let updates2 = core.on_agent_line(&result_line).expect("tool_call_finished");
     let sv2 = updates2
         .iter()
         .find_map(|u| {
@@ -3913,11 +3914,11 @@ fn launch_session_with_disallowed_tools_includes_field_in_ipc() {
 // SessionView current_mode — reflects real permissionMode from system/init
 // ---------------------------------------------------------------------------
 
-/// Helper: build an AgentEvent with a given permissionMode for current_mode tests.
+/// Helper: build an AgentEvent with a given permission_mode for current_mode tests.
 /// Includes a non-empty `claude_code_version` so the reducer populates `current_mode`.
 fn ipc_agent_event_init_with_mode(session_id: &str, mode: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"claude-uuid","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permissionMode":"{mode}","claude_code_version":"1.2.3"}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"session_init","native_session_id":"claude-uuid","model":"m","cwd":"/","tools":[],"mcp_servers":[],"permission_mode":"{mode}","claude_code_version":"1.2.3","current_mode":"{mode}"}}}}"#
     )
 }
 
@@ -4264,11 +4265,9 @@ fn result_after_backfill_accumulates_not_resets() {
     core.on_agent_line(&ipc_agent_event_system_init("session-seed-2"))
         .expect("init");
 
-    // 3. Live result event: cumulative usage from agent = 1200 input + 300 output = 1500.
+    // 3. Live turn_completed: cumulative usage from agent = 1200 input + 300 output = 1500.
     //    This is the authoritative running total — must REPLACE (not reset) the seeded value.
-    let result_line = format!(
-        r#"{{"type":"AgentEvent","session_id":"session-seed-2","event":{{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"usage":{{"input_tokens":1200,"output_tokens":300,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":1,"permission_denials":[]}}}}"#
-    );
+    let result_line = r#"{"type":"AgentEvent","session_id":"session-seed-2","event":{"type":"turn_completed","usage":{"input_tokens":1200,"output_tokens":300,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":0.01}}}"#.to_string();
     let result_updates = core.on_agent_line(&result_line).expect("result");
     let sv_final = result_updates
         .iter()

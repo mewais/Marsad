@@ -859,7 +859,7 @@ impl Core {
     fn handle_agent_event(
         &mut self,
         session_id: String,
-        event: serde_json::Value,
+        event: marsad_proto::AgentEvent,
     ) -> Result<Vec<VmUpdate>, CoreError> {
         // An agent_event for a session this core never registered (e.g. one the
         // agent supervises but we have not launched/adopted) is an UnknownSession,
@@ -875,77 +875,78 @@ impl Core {
             rec.live = true;
         }
 
-        // Parse the event into a StreamMsg; treat unparseable events as Unknown
-        // (forward-compat, no error).
-        let event_json = serde_json::to_string(&event).unwrap(); // infallible
-        let stream_msg = marsad_proto::parse_stream_line(&event_json)
-            .unwrap_or(marsad_proto::StreamMsg::Unknown(event));
-
-        // Extract assistant prose + tool invocations for the transcript (from the
-        // live stream — immediate, no JSONL flush race). claude does not echo user
-        // prompts here; those are injected by launch/send_prompt. Deduped below by
-        // message id.
-        // Pair each entry with a content-based dedup key computed inline (we know
-        // each block is Text→Assistant or ToolUse→Tool here), so dedup works per
-        // BLOCK rather than per message id — see the append loop below.
-        let assistant: Option<(String, Vec<(String, marsad_events::TranscriptEntry)>)> =
-            if let marsad_proto::StreamMsg::Assistant(am) = &stream_msg {
-                let mut entries = Vec::new();
-                for block in &am.message.content {
-                    match block {
-                        marsad_proto::ContentBlock::Text { text } => {
-                            let t = text.trim();
-                            if !t.is_empty() {
-                                entries.push((
-                                    format!("a\u{0}{t}"),
-                                    marsad_events::TranscriptEntry::Assistant {
-                                        text: t.to_string(),
-                                        at: Some(now_ms()),
-                                    },
-                                ));
-                            }
-                        }
-                        marsad_proto::ContentBlock::ToolUse { name, input, .. } => {
-                            let input = serde_json::to_string(input).unwrap_or_default();
-                            entries.push((
-                                format!("t\u{0}{name}\u{0}{input}"),
-                                marsad_events::TranscriptEntry::Tool {
-                                    name: name.clone(),
-                                    input,
-                                    at: Some(now_ms()),
-                                },
-                            ));
-                        }
-                        _ => {}
-                    }
+        // Extract transcript entries from the typed event BEFORE reduce consumes it.
+        // Pair each entry with a dedup key; the append loop below inserts only
+        // newly-seen keys.
+        //
+        // AssistantDelta → TranscriptEntry::Assistant, dedup key = "<msg_id>\0a\0<text>"
+        // ToolCallStarted → TranscriptEntry::Tool, dedup key = call_id (globally unique)
+        // ThinkingDelta → SKIP (preserves old behaviour: thinking blocks are not transcribed)
+        // Compaction → appended AFTER reduce (in sequence, below)
+        // everything else → no transcript entry
+        let transcript_entries: Vec<(String, marsad_events::TranscriptEntry)> = match &event {
+            marsad_proto::AgentEvent::AssistantDelta { text, message_id } => {
+                let t = text.trim();
+                if t.is_empty() {
+                    vec![]
+                } else {
+                    let key = format!(
+                        "{}\u{0}a\u{0}{}",
+                        message_id.as_deref().unwrap_or(""),
+                        t
+                    );
+                    vec![(
+                        key,
+                        marsad_events::TranscriptEntry::Assistant {
+                            text: t.to_string(),
+                            at: Some(now_ms()),
+                        },
+                    )]
                 }
-                Some((am.message.id.clone(), entries))
-            } else {
-                None
-            };
+            }
+            marsad_proto::AgentEvent::ToolCallStarted {
+                name,
+                call_id,
+                input,
+                ..
+            } => {
+                let input_str = serde_json::to_string(input).unwrap_or_default();
+                vec![(
+                    call_id.clone(),
+                    marsad_events::TranscriptEntry::Tool {
+                        name: name.clone(),
+                        input: input_str,
+                        at: Some(now_ms()),
+                    },
+                )]
+            }
+            // ThinkingDelta: skip (old code skipped thinking blocks)
+            marsad_proto::AgentEvent::ThinkingDelta { .. } => vec![],
+            _ => vec![],
+        };
 
-        // Capture compaction metadata BEFORE stream_msg is consumed by reduce, so
+        // Capture compaction metadata BEFORE event is consumed by reduce, so
         // the live transcript gets an in-sequence Compaction entry (mirrors what
         // parse_transcript does for the backfill/JSONL path).
         let compact_entry: Option<marsad_events::TranscriptEntry> =
-            if let marsad_proto::StreamMsg::CompactBoundary(cb) = &stream_msg {
+            if let marsad_proto::AgentEvent::Compaction { info } = &event {
                 Some(marsad_events::TranscriptEntry::Compaction {
-                    trigger: cb.compact_metadata.trigger.clone(),
-                    dropped_tokens: cb.compact_metadata.cumulative_dropped_tokens,
+                    trigger: info.trigger.clone(),
+                    dropped_tokens: info.cumulative_dropped_tokens,
                     at: Some(now_ms()),
                 })
             } else {
                 None
             };
 
-        // Detect a SystemInit BEFORE consuming the stream_msg — we need to
+        // Detect a SessionInit BEFORE consuming the event — we need to
         // know if slash_commands are about to be set so we can persist them.
-        let is_system_init = matches!(stream_msg, marsad_proto::StreamMsg::SystemInit(_));
-        // Detect a Result BEFORE consuming stream_msg — after reduce we re-aggregate
-        // usage from the full JSONL for LOCAL sessions so the displayed total reflects
-        // the whole conversation, not just the current run (which is all result.total_cost_usd
-        // contains for a resumed session).
-        let is_result = matches!(stream_msg, marsad_proto::StreamMsg::Result(_));
+        let is_system_init = matches!(&event, marsad_proto::AgentEvent::SessionInit { .. });
+        // Detect a TurnCompleted (the new Result) BEFORE consuming event — after
+        // reduce we re-aggregate usage from the full JSONL for LOCAL sessions so
+        // the displayed total reflects the whole conversation, not just the current
+        // run (which is all TurnCompleted.usage.cost_usd contains for a resumed session).
+        let is_result = matches!(&event, marsad_proto::AgentEvent::TurnCompleted { .. });
 
         // Reduce the event, then decide whether the working tree may have changed.
         // Safe: require_session above guarantees the entry exists.
@@ -956,7 +957,7 @@ impl Core {
             let was_finished = matches!(old_state.phase, Phase::Done | Phase::Error);
             let old_phase = old_state.phase.clone();
             let old_gate_present = old_state.gate.is_some();
-            record.state = reduce(old_state, Event::Stream(stream_msg));
+            record.state = reduce(old_state, Event::Stream(event));
             // Re-probe git when a tool just ran (files may have changed) or the
             // session just reached a terminal phase — not on every token.
             let tool_ran = record.state.last_action != old_last_action;
@@ -1070,17 +1071,14 @@ impl Core {
             self.sessions.get_mut(&session_id).unwrap().changes = changes;
         }
 
-        // Append this assistant message's NEW content blocks. claude streams one
-        // assistant message as multiple events sharing a message id (one per
-        // block), so we dedup per `<msg_id>\0<block>` — deduping by id alone
-        // dropped every block after the first, freezing the live transcript.
-        if let Some((msg_id, entries)) = assistant {
+        // Append this event's NEW transcript entries. Deduped by the key
+        // computed above (AssistantDelta: "<msg_id>\0a\0<text>"; ToolCallStarted:
+        // call_id). Only entries whose key was NOT already in seen_msg_ids are
+        // pushed — preserving replay-safety exactly as before.
+        if !transcript_entries.is_empty() {
             let record = self.sessions.get_mut(&session_id).unwrap();
-            for (block_key, entry) in entries {
-                if record
-                    .seen_msg_ids
-                    .insert(format!("{msg_id}\u{0}{block_key}"))
-                {
+            for (key, entry) in transcript_entries {
+                if record.seen_msg_ids.insert(key) {
                     record.transcript.push(entry);
                 }
             }

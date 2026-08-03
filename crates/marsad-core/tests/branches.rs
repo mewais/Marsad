@@ -56,26 +56,25 @@ fn spec(project: &str, session_mode: String) -> LaunchSpec {
 
 fn ipc_init(session_id: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"{session_id}","model":"claude-opus-4-5","cwd":"/tmp","tools":[],"mcp_servers":[],"permissionMode":"default"}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"session_init","native_session_id":"{session_id}","model":"claude-opus-4-5","cwd":"/tmp","tools":[],"mcp_servers":[],"permission_mode":"default"}}}}"#
     )
 }
 
 fn ipc_assistant(session_id: &str, msg_id: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"assistant","message":{{"id":"{msg_id}","content":[{{"type":"text","text":"ok"}}],"usage":{{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"assistant_delta","text":"ok","message_id":"{msg_id}"}}}}"#
     )
 }
 
 fn ipc_control_request(session_id: &str, request_id: &str) -> String {
-    // Real Agent-SDK control protocol shape: payload nested under `request`.
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"control_request","request_id":"{request_id}","request":{{"subtype":"can_use_tool","tool_name":"Bash","input":{{}}}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"gate_requested","gate":{{"gate_type":"permission","request_id":"{request_id}","tool_name":"Bash","command":"","cwd":"","explanation":"","raw_input":{{}}}}}}}}"#
     )
 }
 
 fn ipc_result_success(session_id: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"usage":{{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":1,"permission_denials":[]}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"turn_completed","usage":{{"input_tokens":10,"output_tokens":5,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":0.01}}}}}}"#
     )
 }
 
@@ -466,7 +465,7 @@ fn streamed_blocks_sharing_a_message_id_all_appear_and_dedup() {
 
     let text_evt = ipc_assistant(&id, "msg-same"); // content: text "ok"
     let tool_evt = format!(
-        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"assistant","message":{{"id":"msg-same","content":[{{"type":"tool_use","id":"tu1","name":"Bash","input":{{"command":"ls"}}}}],"usage":{{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"tool_call_started","name":"Bash","call_id":"tu1","input":{{"command":"ls"}}}}}}"#
     );
     let _ = core.on_agent_line(&text_evt).expect("text block");
     let _ = core.on_agent_line(&tool_evt).expect("tool block (same id)");

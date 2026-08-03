@@ -52,34 +52,30 @@ fn launch(core: &mut Core) -> String {
 
 fn init_line(session_id: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"{session_id}","model":"claude-sonnet-4-6","cwd":"/tmp","tools":[],"mcp_servers":[],"permissionMode":"default"}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"session_init","native_session_id":"{session_id}","model":"claude-sonnet-4-6","cwd":"/tmp","tools":[],"mcp_servers":[],"permission_mode":"default"}}}}"#
     )
 }
 
 fn live_result_line(session_id: &str, model: &str, input: u64, output: u64, cost: f64) -> String {
+    let mut per_model = serde_json::Map::new();
+    per_model.insert(model.to_string(), serde_json::json!({
+        "input_tokens": input,
+        "output_tokens": output,
+        "cost_usd": cost,
+    }));
     serde_json::json!({
         "type": "AgentEvent",
         "session_id": session_id,
         "event": {
-            "type": "result",
-            "subtype": "success",
-            "is_error": false,
-            "total_cost_usd": cost,
+            "type": "turn_completed",
             "usage": {
                 "input_tokens": input,
                 "output_tokens": output,
-                "cache_read_input_tokens": 0,
-                "cache_creation_input_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cost_usd": cost,
             },
-            "num_turns": 1,
-            "permission_denials": [],
-            "modelUsage": {
-                (model): {
-                    "inputTokens": input,
-                    "outputTokens": output,
-                    "costUSD": cost,
-                }
-            }
+            "per_model": per_model,
         }
     })
     .to_string()

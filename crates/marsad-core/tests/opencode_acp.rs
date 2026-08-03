@@ -21,7 +21,6 @@
 //! with a clear message — never a compile error.
 
 use marsad_core::{Core, CoreConfig, LaunchSpec, VmUpdate};
-use marsad_events::Phase;
 use marsad_store::MemoryBackend;
 use marsad_transport::LoopbackFake;
 
@@ -68,7 +67,7 @@ fn launch_opencode(core: &mut Core) -> String {
 
 fn agent_event_system_init(session_id: &str, model: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"{session_id}","model":"{model}","cwd":"/tmp/opencode-project","tools":[],"mcp_servers":[],"permissionMode":"default"}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"session_init","native_session_id":"{session_id}","model":"{model}","cwd":"/tmp/opencode-project","tools":[],"mcp_servers":[],"permission_mode":"default"}}}}"#
     )
 }
 
@@ -113,7 +112,7 @@ fn oatp4a_plan_update_surfaces_plan_entries_on_session_view() {
     // The contracted plan-update stream-json shape that acp_translate must emit
     // for a session/update{plan} ACP event (§5).
     let plan_update_line = format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"plan_update","session_id":"{session_id}","plan_entries":[{{"content":"Implement the feature","priority":"high"}},{{"content":"Write tests","priority":"medium"}},{{"content":"Update docs","priority":"low"}}]}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"plan_updated","entries":[{{"content":"Implement the feature","priority":"high"}},{{"content":"Write tests","priority":"medium"}},{{"content":"Update docs","priority":"low"}}]}}}}"#
     );
     let updates = core
         .on_agent_line(&plan_update_line)
@@ -183,7 +182,7 @@ fn oatp4b_plan_entries_are_ordered() {
 
     // Feed 5-entry plan: priority sequence is high, low, medium, high, low.
     let plan_update_line = format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"plan_update","session_id":"{session_id}","plan_entries":[{{"content":"Step A","priority":"high"}},{{"content":"Step B","priority":"low"}},{{"content":"Step C","priority":"medium"}},{{"content":"Step D","priority":"high"}},{{"content":"Step E","priority":"low"}}]}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"plan_updated","entries":[{{"content":"Step A","priority":"high"}},{{"content":"Step B","priority":"low"}},{{"content":"Step C","priority":"medium"}},{{"content":"Step D","priority":"high"}},{{"content":"Step E","priority":"low"}}]}}}}"#
     );
     let updates = core
         .on_agent_line(&plan_update_line)
@@ -240,13 +239,13 @@ fn oatp4c_second_plan_update_replaces_first() {
 
     // First plan: 3 entries.
     let first_plan = format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"plan_update","session_id":"{session_id}","plan_entries":[{{"content":"Old step 1","priority":"high"}},{{"content":"Old step 2","priority":"medium"}},{{"content":"Old step 3","priority":"low"}}]}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"plan_updated","entries":[{{"content":"Old step 1","priority":"high"}},{{"content":"Old step 2","priority":"medium"}},{{"content":"Old step 3","priority":"low"}}]}}}}"#
     );
     core.on_agent_line(&first_plan).expect("first plan_update");
 
     // Second plan: 2 new entries (completely different content).
     let second_plan = format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"plan_update","session_id":"{session_id}","plan_entries":[{{"content":"New step 1","priority":"high"}},{{"content":"New step 2","priority":"low"}}]}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"plan_updated","entries":[{{"content":"New step 1","priority":"high"}},{{"content":"New step 2","priority":"low"}}]}}}}"#
     );
     let updates = core
         .on_agent_line(&second_plan)
@@ -300,7 +299,7 @@ fn oatp4d_plan_entries_visible_in_snapshot() {
     core.on_agent_line(&init_line).expect("init");
 
     let plan_update_line = format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"plan_update","session_id":"{session_id}","plan_entries":[{{"content":"Snapshot entry","priority":"high"}}]}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"plan_updated","entries":[{{"content":"Snapshot entry","priority":"high"}}]}}}}"#
     );
     core.on_agent_line(&plan_update_line)
         .expect("plan_update must succeed");

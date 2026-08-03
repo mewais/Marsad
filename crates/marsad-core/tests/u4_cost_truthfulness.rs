@@ -63,38 +63,34 @@ fn launch(core: &mut Core) -> String {
 
 fn init_line(session_id: &str) -> String {
     format!(
-        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"system","subtype":"init","session_id":"{session_id}","model":"claude-sonnet-4-6","cwd":"/tmp","tools":[],"mcp_servers":[],"permissionMode":"default"}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{session_id}","event":{{"type":"session_init","native_session_id":"{session_id}","model":"claude-sonnet-4-6","cwd":"/tmp","tools":[],"mcp_servers":[],"permission_mode":"default"}}}}"#
     )
 }
 
-/// A live `result` event, exactly as the claude stream reports it, with a
-/// single-model `modelUsage` breakdown. `input`/`output` are deliberately
-/// small so the pricing-table recomputation used in the RED tests below
-/// (with vastly larger token counts) is unmistakably a different number.
+/// A live `turn_completed` event with a single-model `per_model` breakdown.
+/// `input`/`output` are deliberately small so the pricing-table recomputation
+/// used in the RED tests below (with vastly larger token counts) is
+/// unmistakably a different number.
 fn live_result_line(session_id: &str, model: &str, input: u64, output: u64, cost: f64) -> String {
+    let mut per_model = serde_json::Map::new();
+    per_model.insert(model.to_string(), serde_json::json!({
+        "input_tokens": input,
+        "output_tokens": output,
+        "cost_usd": cost,
+    }));
     serde_json::json!({
         "type": "AgentEvent",
         "session_id": session_id,
         "event": {
-            "type": "result",
-            "subtype": "success",
-            "is_error": false,
-            "total_cost_usd": cost,
+            "type": "turn_completed",
             "usage": {
                 "input_tokens": input,
                 "output_tokens": output,
-                "cache_read_input_tokens": 0,
-                "cache_creation_input_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cost_usd": cost,
             },
-            "num_turns": 1,
-            "permission_denials": [],
-            "modelUsage": {
-                (model): {
-                    "inputTokens": input,
-                    "outputTokens": output,
-                    "costUSD": cost,
-                }
-            }
+            "per_model": per_model,
         }
     })
     .to_string()
@@ -292,7 +288,7 @@ fn result_is_error_true_with_success_subtype_cost_flows_to_session_view() {
     core.on_agent_line(&init_line(&id)).expect("init");
 
     let line = format!(
-        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"result","subtype":"success","is_error":true,"total_cost_usd":2.5,"usage":{{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"num_turns":1,"permission_denials":[]}}}}"#
+        r#"{{"type":"AgentEvent","session_id":"{id}","event":{{"type":"turn_completed","usage":{{"input_tokens":10,"output_tokens":5,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":2.5}}}}}}"#
     );
     let updates = core.on_agent_line(&line).expect("result");
     let sv = session_view_from(&updates);

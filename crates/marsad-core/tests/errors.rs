@@ -428,7 +428,7 @@ fn on_agent_line_for_unregistered_session_returns_unknown_session() {
     let (mut core, _peer) = make_core();
     // A well-formed agent_event for a session_id that was never launched/registered.
     // Uses an assistant event (not system/init) so the impl cannot auto-register on first sight.
-    let line = r#"{"type":"AgentEvent","session_id":"never-launched-session","event":{"type":"assistant","message":{"id":"msg-x","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}"#;
+    let line = r#"{"type":"AgentEvent","session_id":"never-launched-session","event":{"type":"assistant_delta","text":"hi","message_id":"msg-x"}}"#;
     match core.on_agent_line(line) {
         Err(CoreError::UnknownSession(_)) => {}
         other => panic!(
