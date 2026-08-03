@@ -3,6 +3,13 @@
 **/target
 Cargo.lock.bak
 
+# Nested sibling projects, kept as their OWN independent git repos inside this
+# working tree so they are in-ceiling for editing, but NEVER tracked by Marsad
+# (single source of truth per repo). Wasl = A2A/multi-agent runtime; Wasit =
+# the shared CLI-driver library both Wasl and Marsad depend on.
+/Wasl/
+/Wasit/
+
 # Local cargo registry cache (machine-specific; never commit)
 .cargo-cache/
 .cargo/

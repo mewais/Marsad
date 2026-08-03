@@ -1,5 +1,9 @@
 [workspace]
 resolver = "2"
+# Nested independent projects (their own git repos + their own cargo workspaces);
+# excluded so this workspace never tries to absorb them. Marsad depends on their
+# crates by path (see [workspace.dependencies] / per-crate Cargo.toml).
+exclude = ["Wasl", "Wasit"]
 members = [
     "crates/marsad-proto",
     "crates/marsad-events",
