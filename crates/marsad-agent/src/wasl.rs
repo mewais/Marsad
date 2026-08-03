@@ -230,8 +230,18 @@ pub fn select_wasl_session_runtime(
 /// always compiled (no IO) so the node-spawn path can be tested without real
 /// sockets or OS processes.
 pub struct WaslNodeConfig<'a> {
+    /// Unique per-host agent identity (`marsad-<host_id>`).  Placed under
+    /// `[identity]` so the node and its peers can distinguish Marsad-spawned
+    /// nodes by agent_id.
+    pub agent_id: &'a str,
     /// Host identity — the `host_id` string this daemon is serving.
     pub host_id: &'a str,
+    /// Bare socket address (`ip:port`) for the node's A2A listener (`[a2a]`).
+    /// Deterministic per host; bare because the node parses with `SocketAddr::parse`.
+    pub a2a_bind: &'a str,
+    /// Bare socket address (`ip:port`) for the node's operator listener (`[operator]`).
+    /// Deterministic per host; bare because the node parses with `SocketAddr::parse`.
+    pub operator_bind: &'a str,
     /// The `control_bind` address for the node's runtime-control HTTP endpoint.
     /// May be passed WITH an `http://` scheme (that's what `wasl_control_bind`
     /// returns, since the client/factory dials the node); the rendered TOML
@@ -248,16 +258,30 @@ pub struct WaslNodeConfig<'a> {
     pub opencode_bin: Option<&'a str>,
 }
 
+/// Normalise any bind value to a bare socket address by stripping an optional
+/// `http://` scheme prefix and trailing `/`. The node parses all bind addresses
+/// with `SocketAddr::parse`; an `http://…` value would silently fail that parse.
+fn bare_socket(s: &str) -> &str {
+    let s = s.strip_prefix("http://").unwrap_or(s);
+    s.strip_suffix('/').unwrap_or(s)
+}
+
 /// Render a `wasl-node` TOML config from `cfg`. Pure: no filesystem IO, always
-/// compiled. Generates the `[identity]` + `[runtime]` blocks that `wasl-mcpd
-/// --config <path>` reads.
+/// compiled. Generates the `[identity]`, `[a2a]`, `[operator]`, and `[runtime]`
+/// blocks that `wasl-mcpd --config <path>` reads.
 ///
-/// TOML shape (Phase-B B1, matching the Phase-A `wasl-mcp` config the smoke
-/// verified):
+/// TOML shape (Phase-C, full config):
 ///
 /// ```toml
 /// [identity]
+/// agent_id = "<agent_id>"
 /// host_id = "<host_id>"
+///
+/// [a2a]
+/// bind = "<ip:port>"    # bare socket addr, deterministic per host
+///
+/// [operator]
+/// bind = "<ip:port>"    # bare socket addr, deterministic per host
 ///
 /// [runtime]
 /// kind = "managed"
@@ -268,9 +292,18 @@ pub struct WaslNodeConfig<'a> {
 /// ```
 pub fn render_wasl_node_toml(cfg: &WaslNodeConfig) -> String {
     let mut out = String::new();
-    // [identity] block — host identity so the node knows which host it serves.
+    // [identity] block — agent + host identity.
     out.push_str("[identity]\n");
+    out.push_str(&format!("agent_id = {:?}\n", cfg.agent_id));
     out.push_str(&format!("host_id = {:?}\n", cfg.host_id));
+    out.push('\n');
+    // [a2a] block — the A2A listener address (bare socket addr).
+    out.push_str("[a2a]\n");
+    out.push_str(&format!("bind = {:?}\n", bare_socket(cfg.a2a_bind)));
+    out.push('\n');
+    // [operator] block — the operator listener address (bare socket addr).
+    out.push_str("[operator]\n");
+    out.push_str(&format!("bind = {:?}\n", bare_socket(cfg.operator_bind)));
     out.push('\n');
     // [runtime] block — the managed-runtime kind + control endpoint + protocol defaults.
     out.push_str("[runtime]\n");
@@ -280,12 +313,7 @@ pub fn render_wasl_node_toml(cfg: &WaslNodeConfig) -> String {
     // the runtime-control API silently never starts). `wasl_control_bind` carries
     // an `http://` scheme for the CLIENT/factory side (it dials the node), so
     // strip the scheme (and any trailing slash) here for the node's own bind.
-    let control_socket = cfg
-        .control_bind
-        .strip_prefix("http://")
-        .unwrap_or(cfg.control_bind);
-    let control_socket = control_socket.strip_suffix('/').unwrap_or(control_socket);
-    out.push_str(&format!("control_bind = {control_socket:?}\n"));
+    out.push_str(&format!("control_bind = {:?}\n", bare_socket(cfg.control_bind)));
     out.push_str(&format!("default_protocol = {:?}\n", cfg.default_protocol));
     if let Some(bin) = cfg.claude_bin {
         out.push_str(&format!("claude_bin = {:?}\n", bin));
@@ -316,6 +344,45 @@ pub fn wasl_control_bind(host_id: &str) -> String {
     // Map into [47000, 47999]: 1000-port window.
     let port = 47_000u32 + (hash % 1_000);
     format!("http://127.0.0.1:{port}")
+}
+
+/// Compute a deterministic bare A2A bind address for `host_id`
+/// (`127.0.0.1:<port>`), using the same FNV-1a technique as
+/// [`wasl_control_bind`] but in the port window `[48000, 48999]`.
+///
+/// Returns a **bare** `ip:port` (no `http://` scheme) because the node
+/// parses `[a2a] bind` with `SocketAddr::parse`, not as a URL.
+pub fn wasl_a2a_bind(host_id: &str) -> String {
+    const FNV_OFFSET: u32 = 2_166_136_261;
+    const FNV_PRIME: u32 = 16_777_619;
+    let mut hash = FNV_OFFSET;
+    for byte in host_id.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    // Map into [48000, 48999]: 1000-port window, distinct from control (47xxx).
+    let port = 48_000u32 + (hash % 1_000);
+    format!("127.0.0.1:{port}")
+}
+
+/// Compute a deterministic bare operator bind address for `host_id`
+/// (`127.0.0.1:<port>`), using the same FNV-1a technique as
+/// [`wasl_control_bind`] but in the port window `[49000, 49999]`.
+///
+/// Returns a **bare** `ip:port` (no `http://` scheme) because the node
+/// parses `[operator] bind` with `SocketAddr::parse`, not as a URL.
+pub fn wasl_operator_bind(host_id: &str) -> String {
+    const FNV_OFFSET: u32 = 2_166_136_261;
+    const FNV_PRIME: u32 = 16_777_619;
+    let mut hash = FNV_OFFSET;
+    for byte in host_id.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    // Map into [49000, 49999]: 1000-port window, distinct from control (47xxx)
+    // and A2A (48xxx).
+    let port = 49_000u32 + (hash % 1_000);
+    format!("127.0.0.1:{port}")
 }
 
 // ---------------------------------------------------------------------------

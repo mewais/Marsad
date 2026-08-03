@@ -285,9 +285,22 @@ impl Agent {
             .find(|(k, _)| k == "opencode")
             .map(|(_, v)| v.as_str());
 
+        // Compute the deterministic A2A + operator bind addresses and agent_id.
+        let agent_id = format!("marsad-{host_id}");
+        let a2a_bind = crate::wasl::wasl_a2a_bind(host_id);
+        let operator_bind = crate::wasl::wasl_operator_bind(host_id);
+
+        eprintln!(
+            "marsad-agent: wasl-node: host={host_id} control_bind={base_url} \
+             a2a_bind={a2a_bind} operator_bind={operator_bind} agent_id={agent_id}"
+        );
+
         // Render the TOML config and write it to data_root.
         let toml_cfg = crate::wasl::WaslNodeConfig {
+            agent_id: &agent_id,
             host_id,
+            a2a_bind: &a2a_bind,
+            operator_bind: &operator_bind,
             control_bind: &base_url,
             default_protocol: if opencode_bin_resolved.is_some() && claude_bin_resolved.is_none() {
                 "opencode"
@@ -300,11 +313,19 @@ impl Agent {
         let toml_str = crate::wasl::render_wasl_node_toml(&toml_cfg);
         let config_path = std::path::Path::new(&self.config.data_root)
             .join(format!("wasl-node-{host_id}.toml"));
+        let log_path = std::path::Path::new(&self.config.data_root)
+            .join(format!("wasl-node-{host_id}.log"));
         // Best-effort write: if the data_root doesn't exist yet, create it.
         // Failure to write is logged but not fatal here — the node can still be
         // adopted if already running (the Container probe determines liveness).
         let _ = std::fs::create_dir_all(&self.config.data_root);
         let write_ok = std::fs::write(&config_path, &toml_str).is_ok();
+
+        eprintln!(
+            "marsad-agent: wasl-node: config={} write_ok={write_ok} node_log={}",
+            config_path.display(),
+            log_path.display()
+        );
 
         // Probe / adopt-or-spawn the managed-runtime node via the Container seam.
         // Container call-log entries produced (matching adopt_or_spawn_wasl_mcpd):
@@ -313,19 +334,24 @@ impl Agent {
         //   spawn:wasl-mcpd-runtime-<host_id> wasl-mcpd --config <path>   (if absent)
         let node_name = format!("wasl-mcpd-runtime-{host_id}");
         if self.active_container().exists(&node_name) {
+            eprintln!("marsad-agent: wasl-node: adopting existing node {node_name}");
             let _ = self.active_container().attach(&node_name);
         } else {
             // Build the spawn command: wasl-mcpd with the config path.
+            // Redirect the node's stderr to a durable log file so post-mortem
+            // debugging is possible even if the node exits.
             // The config file write may have succeeded or not; use the path regardless
             // (wasl-mcpd may already have a config at that path from a prior run).
             let spawn_cmd = if write_ok {
                 format!(
-                    "wasl-mcpd --config {}",
-                    config_path.to_string_lossy()
+                    "wasl-mcpd --config {} 2>> {}",
+                    config_path.to_string_lossy(),
+                    log_path.to_string_lossy()
                 )
             } else {
                 "wasl-mcpd".to_string()
             };
+            eprintln!("marsad-agent: wasl-node: spawning node {node_name}: {spawn_cmd}");
             let _ = self.active_container().spawn(&node_name, &spawn_cmd);
         }
 
@@ -343,6 +369,10 @@ impl Agent {
                 },
             )) as Box<dyn marsad_wasl_session::WaslSessionProvider>
         }));
+
+        eprintln!(
+            "marsad-agent: wasl-node: factory registered for host {host_id} at {base_url}"
+        );
 
         Ok(base_url)
     }

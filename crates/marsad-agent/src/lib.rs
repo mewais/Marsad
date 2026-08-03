@@ -52,7 +52,7 @@ pub use remote::{
 pub use remote::{parse_liveness, Liveness, LIVENESS_SENTINEL};
 pub use wasl::{
     load_wasl_config, load_wasl_session_config, render_wasl_node_toml, select_wasl_session_runtime,
-    wasl_control_bind, wasl_event_lines, WaslNodeConfig,
+    wasl_a2a_bind, wasl_control_bind, wasl_operator_bind, wasl_event_lines, WaslNodeConfig,
 };
 pub use wasl_session::{
     pump_wasl_observe, wasl_observe_should_reconnect, wasl_reconnect_after_seq,

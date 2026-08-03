@@ -43,7 +43,8 @@
 // (currently absent → compile failure = RED for tests 1 and 2).
 // ---------------------------------------------------------------------------
 use marsad_agent::{
-    render_wasl_node_toml, wasl_control_bind, Agent, AgentConfig, ListenSpec, WaslNodeConfig,
+    render_wasl_node_toml, wasl_a2a_bind, wasl_control_bind, wasl_operator_bind, Agent,
+    AgentConfig, ListenSpec, WaslNodeConfig,
 };
 use marsad_lifecycle::FakeContainer;
 use marsad_notify::CaptureNotifier;
@@ -105,7 +106,10 @@ fn launch_wasl_line(session_id: &str, host_id: &str) -> String {
 #[test]
 fn render_wasl_node_toml_includes_kind_managed() {
     let cfg = WaslNodeConfig {
+        agent_id: "marsad-local",
         host_id: "local",
+        a2a_bind: "127.0.0.1:48200",
+        operator_bind: "127.0.0.1:49200",
         control_bind: "http://127.0.0.1:47200",
         default_protocol: "claude",
         claude_bin: None,
@@ -124,7 +128,10 @@ fn render_wasl_node_toml_includes_kind_managed() {
 #[test]
 fn render_wasl_node_toml_includes_control_bind() {
     let cfg = WaslNodeConfig {
+        agent_id: "marsad-local",
         host_id: "local",
+        a2a_bind: "127.0.0.1:48200",
+        operator_bind: "127.0.0.1:49200",
         control_bind: "http://127.0.0.1:47200",
         default_protocol: "claude",
         claude_bin: None,
@@ -146,7 +153,10 @@ fn render_wasl_node_toml_includes_control_bind() {
 #[test]
 fn render_wasl_node_toml_control_bind_is_bare_socket_addr_not_url() {
     let cfg = WaslNodeConfig {
+        agent_id: "marsad-local",
         host_id: "local",
+        a2a_bind: "127.0.0.1:48200",
+        operator_bind: "127.0.0.1:49200",
         control_bind: "http://127.0.0.1:47200",
         default_protocol: "claude",
         claude_bin: None,
@@ -167,7 +177,10 @@ fn render_wasl_node_toml_control_bind_is_bare_socket_addr_not_url() {
 #[test]
 fn render_wasl_node_toml_includes_default_protocol() {
     let cfg = WaslNodeConfig {
+        agent_id: "marsad-local",
         host_id: "local",
+        a2a_bind: "127.0.0.1:48200",
+        operator_bind: "127.0.0.1:49200",
         control_bind: "http://127.0.0.1:47200",
         default_protocol: "claude",
         claude_bin: None,
@@ -185,7 +198,10 @@ fn render_wasl_node_toml_includes_default_protocol() {
 #[test]
 fn render_wasl_node_toml_with_claude_bin_some_includes_the_path() {
     let cfg = WaslNodeConfig {
+        agent_id: "marsad-local",
         host_id: "local",
+        a2a_bind: "127.0.0.1:48200",
+        operator_bind: "127.0.0.1:49200",
         control_bind: "http://127.0.0.1:47200",
         default_protocol: "claude",
         claude_bin: Some("/usr/local/bin/claude"),
@@ -202,7 +218,10 @@ fn render_wasl_node_toml_with_claude_bin_some_includes_the_path() {
 #[test]
 fn render_wasl_node_toml_with_opencode_bin_some_includes_the_path() {
     let cfg = WaslNodeConfig {
+        agent_id: "marsad-local",
         host_id: "local",
+        a2a_bind: "127.0.0.1:48200",
+        operator_bind: "127.0.0.1:49200",
         control_bind: "http://127.0.0.1:47200",
         default_protocol: "opencode",
         claude_bin: None,
@@ -220,7 +239,10 @@ fn render_wasl_node_toml_with_opencode_bin_some_includes_the_path() {
 #[test]
 fn render_wasl_node_toml_with_claude_bin_none_omits_claude_bin_key() {
     let cfg = WaslNodeConfig {
+        agent_id: "marsad-hpc",
         host_id: "hpc",
+        a2a_bind: "127.0.0.1:48200",
+        operator_bind: "127.0.0.1:49200",
         control_bind: "http://127.0.0.1:47201",
         default_protocol: "claude",
         claude_bin: None,
@@ -239,7 +261,10 @@ fn render_wasl_node_toml_with_claude_bin_none_omits_claude_bin_key() {
 #[test]
 fn render_wasl_node_toml_is_deterministic() {
     let cfg = WaslNodeConfig {
+        agent_id: "marsad-local",
         host_id: "local",
+        a2a_bind: "127.0.0.1:48200",
+        operator_bind: "127.0.0.1:49200",
         control_bind: "http://127.0.0.1:47200",
         default_protocol: "claude",
         claude_bin: Some("/usr/local/bin/claude"),
@@ -273,7 +298,10 @@ fn render_wasl_node_toml_with_bins_resolved_from_agent_commands() {
         .map(|(_, v)| *v);
 
     let cfg = WaslNodeConfig {
+        agent_id: "marsad-local",
         host_id: "local",
+        a2a_bind: "127.0.0.1:48200",
+        operator_bind: "127.0.0.1:49200",
         control_bind: "http://127.0.0.1:47200",
         default_protocol: "claude",
         claude_bin,
@@ -765,6 +793,255 @@ fn ensure_wasl_runtime_node_seam_never_touches_container() {
             !calls.iter().any(|c| c.contains("wasl-mcpd-runtime")),
             "seam scenario '{scenario}': ensure_wasl_runtime_node must NEVER touch a \
              wasl-mcpd-runtime container when a seam is pre-set; calls: {calls:?}"
+        );
+    }
+}
+
+// ===========================================================================
+// Part 6 — New config blocks: [identity] + [a2a] + [operator]
+// ===========================================================================
+
+/// The rendered TOML must include an `[identity]` block with `agent_id`.
+#[test]
+fn render_wasl_node_toml_emits_identity_block_with_agent_id() {
+    let cfg = WaslNodeConfig {
+        agent_id: "marsad-local",
+        host_id: "local",
+        a2a_bind: "127.0.0.1:48200",
+        operator_bind: "127.0.0.1:49200",
+        control_bind: "http://127.0.0.1:47200",
+        default_protocol: "claude",
+        claude_bin: None,
+        opencode_bin: None,
+    };
+    let toml = render_wasl_node_toml(&cfg);
+    assert!(
+        toml.contains("[identity]"),
+        "rendered TOML must have an [identity] block; got:\n{toml}"
+    );
+    assert!(
+        toml.contains("agent_id = \"marsad-local\""),
+        "rendered TOML must contain agent_id under [identity]; got:\n{toml}"
+    );
+}
+
+/// The `[identity]` block must come before `[runtime]` in the rendered TOML.
+#[test]
+fn render_wasl_node_toml_identity_block_before_runtime() {
+    let cfg = WaslNodeConfig {
+        agent_id: "marsad-local",
+        host_id: "local",
+        a2a_bind: "127.0.0.1:48200",
+        operator_bind: "127.0.0.1:49200",
+        control_bind: "http://127.0.0.1:47200",
+        default_protocol: "claude",
+        claude_bin: None,
+        opencode_bin: None,
+    };
+    let toml = render_wasl_node_toml(&cfg);
+    let identity_pos = toml.find("[identity]").expect("[identity] must be present");
+    let runtime_pos = toml.find("[runtime]").expect("[runtime] must be present");
+    assert!(
+        identity_pos < runtime_pos,
+        "[identity] block must appear before [runtime]; got:\n{toml}"
+    );
+}
+
+/// The rendered TOML must include an `[a2a]` block with a bare `bind` address.
+#[test]
+fn render_wasl_node_toml_emits_a2a_block_with_bare_bind() {
+    let cfg = WaslNodeConfig {
+        agent_id: "marsad-local",
+        host_id: "local",
+        a2a_bind: "127.0.0.1:48200",
+        operator_bind: "127.0.0.1:49200",
+        control_bind: "http://127.0.0.1:47200",
+        default_protocol: "claude",
+        claude_bin: None,
+        opencode_bin: None,
+    };
+    let toml = render_wasl_node_toml(&cfg);
+    assert!(
+        toml.contains("[a2a]"),
+        "rendered TOML must have an [a2a] block; got:\n{toml}"
+    );
+    assert!(
+        toml.contains("bind = \"127.0.0.1:48200\""),
+        "rendered TOML [a2a] block must have bare bind address; got:\n{toml}"
+    );
+    // Must not contain http:// in [a2a] bind — bare addr only.
+    let a2a_section_start = toml.find("[a2a]").unwrap();
+    let a2a_section = &toml[a2a_section_start..];
+    let a2a_end = a2a_section.find("\n[").unwrap_or(a2a_section.len());
+    let a2a_block = &a2a_section[..a2a_end];
+    assert!(
+        !a2a_block.contains("http://"),
+        "[a2a] bind must be a bare socket addr (no http://); got:\n{a2a_block}"
+    );
+}
+
+/// The rendered TOML must include an `[operator]` block with a bare `bind` address.
+#[test]
+fn render_wasl_node_toml_emits_operator_block_with_bare_bind() {
+    let cfg = WaslNodeConfig {
+        agent_id: "marsad-local",
+        host_id: "local",
+        a2a_bind: "127.0.0.1:48200",
+        operator_bind: "127.0.0.1:49200",
+        control_bind: "http://127.0.0.1:47200",
+        default_protocol: "claude",
+        claude_bin: None,
+        opencode_bin: None,
+    };
+    let toml = render_wasl_node_toml(&cfg);
+    assert!(
+        toml.contains("[operator]"),
+        "rendered TOML must have an [operator] block; got:\n{toml}"
+    );
+    assert!(
+        toml.contains("bind = \"127.0.0.1:49200\""),
+        "rendered TOML [operator] block must have bare bind address; got:\n{toml}"
+    );
+}
+
+/// `wasl_a2a_bind` is deterministic: same host → same result across calls.
+#[test]
+fn wasl_a2a_bind_is_deterministic_for_same_host() {
+    let a = wasl_a2a_bind("local");
+    let b = wasl_a2a_bind("local");
+    assert_eq!(a, b, "wasl_a2a_bind must be deterministic for the same host_id");
+}
+
+/// `wasl_a2a_bind` returns a bare loopback address (no `http://` scheme).
+#[test]
+fn wasl_a2a_bind_returns_bare_loopback() {
+    let bind = wasl_a2a_bind("local");
+    assert!(
+        bind.starts_with("127.0.0.1:"),
+        "wasl_a2a_bind must return a bare loopback address (127.0.0.1:PORT); got: {bind}"
+    );
+    assert!(
+        !bind.contains("http://"),
+        "wasl_a2a_bind must NOT contain an http:// scheme (it is a bare socket addr); got: {bind}"
+    );
+}
+
+/// `wasl_a2a_bind` result parses as a `SocketAddr`.
+#[test]
+fn wasl_a2a_bind_parses_as_socket_addr() {
+    let bind = wasl_a2a_bind("local");
+    bind.parse::<std::net::SocketAddr>().unwrap_or_else(|e| {
+        panic!("wasl_a2a_bind must produce a valid SocketAddr; got '{bind}': {e}")
+    });
+}
+
+/// Two distinct hosts produce distinct A2A bind ports.
+#[test]
+fn wasl_a2a_bind_distinct_hosts_produce_distinct_binds() {
+    let a = wasl_a2a_bind("local");
+    let b = wasl_a2a_bind("hpc");
+    assert_ne!(a, b, "distinct host_ids must have distinct a2a_bind ports; local={a}, hpc={b}");
+}
+
+/// `wasl_a2a_bind` port window is `[48000, 48999]` — distinct from the
+/// control_bind window `[47000, 47999]`.
+#[test]
+fn wasl_a2a_bind_port_in_expected_window() {
+    for host in ["local", "hpc", "cloud", "dev", "prod"] {
+        let bind = wasl_a2a_bind(host);
+        let port: u16 = bind
+            .rsplit(':')
+            .next()
+            .unwrap()
+            .parse()
+            .expect("port must be numeric");
+        assert!(
+            (48000..=48999).contains(&port),
+            "wasl_a2a_bind port for host '{host}' must be in [48000, 48999]; got {port}"
+        );
+    }
+}
+
+/// `wasl_operator_bind` is deterministic: same host → same result.
+#[test]
+fn wasl_operator_bind_is_deterministic_for_same_host() {
+    let a = wasl_operator_bind("local");
+    let b = wasl_operator_bind("local");
+    assert_eq!(a, b, "wasl_operator_bind must be deterministic for the same host_id");
+}
+
+/// `wasl_operator_bind` returns a bare loopback address (no `http://`).
+#[test]
+fn wasl_operator_bind_returns_bare_loopback() {
+    let bind = wasl_operator_bind("local");
+    assert!(
+        bind.starts_with("127.0.0.1:"),
+        "wasl_operator_bind must return a bare loopback address; got: {bind}"
+    );
+    assert!(
+        !bind.contains("http://"),
+        "wasl_operator_bind must NOT contain an http:// scheme; got: {bind}"
+    );
+}
+
+/// `wasl_operator_bind` result parses as a `SocketAddr`.
+#[test]
+fn wasl_operator_bind_parses_as_socket_addr() {
+    let bind = wasl_operator_bind("local");
+    bind.parse::<std::net::SocketAddr>().unwrap_or_else(|e| {
+        panic!("wasl_operator_bind must produce a valid SocketAddr; got '{bind}': {e}")
+    });
+}
+
+/// Two distinct hosts produce distinct operator bind ports.
+#[test]
+fn wasl_operator_bind_distinct_hosts_produce_distinct_binds() {
+    let a = wasl_operator_bind("local");
+    let b = wasl_operator_bind("hpc");
+    assert_ne!(
+        a, b,
+        "distinct host_ids must have distinct operator_bind ports; local={a}, hpc={b}"
+    );
+}
+
+/// `wasl_operator_bind` port window is `[49000, 49999]` — distinct from both
+/// control `[47000, 47999]` and A2A `[48000, 48999]`.
+#[test]
+fn wasl_operator_bind_port_in_expected_window() {
+    for host in ["local", "hpc", "cloud", "dev", "prod"] {
+        let bind = wasl_operator_bind(host);
+        let port: u16 = bind
+            .rsplit(':')
+            .next()
+            .unwrap()
+            .parse()
+            .expect("port must be numeric");
+        assert!(
+            (49000..=49999).contains(&port),
+            "wasl_operator_bind port for host '{host}' must be in [49000, 49999]; got {port}"
+        );
+    }
+}
+
+/// All three bind helpers produce DISTINCT addresses for the same host — no
+/// control/a2a/operator port collision.
+#[test]
+fn all_three_bind_helpers_distinct_for_same_host() {
+    for host in ["local", "hpc", "cloud"] {
+        let control = wasl_control_bind(host);
+        let a2a = wasl_a2a_bind(host);
+        let op = wasl_operator_bind(host);
+        assert_ne!(
+            control, a2a,
+            "control_bind and a2a_bind must differ for host '{host}': {control} vs {a2a}"
+        );
+        assert_ne!(
+            control, op,
+            "control_bind and operator_bind must differ for host '{host}': {control} vs {op}"
+        );
+        assert_ne!(
+            a2a, op,
+            "a2a_bind and operator_bind must differ for host '{host}': {a2a} vs {op}"
         );
     }
 }
