@@ -391,12 +391,25 @@ pub(crate) fn truncated_from_json(data: &str) -> Option<TruncatedDto> {
 // Outbound request bodies (Marsad → wire).
 // ===========================================================================
 
-/// The wire `POST /v1/targets` body (`create_request.json`): `{key}` (plus an
-/// optional `protocol` the node may default). Marsad relays the opaque key
-/// verbatim.
+/// The wire `POST /v1/targets` body (`create_request.json`). The node's
+/// create-target reads TOP-LEVEL `protocol` and `context` (the `SpawnContext`:
+/// cwd/model/session_mode/mcp_config/…); Marsad's caller nests those inside the
+/// opaque target key as `{ protocol, context, … }`. Unpack them to the top
+/// level so the worker actually receives its protocol + spawn context — a plain
+/// (string) or context-less key leaves the body as just `{key}`, unchanged
+/// (preserving the relay-verbatim contract for keys that carry neither). The
+/// full key value is always still sent as `key` for create-or-reuse/reattach.
 pub(crate) fn create_request_body(key: &serde_json::Value) -> String {
-    let body = serde_json::json!({ "key": key });
-    serde_json::to_string(&body).expect("create request always serializes")
+    let mut body = serde_json::Map::new();
+    body.insert("key".to_string(), key.clone());
+    if let Some(protocol) = key.get("protocol") {
+        body.insert("protocol".to_string(), protocol.clone());
+    }
+    if let Some(context) = key.get("context") {
+        body.insert("context".to_string(), context.clone());
+    }
+    serde_json::to_string(&serde_json::Value::Object(body))
+        .expect("create request always serializes")
 }
 
 /// Serialize a [`WaslBusyPolicy`] to its wire tagged form
