@@ -297,8 +297,33 @@ impl SeededProvider {
     }
 }
 
+/// Canonical key string for `SeededProvider` lookup.
+///
+/// Strips `context.mcp_config` before serializing — `mcp_config` is a
+/// Marsad-internal transport annotation injected by `handle_launch_wasl_session`
+/// just before `get_or_start` (Phase D worker-send). It is NOT part of the Wasl
+/// target identity that tests seed against; stripping it lets the existing test
+/// seeds (which use the original key without `mcp_config`) match the mutated key
+/// the agent passes in.
 fn key_string(key: &serde_json::Value) -> String {
-    serde_json::to_string(key).unwrap_or_default()
+    let mut v = key.clone();
+    // Strip the Marsad-internal mcp_config annotation (injected by
+    // handle_launch_wasl_session just before get_or_start — Phase D
+    // worker-send). After stripping, if context becomes an empty object
+    // (because it only contained mcp_config, e.g. when the original key had
+    // no context field at all and the agent created one just for mcp_config),
+    // remove the context key entirely so the normalised form matches the
+    // original seed key.
+    if let Some(obj) = v.as_object_mut() {
+        if let Some(ctx) = obj.get_mut("context").and_then(|c| c.as_object_mut()) {
+            ctx.remove("mcp_config");
+        }
+        // Remove context if it is now empty.
+        if obj.get("context").map(|c| c.as_object().map(|o| o.is_empty()).unwrap_or(false)).unwrap_or(false) {
+            obj.remove("context");
+        }
+    }
+    serde_json::to_string(&v).unwrap_or_default()
 }
 
 impl WaslSessionProvider for SeededProvider {

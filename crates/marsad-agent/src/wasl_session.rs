@@ -405,7 +405,74 @@ impl Agent {
         // hits ECONNREFUSED and returns a graceful Err — no short-circuit needed.
         self.ensure_wasl_runtime_node(&host_id, &[], None)?;
 
-        let _ = (host_id, name);
+        let _ = name;
+
+        // Phase D — worker-send: inject the Wasl MCP config into the target key's
+        // context BEFORE `get_or_start`. The worker's inner claude/opencode binary
+        // is launched by the Wasl runtime with `--mcp-config <path>`, wiring
+        // `wasl-mcpd` as the "wasl" MCP server so the worker can send A2A messages
+        // to its peers. This is unconditional: even with zero peers the worker gets
+        // the wasl send-tools MCP (peers may be added later).
+        let mut key_val = wasl_target_key;
+
+        // Determine worker identity from the key if present, else use session_id.
+        let worker_agent_id = key_val
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&session_id)
+            .to_string();
+        let worker_host = host_id.clone();
+
+        // Build the peer list from context.peers (tolerate missing/non-array).
+        let peers: Vec<crate::wasl::WaslWorkerPeer> = key_val
+            .get("context")
+            .and_then(|ctx| ctx.get("peers"))
+            .and_then(|p| p.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|entry| {
+                        let agent_id = entry.get("agent_id")?.as_str()?.to_string();
+                        let peer_host = entry.get("host_id")?.as_str()?.to_string();
+                        let url = format!(
+                            "http://{}",
+                            crate::wasl::wasl_a2a_bind(&peer_host)
+                        );
+                        Some(crate::wasl::WaslWorkerPeer {
+                            agent_id,
+                            host_id: peer_host,
+                            url,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Render the TOML and write it to <data_root>/wasl-worker-<session_id>.toml.
+        let toml_content =
+            crate::wasl::render_wasl_worker_toml(&worker_agent_id, &worker_host, &peers);
+        let config_path = std::path::Path::new(&self.config.data_root)
+            .join(format!("wasl-worker-{session_id}.toml"));
+        let _ = std::fs::create_dir_all(&self.config.data_root);
+        let write_ok = std::fs::write(&config_path, &toml_content).is_ok();
+
+        eprintln!(
+            "marsad-agent: wasl-worker: session {session_id} host {worker_host} \
+             peers {} config {} write_ok {write_ok}",
+            peers.len(),
+            config_path.display()
+        );
+
+        // Build the mcp_config JSON string and inject it into context.
+        let config_path_str = config_path.to_string_lossy().into_owned();
+        let mcp_config = crate::wasl::wasl_worker_mcp_config(&config_path_str);
+
+        // Ensure context is an object, then set mcp_config.
+        if key_val.get("context").map(|v| v.is_object()).unwrap_or(false) {
+            key_val["context"]["mcp_config"] = serde_json::Value::String(mcp_config);
+        } else {
+            key_val["context"] = serde_json::json!({ "mcp_config": mcp_config });
+        }
+
         // Ensure a provider exists: prefer the directly-registered one, else build
         // one from the factory (once) and keep it. Absent both -> Protocol error.
         if self.wasl_session_provider.0.is_none() {
@@ -422,7 +489,7 @@ impl Agent {
         // Resolve (or reattach to) the client. `get_or_start` is the potentially
         // blocking call, but the provider is `&mut self`-borrowed here (not under
         // any registry lock), so lock hygiene holds trivially.
-        let key = WaslTargetKey(wasl_target_key);
+        let key = WaslTargetKey(key_val);
         let (client, _snapshot) = self
             .wasl_session_provider
             .0

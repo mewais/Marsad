@@ -386,6 +386,88 @@ pub fn wasl_operator_bind(host_id: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Phase-D — Wasl worker MCP config builders
+//
+// When Marsad launches a Wasl-managed worker session (a claude or opencode
+// process whose A2A peers are other Wasl nodes), the worker's inner agent
+// binary needs an `--mcp-config` flag pointing at a TOML file that configures
+// `wasl-mcpd` as an MCP server. These PURELY FUNCTIONAL builders (no IO,
+// always compiled, unit-testable) produce that TOML and the compact JSON
+// `SpawnContext.mcp_config` string that `handle_launch_wasl_session` injects
+// into the target key's context before calling `get_or_start`.
+// ---------------------------------------------------------------------------
+
+/// A Wasl A2A peer that a worker session should be able to reach.
+///
+/// Built by `handle_launch_wasl_session` from the `context.peers` array in
+/// the `WaslTargetKey`, then passed to `render_wasl_worker_toml` to produce
+/// the per-session TOML config that `wasl-mcpd --config <path>` reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaslWorkerPeer {
+    pub agent_id: String,
+    pub host_id: String,
+    /// Absolute A2A URL (`http://127.0.0.1:<port>`).  Built from
+    /// `wasl_a2a_bind(peer.host_id)` by the caller.
+    pub url: String,
+}
+
+/// Render a **tools-client** `wasl-mcpd` TOML config for a Wasl worker.
+///
+/// The rendered file has only `[identity]` + zero or more `[[peers]]` blocks.
+/// No `[runtime]` block is emitted: its absence tells `wasl-mcpd` this is an
+/// ephemeral tools client, not a managed runtime node.
+///
+/// Keys are exactly `identity.agent_id`, `identity.host_id`,
+/// `peers[].agent_id`, `peers[].host_id`, `peers[].url` (the `deny_unknown_fields`
+/// TOML parse in `wasl-mcpd` rejects any other key). String values are rendered
+/// with `{:?}` so Rust's `Debug` format quotes and escapes them correctly for
+/// TOML.
+///
+/// The output is deterministic (peers in the given order) and pure (no IO).
+pub fn render_wasl_worker_toml(agent_id: &str, host_id: &str, peers: &[WaslWorkerPeer]) -> String {
+    let mut out = String::new();
+    // [identity] block
+    out.push_str("[identity]\n");
+    out.push_str(&format!("agent_id = {:?}\n", agent_id));
+    out.push_str(&format!("host_id = {:?}\n", host_id));
+    // [[peers]] blocks — one per peer, in the given order.
+    for peer in peers {
+        out.push('\n');
+        out.push_str("[[peers]]\n");
+        out.push_str(&format!("agent_id = {:?}\n", peer.agent_id));
+        out.push_str(&format!("host_id = {:?}\n", peer.host_id));
+        out.push_str(&format!("url = {:?}\n", peer.url));
+    }
+    out
+}
+
+/// Build the compact JSON `mcp_config` string for a Wasl worker.
+///
+/// The returned string is the value to place in `SpawnContext.mcp_config` (a
+/// `--mcp-config` argument applied verbatim to the worker's inner agent
+/// binary). It configures `wasl-mcpd` as the `"wasl"` MCP server, pointing at
+/// `config_path` (the TOML file written by `handle_launch_wasl_session`).
+///
+/// Built with `serde_json` so the path is correctly JSON-escaped even if it
+/// contains special characters.
+///
+/// # Example output
+/// ```text
+/// {"mcpServers":{"wasl":{"command":"wasl-mcpd","args":["--config","/data/wasl-worker-sess.toml"]}}}
+/// ```
+pub fn wasl_worker_mcp_config(config_path: &str) -> String {
+    serde_json::json!({
+        "mcpServers": {
+            "wasl": {
+                "command": "wasl-mcpd",
+                "args": ["--config", config_path]
+            }
+        }
+    })
+    .to_string()
+}
+
+// ---------------------------------------------------------------------------
 // §4.2 — wasl_event_lines (pure mapping)
 // ---------------------------------------------------------------------------
 
