@@ -471,6 +471,37 @@ fn opencode_launch_model_values(res: &serde_json::Value) -> (Option<String>, Vec
     (current, valid)
 }
 
+/// CODEX `collaborationMode/list` response interception.
+///
+/// The codex wasit `MessageParser` returns NO events for JSON-RPC RESPONSE lines
+/// (the `{"id":N,"result":{…}}` shape). Marsad intercepts the id==5 response
+/// (the `collaborationMode/list` request Marsad sends after `thread/started` to
+/// discover what modes the session supports) and synthesizes a `ModesUpdated` event
+/// from the result. Returns `None` for any line that is NOT the id==5 response.
+///
+/// Wire shape: `{"id":5,"result":{"data":[{"mode":"<id>","settings":{...}}, ...]}}`
+#[cfg(not(coverage))]
+fn codex_collab_mode_intercept(raw: &str, sid: &str) -> Option<Vec<wasit_core::AgentEvent>> {
+    let val: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    // Must be a RESPONSE (has id + result, no method) with id == 5.
+    if val.get("method").is_some() {
+        return None;
+    }
+    if val.get("id").and_then(|v| v.as_u64()) != Some(5) {
+        return None;
+    }
+    let result = val.get("result")?;
+    let available_modes = wasit_codex::codex_modes_from_collab_list(result);
+    eprintln!(
+        "marsad-agent: session {sid} codex collaborationMode/list response → {} mode(s)",
+        available_modes.len()
+    );
+    Some(vec![wasit_core::AgentEvent::ModesUpdated {
+        available_modes,
+        current_mode: None,
+    }])
+}
+
 /// Spawn the per-session reader thread: connect the transport (local FIFO/pipe, or a
 /// remote durable FIFO bridge), send the control `initialize` handshake + an optional
 /// first prompt, register the writer, then stream claude's stdout to every subscriber
@@ -1314,6 +1345,21 @@ pub(crate) fn spawn_session_reader(
                                         capability_provider.as_ref(),
                                         &capability_host_id,
                                     );
+                                    emit_event(ev);
+                                }
+                                continue;
+                            }
+                        }
+
+                        // CODEX collaborationMode/list response interception.
+                        // The codex MessageParser returns empty for all JSON-RPC
+                        // RESPONSE lines (by design — it only handles notifications
+                        // and server-initiated requests). We intercept the id==5
+                        // response here and emit ModesUpdated with the real mode
+                        // list, mirroring the opencode_handshake_intercept above.
+                        if driver == "codex" {
+                            if let Some(evs) = codex_collab_mode_intercept(raw, &sid) {
+                                for ev in evs {
                                     emit_event(ev);
                                 }
                                 continue;
