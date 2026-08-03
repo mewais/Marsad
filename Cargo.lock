@@ -243,6 +243,7 @@ dependencies = [
  "marsad-store",
  "marsad-transport",
  "marsad-viewmodel",
+ "wasit-core",
 ]
 
 [[package]]
@@ -261,6 +262,9 @@ dependencies = [
  "marsad-store",
  "marsad-transport",
  "marsad-viewmodel",
+ "serde_json",
+ "wasit-claude",
+ "wasit-core",
 ]
 
 [[package]]
@@ -280,6 +284,8 @@ dependencies = [
  "marsad-transport",
  "marsad-viewmodel",
  "serde_json",
+ "wasit-claude",
+ "wasit-core",
 ]
 
 [[package]]
@@ -316,6 +322,7 @@ dependencies = [
  "marsad-store",
  "marsad-transport",
  "marsad-viewmodel",
+ "wasit-claude",
 ]
 
 [[package]]
@@ -354,6 +361,8 @@ dependencies = [
  "marsad-transport",
  "marsad-viewmodel",
  "serde_json",
+ "wasit-claude",
+ "wasit-core",
 ]
 
 [[package]]

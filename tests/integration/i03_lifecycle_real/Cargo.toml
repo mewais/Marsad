@@ -7,6 +7,8 @@ description = "Marsad integration scenario i03_lifecycle_real"
 
 [dependencies]
 serde_json = { workspace = true }
+wasit-core = { path = "../../../Wasit/crates/wasit-core" }
+wasit-claude = { path = "../../../Wasit/crates/wasit-claude" }
 marsad-proto = { workspace = true }
 marsad-events = { workspace = true }
 marsad-gates = { workspace = true }

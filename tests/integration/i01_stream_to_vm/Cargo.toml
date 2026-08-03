@@ -6,6 +6,7 @@ publish = false
 description = "Marsad integration scenario i01_stream_to_vm"
 
 [dependencies]
+wasit-core = { path = "../../../Wasit/crates/wasit-core" }
 marsad-proto = { workspace = true }
 marsad-events = { workspace = true }
 marsad-gates = { workspace = true }

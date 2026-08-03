@@ -60,7 +60,8 @@ use std::time::{Duration, Instant};
 
 use marsad_events::{reduce, Event, SessionState};
 use marsad_lifecycle::{Container, TmuxContainer};
-use marsad_proto::{parse_stream_line, StreamMsg};
+use wasit_claude::LineParser;
+use wasit_core::AgentEvent;
 
 // ── test-local counter ────────────────────────────────────────────────────────
 
@@ -353,18 +354,19 @@ fn count_tmux_sessions_with_prefix(prefix: &str) -> usize {
 
 // ── read_all_lines ────────────────────────────────────────────────────────────
 
-/// Drain `reader` until EOF, parsing each NDJSON line.
+/// Drain `reader` until EOF, parsing each NDJSON line into `AgentEvent`s.
 ///
 /// Also extracts `session_id` from the raw JSON of every line so it works for
-/// `system/init` (SessionInit struct has the field) and `result` (whose raw JSON
-/// has `session_id` even though `ResultMsg` does not model it).
+/// `system/init` (SessionInit has the field) and `result` (whose raw JSON
+/// has `session_id` even though TurnCompleted does not model it directly).
 fn read_all_lines(
     reader: &mut BufReader<std::fs::File>,
     timeout: Duration,
-) -> (Option<String>, Vec<StreamMsg>) {
+) -> (Option<String>, Vec<AgentEvent>) {
     let deadline = Instant::now() + timeout;
-    let mut msgs = Vec::new();
+    let mut events: Vec<AgentEvent> = Vec::new();
     let mut session_id: Option<String> = None;
+    let mut parser = LineParser::new();
 
     loop {
         if Instant::now() > deadline {
@@ -387,12 +389,7 @@ fn read_all_lines(
                         }
                     }
                 }
-                match parse_stream_line(trimmed) {
-                    Ok(msg) => msgs.push(msg),
-                    Err(e) => {
-                        eprintln!("[i03] parse error: {e:?} on: {:.120}", trimmed);
-                    }
-                }
+                events.extend(parser.on_line(trimmed));
             }
             Err(e) => {
                 eprintln!("[i03] read error: {e}");
@@ -401,7 +398,7 @@ fn read_all_lines(
         }
     }
 
-    (session_id, msgs)
+    (session_id, events)
 }
 
 // ── OOM crash detection ───────────────────────────────────────────────────────
@@ -432,7 +429,7 @@ fn run_session(
     project: &str,
     extra_args: &[&str],
     prompt: &str,
-) -> (Option<String>, Vec<StreamMsg>) {
+) -> (Option<String>, Vec<AgentEvent>) {
     let cmd = build_cmd(session_dir, project, extra_args);
     container
         .spawn(session_name, &cmd)
@@ -599,25 +596,33 @@ fn scenario_1_launch_system_init_check_oom() -> bool {
     );
 
     match msgs.first().expect("at least one msg") {
-        StreamMsg::SystemInit(init) => {
+        AgentEvent::SessionInit {
+            native_session_id,
+            model,
+            cwd,
+            tools,
+            ..
+        } => {
+            let sid_str = native_session_id.as_deref().unwrap_or("");
+            let model_str = model.as_deref().unwrap_or("");
+            let cwd_str = cwd.as_deref().unwrap_or("");
             eprintln!(
-                "[i03/s1] system/init: session_id={} model={} cwd={}",
-                init.session_id, init.model, init.cwd
+                "[i03/s1] system/init: session_id={sid_str} model={model_str} cwd={cwd_str}"
             );
-            assert!(!init.session_id.is_empty(), "session_id must be non-empty");
-            assert!(!init.model.is_empty(), "model must be non-empty");
-            assert!(!init.cwd.is_empty(), "cwd must be non-empty");
-            assert!(!init.tools.is_empty(), "tools list must be non-empty");
+            assert!(!sid_str.is_empty(), "session_id must be non-empty");
+            assert!(!model_str.is_empty(), "model must be non-empty");
+            assert!(!cwd_str.is_empty(), "cwd must be non-empty");
+            assert!(!tools.is_empty(), "tools list must be non-empty");
         }
-        other => panic!("[s1] Expected SystemInit as first message, got {other:?}"),
+        other => panic!("[s1] Expected SessionInit as first message, got {other:?}"),
     }
 
     assert!(sid.is_some(), "[s1] session_id must have been captured");
 
-    // Verify reduce folds system/init → Working phase with session_id set.
+    // Verify reduce folds SessionInit → Working phase with session_id set.
     let mut state = SessionState::initial();
-    for msg in &msgs {
-        state = reduce(state, Event::Stream(msg.clone()));
+    for event in &msgs {
+        state = reduce(state, Event::Stream(event.clone()));
     }
     assert!(
         state.session_id.is_some(),
@@ -667,8 +672,8 @@ fn scenario_2_resume_continuity() {
     );
 
     assert!(
-        matches!(msgs1.first(), Some(StreamMsg::SystemInit(_))),
-        "[s2] First message of session 1 must be SystemInit, got {:?}",
+        matches!(msgs1.first(), Some(AgentEvent::SessionInit { .. })),
+        "[s2] First message of session 1 must be SessionInit, got {:?}",
         msgs1.first()
     );
 
@@ -711,11 +716,11 @@ fn scenario_2_resume_continuity() {
             eprintln!("[i03/s2] PASS — resumed session_id matches original ({sid1})");
         }
         Some(sid2) => {
-            // Different UUID: only acceptable if it's a fresh system/init.
+            // Different UUID: only acceptable if it's a fresh SessionInit.
             assert!(
-                matches!(msgs2.first(), Some(StreamMsg::SystemInit(_))),
+                matches!(msgs2.first(), Some(AgentEvent::SessionInit { .. })),
                 "[s2] Resume returned different session_id {sid2} (not {sid1}); \
-                 only acceptable if the first message is a fresh SystemInit"
+                 only acceptable if the first message is a fresh SessionInit"
             );
             eprintln!(
                 "[i03/s2] PASS — resume launched fresh session {sid2} \
@@ -723,10 +728,10 @@ fn scenario_2_resume_continuity() {
             );
         }
         None => {
-            let has_result = msgs2.iter().any(|m| matches!(m, StreamMsg::Result(_)));
+            let has_result = msgs2.iter().any(|m| matches!(m, AgentEvent::TurnCompleted { .. }));
             assert!(
                 has_result,
-                "[s2] Resume session produced no session_id and no Result — unexpected"
+                "[s2] Resume session produced no session_id and no TurnCompleted — unexpected"
             );
             eprintln!(
                 "[i03/s2] PASS — resume produced a Result (ephemeral session, sid not echoed)"

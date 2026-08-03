@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use marsad_proto::{parse_stream_line, ContentBlock, ResultSubtype, StreamMsg};
+use wasit_claude::LineParser;
+use wasit_core::AgentEvent;
 
 // ── unique ID generation ──────────────────────────────────────────────────────
 
@@ -135,8 +136,8 @@ impl LiveSession {
         }
     }
 
-    /// Send `prompt_text` to this session and collect all `StreamMsg`s until
-    /// a `result` line arrives or `timeout` elapses.
+    /// Send `prompt_text` to this session and collect all `AgentEvent`s until
+    /// a `TurnCompleted` event arrives or `timeout` elapses.
     ///
     /// Open ordering (deadlock-free, per realio.md):
     ///   1. A background thread opens `out.fifo` for reading — this unblocks
@@ -144,7 +145,7 @@ impl LiveSession {
     ///   2. The main thread opens `in.fifo` for writing — by the time step 2
     ///      runs, claude has already opened `in.fifo` for reading (because
     ///      step 1 let it proceed past its stdout open), so we don't block.
-    fn run_prompt(&self, prompt_text: &str, timeout: Duration) -> Result<Vec<StreamMsg>, String> {
+    fn run_prompt(&self, prompt_text: &str, timeout: Duration) -> Result<Vec<AgentEvent>, String> {
         let out_fifo = self.out_fifo();
         let in_fifo = self.in_fifo();
 
@@ -163,6 +164,8 @@ impl LiveSession {
             for line in BufReader::new(file).lines() {
                 match line {
                     Ok(l) => {
+                        // Send the raw line; the main thread parses it.
+                        // Keep sending even after result so the parser sees it.
                         let done = l.contains("\"type\":\"result\"");
                         if tx.send(l).is_err() {
                             break;
@@ -180,11 +183,8 @@ impl LiveSession {
         // try to open in.fifo (which would block if claude hasn't started yet).
         std::thread::sleep(Duration::from_millis(600));
 
-        // Encode the user message in the format claude's stream-json parser expects.
-        let prompt_json = format!(
-            "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":{text}}}]}}}}",
-            text = serde_json::to_string(prompt_text).unwrap()
-        );
+        // Encode the user message via wasit_claude encoder.
+        let prompt_json = wasit_claude::encode_user_message(prompt_text);
 
         // Open in.fifo for writing (blocks until claude opens it for reading —
         // which happens right after its stdout redirect unblocks in step 1).
@@ -198,7 +198,8 @@ impl LiveSession {
 
         // Drain the reader thread's channel with a deadline.
         let deadline = Instant::now() + timeout;
-        let mut msgs: Vec<StreamMsg> = Vec::new();
+        let mut events: Vec<AgentEvent> = Vec::new();
+        let mut parser = LineParser::new();
 
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -210,38 +211,42 @@ impl LiveSession {
                     if line.starts_with("__ERR__:") {
                         return Err(format!("[{}] {line}", self.id));
                     }
-                    // Unknown subtypes (thinking_tokens, etc.) — skip.
-                    if let Ok(msg) = parse_stream_line(&line) {
-                        let done = matches!(msg, StreamMsg::Result(_));
-                        msgs.push(msg);
+                    for event in parser.on_line(&line) {
+                        let done = matches!(event, AgentEvent::TurnCompleted { .. });
+                        events.push(event);
                         if done {
+                            // Drain the rest of the loop via break.
                             break;
                         }
+                    }
+                    // Also break the outer loop if we got TurnCompleted.
+                    if events.iter().any(|e| matches!(e, AgentEvent::TurnCompleted { .. })) {
+                        break;
                     }
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    // Check if we already have a result (channel closed normally).
-                    if msgs.iter().any(|m| matches!(m, StreamMsg::Result(_))) {
+                    // Check if we already have a TurnCompleted (channel closed normally).
+                    if events.iter().any(|e| matches!(e, AgentEvent::TurnCompleted { .. })) {
                         break;
                     }
                 }
             }
         }
 
-        if msgs.is_empty() {
+        if events.is_empty() {
             // Dump err.log for diagnostics.
             let err_log = self.dir.join("err.log");
             let err_content = std::fs::read_to_string(&err_log).unwrap_or_default();
             return Err(format!(
-                "[{}] no messages within {:?}; err.log: {:?}",
+                "[{}] no events within {:?}; err.log: {:?}",
                 self.id,
                 timeout,
                 err_content.lines().take(5).collect::<Vec<_>>().join(" | ")
             ));
         }
 
-        Ok(msgs)
+        Ok(events)
     }
 
     /// Kill the tmux session and remove the temp directory.
@@ -267,54 +272,63 @@ impl Drop for TeardownGuard {
     }
 }
 
-// ── stream assertion helpers ──────────────────────────────────────────────────
+// ── AgentEvent assertion helpers ──────────────────────────────────────────────
+//
+// Wave 1 replaced the old StreamMsg/ContentBlock/ResultSubtype with AgentEvent.
+// These helpers mirror the original assertions using the new event shapes.
 
-fn has_system_init(msgs: &[StreamMsg]) -> bool {
-    msgs.iter().any(|m| matches!(m, StreamMsg::SystemInit(_)))
+fn has_system_init(events: &[AgentEvent]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::SessionInit { .. }))
 }
 
-fn has_assistant_text(msgs: &[StreamMsg]) -> bool {
-    msgs.iter().any(|m| {
-        if let StreamMsg::Assistant(a) = m {
-            a.message
-                .content
-                .iter()
-                .any(|c| matches!(c, ContentBlock::Text { .. }))
+/// True if any AssistantDelta with non-empty text was received.
+fn has_assistant_text(events: &[AgentEvent]) -> bool {
+    events.iter().any(|e| {
+        if let AgentEvent::AssistantDelta { text, .. } = e {
+            !text.is_empty()
         } else {
             false
         }
     })
 }
 
-fn has_result_success(msgs: &[StreamMsg]) -> bool {
-    msgs.iter()
-        .any(|m| matches!(m, StreamMsg::Result(r) if r.subtype == ResultSubtype::Success))
+/// True if a successful TurnCompleted (not interrupted) was received.
+fn has_result_success(events: &[AgentEvent]) -> bool {
+    events.iter().any(|e| {
+        if let AgentEvent::TurnCompleted { was_interrupted, .. } = e {
+            !was_interrupted
+        } else {
+            false
+        }
+    })
 }
 
-fn session_id_of(msgs: &[StreamMsg]) -> Option<String> {
-    msgs.iter().find_map(|m| {
-        if let StreamMsg::SystemInit(init) = m {
-            Some(init.session_id.clone())
+fn session_id_of(events: &[AgentEvent]) -> Option<String> {
+    events.iter().find_map(|e| {
+        if let AgentEvent::SessionInit {
+            native_session_id, ..
+        } = e
+        {
+            native_session_id.clone()
         } else {
             None
         }
     })
 }
 
-fn first_assistant_text(msgs: &[StreamMsg]) -> String {
-    msgs.iter()
-        .find_map(|m| {
-            if let StreamMsg::Assistant(a) = m {
-                a.message.content.iter().find_map(|c| {
-                    if let ContentBlock::Text { text } = c {
-                        Some(text.clone())
-                    } else {
-                        None
-                    }
-                })
-            } else {
-                None
+/// Return the concatenated text of all AssistantDelta events.
+fn first_assistant_text(events: &[AgentEvent]) -> String {
+    events
+        .iter()
+        .find_map(|e| {
+            if let AgentEvent::AssistantDelta { text, .. } = e {
+                if !text.is_empty() {
+                    return Some(text.clone());
+                }
             }
+            None
         })
         .unwrap_or_default()
 }
@@ -374,7 +388,7 @@ fn test_concurrent_independent_advance_and_no_cross_routing() {
 
     // ── run prompts concurrently ──────────────────────────────────────────────
     let timeout = Duration::from_secs(90);
-    let results: Vec<Result<Vec<StreamMsg>, String>> = std::thread::scope(|scope| {
+    let results: Vec<Result<Vec<AgentEvent>, String>> = std::thread::scope(|scope| {
         let handles: Vec<_> = sessions
             .0
             .iter()

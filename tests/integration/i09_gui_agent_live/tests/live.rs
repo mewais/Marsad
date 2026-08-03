@@ -391,11 +391,11 @@ fn all_scenarios() {
     let tmux_session_name = format!("marsad-{}", session_id);
     guard.register_tmux(&tmux_session_name);
 
-    // Wait for AgentEvent lines; look for one whose event.type == "system" (system/init).
+    // Wait for AgentEvent lines; look for a SessionInit event.
     let deadline = Instant::now() + Duration::from_secs(90);
     let msgs = recv_until(&mut client, deadline, |msg| {
         if let IpcMsg::AgentEvent { event, .. } = msg {
-            event.get("type").and_then(|v| v.as_str()) == Some("system")
+            matches!(event, marsad_proto::AgentEvent::SessionInit { .. })
         } else {
             false
         }
@@ -403,7 +403,7 @@ fn all_scenarios() {
 
     let init_msg = msgs.iter().find(|m| {
         if let IpcMsg::AgentEvent { event, .. } = m {
-            event.get("type").and_then(|v| v.as_str()) == Some("system")
+            matches!(event, marsad_proto::AgentEvent::SessionInit { .. })
         } else {
             false
         }
@@ -411,7 +411,7 @@ fn all_scenarios() {
 
     assert!(
         init_msg.is_some(),
-        "[s1] Expected an AgentEvent with event.type==\"system\" (system/init) over the socket.\n\
+        "[s1] Expected an AgentEvent::SessionInit over the socket.\n\
          Received {} msgs: {:?}",
         msgs.len(),
         msgs.iter()
@@ -425,11 +425,13 @@ fn all_scenarios() {
         event,
     }) = init_msg
     {
-        eprintln!(
-            "[i09/s1] system/init arrived: session_id={sid} model={} cwd={}",
-            event.get("model").and_then(|v| v.as_str()).unwrap_or("?"),
-            event.get("cwd").and_then(|v| v.as_str()).unwrap_or("?")
-        );
+        if let marsad_proto::AgentEvent::SessionInit { model, cwd, .. } = event {
+            eprintln!(
+                "[i09/s1] SessionInit arrived: session_id={sid} model={} cwd={}",
+                model.as_deref().unwrap_or("?"),
+                cwd.as_deref().unwrap_or("?")
+            );
+        }
         assert!(
             !sid.is_empty(),
             "[s1] AgentEvent session_id must be non-empty"
@@ -441,32 +443,32 @@ fn all_scenarios() {
         );
     }
     eprintln!(
-        "[i09/s1] PASS — system/init received over the socket. GUI<->agent<->claude path verified."
+        "[i09/s1] PASS — SessionInit received over the socket. GUI<->agent<->claude path verified."
     );
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Scenario 2 (optional): wait for an assistant/text AgentEvent.
+    // Scenario 2 (optional): wait for an AssistantDelta AgentEvent.
     // ─────────────────────────────────────────────────────────────────────────
     eprintln!("\n[i09/s2] === Scenario 2 (optional): wait for assistant reply ===");
     let deadline2 = Instant::now() + Duration::from_secs(60);
     let msgs2 = recv_until(&mut client, deadline2, |msg| {
         if let IpcMsg::AgentEvent { event, .. } = msg {
-            event.get("type").and_then(|v| v.as_str()) == Some("assistant")
+            matches!(event, marsad_proto::AgentEvent::AssistantDelta { .. })
         } else {
             false
         }
     });
     let got_assistant = msgs2.iter().any(|m| {
         if let IpcMsg::AgentEvent { event, .. } = m {
-            event.get("type").and_then(|v| v.as_str()) == Some("assistant")
+            matches!(event, marsad_proto::AgentEvent::AssistantDelta { .. })
         } else {
             false
         }
     });
     if got_assistant {
-        eprintln!("[i09/s2] PASS — assistant AgentEvent received.");
+        eprintln!("[i09/s2] PASS — AssistantDelta AgentEvent received.");
     } else {
-        eprintln!("[i09/s2] NOTE — no assistant event received within timeout (not a hard failure; scenario 1 is the capstone).");
+        eprintln!("[i09/s2] NOTE — no AssistantDelta event received within timeout (not a hard failure; scenario 1 is the capstone).");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

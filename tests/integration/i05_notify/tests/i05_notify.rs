@@ -8,7 +8,7 @@ use marsad_notify::{
     build_notification, group, Action, CaptureNotifier, NotifEvent, NotifKind, NotifPrefs,
     Notification, Notifier, Priority,
 };
-use marsad_proto::parse_stream_line;
+use wasit_claude::LineParser;
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -18,16 +18,22 @@ const QA_NDJSON: &str = concat!(
     "/../../../fixtures/streams/qa.ndjson"
 );
 
-/// Fold every line in the given NDJSON text into a SessionState and return the final state.
+/// Fold every line in the given NDJSON text into a SessionState via `wasit_claude::LineParser`.
+///
+/// Wave 1 moved raw stream-json parsing into the wasit drivers; `marsad-events`
+/// now folds `AgentEvent`s. `LineParser::on_line` is the per-line equivalent of
+/// the deleted `parse_stream_line`.
 fn fold_ndjson(ndjson: &str) -> SessionState {
     let mut state = SessionState::initial();
+    let mut parser = LineParser::new();
     for line in ndjson.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let msg = parse_stream_line(line).expect("fixture line must parse");
-        state = reduce(state, Event::Stream(msg));
+        for event in parser.on_line(line) {
+            state = reduce(state, Event::Stream(event));
+        }
     }
     state
 }

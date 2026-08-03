@@ -6,6 +6,8 @@ publish = false
 description = "Marsad integration scenario i07_core_facade"
 
 [dependencies]
+wasit-claude = { path = "../../../Wasit/crates/wasit-claude" }
+wasit-core = { path = "../../../Wasit/crates/wasit-core" }
 marsad-proto = { workspace = true }
 marsad-events = { workspace = true }
 marsad-gates = { workspace = true }

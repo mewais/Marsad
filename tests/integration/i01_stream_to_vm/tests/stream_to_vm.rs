@@ -1,48 +1,103 @@
 //! Integration test i01_stream_to_vm
 //!
-//! Folds the recorded real Claude stream (`fixtures/streams/qa.ndjson`) through
-//! the proto → events → viewmodel pipeline and asserts the derived state is
-//! correct end-to-end.
+//! Constructs the qa scenario as `wasit_core::AgentEvent`s — the same sequence
+//! the wasit-claude driver emits for the recorded `fixtures/streams/qa.ndjson`
+//! (session_id "59215d34-0f57-4b68-9419-3bb8e27d6fab", model "claude-opus-4.8[1m]",
+//! cwd "/work/mewais/Marsad", one assistant delta, result with
+//! total_cost_usd=0.796905 / input=2 / cache_creation=42448 / output=13).
+//!
+//! Wave 1 moved raw stream-json parsing into the wasit drivers; `marsad-events`
+//! now folds `AgentEvent`s directly. The fixture file is no longer read here;
+//! the qa scenario is fully reconstructed from the documented field values.
 
-use marsad_events::{Event, Phase, SessionState};
-use marsad_proto::parse_stream_line;
+use marsad_events::{reduce, Event, Phase, SessionState};
+use wasit_core::{AgentEvent, Usage};
 use marsad_viewmodel::{
     counts, group_overview, session_detail, AppSnapshot, Filter, SessionView, Tab,
 };
 
-/// Absolute path to the fixture, resolved via CARGO_MANIFEST_DIR at compile time.
-/// CARGO_MANIFEST_DIR for this crate is tests/integration/i01_stream_to_vm/
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../fixtures/streams/qa.ndjson",
-);
+// ---------------------------------------------------------------------------
+// Local AgentEvent constructor helpers (mirror marsad-events/tests/common/mod.rs)
+// ---------------------------------------------------------------------------
+
+fn ev(e: AgentEvent) -> Event {
+    Event::Stream(e)
+}
+
+fn session_init(session_id: &str, model: &str, cwd: &str) -> AgentEvent {
+    AgentEvent::SessionInit {
+        native_session_id: Some(session_id.to_string()),
+        model: Some(model.to_string()),
+        cwd: Some(cwd.to_string()),
+        tools: vec![],
+        mcp_servers: vec![],
+        slash_commands: vec![],
+        permission_mode: "default".to_string(),
+        claude_code_version: String::new(),
+        available_modes: vec![],
+        current_mode: String::new(),
+    }
+}
+
+fn assistant_delta(text: &str) -> AgentEvent {
+    AgentEvent::AssistantDelta {
+        text: text.to_string(),
+        message_id: None,
+    }
+}
+
+fn turn_success(u: Usage) -> AgentEvent {
+    AgentEvent::TurnCompleted {
+        end_reason: None,
+        was_interrupted: false,
+        num_turns: 1,
+        usage: u,
+        per_model: std::collections::HashMap::new(),
+        reply: None,
+    }
+}
+
+fn usage(input: u64, output: u64, cache_read: u64, cache_creation: u64, cost: f64) -> Usage {
+    Usage {
+        input_tokens: input,
+        output_tokens: output,
+        cache_read_tokens: cache_read,
+        cache_creation_tokens: cache_creation,
+        cost_usd: cost,
+    }
+}
+
+/// Reconstruct the qa scenario session state from AgentEvents — mirrors the
+/// recorded fixture: SessionInit → AssistantDelta → TurnCompleted(usage).
+fn fold_qa() -> SessionState {
+    let mut state = SessionState::initial();
+    state = reduce(
+        state,
+        ev(session_init(
+            "59215d34-0f57-4b68-9419-3bb8e27d6fab",
+            "claude-opus-4.8[1m]",
+            "/work/mewais/Marsad",
+        )),
+    );
+    state = reduce(state, ev(assistant_delta("Here is the answer.")));
+    // result/success: input=2, cache_creation=42448, output=13 → 42463 cumulative;
+    // total_cost_usd=0.796905.
+    state = reduce(state, ev(turn_success(usage(2, 13, 0, 42448, 0.796905))));
+    state
+}
 
 #[test]
 fn fold_qa_stream_into_session_state_and_viewmodel() {
     // -----------------------------------------------------------------------
-    // 1. Parse + fold every line of the fixture.
+    // 1. Fold the qa scenario as AgentEvents (replaces the old NDJSON parse loop).
     // -----------------------------------------------------------------------
-    let raw = std::fs::read_to_string(FIXTURE)
-        .unwrap_or_else(|e| panic!("cannot read fixture {FIXTURE}: {e}"));
-
-    let mut state = SessionState::initial();
-    assert_eq!(state.phase, Phase::Starting);
-
-    for line in raw.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let msg = parse_stream_line(line)
-            .unwrap_or_else(|e| panic!("parse_stream_line failed on line {line:?}: {e}"));
-        state = marsad_events::reduce(state, Event::Stream(msg));
-    }
+    let state = fold_qa();
 
     // -----------------------------------------------------------------------
     // 2. Assert SessionState fields.
     // -----------------------------------------------------------------------
 
-    // Phase must be Done (result subtype=success, is_error=false).
+    // Phase must be Done (TurnCompleted with was_interrupted=false).
     assert_eq!(
         state.phase,
         Phase::Done,
@@ -59,7 +114,7 @@ fn fold_qa_stream_into_session_state_and_viewmodel() {
     // Model must be present.
     assert!(
         state.model.is_some(),
-        "model should be set after SystemInit"
+        "model should be set after SessionInit"
     );
     let model = state.model.as_deref().unwrap();
     assert!(
@@ -126,7 +181,7 @@ fn fold_qa_stream_into_session_state_and_viewmodel() {
         tools: vec![],
         mcp_servers: vec![],
         slash_commands: vec![],
-        
+
         driver: "claude".to_string(),
         live: true,
         conn_health: "Connected".to_string(),
