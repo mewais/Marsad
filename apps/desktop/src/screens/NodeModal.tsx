@@ -445,9 +445,18 @@ export function NodeModal() {
     try {
       let newId: string;
       if (isWaslDriver(driver)) {
+        // Generate a stable id for this worker. The NodeModal single-launch
+        // path does NOT have workstream connections in scope, so peers is
+        // empty — the agent tolerates this. If connections are ever wired
+        // here, compute peers via peersForNode(nodeId, connections).
+        // TODO(phase E): single-launch peers when connections are in scope.
+        const nodeId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? `node-${crypto.randomUUID()}`
+          : `node-${Date.now()}`;
         const wasl_target_key = {
+          key: nodeId,
           protocol: waslProtocol(driver),
-          context: { cwd: project.trim(), model, session_mode: sessionMode },
+          context: { cwd: project.trim(), model, session_mode: sessionMode, peers: [] },
         };
         newId = await launchWaslSession({
           host_id: hostId,

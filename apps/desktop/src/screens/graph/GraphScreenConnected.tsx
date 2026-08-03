@@ -33,6 +33,7 @@ import { GraphScreen } from "./GraphScreen";
 import { validateConnection, CONN_ERROR_MESSAGE } from "../../bridge/connValidate";
 import { orderDraftLaunch } from "../../bridge/draftOrder";
 import { isWaslDriver, waslProtocol } from "../../bridge/drivers";
+import { peersForNode } from "../../bridge/peersForNode";
 
 /** Local id generator for a newly drag-connected edge — mirrors the design
  *  reference's `'e'+Date.now()` (Marsad Workstreams.dc.html ~line 897).
@@ -222,9 +223,19 @@ export function GraphScreenConnected(): JSX.Element {
         let realId: string;
         if (isWaslDriver(node.driver)) {
           const protocol = waslProtocol(node.driver);
+          // Build peers: outbound edges from this node, mapped to {agent_id, host_id}.
+          // Both node.tempId (this node's id) and the peer's agent_id use the same
+          // draft node id namespace — CRITICAL consistency rule.
+          const outboundIds = peersForNode(node.tempId, draftEdges).outbound;
+          const peers = outboundIds.flatMap((peerId) => {
+            const peerNode = draftNodes.find((n) => n.tempId === peerId);
+            if (!peerNode) return []; // skip unresolvable peer
+            return [{ agent_id: peerId, host_id: peerNode.hostId }];
+          });
           const wasl_target_key = {
+            key: node.tempId,
             protocol,
-            context: { cwd: node.project, model: node.model, session_mode: node.session_mode },
+            context: { cwd: node.project, model: node.model, session_mode: node.session_mode, peers },
           };
           realId = await launchWaslSession({
             host_id: node.hostId,
