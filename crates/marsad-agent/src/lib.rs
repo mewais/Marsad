@@ -15,11 +15,7 @@ use marsad_lifecycle::{FakeContainer, Persisted};
 use marsad_notify::{CaptureNotifier, Notifier};
 use marsad_store::{MemoryBackend, Store};
 
-pub mod acp;
-pub mod acp_translate;
 pub mod capabilities;
-pub mod codex_appserver;
-pub mod codex_translate;
 mod driver;
 #[cfg(not(coverage))]
 pub mod exec_shell;
@@ -35,7 +31,7 @@ mod wasl_session;
 #[cfg(not(coverage))]
 use remote::REMOTE_RUNTIME_DIR;
 
-pub use driver::{build_remote_run_cmd, claude_argv, opencode_argv};
+pub use driver::{build_remote_run_cmd, claude_argv, codex_appserver_argv, opencode_argv};
 pub use reader::{
     assistant_has_file_modifying_tool_use, conn_on_drop, reconnect_action, reconnect_backoff_next,
     ReconnectAction, RECONNECT_INITIAL_BACKOFF_SECS, RECONNECT_MAX_BACKOFF_SECS,

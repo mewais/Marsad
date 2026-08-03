@@ -35,16 +35,15 @@ impl Agent {
                 .unwrap_or_else(|| "claude".to_string());
             if driver == "claude" {
                 // claude: a LIVE mode switch (no restart) via the control protocol —
-                // set_permission_mode. Only `mode` is live-settable this way; `model`
-                // still requires a restart (handled by the Config "Apply" path).
+                // set_permission_mode (wasit encoder). Only `mode` is live-settable
+                // this way; `model` still requires a restart (Config "Apply" path).
                 if config_id != "mode" {
                     eprintln!(
                         "marsad-agent: session {session_id} claude set_config_option {config_id} not live-settable (use restart)"
                     );
                     return Ok(vec![]);
                 }
-                let line =
-                    marsad_proto::encode_control_request_set_permission_mode("req_setmode", value);
+                let line = wasit_claude::encode_set_permission_mode("req_setmode", value);
                 let writers = self.session_writers.0.lock().unwrap();
                 if let Some(shared) = writers.get(session_id) {
                     let mut writer = shared.lock().unwrap();
@@ -68,31 +67,14 @@ impl Agent {
                 return Ok(vec![]);
             }
             if driver == "codex" {
-                // codex app-server: a LIVE switch via thread/settings/update. Map
-                // config_id → the codex setting: "model" → model; "mode" →
-                // collaborationMode. The threadId was captured by the reader.
-                use crate::codex_appserver as cx;
-                let thread_id = self.codex_threads.0.lock().unwrap().get(session_id).map(|c| c.thread_id.clone());
-                let Some(tid) = thread_id else {
-                    eprintln!("marsad-agent: session {session_id} codex set_config_option DROPPED — threadId not yet known");
-                    return Ok(vec![]);
-                };
-                let codex_field = match config_id {
-                    "mode" => "collaborationMode",
-                    other => other, // "model", "approvalPolicy", "sandboxPolicy", …
-                };
-                let req_id = serde_json::json!(
-                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_millis() as u64 + 300u64
+                // codex app-server: the wasit codex driver reports model_switchable
+                // = false / mode_switchable = false and exposes NO live-config
+                // encoder (thread/settings/update was Marsad's own, removed with the
+                // codex_appserver module). Honest no-op — a codex model/mode change
+                // is applied by restarting the session (Config "Apply"), not live.
+                eprintln!(
+                    "marsad-agent: session {session_id} codex set_config_option {config_id} not live-settable via wasit — use restart"
                 );
-                let line = crate::acp::encode_request(req_id, cx::THREAD_SETTINGS_UPDATE, cx::settings_update_params(&tid, codex_field, value));
-                let writers = self.session_writers.0.lock().unwrap();
-                if let Some(shared) = writers.get(session_id) {
-                    let mut writer = shared.lock().unwrap();
-                    let _ = writer.write_all(line.as_bytes()).and_then(|_| writer.write_all(b"\n")).and_then(|_| writer.flush());
-                    eprintln!("marsad-agent: session {session_id} codex thread/settings/update {codex_field}={value}");
-                } else {
-                    eprintln!("marsad-agent: session {session_id} codex set_config_option DROPPED — no writer");
-                }
                 return Ok(vec![]);
             }
             if driver != "opencode" {
@@ -109,21 +91,24 @@ impl Agent {
                 );
                 return Ok(vec![]);
             };
-            // Millis-based id > the reserved handshake ids (1/2/3), matching
-            // handle_send_prompt's scheme.
-            let req_id = serde_json::json!(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .subsec_millis() as u64
-                    + 200u64
-            );
-            let params = serde_json::json!({
-                "sessionId": acp_sid,
-                "configId": config_id,
-                "value": value,
-            });
-            let line = crate::acp::encode_request(req_id, "session/set_config_option", params);
+            // Millis-based id > the reserved handshake ids (1/2/3/4), matching
+            // handle_send_prompt's scheme. opencode live model/mode via the wasit
+            // set_model/set_mode encoders (session/set_config_option under the hood).
+            let req_id = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_millis() as u64
+                + 200u64;
+            let line = match config_id {
+                "mode" => wasit_opencode::encode_set_mode(req_id, &acp_sid, value),
+                "model" => wasit_opencode::encode_set_model(req_id, &acp_sid, value),
+                other => {
+                    eprintln!(
+                        "marsad-agent: session {session_id} opencode set_config_option {other} not wired — ignored"
+                    );
+                    return Ok(vec![]);
+                }
+            };
             let writers = self.session_writers.0.lock().unwrap();
             if let Some(shared) = writers.get(session_id) {
                 let mut writer = shared.lock().unwrap();
@@ -186,19 +171,14 @@ impl Agent {
                 // so we build + queue the request here and let the reader flush it).
                 let acp_session_id = self.acp_sessions.0.lock().unwrap().get(session_id).cloned();
                 if let Some(acp_sid) = acp_session_id {
-                    // We use a simple incrementing id based on the current time
-                    // (millis) to avoid collisions across turns. The reader thread
-                    // correlates responses by the numeric id > 2 (initialize=1,
-                    // session/new=2, first_prompt=3, subsequent=4+).
-                    let req_id = serde_json::json!(
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .subsec_millis() as u64
-                            + 100u64  // ensure > 3
-                    );
-                    let prompt_params = crate::acp::session_prompt_params(&acp_sid, text);
-                    let prompt_line = crate::acp::encode_request(req_id, "session/prompt", prompt_params);
+                    // Simple time-based (millis) incrementing id to avoid collisions
+                    // across turns (initialize=1, session/new=2, first_prompt=4+).
+                    let req_id = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .subsec_millis() as u64
+                        + 100u64; // ensure > handshake ids
+                    let prompt_line = wasit_opencode::encode_session_prompt(req_id, &acp_sid, text);
                     let writers = self.session_writers.0.lock().unwrap();
                     if let Some(shared) = writers.get(session_id) {
                         let mut writer = shared.lock().unwrap();
@@ -251,17 +231,15 @@ impl Agent {
                 // the thread/start response (stored in codex_threads by the reader).
                 let thread_id_opt = self.codex_threads.0.lock().unwrap().get(session_id).map(|c| c.thread_id.clone());
                 if let Some(tid) = thread_id_opt {
-                    use crate::codex_appserver as cx;
                     // Millis-based id > the reserved handshake ids (1/2) and the
-                    // first turn (3), matching the opencode scheme.
-                    let req_id = serde_json::json!(
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .subsec_millis() as u64
-                            + 100u64
-                    );
-                    let line = crate::acp::encode_request(req_id, cx::TURN_START, cx::turn_start_params(&tid, text));
+                    // first turn (3), matching the opencode scheme. Follow-up turn
+                    // via the wasit codex turn/start encoder.
+                    let req_id = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .subsec_millis() as u64
+                        + 100u64;
+                    let line = wasit_codex::encode_turn_start(req_id, &tid, text);
                     let writers = self.session_writers.0.lock().unwrap();
                     if let Some(shared) = writers.get(session_id) {
                         let mut writer = shared.lock().unwrap();
@@ -289,13 +267,8 @@ impl Agent {
                     );
                 }
             } else {
-                // Claude: stream-json user message.
-                use marsad_proto::{encode_user_input, ContentBlock, UserInput};
-                let encoded = encode_user_input(&UserInput {
-                    content: vec![ContentBlock::Text {
-                        text: text.to_string(),
-                    }],
-                });
+                // Claude: stream-json user message (wasit encoder).
+                let encoded = wasit_claude::encode_user_message(text);
                 let writers = self.session_writers.0.lock().unwrap();
                 if let Some(shared) = writers.get(session_id) {
                     let mut writer = shared.lock().unwrap();
@@ -397,36 +370,32 @@ impl Agent {
                 .unwrap_or_default();
 
             if driver == "opencode" {
-                // opencode ACP interrupt: send session/cancel notification, then
-                // answer any pending permission request with {outcome:"cancelled"}.
+                // opencode ACP interrupt: deny any pending permission gate, then
+                // send session/cancel (wasit encoders).
                 let acp_session_id = self.acp_sessions.0.lock().unwrap().get(session_id).cloned();
                 let writers = self.session_writers.0.lock().unwrap();
                 if let Some(shared) = writers.get(session_id) {
                     let mut writer = shared.lock().unwrap();
 
-                    // 1. Answer any pending permission gate(s) with cancelled.
+                    // 1. Deny any pending permission gate(s) — keyed on the raw ACP
+                    //    JSON-RPC id (acp_response_id), falling back to the routing id.
                     for gate in &pending {
-                        let cancel_result = crate::acp::request_permission_response(None);
-                        // Parse the stored request id back as a JSON Value.
-                        let acp_req_id: serde_json::Value =
-                            serde_json::from_str(&gate.request_id).unwrap_or_else(|_| {
-                                serde_json::Value::String(gate.request_id.clone())
-                            });
-                        let cancel_line = crate::acp::encode_response(acp_req_id, cancel_result);
+                        let raw = gate.acp_response_id.as_deref().unwrap_or(&gate.request_id);
+                        let raw_id: serde_json::Value = serde_json::from_str(raw)
+                            .unwrap_or_else(|_| serde_json::Value::String(raw.to_string()));
+                        let cancel_line = wasit_opencode::encode_gate_deny(&raw_id);
                         let _ = writer.write_all(cancel_line.as_bytes());
                         let _ = writer.write_all(b"\n");
                         eprintln!(
-                            "marsad-agent: session {session_id} opencode pending gate cancelled on interrupt"
+                            "marsad-agent: session {session_id} opencode pending gate denied on interrupt"
                         );
                     }
                     let _ = writer.flush();
 
-                    // 2. Send session/cancel notification (no reply expected).
+                    // 2. Send session/cancel (no reply expected).
                     if let Some(ref acp_sid) = acp_session_id {
-                        let cancel_params = crate::acp::session_cancel_params(acp_sid);
-                        let cancel_notification =
-                            crate::acp::encode_notification("session/cancel", cancel_params);
-                        let _ = writer.write_all(cancel_notification.as_bytes());
+                        let cancel_line = wasit_opencode::encode_session_cancel(0, acp_sid);
+                        let _ = writer.write_all(cancel_line.as_bytes());
                         let _ = writer.write_all(b"\n");
                         let _ = writer.flush();
                         eprintln!(
@@ -450,10 +419,8 @@ impl Agent {
                 }
             } else if driver == "codex" {
                 // Codex app-server: a REAL interrupt — send `turn/interrupt`
-                // {threadId, turnId} for the in-flight turn. (The old eval-loop had
-                // no interrupt; the persistent app-server does.) Decline any pending
-                // gate first so codex isn't left waiting on an approval.
-                use crate::codex_appserver as cx;
+                // {threadId, turnId} (wasit encoder) for the in-flight turn. Decline
+                // any pending gate first so codex isn't left waiting on an approval.
                 let (thread_id, turn_id) = {
                     let mut threads = self.codex_threads.0.lock().unwrap();
                     match threads.get_mut(session_id) {
@@ -468,19 +435,17 @@ impl Agent {
                 if let Some(shared) = writers.get(session_id) {
                     let mut writer = shared.lock().unwrap();
                     for gate in &pending {
-                        let raw_id = gate.acp_response_id.as_deref().unwrap_or(&gate.request_id);
-                        let req_id: serde_json::Value = serde_json::from_str(raw_id)
-                            .unwrap_or_else(|_| serde_json::Value::String(raw_id.to_string()));
-                        let decline = crate::acp::encode_response(req_id, cx::approval_decision(false, false));
+                        let raw = gate.acp_response_id.as_deref().unwrap_or(&gate.request_id);
+                        let raw_id: serde_json::Value = serde_json::from_str(raw)
+                            .unwrap_or_else(|_| serde_json::Value::String(raw.to_string()));
+                        let method = gate.codex_method.as_deref().unwrap_or("");
+                        let decline = wasit_codex::encode_gate_deny(&raw_id, method);
                         let _ = writer.write_all(decline.as_bytes()).and_then(|_| writer.write_all(b"\n")).and_then(|_| writer.flush());
                     }
                     match (thread_id, turn_id) {
                         (Some(tid), Some(uid)) => {
-                            let line = crate::acp::encode_request(
-                                serde_json::json!(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_millis() as u64 + 500),
-                                cx::TURN_INTERRUPT,
-                                cx::turn_interrupt_params(&tid, &uid),
-                            );
+                            let iid = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_millis() as u64 + 500;
+                            let line = wasit_codex::encode_turn_interrupt(iid, &tid, &uid);
                             let _ = writer.write_all(line.as_bytes()).and_then(|_| writer.write_all(b"\n")).and_then(|_| writer.flush());
                             eprintln!("marsad-agent: session {session_id} codex turn/interrupt sent (turn={uid})");
                         }
@@ -499,19 +464,12 @@ impl Agent {
                     let mut writer = shared.lock().unwrap();
                     for gate in pending {
                         let decline = if gate.elicitation {
-                            marsad_proto::encode_control_response_elicitation(
-                                &gate.request_id,
-                                false,
-                                None,
-                            )
+                            wasit_claude::encode_elicitation_decline(&gate.request_id)
                         } else {
-                            marsad_proto::encode_control_response(&marsad_proto::ControlResponse {
-                                request_id: gate.request_id,
-                                allow: false,
-                                deny_reason: Some("interrupted".to_string()),
-                                updated_input: None,
-                                updated_permissions: None,
-                            })
+                            wasit_claude::encode_deny(
+                                &gate.request_id,
+                                Some("interrupted".to_string()),
+                            )
                         };
                         let _ = writer
                             .write_all(decline.as_bytes())
@@ -521,7 +479,7 @@ impl Agent {
                             "marsad-agent: session {session_id} pending gate declined on interrupt"
                         );
                     }
-                    let encoded = marsad_proto::encode_control_request_interrupt("req_interrupt");
+                    let encoded = encode_claude_interrupt("req_interrupt");
                     let _ = writer
                         .write_all(encoded.as_bytes())
                         .and_then(|_| writer.write_all(b"\n"))
@@ -540,4 +498,23 @@ impl Agent {
         });
         Ok(vec![event])
     }
+}
+
+/// Encode a claude `interrupt` control_request.
+///
+/// wasit-claude reports `interruptible: false` and exposes no interrupt encoder,
+/// and `marsad_proto::encode_control_request_interrupt` was removed in the wasit
+/// migration (Wave 0) — but Marsad's live claude interrupt still relies on this
+/// control_request (claude acks it + ends the turn with
+/// `result: error_during_execution`). This is the minimal local encoder that
+/// preserves that behavior; the wire shape matches the control-protocol
+/// `initialize`/`set_permission_mode` requests wasit-claude does encode.
+#[cfg(not(coverage))]
+fn encode_claude_interrupt(request_id: &str) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": { "subtype": "interrupt" },
+    }))
+    .expect("always serializable")
 }

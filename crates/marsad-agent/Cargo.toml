@@ -33,6 +33,15 @@ marsad-hosts = { workspace = true }
 marsad-notify = { workspace = true }
 marsad-wasl = { workspace = true }
 marsad-wasl-session = { workspace = true }
+# Wasit shared driver library (pure protocol layer): argv builders, stateful
+# line/message parsers (raw CLI stdout → wasit_core::AgentEvent), and wire
+# encoders (AgentEvent decisions → NDJSON stdin lines). Marsad consumes ONLY
+# the pure functions/parsers/encoders here — never the async AgentDriver/Session
+# IO shell (Marsad owns its own transport/reconnect/backfill machinery).
+wasit-core = { path = "../../Wasit/crates/wasit-core" }
+wasit-claude = { path = "../../Wasit/crates/wasit-claude" }
+wasit-codex = { path = "../../Wasit/crates/wasit-codex" }
+wasit-opencode = { path = "../../Wasit/crates/wasit-opencode" }
 # WAVE 3b — interactive PTY escape-hatch terminal (Terminal tab). Cross-platform
 # pty allocation + child spawning (real OS IO, gated `#[cfg(not(coverage))]` in
 # pty.rs); base64 encodes raw pty output bytes for the IPC wire (see

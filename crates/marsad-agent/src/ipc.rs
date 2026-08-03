@@ -252,10 +252,17 @@ impl Agent {
             let gates = self.pending_gates.0.lock().unwrap();
             for (sid, queue) in gates.iter() {
                 for gate in queue.iter() {
-                    out.push(marsad_proto::encode_ipc(&marsad_proto::IpcMsg::AgentEvent {
-                        session_id: sid.clone(),
-                        event: gate.event.clone(),
-                    }));
+                    // `gate.event` is a serialized `wasit_core::AgentEvent::GateRequested`
+                    // stored as a `serde_json::Value` for re-subscription replay. Deserialize
+                    // it back to the typed variant for the wire format.
+                    if let Ok(typed_event) =
+                        serde_json::from_value::<wasit_core::AgentEvent>(gate.event.clone())
+                    {
+                        out.push(marsad_proto::encode_ipc(&marsad_proto::IpcMsg::AgentEvent {
+                            session_id: sid.clone(),
+                            event: typed_event,
+                        }));
+                    }
                 }
             }
         }
@@ -352,6 +359,21 @@ mod subscribe_gate_replay_tests {
     }
 
     fn seed_gate(a: &Agent, sid: &str, req: &str) {
+        // Store the gate event as a serialized AgentEvent::GateRequested so the
+        // handle_subscribe replay path can deserialize it back to the typed form.
+        let typed_event = wasit_core::AgentEvent::GateRequested {
+            gate: wasit_core::GateRequest::Permission {
+                request_id: req.to_string(),
+                tool_name: "Bash".to_string(),
+                command: "bash cmd".to_string(),
+                cwd: "/proj".to_string(),
+                explanation: String::new(),
+                is_elicitation: false,
+                elicitation_choices: vec![],
+                permission_suggestions: vec![],
+                raw_input: serde_json::json!({ "tool_name": "Bash" }),
+            },
+        };
         a.pending_gates
             .0
             .lock()
@@ -364,15 +386,12 @@ mod subscribe_gate_replay_tests {
                 elicitation: false,
                 acp_response_id: None,
                 codex_method: None,
-                event: serde_json::json!({
-                    "type": "control_request",
-                    "request_id": req,
-                    "request": { "subtype": "can_use_tool", "tool_name": "Bash" }
-                }),
+                event: serde_json::to_value(&typed_event)
+                    .unwrap_or_else(|_| serde_json::json!({})),
             });
     }
 
-    fn agent_event_gates(out: &[String]) -> Vec<(String, serde_json::Value)> {
+    fn agent_event_gates(out: &[String]) -> Vec<(String, wasit_core::AgentEvent)> {
         out.iter()
             .filter_map(|l| match marsad_proto::parse_ipc(l) {
                 Ok(marsad_proto::IpcMsg::AgentEvent { session_id, event }) => {
@@ -381,6 +400,21 @@ mod subscribe_gate_replay_tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn gate_request_id(ev: &wasit_core::AgentEvent) -> Option<&str> {
+        match ev {
+            wasit_core::AgentEvent::GateRequested {
+                gate: wasit_core::GateRequest::Permission { request_id, .. },
+            }
+            | wasit_core::AgentEvent::GateRequested {
+                gate: wasit_core::GateRequest::Plan { request_id, .. },
+            }
+            | wasit_core::AgentEvent::GateRequested {
+                gate: wasit_core::GateRequest::Question { request_id, .. },
+            } => Some(request_id.as_str()),
+            _ => None,
+        }
     }
 
     #[test]
@@ -395,12 +429,19 @@ mod subscribe_gate_replay_tests {
             marsad_proto::parse_ipc(&out[0]),
             Ok(marsad_proto::IpcMsg::Subscribed { .. })
         ));
-        // The open gate is replayed as the same AgentEvent the reader broadcast.
+        // The open gate is replayed as an AgentEvent::GateRequested with the same request_id.
         let gates = agent_event_gates(&out);
         assert_eq!(gates.len(), 1, "exactly one gate replayed");
         assert_eq!(gates[0].0, "s1");
-        assert_eq!(gates[0].1["request_id"], "req-1");
-        assert_eq!(gates[0].1["request"]["subtype"], "can_use_tool");
+        assert_eq!(
+            gate_request_id(&gates[0].1),
+            Some("req-1"),
+            "gate event must carry request_id=req-1"
+        );
+        assert!(
+            matches!(&gates[0].1, wasit_core::AgentEvent::GateRequested { .. }),
+            "replayed event must be GateRequested"
+        );
     }
 
     #[test]
@@ -416,8 +457,8 @@ mod subscribe_gate_replay_tests {
         // Both open gates replayed, in order.
         let g1 = agent_event_gates(&first);
         assert_eq!(g1.len(), 2);
-        assert_eq!(g1[0].1["request_id"], "req-1");
-        assert_eq!(g1[1].1["request_id"], "req-2");
+        assert_eq!(gate_request_id(&g1[0].1), Some("req-1"));
+        assert_eq!(gate_request_id(&g1[1].1), Some("req-2"));
         // The registry is the durable source of truth — NOT consumed by a replay,
         // so a second (re)subscribe replays the still-open gates again.
         assert_eq!(agent_event_gates(&second).len(), 2);

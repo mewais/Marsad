@@ -50,6 +50,427 @@ pub(crate) fn cancel_reader(sid: &str) {
 }
 
 
+/// One stateful wasit parser per reader, dispatched by driver. Turns raw CLI
+/// stdout lines into `wasit_core::AgentEvent`s. Codex/opencode use a JSON-RPC
+/// `MessageParser`; claude uses a stream-json `LineParser`.
+///
+/// This replaces Marsad's hand-rolled `codex_translate`/`acp_translate` +
+/// stream-json passthrough: the driver-specific parsing now lives in the wasit
+/// pure layer (`wasit_{claude,codex,opencode}`). Marsad keeps only the
+/// transport/handshake/reconnect/backfill machinery around it.
+#[cfg(not(coverage))]
+enum WasitParser {
+    Claude(wasit_claude::LineParser),
+    Codex(wasit_codex::MessageParser),
+    Opencode(wasit_opencode::MessageParser),
+}
+
+#[cfg(not(coverage))]
+impl WasitParser {
+    fn new(driver: &str) -> Self {
+        match driver {
+            "codex" => WasitParser::Codex(wasit_codex::MessageParser::new()),
+            "opencode" => WasitParser::Opencode(wasit_opencode::MessageParser::new()),
+            _ => WasitParser::Claude(wasit_claude::LineParser::new()),
+        }
+    }
+
+    /// Parse one raw NDJSON line into zero or more `AgentEvent`s.
+    fn on_raw(&mut self, raw: &str) -> Vec<wasit_core::AgentEvent> {
+        match self {
+            WasitParser::Claude(p) => p.on_line(raw),
+            WasitParser::Codex(p) => p.on_message(raw),
+            WasitParser::Opencode(p) => p.on_message(raw),
+        }
+    }
+
+    /// Look up the real `(raw_id, method)` stored by the parser for the given
+    /// `routing_id`. Returns `None` for Claude (no raw id needed). For Opencode,
+    /// `method` is always the empty string (opencode gates have no method field).
+    ///
+    /// Must be called AFTER `on_raw` processes the gate line so the parser has
+    /// already inserted the gate into its `pending_gates` map.
+    fn pending_gate_raw(&self, routing_id: &str) -> Option<(serde_json::Value, String)> {
+        match self {
+            WasitParser::Claude(_) => None,
+            WasitParser::Codex(p) => p
+                .pending_gate(routing_id)
+                .map(|g| (g.raw_id.clone(), g.method.clone())),
+            WasitParser::Opencode(p) => p
+                .pending_gate(routing_id)
+                .map(|g| (g.raw_id.clone(), String::new())),
+        }
+    }
+}
+
+/// U1 (§3.2 trigger 4): observe the model a session launched with, from a
+/// `SessionInit` event. This is the only model signal that exists for claude
+/// (no list command) — accumulate it into the host's observed model set.
+#[cfg(not(coverage))]
+fn observe_session_init(
+    ev: &wasit_core::AgentEvent,
+    provider: Option<&std::sync::Arc<crate::capabilities::CapabilityProvider>>,
+    host_id: &str,
+) {
+    if let wasit_core::AgentEvent::SessionInit {
+        model: Some(model), ..
+    } = ev
+    {
+        if let Some(provider) = provider {
+            provider.observe_claude_model(host_id, model);
+        }
+    }
+}
+
+/// Capture a pending gate into Marsad's registry, storing the REAL raw JSON-RPC id
+/// (and method for codex) from the wasit parser.
+///
+/// `parser_raw` is the result of `parser.pending_gate_raw(routing_id)` called
+/// AFTER `on_raw` has processed the gate line. For codex/opencode it carries
+/// `(raw_id, method)` from the parser's internal `pending_gates` map — the real
+/// numeric id that was on the wire, not a value derived from the routing_id string.
+/// For claude it is `None` and `acp_response_id` stays `None` (claude gates are
+/// answered by routing_id, not by JSON-RPC id).
+///
+/// `acp_response_id` is stored as the CANONICAL JSON serialization of `raw_id`
+/// (`serde_json::to_string`) so that `recover_codex_raw_id` /
+/// `recover_opencode_raw_id` can round-trip it back to the correct `Value` (a
+/// number stored as "7" parses back to `json!(7)`; a string id parses back as a
+/// string). The old string-munging fallback is kept only for the `None` parser
+/// case (should not happen for codex/opencode with a real gate).
+#[cfg(not(coverage))]
+fn capture_pending_gate(
+    driver: &str,
+    gate: &wasit_core::GateRequest,
+    pending_fifo: &std::sync::Arc<
+        std::sync::Mutex<HashMap<String, std::collections::VecDeque<PendingGate>>>,
+    >,
+    sid: &str,
+    parser_raw: Option<(serde_json::Value, String)>,
+) {
+    use wasit_core::GateRequest;
+
+    let routing_id = match gate {
+        GateRequest::Permission { request_id, .. }
+        | GateRequest::Plan { request_id, .. }
+        | GateRequest::Question { request_id, .. } => request_id.clone(),
+    };
+    let elicitation = matches!(
+        gate,
+        GateRequest::Permission {
+            is_elicitation: true,
+            ..
+        }
+    );
+    // The stored `input` is the raw tool input echoed back on approve (claude
+    // can_use_tool `updatedInput`). For codex/opencode it is unused by the
+    // encoders (they key on raw id/method); keep the gate's raw_input when present.
+    let input = match gate {
+        GateRequest::Permission { raw_input, .. } => raw_input.clone(),
+        _ => serde_json::Value::Null,
+    };
+
+    // For codex/opencode: use the REAL raw_id from the parser (canonical JSON so
+    // round-trip is exact). Fall back to the old string-munging only when the
+    // parser didn't have the gate stored (should not happen in practice).
+    let acp_response_id: Option<String> = if driver == "claude" {
+        None
+    } else if let Some((raw_id_val, _)) = &parser_raw {
+        serde_json::to_string(raw_id_val).ok()
+    } else {
+        // Fallback: old string-munging (routing_id may be codex:<n> or <sid>:acp:<n>
+        // for the legacy no-itemId case).
+        if let Some(n) = routing_id.strip_prefix("codex:") {
+            Some(n.to_string())
+        } else if routing_id.contains(":acp:") {
+            routing_id.rsplit(':').next().map(|s| s.to_string())
+        } else {
+            Some(routing_id.clone())
+        }
+    };
+
+    // For codex: use the REAL method from the parser. Fall back to inference only
+    // when the parser lookup missed (should not happen for real gates).
+    let codex_method: Option<String> = if driver == "codex" {
+        if let Some((_, method)) = &parser_raw {
+            if !method.is_empty() {
+                Some(method.clone())
+            } else {
+                // Parser returned empty method — infer from gate shape.
+                Some(match gate {
+                    GateRequest::Permission {
+                        is_elicitation: true,
+                        ..
+                    } => "mcpServer/elicitation/request".to_string(),
+                    GateRequest::Permission { tool_name, .. } => match tool_name.as_str() {
+                        "apply_patch" => "item/fileChange/requestApproval".to_string(),
+                        "permissions" => "item/permissions/requestApproval".to_string(),
+                        _ => "item/commandExecution/requestApproval".to_string(),
+                    },
+                    GateRequest::Question { .. } => "item/tool/requestUserInput".to_string(),
+                    GateRequest::Plan { .. } => "unknown".to_string(),
+                })
+            }
+        } else {
+            // Parser lookup missed — infer method from gate shape.
+            Some(match gate {
+                GateRequest::Permission {
+                    is_elicitation: true,
+                    ..
+                } => "mcpServer/elicitation/request".to_string(),
+                GateRequest::Permission { tool_name, .. } => match tool_name.as_str() {
+                    "apply_patch" => "item/fileChange/requestApproval".to_string(),
+                    "permissions" => "item/permissions/requestApproval".to_string(),
+                    _ => "item/commandExecution/requestApproval".to_string(),
+                },
+                GateRequest::Question { .. } => "item/tool/requestUserInput".to_string(),
+                GateRequest::Plan { .. } => "unknown".to_string(),
+            })
+        }
+    } else {
+        None
+    };
+
+    // The replay event stored on the pending gate is the bare `AgentEvent`
+    // (`GateRequested`) the reader broadcasts, serialized to a Value so
+    // `handle_subscribe` can deserialize it back and replay the gate to a client
+    // that (re)connects after the one-shot broadcast.
+    let event = serde_json::to_value(wasit_core::AgentEvent::GateRequested {
+        gate: gate.clone(),
+    })
+    .unwrap_or_else(|_| serde_json::json!({}));
+
+    let mut gates = pending_fifo.lock().unwrap();
+    let queue = gates.entry(sid.to_string()).or_default();
+    // Dedup by routing id ACROSS the whole queue: a flapping remote replays the
+    // same gate on each reconnect; a genuinely new routing id is pushed to the
+    // BACK (a turn can block on a burst of gates, each answered on its own id).
+    if queue.iter().any(|g| g.request_id == routing_id) {
+        eprintln!("marsad-agent: session {sid} gate DUPLICATE ignored ({routing_id})");
+        return;
+    }
+    eprintln!(
+        "marsad-agent: session {sid} gate captured ({routing_id}, {} now queued)",
+        queue.len() + 1
+    );
+    queue.push_back(PendingGate {
+        request_id: routing_id,
+        input,
+        elicitation,
+        acp_response_id,
+        codex_method,
+        event,
+    });
+}
+
+/// Drive the remote git Changes + project-usage probes off an `AgentEvent`.
+///
+/// Trigger 1: `TurnCompleted` (turn ended) → probe changes AND usage.
+/// Trigger 2 (#4): a `ToolCallStarted` for a file-modifying tool (debounced) →
+/// probe changes only. Remote sessions only (local sessions read changes/usage
+/// locally in core). No-op when there is no host_target / project.
+#[cfg(not(coverage))]
+#[allow(clippy::too_many_arguments)]
+fn maybe_probe_changes_usage(
+    ev: &wasit_core::AgentEvent,
+    host_target: Option<&str>,
+    remote_project: Option<&str>,
+    sid: &str,
+    subs_fifo: &std::sync::Arc<std::sync::Mutex<Vec<std::sync::mpsc::Sender<String>>>>,
+    last_changes_probe: &mut Option<std::time::Instant>,
+    debounce_secs: u64,
+) {
+    let is_result = matches!(ev, wasit_core::AgentEvent::TurnCompleted { .. });
+    let is_file_tool = agent_event_is_file_modifying_tool(ev);
+    let should_probe = is_result
+        || (is_file_tool && {
+            let now = std::time::Instant::now();
+            let ok = last_changes_probe
+                .map(|t| now.duration_since(t).as_secs() >= debounce_secs)
+                .unwrap_or(true);
+            if ok {
+                *last_changes_probe = Some(now);
+            }
+            ok
+        });
+    if !should_probe {
+        return;
+    }
+    let (Some(target), Some(project)) = (host_target, remote_project) else {
+        return;
+    };
+
+    // Changes probe (both triggers).
+    let script = remote_changes_script(project);
+    if let Some(stdout) = run_remote_script(target, &script) {
+        let changes = parse_remote_changes(&stdout);
+        let cu_line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::ChangesUpdate {
+            session_id: sid.to_string(),
+            changes,
+        });
+        if let Ok(subs) = subs_fifo.lock() {
+            subs.iter().for_each(|s| {
+                let _ = s.send(cu_line.clone());
+            });
+        }
+        eprintln!(
+            "marsad-agent: session {sid} changes update broadcast ({})",
+            if is_result { "result" } else { "tool_use" }
+        );
+    }
+
+    // Project-wide usage aggregation: result events only (reads all *.jsonl —
+    // more expensive than the git probe).
+    if is_result {
+        let usage_script = remote_usage_script(project);
+        if let Some(usage_out) = run_remote_script(target, &usage_script) {
+            let trimmed = usage_out.trim();
+            if !trimmed.is_empty() && trimmed != "{}" {
+                if let Ok(usage_val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    let uu_line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::UsageUpdate {
+                        session_id: sid.to_string(),
+                        usage: usage_val,
+                    });
+                    if let Ok(subs) = subs_fifo.lock() {
+                        subs.iter().for_each(|s| {
+                            let _ = s.send(uu_line.clone());
+                        });
+                    }
+                    eprintln!("marsad-agent: session {sid} usage update broadcast");
+                }
+            }
+        }
+    }
+}
+
+/// OPENCODE handshake response interception.
+///
+/// The opencode wasit `MessageParser` deliberately returns NO events for the
+/// `session/new`/`session/load` RESPONSE (id==2) — it leaves SessionInit
+/// synthesis to the transport owner. Marsad owns the handshake, so it detects
+/// that response here and returns the events to emit (SessionInit plus an
+/// optional ModesUpdated), storing the ACP sessionId and delivering the launch
+/// model-pick then the first prompt. Returns `None` for any line that is NOT the
+/// id==2 response (the caller then feeds the line to the parser as normal).
+#[cfg(not(coverage))]
+#[allow(clippy::too_many_arguments)]
+fn opencode_handshake_intercept(
+    raw: &str,
+    is_first_attach: bool,
+    first_prompt: Option<&str>,
+    opencode_spec: Option<&crate::CachedOpencodeSpec>,
+    acp_sessions: &std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
+    sid: &str,
+    writer: &SharedWriter,
+) -> Option<Vec<wasit_core::AgentEvent>> {
+    let val: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    // Must be a RESPONSE (has id + result, no method) with id == 2.
+    if val.get("method").is_some() {
+        return None;
+    }
+    if val.get("id").and_then(|v| v.as_u64()) != Some(2) {
+        return None;
+    }
+    let res = val.get("result")?;
+    let acp_session_id = res.get("sessionId").and_then(|v| v.as_str())?.to_string();
+    eprintln!("marsad-agent: session {sid} opencode ACP sessionId={acp_session_id}");
+    acp_sessions
+        .lock()
+        .unwrap()
+        .insert(sid.to_string(), acp_session_id.clone());
+
+    // Synthesize SessionInit from the handshake result (mirrors the wasit
+    // opencode driver's own handshake synthesis).
+    let (available_modes, current_mode) = wasit_opencode::parse_config_modes(res);
+    let model = wasit_opencode::parse_config_model(res)
+        .or_else(|| opencode_spec.map(|s| s.model.clone()).filter(|m| !m.is_empty()));
+    let cwd = opencode_spec.map(|s| s.project.clone());
+    let mut events = vec![wasit_core::AgentEvent::SessionInit {
+        native_session_id: Some(acp_session_id.clone()),
+        model,
+        cwd,
+        tools: vec![],
+        mcp_servers: vec![],
+        slash_commands: vec![],
+        permission_mode: String::new(),
+        claude_code_version: String::new(),
+        available_modes: available_modes.clone(),
+        current_mode: current_mode.clone(),
+    }];
+    if !available_modes.is_empty() || !current_mode.is_empty() {
+        events.push(wasit_core::AgentEvent::ModesUpdated {
+            available_modes,
+            current_mode: if current_mode.is_empty() {
+                None
+            } else {
+                Some(current_mode)
+            },
+        });
+    }
+
+    // First attach only: apply the launch model pick (opencode acp rejects
+    // --model; the supported path is set_config_option AFTER session/new, done
+    // BEFORE the first prompt so the first turn runs on the chosen model), then
+    // deliver the first prompt as session/prompt.
+    if is_first_attach {
+        use std::io::Write;
+        if let Some(spec) = opencode_spec {
+            let want = spec.model.trim();
+            if !want.is_empty() {
+                let (current, valid) = opencode_launch_model_values(res);
+                if valid.iter().any(|v| v == want) && current.as_deref() != Some(want) {
+                    let line = wasit_opencode::encode_set_model(3, &acp_session_id, want);
+                    let mut w = writer.lock().unwrap();
+                    let _ = w.write_all(line.as_bytes());
+                    let _ = w.write_all(b"\n");
+                    let _ = w.flush();
+                    eprintln!("marsad-agent: session {sid} opencode applied launch model {want}");
+                } else if !valid.is_empty() && !valid.iter().any(|v| v == want) {
+                    eprintln!("marsad-agent: session {sid} opencode launch model {want:?} not in options — left at {current:?}");
+                }
+            }
+        }
+        if let Some(prompt) = first_prompt {
+            let line = wasit_opencode::encode_session_prompt(4, &acp_session_id, prompt);
+            let mut w = writer.lock().unwrap();
+            let _ = w.write_all(line.as_bytes());
+            let _ = w.write_all(b"\n");
+            let _ = w.flush();
+            eprintln!(
+                "marsad-agent: session {sid} opencode sent first_prompt as session/prompt ({} chars)",
+                prompt.len()
+            );
+        }
+    }
+
+    Some(events)
+}
+
+/// Extract `(current_model, valid_models)` from an opencode `configOptions`
+/// result — the `model` config group's `currentValue` + the `value`s of its
+/// `options`. Used to guard the launch model-pick (only apply a real option that
+/// differs from the current). Pure.
+#[cfg(not(coverage))]
+fn opencode_launch_model_values(res: &serde_json::Value) -> (Option<String>, Vec<String>) {
+    let current = wasit_opencode::parse_config_model(res);
+    let valid = res
+        .get("configOptions")
+        .and_then(|v| v.as_array())
+        .and_then(|opts| {
+            opts.iter()
+                .find(|o| o.get("id").and_then(|v| v.as_str()) == Some("model"))
+        })
+        .and_then(|g| g.get("options"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|o| o.get("value").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    (current, valid)
+}
+
 /// Spawn the per-session reader thread: connect the transport (local FIFO/pipe, or a
 /// remote durable FIFO bridge), send the control `initialize` handshake + an optional
 /// first prompt, register the writer, then stream claude's stdout to every subscriber
@@ -202,8 +623,11 @@ pub(crate) fn spawn_session_reader(
             }
         };
 
-        // Emit an arbitrary translated stream-json event to subscribers.
-        let emit_event = |event: serde_json::Value| {
+        // Emit a typed `wasit_core::AgentEvent` to subscribers. The wire now
+        // carries the rich AgentEvent directly (Wave 0); the driver-specific
+        // parsing lives in the wasit `LineParser`/`MessageParser`, and
+        // `marsad-events` reduces over `AgentEvent`.
+        let emit_event = |event: wasit_core::AgentEvent| {
             let line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::AgentEvent {
                 session_id: sid.clone(),
                 event,
@@ -215,32 +639,12 @@ pub(crate) fn spawn_session_reader(
             }
         };
 
-        // opencode streams ONE assistant reply as many `agent_message_chunk`
-        // deltas that share a message id. We ACCUMULATE them here and emit a single
-        // complete assistant message (on the next message id, any non-text update,
-        // a request/result, or stream end) — otherwise each tiny delta became its
-        // own transcript bubble. `flush_acp_text!()` emits + clears the buffer.
-        let mut acp_text_buf: Option<(String, String)> = None;
-        macro_rules! flush_acp_text {
-            () => {
-                if let Some((mid, txt)) = acp_text_buf.take() {
-                    if !txt.is_empty() {
-                        emit_event(crate::acp_translate::acp_assistant_message(&mid, &txt));
-                    }
-                }
-            };
-        }
-
-        // opencode spawns subagents via its `task` tool, surfaced as a
-        // tool_call/tool_call_update lifecycle. We re-emit that as claude's
-        // canonical `Task` tool_use + `tool_result` so marsad_events groups it
-        // like a claude subagent. These sets keep create/complete idempotent
-        // across reconnect replays (declared outside the reconnect loop on
-        // purpose — a subagent can span a reconnect).
-        let mut acp_sub_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut acp_sub_created: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        let mut acp_sub_done: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // ONE stateful wasit parser per reader, keyed by driver. Declared OUTSIDE
+        // the reconnect loop so parser state (tool_use_id→name correlation, turn
+        // flags, native thread/session ids) survives a reconnect — a subagent or
+        // tool call can span a connection drop. `WasitParser` dispatches
+        // `on_line`/`on_message` to the right concrete parser.
+        let mut parser = WasitParser::new(&driver);
 
         'reconnect: loop {
             // Superseded (a newer reader took over) or stopped (paused) → exit now,
@@ -566,7 +970,7 @@ pub(crate) fn spawn_session_reader(
             // OPENCODE: ACP handshake is sent below (initialize + session/new|session/load).
             if send_init && is_first_attach && driver != "codex" && driver != "opencode" {
                 use std::io::Write;
-                let init = marsad_proto::encode_control_request_initialize("req_1_init");
+                let init = wasit_claude::encode_initialize("req_1_init");
                 let mut w = writer.lock().unwrap();
                 let _ = w.write_all(init.as_bytes());
                 let _ = w.write_all(b"\n");
@@ -583,19 +987,13 @@ pub(crate) fn spawn_session_reader(
             // map below (`pending_acp_reqs`) uses to correlate responses.
             if driver == "opencode" && send_init && is_first_attach {
                 use std::io::Write;
-                use crate::acp;
 
-                // Monotonic request-id counter: use a thread-local AtomicU64 so
-                // multiple reader threads (parallel sessions) never collide.
-                // We start at 1 and increment — the reader loop below also uses
-                // this counter for per-turn session/prompt requests.
-                // We use simple numeric IDs: 1 = initialize, 2 = session/new|load.
-                let init_id = serde_json::json!(1u64);
-                let session_id_for_new = serde_json::json!(2u64);
-
-                // Send `initialize`.
-                let init_params = acp::initialize_params("marsad", env!("CARGO_PKG_VERSION"));
-                let init_line = acp::encode_request(init_id.clone(), "initialize", init_params);
+                // Numeric request ids: 1 = initialize, 2 = session/new|load. The
+                // reader loop below correlates the id=2 RESPONSE to synthesize the
+                // SessionInit (the opencode parser leaves that to the transport
+                // owner) and to deliver the first prompt.
+                let init_line =
+                    wasit_opencode::encode_initialize("marsad", env!("CARGO_PKG_VERSION"));
                 {
                     let mut w = writer.lock().unwrap();
                     let _ = w.write_all(init_line.as_bytes());
@@ -604,41 +1002,24 @@ pub(crate) fn spawn_session_reader(
                 }
                 eprintln!("marsad-agent: session {sid} opencode sent initialize");
 
-                // Send `session/new` or `session/load` depending on whether we have
-                // a stored ACP sessionId (resume path).
-                let (session_method, session_params) = if let Some(ref spec) = opencode_spec {
-                    let cwd = &spec.project;
-                    let mcp_servers = serde_json::json!([]);
-                    if let Some(ref acp_sid) = spec.acp_session_id {
-                        // Resume: session/load with the stored ACP sessionId.
-                        (
-                            "session/load",
-                            acp::session_load_params(acp_sid, cwd, &mcp_servers),
-                        )
-                    } else {
-                        // Fresh: session/new.
-                        (
-                            "session/new",
-                            acp::session_new_params(cwd, &mcp_servers, None),
-                        )
-                    }
-                } else {
-                    // No spec — fall back to session/new with empty cwd.
-                    ("session/new", acp::session_new_params(".", &serde_json::json!([]), None))
+                // session/new (fresh) or session/load (resume with a stored ACP
+                // sessionId). cwd from the cached spec; model applied AFTER
+                // session/new via set_config_option (opencode acp rejects --model).
+                let cwd = opencode_spec
+                    .as_ref()
+                    .map(|s| s.project.clone())
+                    .unwrap_or_else(|| ".".to_string());
+                let session_line = match opencode_spec.as_ref().and_then(|s| s.acp_session_id.clone()) {
+                    Some(acp_sid) => wasit_opencode::encode_session_load(2, &acp_sid, &cwd),
+                    None => wasit_opencode::encode_session_new(2, &cwd, None),
                 };
-
-                let session_line = acp::encode_request(
-                    session_id_for_new.clone(),
-                    session_method,
-                    session_params,
-                );
                 {
                     let mut w = writer.lock().unwrap();
                     let _ = w.write_all(session_line.as_bytes());
                     let _ = w.write_all(b"\n");
                     let _ = w.flush();
                 }
-                eprintln!("marsad-agent: session {sid} opencode sent {session_method}");
+                eprintln!("marsad-agent: session {sid} opencode sent session/new|load");
             }
 
             // ── codex app-server handshake (LAUNCH only, first attach only) ───
@@ -649,36 +1030,29 @@ pub(crate) fn spawn_session_reader(
             // back on the id==2 response (handled in the read loop), which then
             // delivers the first_prompt as a `turn/start`.
             if driver == "codex" && send_init && is_first_attach {
-                use crate::acp;
-                use crate::codex_appserver as cx;
                 use std::io::Write;
-                let (model, approval, sandbox) = codex_spec
+                let model = codex_spec.as_ref().map(|cs| cs.model.clone()).unwrap_or_default();
+                let mode = codex_spec
                     .as_ref()
-                    .map(|cs| {
-                        let (a, s) = codex_mode_settings(&cs.session_mode);
-                        (cs.model.clone(), a, s)
-                    })
-                    .unwrap_or_else(|| (String::new(), "on-request", "workspace-write"));
-                let cwd = codex_spec.as_ref().map(|cs| cs.project.clone()).unwrap_or_else(|| ".".into());
-                let init_line = acp::encode_request(
-                    serde_json::json!(1u64),
-                    cx::INITIALIZE,
-                    cx::initialize_params("marsad", env!("CARGO_PKG_VERSION")),
-                );
-                let started_line =
-                    acp::encode_notification(cx::INITIALIZED, serde_json::Value::Null);
-                let ts_params = cx::thread_start_params(
+                    .map(|cs| cs.session_mode.clone())
+                    .unwrap_or_default();
+                let cwd = codex_spec
+                    .as_ref()
+                    .map(|cs| cs.project.clone())
+                    .unwrap_or_else(|| ".".into());
+                // id 1 = initialize, id 2 = thread/start. The thread id arrives on
+                // the SessionInit the parser emits from the `thread/started`
+                // notification; the reader loop delivers the first turn then.
+                let init_line = wasit_codex::encode_initialize("marsad", env!("CARGO_PKG_VERSION"));
+                let ts_line = wasit_codex::encode_thread_start(
+                    2,
                     &cwd,
-                    Some(model.as_str()),
-                    Some(approval),
-                    Some(sandbox),
+                    if model.is_empty() { None } else { Some(model.as_str()) },
+                    &mode,
                 );
-                let ts_line = acp::encode_request(serde_json::json!(2u64), cx::THREAD_START, ts_params);
                 {
                     let mut w = writer.lock().unwrap();
                     let _ = w.write_all(init_line.as_bytes());
-                    let _ = w.write_all(b"\n");
-                    let _ = w.write_all(started_line.as_bytes());
                     let _ = w.write_all(b"\n");
                     let _ = w.write_all(ts_line.as_bytes());
                     let _ = w.write_all(b"\n");
@@ -707,13 +1081,8 @@ pub(crate) fn spawn_session_reader(
                     use std::io::Write;
                     let plen = prompt.len();
                     {
-                        // Claude: stream-json user message.
-                        use marsad_proto::{encode_user_input, ContentBlock, UserInput};
-                        let encoded = encode_user_input(&UserInput {
-                            content: vec![ContentBlock::Text {
-                                text: prompt.clone(),
-                            }],
-                        });
+                        // Claude: stream-json user message (built by the wasit encoder).
+                        let encoded = wasit_claude::encode_user_message(prompt);
                         let mut w = writer.lock().unwrap();
                         let _ = w.write_all(encoded.as_bytes());
                         let _ = w.write_all(b"\n");
@@ -905,729 +1274,146 @@ pub(crate) fn spawn_session_reader(
                                 "marsad-agent: session {sid} reader EOF after {lines_seen} line(s)"
                             );
                         }
-                        // Emit any assistant text still buffered before we stop.
-                        flush_acp_text!();
                         break;
                     }
                     Err(e) => {
                         eprintln!("marsad-agent: session {sid} reader ERROR after {lines_seen} line(s): {e}");
-                        // Emit any assistant text still buffered before we stop.
-                        flush_acp_text!();
                         break;
                     }
                     Ok(_) => {
                         lines_seen += 1;
                         let raw = raw.trim_end_matches('\n');
 
-                        // Capture a `can_use_tool` control
-                        // request as a pending gate so a later
-                        // AnswerGate can write the matching
-                        // control_response. The event is still
-                        // broadcast (below) so the GUI can
-                        // render the gate and answer it.
-                        if let Ok(marsad_proto::StreamMsg::ControlRequest(cr)) =
-                            marsad_proto::parse_stream_line(raw)
-                        {
-                            let mut gates = pending_fifo.lock().unwrap();
-                            let queue = gates.entry(sid.clone()).or_default();
-                            // Deduplicate by request_id ACROSS the whole queue:
-                            // a flapping remote replays the same control_request
-                            // on each reconnect, so ignore any request_id we're
-                            // already holding rather than enqueuing a duplicate
-                            // that would later be answered against a gate claude
-                            // is no longer blocked on. A genuinely NEW request_id
-                            // is pushed to the BACK — claude can block on a burst
-                            // of gates in one turn, and each must be preserved and
-                            // answered against its own request_id (no overwrite).
-                            let dup = queue.iter().any(|g| g.request_id == cr.request_id);
-                            if dup {
-                                eprintln!(
-                                    "marsad-agent: session {sid} gate DUPLICATE ignored (control_request {})",
-                                    cr.request_id
-                                );
-                            } else {
-                                eprintln!(
-                                    "marsad-agent: session {sid} gate captured (control_request {}, {} now queued)",
-                                    cr.request_id,
-                                    queue.len() + 1
-                                );
-                                // DIAG (temporary): log EXACTLY what claude offers for
-                                // this tool so gate options are truth-based, not guessed.
-                                eprintln!(
-                                    "marsad-agent: session {sid} GATE_DIAG tool={} elicitation={} suggestions={}",
-                                    cr.tool_name,
-                                    cr.elicitation_message.is_some(),
-                                    serde_json::to_string(&cr.permission_suggestions)
-                                        .unwrap_or_else(|_| "[]".to_string())
-                                );
-                                queue.push_back(PendingGate {
-                                    request_id: cr.request_id,
-                                    input: cr.input,
-                                    elicitation: cr.elicitation_message.is_some(),
-                                    acp_response_id: None,
-                                    codex_method: None,
-                                    // The claude gate event IS this raw stream-json
-                                    // line (broadcast verbatim below) — store it so a
-                                    // reconnecting client can have the gate replayed.
-                                    event: serde_json::from_str(raw)
-                                        .unwrap_or_else(|_| serde_json::json!({ "raw": raw })),
-                                });
-                            }
-                        }
-
-                        let raw_value: serde_json::Value = serde_json::from_str(raw)
-                            .unwrap_or_else(|_| serde_json::json!({"raw": raw}));
-
-                        // Driver dispatch: translate raw output line into a
-                        // claude-stream-json Value.
+                        // ── Unified wasit parse → emit path ──────────────────
+                        // Feed EVERY inbound line (including handshake responses)
+                        // to the ONE stateful wasit parser for this driver. It
+                        // turns the raw CLI stdout line into zero or more typed
+                        // `wasit_core::AgentEvent`s — gate extraction, tool
+                        // correlation, usage, mode/model, compaction, subagent
+                        // grouping all live inside the wasit driver now.
                         //
-                        // - "opencode": parse ACP JSON-RPC; notifications →
-                        //   translate via acp_translate; request_permission →
-                        //   capture as pending gate + broadcast; session/new result
-                        //   → stash ACP sessionId.
-                        // - "codex": parse app-server JSON-RPC; translate via codex_translate.
-                        // - everything else ("claude"): raw stream-json, no translation.
+                        // OPENCODE handshake interception: the opencode parser
+                        // deliberately does NOT synthesize `SessionInit` from the
+                        // `session/new`/`session/load` RESPONSE (it leaves that to
+                        // the transport owner). Marsad owns the handshake, so it
+                        // parses the id==2 response itself → SessionInit +
+                        // ModesUpdated + model-apply + first-prompt delivery.
                         if driver == "opencode" {
-                            use crate::acp;
-                            use crate::acp_translate;
-
-                            let acp_msg = match acp::parse_acp_line(raw) {
-                                Ok(m) => m,
-                                Err(e) => {
-                                    eprintln!(
-                                        "marsad-agent: session {sid} opencode ACP parse error: {e} (line: {raw})"
-                                    );
-                                    continue;
-                                }
-                            };
-
-                            match acp_msg {
-                                // ── Notification ──────────────────────────────────────────
-                                acp::AcpMessage::Notification { method, params } => {
-                                    if method == "session/update" {
-                                        if let Some(update) = acp::extract_update(&params) {
-                                            // A streamed text delta → accumulate into
-                                            // the current assistant message instead of
-                                            // emitting one bubble per delta.
-                                            if let Some((mid, txt)) =
-                                                acp_translate::acp_text_chunk(update)
-                                            {
-                                                match &mut acp_text_buf {
-                                                    Some((cur, buf)) if *cur == mid => {
-                                                        buf.push_str(&txt)
-                                                    }
-                                                    _ => {
-                                                        flush_acp_text!();
-                                                        acp_text_buf = Some((mid, txt));
-                                                    }
-                                                }
-                                                continue;
-                                            }
-                                            // Any OTHER update (tool_call, plan, mode,
-                                            // usage…): the current text message is done,
-                                            // flush it first so ordering is preserved.
-                                            flush_acp_text!();
-
-                                            // opencode subagents: re-emit the `task`
-                                            // tool lifecycle as claude's canonical Task
-                                            // tool_use + tool_result so the core groups
-                                            // it identically. The raw `task` rows are
-                                            // suppressed (we `continue`) — one clean
-                                            // Task row + the subagent group instead.
-                                            if let Some(id) =
-                                                acp_translate::acp_subagent_pending_id(update)
-                                            {
-                                                // The bare `task` tool_call has no
-                                                // description yet; just mark the id and
-                                                // emit the create from the first enriched
-                                                // update below.
-                                                acp_sub_ids.insert(id);
-                                                continue;
-                                            }
-                                            if let Some(su) =
-                                                acp_translate::acp_subagent_parse_update(update)
-                                            {
-                                                if acp_sub_ids.contains(&su.tool_call_id) {
-                                                    // Emit the Task tool_use once, as soon
-                                                    // as we have a name for the subagent.
-                                                    if !acp_sub_created.contains(&su.tool_call_id) {
-                                                        if let Some(name) = &su.name {
-                                                            emit_event(
-                                                                acp_translate::acp_subagent_task_tool_use(
-                                                                    &su.tool_call_id,
-                                                                    name,
-                                                                    &su.raw_input,
-                                                                ),
-                                                            );
-                                                            acp_sub_created
-                                                                .insert(su.tool_call_id.clone());
-                                                        }
-                                                    }
-                                                    // On completion, emit the tool_result
-                                                    // once (marks the subagent Done).
-                                                    if su.status == "completed"
-                                                        && !acp_sub_done.contains(&su.tool_call_id)
-                                                    {
-                                                        // Guarantee a create even if no
-                                                        // named update was seen first.
-                                                        if !acp_sub_created
-                                                            .contains(&su.tool_call_id)
-                                                        {
-                                                            let name = su
-                                                                .name
-                                                                .clone()
-                                                                .unwrap_or_else(|| {
-                                                                    "subagent".to_string()
-                                                                });
-                                                            emit_event(
-                                                                acp_translate::acp_subagent_task_tool_use(
-                                                                    &su.tool_call_id,
-                                                                    &name,
-                                                                    &su.raw_input,
-                                                                ),
-                                                            );
-                                                            acp_sub_created
-                                                                .insert(su.tool_call_id.clone());
-                                                        }
-                                                        let text =
-                                                            su.result_text.clone().unwrap_or_default();
-                                                        emit_event(
-                                                            acp_translate::acp_subagent_tool_result(
-                                                                &su.tool_call_id,
-                                                                &text,
-                                                            ),
-                                                        );
-                                                        acp_sub_done.insert(su.tool_call_id.clone());
-                                                    }
-                                                    // Suppress the raw subagent tool rows.
-                                                    continue;
-                                                }
-                                            }
-                                            // Compaction detection: bump the boundary event.
-                                            if acp_translate::detect_compaction(update) {
-                                                eprintln!(
-                                                    "marsad-agent: session {sid} opencode compaction detected"
-                                                );
-                                            }
-                                            // Translate to stream-json; skip None (unknown types).
-                                            let model_str = opencode_spec
-                                                .as_ref()
-                                                .map(|s| s.model.as_str())
-                                                .unwrap_or("");
-                                            if let Some(translated) =
-                                                acp_translate::acp_update_to_stream_json(
-                                                    update, &sid, model_str,
-                                                )
-                                            {
-                                                emit_event(translated);
-                                            }
-                                        }
-                                    } else {
-                                        eprintln!(
-                                            "marsad-agent: session {sid} opencode unknown notification: {method}"
-                                        );
-                                    }
-                                }
-
-                                // ── Request (agent→client) ─────────────────────────────────
-                                acp::AcpMessage::Request { id, method, params } => {
-                                    // A gate interrupts the reply — flush any buffered
-                                    // assistant text before the gate event.
-                                    flush_acp_text!();
-                                    if acp::is_permission_request(&method) {
-                                        // session/request_permission: capture as pending gate.
-                                        // The ACP request `id` is stored as `request_id` in the
-                                        // PendingGate so `handle_answer_gate` can reply to it.
-                                        // Raw ACP JSON-RPC id (e.g. 0) — needed to reply to
-                                        // opencode. It is NOT unique across sessions (the first
-                                        // permission of every session is id 0), so it must NOT be
-                                        // the gate's routing id.
-                                        let acp_request_id = id.to_string();
-                                        // Routing id = opencode's toolCallId (unique per tool call),
-                                        // falling back to a session-scoped composite. This becomes the
-                                        // frontend decision_id AND the core ledger dedup key, so it
-                                        // MUST be unique — using the raw ACP id "0" made the core
-                                        // ledger treat every session's first gate as "already seen"
-                                        // and silently drop the answer (gate never sent, never cleared).
-                                        let unique_id = acp_translate::acp_gate_routing_id(
-                                            &sid,
-                                            &acp_request_id,
-                                            &params,
-                                        );
-
-                                        {
-                                            let mut gates = pending_fifo.lock().unwrap();
-                                            let queue = gates.entry(sid.clone()).or_default();
-                                            let dup = queue.iter().any(|g| g.request_id == unique_id);
-                                            if dup {
-                                                eprintln!(
-                                                    "marsad-agent: session {sid} opencode gate DUPLICATE ignored ({unique_id})"
-                                                );
-                                            } else {
-                                                eprintln!(
-                                                    "marsad-agent: session {sid} opencode gate captured (acp_id={acp_request_id}, gate_id={unique_id}, {} now queued)",
-                                                    queue.len() + 1
-                                                );
-                                                // request_id = the UNIQUE routing id; the raw ACP id is
-                                                // kept in acp_response_id so handle_answer_gate replies
-                                                // to opencode with the correct JSON-RPC id.
-                                                queue.push_back(PendingGate {
-                                                    request_id: unique_id.clone(),
-                                                    input: params.clone(),
-                                                    elicitation: false,
-                                                    acp_response_id: Some(acp_request_id.clone()),
-                                                    codex_method: None,
-                                                    // The translated control_request broadcast just
-                                                    // below — stored for replay on re-subscribe.
-                                                    event: acp_translate::acp_permission_to_control_request_event(
-                                                        &unique_id,
-                                                        &params,
-                                                    ),
-                                                });
-                                            }
-                                        }
-
-                                        // Surface the gate as a stream-json control_request that
-                                        // parse_control_request accepts (request_id top-level,
-                                        // inner subtype=can_use_tool). Uses the SAME unique_id so the
-                                        // frontend decision_id matches the pending gate for answering.
-                                        let gate_event = acp_translate::acp_permission_to_control_request_event(
-                                            &unique_id,
-                                            &params,
-                                        );
-                                        let ipc_msg = marsad_proto::IpcMsg::AgentEvent {
-                                            session_id: sid.clone(),
-                                            event: gate_event,
-                                        };
-                                        let encoded = marsad_proto::encode_ipc(&ipc_msg);
-                                        let subs = subs_fifo.lock().unwrap();
-                                        subs.iter().for_each(|s| {
-                                            let _ = s.send(encoded.clone());
-                                        });
-                                    } else {
-                                        eprintln!(
-                                            "marsad-agent: session {sid} opencode unknown agent request: {method} (id={id})"
-                                        );
-                                    }
-                                }
-
-                                // ── Response ──────────────────────────────────────────────
-                                acp::AcpMessage::Response { id, result } => {
-                                    // A prompt result (end_turn) ends the turn — flush
-                                    // any buffered assistant text before the result.
-                                    flush_acp_text!();
-                                    // Correlate by id. id=1 → initialize result.
-                                    // id=2 → session/new or session/load result.
-                                    // id>=3 → session/prompt result (one per turn).
-                                    let id_u64 = id.as_u64().unwrap_or(0);
-
-                                    match result {
-                                        Err(err_val) => {
-                                            eprintln!(
-                                                "marsad-agent: session {sid} opencode ACP error response id={id}: {err_val}"
-                                            );
-                                        }
-                                        Ok(res) => {
-                                            if id_u64 == 1 {
-                                                // initialize result: agentCapabilities.
-                                                // We just note it (no action needed beyond logging).
-                                                eprintln!(
-                                                    "marsad-agent: session {sid} opencode initialize OK (capabilities: {res})"
-                                                );
-                                            } else if id_u64 == 2 {
-                                                // session/new or session/load result: extract sessionId.
-                                                if let Some(acp_session_id) = acp::extract_session_id(&res) {
-                                                    eprintln!(
-                                                        "marsad-agent: session {sid} opencode ACP sessionId={acp_session_id}"
-                                                    );
-                                                    // Store in the registry so handle_send_prompt etc. can use it.
-                                                    acp_sessions.lock().unwrap().insert(sid.clone(), acp_session_id.clone());
-
-                                                    // Synthesize system/init event and broadcast.
-                                                    let model_str = opencode_spec.as_ref().map(|s| s.model.as_str()).unwrap_or("");
-                                                    let cwd_str = opencode_spec.as_ref().map(|s| s.project.as_str()).unwrap_or(".");
-                                                    // Use a placeholder for init_result (we don't store it).
-                                                    let init_result = serde_json::json!({});
-                                                    let system_init = acp_translate::acp_init_to_system_init(
-                                                        &init_result,
-                                                        &res,
-                                                        model_str,
-                                                        cwd_str,
-                                                        &sid,
-                                                    );
-
-                                                    // U1: observe model from system/init.
-                                                    if let (Some(provider), Some(model)) = (
-                                                        capability_provider.as_ref(),
-                                                        system_init.get("model").and_then(|m| m.as_str()),
-                                                    ) {
-                                                        provider.observe_claude_model(&capability_host_id, model);
-                                                    }
-
-                                                    let ipc_msg = marsad_proto::IpcMsg::AgentEvent {
-                                                        session_id: sid.clone(),
-                                                        event: system_init,
-                                                    };
-                                                    let encoded = marsad_proto::encode_ipc(&ipc_msg);
-                                                    {
-                                                        let subs = subs_fifo.lock().unwrap();
-                                                        subs.iter().for_each(|s| {
-                                                            let _ = s.send(encoded.clone());
-                                                        });
-                                                    }
-
-                                                    // Surface opencode's mode list + current from the
-                                                    // session/new (or session/load) configOptions.
-                                                    if let Some(mu) = acp_translate::acp_config_modes_update(&sid, &res) {
-                                                        emit_event(mu);
-                                                    }
-
-                                                    // Apply the New-Session model pick — opencode acp
-                                                    // rejects --model, so the supported path is
-                                                    // set_config_option AFTER session/new. Truthful:
-                                                    // only when the pick is a real option AND differs
-                                                    // from the current. Done BEFORE the first prompt so
-                                                    // the first turn runs on the chosen model.
-                                                    if is_first_attach {
-                                                        use std::io::Write;
-                                                        if let Some(spec) = opencode_spec.as_ref() {
-                                                            let want = spec.model.trim();
-                                                            if !want.is_empty() {
-                                                                let (current, valid) = acp_translate::acp_config_model_values(&res);
-                                                                if valid.iter().any(|v| v == want) && current.as_deref() != Some(want) {
-                                                                    let params = serde_json::json!({
-                                                                        "sessionId": acp_session_id,
-                                                                        "configId": "model",
-                                                                        "value": want,
-                                                                    });
-                                                                    let line = acp::encode_request(serde_json::json!(3u64), "session/set_config_option", params);
-                                                                    let mut w = writer.lock().unwrap();
-                                                                    let _ = w.write_all(line.as_bytes());
-                                                                    let _ = w.write_all(b"\n");
-                                                                    let _ = w.flush();
-                                                                    eprintln!("marsad-agent: session {sid} opencode applied launch model {want}");
-                                                                } else if !valid.is_empty() && !valid.iter().any(|v| v == want) {
-                                                                    eprintln!("marsad-agent: session {sid} opencode launch model {want:?} not in options — left at {current:?}");
-                                                                }
-                                                            }
-                                                        }
-
-                                                        // Deliver first_prompt as session/prompt (id 4,
-                                                        // after the optional model-set at id 3).
-                                                        if let Some(ref prompt) = first_prompt {
-                                                            let prompt_params = acp::session_prompt_params(&acp_session_id, prompt);
-                                                            let prompt_line = acp::encode_request(
-                                                                serde_json::json!(4u64),
-                                                                "session/prompt",
-                                                                prompt_params,
-                                                            );
-                                                            let mut w = writer.lock().unwrap();
-                                                            let _ = w.write_all(prompt_line.as_bytes());
-                                                            let _ = w.write_all(b"\n");
-                                                            let _ = w.flush();
-                                                            eprintln!(
-                                                                "marsad-agent: session {sid} opencode sent first_prompt as session/prompt ({} chars)",
-                                                                prompt.len()
-                                                            );
-                                                        }
-                                                    }
-                                                } else {
-                                                    eprintln!(
-                                                        "marsad-agent: session {sid} opencode session/new result missing sessionId: {res}"
-                                                    );
-                                                }
-                                            } else if res.get("configOptions").is_some() {
-                                                // A set_config_option result (model/mode changed) —
-                                                // NOT a prompt turn. It echoes the authoritative new
-                                                // configOptions; surface the mode list + current.
-                                                if let Some(mu) = acp_translate::acp_config_modes_update(&sid, &res) {
-                                                    emit_event(mu);
-                                                }
-                                                eprintln!(
-                                                    "marsad-agent: session {sid} opencode set_config_option result applied"
-                                                );
-                                            } else {
-                                                // session/prompt result: extract stopReason + usage, broadcast.
-                                                // Use acp_prompt_result_to_result so per-turn usage is captured.
-                                                let stop_reason = acp::extract_stop_reason(&res)
-                                                    .unwrap_or_else(|| "completed".to_string());
-                                                let result_event = acp_translate::acp_prompt_result_to_result(&res);
-                                                let ipc_msg = marsad_proto::IpcMsg::AgentEvent {
-                                                    session_id: sid.clone(),
-                                                    event: result_event,
-                                                };
-                                                let encoded = marsad_proto::encode_ipc(&ipc_msg);
-                                                let subs = subs_fifo.lock().unwrap();
-                                                subs.iter().for_each(|s| {
-                                                    let _ = s.send(encoded.clone());
-                                                });
-                                                eprintln!(
-                                                    "marsad-agent: session {sid} opencode session/prompt result: {stop_reason}"
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            // opencode lines are fully handled above; continue to next line.
-                            continue;
-                        }
-
-                        // ── codex app-server (persistent JSON-RPC) ───────────────
-                        if driver == "codex" {
-                            use crate::acp;
-                            use crate::codex_appserver as cx;
-                            use crate::codex_translate;
-                            let msg = match cx::parse_line(raw) {
-                                Ok(m) => m,
-                                Err(e) => {
-                                    eprintln!("marsad-agent: session {sid} codex parse error: {e} (line: {raw})");
-                                    continue;
-                                }
-                            };
-                            match msg {
-                                acp::AcpMessage::Notification { method, params } => {
-                                    // Track the current turnId (for turn/interrupt) on
-                                    // the session's thread state. Set on turn/started,
-                                    // cleared on turn/completed (which codex also emits
-                                    // for interrupted/failed turns — see codex_turn_result).
-                                    if method == "turn/started" {
-                                        if let (Some(tid), Ok(mut m)) = (cx::extract_turn_id(&params), codex_threads.lock()) {
-                                            if let Some(entry) = m.get_mut(&sid) {
-                                                entry.turn_id = Some(tid);
-                                            }
-                                        }
-                                    } else if method == "turn/completed" {
-                                        if let Ok(mut m) = codex_threads.lock() {
-                                            if let Some(entry) = m.get_mut(&sid) {
-                                                entry.turn_id = None;
-                                            }
-                                        }
-                                    }
-                                    if let Some(sj) = codex_translate::codex_notification_to_stream_json(&method, &params, &sid) {
-                                        emit_event(sj);
-                                    }
-                                }
-                                acp::AcpMessage::Request { id, method, params } => {
-                                    use crate::codex_translate as ct;
-                                    // Every codex server request that needs a human maps
-                                    // to a Marsad gate: approvals (command/file/permissions
-                                    // + legacy) → can_use_tool; requestUserInput →
-                                    // AskUserQuestion; elicitation → elicitation. The
-                                    // codex `method` is stored on the PendingGate so the
-                                    // answer path replies in the right shape.
-                                    let raw_id = id.to_string();
-                                    let gate_id = ct::codex_gate_routing_id(&sid, &raw_id, &params);
-                                    let gate_event: Option<(serde_json::Value, bool)> =
-                                        if cx::is_command_approval(&method) || cx::is_legacy_approval(&method) {
-                                            Some((ct::codex_approval_to_control_request(&gate_id, &method, &params), false))
-                                        } else if method == cx::REQ_USER_INPUT {
-                                            Some((ct::codex_question_to_control_request(&gate_id, &params), false))
-                                        } else if method == cx::REQ_ELICITATION {
-                                            Some((ct::codex_elicitation_to_control_request(&gate_id, &params), true))
-                                        } else {
-                                            None
-                                        };
-                                    if let Some((event, is_elicit)) = gate_event {
-                                        {
-                                            let mut gates = pending_fifo.lock().unwrap();
-                                            let queue = gates.entry(sid.clone()).or_default();
-                                            if queue.iter().any(|g| g.request_id == gate_id) {
-                                                eprintln!("marsad-agent: session {sid} codex gate DUPLICATE ignored ({gate_id})");
-                                            } else {
-                                                eprintln!("marsad-agent: session {sid} codex gate captured ({method}, gate_id={gate_id})");
-                                                queue.push_back(PendingGate {
-                                                    request_id: gate_id.clone(),
-                                                    input: params.clone(),
-                                                    elicitation: is_elicit,
-                                                    acp_response_id: Some(raw_id.clone()),
-                                                    codex_method: Some(method.clone()),
-                                                    // The translated control_request broadcast just
-                                                    // below — stored for replay on re-subscribe.
-                                                    event: event.clone(),
-                                                });
-                                            }
-                                        }
-                                        emit_event(event);
-                                    } else {
-                                        // An unrecognized server request → decline so the
-                                        // turn never hangs.
-                                        eprintln!("marsad-agent: session {sid} codex unhandled server request {method}; declining");
-                                        let resp = acp::encode_response(id, cx::approval_decision(false, false));
-                                        let mut w = writer.lock().unwrap();
-                                        let _ = w.write_all(resp.as_bytes());
-                                        let _ = w.write_all(b"\n");
-                                        let _ = w.flush();
-                                    }
-                                }
-                                acp::AcpMessage::Response { id, result } => {
-                                    let id_u = id.as_u64().unwrap_or(0);
-                                    match result {
-                                        Err(err_val) => eprintln!(
-                                            "marsad-agent: session {sid} codex error response id={id}: {err_val}"
-                                        ),
-                                        Ok(res) => {
-                                            if id_u == 2 {
-                                                // thread/start result: capture threadId,
-                                                // synthesize system/init, deliver the
-                                                // first turn as turn/start.
-                                                if let Some(tid) = cx::extract_thread_id(&res) {
-                                                    codex_threads.lock().unwrap().insert(sid.clone(), crate::CodexThread { thread_id: tid.clone(), turn_id: None });
-                                                    eprintln!("marsad-agent: session {sid} codex threadId={tid}");
-                                                    let model_str = codex_spec.as_ref().map(|c| c.model.clone()).unwrap_or_default();
-                                                    let cwd_str = codex_spec.as_ref().map(|c| c.project.clone()).unwrap_or_else(|| ".".to_string());
-                                                    emit_event(crate::codex_translate::codex_system_init(&sid, &model_str, &cwd_str));
-                                                    // Query the available collaboration
-                                                    // modes (id 5) so the Config "Session
-                                                    // mode" UI can render + live-switch.
-                                                    {
-                                                        let ml = acp::encode_request(serde_json::json!(5u64), cx::COLLABORATION_MODE_LIST, serde_json::json!({}));
-                                                        let mut w = writer.lock().unwrap();
-                                                        let _ = w.write_all(ml.as_bytes());
-                                                        let _ = w.write_all(b"\n");
-                                                        let _ = w.flush();
-                                                    }
-                                                    if is_first_attach {
-                                                        if let Some(ref prompt) = first_prompt {
-                                                            let tp = cx::turn_start_params(&tid, prompt);
-                                                            let line = acp::encode_request(serde_json::json!(3u64), cx::TURN_START, tp);
-                                                            let mut w = writer.lock().unwrap();
-                                                            let _ = w.write_all(line.as_bytes());
-                                                            let _ = w.write_all(b"\n");
-                                                            let _ = w.flush();
-                                                            eprintln!("marsad-agent: session {sid} codex sent first turn/start ({} chars)", prompt.len());
-                                                        }
-                                                    }
-                                                } else {
-                                                    eprintln!("marsad-agent: session {sid} codex thread/start missing thread.id: {res}");
-                                                }
-                                            } else if id_u == 5 {
-                                                // collaborationMode/list result → surface as modes_update.
-                                                emit_event(crate::codex_translate::codex_modes_from_collab_list(&res, &sid, None));
-                                            }
-                                            // id==1 (initialize) / id>=3 (turn/start) →
-                                            // no action; the turn/completed notification
-                                            // carries the result.
-                                        }
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-
-                        // claude: raw stream-json, no translation. (codex uses the
-                        // app-server branch above and never reaches here; opencode
-                        // is fully handled above.)
-                        let event: serde_json::Value = raw_value;
-
-                        // U1 (§3.2 trigger 4): a `system:init` line reports the
-                        // model claude actually launched with — the only signal
-                        // that exists for claude's model catalog (§1.1: "no list
-                        // command"). Accumulate it into the host's observed set.
-                        // Also triggered for codex sessions (the synthesized system/init
-                        // from thread.started carries the configured model name).
-                        if event.get("type").and_then(|t| t.as_str()) == Some("system")
-                            && event.get("subtype").and_then(|t| t.as_str()) == Some("init")
-                        {
-                            if let (Some(provider), Some(model)) = (
-                                capability_provider.as_ref(),
-                                event.get("model").and_then(|m| m.as_str()),
+                            if let Some(evs) = opencode_handshake_intercept(
+                                raw,
+                                is_first_attach,
+                                first_prompt.as_deref(),
+                                opencode_spec.as_ref(),
+                                &acp_sessions,
+                                &sid,
+                                &writer,
                             ) {
-                                provider.observe_claude_model(&capability_host_id, model);
+                                for ev in evs {
+                                    observe_session_init(
+                                        &ev,
+                                        capability_provider.as_ref(),
+                                        &capability_host_id,
+                                    );
+                                    emit_event(ev);
+                                }
+                                continue;
                             }
                         }
 
-                        // Determine whether this event should trigger a
-                        // remote git Changes probe.
-                        //
-                        // Trigger 1 (existing): `result` event — turn ended.
-                        // Trigger 2 (new, #4): `assistant` event containing a
-                        // `tool_use` block for a file-modifying tool (Bash,
-                        // Edit, Write, NotebookEdit, MultiEdit).  Debounced:
-                        // at most one probe per CHANGES_PROBE_DEBOUNCE_SECS.
-                        let is_result =
-                            event.get("type").and_then(|t| t.as_str()) == Some("result");
-                        let is_file_modifying_tool_use = !is_result
-                            && event.get("type").and_then(|t| t.as_str()) == Some("assistant")
-                            && assistant_has_file_modifying_tool_use(&event);
-                        let should_probe_changes = is_result
-                            || (is_file_modifying_tool_use && {
-                                let now = std::time::Instant::now();
-                                let elapsed_ok = last_changes_probe
-                                    .map(|t| {
-                                        now.duration_since(t).as_secs()
-                                            >= CHANGES_PROBE_DEBOUNCE_SECS
-                                    })
-                                    .unwrap_or(true);
-                                if elapsed_ok {
-                                    last_changes_probe = Some(now);
-                                }
-                                elapsed_ok
-                            });
-                        if should_probe_changes {
-                            if let (Some(target), Some(project)) =
-                                (host_target.as_deref(), remote_project.as_deref())
+                        let events = parser.on_raw(raw);
+                        for ev in events {
+                            // Native id capture (from SessionInit) → store for
+                            // encodes + storage, then deliver a deferred first
+                            // prompt (codex/opencode need the native id first).
+                            if let wasit_core::AgentEvent::SessionInit {
+                                ref native_session_id,
+                                ..
+                            } = ev
                             {
-                                let script = remote_changes_script(project);
-                                if let Some(stdout) = run_remote_script(target, &script) {
-                                    let changes = parse_remote_changes(&stdout);
-                                    let cu_line = marsad_proto::encode_ipc(
-                                        &marsad_proto::IpcMsg::ChangesUpdate {
-                                            session_id: sid.clone(),
-                                            changes,
-                                        },
-                                    );
-                                    let subs2 = subs_fifo.lock().unwrap();
-                                    subs2.iter().for_each(|s| {
-                                        let _ = s.send(cu_line.clone());
-                                    });
-                                    eprintln!(
-                                        "marsad-agent: session {sid} changes update broadcast ({})",
-                                        if is_result { "result" } else { "tool_use" }
-                                    );
-                                }
-                                // Project-wide usage aggregation: run on result events
-                                // only (not on every tool_use — it reads all *.jsonl,
-                                // so it's more expensive than the git probe).
-                                if is_result {
-                                    let usage_script = remote_usage_script(project);
-                                    if let Some(usage_out) =
-                                        run_remote_script(target, &usage_script)
-                                    {
-                                        let trimmed = usage_out.trim();
-                                        if !trimmed.is_empty() && trimmed != "{}" {
-                                            if let Ok(usage_val) =
-                                                serde_json::from_str::<serde_json::Value>(trimmed)
-                                            {
-                                                let uu_line = marsad_proto::encode_ipc(
-                                                    &marsad_proto::IpcMsg::UsageUpdate {
-                                                        session_id: sid.clone(),
-                                                        usage: usage_val,
-                                                    },
-                                                );
-                                                let subs3 = subs_fifo.lock().unwrap();
-                                                subs3.iter().for_each(|s| {
-                                                    let _ = s.send(uu_line.clone());
-                                                });
-                                                eprintln!(
-                                                    "marsad-agent: session {sid} usage update broadcast"
-                                                );
+                                if let Some(nid) = native_session_id.clone() {
+                                    if driver == "codex" {
+                                        codex_threads.lock().unwrap().insert(
+                                            sid.clone(),
+                                            crate::CodexThread {
+                                                thread_id: nid.clone(),
+                                                turn_id: None,
+                                            },
+                                        );
+                                        // Deliver the first turn now that the
+                                        // thread id is known (first attach only).
+                                        if is_first_attach {
+                                            if let Some(ref prompt) = first_prompt {
+                                                use std::io::Write;
+                                                let line =
+                                                    wasit_codex::encode_turn_start(3, &nid, prompt);
+                                                let mut w = writer.lock().unwrap();
+                                                let _ = w.write_all(line.as_bytes());
+                                                let _ = w.write_all(b"\n");
+                                                let _ = w.flush();
+                                                eprintln!("marsad-agent: session {sid} codex sent first turn/start ({} chars)", prompt.len());
                                             }
+                                            // Query the collaboration modes so the
+                                            // Config "Session mode" UI can render.
+                                            use std::io::Write;
+                                            let ml = wasit_codex::encode_collab_mode_list(5, &nid);
+                                            let mut w = writer.lock().unwrap();
+                                            let _ = w.write_all(ml.as_bytes());
+                                            let _ = w.write_all(b"\n");
+                                            let _ = w.flush();
                                         }
+                                    } else if driver == "opencode" {
+                                        acp_sessions
+                                            .lock()
+                                            .unwrap()
+                                            .insert(sid.clone(), nid.clone());
                                     }
                                 }
                             }
+
+                            // Capture a gate into Marsad's pending-gate registry so
+                            // the answer path can encode a response to the right
+                            // native routing id. We look up the REAL raw_id (and
+                            // method for codex) from the wasit parser BEFORE capture
+                            // so the stored acp_response_id is the canonical JSON of
+                            // the actual wire id rather than a string-munged guess.
+                            if let wasit_core::AgentEvent::GateRequested { ref gate } = ev {
+                                let routing_id = match gate {
+                                    wasit_core::GateRequest::Permission { request_id, .. }
+                                    | wasit_core::GateRequest::Plan { request_id, .. }
+                                    | wasit_core::GateRequest::Question { request_id, .. } => {
+                                        request_id.clone()
+                                    }
+                                };
+                                let parser_raw = parser.pending_gate_raw(&routing_id);
+                                capture_pending_gate(
+                                    &driver,
+                                    gate,
+                                    &pending_fifo,
+                                    &sid,
+                                    parser_raw,
+                                );
+                            }
+
+                            // U1: observe the model claude/opencode launched with.
+                            observe_session_init(
+                                &ev,
+                                capability_provider.as_ref(),
+                                &capability_host_id,
+                            );
+
+                            // Mid-turn / end-of-turn remote git Changes + usage probe.
+                            maybe_probe_changes_usage(
+                                &ev,
+                                host_target.as_deref(),
+                                remote_project.as_deref(),
+                                &sid,
+                                &subs_fifo,
+                                &mut last_changes_probe,
+                                CHANGES_PROBE_DEBOUNCE_SECS,
+                            );
+
+                            emit_event(ev);
                         }
-                        let ipc_msg = marsad_proto::IpcMsg::AgentEvent {
-                            session_id: sid.clone(),
-                            event,
-                        };
-                        let encoded = marsad_proto::encode_ipc(&ipc_msg);
-                        // Broadcast to all subscribers.
-                        let subs = subs_fifo.lock().unwrap();
-                        subs.iter().for_each(|s| {
-                            let _ = s.send(encoded.clone());
-                        });
                     }
                 }
             }
@@ -1827,3 +1613,4 @@ pub(crate) fn spawn_session_reader(
         // (PENDING_PROMPT_MAX) so it can't grow without limit.
     });
 }
+

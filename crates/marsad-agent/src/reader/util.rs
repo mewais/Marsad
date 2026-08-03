@@ -25,16 +25,6 @@ pub fn reconnect_backoff_next(current: u64) -> u64 {
 // functions are the WHOLE decision logic — no flap counter driving state at
 // attach, no verdict-string guessing. The reader just calls them and emits.
 
-/// Map a session mode id to codex app-server `(approvalPolicy, sandbox)`.
-///
-/// Codex's available modes are not discoverable from the CLI, so for now every mode
-/// id (including empty = backend default) maps to codex's sane default settings.
-/// // TODO(modes): source codex's real modes from the app-server when wired; until
-/// // then codex launches at this default and mode picking is disabled for codex.
-pub fn codex_mode_settings(_mode: &str) -> (&'static str, &'static str) {
-    ("on-request", "workspace-write")
-}
-
 /// Health to emit when the stream DROPS. A drop right after a bare re-attach that
 /// never produced a line (`lines_seen == 0`) is a FLAP → `Unstable`; a drop from a
 /// connection that was actually working → a plain `Reconnecting` blip.
@@ -114,4 +104,79 @@ pub fn assistant_has_file_modifying_tool_use(event: &serde_json::Value) -> bool 
                 .map(|name| FILE_TOOLS.contains(&name))
                 .unwrap_or(false)
     })
+}
+
+/// Return `true` if the given `AgentEvent` is a `ToolCallStarted` for a known
+/// file-modifying tool.
+///
+/// The wasit migration made the reader operate over typed `AgentEvent`s rather
+/// than raw claude stream-json Values, so the mid-turn Changes-probe trigger
+/// (#4) now inspects the parser's `ToolCallStarted` events. Same tool set as
+/// `assistant_has_file_modifying_tool_use` (claude names + codex `shell`/
+/// `apply_patch` + opencode kinds), so the probe fires for every driver.
+///
+/// Pure logic (no IO), compiled in all build modes — covered by unit tests.
+pub fn agent_event_is_file_modifying_tool(ev: &wasit_core::AgentEvent) -> bool {
+    const FILE_TOOLS: &[&str] = &[
+        "Bash",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "MultiEdit",
+        "shell",
+        "apply_patch",
+    ];
+    match ev {
+        wasit_core::AgentEvent::ToolCallStarted { name, .. } => {
+            FILE_TOOLS.contains(&name.as_str())
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod agent_event_file_tool_tests {
+    use super::agent_event_is_file_modifying_tool;
+    use wasit_core::AgentEvent;
+
+    fn tool_started(name: &str) -> AgentEvent {
+        AgentEvent::ToolCallStarted {
+            name: name.to_string(),
+            call_id: "c1".to_string(),
+            input: serde_json::Value::Null,
+            is_subagent: false,
+            subagent_model: None,
+        }
+    }
+
+    #[test]
+    fn bash_is_file_modifying() {
+        assert!(agent_event_is_file_modifying_tool(&tool_started("Bash")));
+    }
+
+    #[test]
+    fn codex_shell_and_apply_patch_are_file_modifying() {
+        assert!(agent_event_is_file_modifying_tool(&tool_started("shell")));
+        assert!(agent_event_is_file_modifying_tool(&tool_started(
+            "apply_patch"
+        )));
+    }
+
+    #[test]
+    fn read_is_not_file_modifying() {
+        assert!(!agent_event_is_file_modifying_tool(&tool_started("Read")));
+    }
+
+    #[test]
+    fn non_tool_events_are_not_file_modifying() {
+        assert!(!agent_event_is_file_modifying_tool(
+            &AgentEvent::AssistantDelta {
+                text: "hi".to_string(),
+                message_id: None,
+            }
+        ));
+        assert!(!agent_event_is_file_modifying_tool(&AgentEvent::TurnStarted {
+            native_turn_id: None,
+        }));
+    }
 }

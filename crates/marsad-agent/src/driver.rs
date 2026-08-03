@@ -487,108 +487,69 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+// ── LaunchSpec → wasit SpawnSpec ────────────────────────────────────────────────
+
+/// Build a `wasit_core::SpawnSpec` from Marsad's `LaunchSpec`.
+///
+/// This is the single mapping between Marsad's launch fields and the union
+/// `SpawnSpec` the wasit pure argv builders consume. `cwd` is intentionally left
+/// `None` — Marsad sets the working directory via the FIFO-wired
+/// `cd <project> && <bin> …` shell command (`build_spawn_cmd`) / the remote run
+/// command, NOT via an argv flag, so the wasit argv must not carry a `--cwd`.
+///
+/// `mcp_config` is populated from `spec.wasl` with the `wasl-mcp.json`
+/// placeholder — `materialize_wasl_mcp_config` rewrites it to the true absolute
+/// path (and writes the file) once the session id is known. `wasl:false`
+/// produces `None`, keeping the argv byte-identical to a non-wasl launch.
+fn spawn_spec_from_launch(spec: &marsad_proto::LaunchSpec) -> wasit_core::SpawnSpec {
+    let resume = match &spec.mode {
+        marsad_proto::LaunchMode::Fresh => wasit_core::ResumeMode::Fresh,
+        marsad_proto::LaunchMode::Continue => wasit_core::ResumeMode::Continue,
+        marsad_proto::LaunchMode::Resume(id) => wasit_core::ResumeMode::Resume(id.clone()),
+    };
+    wasit_core::SpawnSpec {
+        // cwd handled by the shell `cd`, not an argv flag — leave None.
+        cwd: None,
+        model: if spec.model.is_empty() {
+            None
+        } else {
+            Some(spec.model.clone())
+        },
+        mode: spec.session_mode.clone(),
+        bin: spec.claude_bin.clone(),
+        env: spec.env.clone(),
+        setup: spec.setup.clone(),
+        disallowed_tools: spec.disallowed_tools.clone(),
+        mcp_config: if spec.wasl {
+            Some(WASL_MCP_CONFIG_FILENAME.to_string())
+        } else {
+            None
+        },
+        resume,
+        // first_prompt is delivered over the FIFO as a user message (claude) or
+        // a turn/prompt request (codex/opencode), never as an argv positional.
+        first_prompt: None,
+    }
+}
+
 // ── claude_argv ───────────────────────────────────────────────────────────────
 
-/// Build the exact `claude` invocation for a session launch.
+/// Build the exact `claude` invocation for a session launch, via the pure
+/// `wasit_claude::claude_argv` builder.
 ///
-/// `first_prompt` is intentionally NOT included here — in `--input-format
-/// stream-json` mode the prompt must be delivered via `in.fifo` as a
-/// stream-json user message, not as a positional CLI argument.
+/// `first_prompt` is intentionally NOT included — in `--input-format
+/// stream-json` mode the prompt must be delivered via `in.fifo` as a stream-json
+/// user message, not as a positional CLI argument (see reader.rs).
 ///
-/// The trailing argument depends on `spec.mode`:
-/// - `Fresh`    → nothing (new conversation; cwd is set by the spawn `cd`);
-/// - `Continue` → `--continue` (resume the most recent conversation in the cwd);
-/// - `Resume(id)` → `--resume <id>` (resume that specific conversation).
+/// The trailing argument depends on `spec.mode` (Fresh → nothing; Continue →
+/// `--continue`; Resume(id) → `--resume <id>`). The session's `cwd` is set by the
+/// FIFO-wired `cd <project> && claude …` command (see `build_spawn_cmd`).
 ///
-/// The session's `cwd` is set by the FIFO-wired `cd <project> && claude …`
-/// command (see `build_spawn_cmd`), so `--continue`/`--resume` resolve against
-/// the right project directory.
+/// Signature kept `LaunchSpec`-shaped (frozen by tests/wasl_launch_attach.rs and
+/// the lib re-export) — it wraps the wasit builder plus the wasl `--mcp-config`
+/// placeholder (via `spawn_spec_from_launch`).
 pub fn claude_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
-    let mut argv = vec![
-        // argv[0] is the host's configured claude executable (a wrapper like
-        // `genie` or an absolute path), defaulting to the bare `claude`.
-        spec.claude_bin
-            .clone()
-            .unwrap_or_else(|| "claude".to_string()),
-        "--print".to_string(),
-        "--input-format".to_string(),
-        "stream-json".to_string(),
-        "--output-format".to_string(),
-        "stream-json".to_string(),
-        "--verbose".to_string(),
-        "--model".to_string(),
-        spec.model.clone(),
-    ];
-
-    // Pass --permission-mode ONLY when a non-empty mode id was requested.
-    // Empty = use claude's backend default (omit both flag and value so claude
-    // starts in its configured default mode — usually "default"/"ask").
-    if !spec.session_mode.is_empty() {
-        argv.push("--permission-mode".to_string());
-        argv.push(spec.session_mode.clone());
-    }
-
-    // Route tool-permission prompts to the control-protocol stream so the GUI can
-    // approve/deny them. `--permission-prompt-tool stdio` is the CLI sentinel that
-    // makes claude emit `can_use_tool` control_requests on stdout (verified
-    // against the 2.1.x binary: `mx9("stdio") => createCanUseTool`).
-    //
-    // ALWAYS included, for every posture (verified: claude accepts it alongside
-    // `--permission-mode bypassPermissions` with no conflict). The flag only
-    // *registers* a destination for approval requests; it never forces gating:
-    // - Ask (`default`): every action gates.
-    // - AutoApproveSafe (`acceptEdits`): edits auto-approve; risky tools gate.
-    // - FullAutonomy (`bypassPermissions`): claude's OWN checks are skipped, but
-    //   anything it can't bypass — notably MCP-server-sourced HITL (the MCP's own
-    //   elicitation/approval, independent of claude's permission mode) — still
-    //   routes here as a gate instead of silently hanging in `--print` mode.
-    argv.push("--permission-prompt-tool".to_string());
-    argv.push("stdio".to_string());
-
-    match &spec.mode {
-        // Fresh: nothing to add. The session's working directory is set by the
-        // `cd <project>` in the remote run command (and by the local spawn cwd),
-        // so claude starts a new conversation in the right place. A positional
-        // here would be parsed as claude's *prompt* (e.g. a literal "~/"), which
-        // is wrong — the first task is delivered as a stream-json user message.
-        marsad_proto::LaunchMode::Fresh => {}
-        marsad_proto::LaunchMode::Continue => argv.push("--continue".to_string()),
-        marsad_proto::LaunchMode::Resume(id) => {
-            argv.push("--resume".to_string());
-            argv.push(id.clone());
-        }
-    }
-
-    // Disabled tools: pass as a single comma-joined value to --disallowedTools.
-    // Only added when the list is non-empty (verified: the flag is absent when
-    // the list is empty so the absence/presence test holds trivially).
-    if !spec.disallowed_tools.is_empty() {
-        argv.push("--disallowedTools".to_string());
-        argv.push(spec.disallowed_tools.join(","));
-    }
-
-    // X4a (docs/specs/wasl-connector.md §X4a): request claude launch the
-    // host's `wasl-mcpd` as a stdio MCP-server subprocess (the session's SEND
-    // node). ADDITIVE ONLY — `wasl:false`/absent produces byte-identical argv
-    // to every pre-X4 launch (the load-bearing optionality proof).
-    //
-    // The VALUE here is a placeholder filename, not an absolute path: this fn
-    // is a pure function of `LaunchSpec` alone (frozen by
-    // `tests/wasl_launch_attach.rs`'s `claude_argv(&spec)` call shape), and
-    // the true per-session directory isn't known until `Agent::launch`
-    // assigns a session id (after this fn runs). `spawn_container`'s real-IO
-    // path (`driver.rs`, `#[cfg(not(coverage))]`) rewrites this placeholder
-    // to the true `<session_dir>/wasl-mcp.json` absolute path — and writes
-    // that file — once the session id is known; see
-    // `materialize_wasl_mcp_config`. UNSPECIFIED/flagged for the owner in the
-    // test file's header: only the flag's presence/singularity and a
-    // non-empty, "wasl"-identifying value are pinned here.
-    if spec.wasl {
-        argv.push("--mcp-config".to_string());
-        argv.push(WASL_MCP_CONFIG_FILENAME.to_string());
-    }
-
-    argv
+    wasit_claude::claude_argv(&spawn_spec_from_launch(spec))
 }
 
 /// Placeholder `--mcp-config` filename `claude_argv` injects for a
@@ -614,12 +575,7 @@ const WASL_MCP_CONFIG_FILENAME: &str = "wasl-mcp.json";
 /// default); a per-session override would need a supported ACP path (session
 /// config / modes), not a CLI flag. `spec.model` is intentionally unused here.
 pub fn opencode_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
-    let bin = spec
-        .claude_bin
-        .as_deref()
-        .unwrap_or("opencode")
-        .to_string();
-    vec![bin, "acp".to_string()]
+    wasit_opencode::opencode_argv(&spawn_spec_from_launch(spec))
 }
 
 /// Build the `codex app-server` invocation for a PERSISTENT session launch.
@@ -631,8 +587,7 @@ pub fn opencode_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
 /// sends them), so `spec.model`/`spec.posture` are intentionally unused in the argv.
 /// Binary from `LaunchSpec.claude_bin` (default `"codex"`).
 pub fn codex_appserver_argv(spec: &marsad_proto::LaunchSpec) -> Vec<String> {
-    let bin = spec.claude_bin.as_deref().unwrap_or("codex").to_string();
-    vec![bin, "app-server".to_string()]
+    wasit_codex::codex_argv(&spawn_spec_from_launch(spec))
 }
 
 /// Dispatch to the correct argv builder based on `spec.driver`.
@@ -759,23 +714,7 @@ mod tests {
         assert_eq!(argv[pm_pos + 1], "bypassPermissions");
     }
 
-    // ── codex_mode_settings ───────────────────────────────────────────────────
-
-    #[test]
-    fn codex_mode_settings_empty_mode_returns_default() {
-        use crate::reader::codex_mode_settings;
-        let (policy, sandbox) = codex_mode_settings("");
-        assert_eq!(policy, "on-request");
-        assert_eq!(sandbox, "workspace-write");
-    }
-
-    #[test]
-    fn codex_mode_settings_any_mode_returns_default() {
-        use crate::reader::codex_mode_settings;
-        // Codex modes are not discoverable yet; any mode id returns the same default.
-        let (policy, sandbox) = codex_mode_settings("plan");
-        assert_eq!(policy, "on-request");
-        assert_eq!(sandbox, "workspace-write");
-    }
+    // codex mode→(approvalPolicy, sandbox) mapping now lives in wasit_codex
+    // (`codex_mode_settings`) and is covered by that crate's own tests.
 }
 
