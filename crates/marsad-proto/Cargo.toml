@@ -6,9 +6,10 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Wire types + serde for Claude stream-json and the GUI<->agent IPC protocol"
+description = "Wire types + serde for the GUI<->agent IPC protocol (carries wasit-core AgentEvent)"
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+wasit-core = { path = "../../Wasit/crates/wasit-core" }

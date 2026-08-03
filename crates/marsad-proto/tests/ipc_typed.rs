@@ -493,13 +493,21 @@ fn vm_update_golden_contract() {
     );
 }
 
+/// `AgentEvent` now carries a typed `wasit_core::AgentEvent` (internally tagged,
+/// snake_case). The golden is the wire form of an `AssistantDelta` event; the
+/// `skip_serializing_if`-guarded `message_id` is omitted here so the golden
+/// re-encodes byte-for-byte (the symmetric-shape requirement of
+/// `assert_variant_contract`).
 #[test]
 fn agent_event_golden_contract() {
     assert_variant_contract(
-        r#"{"type":"AgentEvent","session_id":"s-1","event":{"type":"result","subtype":"success"}}"#,
+        r#"{"type":"AgentEvent","session_id":"s-1","event":{"type":"assistant_delta","text":"hi"}}"#,
         &IpcMsg::AgentEvent {
             session_id: "s-1".to_string(),
-            event: serde_json::json!({"type":"result","subtype":"success"}),
+            event: marsad_proto::AgentEvent::AssistantDelta {
+                text: "hi".to_string(),
+                message_id: None,
+            },
         },
     );
 }
@@ -767,10 +775,13 @@ fn all_goldens() -> Vec<(&'static str, &'static str, IpcMsg)> {
         ),
         (
             "AgentEvent",
-            r#"{"type":"AgentEvent","session_id":"s-1","event":{"type":"result","subtype":"success"}}"#,
+            r#"{"type":"AgentEvent","session_id":"s-1","event":{"type":"assistant_delta","text":"hi"}}"#,
             IpcMsg::AgentEvent {
                 session_id: "s-1".to_string(),
-                event: serde_json::json!({"type":"result","subtype":"success"}),
+                event: marsad_proto::AgentEvent::AssistantDelta {
+                    text: "hi".to_string(),
+                    message_id: None,
+                },
             },
         ),
         (
