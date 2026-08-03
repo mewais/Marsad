@@ -232,8 +232,11 @@ pub fn select_wasl_session_runtime(
 pub struct WaslNodeConfig<'a> {
     /// Host identity — the `host_id` string this daemon is serving.
     pub host_id: &'a str,
-    /// The `control_bind` address the node binds for its runtime-control HTTP
-    /// endpoint (`http://ip:port`). Deterministic per host so a durable node is
+    /// The `control_bind` address for the node's runtime-control HTTP endpoint.
+    /// May be passed WITH an `http://` scheme (that's what `wasl_control_bind`
+    /// returns, since the client/factory dials the node); the rendered TOML
+    /// strips the scheme to the bare `ip:port` that wasl-mcpd's `SocketAddr`
+    /// parser requires. Deterministic per host so a durable node is
     /// rediscoverable after a restart.
     pub control_bind: &'a str,
     /// The default A2A protocol the node advertises (e.g. `"claude"`).
@@ -258,7 +261,7 @@ pub struct WaslNodeConfig<'a> {
 ///
 /// [runtime]
 /// kind = "managed"
-/// control_bind = "<control_bind>"
+/// control_bind = "<ip:port>"   # scheme-stripped from cfg.control_bind
 /// default_protocol = "<default_protocol>"
 /// claude_bin = "<path>"      # only when Some
 /// opencode_bin = "<path>"    # only when Some
@@ -272,7 +275,17 @@ pub fn render_wasl_node_toml(cfg: &WaslNodeConfig) -> String {
     // [runtime] block — the managed-runtime kind + control endpoint + protocol defaults.
     out.push_str("[runtime]\n");
     out.push_str("kind = \"managed\"\n");
-    out.push_str(&format!("control_bind = {:?}\n", cfg.control_bind));
+    // `control_bind` in the node's config is a BARE socket address: wasl-mcpd
+    // parses it with `SocketAddr::parse` (an `http://…` value fails to parse and
+    // the runtime-control API silently never starts). `wasl_control_bind` carries
+    // an `http://` scheme for the CLIENT/factory side (it dials the node), so
+    // strip the scheme (and any trailing slash) here for the node's own bind.
+    let control_socket = cfg
+        .control_bind
+        .strip_prefix("http://")
+        .unwrap_or(cfg.control_bind);
+    let control_socket = control_socket.strip_suffix('/').unwrap_or(control_socket);
+    out.push_str(&format!("control_bind = {control_socket:?}\n"));
     out.push_str(&format!("default_protocol = {:?}\n", cfg.default_protocol));
     if let Some(bin) = cfg.claude_bin {
         out.push_str(&format!("claude_bin = {:?}\n", bin));

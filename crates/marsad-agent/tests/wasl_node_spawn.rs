@@ -137,6 +137,32 @@ fn render_wasl_node_toml_includes_control_bind() {
     );
 }
 
+/// Regression: `control_bind` in the node TOML must be a BARE socket address
+/// (no `http://` scheme). wasl-mcpd parses it with `SocketAddr::parse`, so an
+/// `http://…` value makes the runtime-control API silently fail to start —
+/// which broke the whole Marsad-spawned managed-node flow. `wasl_control_bind`
+/// (the input) carries the scheme for the client/factory side; the render must
+/// strip it.
+#[test]
+fn render_wasl_node_toml_control_bind_is_bare_socket_addr_not_url() {
+    let cfg = WaslNodeConfig {
+        host_id: "local",
+        control_bind: "http://127.0.0.1:47200",
+        default_protocol: "claude",
+        claude_bin: None,
+        opencode_bin: None,
+    };
+    let toml = render_wasl_node_toml(&cfg);
+    assert!(
+        toml.contains("control_bind = \"127.0.0.1:47200\""),
+        "control_bind must render as a bare ip:port; got:\n{toml}"
+    );
+    assert!(
+        !toml.contains("http://"),
+        "the rendered node TOML must not carry an http:// scheme in control_bind; got:\n{toml}"
+    );
+}
+
 /// The rendered TOML must carry the `default_protocol` value.
 #[test]
 fn render_wasl_node_toml_includes_default_protocol() {
