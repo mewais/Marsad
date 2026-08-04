@@ -13,6 +13,7 @@ vi.mock("../src/bridge/api", async (importOriginal) => {
     ...original,
     answerGate: vi.fn().mockResolvedValue(undefined),
     answerQuestion: vi.fn().mockResolvedValue(undefined),
+    answerWaslGate: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -396,5 +397,124 @@ describe("responseToAnswer", () => {
       request_id: R,
       answers: { "Which DB?": "Postgres", "Which cache?": "Redis" },
     });
+  });
+
+  it("waslApprove → answerWaslGate outcome:approved (normal path)", async () => {
+    await responseToAnswer(S, D, R, { type: "waslApprove", gate_id: "g1" }, undefined, "hostA");
+    expect(api.answerWaslGate).toHaveBeenCalledWith({
+      host_id: "hostA",
+      gate_id: "g1",
+      outcome: "approved",
+    });
+    expect(api.answerGate).not.toHaveBeenCalled();
+  });
+
+  it("waslDeny → answerWaslGate outcome:denied + reason", async () => {
+    await responseToAnswer(S, D, R, { type: "waslDeny", gate_id: "g2" }, "Too sensitive", "hostA");
+    expect(api.answerWaslGate).toHaveBeenCalledWith({
+      host_id: "hostA",
+      gate_id: "g2",
+      outcome: "denied",
+      reason: "Too sensitive",
+    });
+    expect(api.answerGate).not.toHaveBeenCalled();
+  });
+
+  it("waslDeny with blank text → reason undefined", async () => {
+    await responseToAnswer(S, D, R, { type: "waslDeny", gate_id: "g3" }, "   ", "hostA");
+    expect(api.answerWaslGate).toHaveBeenCalledWith({
+      host_id: "hostA",
+      gate_id: "g3",
+      outcome: "denied",
+      reason: undefined,
+    });
+  });
+
+  it("waslApprove without host_id → no-op (guards against programming error)", async () => {
+    // host_id absent — the function logs an error and resolves without calling anything.
+    await responseToAnswer(S, D, R, { type: "waslApprove", gate_id: "g4" });
+    expect(api.answerWaslGate).not.toHaveBeenCalled();
+    expect(api.answerGate).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// normalizeGate — HANDOFF (Wasl A2A send-gate)
+// ---------------------------------------------------------------------------
+
+describe("normalizeGate — Wasl Handoff (A2A send-gate)", () => {
+  function handoffRaw(kind = "consult"): Gate {
+    return {
+      Handoff: {
+        gate_id: "wasl-gate-001",
+        kind,
+        from: "alpha",
+        summary: "consult beta about the migration plan",
+        preview: "Should we run the migration now?",
+      },
+    };
+  }
+
+  it("normalizes to kind:handoff, pick-one, two options: Approve + Deny", () => {
+    const n = normalizeGate(
+      gv({ kind: "handoff", lead: "A2A send from alpha" }),
+      handoffRaw()
+    );
+    expect(n.kind).toBe("handoff");
+    expect(n.title).toBe("A2A send from alpha");
+    expect(n.mode).toBe("pick-one");
+    expect(n.prompts).toHaveLength(1);
+    const opts = n.prompts[0].options;
+    expect(opts).toHaveLength(2);
+    expect(opts[0].testid).toBe("wasl-approve-btn");
+    expect(opts[0].label).toBe("Approve send");
+    expect(opts[0].tone).toBe("approve");
+    expect(opts[1].testid).toBe("wasl-deny-btn");
+    expect(opts[1].label).toBe("Deny…");
+    expect(opts[1].tone).toBe("reject");
+    expect(opts[1].freeText).toBeTruthy();
+  });
+
+  it("body is the preview (shown in Markdown body block)", () => {
+    const n = normalizeGate(
+      gv({ kind: "handoff", lead: "A2A send from alpha" }),
+      handoffRaw()
+    );
+    expect(n.body).toBe("Should we run the migration now?");
+  });
+
+  it("risk banner labels the A2A gate kind (capitalised)", () => {
+    const n = normalizeGate(
+      gv({ kind: "handoff", lead: "A2A send from alpha" }),
+      handoffRaw("command")
+    );
+    expect(n.risk).toContain("A2A Command gate");
+  });
+
+  it("Approve response has type:waslApprove + gate_id", () => {
+    const n = normalizeGate(
+      gv({ kind: "handoff", lead: "A2A send from alpha" }),
+      handoffRaw()
+    );
+    const approveOpt = n.prompts[0].options.find((o) => o.testid === "wasl-approve-btn");
+    expect(approveOpt?.response).toEqual({ type: "waslApprove", gate_id: "wasl-gate-001" });
+  });
+
+  it("Deny response has type:waslDeny + gate_id", () => {
+    const n = normalizeGate(
+      gv({ kind: "handoff", lead: "A2A send from alpha" }),
+      handoffRaw()
+    );
+    const denyOpt = n.prompts[0].options.find((o) => o.testid === "wasl-deny-btn");
+    expect(denyOpt?.response).toEqual({ type: "waslDeny", gate_id: "wasl-gate-001" });
+  });
+
+  it("NO diff attachments (no edit, no command box)", () => {
+    const n = normalizeGate(
+      gv({ kind: "handoff", lead: "A2A send from alpha" }),
+      handoffRaw()
+    );
+    expect(n.attachments).toEqual([]);
+    expect(n.prompts[0].id).toBe("handoff");
   });
 });

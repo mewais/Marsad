@@ -14,7 +14,7 @@
  * branching on kind.
  */
 import type { Gate, GateVM, PermissionSuggestion, SideRow } from "./types";
-import { answerGate, answerQuestion } from "./api";
+import { answerGate, answerQuestion, answerWaslGate } from "./api";
 
 // ---------------------------------------------------------------------------
 // Response — the concrete thing the human picked. Kept abstract here; the
@@ -30,7 +30,13 @@ export type GateResponse =
   // claude "always allow …" suggestion, echoed back VERBATIM.
   | { type: "permissionRule"; suggestion: unknown }
   | { type: "answer"; question: string; label: string }
-  | { type: "skipQuestions" };
+  | { type: "skipQuestions" }
+  // X1/X2: Wasl A2A send-gate responses — routed to answerWaslGate (host-scoped),
+  // NOT the normal answerGate (session-scoped). `gate_id` is the Wasl connector
+  // gate identity; `host_id` is supplied by the caller (GateOverlay has it from
+  // selectedSession.host_id — the SessionView projection always carries host_id).
+  | { type: "waslApprove"; gate_id: string }
+  | { type: "waslDeny"; gate_id: string };
 
 /** One selectable answer within a prompt. */
 export interface GateOptionModel {
@@ -313,6 +319,59 @@ export function normalizeGate(gv: GateVM, raw: Gate): NormalizedGate {
     };
   }
 
+  // ---- HANDOFF (Wasl A2A send-gate) ----
+  //
+  // A Handoff gate is surfaced on the owning node's SessionView.gate by core
+  // when a WaslGateRequested event arrives. It must be answered via
+  // answerWaslGate (host-scoped), NOT the normal answerGate (session-scoped).
+  // The gate_id is in the response so responseToAnswer can route correctly.
+  // The host_id is supplied by the caller (GateOverlay, which has selectedSession.host_id).
+  if ("Handoff" in raw) {
+    const h = raw.Handoff;
+    // Capitalise "consult" → "Consult", "message" → "Message", etc.
+    const kindLabel = h.kind.charAt(0).toUpperCase() + h.kind.slice(1);
+    return {
+      kind: "handoff",
+      title: gv.lead,
+      body: h.preview || h.summary || undefined,
+      risk: `A2A ${kindLabel} gate — approving sends this message to another agent`,
+      attachments: [],
+      mode: "pick-one",
+      prompts: [
+        {
+          id: "handoff",
+          multiSelect: false,
+          options: [
+            {
+              id: "wasl-approve",
+              testid: "wasl-approve-btn",
+              label: "Approve send",
+              response: {
+                type: "waslApprove" as const,
+                gate_id: h.gate_id,
+              },
+              tone: "approve" as const,
+            },
+            {
+              id: "wasl-deny",
+              testid: "wasl-deny-btn",
+              label: "Deny…",
+              response: {
+                type: "waslDeny" as const,
+                gate_id: h.gate_id,
+              },
+              tone: "reject" as const,
+              freeText: {
+                label: "Reason for denial (sent to the Wasl operator surface)",
+                placeholder: "e.g. Message content not appropriate for this recipient.",
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
   // Exhaustive fallback (should never hit — Gate union is closed).
   return {
     kind: gv.kind,
@@ -332,13 +391,19 @@ export function normalizeGate(gv: GateVM, raw: Gate): NormalizedGate {
 // per-prompt answers itself and calls `submitAnswers` / this with skipQuestions.
 // ---------------------------------------------------------------------------
 
-/** Fire the concrete api call for a single pick-one response. Returns the promise. */
+/** Fire the concrete api call for a single pick-one response. Returns the promise.
+ *
+ * `host_id` is required only for Wasl send-gate responses (`waslApprove` /
+ * `waslDeny`). All other gate kinds ignore it. GateOverlay supplies it from
+ * `selectedSession.host_id`, which is always present in the SessionView projection.
+ */
 export function responseToAnswer(
   session_id: string,
   decision_id: string,
   request_id: string,
   response: GateResponse,
-  text?: string
+  text?: string,
+  host_id?: string
 ): Promise<void> {
   switch (response.type) {
     case "allow":
@@ -384,6 +449,26 @@ export function responseToAnswer(
       });
     case "skipQuestions":
       return answerQuestion({ session_id, request_id, answers: {} });
+    // X1/X2: Wasl A2A send-gate — route to answerWaslGate (host-scoped), NOT
+    // the normal answerGate (session-scoped). `host_id` is required here; if it
+    // is somehow missing (programming error), log and no-op rather than crash.
+    case "waslApprove":
+      if (!host_id) {
+        console.error("[gateModel] waslApprove fired without host_id — BUG");
+        return Promise.resolve();
+      }
+      return answerWaslGate({ host_id, gate_id: response.gate_id, outcome: "approved" });
+    case "waslDeny":
+      if (!host_id) {
+        console.error("[gateModel] waslDeny fired without host_id — BUG");
+        return Promise.resolve();
+      }
+      return answerWaslGate({
+        host_id,
+        gate_id: response.gate_id,
+        outcome: "denied",
+        reason: text?.trim() || undefined,
+      });
   }
 }
 

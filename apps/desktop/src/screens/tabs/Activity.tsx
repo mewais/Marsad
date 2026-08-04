@@ -87,6 +87,10 @@ const hitlEpisodes = new Map<string, HitlEpisode[]>();
 function hitlResolutionKey(sessionId: string, gate: Gate): string {
   if ("Permission" in gate) return gate.Permission.request_id;
   if ("Question" in gate) return gate.Question.request_id;
+  // Handoff (Wasl A2A send-gate) uses its own gate_id as the key; it is never
+  // recorded as a HITL episode (recordHitlEpisode skips it early), so this
+  // branch is only reached if hitlResolutionKey is called directly on a Handoff.
+  if ("Handoff" in gate) return gate.Handoff.gate_id;
   return sessionId;
 }
 
@@ -94,6 +98,9 @@ function hitlKind(gate: Gate): HitlKind {
   if ("Permission" in gate) return "permission";
   if ("Plan" in gate) return "plan";
   if ("Question" in gate) return "question";
+  // Handoff gates are not HITL-episode kinds (answered via answerWaslGate);
+  // this fallback satisfies TS exhaustiveness. recordHitlEpisode skips them.
+  if ("Handoff" in gate) return "permission";
   return "edit";
 }
 
@@ -102,6 +109,11 @@ function hitlEpisodeId(sessionId: string, gate: Gate): string {
 }
 
 function recordHitlEpisode(sessionId: string, gate: Gate, transcriptLen: number): void {
+  // Handoff (Wasl A2A send-gate) gates are answered via answerWaslGate and are
+  // not tracked as HITL episodes in the Activity transcript — they surface
+  // through the GateOverlay like any other gate and clear via SessionView.gate.
+  if ("Handoff" in gate) return;
+
   const id = hitlEpisodeId(sessionId, gate);
   const list = hitlEpisodes.get(sessionId) ?? [];
   if (list.some((e) => e.id === id)) return;

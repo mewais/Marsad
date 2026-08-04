@@ -29,6 +29,8 @@ function kindBadge(kind: string): string {
   if (kind === "plan") return "Plan";
   if (kind === "edit") return "Edit";
   if (kind === "question") return "Question";
+  // X1/X2: Wasl A2A send-gate label — shown in the kind-badge next to the host.
+  if (kind === "handoff") return "A2A Send";
   return "Permission";
 }
 
@@ -97,12 +99,16 @@ export function GateOverlay() {
   async function fire(response: GateOptionModel["response"], text?: string) {
     if (!selectedSession) return;
     setBusy(true);
+    // X1/X2: For Wasl send-gates (Handoff) the answer routes to answerWaslGate
+    // (host-scoped). Pass host_id from the SessionView so responseToAnswer can
+    // dispatch correctly. Normal gates (permission/plan/edit/question) ignore it.
     await responseToAnswer(
       selectedSession.id,
       decisionId,
       questionRequestId,
       response,
-      text
+      text,
+      selectedSession.host_id
     );
     setBusy(false);
     close();

@@ -911,6 +911,19 @@ function computeGate(
       diff_rows,
     };
   }
+  // X1/X2: Wasl A2A send-gate — surfaced on the owning node's SessionView.gate
+  // as a Handoff variant. Uses gate_id as decision_id (connector-scope identity).
+  if ("Handoff" in g) {
+    return {
+      kind: "handoff",
+      icon: "⇄", // ⇄
+      lead: `A2A send from ${g.Handoff.from}`,
+      summary: g.Handoff.summary,
+      decision_id: g.Handoff.gate_id,
+      is_edit: false,
+      diff_rows: [],
+    };
+  }
   return null;
 }
 

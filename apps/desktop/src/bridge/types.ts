@@ -117,6 +117,26 @@ export type Gate =
         request_id: string;
         questions: QuestionPrompt[];
       };
+    }
+  | {
+      /** X1/X2: Wasl A2A send-gate — an agent-to-agent handoff awaiting human
+       *  approval. Distinguished from session permission gates by this variant
+       *  (carries `gate_id`, not `request_id`). Answered via `answerWaslGate`
+       *  (host-scoped), not the normal `answerGate` (session-scoped). */
+      Handoff: {
+        /** Wasl-scope gate id — THE identity (unique for the node's process
+         *  lifetime). Used as `decision_id` in GateVM so two concurrent handoff
+         *  gates on the same session don't collapse. */
+        gate_id: string;
+        /** "consult" | "command" | "message" | "transfer" */
+        kind: string;
+        /** Source agent name (the sender). */
+        from: string;
+        /** Short human-readable summary of the outbound send. */
+        summary: string;
+        /** Longer preview (the message body / content extract). */
+        preview: string;
+      };
     };
 
 // ---------------------------------------------------------------------------
