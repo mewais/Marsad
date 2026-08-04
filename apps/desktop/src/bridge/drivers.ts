@@ -21,6 +21,7 @@ export const DRIVERS: { id: Driver; label: string }[] = [
   { id: "opencode", label: "opencode" },
   { id: "wasl-claude", label: "Wasl · Claude" },
   { id: "wasl-opencode", label: "Wasl · OpenCode" },
+  { id: "wasl-codex", label: "Wasl · Codex" },
 ];
 
 /**
@@ -35,6 +36,7 @@ export const DRIVER_COLOR: Record<Driver, string> = {
   opencode: "var(--d-opencode, #f0a050)",
   "wasl-claude": "var(--d-wasl-claude, #5a9fd4)",
   "wasl-opencode": "var(--d-wasl-opencode, #7ec87e)",
+  "wasl-codex": "var(--d-wasl-codex, #c07fc0)",
 };
 
 /** Returns true iff the driver id is a Wasl-backed driver (starts with "wasl-"). */
@@ -46,10 +48,12 @@ export function isWaslDriver(d: Driver): boolean {
  * Maps a wasl driver id to its underlying protocol string.
  * "wasl-claude"    → "claude"
  * "wasl-opencode"  → "opencode"
+ * "wasl-codex"     → "codex"
  * anything else    → null
  */
-export function waslProtocol(d: Driver): "claude" | "opencode" | null {
+export function waslProtocol(d: Driver): "claude" | "opencode" | "codex" | null {
   if (d === "wasl-claude") return "claude";
   if (d === "wasl-opencode") return "opencode";
+  if (d === "wasl-codex") return "codex";
   return null;
 }

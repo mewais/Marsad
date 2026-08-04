@@ -25,6 +25,7 @@ const DRIVER_COLOR: Record<Driver, string> = {
   opencode: "#f0a050",
   "wasl-claude": "#5a9fd4",
   "wasl-opencode": "#7ec87e",
+  "wasl-codex": "#c07fc0",
 };
 
 /** driver hex -> ~12-14% tint background, matching the design tokens' "driver

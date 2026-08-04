@@ -43,6 +43,7 @@ const driverColor: Record<Driver, string> = {
   opencode: "#f0a050",
   "wasl-claude": "#5a9fd4",
   "wasl-opencode": "#7ec87e",
+  "wasl-codex": "#c07fc0",
 };
 
 /** Node state colour (also drives the left accent + state dot). */

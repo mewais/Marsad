@@ -38,6 +38,9 @@ export interface ColorTokens {
   dCodex: string;
   dGemini: string;
   dOpencode: string;
+  dWaslClaude: string;
+  dWaslOpencode: string;
+  dWaslCodex: string;
 }
 
 export interface Tokens extends ColorTokens {
@@ -51,6 +54,9 @@ const DRIVER_COLORS = {
   dCodex: "#3fb6a8",
   dGemini: "#9b8cf0",
   dOpencode: "#f0a050",
+  dWaslClaude: "#5a9fd4",
+  dWaslOpencode: "#7ec87e",
+  dWaslCodex: "#c07fc0",
 };
 
 /** Dark theme (default). Matches :root in "Marsad Workstreams.dc.html" verbatim. */
@@ -179,6 +185,9 @@ export function tokensToCssVars(t: Tokens): Record<string, string> {
     "--d-codex": t.dCodex,
     "--d-gemini": t.dGemini,
     "--d-opencode": t.dOpencode,
+    "--d-wasl-claude": t.dWaslClaude,
+    "--d-wasl-opencode": t.dWaslOpencode,
+    "--d-wasl-codex": t.dWaslCodex,
     "--font-sans": t.fontSans,
     "--font-mono": t.fontMono,
   };

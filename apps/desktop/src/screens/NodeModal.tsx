@@ -176,13 +176,15 @@ export function NodeModal() {
   // remote probe (etx ~47s) or race the path-scoped session probe on every open.
   // Non-launchable drivers (e.g. gemini) are never re-probed — they can't launch
   // regardless. NO project here (this is "what agents/models exist").
+  // Wasl drivers alias to their underlying protocol for the probe (capabilities
+  // are host+CLI facts, not Wasl-transport facts).
   useEffect(() => {
     if (!open) return;
-    const caps = state.capabilities[capsKey(driver, hostId)];
+    const caps = state.capabilities[capsKey(capDriver, hostId)];
     const staleNegative =
       caps !== undefined && caps.launchable && caps.cli_available !== true;
     if (caps !== undefined && !staleNegative) return;
-    refreshCapabilities({ host_id: hostId, driver });
+    refreshCapabilities({ host_id: hostId, driver: capDriver });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, hostId, driver]);
 
@@ -216,6 +218,16 @@ export function NodeModal() {
     return dirs.slice(0, 6);
   }, [state.snapshot, hostId]);
 
+  // Capability aliasing: wasl drivers are launched via Wasl transport, but their
+  // underlying CLI facts (models, available_modes, sessions) are the SAME as
+  // the non-wasl protocol on that host. "wasl-claude" → reads from "claude"
+  // slot, "wasl-opencode" → "opencode", "wasl-codex" → "codex".
+  // For non-wasl drivers `capDriver === driver` (identity). Only capability
+  // READS + the discovery TRIGGER alias; the launch path keeps the real driver.
+  const capDriver: Driver = isWaslDriver(driver)
+    ? ((waslProtocol(driver) as Driver) ?? driver)
+    : driver;
+
   // Capabilities-driven driver availability + model catalog — NEVER a
   // hardcoded list (dynamic-capabilities.md §5). A driver with no reported
   // capabilities (or cli_available: false) is disabled with a note; today
@@ -225,9 +237,11 @@ export function NodeModal() {
   }
   /** True while REAL discovery for this (driver, host) hasn't landed yet — caps
    *  are absent. We stay optimistic during this window (never grey), and show a
-   *  loading indicator instead of the empty state. */
+   *  loading indicator instead of the empty state. Wasl drivers alias to their
+   *  underlying protocol for the lookup. */
   function driverDiscovering(d: Driver): boolean {
-    return capsForDriver(d) === undefined;
+    const aliased: Driver = isWaslDriver(d) ? ((waslProtocol(d) as Driver) ?? d) : d;
+    return capsForDriver(aliased) === undefined;
   }
   // Driver availability from REAL per-host discovery (dynamic-capabilities.md
   // §5). While caps are absent (discovery in flight) stay optimistic — never
@@ -235,8 +249,11 @@ export function NodeModal() {
   // available iff Marsad has a launch driver (`launchable`) AND the CLI was
   // actually detected on the host (`cli_available`). gemini → launchable:false
   // → greyed; a driver not installed on the host → cli_available:false → greyed.
+  // Wasl drivers alias to their underlying protocol for the availability check —
+  // a wasl driver is available iff its underlying CLI is available on the host.
   function driverAvailable(d: Driver): boolean {
-    const c = capsForDriver(d);
+    const aliased: Driver = isWaslDriver(d) ? ((waslProtocol(d) as Driver) ?? d) : d;
+    const c = capsForDriver(aliased);
     if (!c) return true; // discovery in flight — optimistic
     if (!c.launchable) return false; // no Marsad driver (e.g. gemini) — hard no
     // A probe that ERRORED/TIMED OUT (slow-setup remote hosts) says nothing about
@@ -249,11 +266,11 @@ export function NodeModal() {
    *  launchable (gemini) or its CLI not detected. Absent caps (loading) are
    *  never known-unavailable. */
   function driverKnownUnavailable(d: Driver): boolean {
-    const c = capsForDriver(d);
+    const c = capsForDriver(isWaslDriver(d) ? ((waslProtocol(d) as Driver) ?? d) : d);
     return !!c && !driverAvailable(d);
   }
 
-  const modelCatalog: ModelCatalog = capsForDriver(driver)?.models ?? EMPTY_MODEL_CATALOG;
+  const modelCatalog: ModelCatalog = capsForDriver(capDriver)?.models ?? EMPTY_MODEL_CATALOG;
 
   // #1 model free-text — the custom input is ONLY for a model NOT in the
   // catalog. When `model` matches a catalog entry (a picked family/radio), the
@@ -263,14 +280,16 @@ export function NodeModal() {
 
   // Session-mode list from capabilities for the selected (driver, host).
   // Empty list = backend default (no mode picker rendered).
-  const modeList: SessionMode[] = capsForDriver(driver)?.available_modes ?? [];
+  // Uses capDriver alias: wasl-* reads from the underlying protocol slot.
+  const modeList: SessionMode[] = capsForDriver(capDriver)?.available_modes ?? [];
 
-  // #3 resume — sessions come ONLY from capabilities[(driver, host)].sessions
+  // #3 resume — sessions come ONLY from capabilities[(capDriver, host)].sessions
   // (populated by scan_claude_sessions once a project is in scope). String-
   // project entries are filtered to the chosen project; agy-style null-project
   // entries always show (they aren't scoped to a requested project).
+  // capDriver alias: wasl-* reads sessions from the underlying protocol slot.
   const projectTrim = project.trim();
-  const driverCaps = capsForDriver(driver);
+  const driverCaps = capsForDriver(capDriver);
   const allSessions: DiscoveredSession[] = driverCaps?.sessions ?? [];
   const visibleSessions = allSessions.filter(
     (s) => s.project == null || s.project === projectTrim
@@ -307,9 +326,10 @@ export function NodeModal() {
   // per (driver, host, project) and merges by project, so it can never be
   // swallowed by, or clobber, the connect-time capability probe. Fires
   // unconditionally on path change so re-picking always refreshes + clears the spinner.
+  // capDriver alias: wasl-* probes the underlying protocol's session store.
   useEffect(() => {
     if (!resume || !projectTrim) return;
-    refreshCapabilities({ host_id: hostId, driver, project: projectTrim });
+    refreshCapabilities({ host_id: hostId, driver: capDriver, project: projectTrim });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resume, hostId, driver, projectTrim]);
 

@@ -57,6 +57,7 @@ const driverColor: Record<Driver, string> = {
   opencode: "#f0a050",
   "wasl-claude": "#5a9fd4",
   "wasl-opencode": "#7ec87e",
+  "wasl-codex": "#c07fc0",
 };
 
 const hostStatusColor: Record<string, string> = {
