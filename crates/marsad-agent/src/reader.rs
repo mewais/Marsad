@@ -1348,6 +1348,17 @@ pub(crate) fn spawn_session_reader(
             // once the first turn/start fires so a later reconnect can't re-deliver.
             let codex_first_turn_pending = std::cell::Cell::new(is_first_attach);
 
+            // OPENCODE has the SAME hazard: the first prompt is delivered as a
+            // `session/prompt` (id 4) from `opencode_handshake_intercept`, fired
+            // on the id==2 session/new RESPONSE — which arrives INSIDE the read
+            // loop, i.e. AFTER `is_first_attach` is cleared below. Passing the raw
+            // `is_first_attach` to the intercept therefore always passed `false`,
+            // so the set_model + session/prompt block never ran → the prompt was
+            // never sent → the turn never started (session stuck at Working, the
+            // i14 stall). Consult this saved copy instead, and clear it once the
+            // intercept consumes it so a reconnect can't re-deliver the prompt.
+            let opencode_first_prompt_pending = std::cell::Cell::new(is_first_attach);
+
             is_first_attach = false;
 
             // Read out.log tail lines and broadcast to all subscribers. The reader
@@ -1439,15 +1450,26 @@ pub(crate) fn spawn_session_reader(
                         // parses the id==2 response itself → SessionInit +
                         // ModesUpdated + model-apply + first-prompt delivery.
                         if driver == "opencode" {
+                            // Consult the saved first-attach copy, NOT the loop's
+                            // (always-false) `is_first_attach` — otherwise the
+                            // intercept's set_model + session/prompt delivery never
+                            // runs and the turn never starts. Consume it once so a
+                            // reconnect (which re-enters this loop) can't re-deliver.
+                            let first = opencode_first_prompt_pending.get();
                             if let Some(evs) = opencode_handshake_intercept(
                                 raw,
-                                is_first_attach,
+                                first,
                                 first_prompt.as_deref(),
                                 opencode_spec.as_ref(),
                                 &acp_sessions,
                                 &sid,
                                 &writer,
                             ) {
+                                // The intercept only fires on the id==2 response,
+                                // which is the point where the first prompt is (or
+                                // is not) delivered — clear the flag now so it can't
+                                // fire twice across a reconnect.
+                                opencode_first_prompt_pending.set(false);
                                 for ev in evs {
                                     observe_session_init(
                                         &ev,
