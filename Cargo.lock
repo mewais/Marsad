@@ -465,6 +465,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "marsad-it-i16_wasl_a2a_live"
+version = "0.1.0"
+dependencies = [
+ "marsad-agent",
+ "marsad-wasl",
+ "marsad-wasl-session",
+ "serde_json",
+]
+
+[[package]]
 name = "marsad-it-x6_wasl_live"
 version = "0.1.0"
 dependencies = [
