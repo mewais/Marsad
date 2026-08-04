@@ -502,6 +502,80 @@ fn codex_collab_mode_intercept(raw: &str, sid: &str) -> Option<Vec<wasit_core::A
     }])
 }
 
+/// CODEX `initialize` RESPONSE interception (id == 1).
+///
+/// The codex app-server requires the `initialize` handshake to COMPLETE before
+/// it accepts `thread/start`. Sending both back-to-back makes codex drop
+/// `thread/start` (no `thread/started` → no SessionInit → the session never
+/// materializes). So Marsad sends ONLY `initialize` at handshake time and defers
+/// `thread/start` to this intercept, which fires exactly once when the id==1
+/// response is seen. Mirrors the working wasit `Session::spawn` sequence
+/// (`initialize` → wait for id==1 response → `thread/start`).
+///
+/// Returns `true` iff it handled the line (an id==1 response AND thread/start not
+/// yet sent), in which case the caller should NOT feed the line to the parser and
+/// should `continue`. Returns `false` for any other line (including a duplicate
+/// id==1 response after thread/start already fired — the `sent` guard prevents a
+/// double-send).
+///
+/// Wire shape of the handled line: `{"id":1,"result":{…}}` (has `result`, no `method`).
+#[cfg(not(coverage))]
+fn codex_init_response_intercept(
+    raw: &str,
+    codex_spec: Option<&crate::CachedCodexSpec>,
+    thread_start_sent: &std::cell::Cell<bool>,
+    sid: &str,
+    writer: &SharedWriter,
+) -> bool {
+    if thread_start_sent.get() {
+        return false;
+    }
+    let val: serde_json::Value = match serde_json::from_str(raw.trim()) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    // Must be a RESPONSE (has id + result, no method) with id == 1.
+    if val.get("method").is_some() {
+        return false;
+    }
+    if val.get("id").and_then(|v| v.as_u64()) != Some(1) {
+        return false;
+    }
+    if val.get("result").is_none() {
+        return false;
+    }
+
+    // Send the deferred thread/start (id 2) now that initialize is complete.
+    // This handshake path is fresh-launch only (reconnect uses send_init=false),
+    // so it always sends thread/start (never thread/resume) — matching the prior
+    // behavior of the back-to-back send.
+    let model = codex_spec.map(|cs| cs.model.clone()).unwrap_or_default();
+    let mode = codex_spec
+        .map(|cs| cs.session_mode.clone())
+        .unwrap_or_default();
+    let cwd = codex_spec
+        .map(|cs| cs.project.clone())
+        .unwrap_or_else(|| ".".into());
+    let ts_line = wasit_codex::encode_thread_start(
+        2,
+        &cwd,
+        if model.is_empty() { None } else { Some(model.as_str()) },
+        &mode,
+    );
+    {
+        use std::io::Write;
+        let mut w = writer.lock().unwrap();
+        let _ = w.write_all(ts_line.as_bytes());
+        let _ = w.write_all(b"\n");
+        let _ = w.flush();
+    }
+    thread_start_sent.set(true);
+    eprintln!(
+        "marsad-agent: session {sid} codex initialize complete → sent deferred thread/start (id 2)"
+    );
+    true
+}
+
 /// Spawn the per-session reader thread: connect the transport (local FIFO/pipe, or a
 /// remote durable FIFO bridge), send the control `initialize` handshake + an optional
 /// first prompt, register the writer, then stream claude's stdout to every subscriber
@@ -1054,42 +1128,33 @@ pub(crate) fn spawn_session_reader(
             }
 
             // ── codex app-server handshake (LAUNCH only, first attach only) ───
-            // Persistent JSON-RPC: `initialize` (id 1) → `initialized`
-            // (notification) → `thread/start` (id 2). thread/start carries the
-            // project cwd + model + posture-derived approvalPolicy/sandbox so the
-            // very first turn runs under the right settings. The thread id comes
-            // back on the id==2 response (handled in the read loop), which then
-            // delivers the first_prompt as a `turn/start`.
+            // Persistent JSON-RPC. The codex app-server requires the `initialize`
+            // handshake to COMPLETE before it will accept `thread/start`: sending
+            // both back-to-back makes codex silently DROP `thread/start` (no
+            // `thread/started` notification → no SessionInit). So the real
+            // sequence is:
+            //   `initialize` (id 1) → wait for the id==1 RESPONSE →
+            //   `thread/start` (id 2) → `thread/started` (notification).
+            // Here we send ONLY `initialize`; the deferred `thread/start` fires
+            // from the read-loop intercept on the id==1 response (see
+            // `codex_init_response_intercept`). thread/start carries the project
+            // cwd + model + mode-derived approvalPolicy/sandbox so the very first
+            // turn runs under the right settings. The thread id then comes back on
+            // the `thread/started` notification (parsed into SessionInit), which
+            // triggers first_prompt delivery as a `turn/start`.
             if driver == "codex" && send_init && is_first_attach {
                 use std::io::Write;
-                let model = codex_spec.as_ref().map(|cs| cs.model.clone()).unwrap_or_default();
-                let mode = codex_spec
-                    .as_ref()
-                    .map(|cs| cs.session_mode.clone())
-                    .unwrap_or_default();
-                let cwd = codex_spec
-                    .as_ref()
-                    .map(|cs| cs.project.clone())
-                    .unwrap_or_else(|| ".".into());
-                // id 1 = initialize, id 2 = thread/start. The thread id arrives on
-                // the SessionInit the parser emits from the `thread/started`
-                // notification; the reader loop delivers the first turn then.
+                // id 1 = initialize. The deferred thread/start (id 2) is sent by
+                // the read loop when the id==1 response arrives, using the same
+                // codex_spec (cwd/model/mode) which is in scope there.
                 let init_line = wasit_codex::encode_initialize("marsad", env!("CARGO_PKG_VERSION"));
-                let ts_line = wasit_codex::encode_thread_start(
-                    2,
-                    &cwd,
-                    if model.is_empty() { None } else { Some(model.as_str()) },
-                    &mode,
-                );
                 {
                     let mut w = writer.lock().unwrap();
                     let _ = w.write_all(init_line.as_bytes());
                     let _ = w.write_all(b"\n");
-                    let _ = w.write_all(ts_line.as_bytes());
-                    let _ = w.write_all(b"\n");
                     let _ = w.flush();
                 }
-                eprintln!("marsad-agent: session {sid} codex sent initialize + thread/start");
+                eprintln!("marsad-agent: session {sid} codex sent initialize (thread/start deferred to id==1 response)");
             }
 
             // Deliver the first_prompt (if any) immediately so the process receives its
@@ -1245,6 +1310,15 @@ pub(crate) fn spawn_session_reader(
                 }
             }
 
+            // Capture whether THIS attach is the first one BEFORE clearing the
+            // flag. Codex delivers its first turn/start from inside the read loop
+            // (on the SessionInit synthesized from `thread/started`), which runs
+            // AFTER `is_first_attach` is cleared below — so the loop must consult
+            // this saved copy, not `is_first_attach` (always false in the loop),
+            // or the first turn is never sent (session stuck at Working). Cleared
+            // once the first turn/start fires so a later reconnect can't re-deliver.
+            let codex_first_turn_pending = std::cell::Cell::new(is_first_attach);
+
             is_first_attach = false;
 
             // Read out.log tail lines and broadcast to all subscribers. The reader
@@ -1278,6 +1352,12 @@ pub(crate) fn spawn_session_reader(
             // (at most one probe per CHANGES_PROBE_DEBOUNCE_SECS per session).
             let mut last_changes_probe: Option<std::time::Instant> = None;
             const CHANGES_PROBE_DEBOUNCE_SECS: u64 = 3;
+            // One-shot guard for the deferred codex thread/start: set true once the
+            // id==1 initialize response has been seen and thread/start (id 2) sent,
+            // so a duplicate id==1 line can't double-send. First-attach only (the
+            // codex handshake runs only when send_init is set), so on a reconnect
+            // pass this stays false and simply never fires.
+            let codex_thread_start_sent = std::cell::Cell::new(false);
             loop {
                 let mut raw = String::new();
                 match reader.read_line(&mut raw) {
@@ -1351,6 +1431,25 @@ pub(crate) fn spawn_session_reader(
                             }
                         }
 
+                        // CODEX initialize (id==1) RESPONSE interception.
+                        // codex requires the initialize handshake to COMPLETE
+                        // before it will accept thread/start, so Marsad sends only
+                        // `initialize` at handshake time and defers `thread/start`
+                        // (id 2) to here — fired exactly once when the id==1
+                        // response arrives. `continue` so this response isn't fed
+                        // to the parser (it drops responses anyway).
+                        if driver == "codex"
+                            && codex_init_response_intercept(
+                                raw,
+                                codex_spec.as_ref(),
+                                &codex_thread_start_sent,
+                                &sid,
+                                &writer,
+                            )
+                        {
+                            continue;
+                        }
+
                         // CODEX collaborationMode/list response interception.
                         // The codex MessageParser returns empty for all JSON-RPC
                         // RESPONSE lines (by design — it only handles notifications
@@ -1385,9 +1484,15 @@ pub(crate) fn spawn_session_reader(
                                                 turn_id: None,
                                             },
                                         );
-                                        // Deliver the first turn now that the
-                                        // thread id is known (first attach only).
-                                        if is_first_attach {
+                                        // Deliver the first turn now that the thread
+                                        // id is known — FIRST ATTACH ONLY. This runs
+                                        // inside the read loop (after `is_first_attach`
+                                        // was cleared), so we consult the saved
+                                        // `codex_first_turn_pending` copy instead, and
+                                        // clear it once consumed so a reconnect can't
+                                        // re-deliver the first turn.
+                                        if codex_first_turn_pending.get() {
+                                            codex_first_turn_pending.set(false);
                                             if let Some(ref prompt) = first_prompt {
                                                 use std::io::Write;
                                                 let line =
