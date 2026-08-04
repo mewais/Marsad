@@ -829,6 +829,12 @@ impl Core {
     /// are stream-visible but never pending/answerable. A malformed `request`
     /// Value is also a tolerant skip (observational data must never wedge the
     /// reader loop, same disposition as `ChangesUpdate`).
+    ///
+    /// ALSO surfaces the send-gate on the owning node's `SessionView`: finds the
+    /// first WaslManaged session on `host_id` and sets a `Gate::Handoff` on its
+    /// `state.gate` so the session card shows a send-gate attention item. Node
+    /// ambiguity (multiple sessions on the same host) → first match (order of
+    /// `session_order`). The gate_id is the identity.
     fn handle_wasl_gate_requested(
         &mut self,
         host_id: String,
@@ -853,23 +859,69 @@ impl Core {
         self.wasl_gates.insert(
             (host_id.clone(), gate_id.clone()),
             WaslGateView {
-                host_id,
-                gate_id,
-                kind: req.kind,
-                from: req.from,
-                summary: req.summary,
-                preview: req.preview,
+                host_id: host_id.clone(),
+                gate_id: gate_id.clone(),
+                kind: req.kind.clone(),
+                from: req.from.clone(),
+                summary: req.summary.clone(),
+                preview: req.preview.clone(),
                 requested_at,
                 deadline,
             },
         );
-        Ok(vec![VmUpdate::WaslGates(self.wasl_gates_list())])
+        let mut updates = vec![VmUpdate::WaslGates(self.wasl_gates_list())];
+
+        // Surface the send-gate on the owning node's SessionView. Find the first
+        // WaslManaged session on host_id (prefer request.from if it uniquely
+        // identifies a session; otherwise first match in session_order).
+        // Choice rationale: session_order is stable insertion order, so the first
+        // session launched for this host is the natural "owning node" in a
+        // single-node workstream. In multi-node, the session whose agent_id matches
+        // request.from would be more precise, but that mapping requires reverse-
+        // lookup of agent_id → session_id which we don't have here — first-match
+        // is honest and flagged in the doc comment above.
+        if let Some(owning_session_id) = self
+            .session_order
+            .iter()
+            .find(|sid| {
+                self.sessions
+                    .get(*sid)
+                    .map(|r| {
+                        r.host_id == host_id
+                            && matches!(r.runtime_owner, RuntimeOwner::WaslManaged { .. })
+                    })
+                    .unwrap_or(false)
+            })
+            .cloned()
+        {
+            if let Some(record) = self.sessions.get_mut(&owning_session_id) {
+                record.state.gate = Some(marsad_gates::Gate::Handoff {
+                    gate_id: gate_id.clone(),
+                    kind: req.kind,
+                    from: req.from,
+                    summary: req.summary,
+                    preview: req.preview,
+                });
+                record.state.phase = marsad_events::Phase::Needs;
+            }
+            let sv = self.make_session_view(
+                &owning_session_id,
+                self.sessions.get(&owning_session_id).unwrap(),
+            );
+            updates.push(VmUpdate::Session(sv));
+        }
+
+        Ok(updates)
     }
 
     /// A Wasl gate resolved. Removal is unconditional-attempt: if the gate
     /// was tracked, the pending list update is also emitted; an
     /// already-cleared/unknown gate still gets the `WaslGateDecided` event
     /// (silent-consistent with a race the node itself already resolved).
+    ///
+    /// ALSO clears the send-gate from the owning node's `SessionView`: finds
+    /// the session whose `state.gate` is a `Handoff` with matching `gate_id`
+    /// and clears it, emitting `VmUpdate::Session`.
     fn handle_wasl_gate_decided(
         &mut self,
         host_id: String,
@@ -883,8 +935,8 @@ impl Core {
             .remove(&(host_id.clone(), gate_id.clone()))
             .is_some();
         let mut updates = vec![VmUpdate::WaslGateDecided {
-            host_id,
-            gate_id,
+            host_id: host_id.clone(),
+            gate_id: gate_id.clone(),
             outcome,
             decided_by,
             reason,
@@ -892,6 +944,41 @@ impl Core {
         if removed {
             updates.push(VmUpdate::WaslGates(self.wasl_gates_list()));
         }
+
+        // Clear the send-gate from the owning node's SessionView: find the
+        // session on this host whose state.gate is a Handoff matching gate_id.
+        if let Some(owning_session_id) = self
+            .session_order
+            .iter()
+            .find(|sid| {
+                self.sessions
+                    .get(*sid)
+                    .map(|r| {
+                        r.host_id == host_id
+                            && matches!(
+                                &r.state.gate,
+                                Some(marsad_gates::Gate::Handoff { gate_id: gid, .. })
+                                    if gid == &gate_id
+                            )
+                    })
+                    .unwrap_or(false)
+            })
+            .cloned()
+        {
+            if let Some(record) = self.sessions.get_mut(&owning_session_id) {
+                record.state.gate = None;
+                // Phase stays as-is unless it was Needs (revert to Done).
+                if record.state.phase == marsad_events::Phase::Needs {
+                    record.state.phase = marsad_events::Phase::Done;
+                }
+            }
+            let sv = self.make_session_view(
+                &owning_session_id,
+                self.sessions.get(&owning_session_id).unwrap(),
+            );
+            updates.push(VmUpdate::Session(sv));
+        }
+
         Ok(updates)
     }
 

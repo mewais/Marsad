@@ -374,7 +374,60 @@ impl Agent {
             "marsad-agent: wasl-node: factory registered for host {host_id} at {base_url}"
         );
 
+        // Wire the X1 operator connector for this node so GateRequested/GateDecided
+        // events from the node's operator API flow through wasl_event_lines into
+        // the broadcast path. Uses the registered connector factory if set; otherwise
+        // skips (serve() wires from load_wasl_config; tests pre-register via
+        // register_wasl_connector). Best-effort: a missing factory never fails a
+        // LaunchWaslSession.
+        let operator_url = format!("http://{operator_bind}");
+        self.ensure_wasl_operator_connector(host_id, &operator_url);
+
         Ok(base_url)
+    }
+
+    /// Wire the X1 operator connector for a node's operator endpoint, if not
+    /// already registered. Idempotent (deduped by host_id). Uses the registered
+    /// connector factory if set; otherwise logs and skips (serve() wires from
+    /// load_wasl_config for static config, tests pre-register via
+    /// register_wasl_connector). Best-effort: never panics, never fails a
+    /// LaunchWaslSession.
+    pub fn ensure_wasl_operator_connector(&mut self, host_id: &str, operator_url: &str) {
+        // Dedup: already registered → skip (the early-return path for a second
+        // LaunchWaslSession on the same host or a pre-registered test seam).
+        let already_registered = self
+            .wasl_connectors
+            .0
+            .lock()
+            .unwrap()
+            .contains_key(host_id);
+        if already_registered {
+            eprintln!(
+                "marsad-agent: wasl-operator: connector for host {host_id} already registered — skip"
+            );
+            return;
+        }
+
+        // Build via the connector factory if one is set. In real-IO mode serve()
+        // supplies the factory; in test mode no factory is set (tests pre-register
+        // via register_wasl_connector before calling ensure_wasl_runtime_node).
+        let entry = marsad_wasl::WaslOperatorEntry {
+            host_id: host_id.to_string(),
+            url: operator_url.to_string(),
+        };
+        if let Some(factory) = self.wasl_connector_factory.0.as_ref() {
+            let connector = factory(&entry);
+            self.register_wasl_connector(host_id, connector);
+            eprintln!(
+                "marsad-agent: wasl-operator: connector registered for host {host_id} at {operator_url}"
+            );
+        } else {
+            // No factory — serve() will wire the connector from load_wasl_config,
+            // or the caller pre-registered a test seam. Log for observability.
+            eprintln!(
+                "marsad-agent: wasl-operator: no connector factory for host {host_id} — skipping operator connector registration"
+            );
+        }
     }
 
     /// `LaunchWaslSession`: build the provider (via the registered one, or lazily
