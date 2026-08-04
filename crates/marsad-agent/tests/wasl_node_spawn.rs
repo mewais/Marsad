@@ -114,6 +114,7 @@ fn render_wasl_node_toml_includes_kind_managed() {
         default_protocol: "claude",
         claude_bin: None,
         opencode_bin: None,
+        codex_bin: None,
     };
     // todo!() → panic (RED once re-exported)
     let toml = render_wasl_node_toml(&cfg);
@@ -136,6 +137,7 @@ fn render_wasl_node_toml_includes_control_bind() {
         default_protocol: "claude",
         claude_bin: None,
         opencode_bin: None,
+        codex_bin: None,
     };
     let toml = render_wasl_node_toml(&cfg);
     assert!(
@@ -161,6 +163,7 @@ fn render_wasl_node_toml_control_bind_is_bare_socket_addr_not_url() {
         default_protocol: "claude",
         claude_bin: None,
         opencode_bin: None,
+        codex_bin: None,
     };
     let toml = render_wasl_node_toml(&cfg);
     assert!(
@@ -185,6 +188,7 @@ fn render_wasl_node_toml_includes_default_protocol() {
         default_protocol: "claude",
         claude_bin: None,
         opencode_bin: None,
+        codex_bin: None,
     };
     let toml = render_wasl_node_toml(&cfg);
     assert!(
@@ -206,6 +210,7 @@ fn render_wasl_node_toml_with_claude_bin_some_includes_the_path() {
         default_protocol: "claude",
         claude_bin: Some("/usr/local/bin/claude"),
         opencode_bin: None,
+        codex_bin: None,
     };
     let toml = render_wasl_node_toml(&cfg);
     assert!(
@@ -226,6 +231,7 @@ fn render_wasl_node_toml_with_opencode_bin_some_includes_the_path() {
         default_protocol: "opencode",
         claude_bin: None,
         opencode_bin: Some("/usr/bin/opencode"),
+        codex_bin: None,
     };
     let toml = render_wasl_node_toml(&cfg);
     assert!(
@@ -247,6 +253,7 @@ fn render_wasl_node_toml_with_claude_bin_none_omits_claude_bin_key() {
         default_protocol: "claude",
         claude_bin: None,
         opencode_bin: None,
+        codex_bin: None,
     };
     let toml = render_wasl_node_toml(&cfg);
     // The exact key name depends on the TOML schema; assert the path "/claude"
@@ -269,6 +276,7 @@ fn render_wasl_node_toml_is_deterministic() {
         default_protocol: "claude",
         claude_bin: Some("/usr/local/bin/claude"),
         opencode_bin: None,
+        codex_bin: None,
     };
     let a = render_wasl_node_toml(&cfg);
     let b = render_wasl_node_toml(&cfg);
@@ -306,6 +314,7 @@ fn render_wasl_node_toml_with_bins_resolved_from_agent_commands() {
         default_protocol: "claude",
         claude_bin,
         opencode_bin,
+        codex_bin: None,
     };
     let toml = render_wasl_node_toml(&cfg);
     assert!(
@@ -814,6 +823,7 @@ fn render_wasl_node_toml_emits_identity_block_with_agent_id() {
         default_protocol: "claude",
         claude_bin: None,
         opencode_bin: None,
+        codex_bin: None,
     };
     let toml = render_wasl_node_toml(&cfg);
     assert!(
@@ -838,6 +848,7 @@ fn render_wasl_node_toml_identity_block_before_runtime() {
         default_protocol: "claude",
         claude_bin: None,
         opencode_bin: None,
+        codex_bin: None,
     };
     let toml = render_wasl_node_toml(&cfg);
     let identity_pos = toml.find("[identity]").expect("[identity] must be present");
@@ -860,6 +871,7 @@ fn render_wasl_node_toml_emits_a2a_block_with_bare_bind() {
         default_protocol: "claude",
         claude_bin: None,
         opencode_bin: None,
+        codex_bin: None,
     };
     let toml = render_wasl_node_toml(&cfg);
     assert!(
@@ -893,6 +905,7 @@ fn render_wasl_node_toml_emits_operator_block_with_bare_bind() {
         default_protocol: "claude",
         claude_bin: None,
         opencode_bin: None,
+        codex_bin: None,
     };
     let toml = render_wasl_node_toml(&cfg);
     assert!(
@@ -1190,6 +1203,7 @@ fn remote_wasl_node_launch_script_shape() {
         default_protocol: "claude",
         claude_bin: None,
         opencode_bin: None,
+        codex_bin: None,
     });
     let s = remote_wasl_node_launch_script("agent33", &toml);
     assert!(s.contains("wasl-node-agent33.toml"), "per-host config path; got:\n{s}");

@@ -20,6 +20,7 @@ import { launchSession, launchWaslSession, fetchGraph, capsKey, getSettings, ref
 import type { CapabilitiesView, DiscoveredSession, ModelCatalog, SessionMode } from "../bridge/types";
 import type { Driver, GraphNode } from "../bridge/workstreamTypes";
 import { DRIVERS, DRIVER_COLOR, isWaslDriver, waslProtocol } from "../bridge/drivers";
+import { buildWaslTargetKey } from "../bridge/waslTargetKey";
 import { Modal } from "../components/Modal";
 
 // ---------------------------------------------------------------------------
@@ -429,6 +430,10 @@ export function NodeModal() {
       model,
       session_mode: sessionMode,
       firstPrompt: firstPrompt.trim() || undefined,
+      // W2b: carry resume state for wasl drivers so onConfirmDraft can thread it.
+      resume: isWaslDriver(driver) ? resume : undefined,
+      selectedResume: isWaslDriver(driver) ? selectedResume : undefined,
+      resumeSessions: isWaslDriver(driver) ? visibleSessions.map((s) => ({ id: s.id })) : undefined,
     });
     // Honor explicit Controlled-by / Feeds-from picks against existing DRAFT
     // nodes — recorded as draft edges (temp ids), never a real addConnection.
@@ -473,11 +478,18 @@ export function NodeModal() {
         const nodeId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
           ? `node-${crypto.randomUUID()}`
           : `node-${Date.now()}`;
-        const wasl_target_key = {
-          key: nodeId,
-          protocol: waslProtocol(driver),
-          context: { cwd: project.trim(), model, session_mode: sessionMode, peers: [] },
-        };
+        const protocol = waslProtocol(driver) ?? driver;
+        const wasl_target_key = buildWaslTargetKey(
+          nodeId,
+          protocol,
+          project.trim(),
+          model,
+          sessionMode,
+          [],
+          resume,
+          selectedResume,
+          visibleSessions
+        );
         newId = await launchWaslSession({
           host_id: hostId,
           wasl_target_key,

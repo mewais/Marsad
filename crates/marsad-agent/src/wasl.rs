@@ -256,6 +256,8 @@ pub struct WaslNodeConfig<'a> {
     pub claude_bin: Option<&'a str>,
     /// Absolute path to the `opencode` binary, if known.
     pub opencode_bin: Option<&'a str>,
+    /// Absolute path to the `codex` binary, if known.
+    pub codex_bin: Option<&'a str>,
 }
 
 /// Normalise any bind value to a bare socket address by stripping an optional
@@ -320,6 +322,9 @@ pub fn render_wasl_node_toml(cfg: &WaslNodeConfig) -> String {
     }
     if let Some(bin) = cfg.opencode_bin {
         out.push_str(&format!("opencode_bin = {:?}\n", bin));
+    }
+    if let Some(bin) = cfg.codex_bin {
+        out.push_str(&format!("codex_bin = {:?}\n", bin));
     }
     out
 }

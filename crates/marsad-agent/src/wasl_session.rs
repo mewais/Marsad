@@ -337,6 +337,10 @@ impl Agent {
             .iter()
             .find(|(k, _)| k == "opencode")
             .map(|(_, v)| v.as_str());
+        let codex_bin_resolved = agent_commands
+            .iter()
+            .find(|(k, _)| k == "codex")
+            .map(|(_, v)| v.as_str());
 
         // Compute the deterministic A2A + operator bind addresses and agent_id.
         let agent_id = format!("marsad-{host_id}");
@@ -355,13 +359,22 @@ impl Agent {
             a2a_bind: &a2a_bind,
             operator_bind: &operator_bind,
             control_bind: &base_url,
-            default_protocol: if opencode_bin_resolved.is_some() && claude_bin_resolved.is_none() {
+            // Protocol selection: codex when only codex_bin is present (no claude, no
+            // opencode); opencode when only opencode_bin is present (no claude);
+            // claude otherwise (default — always has a fallback to PATH).
+            default_protocol: if codex_bin_resolved.is_some()
+                && claude_bin_resolved.is_none()
+                && opencode_bin_resolved.is_none()
+            {
+                "codex"
+            } else if opencode_bin_resolved.is_some() && claude_bin_resolved.is_none() {
                 "opencode"
             } else {
                 "claude"
             },
             claude_bin: claude_bin_resolved,
             opencode_bin: opencode_bin_resolved,
+            codex_bin: codex_bin_resolved,
         };
         let toml_str = crate::wasl::render_wasl_node_toml(&toml_cfg);
         let config_path = std::path::Path::new(&self.config.data_root)
@@ -509,6 +522,10 @@ impl Agent {
             .iter()
             .find(|(k, _)| k == "opencode")
             .map(|(_, v)| v.as_str());
+        let codex_bin_resolved = agent_commands
+            .iter()
+            .find(|(k, _)| k == "codex")
+            .map(|(_, v)| v.as_str());
 
         // The node's OWN loopback binds live on the REMOTE host (bare ip:port).
         let agent_id = format!("marsad-{host_id}");
@@ -536,13 +553,20 @@ impl Agent {
             a2a_bind: &remote_a2a,
             operator_bind: &remote_operator,
             control_bind: &remote_control,
-            default_protocol: if opencode_bin_resolved.is_some() && claude_bin_resolved.is_none() {
+            // Mirror the local branch's protocol selection logic exactly.
+            default_protocol: if codex_bin_resolved.is_some()
+                && claude_bin_resolved.is_none()
+                && opencode_bin_resolved.is_none()
+            {
+                "codex"
+            } else if opencode_bin_resolved.is_some() && claude_bin_resolved.is_none() {
                 "opencode"
             } else {
                 "claude"
             },
             claude_bin: claude_bin_resolved,
             opencode_bin: opencode_bin_resolved,
+            codex_bin: codex_bin_resolved,
         };
         let toml_str = crate::wasl::render_wasl_node_toml(&toml_cfg);
 

@@ -121,6 +121,12 @@ export interface DraftNode {
   firstPrompt?: string;
   /** True for the first authored node — it becomes the workstream's lead. */
   isLead: boolean;
+  /** W2b: resume state for wasl driver launches. `resume` enables threading;
+   *  `selectedResume` is either "continue" (most-recent) or a specific session id. */
+  resume?: boolean;
+  selectedResume?: string;
+  /** W2b: the sessions list at the time of authoring, for most-recent resolution. */
+  resumeSessions?: { id: string }[];
 }
 
 /** A connection authored between two draft nodes — referencing their TEMP ids.
