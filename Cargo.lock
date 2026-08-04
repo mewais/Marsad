@@ -444,6 +444,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "marsad-it-i14_opencode_live"
+version = "0.1.0"
+dependencies = [
+ "marsad-agent",
+ "marsad-core",
+ "marsad-events",
+ "marsad-proto",
+ "marsad-transport",
+ "marsad-viewmodel",
+ "serde_json",
+]
+
+[[package]]
 name = "marsad-it-x6_wasl_live"
 version = "0.1.0"
 dependencies = [
