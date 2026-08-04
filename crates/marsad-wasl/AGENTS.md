@@ -86,6 +86,22 @@ before reaching for `cfg(coverage)`. Only use the residual pattern when the *fro
 genuinely cannot (not "doesn't currently") exercise it — the code-agent cannot edit tests to add
 such a case.
 
+### `next_frame` empty-frames residual (`client.rs`, `Data(n)` arm)
+
+When `pump.feed` is called with bytes that complete a partial SSE line boundary
+(i.e. the bytes land mid-line), it returns an empty `Vec<SseFrame>` and the
+loop spins back to read more bytes. In production this is a routine TCP
+fragmentation path. `MockServer` always delivers complete SSE frame lines
+in a single contiguous write (the 32-byte `READ_CHUNK_SIZE` forces multiple
+reads per HTTP header, but every SSE frame line ends with `'\n'` which is
+always part of the same write — so `LineSplitter` always dispatches a frame on
+the first `Data(n)` read of each new line). The implicit fall-through (the
+`if let Some(first)` else-branch) is thus structurally unreachable from this
+crate's own tests. The `#[cfg(not(coverage))]` / `#[cfg(coverage)]` split in
+the `Data(n)` arm removes the implicit uncovered region by making the coverage
+build always `expect`-unwrap the first frame (which is always present, per
+`MockServer`'s write ordering).
+
 ### `WaslConnector for WaslOperatorClient` (§2.6) — the real impl
 
 Entirely `#[cfg(not(coverage))]` (whole `impl` block, plus the `stop_flag`/`handle` fields it
