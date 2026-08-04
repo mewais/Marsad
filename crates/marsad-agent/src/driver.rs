@@ -118,41 +118,51 @@ impl Agent {
                         err_log.display(),
                     )
                 } else if driver == "codex" {
-                    // Codex eval-loop container command:
-                    //   <setup>
-                    //   export 'K'='V'
-                    //   cd <project> && cat <in.fifo> | \
-                    //     while IFS= read -r __cmd; do
-                    //       eval "$__cmd" </dev/null >> <out.log> 2>><err.log>
-                    //     done
+                    // Codex app-server: persistent JSON-RPC process, claude-shaped
+                    // (in.fifo → `codex app-server` → out.log). SAME single-invocation
+                    // FIFO-wired shape as opencode — NOT the old `codex exec`
+                    // eval-loop. `argv` here is `codex app-server …` (from
+                    // `codex_appserver_argv`); the reader performs the JSON-RPC
+                    // handshake (`initialize` → id==1 response → `thread/start` →
+                    // `thread/started` → turns) over this pipe.
                     //
-                    // KEY: we write to `out.log` (a REGULAR FILE), NOT `out.fifo`.
-                    // A named FIFO blocks on open() until a reader appears; with the
-                    // eval-loop the first write only happens when the first codex
-                    // command runs — which requires the connect() to have completed
-                    // first, creating a circular wait (deadlock). A regular file
-                    // never blocks on open() and never requires a paired reader,
-                    // so the reader thread can open it independently at any time.
-                    // The reader thread polls out.log with read_line, sleeping a
-                    // short interval on EOF (while the eval-loop is running a turn)
-                    // and exiting when the eval-loop's in.fifo closes.
+                    // REGRESSION FIXED: this branch previously hardcoded the old
+                    // eval-loop (`cat in.fifo | while read __cmd; do eval "$__cmd"`),
+                    // ignoring `argv`. But the rest of the stack (reader handshake,
+                    // wasit_codex encoders, parser expecting `thread/started`) had
+                    // been migrated to the app-server JSON-RPC protocol, so the
+                    // eval-loop `eval`'d the reader's JSON-RPC `initialize` line as a
+                    // shell command → error to err.log, nothing usable in out.log,
+                    // no id==1 response, no SessionInit (i12 stalled at S1). Running
+                    // `codex app-server` directly — as the argv/remote paths already
+                    // did — restores the handshake.
+                    //
+                    // We write to `out.log` (a REGULAR FILE), NOT `out.fifo`: a named
+                    // FIFO blocks on open() until a paired reader/writer appears, but
+                    // codex's first write can't happen until after the handshake,
+                    // which needs the reader connected first — a deadlock. A regular
+                    // file never blocks on open(); the reader polls out.log with
+                    // read_line, sleeping on EOF and exiting when in.fifo closes.
                     //
                     // `cat in.fifo |` is load-bearing (same named-FIFO/anonymous-pipe
                     // reason as claude's path — see the build_spawn_cmd doc comment).
                     //
-                    // `</dev/null` on the eval prevents codex from consuming the
-                    // eval-loop's stdin (the loop itself reads commands from in.fifo
-                    // via the `cat` piped through the `while read`; codex MUST NOT
-                    // see that stream or it will gobble the next command line).
-                    //
-                    // `>>` (append): multiple turns append to the same log file so
-                    // the reader thread sees events from all turns in sequence.
+                    // `>>` (append): reconnects append to the same log so the reader
+                    // sees events from all turns in sequence.
                     let out_log = session_dir.join("out.log");
+                    let bin = argv.first().map(String::as_str).unwrap_or("codex");
+                    let codex_args = &argv[1..];
                     format!(
-                        "{}cd {} && cat {} | while IFS= read -r __cmd; do eval \"$__cmd\" </dev/null >> {} 2>>{}; done",
+                        "{}cd {} && cat {} | {} {} >> {} 2>>{}",
                         prefix,
                         shell_quote(project),
                         shell_quote(&in_fifo.display().to_string()),
+                        shell_quote(bin),
+                        codex_args
+                            .iter()
+                            .map(|a| shell_quote(a))
+                            .collect::<Vec<_>>()
+                            .join(" "),
                         out_log.display(),
                         err_log.display(),
                     )
