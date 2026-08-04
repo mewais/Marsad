@@ -314,7 +314,353 @@ fn dynamic_peer_registration_against_live_node() {
     );
 
     guard.track(node_a.child);
-    // Silence unused-field warnings for fields S2 will use.
     let _ = (&node_a.a2a_bind, &node_a.agent_id, &node_a.host_id);
+    drop(guard);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// S2 — node→node A2A send with a send-gate answered through Marsad, against a
+// DYNAMICALLY-registered peer (gaps 1+2 combined, end-to-end).
+//
+// Topology (mirrors x6's Tier-3 leg, but the peer is registered at RUNTIME via
+// Marsad's client rather than baked into node A's `[[peers]]` config):
+//   * node B ("beta"): `[a2a]` receiver, real ClaudeAdapter — replies to consults.
+//   * node A ("alpha"): `[operator]` + `[gate] authority = external-first` +
+//     `[runtime] control_bind` (so Marsad can register the peer). Driven as a
+//     real rmcp MCP client by THIS test.
+//
+// The flow proves, in one live pass:
+//   1. Marsad's `register_peer` wires B into A at runtime (gap 1, USED for a send).
+//   2. A `consult` to that peer raises an EXTERNAL gate that Marsad's real
+//      operator connector (`marsad-wasl::WaslOperatorClient`) observes over SSE.
+//   3. Marsad's `post_decision(approved)` releases the gate (gap 2).
+//   4. Node A dispatches to B, B's real claude replies, and the reply (carrying
+//      this run's probe word) comes back through the consult tool result.
+//
+// Needs claude + tmux-free memory headroom (like x6) + a wasl-mcpd binary; loud
+// SKIP otherwise. Never a silent pass.
+// ══════════════════════════════════════════════════════════════════════════════
+
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::time::Duration as StdDuration;
+
+use marsad_wasl::{WaslClientConfig, WaslEvent, WaslOperatorClient};
+use rmcp::model::{CallToolRequestParam, CallToolResult, ClientInfo};
+use rmcp::transport::TokioChildProcess;
+use rmcp::{ClientHandler, Peer, RoleClient, ServiceExt};
+
+/// A caps-less MCP client: no elicitation capability, so node A's
+/// `external-first` authority routes the gate to the OPERATOR (not back to us).
+#[derive(Clone)]
+struct BareClient;
+impl ClientHandler for BareClient {
+    fn get_info(&self) -> ClientInfo {
+        ClientInfo::default()
+    }
+}
+
+fn tool_text(res: &CallToolResult) -> String {
+    res.content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default()
+}
+
+fn tool_is_error(res: &CallToolResult) -> bool {
+    res.is_error.unwrap_or(false)
+}
+
+async fn call_tool(peer: &Peer<RoleClient>, name: &str, args: serde_json::Value) -> CallToolResult {
+    peer.call_tool(CallToolRequestParam {
+        name: name.to_string().into(),
+        arguments: args.as_object().cloned(),
+    })
+    .await
+    .unwrap_or_else(|e| panic!("call_tool({name}) transport error: {e}"))
+}
+
+fn claude_ok() -> bool {
+    Command::new("claude")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Memory gate identical to x6/i10: claude needs ~700 MB RSS + a large virtual
+/// address space (self-gated so the sandbox's 2 GB RLIMIT_AS run skips instead
+/// of OOM-killing claude mid-turn).
+fn enough_memory() -> bool {
+    const MIN_AVAIL_KB: u64 = 3_000_000;
+    const MIN_AS_BYTES: u64 = 6_000_000_000;
+    let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    for line in meminfo.lines() {
+        if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            let kb: u64 = rest
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(u64::MAX);
+            if kb < MIN_AVAIL_KB {
+                return false;
+            }
+            break;
+        }
+    }
+    let limits = std::fs::read_to_string("/proc/self/limits").unwrap_or_default();
+    for line in limits.lines() {
+        if line.starts_with("Max address space") {
+            if let Some(val) = line.split_whitespace().nth(3) {
+                if val == "unlimited" {
+                    return true;
+                }
+                return val.parse::<u64>().map(|b| b >= MIN_AS_BYTES).unwrap_or(true);
+            }
+        }
+    }
+    true
+}
+
+/// Spawn node B ("beta"): an `[a2a]` receiver with a real ClaudeAdapter. Plain
+/// `Command`, piped stdin held open by the returned `Child` (no EOF → stays up).
+/// Neutral cwd (never a project checkout) per x6's prompt-injection finding.
+fn spawn_node_b(mcpd: &Path, tmpdir: &Path, a2a_port: u16, id: &str) -> Child {
+    let cfg = format!(
+        "[identity]\n\
+         agent_id = \"beta-{id}\"\n\
+         host_id = \"hostB-{id}\"\n\
+         \n\
+         [a2a]\n\
+         bind = \"127.0.0.1:{a2a_port}\"\n\
+         \n\
+         [audit]\n\
+         path = {audit:?}\n\
+         \n\
+         [adapter]\n\
+         kind = \"claude\"\n",
+        audit = tmpdir.join(format!("audit-B-{id}.jsonl")).to_string_lossy(),
+    );
+    let cfg_path = tmpdir.join(format!("configB-{id}.toml"));
+    std::fs::write(&cfg_path, cfg).expect("write configB");
+    let home = tmpdir.join(format!("home-B-{id}"));
+    std::fs::create_dir_all(&home).expect("node B home");
+    let log = std::fs::File::create(tmpdir.join(format!("nodeB-{id}.log"))).expect("node B log");
+    let log_err = log.try_clone().expect("clone node B log");
+    Command::new(mcpd)
+        .current_dir(&home)
+        .env("WASL_CONFIG", &cfg_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err))
+        .spawn()
+        .expect("spawn node B (wasl-mcpd)")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dynamic_peer_consult_gate_answered_through_marsad() {
+    let mcpd = skip_if_no_mcpd!();
+    if !claude_ok() || !enough_memory() {
+        eprintln!(
+            "\n========================================================\n\
+             SKIP i16/S2: needs `claude` on PATH + >=3 GB memory / >=6 GB address\n\
+             space (node B runs a real claude turn to answer the consult).\n\
+             ========================================================"
+        );
+        return;
+    }
+
+    let id = unique_id();
+    let tmpdir = std::env::temp_dir().join(format!("marsad-it-i16-s2-{id}"));
+    std::fs::create_dir_all(&tmpdir).expect("tmpdir");
+    let mut guard = TeardownGuard {
+        tmpdir: tmpdir.clone(),
+        children: Vec::new(),
+    };
+
+    // ── node B: a2a receiver (real ClaudeAdapter) ────────────────────────────
+    let b_a2a = get_free_port();
+    eprintln!("\n[i16/S2] starting node B (a2a=:{b_a2a}) — real ClaudeAdapter receive side");
+    let node_b = spawn_node_b(&mcpd, &tmpdir, b_a2a, &id);
+    guard.track(node_b);
+    assert!(
+        wait_tcp(&format!("127.0.0.1:{b_a2a}"), StdDuration::from_secs(20)),
+        "[S2] node B never bound its a2a port :{b_a2a}"
+    );
+    eprintln!("[i16/S2] node B a2a listening on :{b_a2a}");
+
+    // ── node A config: control + a2a + operator + external-first gate ────────
+    let a_control = get_free_port();
+    let a_a2a = get_free_port();
+    let a_operator = get_free_port();
+    let control_url = format!("http://127.0.0.1:{a_control}");
+    let operator_url = format!("http://127.0.0.1:{a_operator}");
+    let mut toml_a = render_wasl_node_toml(&WaslNodeConfig {
+        agent_id: &format!("alpha-{id}"),
+        host_id: &format!("hostA-{id}"),
+        a2a_bind: &format!("127.0.0.1:{a_a2a}"),
+        operator_bind: &format!("127.0.0.1:{a_operator}"),
+        control_bind: &control_url,
+        default_protocol: "claude",
+        claude_bin: None,
+        opencode_bin: None,
+    });
+    // render_wasl_node_toml emits no [gate] block → default authority is
+    // "elicitation" (gate goes back to the MCP client). Force external-first so
+    // the gate surfaces on the OPERATOR API, where Marsad's connector decides it.
+    toml_a.push_str("\n[gate]\nauthority = \"external-first\"\n");
+    let cfg_a = tmpdir.join(format!("configA-{id}.toml"));
+    std::fs::write(&cfg_a, &toml_a).expect("write configA");
+    let home_a = tmpdir.join(format!("home-A-{id}"));
+    std::fs::create_dir_all(&home_a).expect("node A home");
+
+    // ── spawn node A as a real rmcp MCP client (stdio child transport) ───────
+    eprintln!("[i16/S2] spawning node A as an rmcp child (control=:{a_control} operator=:{a_operator})");
+    let mut cmd = tokio::process::Command::new(&mcpd);
+    cmd.current_dir(&home_a).env("WASL_CONFIG", &cfg_a);
+    let transport = TokioChildProcess::new(cmd).expect("spawn node A via rmcp");
+    let client = BareClient
+        .serve(transport)
+        .await
+        .expect("[S2] rmcp client must initialize against node A");
+    assert!(
+        wait_tcp(&format!("127.0.0.1:{a_control}"), StdDuration::from_secs(20)),
+        "[S2] node A control API never bound :{a_control}"
+    );
+    assert!(
+        wait_tcp(&format!("127.0.0.1:{a_operator}"), StdDuration::from_secs(20)),
+        "[S2] node A operator API never bound :{a_operator}"
+    );
+
+    // ── gap 1 in-flow: dynamically register B as A's peer ────────────────────
+    let peer_id = format!("beta-{id}");
+    let provider = RealWaslSessionProvider::new(WaslSessionClientConfig {
+        base_url: control_url.clone(),
+    });
+    provider
+        .register_peer(WaslAgentCard {
+            id: peer_id.clone(),
+            host: format!("hostB-{id}"),
+            endpoint: Some(format!("http://127.0.0.1:{b_a2a}/")),
+        })
+        .expect("[S2] register_peer must succeed against live node A");
+    let peers = provider.list_peers().expect("[S2] list_peers");
+    assert!(
+        peers.iter().any(|p| p.id == peer_id),
+        "[S2] dynamically-registered peer must be present; got {peers:?}"
+    );
+    eprintln!("[i16/S2] registered peer {peer_id} on node A at runtime (endpoint -> node B a2a)");
+
+    // ── Marsad's REAL operator connector: SSE thread + decision channel ──────
+    let (tx, rx) = mpsc::channel::<WaslEvent>();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_run = stop.clone();
+    let op_url_run = operator_url.clone();
+    let op_thread = std::thread::spawn(move || {
+        let mut op = WaslOperatorClient::new(WaslClientConfig {
+            base_url: op_url_run,
+            initial_backoff_ms: 150,
+        });
+        op.run(tx, stop_run);
+    });
+
+    // ── trigger the consult (blocks until the operator releases the gate) ────
+    let word = format!("build-{id}");
+    let question = format!("Reply with exactly the single word {word} and nothing else.");
+    eprintln!("[i16/S2] calling consult(peers=[{peer_id}]) — gate will surface to the operator");
+    let consult = tokio::spawn(async move {
+        call_tool(
+            &client,
+            "consult",
+            serde_json::json!({ "peers": [peer_id], "question": question }),
+        )
+        .await
+    });
+
+    // ── observe the gate on Marsad's connector, then approve it ──────────────
+    let op_url_dec = operator_url.clone();
+    let gate_id = tokio::task::spawn_blocking(move || {
+        let deadline = Instant::now() + StdDuration::from_secs(60);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                panic!("[S2] no GateRequested from Marsad's operator connector within 60s");
+            }
+            match rx.recv_timeout(remaining) {
+                Ok(WaslEvent::GateRequested(gr)) if gr.decidable => {
+                    eprintln!(
+                        "[i16/S2] Marsad connector saw gate {} kind={} preview={:?}",
+                        gr.gate_id, gr.request.kind, gr.request.preview
+                    );
+                    // Approve via Marsad's real one-shot decision POST.
+                    let dec = WaslOperatorClient::new(WaslClientConfig {
+                        base_url: op_url_dec.clone(),
+                        initial_backoff_ms: 150,
+                    });
+                    let ack = dec
+                        .post_decision(&gr.gate_id, "approved", None)
+                        .expect("[S2] post_decision must reach the node");
+                    eprintln!("[i16/S2] post_decision(approved) -> {ack:?}");
+                    // Drain until we also see the matching GateDecided(approved).
+                    let gate_id = gr.gate_id.clone();
+                    let dd = Instant::now() + StdDuration::from_secs(30);
+                    loop {
+                        let rem = dd.saturating_duration_since(Instant::now());
+                        if rem.is_zero() {
+                            break;
+                        }
+                        match rx.recv_timeout(rem) {
+                            Ok(WaslEvent::GateDecided(gd))
+                                if gd.gate_id == gate_id && gd.outcome == "approved" =>
+                            {
+                                eprintln!("[i16/S2] Marsad connector saw gate_decided(approved)");
+                                break;
+                            }
+                            Ok(_) => continue,
+                            Err(_) => break,
+                        }
+                    }
+                    return gate_id;
+                }
+                Ok(_) => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("[S2] timed out waiting for GateRequested")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("[S2] operator event channel disconnected before a gate")
+                }
+            }
+        }
+    })
+    .await
+    .expect("[S2] gate-observer task panicked");
+
+    // ── the consult must now complete with node B's real reply ───────────────
+    let res = tokio::time::timeout(StdDuration::from_secs(120), consult)
+        .await
+        .expect("[S2] consult did not complete within 120s after approval")
+        .expect("[S2] consult task panicked");
+    let text = tool_text(&res);
+    assert!(
+        !tool_is_error(&res),
+        "[S2] consult returned an error after approval: {text:?}"
+    );
+    assert!(
+        text.contains(&word),
+        "[S2] consult result must carry node B's real reply (the probe word {word}); got {text:?}"
+    );
+    eprintln!("[i16/S2] consult delivered to the dynamic peer; reply carried {word:?}");
+
+    stop.store(true, Ordering::SeqCst);
+    let _ = op_thread.join();
+    eprintln!(
+        "\n[i16/S2] PASS (gate {gate_id}) — Marsad registered a peer at runtime, a consult to it \
+         raised a gate Marsad's operator connector observed + approved, and node B's real reply \
+         came back. Full dynamic-peer multinode loop verified."
+    );
     drop(guard);
 }
