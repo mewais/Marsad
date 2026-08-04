@@ -21,6 +21,114 @@ use crate::types::{
     WaslTargetStatus, WaslTurnReceipt, WaslTurnRequest,
 };
 
+// ---------------------------------------------------------------------------
+// Payload structs for the rich informational TurnEvent variants. Field names
+// and serde attributes match wasl-runtime's definitions EXACTLY (they mirror
+// the `wasit_core` shapes that wasl-runtime replicated verbatim). We replicate
+// them here rather than adding a wasl-runtime dev-dep so the consumer crate
+// stays independent of the Wasl workspace.
+// ---------------------------------------------------------------------------
+
+/// Token and cost snapshot for `UsageUpdate`. Mirrors `wasl_runtime::UsageSnapshot`
+/// (snake_case fields, all defaulted).
+#[derive(Debug, Clone, Deserialize)]
+struct UsageSnapshotDto {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_tokens: u64,
+    #[serde(default)]
+    pub cost_usd: f64,
+}
+
+/// One selectable agent mode for `ModesUpdated`. Mirrors `wasl_runtime::AgentMode`
+/// (snake_case, re-uses marsad_proto::SessionMode's {id, label, description} shape).
+#[derive(Debug, Clone, Deserialize)]
+struct AgentModeDto {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+impl AgentModeDto {
+    fn into_session_mode(self) -> marsad_proto::SessionMode {
+        marsad_proto::SessionMode {
+            id: self.id,
+            label: self.label,
+            description: self.description,
+        }
+    }
+}
+
+/// One plan entry for `PlanUpdated`. Mirrors `wasl_runtime::PlanEntry`.
+#[derive(Debug, Clone, Deserialize)]
+struct PlanEntryDto {
+    pub content: String,
+    #[serde(default)]
+    pub priority: String,
+}
+
+impl PlanEntryDto {
+    fn into_plan_entry(self) -> marsad_proto::PlanEntry {
+        marsad_proto::PlanEntry {
+            content: self.content,
+            priority: self.priority,
+        }
+    }
+}
+
+/// One slash command for `SlashCommandsUpdated`. Mirrors `wasl_runtime::SlashCommandInfo`.
+#[derive(Debug, Clone, Deserialize)]
+struct SlashCommandInfoDto {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub argument_hint: String,
+}
+
+impl SlashCommandInfoDto {
+    fn into_slash_command(self) -> marsad_proto::SlashCommandInfo {
+        marsad_proto::SlashCommandInfo {
+            name: self.name,
+            description: self.description,
+            argument_hint: self.argument_hint,
+        }
+    }
+}
+
+/// Compaction metadata for `Compaction`. Mirrors `wasl_runtime::CompactionInfo`.
+#[derive(Debug, Clone, Deserialize)]
+struct CompactionInfoDto {
+    #[serde(default)]
+    pub trigger: String,
+    #[serde(default)]
+    pub pre_tokens: u64,
+    #[serde(default)]
+    pub post_tokens: u64,
+    #[serde(default)]
+    pub cumulative_dropped_tokens: u64,
+    #[serde(default)]
+    pub duration_ms: u64,
+}
+
+impl CompactionInfoDto {
+    fn into_compaction_info(self) -> marsad_proto::CompactionInfo {
+        marsad_proto::CompactionInfo {
+            trigger: self.trigger,
+            pre_tokens: self.pre_tokens,
+            post_tokens: self.post_tokens,
+            cumulative_dropped_tokens: self.cumulative_dropped_tokens,
+            duration_ms: self.duration_ms,
+        }
+    }
+}
+
 // ===========================================================================
 // TargetSnapshot — GET /v1/targets/{id} and each entry of GET /v1/targets.
 // ===========================================================================
@@ -307,6 +415,40 @@ enum TurnEventDto {
         #[serde(default)]
         code: Option<i32>,
     },
+    // ── Rich informational variants (added by wasit-adapter work) ─────────────
+    // These carry no `turn_id` — they are session-global, not per-turn.
+    /// Incremental token/cost snapshot. Wire tag `"usage_update"`.
+    UsageUpdate {
+        usage: UsageSnapshotDto,
+        #[serde(default)]
+        context_pct: Option<u8>,
+    },
+    /// Full replacement of the opencode plan/todo list. Wire tag `"plan_updated"`.
+    PlanUpdated {
+        entries: Vec<PlanEntryDto>,
+    },
+    /// Available mode list or current mode changed. Wire tag `"modes_updated"`.
+    ModesUpdated {
+        #[serde(default)]
+        available_modes: Vec<AgentModeDto>,
+        #[serde(default)]
+        current_mode: Option<String>,
+    },
+    /// Active model changed mid-session. Wire tag `"model_changed"`.
+    ModelChanged {
+        model: String,
+    },
+    /// Slash-command catalog replaced. Wire tag `"slash_commands_updated"`.
+    SlashCommandsUpdated {
+        commands: Vec<SlashCommandInfoDto>,
+    },
+    /// Context compaction occurred. Wire tag `"compaction"`.
+    Compaction {
+        info: CompactionInfoDto,
+    },
+    // `thinking_delta` is deliberately NOT mapped — Marsad drops thinking deltas
+    // (like the solo-session path does). An unknown `type` is still tolerantly
+    // skipped by `turn_event_from_json` returning `None`.
 }
 
 impl TurnEventDto {
@@ -361,6 +503,42 @@ impl TurnEventDto {
                 status: status.into_public(),
             },
             TurnEventDto::ProcessExited { code } => WaslSessionEventKind::SessionExited { code },
+            TurnEventDto::UsageUpdate { usage, context_pct } => {
+                WaslSessionEventKind::UsageUpdate {
+                    cost_usd: usage.cost_usd,
+                    tokens: usage
+                        .input_tokens
+                        .saturating_add(usage.output_tokens)
+                        .saturating_add(usage.cache_read_tokens)
+                        .saturating_add(usage.cache_creation_tokens),
+                    context_pct,
+                }
+            }
+            TurnEventDto::PlanUpdated { entries } => WaslSessionEventKind::PlanUpdated {
+                entries: entries.into_iter().map(PlanEntryDto::into_plan_entry).collect(),
+            },
+            TurnEventDto::ModesUpdated {
+                available_modes,
+                current_mode,
+            } => WaslSessionEventKind::ModesUpdated {
+                available_modes: available_modes
+                    .into_iter()
+                    .map(AgentModeDto::into_session_mode)
+                    .collect(),
+                current_mode,
+            },
+            TurnEventDto::ModelChanged { model } => WaslSessionEventKind::ModelChanged { model },
+            TurnEventDto::SlashCommandsUpdated { commands } => {
+                WaslSessionEventKind::SlashCommandsUpdated {
+                    commands: commands
+                        .into_iter()
+                        .map(SlashCommandInfoDto::into_slash_command)
+                        .collect(),
+                }
+            }
+            TurnEventDto::Compaction { info } => WaslSessionEventKind::Compaction {
+                info: info.into_compaction_info(),
+            },
         }
     }
 }

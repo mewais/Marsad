@@ -359,6 +359,69 @@ impl Core {
             K::Unknown(tag) => {
                 eprintln!("marsad-core: WaslSessionEvent for {session_id}: unknown kind '{tag}'");
             }
+            // ── Rich informational events (folded into the same SessionState
+            // fields the solo-session path uses) ──────────────────────────────
+            K::UsageUpdate {
+                cost_usd,
+                tokens,
+                context_pct,
+            } => {
+                record.state.cost_usd = cost_usd;
+                record.state.tokens = tokens;
+                if let Some(pct) = context_pct {
+                    record.state.context_pct = (pct as f32).clamp(0.0, 100.0);
+                } else {
+                    // Derive from tokens when the driver doesn't report it.
+                    let window = record
+                        .state
+                        .model
+                        .as_deref()
+                        .map(marsad_events::SessionState::context_window_for)
+                        .unwrap_or(200_000);
+                    let pct = (tokens as f64 / window as f64 * 100.0) as f32;
+                    record.state.context_pct = pct.min(100.0);
+                }
+            }
+            K::PlanUpdated { entries } => {
+                record.state.plan_entries = entries;
+            }
+            K::ModesUpdated {
+                available_modes,
+                current_mode,
+            } => {
+                if !available_modes.is_empty() {
+                    record.state.available_modes = available_modes;
+                }
+                if let Some(m) = current_mode {
+                    record.state.current_mode = Some(m);
+                }
+            }
+            K::ModelChanged { model } => {
+                record.state.model = Some(model);
+            }
+            K::SlashCommandsUpdated { commands } => {
+                record.state.slash_commands = commands;
+            }
+            K::Compaction { info } => {
+                record.state.compactions = record.state.compactions.saturating_add(1);
+                record.state.last_compaction = Some(marsad_proto::CompactionInfo {
+                    trigger: info.trigger.clone(),
+                    pre_tokens: info.pre_tokens,
+                    post_tokens: info.post_tokens,
+                    cumulative_dropped_tokens: info.cumulative_dropped_tokens,
+                    duration_ms: info.duration_ms,
+                });
+                // Append a Compaction transcript entry in sequence so the
+                // workstream transcript shows compaction events chronologically
+                // (mirrors what the solo-session path does in handle_agent_event).
+                record
+                    .transcript
+                    .push(marsad_events::TranscriptEntry::Compaction {
+                        trigger: info.trigger,
+                        dropped_tokens: info.cumulative_dropped_tokens,
+                        at: Some(now_ms()),
+                    });
+            }
         }
 
         let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());

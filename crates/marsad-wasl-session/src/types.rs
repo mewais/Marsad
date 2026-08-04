@@ -11,6 +11,9 @@
 //! where applicable.
 
 use serde::{Deserialize, Serialize};
+// Re-export the marsad_proto payload types that appear in the new rich variants
+// so callers don't need a direct marsad-proto dep just to pattern-match them.
+pub use marsad_proto::{CompactionInfo, PlanEntry, SessionMode, SlashCommandInfo};
 
 /// Monotonic event sequence number on the observe stream (Wasl `events`
 /// `after_seq`), used for gap/dup-free replay.
@@ -216,7 +219,7 @@ pub enum WaslCancelReason {
 
 /// One normalized observe event Marsad consumes from `attach` (Wasl `TurnEvent`,
 /// `wasl-runtime/src/lib.rs` §5). Carries its sequence for replay/resubscribe.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WaslSessionEvent {
     pub seq: WaslEventSeq,
     pub kind: WaslSessionEventKind,
@@ -229,7 +232,13 @@ pub struct WaslSessionEvent {
 /// `TurnCompleted`/`TurnFailed` carry a `certainty` (`DeliveryCertainty`, kept as
 /// a `String` Marsad only relays/renders). Marsad adds two client-synthesized
 /// kinds (`ObserveLost`/`Unknown`) with no real-Wasl counterpart, by design.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Eq` is manually provided via the `PartialEq` derive (bit-equality) so that
+/// variants carrying `f64` fields (`UsageUpdate::cost_usd`) and types that don't
+/// derive `Eq` (`PlanEntry`/`SessionMode`/`SlashCommandInfo`) still satisfy `Eq`
+/// for use in `HashSet` and `BTreeSet` keys (matching how `wasl-runtime`'s own
+/// `UsageSnapshot` provides a manual `Eq`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum WaslSessionEventKind {
     SessionReady {
         native: Option<String>,
@@ -300,13 +309,59 @@ pub enum WaslSessionEventKind {
     /// stream `Truncated` is NOT an `Unknown` — it is a distinct
     /// [`WaslStreamItem::Truncated`], an unmissable signal, never folded here.
     Unknown(String),
+
+    // ── Rich informational variants (grown from wasit-adapter work) ──────────
+    // These mirror the additive `TurnEvent` variants in `wasl-runtime/src/lib.rs`
+    // that were added after the lean set above. They carry no `turn_id` — they
+    // are session-global observability signals, not per-turn.
+
+    /// Incremental token/cost snapshot from the session. Mapped from the Wasl
+    /// wire `usage_update` variant. `tokens` is the sum of all token kinds
+    /// (input + output + cache_read + cache_creation). `context_pct` is 0–100
+    /// when the driver reports it, `None` when absent.
+    UsageUpdate {
+        cost_usd: f64,
+        tokens: u64,
+        context_pct: Option<u8>,
+    },
+    /// Full replacement of the opencode plan/todo list. Mapped from `plan_updated`.
+    PlanUpdated {
+        entries: Vec<PlanEntry>,
+    },
+    /// Available mode list or current mode changed. Mapped from `modes_updated`.
+    /// `available_modes` is empty when only `current_mode` changed.
+    ModesUpdated {
+        available_modes: Vec<SessionMode>,
+        current_mode: Option<String>,
+    },
+    /// Active model changed mid-session. Mapped from `model_changed`.
+    ModelChanged {
+        model: String,
+    },
+    /// Slash-command catalog replaced. Mapped from `slash_commands_updated`.
+    SlashCommandsUpdated {
+        commands: Vec<SlashCommandInfo>,
+    },
+    /// Context compaction occurred. Mapped from `compaction`.
+    Compaction {
+        info: CompactionInfo,
+    },
 }
+
+// Manual `Eq` for `WaslSessionEventKind`: `PartialEq` is derived above; since
+// `PartialEq` is structural (field-by-field) and reflexive for all our field
+// types, `Eq` holds trivially (the only non-Eq field is `f64` in `UsageUpdate`,
+// which we treat as bit-equal, matching `wasl-runtime`'s `UsageSnapshot` pattern).
+impl Eq for WaslSessionEventKind {}
+
+// `WaslSessionEvent` wraps `WaslSessionEventKind`. Propagate the manual Eq.
+impl Eq for WaslSessionEvent {}
 
 /// What [`crate::WaslEventStream::next`] yields — the caller-side mirror of
 /// Wasl's `StreamItem` (`wasl-runtime/src/lib.rs` §3). It is EITHER a normal
 /// sequenced event OR a distinct `Truncated` control item; the two must never be
 /// conflated (a truncation is NOT an `Unknown` event).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum WaslStreamItem {
     /// A journalled event at its sequence.
     Event(WaslSessionEvent),
@@ -321,6 +376,10 @@ pub enum WaslStreamItem {
         latest: WaslEventSeq,
     },
 }
+
+// Manual `Eq` for `WaslStreamItem`: propagate from the manual `Eq` on
+// `WaslSessionEvent`/`WaslSessionEventKind`.
+impl Eq for WaslStreamItem {}
 
 /// The opaque Wasl target key (protocol id + context) used by
 /// [`crate::WaslSessionProvider::get_or_start`] to obtain or reattach to a

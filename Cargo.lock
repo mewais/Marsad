@@ -538,6 +538,7 @@ name = "marsad-wasl-session"
 version = "0.1.0"
 dependencies = [
  "marsad-events",
+ "marsad-proto",
  "serde",
  "serde_json",
  "thiserror",

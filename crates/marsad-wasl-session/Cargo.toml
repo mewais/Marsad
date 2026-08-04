@@ -31,7 +31,9 @@ thiserror = { workspace = true }
 # edge. If the accepted spec keeps the projection private to marsad-core instead,
 # this dep (and the projection tests) move there.
 marsad-events = { workspace = true }
+marsad-proto = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 marsad-events = { workspace = true }
+marsad-proto = { workspace = true }
