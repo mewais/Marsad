@@ -6,6 +6,110 @@
 use super::*;
 
 // ===========================================================================
+// Bounded line reader — shared by both mode-probe handshakes.
+//
+// Spawns a dedicated thread that reads lines from `reader` and sends each
+// `String` over an `mpsc::Sender`.  The handshake loop calls
+// `rx.recv_timeout(remaining_deadline)` instead of a blocking `read_line`,
+// so the deadline is honoured even when the child is alive-but-silent.
+//
+// This is ALWAYS compiled (no `cfg(not(coverage))` gate) so the unit test
+// below can exercise it directly with a pipe that never yields a line.
+// ===========================================================================
+
+/// Spawn a background thread that reads newline-delimited lines from `reader`
+/// and sends each `String` (including the trailing `\n`) over the returned
+/// channel.  The thread exits when `reader` reaches EOF or an IO error.
+///
+/// The caller drives the handshake by calling `rx.recv_timeout(remaining)`
+/// instead of blocking `read_line`.  On `RecvTimeoutError::Timeout` the
+/// caller should kill the child and return `Err`; on `Disconnected` (EOF /
+/// thread exited) the caller should also return `Err`.
+pub fn spawn_bounded_line_reader<R: std::io::BufRead + Send + 'static>(
+    reader: R,
+) -> std::sync::mpsc::Receiver<String> {
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,          // EOF
+                Ok(_) => {
+                    if tx.send(line).is_err() {
+                        break; // receiver dropped
+                    }
+                }
+                Err(_) => break,         // IO error
+            }
+        }
+    });
+    rx
+}
+
+// ===========================================================================
+// Part 5a — pure spawn-argv builder (always compiled, unit-tested)
+//
+// `build_probe_spawn_argv` is the single source of truth for how a mode
+// probe is launched across ALL transports (local, SSH, WSL, plink, wslssh).
+// It is a PURE function (no IO, no subprocess), always compiled (no
+// `cfg(not(coverage))` gate), and unit-tested in `tests/capabilities.rs`
+// alongside the other pure helpers.
+// ===========================================================================
+
+/// Build the complete argv for a mode-probe subprocess, routing through the
+/// correct transport for `host_target`.
+///
+/// # Semantics
+///
+/// ```text
+/// prefix = exec_prefix_for(host_target).unwrap_or_default()
+/// inner  = "{maybe_setup}exec {quoted_tool_argv}"
+/// argv   = prefix + ["bash", "-lc", inner]
+/// ```
+///
+/// where `maybe_setup = setup.filter(!is_empty).map(|s| "{s}; ").unwrap_or("")`
+/// and each `tool_argv` element is POSIX single-quoted via `sh_squote`.
+///
+/// Using `bash -lc <arg>` (login shell, command as an argument) rather than
+/// `bash -l -s` keeps the child's STDIN free for the JSON-RPC handshake, and
+/// `exec` replaces bash with the tool binary so it directly owns stdin/stdout
+/// (critical for remote piping over ssh/wsl/plink).
+///
+/// For local (`host_target` None / "local" / "localhost"): `exec_prefix_for`
+/// returns `None` → argv is `["bash", "-lc", inner]` run locally. Same code
+/// path, no special-casing.
+///
+/// # Errors
+///
+/// Returns `Err` if `tool_argv` is empty (no binary to spawn).
+pub fn build_probe_spawn_argv(
+    host_target: Option<&str>,
+    setup: Option<&str>,
+    tool_argv: &[String],
+) -> Result<Vec<String>, String> {
+    if tool_argv.is_empty() {
+        return Err("tool_argv must not be empty".to_string());
+    }
+    let prefix = crate::remote::exec_prefix_for(host_target).unwrap_or_default();
+    // Quote each element of tool_argv for safe embedding in the bash -lc command.
+    let quoted: Vec<String> = tool_argv.iter().map(|s| sh_squote(s)).collect();
+    let joined_quoted = quoted.join(" ");
+    // Prepend setup if non-empty: "setup_cmd; exec quoted_tool_argv"
+    let maybe_setup = setup
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("{s}; "))
+        .unwrap_or_default();
+    let inner = format!("{maybe_setup}exec {joined_quoted}");
+    let mut argv = prefix;
+    argv.push("bash".to_string());
+    argv.push("-lc".to_string());
+    argv.push(inner);
+    Ok(argv)
+}
+
+// ===========================================================================
 // Part 5 — real, subprocess/$HOME-rooted probe implementations. Production
 // only: never unit-tested (no live `codex`/`agy`/`claude` on the test
 // machine, per the house guardrail — the `run` fixture-driven live suites
@@ -100,6 +204,17 @@ fn run_local_script(script: &str, deadline: Duration) -> Result<String, String> 
 /// Real codex probe: setup-first `command -v` + `<cmd> debug models` +
 /// `~/.codex/sessions` listing, run over the host connection (remote) or locally
 /// (setup honored). No `which`; no local-only optimism.
+///
+/// Task B: performs a bounded `codex app-server` handshake at connect time
+/// to discover available collaboration modes via `collaborationMode/list`.
+/// On any failure, `available_modes` is empty (honest) and the error is
+/// appended to `errors`.
+///
+/// Task D: when `ctx.project` is `Some(non-empty)`, filters the discovered
+/// sessions to only those whose `cwd` matches the requested project
+/// (honest path-equality; trim trailing slashes). Sets `session_scope`
+/// to `Projects([project])` in that case, mirroring how `RealClaudeProbe`
+/// scopes its sessions.
 #[cfg(not(coverage))]
 pub struct RealCodexProbe;
 
@@ -117,7 +232,7 @@ impl CapabilityProbe for RealCodexProbe {
         let command = ctx.resolve_command("codex");
         let script = build_codex_discovery_script(&command, ctx.setup.as_deref());
         let mut errors = Vec::new();
-        let (cli_available, models, sessions) =
+        let (cli_available, models, mut sessions) =
             match run_discovery(ctx.host_target.as_deref(), &script, ctx.deadline) {
                 Ok(out) => {
                     let secs = parse_discovery_sections(&out);
@@ -132,6 +247,45 @@ impl CapabilityProbe for RealCodexProbe {
                     (false, vec![], vec![])
                 }
             };
+
+        // Task B: probe modes via a bounded codex app-server handshake (only
+        // when the CLI is available — no point spinning up a binary that isn't
+        // there). The modes deadline is a fraction of the host deadline; on
+        // any failure it stays empty (honest, no fabrication).
+        let available_modes = if cli_available {
+            let modes_deadline = ctx.deadline.min(Duration::from_secs(10));
+            match probe_codex_modes_bounded(&command, ctx.host_target.as_deref(), ctx.setup.as_deref(), modes_deadline) {
+                Ok(modes) => {
+                    eprintln!(
+                        "marsad-agent: codex probe on {:?} → {} mode(s) at connect time",
+                        ctx.host_target,
+                        modes.len()
+                    );
+                    modes
+                }
+                Err(e) => {
+                    eprintln!(
+                        "marsad-agent: codex modes probe on {:?} failed: {e}",
+                        ctx.host_target
+                    );
+                    errors.push(format!("codex modes probe: {e}"));
+                    vec![]
+                }
+            }
+        } else {
+            vec![]
+        };
+
+        // Task D: when a project was requested, filter sessions to those whose
+        // payload.cwd matches (honest path-equality), and scope accordingly.
+        let session_scope = match ctx.project.as_deref() {
+            Some(p) if !p.trim().is_empty() => {
+                sessions = filter_codex_sessions_by_project(sessions, p);
+                SessionScope::Projects(vec![p.to_string()])
+            }
+            _ => SessionScope::AllKnown,
+        };
+
         Capabilities {
             driver: "codex".to_string(),
             host_id: ctx.host_id.clone(),
@@ -142,8 +296,8 @@ impl CapabilityProbe for RealCodexProbe {
                 source: ModelListSource::Listed,
                 free_text: true,
             },
-            available_modes: vec![],
-            session_scope: Some(SessionScope::AllKnown),
+            available_modes,
+            session_scope: Some(session_scope),
             sessions,
             fetched_at_ms: now_ms(),
             errors,
@@ -151,6 +305,211 @@ impl CapabilityProbe for RealCodexProbe {
     }
 }
 
+/// Spawn `codex app-server --stdio` (locally or via `host_target` transport),
+/// perform the minimal JSON-RPC handshake (`initialize` → `thread/start` →
+/// `collaborationMode/list`), and return the parsed mode list. Bounded by `deadline`.
+///
+/// The handshake sequence mirrors what `wasit_codex::CodexDriver::spawn`
+/// does: send `initialize` (id=1), wait for its response, send
+/// `thread/start` (id=2) with a temp cwd, wait for `thread/started`
+/// notification (which carries the thread_id), send
+/// `collaborationMode/list` (id=5) with the thread_id, and parse the
+/// id=5 response via `wasit_codex::codex_modes_from_collab_list`.
+///
+/// On any failure (spawn error, timeout, parse error) returns `Err`. The
+/// caller treats `Err` as empty modes + appends to `errors`.
+///
+/// `command` is the FULL command string (e.g. `"codex"` or `"/opt/bin/codex
+/// --sandbox"`). The subprocess is spawned through the transport for
+/// `host_target` (local / SSH / WSL / plink / wslssh) via
+/// `build_probe_spawn_argv`. For local `host_target`, the spawn is identical
+/// to direct local execution; for remotes, the JSON-RPC handshake runs over
+/// the transport's stdin/stdout (exactly as the live session does). `setup`
+/// (if any) is prepended to the inner bash command so the tool resolves
+/// in the same env as a real launched session.
+#[cfg(not(coverage))]
+fn probe_codex_modes_bounded(
+    command: &str,
+    host_target: Option<&str>,
+    setup: Option<&str>,
+    deadline: Duration,
+) -> Result<Vec<marsad_proto::SessionMode>, String> {
+    use std::io::{BufReader, Write};
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc::RecvTimeoutError;
+
+    // Build the tool_argv: command words + subcommand.
+    let tool_argv: Vec<String> = command
+        .split_whitespace()
+        .map(str::to_string)
+        .chain(["app-server".to_string(), "--stdio".to_string()])
+        .collect();
+
+    let argv = build_probe_spawn_argv(host_target, setup, &tool_argv)
+        .map_err(|e| format!("build_probe_spawn_argv: {e}"))?;
+    let bin = &argv[0];
+
+    let mut child = Command::new(bin)
+        .args(&argv[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("spawn {bin}: {e}"))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "no stdin".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "no stdout".to_string())?;
+
+    // Spawn a dedicated reader thread. The handshake loop uses recv_timeout
+    // instead of blocking read_line so the deadline fires even if the child is
+    // alive-but-silent (never writes a newline, never exits).
+    let rx = spawn_bounded_line_reader(BufReader::new(stdout));
+
+    let start = std::time::Instant::now();
+    let remaining = || deadline.saturating_sub(start.elapsed());
+
+    /// Kill the child and drain the reader thread on every early-exit path
+    /// so no zombie/leaked thread is left behind.
+    macro_rules! cleanup_and_err {
+        ($child:expr, $msg:expr) => {{
+            let _ = $child.kill();
+            let _ = $child.wait();
+            return Err($msg);
+        }};
+    }
+
+    // Helper: read one line via the bounded channel. Kills child on timeout/EOF.
+    macro_rules! recv_line {
+        ($child:expr, $timeout_msg:expr) => {{
+            match rx.recv_timeout(remaining()) {
+                Ok(line) => line,
+                Err(RecvTimeoutError::Timeout) => {
+                    cleanup_and_err!($child, format!("timeout: {}", $timeout_msg));
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    cleanup_and_err!($child, format!("child exited unexpectedly: {}", $timeout_msg));
+                }
+            }
+        }};
+    }
+
+    // 1. Send initialize (id=1).
+    let init = wasit_codex::encode_initialize("marsad-probe", env!("CARGO_PKG_VERSION"));
+    stdin.write_all(init.as_bytes()).map_err(|e| format!("write initialize: {e}"))?;
+    stdin.write_all(b"\n").map_err(|e| format!("write initialize newline: {e}"))?;
+    stdin.flush().map_err(|e| format!("flush: {e}"))?;
+
+    // 2. Wait for initialize response (id=1).
+    loop {
+        if start.elapsed() >= deadline {
+            cleanup_and_err!(child, "timeout waiting for initialize response".to_string());
+        }
+        let line = recv_line!(child, "waiting for initialize response");
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        let val: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if val.get("method").is_some() {
+            continue; // notification, skip
+        }
+        if val.get("id").and_then(|v| v.as_u64()) == Some(1) {
+            if val.get("error").is_some() {
+                cleanup_and_err!(child, "initialize error response".to_string());
+            }
+            break; // got the initialize ack
+        }
+    }
+
+    // 3. Send thread/start (id=2) with a dummy cwd (modes are not cwd-dependent).
+    let thread_req = wasit_codex::encode_thread_start(2, "/tmp", None, "");
+    stdin.write_all(thread_req.as_bytes()).map_err(|e| format!("write thread/start: {e}"))?;
+    stdin.write_all(b"\n").map_err(|e| format!("write thread/start newline: {e}"))?;
+    stdin.flush().map_err(|e| format!("flush: {e}"))?;
+
+    // 4. Wait for thread/started notification (carries thread_id).
+    let thread_id = loop {
+        if start.elapsed() >= deadline {
+            cleanup_and_err!(child, "timeout waiting for thread/started".to_string());
+        }
+        let line = recv_line!(child, "waiting for thread/started");
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        let val: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if val.get("method").and_then(|m| m.as_str()) == Some("thread/started") {
+            let tid = val
+                .get("params")
+                .and_then(|p| p.get("thread"))
+                .and_then(|t| t.get("id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_default();
+            break tid;
+        }
+        // Also watch for id=2 response (thread/start ack) in case it comes first.
+        // It does NOT carry the thread_id in the response for codex — the
+        // thread_id comes in the `thread/started` notification.
+        // Also skip error responses.
+        if val.get("id").and_then(|v| v.as_u64()) == Some(2) && val.get("error").is_some() {
+            cleanup_and_err!(child, "thread/start error response".to_string());
+        }
+    };
+
+    if thread_id.is_empty() {
+        cleanup_and_err!(child, "thread/started notification missing thread.id".to_string());
+    }
+
+    // 5. Send collaborationMode/list (id=5).
+    let collab_req = wasit_codex::encode_collab_mode_list(5, &thread_id);
+    stdin.write_all(collab_req.as_bytes()).map_err(|e| format!("write collab/list: {e}"))?;
+    stdin.write_all(b"\n").map_err(|e| format!("write collab/list newline: {e}"))?;
+    stdin.flush().map_err(|e| format!("flush: {e}"))?;
+
+    // 6. Wait for collaborationMode/list response (id=5).
+    let modes = loop {
+        if start.elapsed() >= deadline {
+            cleanup_and_err!(child, "timeout waiting for collaborationMode/list response".to_string());
+        }
+        let line = recv_line!(child, "waiting for collaborationMode/list response");
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        let val: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if val.get("method").is_some() {
+            continue; // notification
+        }
+        if val.get("id").and_then(|v| v.as_u64()) == Some(5) {
+            if val.get("error").is_some() {
+                cleanup_and_err!(child, "collaborationMode/list error response".to_string());
+            }
+            let result = val.get("result").cloned().unwrap_or(serde_json::Value::Null);
+            break wasit_codex::codex_modes_from_collab_list(&result);
+        }
+    };
+
+    // Clean up: kill child (it's a probe, not a real session).
+    let _ = child.kill();
+    let _ = child.wait();
+    Ok(modes)
+}
 /// Real agy/gemini probe: setup-first `command -v` + `<cmd> models`, run over
 /// the host connection (remote) or locally (setup honored).
 #[cfg(not(coverage))]
@@ -415,6 +774,13 @@ pub fn parse_opencode_sessions(raw: &str) -> Vec<(String, Option<String>)> {
 /// Real opencode probe: setup-first `command -v` + `opencode models` +
 /// `opencode session list`, run over the host connection or locally.
 /// Registered in the probes list in `serve.rs` alongside claude/codex/agy.
+///
+/// Task B: performs a bounded `opencode acp` handshake at connect time to
+/// discover available modes via `configOptions` in the `session/new` result.
+/// Opencode has no non-session way to list modes (they are user-config-defined
+/// and only appear in the ACP handshake response), so a minimal ACP session
+/// is the only honest source. On any failure, `available_modes` is empty
+/// (honest) and the error is appended to `errors`.
 #[cfg(not(coverage))]
 pub struct RealOpencodeProbe;
 
@@ -457,6 +823,36 @@ impl CapabilityProbe for RealOpencodeProbe {
                     (false, vec![], vec![])
                 }
             };
+
+        // Task B: probe modes via a bounded opencode acp handshake (only when
+        // the CLI is available). Opencode modes are user-config-defined and only
+        // available from the ACP `session/new` configOptions — there is no
+        // non-session subcommand. On any failure stay empty (honest).
+        let available_modes = if cli_available {
+            let modes_deadline = ctx.deadline.min(Duration::from_secs(10));
+            match probe_opencode_modes_bounded(&command, ctx.host_target.as_deref(), ctx.setup.as_deref(), modes_deadline)
+            {
+                Ok((modes, _current)) => {
+                    eprintln!(
+                        "marsad-agent: opencode probe on {:?} → {} mode(s) at connect time",
+                        ctx.host_target,
+                        modes.len()
+                    );
+                    modes
+                }
+                Err(e) => {
+                    eprintln!(
+                        "marsad-agent: opencode modes probe on {:?} failed: {e}",
+                        ctx.host_target
+                    );
+                    errors.push(format!("opencode modes probe: {e}"));
+                    vec![]
+                }
+            }
+        } else {
+            vec![]
+        };
+
         Capabilities {
             driver: "opencode".to_string(),
             host_id: ctx.host_id.clone(),
@@ -467,7 +863,7 @@ impl CapabilityProbe for RealOpencodeProbe {
                 source: ModelListSource::Listed,
                 free_text: true,
             },
-            available_modes: vec![],
+            available_modes,
             session_scope: Some(SessionScope::AllKnown),
             sessions,
             fetched_at_ms: now_ms(),
@@ -476,3 +872,229 @@ impl CapabilityProbe for RealOpencodeProbe {
     }
 }
 
+/// Spawn `opencode acp` (locally or via `host_target` transport), perform the
+/// minimal ACP JSON-RPC handshake (`initialize` → `session/new`), and return
+/// the parsed `(available_modes, current_mode_id)` from the `configOptions`
+/// in the `session/new` result. Bounded by `deadline`.
+///
+/// This mirrors what `wasit_opencode::OpencodeDriver::spawn` does: send
+/// `initialize` (id=1), wait for its response, send `session/new` (id=2)
+/// with a temp cwd, and parse the `configOptions` from the result via
+/// `wasit_opencode::parse_config_modes`.
+///
+/// The subprocess is spawned through the transport for `host_target`
+/// (local / SSH / WSL / plink / wslssh) via `build_probe_spawn_argv`.
+/// `setup` (if any) is prepended so the tool resolves in the same env as a
+/// real launched session.
+///
+/// On any failure returns `Err`. The caller treats `Err` as empty modes +
+/// appends to `errors`.
+#[cfg(not(coverage))]
+fn probe_opencode_modes_bounded(
+    command: &str,
+    host_target: Option<&str>,
+    setup: Option<&str>,
+    deadline: Duration,
+) -> Result<(Vec<marsad_proto::SessionMode>, String), String> {
+    use std::io::{BufReader, Write};
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc::RecvTimeoutError;
+
+    // Build the tool_argv: command words + subcommand.
+    let tool_argv: Vec<String> = command
+        .split_whitespace()
+        .map(str::to_string)
+        .chain(["acp".to_string()])
+        .collect();
+
+    let argv = build_probe_spawn_argv(host_target, setup, &tool_argv)
+        .map_err(|e| format!("build_probe_spawn_argv: {e}"))?;
+    let bin = &argv[0];
+
+    let mut child = Command::new(bin)
+        .args(&argv[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("spawn {bin}: {e}"))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "no stdin".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "no stdout".to_string())?;
+
+    // Spawn a dedicated reader thread. The handshake loop uses recv_timeout
+    // instead of blocking read_line so the deadline fires even if the child is
+    // alive-but-silent (never writes a newline, never exits).
+    let rx = spawn_bounded_line_reader(BufReader::new(stdout));
+
+    let start = std::time::Instant::now();
+    let remaining = || deadline.saturating_sub(start.elapsed());
+
+    /// Kill the child and drain the reader thread on every early-exit path
+    /// so no zombie/leaked thread is left behind.
+    macro_rules! cleanup_and_err {
+        ($child:expr, $msg:expr) => {{
+            let _ = $child.kill();
+            let _ = $child.wait();
+            return Err($msg);
+        }};
+    }
+
+    // Helper: read one line via the bounded channel. Kills child on timeout/EOF.
+    macro_rules! recv_line {
+        ($child:expr, $timeout_msg:expr) => {{
+            match rx.recv_timeout(remaining()) {
+                Ok(line) => line,
+                Err(RecvTimeoutError::Timeout) => {
+                    cleanup_and_err!($child, format!("timeout: {}", $timeout_msg));
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    cleanup_and_err!($child, format!("child exited unexpectedly: {}", $timeout_msg));
+                }
+            }
+        }};
+    }
+
+    // 1. Send initialize (id=1).
+    let init = wasit_opencode::encode_initialize("marsad-probe", env!("CARGO_PKG_VERSION"));
+    stdin.write_all(init.as_bytes()).map_err(|e| format!("write initialize: {e}"))?;
+    stdin.write_all(b"\n").map_err(|e| format!("write initialize newline: {e}"))?;
+    stdin.flush().map_err(|e| format!("flush: {e}"))?;
+
+    // 2. Wait for initialize response (id=1).
+    loop {
+        if start.elapsed() >= deadline {
+            cleanup_and_err!(child, "timeout waiting for initialize response".to_string());
+        }
+        let line = recv_line!(child, "waiting for initialize response");
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        let val: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if val.get("method").is_some() {
+            continue;
+        }
+        if val.get("id").and_then(|v| v.as_u64()) == Some(1) {
+            if val.get("error").is_some() {
+                cleanup_and_err!(child, "initialize error response".to_string());
+            }
+            break;
+        }
+    }
+
+    // 3. Send session/new (id=2) with a temp cwd (modes are global config).
+    let session_new = wasit_opencode::encode_session_new(2, "/tmp", None);
+    stdin.write_all(session_new.as_bytes()).map_err(|e| format!("write session/new: {e}"))?;
+    stdin.write_all(b"\n").map_err(|e| format!("write session/new newline: {e}"))?;
+    stdin.flush().map_err(|e| format!("flush: {e}"))?;
+
+    // 4. Wait for session/new response (id=2) carrying configOptions.
+    let modes = loop {
+        if start.elapsed() >= deadline {
+            cleanup_and_err!(child, "timeout waiting for session/new response".to_string());
+        }
+        let line = recv_line!(child, "waiting for session/new response");
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        let val: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if val.get("method").is_some() {
+            continue; // notification
+        }
+        if val.get("id").and_then(|v| v.as_u64()) == Some(2) {
+            if val.get("error").is_some() {
+                cleanup_and_err!(child, "session/new error response".to_string());
+            }
+            let result = val.get("result").cloned().unwrap_or(serde_json::Value::Null);
+            break wasit_opencode::parse_config_modes(&result);
+        }
+    };
+
+    let _ = child.kill();
+    let _ = child.wait();
+    Ok(modes)
+}
+
+// ===========================================================================
+// Tests for the bounded line reader contract (always compiled so the coverage
+// build can reach them — see `spawn_bounded_line_reader` above).
+// ===========================================================================
+
+#[cfg(test)]
+mod bounded_reader_tests {
+    use super::spawn_bounded_line_reader;
+    use std::io::BufReader;
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::{Duration, Instant};
+
+    /// Proves that `spawn_bounded_line_reader` + `recv_timeout` times out
+    /// quickly when the underlying reader never yields a line, because the
+    /// underlying subprocess is alive-but-silent (never writes to stdout).
+    ///
+    /// Spawns `bash -lc "exec sleep 30"` (the same transport shape that the
+    /// real mode probes use, via `build_probe_spawn_argv`) with a 1-second
+    /// `recv_timeout` deadline and asserts the probe returns `Err(Timeout)`
+    /// in well under the `sleep` duration (~3s budget).
+    ///
+    /// This is the canonical regression test for the blocking-read bug:
+    /// before the fix, `read_line` on a silent-child stdout would hang for
+    /// the full 30-second `sleep` duration.
+    #[test]
+    fn bounded_probe_via_build_probe_spawn_argv_times_out_on_silent_child() {
+        use crate::capabilities::build_probe_spawn_argv;
+        use std::process::{Command, Stdio};
+
+        // Build argv the same way the real probes do: local host, no setup,
+        // tool_argv = ["sleep", "30"].  This produces
+        // ["bash", "-lc", "exec 'sleep' '30'"], exactly mirroring the probe
+        // spawn path.
+        let tool_argv = vec!["sleep".to_string(), "30".to_string()];
+        let argv = build_probe_spawn_argv(None, None, &tool_argv)
+            .expect("build_probe_spawn_argv must succeed for local target");
+
+        let bin = &argv[0];
+        let mut child = Command::new(bin)
+            .args(&argv[1..])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("bash must be available on test machine");
+
+        let stdout = child.stdout.take().expect("stdout must be piped");
+        let rx = spawn_bounded_line_reader(BufReader::new(stdout));
+
+        let deadline = Duration::from_secs(1);
+        let start = Instant::now();
+        // Use recv_timeout exactly as the fixed handshake loops do.
+        let result = rx.recv_timeout(deadline);
+        let elapsed = start.elapsed();
+
+        // Kill the silent child so it doesn't linger as a zombie.
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "recv_timeout must fire near the 1s deadline, NOT hang for 30s; took {elapsed:?}"
+        );
+        assert!(
+            matches!(result, Err(RecvTimeoutError::Timeout)),
+            "expected RecvTimeoutError::Timeout for a silent child, got: {result:?}"
+        );
+    }
+}

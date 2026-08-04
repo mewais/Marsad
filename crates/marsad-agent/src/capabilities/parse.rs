@@ -5,6 +5,9 @@
 
 use super::*;
 
+// Task B pure seams use wasit types directly.
+// `wasit_codex` and `wasit_opencode` are workspace deps of marsad-agent.
+
 // ===========================================================================
 // Part 1 — pure parse functions (no IO)
 // ===========================================================================
@@ -180,6 +183,82 @@ pub(crate) fn extract_codex_user_snippet(body: &str) -> String {
             .to_string();
     }
     String::new()
+}
+
+// ===========================================================================
+// Task B — pure parse seams for connect-time mode discovery
+// (unit-testable wrappers over the wasit-codex and wasit-opencode functions;
+//  the real subprocess handshake lives in real_probes.rs under cfg(not(coverage)))
+// ===========================================================================
+
+/// Parse a `collaborationMode/list` JSON-RPC RESPONSE body (the `result`
+/// object) into a vec of `SessionMode`s.
+///
+/// Wire shape: `{"data":[{"mode":"<id>","settings":{...}}, ...]}`
+/// This is the pure seam that `RealCodexProbe` uses after capturing the
+/// response from a bounded `codex app-server` handshake.
+/// Delegates to `wasit_codex::codex_modes_from_collab_list` — no
+/// reimplementation.
+///
+/// `raw_result_json` is the serialized `result` object from the JSON-RPC
+/// response line `{"id":5,"result":{…}}`. Returns empty on any parse
+/// failure — never a panic.
+pub fn parse_codex_collab_list_response(raw_result_json: &str) -> Vec<marsad_proto::SessionMode> {
+    let val: serde_json::Value = match serde_json::from_str(raw_result_json) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+    wasit_codex::codex_modes_from_collab_list(&val)
+}
+
+/// Parse the `configOptions` container from an opencode `session/new` or
+/// `session/load` result (a full serialized JSON value) into
+/// `(available_modes, current_mode_id)`.
+///
+/// This is the pure seam that `RealOpencodeProbe` uses after capturing the
+/// init response from a bounded `opencode acp` handshake. Delegates to
+/// `wasit_opencode::parse_config_modes` — no reimplementation.
+///
+/// `raw_result_json` is the serialized result VALUE (NOT a full JSON-RPC
+/// line — just the result object). Returns `(vec![], String::new())` on
+/// any parse failure — never a panic.
+pub fn parse_opencode_config_modes(
+    raw_result_json: &str,
+) -> (Vec<marsad_proto::SessionMode>, String) {
+    let val: serde_json::Value = match serde_json::from_str(raw_result_json) {
+        Ok(v) => v,
+        Err(_) => return (vec![], String::new()),
+    };
+    wasit_opencode::parse_config_modes(&val)
+}
+
+// ===========================================================================
+// Task D — pure filter for project-scoped codex session discovery
+// ===========================================================================
+
+/// Filter a slice of `DiscoveredSession`s to only those whose `project`
+/// matches `requested_project` (honest path-equality; both sides trim
+/// trailing slashes). Sessions with `project: None` are excluded when a
+/// project is requested — they lack cwd information and cannot be
+/// attributed to a specific project.
+///
+/// Pure; no IO. Used by `RealCodexProbe` to scope the session list to the
+/// requested project, mirroring how `RealClaudeProbe` stamps sessions with
+/// `ctx.project`.
+pub fn filter_codex_sessions_by_project(
+    sessions: Vec<DiscoveredSession>,
+    requested_project: &str,
+) -> Vec<DiscoveredSession> {
+    let want = requested_project.trim_end_matches('/');
+    sessions
+        .into_iter()
+        .filter(|s| {
+            s.project
+                .as_deref()
+                .map(|p| p.trim_end_matches('/') == want)
+                .unwrap_or(false)
+        })
+        .collect()
 }
 
 /// Strip the `<USER_REQUEST>…</USER_REQUEST>` wrapper (and sibling injected

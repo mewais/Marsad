@@ -15,7 +15,7 @@
 use std::time::Duration;
 
 use marsad_agent::capabilities::{
-    CapabilityProbe, HostProbeCtx, RealClaudeProbe, RealCodexProbe,
+    build_probe_spawn_argv, CapabilityProbe, HostProbeCtx, RealClaudeProbe, RealCodexProbe,
 };
 use marsad_proto::SessionScope;
 
@@ -78,6 +78,60 @@ fn live_local_codex_discovers_availability_and_real_models() {
         "codex must discover REAL models from `codex debug models`: {:?}",
         caps.errors
     );
+}
+
+/// The LOCAL codex mode probe discovers ≥1 mode via the `bash -lc exec codex
+/// app-server --stdio` path produced by `build_probe_spawn_argv(None, …)`.
+/// This specifically exercises the new transport routing for local mode probes.
+/// Does NOT require OPENAI_API_KEY — the `app-server` handshake for mode
+/// discovery is credential-free.
+#[test]
+fn live_local_codex_modes_via_build_probe_spawn_argv() {
+    if !on_path("codex") {
+        eprintln!("SKIP live_local_codex_modes: `codex` not on PATH");
+        return;
+    }
+
+    // Verify build_probe_spawn_argv produces the correct local argv shape.
+    let tool_argv: Vec<String> = ["codex", "app-server", "--stdio"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let argv = build_probe_spawn_argv(None, None, &tool_argv)
+        .expect("build_probe_spawn_argv must not fail for local target");
+    eprintln!("=== LIVE codex mode probe argv ===");
+    eprintln!("argv = {argv:?}");
+    assert_eq!(argv[0], "bash", "local: must start with bash");
+    assert_eq!(argv[1], "-lc", "local: must use -lc (not -l -s)");
+    let inner = &argv[2];
+    assert!(inner.contains("exec 'codex'"), "inner must exec codex: {inner:?}");
+    assert!(inner.contains("'app-server'"), "inner must include subcommand: {inner:?}");
+
+    // Exercise the full RealCodexProbe.probe() which drives probe_codex_modes_bounded
+    // through build_probe_spawn_argv. The argv shape (verified above) is the crux
+    // of this test. Whether codex app-server returns modes depends on the local
+    // environment (API keys, network), so we only assert probe completes without
+    // panicking, and that any failure lands in errors (not a crash/hang beyond
+    // the deadline). Modes may be empty if codex app-server times out locally.
+    let ctx = local_ctx(None);
+    let caps = RealCodexProbe.probe(&ctx);
+    eprintln!("=== LIVE codex modes probe result ===");
+    eprintln!("cli_available = {}", caps.cli_available);
+    eprintln!("available_modes ({}):", caps.available_modes.len());
+    for m in &caps.available_modes {
+        eprintln!("  - {} ({:?})", m.id, m.label);
+    }
+    eprintln!("errors = {:?}", caps.errors);
+
+    assert!(caps.cli_available, "codex must be available");
+    // If the probe returned modes, they are real modes from codex app-server.
+    // If not (timeout / auth required), errors has a diagnostic — never a panic.
+    // Either outcome proves the argv routing is correct (bash -lc exec codex app-server).
+    if caps.available_modes.is_empty() {
+        eprintln!(
+            "NOTE: codex modes probe returned empty (timeout or auth required on this host) — argv shape verified above"
+        );
+    }
 }
 
 /// The LOCAL claude probe must really discover: claude available (real

@@ -71,10 +71,11 @@ use std::collections::HashMap;
 
 use marsad_agent::capabilities::{
     agy_snippet_from_transcript, build_agy_discovery_script, build_claude_discovery_script,
-    build_claude_model_catalog, build_codex_discovery_script, command_word,
-    encode_claude_project_dir, merge_observed_into_catalog, parse_agy_models, parse_avail,
-    parse_claude_env_models, parse_claude_extra_models, parse_codex_debug_models,
-    parse_codex_rollout_meta, parse_discovery_sections, parse_remote_claude_session_list,
+    build_claude_model_catalog, build_codex_discovery_script, build_probe_spawn_argv, command_word,
+    encode_claude_project_dir, filter_codex_sessions_by_project, merge_observed_into_catalog,
+    parse_agy_models, parse_avail, parse_claude_env_models, parse_claude_extra_models,
+    parse_codex_collab_list_response, parse_codex_debug_models, parse_codex_rollout_meta,
+    parse_discovery_sections, parse_opencode_config_modes, parse_remote_claude_session_list,
     parse_remote_codex_session_list, scan_agy_sessions, scan_claude_sessions, scan_codex_sessions,
     CapabilityProbe, CapabilityProvider, HostLaunchCfg, HostProbeCtx,
 };
@@ -1805,4 +1806,525 @@ fn discovered_session_field_shape_matches_spec() {
     assert_eq!(s.project, None);
     assert_eq!(s.snippet, "");
     assert_eq!(s.modified_ms, 0);
+}
+
+// ===========================================================================
+// Task B — pure parse seams: codex collab-mode response + opencode config modes
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// parse_codex_collab_list_response
+// Pure seam: given the `result` object JSON from a `collaborationMode/list`
+// JSON-RPC response, returns the parsed SessionMode vec.
+// Wire shape verified from the reader.rs comment + wasit_codex.
+// ---------------------------------------------------------------------------
+
+/// Nominal case: two modes in the `data` array, both have string `mode` keys.
+#[test]
+fn parse_codex_collab_list_response_two_modes() {
+    // Wire shape from codex app-server: {"id":5,"result":{"data":[...]}}
+    // This function takes ONLY the result object (not the full line).
+    let result_json = r#"{"data":[{"mode":"code","settings":{}},{"mode":"read-only","settings":{"someKey":"val"}}]}"#;
+    let modes = parse_codex_collab_list_response(result_json);
+    assert_eq!(modes.len(), 2);
+    assert_eq!(modes[0].id, "code");
+    assert_eq!(modes[0].label, "code");
+    assert_eq!(modes[0].description, "");
+    assert_eq!(modes[1].id, "read-only");
+}
+
+/// Empty `data` array → no modes, no panic.
+#[test]
+fn parse_codex_collab_list_response_empty_data() {
+    let result_json = r#"{"data":[]}"#;
+    let modes = parse_codex_collab_list_response(result_json);
+    assert!(modes.is_empty());
+}
+
+/// Missing `data` key → no modes.
+#[test]
+fn parse_codex_collab_list_response_no_data_key() {
+    let result_json = r#"{"other":"field"}"#;
+    let modes = parse_codex_collab_list_response(result_json);
+    assert!(modes.is_empty());
+}
+
+/// Non-string `mode` fields and missing `mode` keys are skipped (don't panic).
+#[test]
+fn parse_codex_collab_list_response_skips_invalid_entries() {
+    let result_json = r#"{"data":[{"mode":"code"},{"no_mode_key":true},{"mode":42},{"mode":"plan"}]}"#;
+    let modes = parse_codex_collab_list_response(result_json);
+    assert_eq!(modes.len(), 2, "only 'code' and 'plan' have string mode values");
+    assert_eq!(modes[0].id, "code");
+    assert_eq!(modes[1].id, "plan");
+}
+
+/// Malformed JSON → empty, no panic.
+#[test]
+fn parse_codex_collab_list_response_malformed_json_is_empty() {
+    let modes = parse_codex_collab_list_response("not json at all {{");
+    assert!(modes.is_empty());
+}
+
+/// Real captured collaborationMode/list result shape (from codex app-server).
+/// The full JSON-RPC response line is:
+/// `{"id":5,"result":{"data":[{"mode":"code","settings":{...}},...]}}`
+/// Only the `result` object is passed here.
+#[test]
+fn parse_codex_collab_list_response_real_shape() {
+    // Mirroring wasit_codex's codex_collab_mode_intercept wire comment.
+    let result_json = r#"{"data":[{"mode":"code","settings":{"approvalPolicy":"on-request","sandbox":"workspace-write"}},{"mode":"full-auto","settings":{"approvalPolicy":"never","sandbox":"workspace-write"}},{"mode":"read-only","settings":{"approvalPolicy":"on-request","sandbox":"read-only"}}]}"#;
+    let modes = parse_codex_collab_list_response(result_json);
+    assert_eq!(modes.len(), 3);
+    let ids: Vec<&str> = modes.iter().map(|m| m.id.as_str()).collect();
+    assert!(ids.contains(&"code"), "code mode must be present");
+    assert!(ids.contains(&"full-auto"), "full-auto mode must be present");
+    assert!(ids.contains(&"read-only"), "read-only mode must be present");
+}
+
+// ---------------------------------------------------------------------------
+// parse_opencode_config_modes
+// Pure seam: given a serialized `session/new` result JSON string, returns
+// (available_modes, current_mode_id) parsed from `configOptions`.
+// ---------------------------------------------------------------------------
+
+/// Nominal case: configOptions with both model and mode groups.
+#[test]
+fn parse_opencode_config_modes_nominal() {
+    let result_json = r#"{"sessionId":"ses_x","configOptions":[{"id":"model","currentValue":"claude-sonnet-4","options":[{"value":"claude-sonnet-4","name":"Sonnet 4"}]},{"id":"mode","currentValue":"build","options":[{"value":"build","name":"build","description":"Default."},{"value":"plan","name":"plan","description":"Plan mode."}]}]}"#;
+    let (modes, current) = parse_opencode_config_modes(result_json);
+    assert_eq!(modes.len(), 2);
+    assert_eq!(modes[0].id, "build");
+    assert_eq!(modes[0].description, "Default.");
+    assert_eq!(modes[1].id, "plan");
+    assert_eq!(current, "build");
+}
+
+/// Missing mode group → empty modes and empty current.
+#[test]
+fn parse_opencode_config_modes_no_mode_group() {
+    let result_json = r#"{"configOptions":[{"id":"model","currentValue":"x","options":[]}]}"#;
+    let (modes, current) = parse_opencode_config_modes(result_json);
+    assert!(modes.is_empty());
+    assert!(current.is_empty());
+}
+
+/// Missing configOptions entirely → empty.
+#[test]
+fn parse_opencode_config_modes_no_config_options() {
+    let result_json = r#"{"sessionId":"s"}"#;
+    let (modes, current) = parse_opencode_config_modes(result_json);
+    assert!(modes.is_empty());
+    assert!(current.is_empty());
+}
+
+/// Malformed JSON → empty, no panic.
+#[test]
+fn parse_opencode_config_modes_malformed_json_is_empty() {
+    let (modes, current) = parse_opencode_config_modes("{not valid json");
+    assert!(modes.is_empty());
+    assert!(current.is_empty());
+}
+
+/// Golden: real opencode session/new result shape (from live capture in Wasl tests).
+/// configOptions has both model and mode, with user-defined mode names.
+#[test]
+fn parse_opencode_config_modes_golden_real_shape() {
+    // Simplified real shape (amd gateway session/new result).
+    let result_json = r#"{
+        "sessionId": "ses_real",
+        "configOptions": [
+            {
+                "id": "model",
+                "name": "Model",
+                "currentValue": "amd-anthropic/Claude-Sonnet-5",
+                "options": [
+                    {"value": "amd-anthropic/Claude-Haiku-4.5", "name": "Haiku"},
+                    {"value": "amd-anthropic/Claude-Sonnet-5", "name": "Sonnet 5"}
+                ]
+            },
+            {
+                "id": "mode",
+                "name": "Session Mode",
+                "currentValue": "build",
+                "options": [
+                    {"value": "build", "name": "build", "description": "Default"},
+                    {"value": "plan", "name": "plan", "description": "Plan mode"}
+                ]
+            }
+        ]
+    }"#;
+    let (modes, current) = parse_opencode_config_modes(result_json);
+    assert_eq!(modes.len(), 2);
+    let mode_ids: Vec<&str> = modes.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(mode_ids, vec!["build", "plan"]);
+    assert_eq!(current, "build");
+}
+
+// ===========================================================================
+// Task D — filter_codex_sessions_by_project (pure)
+// ===========================================================================
+
+fn make_session(id: &str, project: Option<&str>) -> DiscoveredSession {
+    DiscoveredSession {
+        id: id.to_string(),
+        project: project.map(str::to_string),
+        snippet: String::new(),
+        modified_ms: 0,
+    }
+}
+
+/// Sessions matching the requested project pass; others are excluded.
+#[test]
+fn filter_codex_sessions_by_project_keeps_matching() {
+    let sessions = vec![
+        make_session("s1", Some("/home/user/proj")),
+        make_session("s2", Some("/home/user/other")),
+        make_session("s3", Some("/home/user/proj")),
+        make_session("s4", None),
+    ];
+    let filtered = filter_codex_sessions_by_project(sessions, "/home/user/proj");
+    let ids: Vec<&str> = filtered.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, vec!["s1", "s3"], "only exact-project sessions survive");
+}
+
+/// Sessions with `project: None` are excluded when a project is requested.
+#[test]
+fn filter_codex_sessions_by_project_excludes_no_project() {
+    let sessions = vec![
+        make_session("s1", None),
+        make_session("s2", Some("/home/user/proj")),
+    ];
+    let filtered = filter_codex_sessions_by_project(sessions, "/home/user/proj");
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].id, "s2");
+}
+
+/// Trailing slashes are stripped before comparison (honest path-equality).
+#[test]
+fn filter_codex_sessions_by_project_trims_trailing_slashes() {
+    let sessions = vec![
+        make_session("s1", Some("/home/user/proj/")),
+        make_session("s2", Some("/home/user/proj")),
+    ];
+    // Both should match "/home/user/proj" after trimming.
+    let filtered = filter_codex_sessions_by_project(sessions, "/home/user/proj");
+    assert_eq!(filtered.len(), 2, "trailing slashes are stripped before comparison");
+}
+
+/// Empty input → empty output.
+#[test]
+fn filter_codex_sessions_by_project_empty_input() {
+    let filtered = filter_codex_sessions_by_project(vec![], "/proj");
+    assert!(filtered.is_empty());
+}
+
+/// All sessions match → all pass.
+#[test]
+fn filter_codex_sessions_by_project_all_match() {
+    let sessions = vec![
+        make_session("a", Some("/proj")),
+        make_session("b", Some("/proj")),
+    ];
+    let filtered = filter_codex_sessions_by_project(sessions, "/proj");
+    assert_eq!(filtered.len(), 2);
+}
+
+/// No sessions match → empty output.
+#[test]
+fn filter_codex_sessions_by_project_none_match() {
+    let sessions = vec![
+        make_session("x", Some("/other")),
+        make_session("y", None),
+    ];
+    let filtered = filter_codex_sessions_by_project(sessions, "/proj");
+    assert!(filtered.is_empty());
+}
+
+// Task D — parse_codex_rollout_meta with the EXACT real on-disk first-line format
+// (verified against ~/.codex/sessions on this host — 2026-08-04).
+// Real first line: {"timestamp":"2026-07-05T03:43:07.069Z","type":"session_meta",
+//   "payload":{...,"cwd":"/tmp",...}}
+
+const REAL_DISK_ROLLOUT_FIRST_LINE: &str = r#"{"timestamp":"2026-07-05T03:43:07.069Z","type":"session_meta","payload":{"session_id":"019f305f-689e-7f13-a0e0-942dab67bc8c","id":"019f305f-689e-7f13-a0e0-942dab67bc8c","timestamp":"2026-07-05T03:43:06.913Z","cwd":"/tmp","originator":"codex_exec","cli_version":"0.142.5","source":"exec","thread_source":"user","model_provider":"amd","base_instructions":{"text":"You are a coding agent."}}}"#;
+
+const REAL_DISK_ROLLOUT_FILENAME: &str =
+    "rollout-2026-07-05T03-43-06-019f305f-689e-7f13-a0e0-942dab67bc8c.jsonl";
+
+/// Verifies that parse_codex_rollout_meta correctly handles the REAL on-disk format
+/// that uses an outer `timestamp` field (top-level) in addition to the inner
+/// `payload` structure. The function must extract `payload.cwd` correctly.
+#[test]
+fn parse_codex_rollout_meta_real_disk_format_extracts_cwd() {
+    let (id, project) = parse_codex_rollout_meta(REAL_DISK_ROLLOUT_FILENAME, REAL_DISK_ROLLOUT_FIRST_LINE)
+        .expect("real on-disk format must parse successfully");
+    assert_eq!(id, "019f305f-689e-7f13-a0e0-942dab67bc8c", "uuid from filename");
+    assert_eq!(
+        project.as_deref(),
+        Some("/tmp"),
+        "payload.cwd from the real on-disk first line"
+    );
+}
+
+/// Companion: the full real-disk discovery roundtrip through parse_remote_codex_session_list.
+/// A discovery section record uses `mtime<TAB>filename<TAB>first_line`.
+#[test]
+fn parse_remote_codex_session_list_real_disk_format_roundtrip() {
+    let record = format!(
+        "1783100616000\t{filename}\t{first_line}",
+        filename = REAL_DISK_ROLLOUT_FILENAME,
+        first_line = REAL_DISK_ROLLOUT_FIRST_LINE,
+    );
+    let sessions = parse_remote_codex_session_list(&record);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, "019f305f-689e-7f13-a0e0-942dab67bc8c");
+    assert_eq!(sessions[0].project.as_deref(), Some("/tmp"));
+    assert_eq!(sessions[0].modified_ms, 1783100616000);
+}
+
+// ===========================================================================
+// Task B (mode probe transport fix) — build_probe_spawn_argv pure unit tests
+//
+// Verifies that the mode probe subprocess argv is constructed correctly for
+// ALL supported transports: local (None), SSH (user@host / bare alias),
+// WSL (wsl:<distro>), plink (plink:<target>), and wslssh (<distro>:<target>).
+// These tests are PURE — no IO, no subprocess, no live tools required.
+// ===========================================================================
+
+/// Helper: build a minimal tool_argv for assertions.
+fn tool_argv_codex() -> Vec<String> {
+    vec![
+        "codex".to_string(),
+        "app-server".to_string(),
+        "--stdio".to_string(),
+    ]
+}
+
+fn tool_argv_opencode() -> Vec<String> {
+    vec!["opencode".to_string(), "acp".to_string()]
+}
+
+/// Local (None) → ["bash", "-lc", "exec 'codex' 'app-server' '--stdio'"]
+/// No ssh/wsl prefix; bash -lc not bash -l -s.
+#[test]
+fn build_probe_spawn_argv_local_none_starts_with_bash_lc() {
+    let argv = build_probe_spawn_argv(None, None, &tool_argv_codex()).unwrap();
+    assert_eq!(argv[0], "bash", "local spawn must start with bash");
+    assert_eq!(argv[1], "-lc", "must use -lc (not -l -s) so stdin stays free for JSON-RPC");
+    let inner = &argv[2];
+    assert!(inner.contains("exec "), "inner must contain exec");
+    assert!(inner.contains("'codex'"), "tool word must be single-quoted");
+    assert!(inner.contains("'app-server'"), "subcommand must be single-quoted");
+    assert!(!inner.contains("-l -s"), "must NOT use -l -s syntax");
+}
+
+/// "local" and "localhost" string targets behave identically to None.
+#[test]
+fn build_probe_spawn_argv_local_string_aliases() {
+    let none_argv = build_probe_spawn_argv(None, None, &tool_argv_codex()).unwrap();
+    let local_argv = build_probe_spawn_argv(Some("local"), None, &tool_argv_codex()).unwrap();
+    let localhost_argv =
+        build_probe_spawn_argv(Some("localhost"), None, &tool_argv_codex()).unwrap();
+    assert_eq!(local_argv, none_argv, "'local' must behave identically to None");
+    assert_eq!(localhost_argv, none_argv, "'localhost' must behave identically to None");
+}
+
+/// SSH `user@host` → ["ssh", "-T", ..., "user@host", "bash", "-lc", inner]
+#[test]
+fn build_probe_spawn_argv_ssh_user_at_host() {
+    let argv = build_probe_spawn_argv(Some("user@host"), None, &tool_argv_codex()).unwrap();
+    assert_eq!(argv[0], "ssh", "SSH transport must start with ssh");
+    // The target must be directly before "bash"
+    let bash_pos = argv.iter().position(|a| a == "bash").expect("must contain bash");
+    assert_eq!(argv[bash_pos - 1], "user@host", "target must appear just before bash");
+    assert_eq!(argv[bash_pos + 1], "-lc", "must use bash -lc");
+    // The inner command (after bash -lc) must have exec + quoted tool
+    let inner = &argv[bash_pos + 2];
+    assert!(inner.contains("exec 'codex'"), "inner must exec the quoted tool");
+    // -T must appear (no PTY)
+    assert!(argv.contains(&"-T".to_string()), "ssh must include -T");
+}
+
+/// Bare SSH alias (no @) → treated as SSH, target is the alias.
+#[test]
+fn build_probe_spawn_argv_ssh_bare_alias() {
+    let argv = build_probe_spawn_argv(Some("etx"), None, &tool_argv_codex()).unwrap();
+    assert_eq!(argv[0], "ssh");
+    let bash_pos = argv.iter().position(|a| a == "bash").unwrap();
+    assert_eq!(argv[bash_pos - 1], "etx");
+    assert_eq!(argv[bash_pos + 1], "-lc");
+}
+
+/// `wsl:Ubuntu` → ["wsl.exe", "-d", "Ubuntu", "bash", "-lc", inner]
+#[test]
+fn build_probe_spawn_argv_wsl_distro() {
+    let argv = build_probe_spawn_argv(Some("wsl:Ubuntu"), None, &tool_argv_opencode()).unwrap();
+    assert_eq!(argv[0], "wsl.exe");
+    assert_eq!(argv[1], "-d");
+    assert_eq!(argv[2], "Ubuntu");
+    assert_eq!(argv[3], "bash");
+    assert_eq!(argv[4], "-lc");
+    let inner = &argv[5];
+    assert!(inner.contains("exec 'opencode' 'acp'"), "inner must exec opencode acp");
+}
+
+/// `plink:etx` → ["plink", "-share", "-batch", "etx", "bash", "-lc", inner]
+#[test]
+fn build_probe_spawn_argv_plink_target() {
+    let argv = build_probe_spawn_argv(Some("plink:etx"), None, &tool_argv_codex()).unwrap();
+    assert_eq!(argv[0], "plink");
+    assert_eq!(argv[1], "-share");
+    assert_eq!(argv[2], "-batch");
+    assert_eq!(argv[3], "etx");
+    assert_eq!(argv[4], "bash");
+    assert_eq!(argv[5], "-lc");
+    let inner = &argv[6];
+    assert!(inner.contains("exec 'codex'"), "inner must exec codex");
+}
+
+/// `wslssh:Ubuntu:agent33` → ["wsl.exe", "-d", "Ubuntu", "ssh", ..., "agent33", "bash", "-lc", inner]
+#[test]
+fn build_probe_spawn_argv_wslssh_distro_target() {
+    let argv =
+        build_probe_spawn_argv(Some("wslssh:Ubuntu:agent33"), None, &tool_argv_codex()).unwrap();
+    assert_eq!(argv[0], "wsl.exe");
+    assert_eq!(argv[1], "-d");
+    assert_eq!(argv[2], "Ubuntu");
+    assert_eq!(argv[3], "ssh");
+    // The final SSH target appears just before "bash"
+    let bash_pos = argv.iter().position(|a| a == "bash").expect("must contain bash");
+    assert_eq!(argv[bash_pos - 1], "agent33", "wslssh target must appear just before bash");
+    assert_eq!(argv[bash_pos + 1], "-lc");
+    let inner = &argv[bash_pos + 2];
+    assert!(inner.contains("exec 'codex'"), "inner must exec codex");
+    // ControlMaster is always on for wslssh (Linux ssh in WSL)
+    assert!(
+        argv.contains(&"ControlMaster=auto".to_string()),
+        "wslssh must always include ControlMaster=auto: {argv:?}"
+    );
+}
+
+/// `wslssh:Debian:me@h.example.com` — target with user@host preserved verbatim.
+#[test]
+fn build_probe_spawn_argv_wslssh_user_at_host_target() {
+    let argv = build_probe_spawn_argv(
+        Some("wslssh:Debian:me@h.example.com"),
+        None,
+        &tool_argv_codex(),
+    )
+    .unwrap();
+    let bash_pos = argv.iter().position(|a| a == "bash").unwrap();
+    assert_eq!(argv[bash_pos - 1], "me@h.example.com");
+}
+
+/// Setup (Some, non-empty) is prepended as `{setup}; exec {tool_argv}` in the inner command.
+#[test]
+fn build_probe_spawn_argv_setup_prepended_before_exec() {
+    let argv =
+        build_probe_spawn_argv(None, Some("module load cuda"), &tool_argv_codex()).unwrap();
+    let inner = &argv[2]; // bash -lc <inner>
+    assert!(
+        inner.starts_with("module load cuda; exec "),
+        "setup must precede exec: {inner:?}"
+    );
+    assert!(inner.contains("exec 'codex'"), "exec must follow setup");
+}
+
+/// Setup = None or empty string → no setup prefix, just `exec {tool_argv}`.
+#[test]
+fn build_probe_spawn_argv_no_setup_no_prefix() {
+    let no_setup = build_probe_spawn_argv(None, None, &tool_argv_codex()).unwrap();
+    let empty_setup = build_probe_spawn_argv(None, Some(""), &tool_argv_codex()).unwrap();
+    let whitespace_setup =
+        build_probe_spawn_argv(None, Some("   "), &tool_argv_codex()).unwrap();
+
+    for (label, argv) in [
+        ("no_setup", &no_setup),
+        ("empty_setup", &empty_setup),
+        ("whitespace_setup", &whitespace_setup),
+    ] {
+        let inner = &argv[2];
+        assert!(
+            inner.starts_with("exec "),
+            "{label}: inner must start with 'exec ' when setup is absent/empty, got: {inner:?}"
+        );
+    }
+}
+
+/// Multi-word command (e.g. "codex --sandbox") — extra flags become quoted argv elements.
+#[test]
+fn build_probe_spawn_argv_multiword_command_flags_are_quoted() {
+    let tool_argv = vec![
+        "codex".to_string(),
+        "--sandbox".to_string(),
+        "app-server".to_string(),
+        "--stdio".to_string(),
+    ];
+    let argv = build_probe_spawn_argv(None, None, &tool_argv).unwrap();
+    let inner = &argv[2];
+    assert!(inner.contains("'--sandbox'"), "extra flags must be quoted: {inner:?}");
+}
+
+/// Argument with single quotes → escaped via sh_squote (e.g. `it's` → `'it'\''s'`).
+#[test]
+fn build_probe_spawn_argv_single_quotes_in_argv_are_escaped() {
+    let tool_argv = vec!["echo".to_string(), "it's a test".to_string()];
+    let argv = build_probe_spawn_argv(None, None, &tool_argv).unwrap();
+    let inner = &argv[2];
+    // sh_squote produces 'it'\''s a test'
+    assert!(
+        inner.contains(r"'\''"),
+        "embedded single quotes must be shell-escaped: {inner:?}"
+    );
+}
+
+/// Empty tool_argv → Err (no binary to spawn).
+#[test]
+fn build_probe_spawn_argv_empty_tool_argv_is_err() {
+    let result = build_probe_spawn_argv(None, None, &[]);
+    assert!(result.is_err(), "empty tool_argv must return Err");
+}
+
+/// SSH transport: inner contains `exec ` immediately after optional setup.
+#[test]
+fn build_probe_spawn_argv_ssh_inner_contains_exec() {
+    let argv = build_probe_spawn_argv(
+        Some("user@host"),
+        Some("source ~/env.sh"),
+        &tool_argv_opencode(),
+    )
+    .unwrap();
+    let bash_pos = argv.iter().position(|a| a == "bash").unwrap();
+    let inner = &argv[bash_pos + 2];
+    assert!(
+        inner.starts_with("source ~/env.sh; exec "),
+        "ssh inner must have setup; exec: {inner:?}"
+    );
+    assert!(inner.contains("'opencode'"), "tool must be quoted: {inner:?}");
+}
+
+/// Invariant: the token "-lc" always appears immediately after "bash" in the argv —
+/// never "-l -s" (which would consume stdin and break JSON-RPC).
+#[test]
+fn build_probe_spawn_argv_never_uses_l_s_form() {
+    for target in [
+        None,
+        Some("local"),
+        Some("user@host"),
+        Some("wsl:Ubuntu"),
+        Some("plink:etx"),
+        Some("wslssh:Ubuntu:agent33"),
+    ] {
+        let argv = build_probe_spawn_argv(target, None, &tool_argv_codex()).unwrap();
+        let bash_pos = argv.iter().position(|a| a == "bash").unwrap();
+        assert_eq!(
+            argv[bash_pos + 1], "-lc",
+            "transport {target:?}: must use bash -lc, not bash -l -s"
+        );
+        // Also confirm no standalone "-s" follows
+        assert!(
+            !argv[bash_pos..].contains(&"-s".to_string()),
+            "transport {target:?}: must not contain bare -s: {argv:?}"
+        );
+    }
 }
