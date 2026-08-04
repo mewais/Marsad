@@ -1,0 +1,10 @@
+[package]
+name = "marsad-it-i15_remote_wasl_live"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Marsad integration scenario i15 — headless live REMOTE Wasl node: Agent's ensure_wasl_runtime_node(remote) spawns a durable wasl-mcpd over ssh, opens ssh -L tunnels, and REACHES the node's control API (GET /v1/targets) through the tunnel"
+
+[dependencies]
+marsad-agent = { workspace = true }
+marsad-wasl-session = { workspace = true }

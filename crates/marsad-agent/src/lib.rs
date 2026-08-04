@@ -50,6 +50,11 @@ pub use wasl::{
     load_wasl_config, load_wasl_session_config, render_wasl_node_toml, select_wasl_session_runtime,
     wasl_a2a_bind, wasl_control_bind, wasl_operator_bind, wasl_event_lines, WaslNodeConfig,
     render_wasl_worker_toml, wasl_worker_mcp_config, WaslWorkerPeer,
+    // Remote-host Wasl node: bind kinds, local-tunnel allocation, tunnel argv,
+    // remote spawn/kill scripts, and the spawn-sentinel parser.
+    parse_wasl_node_spawn, remote_wasl_node_kill_script, remote_wasl_node_launch_script,
+    wasl_local_tunnel_bind, wasl_local_tunnel_port, wasl_remote_bind, wasl_tunnel_ssh_argv,
+    WaslBindKind, WaslNodeSpawn,
 };
 pub use wasl_session::{
     pump_wasl_observe, wasl_observe_should_reconnect, wasl_reconnect_after_seq,
@@ -374,6 +379,25 @@ impl fmt::Debug for SessionRunCmdsWrap {
     }
 }
 
+// Per-HOST `ssh -L` tunnel children for a REMOTE Wasl node — production builds
+// only. A remote node spawn (`ensure_remote_wasl_runtime_node`) opens one
+// foreground `ssh -N -L` child per bind kind (control/operator/a2a) and tracks
+// them here keyed by host_id so `teardown_wasl_tunnels` can SIGKILL + reap them
+// on node/session stop, freeing the local tunnel ports and preventing ssh child
+// leaks. LOCAL Wasl nodes never populate this map (they dial the node's own
+// loopback bind directly, no tunnel). Gated out of the coverage build.
+#[cfg(not(coverage))]
+struct WaslTunnelsWrap(
+    std::sync::Arc<std::sync::Mutex<HashMap<String, Vec<std::process::Child>>>>,
+);
+
+#[cfg(not(coverage))]
+impl fmt::Debug for WaslTunnelsWrap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("WaslTunnelsWrap")
+    }
+}
+
 /// Minimal per-session spec cache for codex sessions — holds everything
 /// the reader's app-server handshake (thread/start or thread/resume) needs,
 /// keyed by session_id. Inserted at launch, read by `handle_send_prompt`,
@@ -624,6 +648,11 @@ pub struct Agent {
     /// launch and consumed by the serve loop. Production builds only.
     #[cfg(not(coverage))]
     session_run_cmds: SessionRunCmdsWrap,
+    /// Per-host `ssh -L` tunnel children for REMOTE Wasl nodes, keyed by host_id.
+    /// Populated by `ensure_remote_wasl_runtime_node`, reaped by
+    /// `teardown_wasl_tunnels`. Production builds only.
+    #[cfg(not(coverage))]
+    wasl_tunnels: WaslTunnelsWrap,
     /// Per-session codex spec cache: model/project/posture for building
     /// the reader's codex handshake. Production builds only.
     #[cfg(not(coverage))]
@@ -714,6 +743,10 @@ impl Agent {
                 HashMap::new(),
             ))),
             #[cfg(not(coverage))]
+            wasl_tunnels: WaslTunnelsWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
+            #[cfg(not(coverage))]
             codex_specs: CodexSpecsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
             #[cfg(not(coverage))]
             codex_threads: CodexThreadsWrap(std::sync::Arc::new(std::sync::Mutex::new(
@@ -788,6 +821,9 @@ impl Agent {
                 HashMap::new(),
             ))),
             session_run_cmds: SessionRunCmdsWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
+            wasl_tunnels: WaslTunnelsWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
             codex_specs: CodexSpecsWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),

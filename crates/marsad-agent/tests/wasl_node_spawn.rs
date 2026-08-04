@@ -430,6 +430,7 @@ fn ensure_wasl_runtime_node_spawn_absent_node_probes_and_spawns_via_container() 
     // No factory, no provider pre-set → triggers the real spawn path.
     let result = agent.ensure_wasl_runtime_node(
         "local",
+        None,
         &[("claude".to_string(), "/usr/bin/claude".to_string())],
         Some("/usr/bin/claude"),
     );
@@ -458,7 +459,7 @@ fn ensure_wasl_runtime_node_spawn_absent_node_probes_and_spawns_via_container() 
 #[test]
 fn ensure_wasl_runtime_node_returns_loopback_control_bind_url() {
     let mut agent = make_agent();
-    let result = agent.ensure_wasl_runtime_node("local", &[], None);
+    let result = agent.ensure_wasl_runtime_node("local", None, &[], None);
     let url = result.expect(
         "ensure_wasl_runtime_node must return Ok(base_url) after adopt-or-spawn (currently Err → RED)",
     );
@@ -479,7 +480,7 @@ fn ensure_wasl_runtime_node_registers_real_provider_then_launch_fails_without_a_
 
     // Phase B: adopt-or-spawn the managed wasl-mcpd node and register a REAL
     // RealWaslSessionProvider factory pointed at the loopback control_bind.
-    let result = agent.ensure_wasl_runtime_node("local", &[], None);
+    let result = agent.ensure_wasl_runtime_node("local", None, &[], None);
 
     // 1. Must return Ok(base_url) — the real deterministic loopback control_bind,
     //    NOT a placeholder. This proves the spawn path ran to completion.
@@ -542,7 +543,7 @@ fn ensure_wasl_runtime_node_registers_real_provider_then_launch_fails_without_a_
 #[test]
 fn ensure_wasl_runtime_node_adopts_existing_node_without_respawning() {
     let mut agent = agent_with_existing_wasl_mcpd("local");
-    let result = agent.ensure_wasl_runtime_node("local", &[], None);
+    let result = agent.ensure_wasl_runtime_node("local", None, &[], None);
 
     assert!(
         result.is_ok(),
@@ -571,7 +572,7 @@ fn ensure_wasl_runtime_node_adopts_existing_node_without_respawning() {
 #[test]
 fn ensure_wasl_runtime_node_scopes_probe_by_host_id() {
     let mut agent = make_agent();
-    let _ = agent.ensure_wasl_runtime_node("hpc", &[], None);
+    let _ = agent.ensure_wasl_runtime_node("hpc", None, &[], None);
 
     let calls = agent.container_calls();
     // The probe must name the correct host.
@@ -658,12 +659,12 @@ fn ensure_wasl_runtime_node_called_twice_only_spawns_once() {
     }));
 
     // First call: seam-precedence early-return (factory already set), no Container calls.
-    let r1 = agent.ensure_wasl_runtime_node("local", &[], None);
+    let r1 = agent.ensure_wasl_runtime_node("local", None, &[], None);
     assert!(r1.is_ok(), "first ensure_wasl_runtime_node must succeed; got {r1:?}");
     let calls_after_first = agent.container_calls().len();
 
     // Second call: same early-return, same no Container calls.
-    let r2 = agent.ensure_wasl_runtime_node("local", &[], None);
+    let r2 = agent.ensure_wasl_runtime_node("local", None, &[], None);
     assert!(r2.is_ok(), "second ensure_wasl_runtime_node must succeed; got {r2:?}");
     let calls_after_second = agent.container_calls().len();
 
@@ -693,7 +694,7 @@ fn ensure_wasl_runtime_node_seam_precedence_factory_set_no_container_calls() {
     }));
 
     let before = agent.container_calls().len();
-    let result = agent.ensure_wasl_runtime_node("local", &[], None);
+    let result = agent.ensure_wasl_runtime_node("local", None, &[], None);
 
     assert!(
         result.is_ok(),
@@ -718,7 +719,7 @@ fn ensure_wasl_runtime_node_seam_precedence_provider_set_no_container_calls() {
     agent.register_wasl_session_provider(Box::new(FakeWaslSessionProvider::new()));
 
     let before = agent.container_calls().len();
-    let result = agent.ensure_wasl_runtime_node("local", &[], None);
+    let result = agent.ensure_wasl_runtime_node("local", None, &[], None);
 
     assert!(
         result.is_ok(),
@@ -1044,4 +1045,328 @@ fn all_three_bind_helpers_distinct_for_same_host() {
             "a2a_bind and operator_bind must differ for host '{host}': {a2a} vs {op}"
         );
     }
+}
+
+// ===========================================================================
+// Part 7 — REMOTE-host Wasl node: bind kinds, local-tunnel allocation, tunnel
+// argv, remote spawn/kill scripts, spawn-sentinel parser, and the
+// local-vs-remote branch decision in `ensure_wasl_runtime_node`.
+// ===========================================================================
+
+use marsad_agent::{
+    parse_wasl_node_spawn, remote_wasl_node_kill_script, remote_wasl_node_launch_script,
+    wasl_local_tunnel_bind, wasl_local_tunnel_port, wasl_remote_bind, wasl_tunnel_ssh_argv,
+    WaslBindKind, WaslNodeSpawn,
+};
+
+// ── wasl_remote_bind: the node's OWN loopback binds (bare, per kind) ─────────
+
+/// `wasl_remote_bind` for Control returns the BARE control address (no scheme) —
+/// the form the remote node's TOML `control_bind` requires. It must equal the
+/// scheme-stripped `wasl_control_bind`.
+#[test]
+fn wasl_remote_bind_control_is_bare_and_matches_control_bind() {
+    let bare = wasl_remote_bind("agent33", WaslBindKind::Control);
+    assert!(!bare.contains("http://"), "remote control bind must be bare; got {bare}");
+    let expected = wasl_control_bind("agent33")
+        .strip_prefix("http://")
+        .unwrap()
+        .to_string();
+    assert_eq!(bare, expected, "remote control bind must match bare wasl_control_bind");
+    bare.parse::<std::net::SocketAddr>()
+        .expect("remote control bind must be a valid socket addr");
+}
+
+/// Operator + A2A remote binds match their bare helpers and parse as SocketAddr.
+#[test]
+fn wasl_remote_bind_operator_and_a2a_match_bare_helpers() {
+    assert_eq!(
+        wasl_remote_bind("agent33", WaslBindKind::Operator),
+        wasl_operator_bind("agent33")
+    );
+    assert_eq!(
+        wasl_remote_bind("agent33", WaslBindKind::A2a),
+        wasl_a2a_bind("agent33")
+    );
+}
+
+// ── wasl_local_tunnel_bind / _port: local endpoints, distinct window ─────────
+
+/// The local tunnel endpoint is deterministic per (host, kind) and a loopback
+/// address that parses.
+#[test]
+fn wasl_local_tunnel_bind_is_deterministic_loopback() {
+    let a = wasl_local_tunnel_bind("agent33", WaslBindKind::Control);
+    let b = wasl_local_tunnel_bind("agent33", WaslBindKind::Control);
+    assert_eq!(a, b, "local tunnel bind must be deterministic");
+    assert!(a.starts_with("127.0.0.1:"), "must be loopback; got {a}");
+    a.parse::<std::net::SocketAddr>().expect("must be a valid socket addr");
+}
+
+/// The three tunnel kinds for one host land on three DISTINCT local ports.
+#[test]
+fn wasl_local_tunnel_ports_distinct_per_kind() {
+    let c = wasl_local_tunnel_port("agent33", WaslBindKind::Control);
+    let o = wasl_local_tunnel_port("agent33", WaslBindKind::Operator);
+    let a = wasl_local_tunnel_port("agent33", WaslBindKind::A2a);
+    assert_ne!(c, o, "control/operator tunnel ports must differ: {c} vs {o}");
+    assert_ne!(c, a, "control/a2a tunnel ports must differ: {c} vs {a}");
+    assert_ne!(o, a, "operator/a2a tunnel ports must differ: {o} vs {a}");
+}
+
+/// The local tunnel port window `[45000, 46999]` is BELOW the node bind windows
+/// (control 47xxx, a2a 48xxx, operator 49xxx) so a remote node's tunnel endpoint
+/// can never collide with a LOCAL node's real bind on this machine.
+#[test]
+fn wasl_local_tunnel_port_window_below_node_bind_windows() {
+    for host in ["agent33", "hpc", "local", "cloud", "dev"] {
+        for kind in [WaslBindKind::Control, WaslBindKind::Operator, WaslBindKind::A2a] {
+            let p = wasl_local_tunnel_port(host, kind);
+            assert!(
+                (45000..=46999).contains(&p),
+                "local tunnel port for {host}/{kind:?} must be in [45000,46999]; got {p}"
+            );
+        }
+    }
+}
+
+/// Distinct hosts get distinct control tunnel ports (no cross-host collision).
+#[test]
+fn wasl_local_tunnel_port_distinct_hosts() {
+    assert_ne!(
+        wasl_local_tunnel_port("agent33", WaslBindKind::Control),
+        wasl_local_tunnel_port("hpc", WaslBindKind::Control),
+    );
+}
+
+// ── wasl_tunnel_ssh_argv: reuses exec_prefix_for, correct forward shape ──────
+
+/// A real SSH target yields an `ssh … -N -L 127.0.0.1:<l>:127.0.0.1:<r>` argv
+/// that starts with the shared ssh prefix (BatchMode etc.), not a hand-rolled one.
+#[test]
+fn wasl_tunnel_ssh_argv_builds_forward_for_ssh_target() {
+    let argv = wasl_tunnel_ssh_argv("agent33", 45123, 47456)
+        .expect("a real ssh target must yield a tunnel argv");
+    assert_eq!(argv[0], "ssh", "must reuse the ssh exec prefix; got {argv:?}");
+    assert!(
+        argv.iter().any(|a| a == "BatchMode=yes"),
+        "must carry the shared ssh option set (proves exec_prefix_for reuse); got {argv:?}"
+    );
+    assert!(argv.iter().any(|a| a == "-N"), "must be a no-command tunnel (-N); got {argv:?}");
+    let l_pos = argv.iter().position(|a| a == "-L").expect("-L present");
+    assert_eq!(
+        argv[l_pos + 1],
+        "127.0.0.1:45123:127.0.0.1:47456",
+        "forward must bind local loopback → remote loopback; got {argv:?}"
+    );
+    // The target must be the LAST argv element (after the -L spec).
+    assert_eq!(argv.last().map(String::as_str), Some("agent33"));
+}
+
+/// A local sentinel target yields NO tunnel argv (a local node needs no tunnel).
+#[test]
+fn wasl_tunnel_ssh_argv_none_for_local_targets() {
+    for t in ["local", "localhost", ""] {
+        assert!(
+            wasl_tunnel_ssh_argv(t, 45000, 47000).is_none(),
+            "local sentinel target {t:?} must not produce a tunnel argv"
+        );
+    }
+}
+
+// ── remote_wasl_node_launch_script / kill_script ─────────────────────────────
+
+/// The launch script writes the config to a per-host path, requires wasl-mcpd on
+/// PATH, and durably spawns holding stdin open (the sleep|... recipe) with
+/// WASL_CONFIG set.
+#[test]
+fn remote_wasl_node_launch_script_shape() {
+    let toml = render_wasl_node_toml(&WaslNodeConfig {
+        agent_id: "marsad-agent33",
+        host_id: "agent33",
+        a2a_bind: "127.0.0.1:48200",
+        operator_bind: "127.0.0.1:49200",
+        control_bind: "http://127.0.0.1:47200",
+        default_protocol: "claude",
+        claude_bin: None,
+        opencode_bin: None,
+    });
+    let s = remote_wasl_node_launch_script("agent33", &toml);
+    assert!(s.contains("wasl-node-agent33.toml"), "per-host config path; got:\n{s}");
+    assert!(
+        s.contains("command -v wasl-mcpd"),
+        "must require wasl-mcpd on PATH; got:\n{s}"
+    );
+    assert!(s.contains("MARSAD_WASL_NODE:NO_BINARY"), "must emit NO_BINARY sentinel");
+    assert!(
+        s.contains("sleep 100000 |") && s.contains("WASL_CONFIG="),
+        "must durably spawn holding stdin open with WASL_CONFIG; got:\n{s}"
+    );
+    assert!(s.contains("MARSAD_WASL_NODE:SPAWNED"), "must emit SPAWNED sentinel");
+    assert!(s.contains("MARSAD_WASL_NODE:ADOPTED"), "must emit ADOPTED sentinel (idempotent)");
+    // The rendered node TOML must be embedded verbatim.
+    assert!(s.contains("kind = \"managed\""), "node TOML must be embedded; got:\n{s}");
+}
+
+/// The kill script SIGTERM/SIGKILLs the recorded pid and removes the state files.
+#[test]
+fn remote_wasl_node_kill_script_shape() {
+    let s = remote_wasl_node_kill_script("agent33");
+    assert!(s.contains("wasl-node-agent33.pid"), "reads the per-host pid file");
+    assert!(s.contains("kill "), "sends SIGTERM");
+    assert!(s.contains("kill -9"), "escalates to SIGKILL");
+    assert!(s.contains("rm -f"), "removes state files");
+    assert!(s.contains("MARSAD_WASL_NODE:KILLED"), "emits KILLED sentinel");
+}
+
+// ── parse_wasl_node_spawn ────────────────────────────────────────────────────
+
+#[test]
+fn parse_wasl_node_spawn_variants() {
+    assert_eq!(
+        parse_wasl_node_spawn(Some("banner\nMARSAD_WASL_NODE:SPAWNED 4242\n")),
+        WaslNodeSpawn::Spawned("4242".to_string())
+    );
+    assert_eq!(
+        parse_wasl_node_spawn(Some("MARSAD_WASL_NODE:ADOPTED 99")),
+        WaslNodeSpawn::Adopted("99".to_string())
+    );
+    assert_eq!(
+        parse_wasl_node_spawn(Some("MARSAD_WASL_NODE:NO_BINARY")),
+        WaslNodeSpawn::NoBinary
+    );
+    // No sentinel / None → Unreachable.
+    assert_eq!(parse_wasl_node_spawn(Some("just a banner")), WaslNodeSpawn::Unreachable);
+    assert_eq!(parse_wasl_node_spawn(None), WaslNodeSpawn::Unreachable);
+    // Unknown tag → Unreachable (forward-compat safe).
+    assert_eq!(
+        parse_wasl_node_spawn(Some("MARSAD_WASL_NODE:WAT 1")),
+        WaslNodeSpawn::Unreachable
+    );
+}
+
+// ── local-vs-remote branch decision in ensure_wasl_runtime_node ──────────────
+
+/// A local sentinel `host_target` (`Some("local")`/`Some("localhost")`/`Some("")`)
+/// takes the LOCAL Container spawn path — byte-identical to `None`: the managed
+/// runtime node is probed + spawned via the Container seam, NOT over ssh.
+#[test]
+fn ensure_wasl_runtime_node_local_sentinel_host_target_takes_local_path() {
+    for sentinel in ["local", "localhost", ""] {
+        let mut agent = make_agent();
+        let result = agent.ensure_wasl_runtime_node("local", Some(sentinel), &[], None);
+        assert!(
+            result.is_ok(),
+            "local-sentinel host_target {sentinel:?} must take the local spawn path; got {result:?}"
+        );
+        let calls = agent.container_calls();
+        assert!(
+            calls.iter().any(|c| c.starts_with("exists:wasl-mcpd-runtime-local")),
+            "local-sentinel host_target {sentinel:?} must probe the LOCAL Container node; calls: {calls:?}"
+        );
+        // The returned base_url is the node's OWN loopback control_bind (no tunnel).
+        assert_eq!(result.unwrap(), wasl_control_bind("local"));
+    }
+}
+
+/// `None` host_target is identical to a local sentinel — the local path.
+#[test]
+fn ensure_wasl_runtime_node_none_host_target_is_local() {
+    let mut agent = make_agent();
+    let url = agent
+        .ensure_wasl_runtime_node("local", None, &[], None)
+        .expect("None host_target must take the local path");
+    assert_eq!(url, wasl_control_bind("local"));
+    assert!(
+        agent
+            .container_calls()
+            .iter()
+            .any(|c| c.starts_with("exists:wasl-mcpd-runtime-local")),
+        "None host_target must probe the LOCAL Container node"
+    );
+}
+
+// ── wasl_host_target: host_id → SSH target resolution (all three branches) ──
+
+use marsad_store::PersistedHost;
+
+fn persisted_host(id: &str, target: &str, is_local: bool) -> PersistedHost {
+    PersistedHost {
+        id: id.to_string(),
+        label: id.to_string(),
+        target: target.to_string(),
+        is_local,
+        claude_bin: None,
+        setup: None,
+        env: vec![],
+        agent_commands: vec![],
+    }
+}
+
+/// Build an Agent whose store is pre-seeded with the given hosts, so
+/// `wasl_host_target` can be driven across all three resolution branches.
+fn agent_with_hosts(hosts: &[PersistedHost]) -> Agent {
+    let mut store = Store::new(Box::new(MemoryBackend::new()));
+    for h in hosts {
+        store.upsert_host(h).expect("upsert_host");
+    }
+    Agent::with_fakes(
+        AgentConfig {
+            listen: ListenSpec::Stdio,
+            data_root: "/tmp/marsad-agent-wasl-host-target-test".to_string(),
+        },
+        Box::new(FakeContainer::new()),
+        Box::new(CaptureNotifier::new()),
+        Box::new(store),
+    )
+    .expect("Agent::with_fakes")
+}
+
+/// A REMOTE host (not is_local, real ssh target) resolves to its SSH target.
+#[test]
+fn wasl_host_target_resolves_remote_host_to_its_ssh_target() {
+    let mut agent = agent_with_hosts(&[persisted_host("agent33", "agent33", false)]);
+    assert_eq!(
+        agent.wasl_host_target("agent33"),
+        Some("agent33".to_string()),
+        "a remote host must resolve to its SSH target"
+    );
+}
+
+/// A LOCAL host (`is_local == true`) resolves to `None` — the local spawn path,
+/// regardless of any target string it carries.
+#[test]
+fn wasl_host_target_local_flag_resolves_to_none() {
+    let mut agent = agent_with_hosts(&[persisted_host("mybox", "whatever", true)]);
+    assert_eq!(
+        agent.wasl_host_target("mybox"),
+        None,
+        "an is_local host must resolve to None (local spawn path)"
+    );
+}
+
+/// A host whose target is a local sentinel (`local`/`localhost`/empty) resolves
+/// to `None` even when `is_local` is false.
+#[test]
+fn wasl_host_target_local_sentinel_target_resolves_to_none() {
+    for sentinel in ["local", "localhost", "", "  "] {
+        let mut agent = agent_with_hosts(&[persisted_host("h", sentinel, false)]);
+        assert_eq!(
+            agent.wasl_host_target("h"),
+            None,
+            "a local-sentinel target {sentinel:?} must resolve to None"
+        );
+    }
+}
+
+/// An unknown host_id resolves to `None` (the local fallback — never a wrong
+/// target). A store with no such host must not error.
+#[test]
+fn wasl_host_target_unknown_host_resolves_to_none() {
+    let mut agent = agent_with_hosts(&[persisted_host("known", "known-host", false)]);
+    assert_eq!(
+        agent.wasl_host_target("nope"),
+        None,
+        "an unknown host_id must resolve to None"
+    );
 }

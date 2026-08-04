@@ -493,6 +493,61 @@ pub fn fetch_remote_session_list(host_target: &str, project: &str) -> Option<Str
 /// - an `ssh` prefix (with the standard option set) for `user@host` or a bare alias,
 /// - a `wsl.exe` prefix for `wsl:<distro>`,
 /// - a `plink` prefix (PuTTY connection sharing) for `plink:<ssh-target>`.
+/// The `-o ControlPath=<...>` option value for SSH ControlMaster multiplexing.
+///
+/// Defaults to `~/.ssh/marsad-cm-%r@%h:%p` (ssh expands `~` via the passwd home,
+/// not `$HOME`). Set `MARSAD_SSH_CONTROL_DIR` to relocate the master socket to a
+/// writable directory when `~/.ssh` is read-only (sandboxes, restricted CI, or a
+/// read-only HOME mount) — otherwise `ssh` aborts with
+/// `unix_listener: cannot bind to path ...: Read-only file system`. Production
+/// behavior is unchanged when the var is unset.
+fn control_path_opt() -> String {
+    control_path_opt_for(std::env::var("MARSAD_SSH_CONTROL_DIR").ok())
+}
+
+/// Pure core of [`control_path_opt`] — split out so the directory-selection logic
+/// is unit-testable without mutating the process-global environment (which would
+/// race the other `exec_prefix_for` tests running in parallel).
+fn control_path_opt_for(env_dir: Option<String>) -> String {
+    let dir = env_dir
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "~/.ssh".to_string());
+    let dir = dir.trim_end_matches('/');
+    format!("ControlPath={dir}/marsad-cm-%r@%h:%p")
+}
+
+#[cfg(test)]
+mod control_path_tests {
+    use super::control_path_opt_for;
+
+    #[test]
+    fn defaults_to_home_ssh_when_unset_or_blank() {
+        let want = "ControlPath=~/.ssh/marsad-cm-%r@%h:%p";
+        assert_eq!(control_path_opt_for(None), want);
+        assert_eq!(control_path_opt_for(Some(String::new())), want);
+        assert_eq!(control_path_opt_for(Some("   ".to_string())), want);
+    }
+
+    #[test]
+    fn honors_override_dir_and_trims_trailing_slash() {
+        assert_eq!(
+            control_path_opt_for(Some("/work/x/.ssh-ctl".to_string())),
+            "ControlPath=/work/x/.ssh-ctl/marsad-cm-%r@%h:%p"
+        );
+        // trailing slash(es) trimmed so we never emit a `//`
+        assert_eq!(
+            control_path_opt_for(Some("/tmp/ctl/".to_string())),
+            "ControlPath=/tmp/ctl/marsad-cm-%r@%h:%p"
+        );
+        // surrounding whitespace trimmed
+        assert_eq!(
+            control_path_opt_for(Some("  /tmp/ctl  ".to_string())),
+            "ControlPath=/tmp/ctl/marsad-cm-%r@%h:%p"
+        );
+    }
+}
+
 pub fn exec_prefix_for(host_target: Option<&str>) -> Option<Vec<String>> {
     let t = host_target.map(str::trim).filter(|s| !s.is_empty())?;
     if t == "local" || t == "localhost" {
@@ -537,7 +592,7 @@ pub fn exec_prefix_for(host_target: Option<&str>) -> Option<Vec<String>> {
         argv.extend(opt("ServerAliveCountMax=3"));
         argv.extend(opt("TCPKeepAlive=yes"));
         argv.extend(opt("ControlMaster=auto"));
-        argv.extend(opt("ControlPath=~/.ssh/marsad-cm-%r@%h:%p"));
+        argv.extend(["-o".to_string(), control_path_opt()]);
         argv.extend(opt("ControlPersist=600"));
         argv.push(target.to_string());
         return Some(argv);
@@ -581,7 +636,7 @@ pub fn exec_prefix_for(host_target: Option<&str>) -> Option<Vec<String>> {
     #[cfg(unix)]
     {
         argv.extend(opt("ControlMaster=auto"));
-        argv.extend(opt("ControlPath=~/.ssh/marsad-cm-%r@%h:%p"));
+        argv.extend(["-o".to_string(), control_path_opt()]);
         argv.extend(opt("ControlPersist=600"));
     }
     argv.push(t.to_string());

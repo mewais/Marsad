@@ -386,6 +386,246 @@ pub fn wasl_operator_bind(host_id: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Remote-host Wasl node: the three loopback bind KINDS a node exposes, and the
+// LOCAL tunnel-endpoint allocator for reaching a REMOTE node over `ssh -L`.
+//
+// For a LOCAL node the daemon dials the node's own loopback bind directly
+// (`wasl_control_bind`/`wasl_operator_bind`/`wasl_a2a_bind`). For a REMOTE node
+// those SAME binds live on the REMOTE loopback; the daemon reaches them through
+// per-host `ssh -L <lport>:127.0.0.1:<remote_port>` tunnels and must dial the
+// LOCAL tunnel endpoint (`http://127.0.0.1:<lport>`), never the remote bind.
+//
+// The local tunnel ports live in a DISTINCT window from the node's own bind
+// windows so a remote node's tunnel endpoint can never collide with a
+// simultaneously-running LOCAL node's real bind on this machine.
+// ---------------------------------------------------------------------------
+
+/// Which of a node's three loopback endpoints a bind/tunnel refers to. Pure
+/// value; drives the deterministic local-tunnel-port allocation so the three
+/// tunnels for one host never collide with each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaslBindKind {
+    Control,
+    Operator,
+    A2a,
+}
+
+impl WaslBindKind {
+    /// A small per-kind salt folded into the FNV hash so the three tunnels for
+    /// one host land on three distinct ports.
+    fn salt(self) -> u32 {
+        match self {
+            WaslBindKind::Control => 0,
+            WaslBindKind::Operator => 1,
+            WaslBindKind::A2a => 2,
+        }
+    }
+}
+
+/// The bare `ip:port` a REMOTE node binds for a given endpoint kind. Identical
+/// to the local bind helpers' bare form (`wasl-mcpd` on the remote parses these
+/// with `SocketAddr::parse`), so a durable remote node is rediscoverable at the
+/// same address after a restart. Returned bare (no `http://`) — that is what the
+/// remote node's TOML `bind`/`control_bind` keys require.
+pub fn wasl_remote_bind(host_id: &str, kind: WaslBindKind) -> String {
+    match kind {
+        // control_bind is the only one whose local helper carries an http://
+        // scheme; strip it to the bare form the node's own TOML needs.
+        WaslBindKind::Control => bare_socket(&wasl_control_bind(host_id)).to_string(),
+        WaslBindKind::Operator => wasl_operator_bind(host_id),
+        WaslBindKind::A2a => wasl_a2a_bind(host_id),
+    }
+}
+
+/// Compute the deterministic LOCAL loopback tunnel endpoint (`127.0.0.1:<lport>`)
+/// the daemon dials to reach a REMOTE node's endpoint of `kind` for `host_id`.
+///
+/// Port window `[45000, 46999]` — a 2000-port range BELOW the node's own bind
+/// windows (control 47xxx, a2a 48xxx, operator 49xxx) so a remote node's tunnel
+/// endpoint on this machine can never collide with a LOCAL node's real bind.
+/// Deterministic per `(host_id, kind)` so the tunnel is re-openable at the same
+/// local port after a restart, and the per-`kind` salt keeps the three tunnels
+/// for one host on three distinct ports.
+///
+/// Returned BARE (`127.0.0.1:<lport>`); the caller adds an `http://` scheme when
+/// dialing the control/operator HTTP endpoints.
+pub fn wasl_local_tunnel_bind(host_id: &str, kind: WaslBindKind) -> String {
+    const FNV_OFFSET: u32 = 2_166_136_261;
+    const FNV_PRIME: u32 = 16_777_619;
+    let mut hash = FNV_OFFSET;
+    for byte in host_id.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    // Fold the kind salt in so the three tunnels for one host differ.
+    hash ^= kind.salt();
+    hash = hash.wrapping_mul(FNV_PRIME);
+    // Map into [45000, 46999]: 2000-port window below the node bind windows.
+    let port = 45_000u32 + (hash % 2_000);
+    format!("127.0.0.1:{port}")
+}
+
+/// Bare port (`u16`) of a local tunnel endpoint — the number `ssh -L` needs as
+/// the local side of the forward. Thin wrapper over [`wasl_local_tunnel_bind`].
+pub fn wasl_local_tunnel_port(host_id: &str, kind: WaslBindKind) -> u16 {
+    wasl_local_tunnel_bind(host_id, kind)
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse().ok())
+        .expect("wasl_local_tunnel_bind always ends in :<port>")
+}
+
+/// Build the `ssh -L` tunnel argv that forwards a LOCAL loopback port to a
+/// REMOTE node's loopback endpoint. Reuses [`crate::remote::exec_prefix_for`] so
+/// the SAME connection options (BatchMode, ControlMaster, keepalive) as every
+/// other remote command apply — no parallel SSH layer.
+///
+/// `-N` (no remote command) + a foreground child we can `kill()` on teardown
+/// (NOT `-f`, which would background the process out of our reach). The forward
+/// is `<local_port>:127.0.0.1:<remote_port>`, binding the LOCAL side to loopback
+/// only. `None` for a local/unknown host (no tunnel is needed for a local node).
+pub fn wasl_tunnel_ssh_argv(
+    host_target: &str,
+    local_port: u16,
+    remote_port: u16,
+) -> Option<Vec<String>> {
+    let mut argv = crate::remote::exec_prefix_for(Some(host_target))?;
+    // `exec_prefix_for` puts the ssh DESTINATION last. The `-N`/`-L` forward
+    // options MUST precede the destination — ssh treats anything after the
+    // destination as the remote command, which would silently break the tunnel
+    // (connect + run `-N -L …` as a command instead of forwarding). So pop the
+    // destination, append the no-command port-forward flags, then re-append it.
+    let dest = argv.pop()?;
+    argv.push("-N".to_string());
+    argv.push("-L".to_string());
+    argv.push(format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"));
+    argv.push(dest);
+    Some(argv)
+}
+
+/// Build the shell script that durably launches a REMOTE `wasl-mcpd` managed
+/// node, holding its stdin open so the stdio-MCP control task does not die on
+/// EOF (the crux recipe). Run via `run_remote_script` (`bash -l -s`, login PATH).
+///
+/// Steps:
+///   1. Write the node's `WASL_CONFIG` TOML to `~/.marsad/wasl-node-<host_id>.toml`.
+///   2. If a `wasl-mcpd` is already durably running for this host (a live pid in
+///      `~/.marsad/wasl-node-<host_id>.pid`), adopt it — do NOT spawn a second.
+///   3. Otherwise verify `wasl-mcpd` is on the login PATH; if absent, print a
+///      clear `MARSAD_WASL_NODE:NO_BINARY` sentinel and exit (the caller surfaces
+///      an actionable error rather than a silent failure).
+///   4. Durably spawn `wasl-mcpd` holding stdin open:
+///        `nohup bash -lc "sleep 100000 | WASL_CONFIG=<toml> wasl-mcpd" >log 2>&1 &`
+///      record its pid in `.pid`, and print `MARSAD_WASL_NODE:SPAWNED <pid>`.
+///
+/// `toml` is embedded via a single-quoted heredoc marker so `$`/`\` inside it are
+/// not expanded. Deterministic + pure (no local IO): the ONLY side effects are on
+/// the remote, performed by the returned script.
+pub fn remote_wasl_node_launch_script(host_id: &str, toml: &str) -> String {
+    // Home-relative remote paths; `$HOME` expands on the remote login shell.
+    let cfg = format!("$HOME/.marsad/wasl-node-{host_id}.toml");
+    let log = format!("$HOME/.marsad/wasl-node-{host_id}.log");
+    let pid = format!("$HOME/.marsad/wasl-node-{host_id}.pid");
+    format!(
+        r#"set -e
+mkdir -p "$HOME/.marsad"
+cfg={cfg}
+log={log}
+pidf={pid}
+cat > "$cfg" << 'MARSAD_WASL_NODE_TOML'
+{toml}
+MARSAD_WASL_NODE_TOML
+# Adopt an already-running durable node for this host.
+if [ -f "$pidf" ]; then
+  old=$(cat "$pidf" 2>/dev/null || echo "")
+  if [ -n "$old" ] && kill -0 "$old" 2>/dev/null; then
+    echo "MARSAD_WASL_NODE:ADOPTED $old"
+    exit 0
+  fi
+fi
+# Require the node binary on the login PATH (installed like the agent CLIs).
+if ! command -v wasl-mcpd >/dev/null 2>&1; then
+  echo "MARSAD_WASL_NODE:NO_BINARY"
+  exit 0
+fi
+# Durable spawn holding stdin open so the stdio-MCP control task survives EOF.
+nohup bash -lc 'sleep 100000 | WASL_CONFIG="'"$cfg"'" wasl-mcpd' </dev/null >>"$log" 2>&1 &
+np=$!
+echo "$np" > "$pidf"
+sleep 0.4
+echo "MARSAD_WASL_NODE:SPAWNED $np"
+"#,
+        cfg = cfg,
+        log = log,
+        pid = pid,
+        toml = toml,
+    )
+}
+
+/// Build the shell script that tears down a durable REMOTE `wasl-mcpd` node for
+/// `host_id`: SIGTERM (then SIGKILL) the pid in `~/.marsad/wasl-node-<host_id>.pid`
+/// and remove the pid/config/log files. Idempotent — a missing pid/dir is a no-op.
+pub fn remote_wasl_node_kill_script(host_id: &str) -> String {
+    let cfg = format!("$HOME/.marsad/wasl-node-{host_id}.toml");
+    let log = format!("$HOME/.marsad/wasl-node-{host_id}.log");
+    let pid = format!("$HOME/.marsad/wasl-node-{host_id}.pid");
+    format!(
+        r#"pidf={pid}
+if [ -f "$pidf" ]; then
+  p=$(cat "$pidf" 2>/dev/null || echo "")
+  [ -n "$p" ] && kill "$p" 2>/dev/null || true
+  sleep 0.2
+  [ -n "$p" ] && kill -9 "$p" 2>/dev/null || true
+fi
+rm -f "$pidf" {cfg} {log}
+echo "MARSAD_WASL_NODE:KILLED"
+"#,
+        pid = pid,
+        cfg = cfg,
+        log = log,
+    )
+}
+
+/// Parse the `MARSAD_WASL_NODE:` sentinel out of the remote launch script's
+/// stdout into a definitive outcome. Pure — unit-tested. Scans ALL lines so a
+/// login banner / MOTD cannot mask the verdict; no sentinel line at all →
+/// `Unreachable` (the command couldn't run / connection failed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WaslNodeSpawn {
+    /// A fresh durable node was spawned (carries the remote pid).
+    Spawned(String),
+    /// An already-running durable node was adopted (carries the remote pid).
+    Adopted(String),
+    /// `wasl-mcpd` is not installed on the remote login PATH.
+    NoBinary,
+    /// No sentinel — the remote command didn't run / connection failed.
+    Unreachable,
+}
+
+/// Parse remote launch-script stdout into a [`WaslNodeSpawn`] verdict.
+pub fn parse_wasl_node_spawn(output: Option<&str>) -> WaslNodeSpawn {
+    let out = match output {
+        Some(o) => o,
+        None => return WaslNodeSpawn::Unreachable,
+    };
+    for line in out.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("MARSAD_WASL_NODE:") {
+            let mut parts = rest.trim().splitn(2, char::is_whitespace);
+            let tag = parts.next().unwrap_or("");
+            let arg = parts.next().unwrap_or("").trim().to_string();
+            return match tag {
+                "SPAWNED" => WaslNodeSpawn::Spawned(arg),
+                "ADOPTED" => WaslNodeSpawn::Adopted(arg),
+                "NO_BINARY" => WaslNodeSpawn::NoBinary,
+                _ => WaslNodeSpawn::Unreachable,
+            };
+        }
+    }
+    WaslNodeSpawn::Unreachable
+}
+
+// ---------------------------------------------------------------------------
 // Phase-D — Wasl worker MCP config builders
 //
 // When Marsad launches a Wasl-managed worker session (a claude or opencode

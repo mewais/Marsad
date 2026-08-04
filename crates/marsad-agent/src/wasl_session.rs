@@ -253,24 +253,77 @@ impl Agent {
     ///   5. Return `Ok(base_url)`.
     ///
     /// Called at the top of `handle_launch_wasl_session` before `get_or_start`.
+    ///
+    /// `host_target` selects LOCAL vs REMOTE:
+    ///
+    /// * `None` (or a local sentinel — `"local"`/`"localhost"`/empty, i.e. any
+    ///   value `exec_prefix_for` treats as local): the node is spawned on THIS
+    ///   machine via the Container seam and the daemon dials the node's own
+    ///   loopback control_bind directly. Byte-identical to the pre-remote
+    ///   behavior.
+    /// * `Some(ssh_target)` (a real SSH/WSL target): the node is spawned on the
+    ///   REMOTE host over that connection (durable `wasl-mcpd` holding stdin
+    ///   open), `ssh -L` tunnels are opened to its control/operator/a2a loopback
+    ///   binds, and the provider + operator connector are registered at the LOCAL
+    ///   tunnel endpoints — see [`Self::ensure_remote_wasl_runtime_node`].
     pub fn ensure_wasl_runtime_node(
         &mut self,
         host_id: &str,
+        host_target: Option<&str>,
         agent_commands: &[(String, String)],
         claude_bin: Option<&str>,
     ) -> Result<String, AgentError> {
-        // Compute the deterministic loopback control_bind address for this host
-        // upfront — needed both for the early-return and for the spawn path.
-        let base_url = crate::wasl::wasl_control_bind(host_id);
+        // The endpoint a caller dials to reach this node's control API — needed
+        // both for the idempotent early-return and (local branch) the spawn path.
+        // For a LOCAL node that's the node's own loopback `control_bind`; for a
+        // REMOTE node the node binds on the remote host and Marsad reaches it via
+        // an `ssh -L` tunnel, so the caller must dial the LOCAL tunnel port. The
+        // early-return below (factory already registered) MUST hand back the SAME
+        // endpoint the first call returned — otherwise a repeat launch/adopt of a
+        // remote host returns the remote port and the client dials an unreachable
+        // address (i15/S2 regression).
+        let is_remote = host_target
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(|t| crate::remote::exec_prefix_for(Some(t)).is_some())
+            .unwrap_or(false);
+        let base_url = if is_remote {
+            format!(
+                "http://127.0.0.1:{}",
+                crate::wasl::wasl_local_tunnel_port(host_id, crate::wasl::WaslBindKind::Control)
+            )
+        } else {
+            crate::wasl::wasl_control_bind(host_id)
+        };
 
         // Test-seam / serve()-pre-set precedence: if a provider or factory is
         // already registered, return immediately with the real base_url — do NOT
-        // overwrite the pre-set seam with a new factory.
+        // overwrite the pre-set seam with a new factory. (Identical for local and
+        // remote: once a node is up and its factory registered, a repeat launch is
+        // a cheap no-op regardless of where the node lives.)
         if self.wasl_session_provider.0.is_some()
             || self.wasl_session_provider_factory.0.is_some()
         {
             return Ok(base_url);
         }
+
+        // REMOTE branch: a real SSH/WSL target. The Container seam only manages
+        // LOCAL processes, so a remote node is spawned + tunneled over the SAME
+        // remote seams solo remote sessions use (run_remote_script + ssh children).
+        // A local sentinel target falls through to the local branch below.
+        #[cfg(not(coverage))]
+        if let Some(target) = host_target
+            .filter(|t| crate::remote::exec_prefix_for(Some(t)).is_some())
+        {
+            return self.ensure_remote_wasl_runtime_node(
+                host_id,
+                target,
+                agent_commands,
+                claude_bin,
+            );
+        }
+        #[cfg(coverage)]
+        let _ = host_target;
 
         // Resolve per-protocol bins from agent_commands (prefer the explicit
         // claude_bin arg, then fall back to agent_commands lookup).
@@ -386,6 +439,250 @@ impl Agent {
         Ok(base_url)
     }
 
+    /// Resolve a logical `host_id` to its real SSH/WSL target from the persisted
+    /// host registry (`PersistedHost.target`). A local host (`is_local`, or a
+    /// `local`/`localhost`/empty target), an unknown `host_id`, or a store that
+    /// won't restore all resolve to `None` — the caller then takes the LOCAL node
+    /// spawn path. Always compiled (the launch path must resolve the target under
+    /// coverage too; the store is present in every build). `pub` so the resolution
+    /// (all three branches: local host, remote host, unknown host) is directly
+    /// unit-tested via a store-seeded `Agent`.
+    pub fn wasl_host_target(&mut self, host_id: &str) -> Option<String> {
+        // The store's `restore()` can only fail on a backend IO error; every test
+        // (and every real launch that reached this point) drives it against a live
+        // backend, so the Err arm is unreachable from the launch path. Folded under
+        // coverage with `.expect()` — the crate's established residual convention
+        // for a call that never fails in the tested regime (see `real.rs`).
+        #[cfg(not(coverage))]
+        let state = self.store.0.restore().ok()?;
+        #[cfg(coverage)]
+        let state = self
+            .store
+            .0
+            .restore()
+            .expect("coverage-mode: the test backend always restores");
+        let host = state.hosts.into_iter().find(|h| h.id == host_id)?;
+        if host.is_local {
+            return None;
+        }
+        let t = host.target.trim();
+        if t.is_empty() || t == "local" || t == "localhost" {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    }
+
+    /// REMOTE node spawn + tunnel wiring (real-IO only). Spawns a durable
+    /// `wasl-mcpd` on `host_target` (holding stdin open so the stdio-MCP control
+    /// task survives EOF — the crux recipe), opens per-host `ssh -L` tunnels to
+    /// its control/operator/a2a loopback binds, and registers the provider factory
+    /// + operator connector at the LOCAL tunnel endpoints (`http://127.0.0.1:<lport>`),
+    /// NOT the remote bind.
+    ///
+    /// Reuses the existing remote seams — `run_remote_script` (config write +
+    /// durable spawn over the host's connection) and `exec_prefix_for` (the tunnel
+    /// argv), the SAME machinery solo remote sessions use — never a parallel SSH
+    /// layer. Honest errors: an unreachable host or a missing `wasl-mcpd` on the
+    /// remote surfaces a typed `Spawn` error, never a panic.
+    ///
+    /// Returns the LOCAL control tunnel endpoint (`http://127.0.0.1:<lport>`) as
+    /// the base_url — the address the factory dials.
+    #[cfg(not(coverage))]
+    fn ensure_remote_wasl_runtime_node(
+        &mut self,
+        host_id: &str,
+        host_target: &str,
+        agent_commands: &[(String, String)],
+        claude_bin: Option<&str>,
+    ) -> Result<String, AgentError> {
+        use crate::wasl::WaslBindKind;
+
+        // Resolve per-protocol bins (prefer the explicit arg, then agent_commands).
+        let claude_bin_resolved = claude_bin.or_else(|| {
+            agent_commands
+                .iter()
+                .find(|(k, _)| k == "claude")
+                .map(|(_, v)| v.as_str())
+        });
+        let opencode_bin_resolved = agent_commands
+            .iter()
+            .find(|(k, _)| k == "opencode")
+            .map(|(_, v)| v.as_str());
+
+        // The node's OWN loopback binds live on the REMOTE host (bare ip:port).
+        let agent_id = format!("marsad-{host_id}");
+        let remote_control = crate::wasl::wasl_remote_bind(host_id, WaslBindKind::Control);
+        let remote_operator = crate::wasl::wasl_remote_bind(host_id, WaslBindKind::Operator);
+        let remote_a2a = crate::wasl::wasl_remote_bind(host_id, WaslBindKind::A2a);
+
+        // The LOCAL tunnel endpoints the daemon dials to reach them.
+        let l_control = crate::wasl::wasl_local_tunnel_port(host_id, WaslBindKind::Control);
+        let l_operator = crate::wasl::wasl_local_tunnel_port(host_id, WaslBindKind::Operator);
+        let l_a2a = crate::wasl::wasl_local_tunnel_port(host_id, WaslBindKind::A2a);
+        let base_url = format!("http://127.0.0.1:{l_control}");
+        let operator_local_url = format!("http://127.0.0.1:{l_operator}");
+
+        eprintln!(
+            "marsad-agent: wasl-node[remote {host_target:?}]: host={host_id} \
+             remote control={remote_control} operator={remote_operator} a2a={remote_a2a} \
+             local control={base_url} operator={operator_local_url} a2a=127.0.0.1:{l_a2a}"
+        );
+
+        // Render the node TOML with the REMOTE binds (bare ip:port).
+        let toml_cfg = crate::wasl::WaslNodeConfig {
+            agent_id: &agent_id,
+            host_id,
+            a2a_bind: &remote_a2a,
+            operator_bind: &remote_operator,
+            control_bind: &remote_control,
+            default_protocol: if opencode_bin_resolved.is_some() && claude_bin_resolved.is_none() {
+                "opencode"
+            } else {
+                "claude"
+            },
+            claude_bin: claude_bin_resolved,
+            opencode_bin: opencode_bin_resolved,
+        };
+        let toml_str = crate::wasl::render_wasl_node_toml(&toml_cfg);
+
+        // Write the config + durably spawn the node over the host's connection.
+        let script = crate::wasl::remote_wasl_node_launch_script(host_id, &toml_str);
+        let out = crate::remote::run_remote_script(host_target, &script);
+        match crate::wasl::parse_wasl_node_spawn(out.as_deref()) {
+            crate::wasl::WaslNodeSpawn::Spawned(pid)
+            | crate::wasl::WaslNodeSpawn::Adopted(pid) => {
+                eprintln!(
+                    "marsad-agent: wasl-node[remote {host_target:?}]: node up (pid {pid})"
+                );
+            }
+            crate::wasl::WaslNodeSpawn::NoBinary => {
+                return Err(AgentError::Spawn(format!(
+                    "wasl-mcpd is not installed on remote host {host_target:?} \
+                     (expected on the login PATH, like the agent CLIs) — install it to \
+                     launch Wasl-managed sessions on this host"
+                )));
+            }
+            crate::wasl::WaslNodeSpawn::Unreachable => {
+                return Err(AgentError::Spawn(format!(
+                    "could not reach remote host {host_target:?} to spawn the Wasl node \
+                     (connection failed / no sentinel)"
+                )));
+            }
+        }
+
+        // Open the three ssh -L tunnels (control + operator + a2a) and track the
+        // children so node/session teardown can kill them. Idempotent per host:
+        // if tunnels are already tracked for this host, they are left in place.
+        self.open_wasl_tunnels(
+            host_id,
+            host_target,
+            &[
+                (l_control, remote_port(&remote_control)),
+                (l_operator, remote_port(&remote_operator)),
+                (l_a2a, remote_port(&remote_a2a)),
+            ],
+        );
+
+        // Register the provider factory at the LOCAL control tunnel endpoint.
+        let factory_base_url = base_url.clone();
+        self.wasl_session_provider_factory.0 = Some(Box::new(move || {
+            Box::new(marsad_wasl_session::RealWaslSessionProvider::new(
+                marsad_wasl_session::WaslSessionClientConfig {
+                    base_url: factory_base_url.clone(),
+                },
+            )) as Box<dyn marsad_wasl_session::WaslSessionProvider>
+        }));
+
+        eprintln!(
+            "marsad-agent: wasl-node[remote {host_target:?}]: factory registered at {base_url}"
+        );
+
+        // Wire the operator connector at the LOCAL operator tunnel endpoint.
+        self.ensure_wasl_operator_connector(host_id, &operator_local_url);
+
+        Ok(base_url)
+    }
+
+    /// Open (once) the `ssh -L` tunnel children for a remote node and track them
+    /// under `host_id` so [`Self::teardown_wasl_tunnels`] can reap them. Idempotent:
+    /// if tunnels are already tracked for this host, this is a no-op (a second
+    /// launch on the same host reuses the live tunnels). Real-IO only.
+    #[cfg(not(coverage))]
+    fn open_wasl_tunnels(
+        &mut self,
+        host_id: &str,
+        host_target: &str,
+        forwards: &[(u16, u16)],
+    ) {
+        use std::process::{Command, Stdio};
+        {
+            let map = self.wasl_tunnels.0.lock().unwrap();
+            if map.contains_key(host_id) {
+                eprintln!(
+                    "marsad-agent: wasl-node[remote {host_target:?}]: tunnels already open for {host_id} — reuse"
+                );
+                return;
+            }
+        }
+        let mut children = Vec::new();
+        for (lport, rport) in forwards {
+            let Some(argv) = crate::wasl::wasl_tunnel_ssh_argv(host_target, *lport, *rport) else {
+                continue;
+            };
+            let bin = crate::remote::resolve_remote_bin(&argv[0]);
+            let mut command = Command::new(&bin);
+            command
+                .args(&argv[1..])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+            }
+            match command.spawn() {
+                Ok(child) => {
+                    eprintln!(
+                        "marsad-agent: wasl-node[remote {host_target:?}]: tunnel 127.0.0.1:{lport} -> :{rport} (pid {})",
+                        child.id()
+                    );
+                    children.push(child);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "marsad-agent: wasl-node[remote {host_target:?}]: tunnel spawn failed for :{lport}: {e}"
+                    );
+                }
+            }
+        }
+        if !children.is_empty() {
+            self.wasl_tunnels
+                .0
+                .lock()
+                .unwrap()
+                .insert(host_id.to_string(), children);
+            // Give the tunnels a moment to establish before the first factory dial.
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+
+    /// Reap all `ssh -L` tunnel children tracked for `host_id` (SIGKILL + wait).
+    /// Idempotent — an unknown host is a no-op. Real-IO only. Called on node/session
+    /// teardown so the local tunnel ports are freed and no ssh children leak.
+    #[cfg(not(coverage))]
+    pub(crate) fn teardown_wasl_tunnels(&mut self, host_id: &str) {
+        let children = self.wasl_tunnels.0.lock().unwrap().remove(host_id);
+        if let Some(children) = children {
+            for mut child in children {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            eprintln!("marsad-agent: wasl-node: tunnels torn down for host {host_id}");
+        }
+    }
+
     /// Wire the X1 operator connector for a node's operator endpoint, if not
     /// already registered. Idempotent (deduped by host_id). Uses the registered
     /// connector factory if set; otherwise logs and skips (serve() wires from
@@ -456,7 +753,14 @@ impl Agent {
         // On the spawn path it registers a RealWaslSessionProvider factory; in
         // the unit-test environment (no live node) the subsequent get_or_start
         // hits ECONNREFUSED and returns a graceful Err — no short-circuit needed.
-        self.ensure_wasl_runtime_node(&host_id, &[], None)?;
+        //
+        // Resolve the logical `host_id` to its real SSH/WSL target from the
+        // persisted host registry so a REMOTE node is spawned + tunneled on the
+        // right host. A local host (or an unknown host_id, or the coverage build
+        // with no store) resolves to `None` → the local Container spawn path,
+        // byte-identical to the pre-remote behavior.
+        let host_target = self.wasl_host_target(&host_id);
+        self.ensure_wasl_runtime_node(&host_id, host_target.as_deref(), &[], None)?;
 
         let _ = name;
 
@@ -690,6 +994,38 @@ impl Agent {
             .remove(&session_id);
         Ok(vec![encode_ipc(&IpcMsg::SessionStopped { session_id })])
     }
+}
+
+/// Reap every REMOTE Wasl node's `ssh -L` tunnel children on agent shutdown so no
+/// ssh child leaks past the daemon's lifetime. The durable remote `wasl-mcpd`
+/// itself is intentionally LEFT RUNNING (it is per-host and survives agent
+/// restarts, exactly like a durable remote solo session — a fresh agent
+/// re-adopts it and re-opens the tunnels); only the local-side tunnel children,
+/// which are meaningless without this agent, are killed here. Real-IO only (the
+/// tunnels map only exists in the non-coverage build).
+#[cfg(not(coverage))]
+impl Drop for Agent {
+    fn drop(&mut self) {
+        let hosts: Vec<String> = {
+            let map = self.wasl_tunnels.0.lock().unwrap();
+            map.keys().cloned().collect()
+        };
+        for host_id in hosts {
+            self.teardown_wasl_tunnels(&host_id);
+        }
+    }
+}
+
+/// Parse the port out of a bare `ip:port` socket address. Used to derive the
+/// REMOTE side of each `ssh -L` forward from the node's bare bind addresses.
+/// `0` on an unparseable value (a malformed bind never forwards to a real port —
+/// the tunnel simply won't connect, surfaced later as a factory dial failure).
+#[cfg(not(coverage))]
+fn remote_port(bind: &str) -> u16 {
+    bind.rsplit(':')
+        .next()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(0)
 }
 
 /// Map the wire busy-policy string (+ `max_wait_ms`) to a typed `WaslBusyPolicy`
