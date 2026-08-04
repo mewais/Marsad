@@ -282,17 +282,134 @@ impl Core {
         self.store
             .upsert_connection(&conn)
             .map_err(|e| CoreError::Agent(format!("{e:?}")))?;
+
+        // Dynamic peer registration: register the `from` node as a peer of the
+        // `to` node on the Wasl runtime. Best-effort — a send error does NOT fail
+        // the connection op (the persist+graph update above is already committed).
+        self.emit_register_wasl_peer(&conn.from, &conn.to);
+        // For bidirectional connections also register `to` as a peer of `from`.
+        if conn.bi {
+            self.emit_register_wasl_peer(&conn.to, &conn.from);
+        }
+
         self.connections.push(conn);
         Ok(vec![VmUpdate::Board(self.board())])
     }
 
     /// Remove a connection by id. Absent id is a no-op `Ok`.
     pub fn remove_connection(&mut self, id: &str) -> Result<Vec<VmUpdate>, CoreError> {
+        // Capture the connection's (from, to) BEFORE removing it so we can emit
+        // the unregister IPC. Best-effort — missing id is a no-op.
+        if let Some(conn) = self.connections.iter().find(|c| c.id == id) {
+            // Clone fields before the mutable retain below.
+            let from = conn.from.clone();
+            let to = conn.to.clone();
+            let bi = conn.bi;
+            self.emit_unregister_wasl_peer(&from, &to);
+            if bi {
+                self.emit_unregister_wasl_peer(&to, &from);
+            }
+        }
         self.store
             .delete_connection(id)
             .map_err(|e| CoreError::Agent(format!("{e:?}")))?;
         self.connections.retain(|c| c.id != id);
         Ok(vec![VmUpdate::Board(self.board())])
+    }
+
+    // -----------------------------------------------------------------------
+    // Private helpers for dynamic Wasl peer registration
+    // -----------------------------------------------------------------------
+
+    /// Look up the host_id for `session_id` from the sessions map. Returns
+    /// `None` when the session is unknown (e.g. not yet launched).
+    fn session_host_id(&self, session_id: &str) -> Option<String> {
+        self.sessions.get(session_id).map(|r| r.host_id.clone())
+    }
+
+    /// Best-effort: emit `RegisterWaslPeer` to the agent so the `to_session`'s
+    /// node learns about `from_session` as a peer. Silently logs on error.
+    fn emit_register_wasl_peer(&mut self, from_session: &str, to_session: &str) {
+        let from_host = match self.session_host_id(from_session) {
+            Some(h) => h,
+            None => {
+                eprintln!(
+                    "marsad-core: emit_register_wasl_peer: unknown session '{from_session}' \
+                     (from) — peer registration skipped"
+                );
+                return;
+            }
+        };
+        let to_host = match self.session_host_id(to_session) {
+            Some(h) => h,
+            None => {
+                eprintln!(
+                    "marsad-core: emit_register_wasl_peer: unknown session '{to_session}' \
+                     (to) — peer registration skipped"
+                );
+                return;
+            }
+        };
+
+        // The peer id Wasl uses for the `from` node is `marsad-<from_host>`.
+        let peer_id = format!("marsad-{from_host}");
+        // The A2A endpoint for the `from` node — built from the same formula as
+        // the node spawn config (deterministic FNV-1a, port window [48000,48999])
+        // so it matches the node's advertised address.
+        let peer_endpoint = Some(format!(
+            "http://{}",
+            marsad_wasl_session::wasl_a2a_bind(&from_host)
+        ));
+
+        let msg = IpcMsg::RegisterWaslPeer {
+            host_id: to_host.clone(),
+            peer_id: peer_id.clone(),
+            peer_host: from_host.clone(),
+            peer_endpoint,
+        };
+        if let Err(e) = self.send_ipc(&msg) {
+            eprintln!(
+                "marsad-core: RegisterWaslPeer send failed (best-effort) \
+                 from={from_session} to={to_session}: {e}"
+            );
+        }
+    }
+
+    /// Best-effort: emit `UnregisterWaslPeer` so the `to_session`'s node
+    /// removes `from_session` from its peer list.
+    fn emit_unregister_wasl_peer(&mut self, from_session: &str, to_session: &str) {
+        let from_host = match self.session_host_id(from_session) {
+            Some(h) => h,
+            None => {
+                eprintln!(
+                    "marsad-core: emit_unregister_wasl_peer: unknown session '{from_session}' \
+                     (from) — peer unregistration skipped"
+                );
+                return;
+            }
+        };
+        let to_host = match self.session_host_id(to_session) {
+            Some(h) => h,
+            None => {
+                eprintln!(
+                    "marsad-core: emit_unregister_wasl_peer: unknown session '{to_session}' \
+                     (to) — peer unregistration skipped"
+                );
+                return;
+            }
+        };
+
+        let peer_id = format!("marsad-{from_host}");
+        let msg = IpcMsg::UnregisterWaslPeer {
+            host_id: to_host.clone(),
+            peer_id: peer_id.clone(),
+        };
+        if let Err(e) = self.send_ipc(&msg) {
+            eprintln!(
+                "marsad-core: UnregisterWaslPeer send failed (best-effort) \
+                 from={from_session} to={to_session}: {e}"
+            );
+        }
     }
 
     /// Create (or overwrite, upsert semantics) a profile.

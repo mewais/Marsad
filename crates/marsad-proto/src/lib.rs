@@ -844,6 +844,31 @@ pub enum IpcMsg {
         code: i32,
     },
 
+    // ── Wasl peer registration (GUI/core → agent) ────────────────────────────
+    /// Register one peer node in a Wasl node's `/v1/peers` registry. Best-effort:
+    /// the agent logs errors but does NOT fail the connection operation. `host_id`
+    /// identifies which Wasl node receives the peer (the "to" node). `peer_id`,
+    /// `peer_host`, and (optional) `peer_endpoint` describe the peer being added.
+    RegisterWaslPeer {
+        /// The Marsad host id of the node whose `/v1/peers` we are writing to.
+        host_id: String,
+        /// The stable agent id of the peer to register.
+        peer_id: String,
+        /// The peer node's hostname/address label.
+        peer_host: String,
+        /// The peer's HTTP control endpoint (e.g. `"http://127.0.0.1:8787"`), or
+        /// absent when not yet resolvable. Skipped on encode when None.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        peer_endpoint: Option<String>,
+    },
+    /// Deregister a peer node from a Wasl node's `/v1/peers` registry. Best-effort.
+    UnregisterWaslPeer {
+        /// The Marsad host id of the node whose `/v1/peers` we are writing to.
+        host_id: String,
+        /// The stable agent id of the peer to remove.
+        peer_id: String,
+    },
+
     // ── Session liveness (agent → GUI/core) ──────────────────────────────────
     /// Authoritative session liveness, emitted by the reader thread: `true` when
     /// it attaches to a running session (launch/resume/reconnect), `false` when
@@ -1039,6 +1064,8 @@ pub fn parse_ipc(line: &str) -> Result<IpcMsg, ProtoError> {
         "PtyExit",
         "SessionLiveness",
         "SessionConn",
+        "RegisterWaslPeer",
+        "UnregisterWaslPeer",
     ];
 
     if !KNOWN.contains(&type_str) {

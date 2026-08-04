@@ -156,6 +156,28 @@ pub fn new_idempotency_key() -> String {
     format_uuid(&bytes)
 }
 
+/// Compute the deterministic bare A2A bind address for a Wasl node with the
+/// given `host_id` (`127.0.0.1:<port>`), using FNV-1a in port window
+/// `[48000, 48999]`.
+///
+/// This is the same formula `marsad-agent::wasl::wasl_a2a_bind` uses — shared
+/// here so callers that need to compute a peer endpoint (e.g. `marsad-core`'s
+/// dynamic peer registration) don't have to depend on `marsad-agent`.
+///
+/// Returns a bare `ip:port` (no `http://` scheme) — callers that need the full
+/// `http://` URL should prepend it themselves.
+pub fn wasl_a2a_bind(host_id: &str) -> String {
+    const FNV_OFFSET: u32 = 2_166_136_261;
+    const FNV_PRIME: u32 = 16_777_619;
+    let mut hash = FNV_OFFSET;
+    for byte in host_id.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    let port = 48_000u32 + (hash % 1_000);
+    format!("127.0.0.1:{port}")
+}
+
 /// SplitMix64 — a small, fast, deterministic scrambler used only to spread the
 /// seed bits across the 128-bit key. Advances `state` in place.
 fn splitmix64(state: &mut u64) -> u64 {

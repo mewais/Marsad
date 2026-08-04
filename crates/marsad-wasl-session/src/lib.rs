@@ -62,7 +62,7 @@ pub use error::WaslSessionError;
 pub use fake::{FakeWaslSessionClient, FakeWaslSessionProvider};
 pub use projection::{
     native_gate_command, native_gate_key, new_idempotency_key, project_status_to_phase,
-    status_is_live,
+    status_is_live, wasl_a2a_bind,
 };
 pub use real::{RealWaslSessionClient, RealWaslSessionProvider, WaslSessionClientConfig};
 pub use types::{

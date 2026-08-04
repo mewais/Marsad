@@ -7,6 +7,7 @@ mod gates;
 mod interaction;
 mod lifecycle;
 mod pty;
+mod wasl_peers;
 
 impl Agent {
     /// Decode one inbound IPC line and return outbound IPC lines.
@@ -187,6 +188,17 @@ impl Agent {
                 session_id,
                 terminal_id,
             } => self.handle_pty_close(&session_id, &terminal_id),
+            // Dynamic peer registration (core → agent). Best-effort: errors are
+            // logged but don't fail the IPC call.
+            marsad_proto::IpcMsg::RegisterWaslPeer {
+                host_id,
+                peer_id,
+                peer_host,
+                peer_endpoint,
+            } => self.handle_register_wasl_peer(host_id, peer_id, peer_host, peer_endpoint),
+            marsad_proto::IpcMsg::UnregisterWaslPeer { host_id, peer_id } => {
+                self.handle_unregister_wasl_peer(host_id, peer_id)
+            }
             // Every other tag is an agent→GUI/core message (ack/broadcast) that
             // has no business arriving inbound here — same observable Protocol
             // error class as an unrecognized type.
