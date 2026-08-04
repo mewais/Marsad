@@ -337,11 +337,23 @@ impl Agent {
                             // resume turn command. Insert it into `self.codex_specs`
                             // (read by `handle_send_prompt`) AND pass it to the
                             // reader. Claude reconnect is unchanged (spec = None).
+                            //
+                            // resume_thread_id: populate from persisted session_id
+                            // (which holds the codex thread_id after thread/started
+                            // and the SystemInit persistence block write-back). A
+                            // Some(non-empty) value makes the reader send
+                            // thread/resume instead of thread/start — mirroring the
+                            // opencode acp_session_id → session/load path.
                             let reconnect_codex_spec = if s.driver == "codex" {
+                                let resume_thread_id = s.session_id
+                                    .as_deref()
+                                    .filter(|t| !t.is_empty())
+                                    .map(|t| t.to_string());
                                 let spec = super::cached_codex_spec_from_persisted(
                                     s.model.clone(),
                                     s.project.clone(),
                                     marsad_store::normalize_session_mode(s.mode.clone()),
+                                    resume_thread_id,
                                 );
                                 self.codex_specs
                                     .0
@@ -402,11 +414,20 @@ impl Agent {
                     // spec from the persisted record so `handle_send_prompt` can
                     // build a resume turn command for the next prompt (the
                     // in-memory map is empty after a restart). Claude unchanged.
+                    // resume_thread_id: same as the remote path above — carry
+                    // the persisted session_id (the codex thread_id) so the
+                    // reader sends thread/resume for a reconnect with a known
+                    // thread.
                     let reconnect_codex_spec = if s.driver == "codex" {
+                        let resume_thread_id = s.session_id
+                            .as_deref()
+                            .filter(|t| !t.is_empty())
+                            .map(|t| t.to_string());
                         let spec = super::cached_codex_spec_from_persisted(
                                     s.model.clone(),
                                     s.project.clone(),
                                     marsad_store::normalize_session_mode(s.mode.clone()),
+                                    resume_thread_id,
                         );
                         self.codex_specs
                             .0
@@ -958,7 +979,21 @@ impl Agent {
                         .map(|s| s.driver.clone())
                         .unwrap_or_else(|| "claude".to_string());
                     let cs = if drv == "codex" {
-                        self.codex_specs.0.lock().unwrap().get(sid.as_str()).cloned()
+                        // For a codex Resume: the spec inserted by launch_with_id has
+                        // resume_thread_id=None (launch doesn't know the thread_id).
+                        // Overlay it from the persisted session_id (the codex thread_id),
+                        // exactly as opencode's acp_session_id is carried from the store.
+                        // For a fresh launch the persisted session_id is still None at
+                        // this point (written back later by the SystemInit block), so
+                        // this is a no-op there.
+                        let mut spec = self.codex_specs.0.lock().unwrap().get(sid.as_str()).cloned();
+                        if let (Some(ref mut cs), Some(ref rec)) = (&mut spec, &session_rec) {
+                            let tid = rec.session_id.as_deref().filter(|t| !t.is_empty());
+                            if let Some(t) = tid {
+                                cs.resume_thread_id = Some(t.to_string());
+                            }
+                        }
+                        spec
                     } else {
                         None
                     };

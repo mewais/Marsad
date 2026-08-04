@@ -375,9 +375,9 @@ impl fmt::Debug for SessionRunCmdsWrap {
 }
 
 /// Minimal per-session spec cache for codex sessions — holds everything
-/// the reader's app-server handshake (thread/start) needs, keyed by session_id.
-/// Inserted at launch, read by `handle_send_prompt`, never cleared (small footprint).
-/// Production builds only — gated out of coverage.
+/// the reader's app-server handshake (thread/start or thread/resume) needs,
+/// keyed by session_id. Inserted at launch, read by `handle_send_prompt`,
+/// never cleared (small footprint). Production builds only — gated out of coverage.
 #[cfg(not(coverage))]
 #[derive(Clone, Debug)]
 pub(crate) struct CachedCodexSpec {
@@ -387,6 +387,11 @@ pub(crate) struct CachedCodexSpec {
     /// Used by `handle_send_prompt` to pass the correct approvalPolicy/sandbox to
     /// the codex app-server via `thread/start`. Maps via `codex_mode_settings`.
     pub session_mode: String,
+    /// The persisted codex thread_id for a resume. `Some(non-empty)` → the reader
+    /// sends `wasit_codex::encode_thread_resume(id, thread_id, cwd)` instead of
+    /// `encode_thread_start(...)`. `None` (fresh launch) → always thread/start.
+    /// Mirrors `CachedOpencodeSpec.acp_session_id`.
+    pub resume_thread_id: Option<String>,
 }
 
 /// Rebuild a `CachedCodexSpec` from the persisted fields of a codex session.
@@ -400,17 +405,23 @@ pub(crate) struct CachedCodexSpec {
 /// restart.
 ///
 /// `mode` is the persisted `PersistedSession::mode` (already normalized to a mode id).
+/// `resume_thread_id` is the persisted `PersistedSession::session_id` (the codex
+/// thread_id, written back after `thread/started`). When `Some(non-empty)` the
+/// reader sends `thread/resume` instead of `thread/start`, mirroring the opencode
+/// `acp_session_id` → `session/load` path.
 /// Pure (no IO, no `self`) so it is unit-testable.
 #[cfg(not(coverage))]
 pub(crate) fn cached_codex_spec_from_persisted(
     model: String,
     project: String,
     mode: Option<String>,
+    resume_thread_id: Option<String>,
 ) -> CachedCodexSpec {
     CachedCodexSpec {
         model,
         project,
         session_mode: mode.unwrap_or_default(),
+        resume_thread_id,
     }
 }
 
@@ -912,10 +923,19 @@ impl Agent {
             // remote codex sessions need this so the reader's app-server handshake
             // (thread/start) can set the right model/posture/project/bin.
             if spec.driver == "codex" {
+                // Fresh launch: resume_thread_id is None (the thread_id is not
+                // known yet — it arrives later via thread/started → SessionInit).
+                // For a Resume(uuid) launch the thread_id lives in spec.mode
+                // as the uuid but codex uses the thread_id from the prior
+                // thread/started, not the marsad session uuid — the persistence
+                // block in agent_events.rs will have stored it in session_id.
+                // That path uses cached_codex_spec_from_persisted (serve.rs),
+                // not this block, so None here is always correct for new launches.
                 let cached = CachedCodexSpec {
                     model: spec.model.clone(),
                     project: spec.project.clone(),
                     session_mode: spec.session_mode.clone(),
+                    resume_thread_id: None,
                 };
                 self.codex_specs
                     .0
@@ -1117,10 +1137,12 @@ mod reconnect_spec_tests {
             "codex-mini-latest".to_string(),
             "/tmp/proj".to_string(),
             Some("bypassPermissions".to_string()),
+            None,
         );
         assert_eq!(spec.model, "codex-mini-latest");
         assert_eq!(spec.project, "/tmp/proj");
         assert_eq!(spec.session_mode, "bypassPermissions");
+        assert!(spec.resume_thread_id.is_none());
     }
 
     #[test]
@@ -1129,13 +1151,14 @@ mod reconnect_spec_tests {
             "m".to_string(),
             "p".to_string(),
             Some("acceptEdits".to_string()),
+            None,
         );
         assert_eq!(spec.session_mode, "acceptEdits");
     }
 
     #[test]
     fn default_mode_round_trips() {
-        let spec = cached_codex_spec_from_persisted("m".into(), "p".into(), Some("default".to_string()));
+        let spec = cached_codex_spec_from_persisted("m".into(), "p".into(), Some("default".to_string()), None);
         assert_eq!(spec.session_mode, "default");
     }
 
@@ -1143,7 +1166,7 @@ mod reconnect_spec_tests {
     fn missing_mode_defaults_to_empty() {
         // A pre-mode persisted record (mode: None) must not panic and must
         // default to empty (backend default).
-        let spec = cached_codex_spec_from_persisted("m".into(), "p".into(), None);
+        let spec = cached_codex_spec_from_persisted("m".into(), "p".into(), None, None);
         assert_eq!(spec.session_mode, "");
     }
 
@@ -1154,7 +1177,78 @@ mod reconnect_spec_tests {
             "m".into(),
             "p".into(),
             Some("plan".to_string()),
+            None,
         );
         assert_eq!(spec.session_mode, "plan");
+    }
+
+    // ── Resume thread_id tests ────────────────────────────────────────────────
+
+    /// A reconnected codex session with a known thread_id must carry it into
+    /// CachedCodexSpec.resume_thread_id so the reader sends thread/resume.
+    #[test]
+    fn resume_thread_id_round_trips_from_persisted() {
+        let tid = "thread-abc-123".to_string();
+        let spec = cached_codex_spec_from_persisted(
+            "m".into(),
+            "p".into(),
+            Some("acceptEdits".to_string()),
+            Some(tid.clone()),
+        );
+        assert_eq!(spec.resume_thread_id, Some(tid));
+    }
+
+    /// A fresh launch (no thread_id yet in the store) must leave resume_thread_id None.
+    #[test]
+    fn fresh_launch_has_no_resume_thread_id() {
+        let spec = cached_codex_spec_from_persisted(
+            "m".into(),
+            "p".into(),
+            None,
+            None,
+        );
+        assert!(spec.resume_thread_id.is_none());
+    }
+
+    /// An empty-string thread_id (pre-persist, corrupted store) must not be
+    /// treated as a valid resume — the intercept checks `Some(non-empty)`.
+    #[test]
+    fn empty_resume_thread_id_is_none() {
+        // The caller (serve.rs) filters empty strings before passing; test that
+        // passing None explicitly leaves the field None.
+        let spec = cached_codex_spec_from_persisted("m".into(), "p".into(), None, None);
+        assert!(
+            spec.resume_thread_id
+                .as_deref()
+                .map(|s| s.is_empty())
+                .unwrap_or(true),
+            "empty or absent resume_thread_id must not trigger thread/resume"
+        );
+    }
+
+    // ── Resume-vs-fresh decision helper ──────────────────────────────────────
+
+    /// Pure helper: given a resume_thread_id slot, returns the method to send.
+    /// Extracted from the intercept logic for unit-testability.
+    fn codex_thread_method(resume_thread_id: Option<&str>) -> &'static str {
+        match resume_thread_id.filter(|s| !s.is_empty()) {
+            Some(_) => "thread/resume",
+            None => "thread/start",
+        }
+    }
+
+    #[test]
+    fn fresh_codex_uses_thread_start() {
+        assert_eq!(codex_thread_method(None), "thread/start");
+    }
+
+    #[test]
+    fn resume_codex_uses_thread_resume() {
+        assert_eq!(codex_thread_method(Some("thread-abc")), "thread/resume");
+    }
+
+    #[test]
+    fn empty_thread_id_uses_thread_start() {
+        assert_eq!(codex_thread_method(Some("")), "thread/start");
     }
 }

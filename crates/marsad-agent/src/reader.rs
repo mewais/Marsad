@@ -505,18 +505,30 @@ fn codex_collab_mode_intercept(raw: &str, sid: &str) -> Option<Vec<wasit_core::A
 /// CODEX `initialize` RESPONSE interception (id == 1).
 ///
 /// The codex app-server requires the `initialize` handshake to COMPLETE before
-/// it accepts `thread/start`. Sending both back-to-back makes codex drop
-/// `thread/start` (no `thread/started` → no SessionInit → the session never
-/// materializes). So Marsad sends ONLY `initialize` at handshake time and defers
-/// `thread/start` to this intercept, which fires exactly once when the id==1
-/// response is seen. Mirrors the working wasit `Session::spawn` sequence
-/// (`initialize` → wait for id==1 response → `thread/start`).
+/// it accepts `thread/start` or `thread/resume`. Sending both back-to-back makes
+/// codex drop the second message (no `thread/started` → no SessionInit → the
+/// session never materializes). So Marsad sends ONLY `initialize` at handshake
+/// time and defers the thread-open call to this intercept, which fires exactly
+/// once when the id==1 response is seen. Mirrors the working wasit `Session::spawn`
+/// sequence (`initialize` → wait for id==1 response → `thread/start|thread/resume`).
 ///
-/// Returns `true` iff it handled the line (an id==1 response AND thread/start not
+/// **Resume vs fresh decision**: if `codex_spec.resume_thread_id` is `Some(non-empty)`,
+/// sends `wasit_codex::encode_thread_resume(2, &thread_id, &cwd)` to reattach to the
+/// prior codex thread and preserve conversation context. Otherwise sends
+/// `wasit_codex::encode_thread_start(2, &cwd, model, mode)` for a fresh thread.
+/// This mirrors how opencode chooses `session/load` vs `session/new` based on
+/// `CachedOpencodeSpec.acp_session_id`.
+///
+/// After `thread/resume`, `thread/started` arrives and the existing read-loop
+/// `SessionInit` handler populates `codex_threads` + delivers the first
+/// `turn/start` and `collaborationMode/list` exactly as for a fresh launch
+/// (the `codex_first_turn_pending` flag drives both).
+///
+/// Returns `true` iff it handled the line (an id==1 response AND thread open not
 /// yet sent), in which case the caller should NOT feed the line to the parser and
 /// should `continue`. Returns `false` for any other line (including a duplicate
-/// id==1 response after thread/start already fired — the `sent` guard prevents a
-/// double-send).
+/// id==1 response after the thread open already fired — the `sent` guard prevents
+/// a double-send).
 ///
 /// Wire shape of the handled line: `{"id":1,"result":{…}}` (has `result`, no `method`).
 #[cfg(not(coverage))]
@@ -545,23 +557,40 @@ fn codex_init_response_intercept(
         return false;
     }
 
-    // Send the deferred thread/start (id 2) now that initialize is complete.
-    // This handshake path is fresh-launch only (reconnect uses send_init=false),
-    // so it always sends thread/start (never thread/resume) — matching the prior
-    // behavior of the back-to-back send.
-    let model = codex_spec.map(|cs| cs.model.clone()).unwrap_or_default();
-    let mode = codex_spec
-        .map(|cs| cs.session_mode.clone())
-        .unwrap_or_default();
     let cwd = codex_spec
         .map(|cs| cs.project.clone())
         .unwrap_or_else(|| ".".into());
-    let ts_line = wasit_codex::encode_thread_start(
-        2,
-        &cwd,
-        if model.is_empty() { None } else { Some(model.as_str()) },
-        &mode,
-    );
+
+    // Resume vs fresh: if the spec carries a non-empty thread_id from the prior
+    // run (persisted via the SystemInit write-back → session_id → serve.rs
+    // resume_thread_id), send thread/resume to reattach to that codex thread and
+    // preserve conversation context. Otherwise send thread/start for a fresh thread.
+    // Mirrors opencode's session/load (acp_session_id Some) vs session/new (None).
+    let resume_thread_id = codex_spec
+        .and_then(|cs| cs.resume_thread_id.as_deref())
+        .filter(|t| !t.is_empty());
+
+    let (ts_line, method_label) = if let Some(tid) = resume_thread_id {
+        (
+            wasit_codex::encode_thread_resume(2, tid, &cwd),
+            "thread/resume",
+        )
+    } else {
+        let model = codex_spec.map(|cs| cs.model.clone()).unwrap_or_default();
+        let mode = codex_spec
+            .map(|cs| cs.session_mode.clone())
+            .unwrap_or_default();
+        (
+            wasit_codex::encode_thread_start(
+                2,
+                &cwd,
+                if model.is_empty() { None } else { Some(model.as_str()) },
+                &mode,
+            ),
+            "thread/start",
+        )
+    };
+
     {
         use std::io::Write;
         let mut w = writer.lock().unwrap();
@@ -571,7 +600,7 @@ fn codex_init_response_intercept(
     }
     thread_start_sent.set(true);
     eprintln!(
-        "marsad-agent: session {sid} codex initialize complete → sent deferred thread/start (id 2)"
+        "marsad-agent: session {sid} codex initialize complete → sent deferred {method_label} (id 2)"
     );
     true
 }

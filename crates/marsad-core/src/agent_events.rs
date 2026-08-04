@@ -976,24 +976,30 @@ impl Core {
             )
         };
 
-        // Persist the claude session UUID, slash_commands, tools, and mcp_servers
-        // after a SystemInit so that on the next attach/reconnect (when send_init
-        // is false) the restored session shows them without waiting for another
-        // system/init.
+        // Persist the session id, slash_commands, tools, and mcp_servers after a
+        // SystemInit so that on the next attach/reconnect (when send_init is false)
+        // the restored session shows them without waiting for another system/init.
         //
-        // The UUID is the critical one: a Fresh launch persists session_id=None
-        // (the real claude conversation id is unknown until system/init arrives),
-        // and that id lives ONLY in memory (`state.session_id`) unless we write it
-        // back here. Without this, on the next app restart two sessions in the SAME
-        // directory both load session_id=None and fall back to "most recent
-        // .jsonl" (remote_transcript_script `ls -t | head -1`) → they COLLAPSE onto
-        // the same claude session. Persisting the id makes each session resume /
-        // backfill its OWN conversation. Guarded to the claude driver: codex's
-        // synthesized system/init carries the codex thread_id in `session_id`,
-        // which is NOT a `claude --resume` target and must not be persisted there.
+        // The session id field serves different roles per driver:
+        //   • claude:   the UUID passed to `claude --resume <uuid>`. A Fresh launch
+        //               persists session_id=None (the real UUID is unknown until
+        //               system/init arrives). Without persisting it, two sessions in
+        //               the SAME directory both load session_id=None and collapse
+        //               onto the same claude session (the "most recent .jsonl" bug).
+        //   • codex:    the codex thread_id (from `thread/started` → SessionInit
+        //               native_session_id). Persisting it lets the next
+        //               attach/resume send `thread/resume <thread_id>` instead of
+        //               `thread/start`, preserving conversation context.
+        //               Previously guarded out (never written), causing resume to
+        //               always spawn a NEW codex thread and lose history.
+        //   • opencode: the ACP sessionId is stored separately (`acp_sessions` map
+        //               in marsad-agent) and NOT through this path — opencode's
+        //               ACP sessionId is written by the reader thread directly; this
+        //               block must NOT overwrite it (opencode's SystemInit does not
+        //               carry a native_session_id we want to persist here).
         // Best-effort: a store error here must not fail the event processing.
         if is_system_init {
-            let (claude_sid, slash_cmds, tools, mcp_servers) = self
+            let (native_sid, slash_cmds, tools, mcp_servers, driver_in_state) = self
                 .sessions
                 .get(&session_id)
                 .map(|r| (
@@ -1001,15 +1007,25 @@ impl Core {
                     r.state.slash_commands.clone(),
                     r.state.tools.clone(),
                     r.state.mcp_servers.clone(),
+                    String::new(), // driver is on PersistedSession, not state; read from store below
                 ))
                 .unwrap_or_default();
-            let has_sid = claude_sid.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+            let _ = driver_in_state; // unused placeholder; real driver read from ps below
+            let has_sid = native_sid.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
             if has_sid || !slash_cmds.is_empty() || !tools.is_empty() || !mcp_servers.is_empty() {
                 // Load the persisted session, update fields, write back.
                 if let Ok(restored) = self.store.restore() {
                     if let Some(mut ps) = restored.sessions.into_iter().find(|s| s.id == session_id) {
-                        if has_sid && ps.driver == "claude" && ps.session_id.as_deref() != claude_sid.as_deref() {
-                            ps.session_id = claude_sid;
+                        // Write back the native session id for claude (UUID for --resume)
+                        // and codex (thread_id for thread/resume). NOT for opencode (its
+                        // ACP sessionId flows through a separate path in marsad-agent and
+                        // must not be clobbered by whatever native_session_id opencode
+                        // happens to carry in its synthesized SessionInit).
+                        if has_sid
+                            && (ps.driver == "claude" || ps.driver == "codex")
+                            && ps.session_id.as_deref() != native_sid.as_deref()
+                        {
+                            ps.session_id = native_sid;
                         }
                         ps.slash_commands = slash_cmds;
                         ps.tools = tools;
