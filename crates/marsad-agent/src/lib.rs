@@ -48,8 +48,8 @@ pub use remote::{
 pub use remote::{parse_liveness, Liveness, LIVENESS_SENTINEL};
 pub use wasl::{
     load_wasl_config, load_wasl_session_config, render_wasl_node_toml, select_wasl_session_runtime,
-    wasl_a2a_bind, wasl_control_bind, wasl_node_protocol, wasl_operator_bind, wasl_event_lines,
-    WaslNodeConfig,
+    is_wsl_direct_target, wasl_a2a_bind, wasl_control_bind, wasl_node_protocol, wasl_operator_bind,
+    wasl_event_lines, WaslNodeConfig,
     render_wasl_worker_toml, wasl_worker_mcp_config, WaslWorkerPeer,
     // Remote-host Wasl node: bind kinds, local-tunnel allocation, tunnel argv,
     // remote spawn/kill scripts, and the spawn-sentinel parser.

@@ -16,7 +16,8 @@
 //!    is `"codex"`.
 
 use marsad_agent::{
-    render_wasl_node_toml, wasl_node_protocol, Agent, AgentConfig, ListenSpec, WaslNodeConfig,
+    is_wsl_direct_target, render_wasl_node_toml, wasl_node_protocol, Agent, AgentConfig, ListenSpec,
+    WaslNodeConfig,
 };
 use marsad_lifecycle::FakeContainer;
 use marsad_notify::CaptureNotifier;
@@ -332,4 +333,22 @@ fn wasl_node_protocol_maps_only_opencode() {
     // Already-canonical and unknown names pass through untouched.
     assert_eq!(wasl_node_protocol("opencode-acp"), "opencode-acp");
     assert_eq!(wasl_node_protocol("whatever"), "whatever");
+}
+
+// ===========================================================================
+// §9 — is_wsl_direct_target: a plain `wsl:<distro>` host is reached via WSL2
+//      localhost forwarding (no ssh -L tunnel); ssh / wslssh / plink / local
+//      are NOT plain-wsl and still tunnel.
+// ===========================================================================
+
+#[test]
+fn is_wsl_direct_target_only_plain_wsl() {
+    assert!(is_wsl_direct_target("wsl:Ubuntu"));
+    assert!(is_wsl_direct_target("wsl:"));
+    // wslssh: is SSH-over-WSL — it tunnels like any SSH host, so NOT direct.
+    assert!(!is_wsl_direct_target("wslssh:Ubuntu:agent33"));
+    assert!(!is_wsl_direct_target("user@host"));
+    assert!(!is_wsl_direct_target("plink:host"));
+    assert!(!is_wsl_direct_target("local"));
+    assert!(!is_wsl_direct_target(""));
 }

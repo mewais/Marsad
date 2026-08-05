@@ -285,6 +285,21 @@ pub fn wasl_node_protocol(name: &str) -> &str {
     }
 }
 
+/// Whether `host_target` is a PLAIN WSL target (`wsl:<distro>`), which Marsad
+/// reaches via WSL2's localhost forwarding rather than an `ssh -L` tunnel.
+///
+/// On WSL2 the guest's listening loopback ports are forwarded to the Windows host
+/// at the SAME `127.0.0.1:<port>`, so for a Wasl node spawned on a `wsl:` host the
+/// agent dials the node's OWN control/operator binds directly — NO tunnel. That
+/// matters because the ssh-shaped tunnel machinery does not fit the `wsl.exe`
+/// transport (appending `-N -L` to a `wsl.exe` command is meaningless). SSH hosts
+/// and `wslssh:<distro>:<target>` (SSH-over-WSL) are NOT plain wsl targets and
+/// still tunnel — note `"wslssh:".starts_with("wsl:")` is false, so wslssh is
+/// correctly excluded here.
+pub fn is_wsl_direct_target(host_target: &str) -> bool {
+    host_target.trim().starts_with("wsl:")
+}
+
 /// Render a `wasl-node` TOML config from `cfg`. Pure: no filesystem IO, always
 /// compiled. Generates the `[identity]`, `[a2a]`, `[operator]`, and `[runtime]`
 /// blocks that `wasl-mcpd --config <path>` reads.

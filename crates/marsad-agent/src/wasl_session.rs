@@ -287,7 +287,18 @@ impl Agent {
             .filter(|t| !t.is_empty())
             .map(|t| crate::remote::exec_prefix_for(Some(t)).is_some())
             .unwrap_or(false);
-        let base_url = if is_remote {
+        // A plain `wsl:` host is reached via WSL2 localhost forwarding: Marsad dials
+        // the node's OWN loopback control bind directly (no ssh -L tunnel). Any
+        // other remote is a real SSH host: dial the LOCAL tunnel endpoint.
+        let is_wsl_direct = host_target
+            .map(crate::wasl::is_wsl_direct_target)
+            .unwrap_or(false);
+        let base_url = if is_wsl_direct {
+            format!(
+                "http://{}",
+                crate::wasl::wasl_remote_bind(host_id, crate::wasl::WaslBindKind::Control)
+            )
+        } else if is_remote {
             format!(
                 "http://127.0.0.1:{}",
                 crate::wasl::wasl_local_tunnel_port(host_id, crate::wasl::WaslBindKind::Control)
@@ -590,17 +601,31 @@ impl Agent {
         let remote_operator = crate::wasl::wasl_remote_bind(host_id, WaslBindKind::Operator);
         let remote_a2a = crate::wasl::wasl_remote_bind(host_id, WaslBindKind::A2a);
 
-        // The LOCAL tunnel endpoints the daemon dials to reach them.
+        // Reach strategy: a plain `wsl:` host is dialed DIRECTLY at the node's own
+        // loopback binds — WSL2 forwards the guest's `127.0.0.1:<port>` to the same
+        // address on the Windows host, so no `ssh -L` tunnel is opened (the
+        // ssh-shaped tunnel does not fit the `wsl.exe` transport). Any other remote
+        // is a real SSH host: open tunnels and dial the LOCAL tunnel endpoints.
+        let is_wsl_direct = crate::wasl::is_wsl_direct_target(host_target);
         let l_control = crate::wasl::wasl_local_tunnel_port(host_id, WaslBindKind::Control);
         let l_operator = crate::wasl::wasl_local_tunnel_port(host_id, WaslBindKind::Operator);
         let l_a2a = crate::wasl::wasl_local_tunnel_port(host_id, WaslBindKind::A2a);
-        let base_url = format!("http://127.0.0.1:{l_control}");
-        let operator_local_url = format!("http://127.0.0.1:{l_operator}");
+        let (base_url, operator_local_url) = if is_wsl_direct {
+            (
+                format!("http://{remote_control}"),
+                format!("http://{remote_operator}"),
+            )
+        } else {
+            (
+                format!("http://127.0.0.1:{l_control}"),
+                format!("http://127.0.0.1:{l_operator}"),
+            )
+        };
 
         eprintln!(
-            "marsad-agent: wasl-node[remote {host_target:?}]: host={host_id} \
+            "marsad-agent: wasl-node[remote {host_target:?}]: host={host_id} wsl_direct={is_wsl_direct} \
              remote control={remote_control} operator={remote_operator} a2a={remote_a2a} \
-             local control={base_url} operator={operator_local_url} a2a=127.0.0.1:{l_a2a}"
+             dial control={base_url} operator={operator_local_url}"
         );
 
         // Render the node TOML with the REMOTE binds (bare ip:port).
@@ -657,15 +682,25 @@ impl Agent {
         // Open the three ssh -L tunnels (control + operator + a2a) and track the
         // children so node/session teardown can kill them. Idempotent per host:
         // if tunnels are already tracked for this host, they are left in place.
-        self.open_wasl_tunnels(
-            host_id,
-            host_target,
-            &[
-                (l_control, remote_port(&remote_control)),
-                (l_operator, remote_port(&remote_operator)),
-                (l_a2a, remote_port(&remote_a2a)),
-            ],
-        );
+        // Skipped entirely for a `wsl:` host — WSL2 localhost forwarding makes the
+        // node's own loopback binds directly reachable, so there is nothing to
+        // tunnel (and no ssh child to track/teardown).
+        if is_wsl_direct {
+            eprintln!(
+                "marsad-agent: wasl-node[wsl {host_target:?}]: no ssh tunnel — reaching the \
+                 node's loopback directly via WSL2 localhost forwarding ({base_url})"
+            );
+        } else {
+            self.open_wasl_tunnels(
+                host_id,
+                host_target,
+                &[
+                    (l_control, remote_port(&remote_control)),
+                    (l_operator, remote_port(&remote_operator)),
+                    (l_a2a, remote_port(&remote_a2a)),
+                ],
+            );
+        }
 
         // Register the provider factory at the LOCAL control tunnel endpoint.
         let factory_base_url = base_url.clone();
