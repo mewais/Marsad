@@ -461,6 +461,15 @@ struct SessionRecord {
     /// entry, so a run of `AssistantDelta`s APPENDS to the same entry rather than
     /// creating one per delta (§10.4). `None` between turns.
     wasl_open_assistant: Option<usize>,
+    /// The currently-open (in-progress) assistant transcript entry for the MAIN
+    /// (MarsadManaged) path: `(message_id, transcript index)`. A run of
+    /// `AssistantDelta`s sharing this `message_id` APPENDS (verbatim) to the same
+    /// entry rather than creating one entry per delta — token-streaming drivers
+    /// (opencode) emit many small chunks per assistant message, and one entry per
+    /// chunk renders as spurious line breaks. Reset to `None` by any non-delta
+    /// event (tool call, turn boundary, …) so the next message opens a fresh
+    /// entry. Mirrors `wasl_open_assistant` for the non-Wasl path.
+    open_assistant: Option<(Option<String>, usize)>,
     /// X6: whether the most recent Wasl turn has seen its terminal event
     /// (`TurnCompleted`/`TurnFailed`) with no newer `TurnAccepted` since. A delta
     /// arriving while this is `true` is a POST-TERMINAL stray → ignored, not

@@ -1029,31 +1029,13 @@ impl Core {
         // Pair each entry with a dedup key; the append loop below inserts only
         // newly-seen keys.
         //
-        // AssistantDelta → TranscriptEntry::Assistant, dedup key = "<msg_id>\0a\0<text>"
+        // AssistantDelta → coalesced separately below (append to the open same-
+        //   message entry, verbatim), NOT one standalone entry per chunk.
         // ToolCallStarted → TranscriptEntry::Tool, dedup key = call_id (globally unique)
         // ThinkingDelta → SKIP (preserves old behaviour: thinking blocks are not transcribed)
         // Compaction → appended AFTER reduce (in sequence, below)
         // everything else → no transcript entry
         let transcript_entries: Vec<(String, marsad_events::TranscriptEntry)> = match &event {
-            marsad_proto::AgentEvent::AssistantDelta { text, message_id } => {
-                let t = text.trim();
-                if t.is_empty() {
-                    vec![]
-                } else {
-                    let key = format!(
-                        "{}\u{0}a\u{0}{}",
-                        message_id.as_deref().unwrap_or(""),
-                        t
-                    );
-                    vec![(
-                        key,
-                        marsad_events::TranscriptEntry::Assistant {
-                            text: t.to_string(),
-                            at: Some(now_ms()),
-                        },
-                    )]
-                }
-            }
             marsad_proto::AgentEvent::ToolCallStarted {
                 name,
                 call_id,
@@ -1098,6 +1080,26 @@ impl Core {
         // run (which is all TurnCompleted.usage.cost_usd contains for a resumed session).
         let is_result = matches!(&event, marsad_proto::AgentEvent::TurnCompleted { .. });
 
+        // Capture an AssistantDelta BEFORE reduce consumes the event. A run of
+        // deltas sharing a `message_id` is ONE assistant message that arrives in
+        // chunks (token-streaming drivers like opencode emit many small chunks);
+        // they must APPEND verbatim to a single open transcript entry, not spawn
+        // one entry per chunk (which renders as spurious line breaks — the "Hi\n!
+        // What\ncan I help…" bug). Any OTHER event closes the open entry so the
+        // next message starts fresh; ThinkingDelta is a no-op (not transcribed,
+        // and must not split an in-flight assistant message).
+        let assistant_delta: Option<(String, Option<String>)> = match &event {
+            marsad_proto::AgentEvent::AssistantDelta { text, message_id } => {
+                Some((text.clone(), message_id.clone()))
+            }
+            _ => None,
+        };
+        let closes_open_assistant = !matches!(
+            &event,
+            marsad_proto::AgentEvent::AssistantDelta { .. }
+                | marsad_proto::AgentEvent::ThinkingDelta { .. }
+        );
+
         // Reduce the event, then decide whether the working tree may have changed.
         // Safe: require_session above guarantees the entry exists.
         let (project, host_id, should_probe, board_changed) = {
@@ -1125,6 +1127,26 @@ impl Core {
                 board_changed,
             )
         };
+
+        // E (opencode "working…" before any prompt): reduce maps every
+        // `SessionInit` to `Working` because claude/codex emit `system/init` at
+        // TURN START — a prompt was already sent, so the turn genuinely IS
+        // working (and the transcript already carries that User entry). opencode
+        // instead emits its init at SESSION ESTABLISHMENT (`session/new`), BEFORE
+        // any prompt, so the same mapping shows a phantom "working…". The honest
+        // distinguisher is the transcript: an init arriving with an EMPTY
+        // transcript means no turn is in flight → the session is established-but-
+        // idle (Starting/ready), not Working. This corrects ONLY that case, so the
+        // reduce-level "SessionInit ⇒ Working" contract (claude/codex turn start,
+        // and any prompt-first launch whose User entry is already recorded) is
+        // untouched. Runs before the transcript-append blocks below — a SessionInit
+        // itself appends nothing, so emptiness here reflects "no prompt yet".
+        if is_system_init {
+            let record = self.sessions.get_mut(&session_id).unwrap();
+            if record.transcript.is_empty() && matches!(record.state.phase, Phase::Working) {
+                record.state.phase = Phase::Starting;
+            }
+        }
 
         // Persist the session id, slash_commands, tools, and mcp_servers after a
         // SystemInit so that on the next attach/reconnect (when send_init is false)
@@ -1247,6 +1269,70 @@ impl Core {
                 if record.seen_msg_ids.insert(key) {
                     record.transcript.push(entry);
                 }
+            }
+        }
+
+        // Coalesce assistant deltas into one open entry per message (see the
+        // pre-reduce capture above). Verbatim append preserves inter-chunk
+        // spacing (never trim a chunk — that drops boundary whitespace). The
+        // per-chunk dedup key (`<msg_id>\0a\0<text>`) keeps a reattach replay of
+        // the same chunk from double-appending. A non-delta event closes the
+        // open entry so the next message opens a fresh one.
+        {
+            let record = self.sessions.get_mut(&session_id).unwrap();
+            if let Some((text, message_id)) = assistant_delta {
+                if !text.is_empty() {
+                    let key =
+                        format!("{}\u{0}a\u{0}{}", message_id.as_deref().unwrap_or(""), text);
+                    if record.seen_msg_ids.insert(key) {
+                        // Append to the open entry only when it exists, still
+                        // matches this message_id, and is still an Assistant row
+                        // (index stays valid — transcript only grows here).
+                        let open_idx = match &record.open_assistant {
+                            Some((mid, idx))
+                                if *mid == message_id
+                                    && matches!(
+                                        record.transcript.get(*idx),
+                                        Some(marsad_events::TranscriptEntry::Assistant { .. })
+                                    ) =>
+                            {
+                                Some(*idx)
+                            }
+                            _ => None,
+                        };
+                        match open_idx {
+                            // Continuing an open message: append VERBATIM, incl.
+                            // whitespace — a chunk boundary can fall between words
+                            // (" can I help…"), so trimming here would fuse tokens.
+                            Some(idx) => {
+                                if let Some(marsad_events::TranscriptEntry::Assistant {
+                                    text: existing,
+                                    ..
+                                }) = record.transcript.get_mut(idx)
+                                {
+                                    existing.push_str(&text);
+                                }
+                            }
+                            // OPENING a new message: don't start it on pure
+                            // whitespace/empty content (a lone blank delta is
+                            // noise, not a message — mirrors the old trim-skip).
+                            None => {
+                                if !text.trim().is_empty() {
+                                    record.transcript.push(
+                                        marsad_events::TranscriptEntry::Assistant {
+                                            text,
+                                            at: Some(now_ms()),
+                                        },
+                                    );
+                                    record.open_assistant =
+                                        Some((message_id, record.transcript.len() - 1));
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if closes_open_assistant {
+                record.open_assistant = None;
             }
         }
 

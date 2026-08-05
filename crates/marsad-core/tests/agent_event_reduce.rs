@@ -180,11 +180,16 @@ fn session_init_sets_session_fields_without_panic() {
         .expect("SessionInit must not error");
 
     let sv = last_sv(&updates);
-    // Phase must be Working after SessionInit.
+    // This session was launched with NO first prompt (empty transcript), so this
+    // SessionInit is a SESSION-ESTABLISHMENT init (opencode's `session/new`
+    // shape), not a turn start. An established-but-idle session is `Starting`
+    // (ready for input), NOT `Working` — a phantom "working…" before any prompt
+    // was the opencode #6 bug. See `session_init_after_prompt_stays_working` for
+    // the turn-in-flight case (transcript non-empty ⇒ Working preserved).
     assert_eq!(
         sv.state,
-        Phase::Working,
-        "SessionInit must set phase to Working"
+        Phase::Starting,
+        "an establishment SessionInit (empty transcript) is idle/ready, not Working"
     );
     // Tools and mcp_servers must be reflected in the view.
     assert_eq!(
@@ -196,6 +201,28 @@ fn session_init_sets_session_fields_without_panic() {
     assert_eq!(sv.mcp_servers[0].name, "hares");
     // Model from SessionInit must appear in the view.
     assert_eq!(sv.model, "claude-sonnet-4-6", "model must match SessionInit model");
+}
+
+/// A SessionInit that arrives with a turn already in flight (the transcript
+/// carries a prompt/output) is a genuine turn-start init (claude/codex
+/// `system/init`) and MUST keep phase `Working`. We simulate a turn in flight by
+/// feeding an assistant delta (non-empty transcript) before the init — proving
+/// the E fix corrects ONLY the empty-transcript establishment case and leaves the
+/// claude/codex turn-start contract intact.
+#[test]
+fn session_init_after_prompt_stays_working() {
+    let mut core = make_core();
+    let sid = launch(&mut core);
+    // Turn in flight: an assistant delta lands first → transcript is non-empty.
+    core.on_agent_line(&assistant_delta_ipc(&sid, "on it", "m-w"))
+        .expect("delta");
+    let updates = core.on_agent_line(&init_ipc(&sid)).expect("init");
+    let sv = last_sv(&updates);
+    assert_eq!(
+        sv.state,
+        Phase::Working,
+        "a turn-start SessionInit (non-empty transcript) must stay Working"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -116,6 +116,7 @@ impl Core {
                 wasl_last_seq: 0,
                 wasl_seen_seqs: std::collections::HashSet::new(),
                 wasl_open_assistant: None,
+                open_assistant: None,
                 wasl_turn_closed: false,
                 wasl_native_gates: HashMap::new(),
             },
@@ -369,6 +370,7 @@ impl Core {
                 wasl_last_seq: 0,
                 wasl_seen_seqs: std::collections::HashSet::new(),
                 wasl_open_assistant: None,
+                open_assistant: None,
                 wasl_turn_closed: false,
                 wasl_native_gates: HashMap::new(),
             },
@@ -616,17 +618,36 @@ impl Core {
         self.sessions.remove(id);
         self.session_order.retain(|s| s != id);
 
-        // Clean up membership and the auto-created single-node workstream (ws-<id>)
-        // so the board doesn't keep a ghost card after deletion from SessionDetail.
-        // We do NOT emit a Workstreams update here — callers that need one (bridge
-        // remove_session, delete_workstream) emit it themselves after we return.
-        let auto_ws_id = format!("ws-{id}");
-        if self.workstreams.iter().any(|w| w.id == auto_ws_id) {
-            let _ = self.store.delete_workstream(&auto_ws_id);
-            self.workstreams.retain(|w| w.id != auto_ws_id);
+        // Clean up membership and cascade-delete the parent workstream when this
+        // node was its LAST member, so the board never keeps a ghost empty
+        // workstream requiring a second delete (#5). Capture the parent BEFORE
+        // dropping membership. This subsumes the old `ws-<id>` special case: the
+        // auto single-node workstream always has exactly one member (this session)
+        // so removing it empties the parent — but it ALSO handles a user-authored
+        // workstream whose only node is this one (its id is NOT `ws-<id>`), which
+        // the old auto-id-only cleanup left behind as an empty shell.
+        let parent_ws = self.membership.remove(id);
+        let mut removed_ws = false;
+        if let Some(ws) = parent_ws {
+            let still_has_members = self.membership.values().any(|w| *w == ws);
+            if !still_has_members {
+                let _ = self.store.delete_workstream(&ws);
+                self.workstreams.retain(|w| w.id != ws);
+                // Drop any connections scoped to the now-deleted workstream.
+                let ws_conns: Vec<String> = self
+                    .connections
+                    .iter()
+                    .filter(|c| c.ws == ws)
+                    .map(|c| c.id.clone())
+                    .collect();
+                for cid in ws_conns {
+                    let _ = self.store.delete_connection(&cid);
+                }
+                self.connections.retain(|c| c.ws != ws);
+                self.ws_leads.remove(&ws);
+                removed_ws = true;
+            }
         }
-        self.membership.remove(id);
-        self.ws_leads.remove(&auto_ws_id);
         let _ = self.store.set_membership(&self.membership);
 
         // Cascade-delete every connection that touches the removed node (inbound
@@ -644,11 +665,19 @@ impl Core {
 
         let snap = self.snapshot();
         let groups = marsad_viewmodel::group_overview(&snap);
-        Ok(vec![
+        let mut updates = vec![
             VmUpdate::SessionRemoved { id: id.to_string() },
             VmUpdate::Overview(groups),
             VmUpdate::Board(self.board()),
-        ])
+        ];
+        // When we cascade-deleted the parent workstream, the client must be told
+        // so the empty workstream vanishes in the SAME op (no lingering shell).
+        // Callers that also emit a Workstreams update (delete_workstream) tolerate
+        // the duplicate — the receiver replaces its slice wholesale.
+        if removed_ws {
+            updates.push(self.workstreams_update());
+        }
+        Ok(updates)
     }
 
     /// Inject a shell command and its output into the session transcript.
@@ -1216,6 +1245,7 @@ impl Core {
                     wasl_last_seq,
                     wasl_seen_seqs: std::collections::HashSet::new(),
                     wasl_open_assistant: None,
+                    open_assistant: None,
                     wasl_turn_closed: false,
                     wasl_native_gates: HashMap::new(),
                 },

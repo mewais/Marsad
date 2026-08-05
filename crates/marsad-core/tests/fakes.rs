@@ -496,6 +496,16 @@ fn scripted_two_concurrent_sessions_no_cross_routing() {
         .on_agent_line(&agent_init(&id_beta))
         .expect("init beta");
 
+    // Put a turn in flight on each (a delta → non-empty transcript → Working).
+    // An init alone on an empty transcript is now established-but-idle (Starting);
+    // Working requires an actual turn, which a streamed delta represents.
+    let _ = core
+        .on_agent_line(&agent_assistant_text(&id_alpha, "m-alpha", "working"))
+        .expect("delta alpha");
+    let _ = core
+        .on_agent_line(&agent_assistant_text(&id_beta, "m-beta", "working"))
+        .expect("delta beta");
+
     // Alpha gets a result, beta stays in Working
     let alpha_done_updates = core
         .on_agent_line(&agent_result_success(&id_alpha, 0.10))

@@ -526,6 +526,11 @@ fn session_update_after_init_reflects_working_phase() {
         .launch_session(spec("proj-phase", String::new()))
         .expect("launch");
 
+    // Put a turn in flight first (non-empty transcript) so this system/init is a
+    // genuine turn-start init → Working. An init on an EMPTY transcript is a
+    // session-establishment init (opencode `session/new`) and is idle/Starting,
+    // covered by agent_event_reduce.rs::session_init_sets_session_fields_*.
+    core.on_agent_line(&ipc_assistant(&id, "m-phase")).expect("delta");
     let updates = core.on_agent_line(&ipc_init(&id)).expect("init");
     let session_updates: Vec<_> = updates
         .into_iter()
