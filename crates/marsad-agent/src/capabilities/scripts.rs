@@ -66,6 +66,15 @@ pub fn command_word(command: &str) -> &str {
     command.split_whitespace().next().unwrap_or("")
 }
 
+/// The `wasl` discovery section: `command -v wasl-mcpd`. Host-global (NOT
+/// per-driver) — appended to EVERY driver's discovery script so each (driver,
+/// host) caps snapshot carries whether wasl-mcpd is installed on that host. The
+/// launch UI gates a managed `wasl-*` driver on BOTH its native CLI AND this.
+/// Parsed by `parse_avail` (same shape as the native `avail` section).
+pub(crate) fn wasl_avail_section() -> String {
+    section("wasl", "command -v wasl-mcpd 2>/dev/null")
+}
+
 /// Build the claude discovery script: after `setup`, check availability of the
 /// resolved command's first word, then print the three `ANTHROPIC_DEFAULT_*`
 /// env values (the host's real versioned models — claude has no "list models"
@@ -161,7 +170,11 @@ pub fn build_claude_discovery_script(
         }
         _ => section("sessions", "true"),
     };
-    with_setup(setup, &format!("{avail}{version}{env}{extra_models}{sessions}"))
+    let wasl = wasl_avail_section();
+    with_setup(
+        setup,
+        &format!("{avail}{wasl}{version}{env}{extra_models}{sessions}"),
+    )
 }
 
 /// Build the codex discovery script: after `setup`, availability of the resolved
@@ -192,7 +205,8 @@ pub fn build_codex_discovery_script(command: &str, setup: Option<&str>) -> Strin
            printf '%s000\\t%s\\t%s\\n' \"$m\" \"$b\" \"$l\"; \
          done",
     );
-    with_setup(setup, &format!("{avail}{models}{sessions}"))
+    let wasl = wasl_avail_section();
+    with_setup(setup, &format!("{avail}{wasl}{models}{sessions}"))
 }
 
 /// Build the agy/gemini discovery script: after `setup`, availability of the
@@ -211,7 +225,8 @@ pub fn build_agy_discovery_script(command: &str, setup: Option<&str>) -> String 
             cmd = command,
         ),
     );
-    with_setup(setup, &format!("{avail}{models}"))
+    let wasl = wasl_avail_section();
+    with_setup(setup, &format!("{avail}{wasl}{models}"))
 }
 
 /// A parsed discovery output: the named sections extracted between the

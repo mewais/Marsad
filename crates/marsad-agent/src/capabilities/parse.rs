@@ -120,19 +120,29 @@ struct CodexModelEntry {
 }
 
 /// Parse `codex debug models` JSON stdout. Hidden models (`visibility ==
-/// "hide"`) are excluded; the remaining models' numeric `priority`, stringified
-/// verbatim, lands in `annotation`. Malformed JSON or an absent/empty `models`
-/// array degrades to an empty list — never a panic (the caller surfaces the
-/// real subprocess failure into `Capabilities.errors` instead).
+/// "hide"`) are excluded. The numeric `priority` is codex's ORDERING key, not a
+/// display label — it is used to sort the list ascending (lower priority first;
+/// models with no priority sort last, in their original relative order) and is
+/// NEVER surfaced as a picker annotation. codex models carry no meaningful
+/// per-model display word (unlike claude's family), so `annotation` is always
+/// `None`. Malformed JSON or an absent/empty `models` array degrades to an empty
+/// list — never a panic (the caller surfaces the real subprocess failure into
+/// `Capabilities.errors` instead).
 pub fn parse_codex_debug_models(raw: &str) -> Vec<ModelInfo> {
-    serde_json::from_str::<CodexModelsFile>(raw)
+    let mut entries: Vec<CodexModelEntry> = serde_json::from_str::<CodexModelsFile>(raw)
         .unwrap_or_default()
         .models
         .into_iter()
         .filter(|m| m.visibility != "hide")
+        .collect();
+    // Stable sort on priority ascending keeps un-prioritized (None → i64::MAX)
+    // models last while preserving their input order among equals.
+    entries.sort_by_key(|m| m.priority.unwrap_or(i64::MAX));
+    entries
+        .into_iter()
         .map(|m| ModelInfo {
             id: m.slug,
-            annotation: m.priority.map(|p| p.to_string()),
+            annotation: None,
         })
         .collect()
 }

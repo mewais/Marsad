@@ -226,6 +226,14 @@ pub struct Capabilities {
     /// old cached snapshots without the field still load.
     #[serde(default)]
     pub cli_available: bool,
+    /// Whether `wasl-mcpd` was detected on the probed host (a `command -v
+    /// wasl-mcpd` in the discovery script). This is a HOST-GLOBAL fact carried
+    /// on every driver's caps for that host (each discovery script probes it),
+    /// so the launch UI can gate a managed `wasl-*` driver on BOTH its native
+    /// CLI (`cli_available`) AND wasl itself being installed. `#[serde(default)]`
+    /// so old cached snapshots without the field load as `false`.
+    #[serde(default)]
+    pub wasl_available: bool,
     /// Whether Marsad has a real LAUNCH DRIVER for this agent — a static,
     /// per-driver fact (claude/codex → true, gemini → false), NOT a probe of
     /// the host. This is what the launch UI gates on: a driver Marsad can

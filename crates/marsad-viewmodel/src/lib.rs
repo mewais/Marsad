@@ -206,6 +206,12 @@ pub struct CapabilitiesView {
     pub driver: String,
     pub host_id: String,
     pub cli_available: bool,
+    /// Whether `wasl-mcpd` was detected on the host (host-global; carried on
+    /// every driver's caps). The launch UI gates a managed `wasl-*` driver on
+    /// BOTH the native CLI (`cli_available`) AND this. Verbatim from
+    /// `marsad_proto::Capabilities::wasl_available`.
+    #[serde(default)]
+    pub wasl_available: bool,
     /// Whether Marsad has a launch driver for this agent (static per-driver
     /// truth: claude/codex → true, gemini → false). What the launch UI gates
     /// on — carried verbatim from `marsad_proto::Capabilities::launchable`.
@@ -229,6 +235,7 @@ impl From<marsad_proto::Capabilities> for CapabilitiesView {
             driver: c.driver,
             host_id: c.host_id,
             cli_available: c.cli_available,
+            wasl_available: c.wasl_available,
             launchable: c.launchable,
             models: c.models,
             available_modes: c.available_modes,

@@ -219,6 +219,7 @@ fn capabilities_update_agy() -> IpcMsg {
             driver: "gemini".to_string(),
             host_id: "local".to_string(),
             cli_available: true,
+            wasl_available: false,
             launchable: false,
             models: ModelCatalog {
                 models: vec![ModelInfo {
@@ -250,6 +251,7 @@ fn capabilities_update_claude() -> IpcMsg {
             driver: "claude".to_string(),
             host_id: "hpc".to_string(),
             cli_available: true,
+            wasl_available: false,
             launchable: true,
             models: ModelCatalog {
                 models: vec![ModelInfo {

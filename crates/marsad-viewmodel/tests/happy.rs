@@ -735,6 +735,7 @@ fn capabilities_view_from_capabilities_maps_every_field_verbatim() {
         driver: "codex".to_string(),
         host_id: "hetzner".to_string(),
         cli_available: true,
+        wasl_available: false,
         // launchable is carried verbatim, INDEPENDENT of cli_available (here it
         // is false while cli_available is true, to prove they map separately).
         launchable: false,

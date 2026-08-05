@@ -445,6 +445,7 @@ impl CapabilityProvider {
                 driver: "claude".to_string(),
                 host_id: host_id.to_string(),
                 cli_available: false,
+                wasl_available: false,
                 // claude has a launch driver — static truth, independent of any
                 // host probe (mirrors RealClaudeProbe::launchable()).
                 launchable: true,

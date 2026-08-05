@@ -232,19 +232,20 @@ impl CapabilityProbe for RealCodexProbe {
         let command = ctx.resolve_command("codex");
         let script = build_codex_discovery_script(&command, ctx.setup.as_deref());
         let mut errors = Vec::new();
-        let (cli_available, models, mut sessions) =
+        let (cli_available, wasl_available, models, mut sessions) =
             match run_discovery(ctx.host_target.as_deref(), &script, ctx.deadline) {
                 Ok(out) => {
                     let secs = parse_discovery_sections(&out);
                     (
                         parse_avail(secs.get("avail")),
+                        parse_avail(secs.get("wasl")),
                         parse_codex_debug_models(secs.get("models")),
                         parse_remote_codex_session_list(secs.get("sessions")),
                     )
                 }
                 Err(e) => {
                     errors.push(format!("codex discovery: {e}"));
-                    (false, vec![], vec![])
+                    (false, false, vec![], vec![])
                 }
             };
 
@@ -290,6 +291,7 @@ impl CapabilityProbe for RealCodexProbe {
             driver: "codex".to_string(),
             host_id: ctx.host_id.clone(),
             cli_available,
+            wasl_available,
             launchable: self.launchable(),
             models: ModelCatalog {
                 models,
@@ -528,24 +530,26 @@ impl CapabilityProbe for RealAgyProbe {
         let command = ctx.resolve_command("gemini");
         let script = build_agy_discovery_script(&command, ctx.setup.as_deref());
         let mut errors = Vec::new();
-        let (cli_available, models) =
+        let (cli_available, wasl_available, models) =
             match run_discovery(ctx.host_target.as_deref(), &script, ctx.deadline) {
                 Ok(out) => {
                     let secs = parse_discovery_sections(&out);
                     (
                         parse_avail(secs.get("avail")),
+                        parse_avail(secs.get("wasl")),
                         parse_agy_models(secs.get("models")),
                     )
                 }
                 Err(e) => {
                     errors.push(format!("gemini discovery: {e}"));
-                    (false, vec![])
+                    (false, false, vec![])
                 }
             };
         Capabilities {
             driver: "gemini".to_string(),
             host_id: ctx.host_id.clone(),
             cli_available,
+            wasl_available,
             // gemini (agy) has NO launch driver in Marsad — the launch UI greys
             // it with the "not yet launchable" note. Uses the trait default.
             launchable: self.launchable(),
@@ -588,7 +592,7 @@ impl CapabilityProbe for RealClaudeProbe {
         let script =
             build_claude_discovery_script(&command, ctx.setup.as_deref(), ctx.project.as_deref());
         let mut errors = Vec::new();
-        let (cli_available, models, sessions, version) =
+        let (cli_available, wasl_available, models, sessions, version) =
             match run_discovery(ctx.host_target.as_deref(), &script, ctx.deadline) {
                 Ok(out) => {
                     let secs = parse_discovery_sections(&out);
@@ -628,6 +632,7 @@ impl CapabilityProbe for RealClaudeProbe {
                     let ver = parse_claude_version(secs.get("version"));
                     (
                         is_available,
+                        parse_avail(secs.get("wasl")),
                         models,
                         parse_remote_claude_session_list(secs.get("sessions")),
                         ver,
@@ -635,7 +640,7 @@ impl CapabilityProbe for RealClaudeProbe {
                 }
                 Err(e) => {
                     errors.push(format!("claude discovery: {e}"));
-                    (false, vec![], vec![], String::new())
+                    (false, false, vec![], vec![], String::new())
                 }
             };
         // Stamp the REQUESTED project onto every discovered session. The remote
@@ -670,6 +675,7 @@ impl CapabilityProbe for RealClaudeProbe {
             driver: "claude".to_string(),
             host_id: ctx.host_id.clone(),
             cli_available,
+            wasl_available,
             launchable: self.launchable(),
             models: ModelCatalog {
                 models,
@@ -722,7 +728,8 @@ pub fn build_opencode_discovery_script(command: &str, setup: Option<&str>) -> St
             cmd = command,
         ),
     );
-    with_setup(setup, &format!("{avail}{models}{sessions}"))
+    let wasl = wasl_avail_section();
+    with_setup(setup, &format!("{avail}{wasl}{models}{sessions}"))
 }
 
 /// Parse `opencode models` stdout: one `provider/model` line per entry.
@@ -801,7 +808,7 @@ impl CapabilityProbe for RealOpencodeProbe {
         let command = ctx.resolve_command("opencode");
         let script = build_opencode_discovery_script(&command, ctx.setup.as_deref());
         let mut errors = Vec::new();
-        let (cli_available, models, sessions) =
+        let (cli_available, wasl_available, models, sessions) =
             match run_discovery(ctx.host_target.as_deref(), &script, ctx.deadline) {
                 Ok(out) => {
                     let secs = parse_discovery_sections(&out);
@@ -817,13 +824,14 @@ impl CapabilityProbe for RealOpencodeProbe {
                         .collect();
                     (
                         parse_avail(secs.get("avail")),
+                        parse_avail(secs.get("wasl")),
                         parse_opencode_models(secs.get("models")),
                         discovered,
                     )
                 }
                 Err(e) => {
                     errors.push(format!("opencode discovery: {e}"));
-                    (false, vec![], vec![])
+                    (false, false, vec![], vec![])
                 }
             };
 
@@ -860,6 +868,7 @@ impl CapabilityProbe for RealOpencodeProbe {
             driver: "opencode".to_string(),
             host_id: ctx.host_id.clone(),
             cli_available,
+            wasl_available,
             launchable: self.launchable(),
             models: ModelCatalog {
                 models,

@@ -251,33 +251,42 @@ fn parse_codex_debug_models_real_fixture_excludes_hidden_model() {
 }
 
 #[test]
-fn parse_codex_debug_models_priority_lands_in_annotation_verbatim() {
-    // §6: "assert hidden models excluded, priority text lands in annotation
-    // verbatim." NOTE(test-agent): the exact string form of "priority text"
-    // is not pinned beyond this phrase; the most literal reading — the
-    // model's numeric `priority` field, stringified, landing unmodified in
-    // `annotation` — is what's asserted here.
+fn parse_codex_debug_models_priority_sorts_ascending_and_leaves_annotation_none() {
+    // codex's `priority` is an ORDERING key, not a display label. It must sort
+    // the list ascending (lower first) and NEVER surface as a picker annotation
+    // (the old "gpt-5.6-sol -- 1" bug was priority leaking into the label).
+    // Fixture priorities: gpt-5.5=7, gpt-5.4-mini=23 → gpt-5.5 sorts first.
     let raw = codex_debug_models_fixture();
     let models = parse_codex_debug_models(&raw);
-    let gpt55 = models
-        .iter()
-        .find(|m| m.id == "gpt-5.5")
-        .expect("gpt-5.5 must be present");
+    let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
     assert_eq!(
-        gpt55.annotation.as_deref(),
-        Some("7"),
-        "gpt-5.5's real priority is 7"
+        ids,
+        vec!["gpt-5.5", "gpt-5.4-mini"],
+        "models must be ordered by ascending priority (7 before 23)"
     );
+    for m in &models {
+        assert_eq!(
+            m.annotation, None,
+            "codex priority must never land in annotation (no '-- N' in the picker)"
+        );
+    }
+}
 
-    let mini = models
-        .iter()
-        .find(|m| m.id == "gpt-5.4-mini")
-        .expect("gpt-5.4-mini must be present");
-    assert_eq!(
-        mini.annotation.as_deref(),
-        Some("23"),
-        "gpt-5.4-mini's real priority is 23"
-    );
+#[test]
+fn parse_codex_debug_models_unprioritized_sort_last_stable() {
+    // A model with no `priority` sorts after all prioritized ones, preserving
+    // input order among the un-prioritized.
+    let raw = r#"{"models":[
+        {"slug":"no-prio-a","visibility":"list"},
+        {"slug":"prio-9","visibility":"list","priority":9},
+        {"slug":"no-prio-b","visibility":"list"},
+        {"slug":"prio-2","visibility":"list","priority":2}
+    ]}"#;
+    let ids: Vec<String> = parse_codex_debug_models(raw)
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(ids, vec!["prio-2", "prio-9", "no-prio-a", "no-prio-b"]);
 }
 
 #[test]
@@ -1346,6 +1355,7 @@ impl CapabilityProbe for FakeProbe {
             driver: self.driver.to_string(),
             host_id: ctx.host_id.clone(),
             cli_available: true,
+            wasl_available: false,
             launchable: self.launchable(),
             models: Default::default(),
             available_modes: vec![],
