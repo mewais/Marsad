@@ -497,8 +497,11 @@ fn probe_codex_modes_bounded(
             continue; // notification
         }
         if val.get("id").and_then(|v| v.as_u64()) == Some(5) {
-            if val.get("error").is_some() {
-                cleanup_and_err!(child, "collaborationMode/list error response".to_string());
+            if let Some(err) = val.get("error") {
+                cleanup_and_err!(
+                    child,
+                    format!("collaborationMode/list error response: {err}")
+                );
             }
             let result = val.get("result").cloned().unwrap_or(serde_json::Value::Null);
             break wasit_codex::codex_modes_from_collab_list(&result);

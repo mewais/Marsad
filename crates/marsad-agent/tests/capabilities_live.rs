@@ -28,6 +28,41 @@ fn on_path(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Memory gate (mirrors x6/i10/i16): opencode's JSC runtime OOMs below ~2 GB and
+/// needs a large virtual address space, so a sandbox with a tight `RLIMIT_AS`
+/// must SKIP rather than crash the CLI mid-probe. Codex/claude discovery is
+/// shell-light and doesn't need this.
+fn enough_memory() -> bool {
+    const MIN_AVAIL_KB: u64 = 3_000_000;
+    const MIN_AS_BYTES: u64 = 6_000_000_000;
+    let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    for line in meminfo.lines() {
+        if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            let kb: u64 = rest
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(u64::MAX);
+            if kb < MIN_AVAIL_KB {
+                return false;
+            }
+            break;
+        }
+    }
+    let limits = std::fs::read_to_string("/proc/self/limits").unwrap_or_default();
+    for line in limits.lines() {
+        if line.starts_with("Max address space") {
+            if let Some(val) = line.split_whitespace().nth(3) {
+                if val == "unlimited" {
+                    return true;
+                }
+                return val.parse::<u64>().map(|b| b >= MIN_AS_BYTES).unwrap_or(true);
+            }
+        }
+    }
+    true
+}
+
 fn local_ctx(project: Option<&str>) -> HostProbeCtx {
     HostProbeCtx {
         host_id: "local".to_string(),
@@ -132,6 +167,34 @@ fn live_local_codex_modes_via_build_probe_spawn_argv() {
             "NOTE: codex modes probe returned empty (timeout or auth required on this host) — argv shape verified above"
         );
     }
+}
+
+/// The LOCAL opencode mode probe must discover ≥1 mode via `opencode acp`
+/// (initialize → session/new → configOptions). Prints what it found so the
+/// manager can confirm live behavior; asserts availability + that a failure
+/// lands in `errors` (never a panic/hang past the deadline).
+#[test]
+fn live_local_opencode_modes() {
+    if !on_path("opencode") {
+        eprintln!("SKIP live_local_opencode_modes: `opencode` not on PATH");
+        return;
+    }
+    if !enough_memory() {
+        eprintln!(
+            "SKIP live_local_opencode_modes: insufficient memory (opencode/JSC needs ~2 GB RSS + large AS; sandbox AS-limited)"
+        );
+        return;
+    }
+    let caps = marsad_agent::capabilities::RealOpencodeProbe.probe(&local_ctx(None));
+    eprintln!("=== LIVE opencode modes probe result ===");
+    eprintln!("cli_available = {}", caps.cli_available);
+    eprintln!("models ({})", caps.models.models.len());
+    eprintln!("available_modes ({}):", caps.available_modes.len());
+    for m in &caps.available_modes {
+        eprintln!("  - {} ({:?})", m.id, m.label);
+    }
+    eprintln!("errors = {:?}", caps.errors);
+    assert!(caps.cli_available, "opencode must be available");
 }
 
 /// The LOCAL claude probe must really discover: claude available (real
