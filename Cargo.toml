@@ -39,6 +39,7 @@ members = [
     "tests/integration/i14_opencode_live",
     "tests/integration/i15_remote_wasl_live",
     "tests/integration/i16_wasl_a2a_live",
+    "tests/integration/i17_wasl_managed_live",
 ]
 # apps/desktop/src-tauri is intentionally NOT a workspace member: Tauri apps build
 # with their own profile/runner. It depends on marsad-core by path. See its own Cargo.toml.
