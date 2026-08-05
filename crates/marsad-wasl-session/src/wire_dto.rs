@@ -573,13 +573,21 @@ pub(crate) fn truncated_from_json(data: &str) -> Option<TruncatedDto> {
 /// create-target reads TOP-LEVEL `protocol` and `context` (the `SpawnContext`:
 /// cwd/model/session_mode/mcp_config/…); Marsad's caller nests those inside the
 /// opaque target key as `{ protocol, context, … }`. Unpack them to the top
-/// level so the worker actually receives its protocol + spawn context — a plain
-/// (string) or context-less key leaves the body as just `{key}`, unchanged
-/// (preserving the relay-verbatim contract for keys that carry neither). The
-/// full key value is always still sent as `key` for create-or-reuse/reattach.
+/// level so the worker actually receives its protocol + spawn context. The wire
+/// `key` is a bare STRING (`TargetKey(String)` — the create-or-reuse/turn-routing
+/// context id), lifted via [`target_context_id`], NOT the whole object (sending
+/// the object 422s the create).
 pub(crate) fn create_request_body(key: &serde_json::Value) -> String {
     let mut body = serde_json::Map::new();
-    body.insert("key".to_string(), key.clone());
+    // The node's `CreateTargetRequest.key` is a bare STRING (the context_id) — NOT
+    // the whole opaque object. Lift the string identity; the rich `protocol` /
+    // `context` ride as their own top-level fields the node reads directly. Sending
+    // the object as `key` makes the node reject the create with a 422
+    // ("key: invalid type: map, expected a string"), so no target is ever created.
+    body.insert(
+        "key".to_string(),
+        serde_json::Value::String(target_context_id(key)),
+    );
     if let Some(protocol) = key.get("protocol") {
         body.insert("protocol".to_string(), protocol.clone());
     }
@@ -588,6 +596,29 @@ pub(crate) fn create_request_body(key: &serde_json::Value) -> String {
     }
     serde_json::to_string(&serde_json::Value::Object(body))
         .expect("create request always serializes")
+}
+
+/// Extract the node-side context_id STRING from Marsad's opaque `WaslTargetKey`.
+///
+/// The node's runtime-control wire uses a plain STRING for BOTH the target `key`
+/// (`CreateTargetRequest.key: TargetKey(String)`) and a submit's
+/// `delivery.context_id` — it identifies the live target for create-or-reuse and
+/// for turn routing. Marsad's [`crate::WaslTargetKey`] is a rich JSON object
+/// `{ "key": "<id>", "protocol": "…", "context": { … } }` (the desktop builds it
+/// that way). Lift its string `key` field as the identity; a key that is ALREADY
+/// a bare string is used verbatim; an object that carries no string `key` falls
+/// back to a canonical JSON encoding of the whole value (stable per distinct key,
+/// so the create-or-reuse identity is the same every time). Both the create body
+/// and the submit body derive the id THROUGH THIS ONE fn so a turn always routes
+/// to the target the create made.
+pub(crate) fn target_context_id(key: &serde_json::Value) -> String {
+    if let Some(s) = key.as_str() {
+        return s.to_string();
+    }
+    if let Some(s) = key.get("key").and_then(|v| v.as_str()) {
+        return s.to_string();
+    }
+    serde_json::to_string(key).unwrap_or_default()
 }
 
 /// Serialize a [`WaslBusyPolicy`] to its wire tagged form
@@ -624,8 +655,13 @@ fn causation_value(c: &WaslCausation) -> serde_json::Value {
 pub(crate) fn submit_request_body(
     req: &WaslTurnRequest,
     busy_policy: &WaslBusyPolicy,
-    context_id: &serde_json::Value,
+    key: &serde_json::Value,
 ) -> String {
+    // `delivery.context_id` is the node-side STRING context id (== the target's
+    // `key`), NOT Marsad's opaque object. Derive it the SAME way the create body
+    // derives the target `key` (`target_context_id`) so the turn routes to the
+    // target the create made; sending the object here would 422 the submit.
+    let context_id = target_context_id(key);
     let body = serde_json::json!({
         "delivery": {
             "context_id": context_id,

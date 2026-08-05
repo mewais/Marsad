@@ -63,15 +63,12 @@ fn create_body_lifts_context_resume_to_top_level() {
         "context.cwd must still be present alongside resume"
     );
 
-    // Also present nested in the opaque key.
-    let key_ctx = body
-        .get("key")
-        .and_then(|k| k.get("context"))
-        .expect("key.context must be present");
+    // The wire `key` is the STRING identity (node's `TargetKey(String)`), not the
+    // object — resume rides in the lifted top-level `context`, asserted above.
     assert_eq!(
-        key_ctx.get("resume").and_then(|v| v.as_str()),
-        Some("sess-uuid-1234"),
-        "resume must also be accessible inside key.context"
+        body.get("key").and_then(|v| v.as_str()),
+        Some("node-abc"),
+        "wire key must be the string identity, not the object"
     );
 }
 

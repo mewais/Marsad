@@ -696,16 +696,23 @@ pub fn render_wasl_worker_toml(agent_id: &str, host_id: &str, peers: &[WaslWorke
 /// Built with `serde_json` so the path is correctly JSON-escaped even if it
 /// contains special characters.
 ///
+/// `wasl-mcpd` reads its config from the `WASL_CONFIG` **env var**, NOT a
+/// `--config` flag (an unknown flag is ignored → it falls back to the default
+/// config, so the worker's peers/identity are lost and the send-tools MCP is
+/// useless). Pass the path via `env`, which the MCP client sets on the spawned
+/// server process.
+///
 /// # Example output
 /// ```text
-/// {"mcpServers":{"wasl":{"command":"wasl-mcpd","args":["--config","/data/wasl-worker-sess.toml"]}}}
+/// {"mcpServers":{"wasl":{"command":"wasl-mcpd","args":[],"env":{"WASL_CONFIG":"/data/wasl-worker-sess.toml"}}}}
 /// ```
 pub fn wasl_worker_mcp_config(config_path: &str) -> String {
     serde_json::json!({
         "mcpServers": {
             "wasl": {
                 "command": "wasl-mcpd",
-                "args": ["--config", config_path]
+                "args": [],
+                "env": { "WASL_CONFIG": config_path }
             }
         }
     })

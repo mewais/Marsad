@@ -1,9 +1,13 @@
 //! create_context_wire.rs — the create-target body must carry the worker's
-//! spawn context. Marsad's caller nests `{protocol, context:{cwd,model,…}}`
-//! inside the opaque target key; `create_request_body` must UNPACK those to the
-//! top level so the node's create-target actually applies them (a node reads
-//! top-level `protocol` + `context`, not a nested key). Regression for the gap
-//! where the whole key was sent as `{key}` and the worker spawned with defaults.
+//! spawn context. Marsad's caller nests `{key, protocol, context:{cwd,model,…}}`
+//! inside the opaque target key; `create_request_body` must UNPACK `protocol` +
+//! `context` to the top level (a node reads top-level `protocol` + `context`, not
+//! a nested key) AND send the target `key` as a bare STRING context id — the
+//! node's `CreateTargetRequest.key` is a `TargetKey(String)`, so sending the whole
+//! object as `key` makes the node reject the create with a 422
+//! ("key: invalid type: map, expected a string") and no target is ever created.
+//! Regression for BOTH: the worker spawning with defaults (context not lifted),
+//! and the object-shaped key that broke every managed create live.
 
 mod real_support;
 
@@ -20,16 +24,17 @@ fn provider(server: &MockRuntimeServer) -> RealWaslSessionProvider {
 }
 
 /// An object key shaped exactly like the desktop builds it:
-/// `{protocol, context:{cwd, model, session_mode}}`. The create body must lift
-/// `protocol` and `context` to the top level while still sending the whole value
-/// as the opaque `key`.
+/// `{key, protocol, context:{cwd, model, session_mode}}`. The create body must
+/// lift `protocol` and `context` to the top level AND send the STRING `key`
+/// identity (not the object) as the wire `key`.
 #[test]
 fn create_body_unpacks_protocol_and_context_to_top_level() {
     let server = MockRuntimeServer::start();
     server.push_create(BufferedResponse::json(200, compact_fixture("target.json")));
 
     let key = WaslTargetKey(val(
-        r#"{ "protocol": "claude",
+        r#"{ "key": "tgt-9",
+             "protocol": "claude",
              "context": { "cwd": "/w/proj", "model": "claude-opus-4-5", "session_mode": "plan" } }"#,
     ));
     let p = provider(&server);
@@ -56,12 +61,42 @@ fn create_body_unpacks_protocol_and_context_to_top_level() {
         ctx.get("session_mode").and_then(|v| v.as_str()),
         Some("plan")
     );
-    // The full value is still relayed as the opaque `key`.
+    // The wire `key` is the STRING identity lifted from the object's `key` field —
+    // NOT the object (the node's `key` is a `TargetKey(String)`).
     assert_eq!(
-        body.get("key").and_then(|k| k.get("protocol")).and_then(|v| v.as_str()),
-        Some("claude"),
-        "the whole key value is still sent as `key` for reattach/reuse"
+        body.get("key").and_then(|v| v.as_str()),
+        Some("tgt-9"),
+        "the string `key` identity must be sent as the wire `key`, not the object"
     );
+}
+
+/// An object key WITHOUT a string `key` field falls back to a canonical JSON
+/// encoding of the whole value — still a bare STRING on the wire (never a map),
+/// so the node accepts it and the create-or-reuse identity is stable.
+#[test]
+fn create_body_key_without_id_field_is_canonical_string() {
+    let server = MockRuntimeServer::start();
+    server.push_create(BufferedResponse::json(200, compact_fixture("target.json")));
+
+    let key = WaslTargetKey(val(
+        r#"{ "protocol": "claude", "context": { "cwd": "/w/proj" } }"#,
+    ));
+    let p = provider(&server);
+    let _ = p.get_or_start(&key).expect("create must succeed on a 200");
+
+    let body = server.requests_to("POST", "/v1/targets")[0].body_json();
+    // Wire `key` is a STRING (the canonical JSON of the whole value), never a map.
+    let wire_key = body
+        .get("key")
+        .and_then(|v| v.as_str())
+        .expect("wire key must be a bare string");
+    assert!(
+        wire_key.contains("\"protocol\":\"claude\""),
+        "fallback key is the canonical JSON of the value: {wire_key:?}"
+    );
+    // protocol + context are still lifted to the top level.
+    assert_eq!(body.get("protocol").and_then(|v| v.as_str()), Some("claude"));
+    assert!(body.get("context").is_some());
 }
 
 /// A key that carries neither `protocol` nor `context` (e.g. a bare string) is

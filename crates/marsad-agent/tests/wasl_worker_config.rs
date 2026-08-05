@@ -171,7 +171,9 @@ fn render_toml_with_peers_has_no_runtime_block() {
 // ---------------------------------------------------------------------------
 
 /// `wasl_worker_mcp_config("/x/y.toml")` must parse back to JSON with
-/// `mcpServers.wasl.command == "wasl-mcpd"` and `args == ["--config", "/x/y.toml"]`.
+/// `mcpServers.wasl.command == "wasl-mcpd"`, EMPTY `args`, and the config path in
+/// `env.WASL_CONFIG` — wasl-mcpd reads its config from the `WASL_CONFIG` env var,
+/// NOT a `--config` flag (which it ignores → default config → useless send-tools).
 #[test]
 fn wasl_worker_mcp_config_parses_back_correctly() {
     let json_str = wasl_worker_mcp_config("/x/y.toml");
@@ -188,21 +190,21 @@ fn wasl_worker_mcp_config_parses_back_correctly() {
     let args = v["mcpServers"]["wasl"]["args"]
         .as_array()
         .expect("args must be an array");
-    assert_eq!(
-        args.len(),
-        2,
-        "args must have exactly 2 elements: [\"--config\", \"<path>\"]"
+    assert!(
+        args.is_empty(),
+        "args must be empty — the config path is passed via the WASL_CONFIG env var, \
+         not a --config flag (wasl-mcpd ignores --config)"
     );
-    assert_eq!(args[0].as_str(), Some("--config"), "args[0] must be --config");
     assert_eq!(
-        args[1].as_str(),
+        v["mcpServers"]["wasl"]["env"]["WASL_CONFIG"].as_str(),
         Some("/x/y.toml"),
-        "args[1] must be the config path"
+        "the config path must be passed via the WASL_CONFIG env var"
     );
 }
 
 /// Path characters that need JSON escaping (e.g. backslash on Windows) are
-/// correctly escaped by `serde_json` — verifiable by round-tripping the path.
+/// correctly escaped by `serde_json` — verifiable by round-tripping the path
+/// through the `env.WASL_CONFIG` value.
 #[test]
 fn wasl_worker_mcp_config_escapes_special_path_chars() {
     // Simulate a Windows-style path (unlikely in practice but the builder must
@@ -211,8 +213,11 @@ fn wasl_worker_mcp_config_escapes_special_path_chars() {
     let json_str = wasl_worker_mcp_config(path);
     let v: serde_json::Value = serde_json::from_str(&json_str)
         .expect("a path with backslashes must still produce valid JSON");
-    let args = v["mcpServers"]["wasl"]["args"].as_array().unwrap();
-    assert_eq!(args[1].as_str(), Some(path), "the path must round-trip through JSON");
+    assert_eq!(
+        v["mcpServers"]["wasl"]["env"]["WASL_CONFIG"].as_str(),
+        Some(path),
+        "the path must round-trip through JSON via the WASL_CONFIG env var"
+    );
 }
 
 // ---------------------------------------------------------------------------

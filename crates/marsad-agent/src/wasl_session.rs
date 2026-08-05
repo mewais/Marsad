@@ -403,22 +403,77 @@ impl Agent {
             eprintln!("marsad-agent: wasl-node: adopting existing node {node_name}");
             let _ = self.active_container().attach(&node_name);
         } else {
-            // Build the spawn command: wasl-mcpd with the config path.
-            // Redirect the node's stderr to a durable log file so post-mortem
-            // debugging is possible even if the node exits.
-            // The config file write may have succeeded or not; use the path regardless
-            // (wasl-mcpd may already have a config at that path from a prior run).
+            // Spawn the managed node EXACTLY like the proven remote recipe
+            // (`remote_wasl_node_launch_script`, live-verified by i15/i16):
+            //   sleep 100000 | WASL_CONFIG=<toml> wasl-mcpd 2>> <log>
+            // Two load-bearing details (both were wrong before → a local managed
+            // session hung forever because the node never served its control API):
+            //   1. wasl-mcpd reads its config from the WASL_CONFIG **env var** — it
+            //      does NOT accept a `--config` flag. An unknown flag is ignored and
+            //      the daemon falls back to its DEFAULT config, which has no
+            //      `[runtime] kind=managed`/`control_bind`, so the HTTP control /
+            //      operator / a2a servers never start and `get_or_start`
+            //      (POST /v1/targets) can never reach the node.
+            //   2. `sleep 100000 |` holds stdin open as a non-TTY pipe so the
+            //      stdio-MCP task never sees EOF (which tears the whole process down)
+            //      and the tmux pane's PTY isn't handed to it as stdin.
+            // Stderr → a durable log for post-mortem even if it exits.
             let spawn_cmd = if write_ok {
                 format!(
-                    "wasl-mcpd --config {} 2>> {}",
+                    "sleep 100000 | WASL_CONFIG=\"{}\" wasl-mcpd 2>> \"{}\"",
                     config_path.to_string_lossy(),
                     log_path.to_string_lossy()
                 )
             } else {
-                "wasl-mcpd".to_string()
+                "sleep 100000 | wasl-mcpd".to_string()
             };
             eprintln!("marsad-agent: wasl-node: spawning node {node_name}: {spawn_cmd}");
             let _ = self.active_container().spawn(&node_name, &spawn_cmd);
+        }
+
+        // Real-IO only: the just-spawned node's HTTP control server is NOT listening
+        // the instant `spawn` returns — the tmux child needs a moment to bind. Poll
+        // the control bind until it accepts a TCP connection (bounded), so the
+        // immediately-following `get_or_start` (POST /v1/targets) does not RACE the
+        // bind and fail with a spurious `ECONNREFUSED` — which would leave the launch
+        // with no target and the session hung forever waiting for a Done that never
+        // comes (the exact managed-wasl bug this closes). On timeout we proceed
+        // anyway so `get_or_start` surfaces a real typed error rather than a false
+        // "up". Gated to real-IO: a FakeContainer unit test never spawns a real node,
+        // so it must NOT wait — it expects the immediate `ECONNREFUSED`. Excluded
+        // from the coverage build (no real node exists there).
+        #[cfg(not(coverage))]
+        if self.real_container.0.is_some() {
+            if let Some(addr) = base_url
+                .strip_prefix("http://")
+                .and_then(|hp| hp.parse::<std::net::SocketAddr>().ok())
+            {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+                let mut waited_ms = 0u64;
+                loop {
+                    if std::net::TcpStream::connect_timeout(
+                        &addr,
+                        std::time::Duration::from_millis(300),
+                    )
+                    .is_ok()
+                    {
+                        if waited_ms > 0 {
+                            eprintln!(
+                                "marsad-agent: wasl-node: control API up at {base_url} after {waited_ms}ms"
+                            );
+                        }
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        eprintln!(
+                            "marsad-agent: wasl-node: control API at {base_url} not up within 20s — proceeding (launch will surface a real error if still down)"
+                        );
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    waited_ms += 200;
+                }
+            }
         }
 
         // Register a RealWaslSessionProvider factory pointed at the real
