@@ -268,6 +268,23 @@ fn bare_socket(s: &str) -> &str {
     s.strip_suffix('/').unwrap_or(s)
 }
 
+/// Map a Marsad driver / bare protocol name to the Wasl node's CANONICAL protocol
+/// name. Marsad names its drivers `claude` / `codex` / `opencode` (the bare form,
+/// used everywhere: driver id, capability slot, `default_protocol`, create
+/// protocol). The Wasl runtime's protocol vocabulary matches for claude/codex but
+/// calls opencode `"opencode-acp"` (its ACP mode, distinct from the planned
+/// `"opencode-serve"`). Marsad must speak Wasl's name when it talks to the node —
+/// both the rendered `default_protocol` (config-validated by the node) and the
+/// create-target `protocol` (routed by the node). This is the ONE boundary mapping;
+/// everything else on the Marsad side keeps the bare driver name. Identity for any
+/// name that is already canonical (claude/codex/opencode-acp) or unknown.
+pub fn wasl_node_protocol(name: &str) -> &str {
+    match name {
+        "opencode" => "opencode-acp",
+        other => other,
+    }
+}
+
 /// Render a `wasl-node` TOML config from `cfg`. Pure: no filesystem IO, always
 /// compiled. Generates the `[identity]`, `[a2a]`, `[operator]`, and `[runtime]`
 /// blocks that `wasl-mcpd --config <path>` reads.

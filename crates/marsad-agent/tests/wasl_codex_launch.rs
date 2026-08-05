@@ -15,7 +15,9 @@
 //! 7. When only codex_bin is present (no claude, no opencode), default_protocol
 //!    is `"codex"`.
 
-use marsad_agent::{render_wasl_node_toml, Agent, AgentConfig, ListenSpec, WaslNodeConfig};
+use marsad_agent::{
+    render_wasl_node_toml, wasl_node_protocol, Agent, AgentConfig, ListenSpec, WaslNodeConfig,
+};
 use marsad_lifecycle::FakeContainer;
 use marsad_notify::CaptureNotifier;
 use marsad_store::{MemoryBackend, Store};
@@ -275,7 +277,9 @@ fn opencode_takes_priority_over_codex_when_both_present_no_claude() {
 
     // The selection: codex only wins when it is the ONLY one and no claude.
     // When opencode is also present, opencode wins (existing behavior preserved).
-    let default_protocol = if codex_bin_resolved.is_some()
+    // The chosen bare name is mapped to the Wasl node's canonical protocol via
+    // `wasl_node_protocol` (opencode → opencode-acp), exactly as the agent does.
+    let default_protocol = wasl_node_protocol(if codex_bin_resolved.is_some()
         && claude_bin_resolved.is_none()
         && opencode_bin_resolved.is_none()
     {
@@ -284,11 +288,12 @@ fn opencode_takes_priority_over_codex_when_both_present_no_claude() {
         "opencode"
     } else {
         "claude"
-    };
+    });
 
     assert_eq!(
-        default_protocol, "opencode",
-        "when opencode is also present (no claude), opencode takes priority over codex"
+        default_protocol, "opencode-acp",
+        "when opencode is present (no claude) it takes priority over codex and maps to \
+         the wasl protocol 'opencode-acp'"
     );
     // codex_bin must still be emitted in the TOML even though it is not the default.
     let cfg = WaslNodeConfig {
@@ -304,11 +309,27 @@ fn opencode_takes_priority_over_codex_when_both_present_no_claude() {
     };
     let toml = render_wasl_node_toml(&cfg);
     assert!(
-        toml.contains("default_protocol = \"opencode\""),
-        "opencode must be the default_protocol; got:\n{toml}"
+        toml.contains("default_protocol = \"opencode-acp\""),
+        "opencode-acp must be the default_protocol; got:\n{toml}"
     );
     assert!(
         toml.contains("codex_bin"),
         "codex_bin must still be emitted even when not the default; got:\n{toml}"
     );
+}
+
+// ===========================================================================
+// §8 — wasl_node_protocol: the ONE Marsad→Wasl boundary mapping. Marsad's bare
+//      "opencode" driver → Wasl's canonical "opencode-acp"; claude/codex (and any
+//      already-canonical/unknown name) pass through unchanged.
+// ===========================================================================
+
+#[test]
+fn wasl_node_protocol_maps_only_opencode() {
+    assert_eq!(wasl_node_protocol("opencode"), "opencode-acp");
+    assert_eq!(wasl_node_protocol("claude"), "claude");
+    assert_eq!(wasl_node_protocol("codex"), "codex");
+    // Already-canonical and unknown names pass through untouched.
+    assert_eq!(wasl_node_protocol("opencode-acp"), "opencode-acp");
+    assert_eq!(wasl_node_protocol("whatever"), "whatever");
 }

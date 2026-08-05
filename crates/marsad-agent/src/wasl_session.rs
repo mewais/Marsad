@@ -362,16 +362,18 @@ impl Agent {
             // Protocol selection: codex when only codex_bin is present (no claude, no
             // opencode); opencode when only opencode_bin is present (no claude);
             // claude otherwise (default — always has a fallback to PATH).
-            default_protocol: if codex_bin_resolved.is_some()
-                && claude_bin_resolved.is_none()
-                && opencode_bin_resolved.is_none()
-            {
-                "codex"
-            } else if opencode_bin_resolved.is_some() && claude_bin_resolved.is_none() {
-                "opencode"
-            } else {
-                "claude"
-            },
+            default_protocol: crate::wasl::wasl_node_protocol(
+                if codex_bin_resolved.is_some()
+                    && claude_bin_resolved.is_none()
+                    && opencode_bin_resolved.is_none()
+                {
+                    "codex"
+                } else if opencode_bin_resolved.is_some() && claude_bin_resolved.is_none() {
+                    "opencode"
+                } else {
+                    "claude"
+                },
+            ),
             claude_bin: claude_bin_resolved,
             opencode_bin: opencode_bin_resolved,
             codex_bin: codex_bin_resolved,
@@ -609,16 +611,18 @@ impl Agent {
             operator_bind: &remote_operator,
             control_bind: &remote_control,
             // Mirror the local branch's protocol selection logic exactly.
-            default_protocol: if codex_bin_resolved.is_some()
-                && claude_bin_resolved.is_none()
-                && opencode_bin_resolved.is_none()
-            {
-                "codex"
-            } else if opencode_bin_resolved.is_some() && claude_bin_resolved.is_none() {
-                "opencode"
-            } else {
-                "claude"
-            },
+            default_protocol: crate::wasl::wasl_node_protocol(
+                if codex_bin_resolved.is_some()
+                    && claude_bin_resolved.is_none()
+                    && opencode_bin_resolved.is_none()
+                {
+                    "codex"
+                } else if opencode_bin_resolved.is_some() && claude_bin_resolved.is_none() {
+                    "opencode"
+                } else {
+                    "claude"
+                },
+            ),
             claude_bin: claude_bin_resolved,
             opencode_bin: opencode_bin_resolved,
             codex_bin: codex_bin_resolved,
@@ -925,6 +929,13 @@ impl Agent {
         // Resolve (or reattach to) the client. `get_or_start` is the potentially
         // blocking call, but the provider is `&mut self`-borrowed here (not under
         // any registry lock), so lock hygiene holds trivially.
+        // Speak the Wasl node's canonical protocol name (opencode → opencode-acp)
+        // before create, so the node's router finds the sub-provider. claude/codex
+        // are identical on both sides. This is the one Marsad→Wasl boundary mapping.
+        if let Some(p) = key_val.get("protocol").and_then(|v| v.as_str()) {
+            let mapped = crate::wasl::wasl_node_protocol(p).to_string();
+            key_val["protocol"] = serde_json::Value::String(mapped);
+        }
         let key = WaslTargetKey(key_val);
         let (client, _snapshot) = self
             .wasl_session_provider
