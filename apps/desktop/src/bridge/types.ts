@@ -686,6 +686,11 @@ export interface CapabilitiesView {
   driver: string;
   host_id: string;
   cli_available: boolean;
+  /** Whether `wasl-mcpd` was detected on this host (host-global; carried on
+   *  every driver's caps). A managed `wasl-*` driver is offered only when BOTH
+   *  its native CLI (`cli_available`) AND this are true. Defaults to false on
+   *  old snapshots without the field. */
+  wasl_available?: boolean;
   /** Whether Marsad has a launch driver for this driver (claude/codex → true,
    *  gemini → false) — carried verbatim from `marsad_proto::Capabilities`. A
    *  driver that isn't launchable is never offered even if its CLI is present. */

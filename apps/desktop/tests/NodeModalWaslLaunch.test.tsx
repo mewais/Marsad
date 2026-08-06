@@ -76,6 +76,7 @@ afterEach(() => {
 function waslCapabilities(hostId: string): Record<string, CapabilitiesView> {
   const base = {
     cli_available: true,
+    wasl_available: true,
     launchable: true,
     models: {
       models: [{ id: "claude-sonnet-latest" }, { id: "claude-opus-latest" }],

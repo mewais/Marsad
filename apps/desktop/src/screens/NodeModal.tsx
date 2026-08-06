@@ -250,18 +250,25 @@ export function NodeModal() {
   // available iff Marsad has a launch driver (`launchable`) AND the CLI was
   // actually detected on the host (`cli_available`). gemini → launchable:false
   // → greyed; a driver not installed on the host → cli_available:false → greyed.
-  // Wasl drivers alias to their underlying protocol for the availability check —
-  // a wasl driver is available iff its underlying CLI is available on the host.
+  //
+  // Wasl drivers alias to their underlying protocol for the caps lookup, but a
+  // managed `wasl-*` driver requires TWO things on the host, ANDed together:
+  // (1) its native CLI is present (the aliased `cli_available`), AND (2) wasl
+  // itself (`wasl-mcpd`) is installed (`wasl_available`, host-global on every
+  // driver's caps). Missing either → greyed.
   function driverAvailable(d: Driver): boolean {
     const aliased: Driver = isWaslDriver(d) ? ((waslProtocol(d) as Driver) ?? d) : d;
     const c = capsForDriver(aliased);
     if (!c) return true; // discovery in flight — optimistic
     if (!c.launchable) return false; // no Marsad driver (e.g. gemini) — hard no
     // A probe that ERRORED/TIMED OUT (slow-setup remote hosts) says nothing about
-    // whether claude is installed. Don't block a launchable driver on a flaky
+    // whether the CLI is installed. Don't block a launchable driver on a flaky
     // probe; only grey out when the probe SUCCEEDED (no errors) and cli was absent.
     if (c.errors.length > 0) return true;
-    return c.cli_available === true;
+    const nativeAvail = c.cli_available === true;
+    // wasl-* needs BOTH the native mirror AND wasl-mcpd on the host.
+    if (isWaslDriver(d)) return nativeAvail && c.wasl_available === true;
+    return nativeAvail;
   }
   /** Known-unavailable: caps are PRESENT and report the driver as not
    *  launchable (gemini) or its CLI not detected. Absent caps (loading) are

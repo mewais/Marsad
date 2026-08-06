@@ -68,6 +68,7 @@ function underlyingCaps(): Record<string, CapabilitiesView> {
       driver: "claude",
       host_id: HOST,
       cli_available: true,
+      wasl_available: true,
       launchable: true,
       models: {
         models: [{ id: "alias-claude-model-a" }, { id: "alias-claude-model-b" }],
@@ -88,6 +89,7 @@ function underlyingCaps(): Record<string, CapabilitiesView> {
       driver: "opencode",
       host_id: HOST,
       cli_available: true,
+      wasl_available: true,
       launchable: true,
       models: {
         models: [{ id: "alias-oc-model" }],
@@ -104,6 +106,7 @@ function underlyingCaps(): Record<string, CapabilitiesView> {
       driver: "codex",
       host_id: HOST,
       cli_available: true,
+      wasl_available: true,
       launchable: true,
       models: {
         models: [{ id: "alias-codex-model" }],
@@ -212,6 +215,42 @@ describe("NodeModal — wasl-codex caps alias (sync)", () => {
     renderNodeModal(underlyingCaps());
     fireEvent.click(screen.getByTestId("nm-driver-wasl-codex"));
     expect(screen.queryByTestId("nm-resume-toggle")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Suite 3b: wasl-* availability is AND (native CLI AND wasl-mcpd on host) (#1)
+// ---------------------------------------------------------------------------
+
+describe("NodeModal — wasl-* availability is AND, not OR (#1)", () => {
+  it("wasl-claude is DISABLED when native claude exists but wasl-mcpd is absent", () => {
+    const caps = underlyingCaps();
+    caps[`claude::${HOST}`] = { ...caps[`claude::${HOST}`], wasl_available: false };
+    renderNodeModal(caps);
+    const btn = screen.getByTestId("nm-driver-wasl-claude") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    // The NATIVE claude driver stays enabled — only the wasl variant is gated on wasl-mcpd.
+    const native = screen.getByTestId("nm-driver-claude") as HTMLButtonElement;
+    expect(native.disabled).toBe(false);
+  });
+
+  it("wasl-codex is DISABLED when wasl-mcpd exists but native codex CLI is absent", () => {
+    const caps = underlyingCaps();
+    caps[`codex::${HOST}`] = {
+      ...caps[`codex::${HOST}`],
+      cli_available: false,
+      wasl_available: true,
+    };
+    renderNodeModal(caps);
+    const btn = screen.getByTestId("nm-driver-wasl-codex") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  it("wasl-opencode is ENABLED only when BOTH the opencode CLI AND wasl-mcpd are present", () => {
+    // Both true in the default fixture → enabled.
+    renderNodeModal(underlyingCaps());
+    const btn = screen.getByTestId("nm-driver-wasl-opencode") as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
   });
 });
 
