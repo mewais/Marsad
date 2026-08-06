@@ -9,7 +9,7 @@
 
 use marsad_workstream::{
     dependency_depth, driver_dots, head_state, host_chips, is_acyclic, state_counts,
-    validate_connection, ConnKind, Connection, Driver, HeadState, Node, Phase, StateCounts,
+    validate_connection, Connection, Driver, HeadState, Node, Phase, StateCounts,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -31,13 +31,12 @@ fn node(id: &str, ws: &str, driver: Driver, host: &str, state: Phase) -> Node {
     }
 }
 
-fn conn(id: &str, ws: &str, from: &str, to: &str, kind: ConnKind) -> Connection {
+fn conn(id: &str, ws: &str, from: &str, to: &str) -> Connection {
     Connection {
         id: id.to_string(),
         ws: ws.to_string(),
         from: from.to_string(),
         to: to.to_string(),
-        kind,
         bi: false,
         gate: None,
     }
@@ -121,9 +120,9 @@ fn is_acyclic_empty_edges_is_true() {
 #[test]
 fn is_acyclic_dag_is_true() {
     let conns = vec![
-        conn("c1", "w1", "a", "b", ConnKind::Data),
-        conn("c2", "w1", "b", "c", ConnKind::Data),
-        conn("c3", "w1", "a", "c", ConnKind::Data),
+        conn("c1", "w1", "a", "b"),
+        conn("c2", "w1", "b", "c"),
+        conn("c3", "w1", "a", "c"),
     ];
     assert!(is_acyclic("w1", &conns));
 }
@@ -132,9 +131,9 @@ fn is_acyclic_dag_is_true() {
 fn is_acyclic_three_cycle_is_false() {
     // a -> b -> c -> a
     let conns = vec![
-        conn("c1", "w1", "a", "b", ConnKind::Data),
-        conn("c2", "w1", "b", "c", ConnKind::Data),
-        conn("c3", "w1", "c", "a", ConnKind::Data),
+        conn("c1", "w1", "a", "b"),
+        conn("c2", "w1", "b", "c"),
+        conn("c3", "w1", "c", "a"),
     ];
     assert!(!is_acyclic("w1", &conns));
 }
@@ -143,13 +142,13 @@ fn is_acyclic_three_cycle_is_false() {
 
 #[test]
 fn dependency_depth_no_inbound_is_zero() {
-    let conns = vec![conn("c1", "w1", "a", "b", ConnKind::Data)];
+    let conns = vec![conn("c1", "w1", "a", "b")];
     assert_eq!(dependency_depth("a", "w1", &conns), 0);
 }
 
 #[test]
 fn dependency_depth_absent_node_is_zero() {
-    let conns = vec![conn("c1", "w1", "a", "b", ConnKind::Data)];
+    let conns = vec![conn("c1", "w1", "a", "b")];
     assert_eq!(dependency_depth("does-not-exist", "w1", &conns), 0);
 }
 
@@ -157,9 +156,9 @@ fn dependency_depth_absent_node_is_zero() {
 fn dependency_depth_node_in_cycle_is_zero() {
     // a -> b -> c -> a; querying any of them should be 0 per spec (caller validates acyclicity).
     let conns = vec![
-        conn("c1", "w1", "a", "b", ConnKind::Data),
-        conn("c2", "w1", "b", "c", ConnKind::Data),
-        conn("c3", "w1", "c", "a", ConnKind::Data),
+        conn("c1", "w1", "a", "b"),
+        conn("c2", "w1", "b", "c"),
+        conn("c3", "w1", "c", "a"),
     ];
     assert_eq!(dependency_depth("a", "w1", &conns), 0);
     assert_eq!(dependency_depth("b", "w1", &conns), 0);
@@ -175,7 +174,7 @@ fn validate_connection_valid_new_edge_is_ok() {
         node("b", "w1", Driver::Claude, "h1", Phase::Working),
     ];
     let existing: Vec<Connection> = vec![];
-    let proposed = conn("new", "w1", "a", "b", ConnKind::Data);
+    let proposed = conn("new", "w1", "a", "b");
     assert_eq!(validate_connection(&proposed, &nodes, &existing), Ok(()));
 }
 
@@ -188,13 +187,13 @@ fn bi_edge_is_directed_only_for_cycle_detection() {
         node("b", "w1", Driver::Claude, "h1", Phase::Working),
     ];
     // Existing: a -> b marked `bi` (still just one directed edge a->b for cycle purposes).
-    let mut existing_edge = conn("c1", "w1", "a", "b", ConnKind::Data);
+    let mut existing_edge = conn("c1", "w1", "a", "b");
     existing_edge.bi = true;
     let existing = vec![existing_edge];
 
     // Proposing b -> a closes the cycle a->b->a, since the bi flag does NOT add a
     // reverse directed edge on its own — the *proposed* b->a is what completes it.
-    let proposed = conn("c2", "w1", "b", "a", ConnKind::Data);
+    let proposed = conn("c2", "w1", "b", "a");
     assert_eq!(
         validate_connection(&proposed, &nodes, &existing),
         Err(marsad_workstream::ConnError::Cycle)

@@ -15,7 +15,7 @@
 //! docs/specs/core-ext.md. That is the correct, expected state until the
 //! code-agent lands the implementation.
 //!
-//! DEV DEPENDENCY NOTE: this file uses `marsad_workstream::{ConnKind, Driver,
+//! DEV DEPENDENCY NOTE: this file uses `marsad_workstream::{Driver,
 //! HeadState}` directly. `marsad-workstream` is currently only a TRANSITIVE
 //! dependency of marsad-core (via marsad-store/marsad-viewmodel), so it must
 //! be added to `[dev-dependencies]` in crates/marsad-core/Cargo.toml as
@@ -29,7 +29,7 @@ use marsad_events::Phase;
 use marsad_store::{BackendOp, MemoryBackend};
 use marsad_transport::LoopbackFake;
 use marsad_viewmodel::EdgeStatus;
-use marsad_workstream::{ConnKind, Connection, Driver};
+use marsad_workstream::{Connection, Driver};
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors `core_with_backend` in tests/happy.rs)
@@ -190,7 +190,6 @@ fn cw2_delete_workstream_cascades_connections_membership_lead() {
         "ws-del".to_string(),
         s1.clone(),
         s2.clone(),
-        ConnKind::Data,
         false,
     )
     .expect("add_connection");
@@ -251,7 +250,6 @@ fn cw3_add_connection_valid_edge_appears_in_graph() {
             "ws-g".to_string(),
             s1.clone(),
             s2.clone(),
-            ConnKind::Command,
             false,
         )
         .expect("valid add_connection");
@@ -268,7 +266,6 @@ fn cw3_add_connection_valid_edge_appears_in_graph() {
         .expect("edge present in graph");
     assert_eq!(edge.from, s1);
     assert_eq!(edge.to, s2);
-    assert_eq!(edge.kind, ConnKind::Command);
     assert!(!edge.bi);
 }
 
@@ -295,7 +292,6 @@ fn cw3_add_connection_persists_and_survives_reload() {
         "ws-persist".to_string(),
         s1.clone(),
         s2.clone(),
-        ConnKind::Both,
         true,
     )
     .expect("add_connection");
@@ -465,7 +461,6 @@ fn cw4_add_connection_self_loop_errors() {
             "ws-e".to_string(),
             s1.clone(),
             s1.clone(),
-            ConnKind::Data,
             false,
         )
         .expect_err("self-loop must error");
@@ -490,7 +485,6 @@ fn cw4_add_connection_unknown_endpoint_errors() {
             "ws-f".to_string(),
             s1.clone(),
             "session-does-not-exist".to_string(),
-            ConnKind::Data,
             false,
         )
         .expect_err("unknown endpoint must error");
@@ -520,7 +514,6 @@ fn cw4_add_connection_cross_workstream_errors() {
             "ws-c1".to_string(),
             s1.clone(),
             s2.clone(),
-            ConnKind::Data,
             false,
         )
         .expect_err("cross-workstream endpoints must error");
@@ -553,7 +546,6 @@ fn cw4_add_connection_duplicate_errors() {
         "ws-dupconn".to_string(),
         s1.clone(),
         s2.clone(),
-        ConnKind::Data,
         false,
     )
     .expect("first connection succeeds");
@@ -564,7 +556,6 @@ fn cw4_add_connection_duplicate_errors() {
             "ws-dupconn".to_string(),
             s1.clone(),
             s2.clone(),
-            ConnKind::Data,
             false,
         )
         .expect_err("identical (from,to) in same ws must error as duplicate");
@@ -599,7 +590,6 @@ fn cw4_add_connection_cycle_errors() {
         "ws-cycle".to_string(),
         s1.clone(),
         s2.clone(),
-        ConnKind::Data,
         false,
     )
     .expect("s1->s2 ok");
@@ -608,7 +598,6 @@ fn cw4_add_connection_cycle_errors() {
         "ws-cycle".to_string(),
         s2.clone(),
         s3.clone(),
-        ConnKind::Data,
         false,
     )
     .expect("s2->s3 ok");
@@ -620,7 +609,6 @@ fn cw4_add_connection_cycle_errors() {
             "ws-cycle".to_string(),
             s3.clone(),
             s1.clone(),
-            ConnKind::Data,
             false,
         )
         .expect_err("closing edge must be rejected as a cycle");
@@ -648,7 +636,6 @@ fn cw5_remove_connection_removes_from_graph() {
         "ws-rm".to_string(),
         s1.clone(),
         s2.clone(),
-        ConnKind::Data,
         false,
     )
     .expect("add_connection");
@@ -1097,7 +1084,6 @@ fn cw11_persistence_round_trip_restores_everything() {
         "ws-rt".to_string(),
         s1.clone(),
         s2.clone(),
-        ConnKind::Data,
         false,
     )
     .expect("add_connection");
@@ -1201,7 +1187,6 @@ fn cw12_graph_edge_status_reflects_gate() {
         "ws-gate".to_string(),
         s1.clone(),
         s2.clone(),
-        ConnKind::Data,
         true,
     )
     .expect("add bi connection");
@@ -1279,7 +1264,6 @@ fn cw13_add_connection_write_failure_errors() {
             "w".to_string(),
             s1.clone(),
             s2.clone(),
-            ConnKind::Data,
             false
         ),
         Err(CoreError::Agent(_))
@@ -1301,7 +1285,6 @@ fn cw13_remove_connection_delete_failure_errors() {
         "w".to_string(),
         s1.clone(),
         s2.clone(),
-        ConnKind::Data,
         false,
     )
     .expect("add connection");
@@ -1799,7 +1782,6 @@ fn remove_session_cascades_connections_touching_removed_node() {
         "ws-cascade".to_string(),
         sa.clone(),
         sb.clone(),
-        ConnKind::Data,
         false,
     )
     .expect("add A->B");
@@ -1808,7 +1790,6 @@ fn remove_session_cascades_connections_touching_removed_node() {
         "ws-cascade".to_string(),
         sb.clone(),
         sc.clone(),
-        ConnKind::Data,
         false,
     )
     .expect("add B->C");
@@ -1874,7 +1855,6 @@ fn remove_session_cascades_only_edges_touching_removed_node() {
         "ws-partial".to_string(),
         sa.clone(),
         sc.clone(),
-        ConnKind::Data,
         false,
     )
     .expect("add A->C");
@@ -1956,7 +1936,6 @@ fn stop_session_does_not_cascade_connections() {
         "ws-stop".to_string(),
         sa.clone(),
         sb.clone(),
-        ConnKind::Data,
         false,
     )
     .expect("add connection");
@@ -2001,7 +1980,6 @@ fn add_connection_error_contract_pins_exact_messages() {
             "ws-ec".to_string(),
             sa.clone(),
             sa.clone(),
-            ConnKind::Data,
             false,
         )
         .expect_err("SelfLoop must error");
@@ -2022,7 +2000,6 @@ fn add_connection_error_contract_pins_exact_messages() {
             "ws-ec".to_string(),
             sa.clone(),
             "ghost-session".to_string(),
-            ConnKind::Data,
             false,
         )
         .expect_err("UnknownEndpoint must error");
@@ -2042,7 +2019,6 @@ fn add_connection_error_contract_pins_exact_messages() {
         "ws-ec".to_string(),
         sa.clone(),
         sb.clone(),
-        ConnKind::Data,
         false,
     )
     .expect("first connection ok");
@@ -2052,7 +2028,6 @@ fn add_connection_error_contract_pins_exact_messages() {
             "ws-ec".to_string(),
             sa.clone(),
             sb.clone(),
-            ConnKind::Data,
             false,
         )
         .expect_err("Duplicate must error");
@@ -2073,7 +2048,6 @@ fn add_connection_error_contract_pins_exact_messages() {
         "ws-ec".to_string(),
         sb.clone(),
         sc.clone(),
-        ConnKind::Data,
         false,
     )
     .expect("sb->sc ok");
@@ -2083,7 +2057,6 @@ fn add_connection_error_contract_pins_exact_messages() {
             "ws-ec".to_string(),
             sc.clone(),
             sa.clone(),
-            ConnKind::Data,
             false,
         )
         .expect_err("Cycle must error");
@@ -2114,7 +2087,6 @@ fn add_connection_error_contract_pins_exact_messages() {
             "ws-ec".to_string(),
             sa.clone(),
             sd.clone(),
-            ConnKind::Data,
             false,
         )
         .expect_err("CrossWorkstream must error");
@@ -2140,7 +2112,6 @@ fn mk_conn(id: &str, from: &str, to: &str) -> Connection {
         ws: "ws-test".to_string(),
         from: from.to_string(),
         to: to.to_string(),
-        kind: ConnKind::Data,
         bi: false,
         gate: None,
     }

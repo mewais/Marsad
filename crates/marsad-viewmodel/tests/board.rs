@@ -8,7 +8,7 @@
 
 use marsad_hosts::{Host, HostStatus};
 use marsad_viewmodel::{board_view, HostLink, LinkStatus};
-use marsad_workstream::{ConnKind, Connection, Driver, Handoff, Node, Phase, Workstream};
+use marsad_workstream::{Connection, Driver, Handoff, Node, Phase, Workstream};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -38,13 +38,12 @@ fn node(id: &str, ws: &str, driver: Driver, host: &str, state: Phase) -> Node {
     }
 }
 
-fn conn(id: &str, ws: &str, from: &str, to: &str, kind: ConnKind) -> Connection {
+fn conn(id: &str, ws: &str, from: &str, to: &str) -> Connection {
     Connection {
         id: id.to_string(),
         ws: ws.to_string(),
         from: from.to_string(),
         to: to.to_string(),
-        kind,
         bi: false,
         gate: None,
     }
@@ -290,7 +289,7 @@ fn bv4_needs_attention_true_when_gated_connection_even_if_working_or_done() {
         node("n1", "w1", Driver::Claude, "h1", Phase::Working),
         node("n2", "w1", Driver::Claude, "h1", Phase::Done),
     ];
-    let mut c = conn("c1", "w1", "n1", "n2", ConnKind::Data);
+    let mut c = conn("c1", "w1", "n1", "n2");
     c.gate = Some(Handoff {
         payload: "design doc".to_string(),
         risk: "medium".to_string(),
@@ -319,7 +318,7 @@ fn bv4_needs_attention_false_otherwise() {
         node("n2", "w1", Driver::Claude, "h1", Phase::Done),
         node("n3", "w2", Driver::Claude, "h1", Phase::Done),
     ];
-    let connections = vec![conn("c1", "w1", "n1", "n2", ConnKind::Data)];
+    let connections = vec![conn("c1", "w1", "n1", "n2")];
     let hosts = vec![host(
         "h1",
         "H1",

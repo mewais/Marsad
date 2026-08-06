@@ -116,16 +116,8 @@ fn default_node_live() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// ConnKind / Handoff / Connection
+// Handoff / Connection
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ConnKind {
-    Data,
-    Command,
-    Both,
-}
 
 /// HITL descriptor on a gated wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,8 +135,10 @@ pub struct Connection {
     pub from: String,
     /// Target node id.
     pub to: String,
-    pub kind: ConnKind,
-    /// Two-way / consulting edge (design `dir:'bi'`).
+    /// Direction is the ONLY axis: `bi=false` is a Directed edge (from → to; the
+    /// source may initiate sends to the target, which answers), `bi=true` is a
+    /// Consult edge (mutual — either may initiate). There are no data/command/both
+    /// "kinds"; direction alone drives the Wasl A2A peer topology.
     #[serde(default)]
     pub bi: bool,
     /// Some(_) => a HITL gate sits on this connection (cross-host handoff).

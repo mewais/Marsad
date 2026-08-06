@@ -11,7 +11,6 @@ use marsad_core::{Core, CoreConfig, LaunchSpec, VmUpdate};
 use marsad_proto::{parse_ipc, IpcMsg};
 use marsad_store::MemoryBackend;
 use marsad_transport::LoopbackFake;
-use marsad_workstream::ConnKind;
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -111,7 +110,6 @@ fn add_connection_emits_register_wasl_peer_for_to_host() {
         "ws-1".to_string(),
         s_from.clone(),
         s_to.clone(),
-        ConnKind::Data,
         false, // not bidirectional
     )
     .expect("add_connection");
@@ -150,7 +148,6 @@ fn add_bidirectional_connection_emits_two_register_wasl_peer() {
         "ws-bi".to_string(),
         s_a.clone(),
         s_b.clone(),
-        ConnKind::Data,
         true, // bidirectional
     )
     .expect("add_connection bi");
@@ -197,7 +194,6 @@ fn remove_connection_emits_unregister_wasl_peer() {
         "ws-rm".to_string(),
         s_from.clone(),
         s_to.clone(),
-        ConnKind::Data,
         false,
     )
     .expect("add_connection");
@@ -238,7 +234,6 @@ fn add_connection_succeeds_and_returns_board_update() {
             "ws-ok".to_string(),
             s1.clone(),
             s2.clone(),
-            ConnKind::Data,
             false,
         )
         .expect("add_connection must not fail");

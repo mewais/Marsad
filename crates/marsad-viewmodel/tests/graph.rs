@@ -7,7 +7,7 @@
 //! Spec: docs/specs/viewmodel-ext.md — §Graph, test plan cases GV1-GV7.
 
 use marsad_viewmodel::{graph_view, EdgeStatus};
-use marsad_workstream::{ConnKind, Connection, Driver, Handoff, Node, Phase, Workstream};
+use marsad_workstream::{Connection, Driver, Handoff, Node, Phase, Workstream};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -37,13 +37,12 @@ fn node(id: &str, ws: &str, driver: Driver, host: &str, state: Phase) -> Node {
     }
 }
 
-fn conn(id: &str, ws: &str, from: &str, to: &str, kind: ConnKind) -> Connection {
+fn conn(id: &str, ws: &str, from: &str, to: &str) -> Connection {
     Connection {
         id: id.to_string(),
         ws: ws.to_string(),
         from: from.to_string(),
         to: to.to_string(),
-        kind,
         bi: false,
         gate: None,
     }
@@ -72,8 +71,8 @@ fn gv2_nodes_mapped_1_to_1_linear_chain_depths() {
         node("c", "w1", Driver::Gemini, "h3", Phase::Needs),
     ];
     let connections = vec![
-        conn("c1", "w1", "a", "b", ConnKind::Data),
-        conn("c2", "w1", "b", "c", ConnKind::Data),
+        conn("c1", "w1", "a", "b"),
+        conn("c2", "w1", "b", "c"),
     ];
 
     let graph = graph_view("w1", &workstreams, &nodes, &connections).unwrap();
@@ -112,10 +111,10 @@ fn gv2_nodes_depth_on_diamond() {
         node("d", "w1", Driver::Claude, "h1", Phase::Working),
     ];
     let connections = vec![
-        conn("c1", "w1", "a", "b", ConnKind::Data),
-        conn("c2", "w1", "a", "c", ConnKind::Data),
-        conn("c3", "w1", "b", "d", ConnKind::Data),
-        conn("c4", "w1", "c", "d", ConnKind::Data),
+        conn("c1", "w1", "a", "b"),
+        conn("c2", "w1", "a", "c"),
+        conn("c3", "w1", "b", "d"),
+        conn("c4", "w1", "c", "d"),
     ];
 
     let graph = graph_view("w1", &workstreams, &nodes, &connections).unwrap();
@@ -136,7 +135,7 @@ fn gv3_edge_status_plain_is_normal() {
         node("a", "w1", Driver::Claude, "h1", Phase::Working),
         node("b", "w1", Driver::Claude, "h1", Phase::Working),
     ];
-    let connections = vec![conn("c1", "w1", "a", "b", ConnKind::Data)];
+    let connections = vec![conn("c1", "w1", "a", "b")];
 
     let graph = graph_view("w1", &workstreams, &nodes, &connections).unwrap();
     let edge = &graph.edges[0];
@@ -151,7 +150,7 @@ fn gv3_edge_status_bi_without_gate_is_consulting() {
         node("a", "w1", Driver::Claude, "h1", Phase::Working),
         node("b", "w1", Driver::Claude, "h1", Phase::Working),
     ];
-    let mut c = conn("c1", "w1", "a", "b", ConnKind::Data);
+    let mut c = conn("c1", "w1", "a", "b");
     c.bi = true;
     let connections = vec![c];
 
@@ -168,7 +167,7 @@ fn gv3_edge_status_gated_is_needs_gate_wins_over_bi() {
         node("a", "w1", Driver::Claude, "h1", Phase::Working),
         node("b", "w1", Driver::Claude, "h1", Phase::Working),
     ];
-    let mut c = conn("c1", "w1", "a", "b", ConnKind::Data);
+    let mut c = conn("c1", "w1", "a", "b");
     c.bi = true;
     c.gate = Some(Handoff {
         payload: "handoff payload".to_string(),
@@ -193,64 +192,14 @@ fn gv3_edge_has_gate_matches_gate_is_some_for_ungated() {
         node("a", "w1", Driver::Claude, "h1", Phase::Working),
         node("b", "w1", Driver::Claude, "h1", Phase::Working),
     ];
-    let connections = vec![conn("c1", "w1", "a", "b", ConnKind::Command)];
+    let connections = vec![conn("c1", "w1", "a", "b")];
 
     let graph = graph_view("w1", &workstreams, &nodes, &connections).unwrap();
     assert!(!graph.edges[0].has_gate);
 }
 
-// ── GV4: kind passthrough unaffected by status ───────────────────────────────
-
-#[test]
-fn gv4_edge_kind_passthrough_data() {
-    let workstreams = vec![ws("w1", "One", "goal")];
-    let nodes = vec![
-        node("a", "w1", Driver::Claude, "h1", Phase::Working),
-        node("b", "w1", Driver::Claude, "h1", Phase::Working),
-    ];
-    let connections = vec![conn("c1", "w1", "a", "b", ConnKind::Data)];
-
-    let graph = graph_view("w1", &workstreams, &nodes, &connections).unwrap();
-    assert_eq!(graph.edges[0].kind, ConnKind::Data);
-}
-
-#[test]
-fn gv4_edge_kind_passthrough_command() {
-    let workstreams = vec![ws("w1", "One", "goal")];
-    let nodes = vec![
-        node("a", "w1", Driver::Claude, "h1", Phase::Working),
-        node("b", "w1", Driver::Claude, "h1", Phase::Working),
-    ];
-    let mut c = conn("c1", "w1", "a", "b", ConnKind::Command);
-    c.bi = true;
-    let connections = vec![c];
-
-    let graph = graph_view("w1", &workstreams, &nodes, &connections).unwrap();
-    assert_eq!(graph.edges[0].kind, ConnKind::Command);
-    assert_eq!(graph.edges[0].status, EdgeStatus::Consulting);
-}
-
-#[test]
-fn gv4_edge_kind_passthrough_both() {
-    let workstreams = vec![ws("w1", "One", "goal")];
-    let nodes = vec![
-        node("a", "w1", Driver::Claude, "h1", Phase::Working),
-        node("b", "w1", Driver::Claude, "h1", Phase::Working),
-    ];
-    let mut c = conn("c1", "w1", "a", "b", ConnKind::Both);
-    c.gate = Some(Handoff {
-        payload: "p".to_string(),
-        risk: "low".to_string(),
-    });
-    let connections = vec![c];
-
-    let graph = graph_view("w1", &workstreams, &nodes, &connections).unwrap();
-    assert_eq!(graph.edges[0].kind, ConnKind::Both);
-    assert_eq!(graph.edges[0].status, EdgeStatus::Needs);
-    assert_eq!(graph.edges[0].id, "c1");
-    assert_eq!(graph.edges[0].from, "a");
-    assert_eq!(graph.edges[0].to, "b");
-}
+// (GV4 "kind passthrough" removed — connection kind no longer exists; edge
+//  status precedence for directed/consult/gated is covered by GV3 above.)
 
 // ── GV5: inspector counts + pending_handoff first gated ──────────────────────
 
@@ -263,14 +212,14 @@ fn gv5_inspector_working_needs_counts_and_pending_handoff_first_gated() {
         node("c", "w1", Driver::Claude, "h1", Phase::Needs),
         node("d", "w1", Driver::Claude, "h1", Phase::Done),
     ];
-    let mut c1 = conn("c1", "w1", "a", "b", ConnKind::Data);
+    let mut c1 = conn("c1", "w1", "a", "b");
     // not gated
-    let mut c2 = conn("c2", "w1", "b", "c", ConnKind::Command);
+    let mut c2 = conn("c2", "w1", "b", "c");
     c2.gate = Some(Handoff {
         payload: "first gated payload".to_string(),
         risk: "medium".to_string(),
     });
-    let mut c3 = conn("c3", "w1", "c", "d", ConnKind::Both);
+    let mut c3 = conn("c3", "w1", "c", "d");
     c3.gate = Some(Handoff {
         payload: "second gated payload".to_string(),
         risk: "high".to_string(),
@@ -308,7 +257,7 @@ fn gv6_pending_handoff_none_when_no_gate() {
         node("a", "w1", Driver::Claude, "h1", Phase::Working),
         node("b", "w1", Driver::Claude, "h1", Phase::Done),
     ];
-    let connections = vec![conn("c1", "w1", "a", "b", ConnKind::Data)];
+    let connections = vec![conn("c1", "w1", "a", "b")];
 
     let graph = graph_view("w1", &workstreams, &nodes, &connections).unwrap();
     assert!(graph.inspector.pending_handoff.is_none());

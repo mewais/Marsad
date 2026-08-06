@@ -8,7 +8,7 @@
 
 use marsad_workstream::{
     conns_of, dependency_depth, driver_dots, head_state, host_chips, is_single_node, nodes_of,
-    state_counts, ConnKind, Connection, Driver, Handoff, HeadState, Node, Phase, Profile,
+    state_counts, Connection, Driver, Handoff, HeadState, Node, Phase, Profile,
     StateCounts, Workstream,
 };
 
@@ -31,13 +31,12 @@ fn node(id: &str, ws: &str, driver: Driver, host: &str, state: Phase) -> Node {
     }
 }
 
-fn conn(id: &str, ws: &str, from: &str, to: &str, kind: ConnKind) -> Connection {
+fn conn(id: &str, ws: &str, from: &str, to: &str) -> Connection {
     Connection {
         id: id.to_string(),
         ws: ws.to_string(),
         from: from.to_string(),
         to: to.to_string(),
-        kind,
         bi: false,
         gate: None,
     }
@@ -83,31 +82,8 @@ fn driver_color_all_variants() {
     assert_eq!(Driver::Gemini.color(), "#9b8cf0");
 }
 
-// ── T2: ConnKind + HeadState serde ──────────────────────────────────────────
-
-#[test]
-fn connkind_serde_round_trips_data() {
-    let json = serde_json::to_string(&ConnKind::Data).unwrap();
-    assert_eq!(json, "\"data\"");
-    let back: ConnKind = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, ConnKind::Data);
-}
-
-#[test]
-fn connkind_serde_round_trips_command() {
-    let json = serde_json::to_string(&ConnKind::Command).unwrap();
-    assert_eq!(json, "\"command\"");
-    let back: ConnKind = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, ConnKind::Command);
-}
-
-#[test]
-fn connkind_serde_round_trips_both() {
-    let json = serde_json::to_string(&ConnKind::Both).unwrap();
-    assert_eq!(json, "\"both\"");
-    let back: ConnKind = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, ConnKind::Both);
-}
+// ── T2: HeadState serde ─────────────────────────────────────────────────────
+// (ConnKind removed — connections carry only `bi` direction, no data/command/both.)
 
 #[test]
 fn headstate_serde_round_trips_lowercase() {
@@ -217,7 +193,7 @@ fn node_round_trip_carries_lead_true_and_phase() {
 
 #[test]
 fn connection_round_trip_bi_and_gate_default() {
-    let c = conn("c1", "w1", "a", "b", ConnKind::Data);
+    let c = conn("c1", "w1", "a", "b");
     let json = serde_json::to_string(&c).unwrap();
     let back: Connection = serde_json::from_str(&json).unwrap();
     assert_eq!(back, c);
@@ -238,7 +214,7 @@ fn connection_round_trip_bi_and_gate_default() {
 
 #[test]
 fn connection_round_trip_with_gate_some() {
-    let mut c = conn("c2", "w1", "a", "b", ConnKind::Both);
+    let mut c = conn("c2", "w1", "a", "b");
     c.bi = true;
     c.gate = Some(Handoff {
         payload: "design doc".to_string(),
@@ -411,9 +387,9 @@ fn nodes_of_filters_and_preserves_order() {
 #[test]
 fn conns_of_filters_and_preserves_order() {
     let conns = vec![
-        conn("c1", "w1", "a", "b", ConnKind::Data),
-        conn("c2", "w2", "x", "y", ConnKind::Command),
-        conn("c3", "w1", "b", "c", ConnKind::Both),
+        conn("c1", "w1", "a", "b"),
+        conn("c2", "w2", "x", "y"),
+        conn("c3", "w1", "b", "c"),
     ];
     let filtered = conns_of("w1", &conns);
     assert_eq!(filtered.len(), 2);
@@ -450,8 +426,8 @@ fn is_single_node_false_for_zero() {
 #[test]
 fn dependency_depth_linear_chain() {
     let conns = vec![
-        conn("c1", "w1", "a", "b", ConnKind::Data),
-        conn("c2", "w1", "b", "c", ConnKind::Data),
+        conn("c1", "w1", "a", "b"),
+        conn("c2", "w1", "b", "c"),
     ];
     assert_eq!(dependency_depth("a", "w1", &conns), 0);
     assert_eq!(dependency_depth("b", "w1", &conns), 1);
@@ -462,10 +438,10 @@ fn dependency_depth_linear_chain() {
 fn dependency_depth_diamond() {
     // a -> b, a -> c, b -> d, c -> d
     let conns = vec![
-        conn("c1", "w1", "a", "b", ConnKind::Data),
-        conn("c2", "w1", "a", "c", ConnKind::Data),
-        conn("c3", "w1", "b", "d", ConnKind::Data),
-        conn("c4", "w1", "c", "d", ConnKind::Data),
+        conn("c1", "w1", "a", "b"),
+        conn("c2", "w1", "a", "c"),
+        conn("c3", "w1", "b", "d"),
+        conn("c4", "w1", "c", "d"),
     ];
     assert_eq!(dependency_depth("a", "w1", &conns), 0);
     assert_eq!(dependency_depth("b", "w1", &conns), 1);

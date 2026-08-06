@@ -134,7 +134,6 @@ fn workstream_layer_survives_restart_on_disk() {
                 ws: "ws-disk-1".to_string(),
                 from: "a".to_string(),
                 to: "b".to_string(),
-                kind: marsad_workstream::ConnKind::Command,
                 bi: false,
                 gate: None,
             })

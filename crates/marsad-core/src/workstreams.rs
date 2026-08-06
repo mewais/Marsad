@@ -265,7 +265,6 @@ impl Core {
         ws: String,
         from: String,
         to: String,
-        kind: marsad_workstream::ConnKind,
         bi: bool,
     ) -> Result<Vec<VmUpdate>, CoreError> {
         let conn = marsad_workstream::Connection {
@@ -273,7 +272,6 @@ impl Core {
             ws,
             from,
             to,
-            kind,
             bi,
             gate: None,
         };

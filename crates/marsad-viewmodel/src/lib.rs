@@ -699,7 +699,7 @@ use std::collections::HashMap;
 
 use marsad_workstream::{
     conns_of, dependency_depth, driver_dots, head_state, host_chips, nodes_of, state_counts,
-    ConnKind, Connection, Driver, HeadState, Node, StateCounts, Workstream,
+    Connection, Driver, HeadState, Node, StateCounts, Workstream,
 };
 
 

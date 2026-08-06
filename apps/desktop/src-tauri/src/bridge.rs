@@ -1626,7 +1626,6 @@ pub fn resume_workstream(
 /// Add a connection between two sessions in a workstream, then refresh the board.
 // A Tauri command legitimately needs all of these invoke-payload keys.
 #[tauri::command(rename_all = "snake_case")]
-#[allow(clippy::too_many_arguments)]
 pub fn add_connection(
     app: tauri::AppHandle,
     state: State<'_, ManagedState>,
@@ -1634,14 +1633,14 @@ pub fn add_connection(
     ws: String,
     from: String,
     to: String,
-    kind: marsad_workstream::ConnKind,
+    // Direction is the only axis: `bi=false` Directed, `bi=true` Consult.
     bi: bool,
 ) -> Result<(), String> {
     let updates = {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
         match &mut *guard {
             AppState::Live(core) => core
-                .add_connection(id, ws, from, to, kind, bi)
+                .add_connection(id, ws, from, to, bi)
                 .map_err(map_err)?,
             AppState::Mock(_) => vec![],
         }

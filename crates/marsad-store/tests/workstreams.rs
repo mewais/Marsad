@@ -16,7 +16,7 @@ use marsad_store::{
     profiles_from_workspaces, Backend, BackendOp, MemoryBackend, PersistedHost, PersistedSession,
     Store, StoreError, Workspace,
 };
-use marsad_workstream::{ConnKind, Connection, Handoff, Profile, Workstream};
+use marsad_workstream::{Connection, Handoff, Profile, Workstream};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,7 +40,6 @@ fn connection(
     ws: &str,
     from: &str,
     to: &str,
-    kind: ConnKind,
     bi: bool,
     gate: Option<Handoff>,
 ) -> Connection {
@@ -49,7 +48,6 @@ fn connection(
         ws: ws.to_string(),
         from: from.to_string(),
         to: to.to_string(),
-        kind,
         bi,
         gate,
     }
@@ -233,7 +231,6 @@ fn ws4_upsert_connection_round_trips_bi_true_and_gate_some() {
         "w-1",
         "node-a",
         "node-b",
-        ConnKind::Both,
         true,
         Some(gate.clone()),
     );
@@ -249,7 +246,6 @@ fn ws4_upsert_connection_round_trips_bi_true_and_gate_some() {
     assert_eq!(found.ws, "w-1");
     assert_eq!(found.from, "node-a");
     assert_eq!(found.to, "node-b");
-    assert_eq!(found.kind, ConnKind::Both);
     assert!(found.bi, "bi must round-trip as true");
     assert_eq!(found.gate, Some(gate));
 }
@@ -262,7 +258,6 @@ fn ws4_upsert_connection_default_bi_false_gate_none_round_trips() {
         "w-1",
         "node-a",
         "node-c",
-        ConnKind::Data,
         false,
         None,
     );
@@ -287,7 +282,6 @@ fn ws4_multiple_connections_restore_sorted_by_id() {
                 "w-1",
                 "a",
                 "b",
-                ConnKind::Command,
                 false,
                 None,
             ))
@@ -311,7 +305,6 @@ fn ws5_delete_connection_removes_it_from_restore() {
             "w-1",
             "a",
             "b",
-            ConnKind::Data,
             false,
             None,
         ))
@@ -536,7 +529,7 @@ fn ws8_backend_write_failure_propagates_from_upsert_connection() {
     let backend = MemoryBackend::new();
     backend.fail_next(BackendOp::Write);
     let mut store = Store::new(Box::new(backend));
-    let c = connection("c-fail-write", "w-1", "a", "b", ConnKind::Data, false, None);
+    let c = connection("c-fail-write", "w-1", "a", "b", false, None);
     match store.upsert_connection(&c) {
         Err(StoreError::Backend(_)) => {}
         other => panic!("expected Backend error from write failure, got: {other:?}"),
@@ -663,7 +656,6 @@ fn ws10_mixed_store_restores_all_entity_kinds_correctly() {
             "wstream-mix",
             "node-a",
             "node-b",
-            ConnKind::Command,
             true,
             None,
         ))

@@ -45,7 +45,8 @@ pub struct GraphEdge {
     pub id: String,
     pub from: String,
     pub to: String,
-    pub kind: ConnKind,
+    /// `bi=false` → Directed (single arrowhead), `bi=true` → Consult (two heads).
+    /// Direction is the only edge axis (no data/command/both kinds).
     pub bi: bool,
     pub status: EdgeStatus,
     pub has_gate: bool,
@@ -109,7 +110,6 @@ pub fn graph_view(
                 id: c.id.clone(),
                 from: c.from.clone(),
                 to: c.to.clone(),
-                kind: c.kind,
                 bi: c.bi,
                 status,
                 has_gate,

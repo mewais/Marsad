@@ -9,7 +9,7 @@
 use std::error::Error as StdError;
 
 use marsad_workstream::{
-    validate_connection, ConnError, ConnKind, Connection, Driver, Node, Phase,
+    validate_connection, ConnError, Connection, Driver, Node, Phase,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -31,13 +31,12 @@ fn node(id: &str, ws: &str, driver: Driver, host: &str, state: Phase) -> Node {
     }
 }
 
-fn conn(id: &str, ws: &str, from: &str, to: &str, kind: ConnKind) -> Connection {
+fn conn(id: &str, ws: &str, from: &str, to: &str) -> Connection {
     Connection {
         id: id.to_string(),
         ws: ws.to_string(),
         from: from.to_string(),
         to: to.to_string(),
-        kind,
         bi: false,
         gate: None,
     }
@@ -49,7 +48,7 @@ fn conn(id: &str, ws: &str, from: &str, to: &str, kind: ConnKind) -> Connection 
 fn self_loop_detected_even_when_node_unknown() {
     let nodes: Vec<Node> = vec![]; // "ghost" is not a known node at all
     let existing: Vec<Connection> = vec![];
-    let proposed = conn("c1", "w1", "ghost", "ghost", ConnKind::Data);
+    let proposed = conn("c1", "w1", "ghost", "ghost");
     assert_eq!(
         validate_connection(&proposed, &nodes, &existing),
         Err(ConnError::SelfLoop)
@@ -60,7 +59,7 @@ fn self_loop_detected_even_when_node_unknown() {
 fn self_loop_detected_for_known_node() {
     let nodes = vec![node("a", "w1", Driver::Claude, "h1", Phase::Working)];
     let existing: Vec<Connection> = vec![];
-    let proposed = conn("c1", "w1", "a", "a", ConnKind::Data);
+    let proposed = conn("c1", "w1", "a", "a");
     assert_eq!(
         validate_connection(&proposed, &nodes, &existing),
         Err(ConnError::SelfLoop)
@@ -73,7 +72,7 @@ fn self_loop_detected_for_known_node() {
 fn unknown_from_endpoint() {
     let nodes = vec![node("b", "w1", Driver::Claude, "h1", Phase::Working)];
     let existing: Vec<Connection> = vec![];
-    let proposed = conn("c1", "w1", "missing-a", "b", ConnKind::Data);
+    let proposed = conn("c1", "w1", "missing-a", "b");
     assert_eq!(
         validate_connection(&proposed, &nodes, &existing),
         Err(ConnError::UnknownEndpoint)
@@ -84,7 +83,7 @@ fn unknown_from_endpoint() {
 fn unknown_to_endpoint() {
     let nodes = vec![node("a", "w1", Driver::Claude, "h1", Phase::Working)];
     let existing: Vec<Connection> = vec![];
-    let proposed = conn("c1", "w1", "a", "missing-b", ConnKind::Data);
+    let proposed = conn("c1", "w1", "a", "missing-b");
     assert_eq!(
         validate_connection(&proposed, &nodes, &existing),
         Err(ConnError::UnknownEndpoint)
@@ -100,7 +99,7 @@ fn endpoint_belongs_to_another_workstream() {
         node("b", "w2", Driver::Claude, "h1", Phase::Working),
     ];
     let existing: Vec<Connection> = vec![];
-    let proposed = conn("c1", "w1", "a", "b", ConnKind::Data);
+    let proposed = conn("c1", "w1", "a", "b");
     assert_eq!(
         validate_connection(&proposed, &nodes, &existing),
         Err(ConnError::CrossWorkstream)
@@ -115,7 +114,7 @@ fn conn_ws_disagrees_with_both_endpoints() {
         node("b", "w1", Driver::Claude, "h1", Phase::Working),
     ];
     let existing: Vec<Connection> = vec![];
-    let proposed = conn("c1", "w9", "a", "b", ConnKind::Data);
+    let proposed = conn("c1", "w9", "a", "b");
     assert_eq!(
         validate_connection(&proposed, &nodes, &existing),
         Err(ConnError::CrossWorkstream)
@@ -131,7 +130,7 @@ fn missing_endpoint_takes_precedence_over_cross_workstream() {
     // must win and report UnknownEndpoint, not CrossWorkstream.
     let nodes = vec![node("b", "w2", Driver::Claude, "h1", Phase::Working)];
     let existing: Vec<Connection> = vec![];
-    let proposed = conn("c1", "w1", "missing-a", "b", ConnKind::Data);
+    let proposed = conn("c1", "w1", "missing-a", "b");
     assert_eq!(
         validate_connection(&proposed, &nodes, &existing),
         Err(ConnError::UnknownEndpoint)
@@ -146,8 +145,8 @@ fn duplicate_from_to_in_same_ws_is_rejected() {
         node("a", "w1", Driver::Claude, "h1", Phase::Working),
         node("b", "w1", Driver::Claude, "h1", Phase::Working),
     ];
-    let existing = vec![conn("existing", "w1", "a", "b", ConnKind::Data)];
-    let proposed = conn("new", "w1", "a", "b", ConnKind::Command);
+    let existing = vec![conn("existing", "w1", "a", "b")];
+    let proposed = conn("new", "w1", "a", "b");
     assert_eq!(
         validate_connection(&proposed, &nodes, &existing),
         Err(ConnError::Duplicate)
@@ -160,12 +159,12 @@ fn reversed_direction_is_not_duplicate_but_closes_a_cycle() {
         node("a", "w1", Driver::Claude, "h1", Phase::Working),
         node("b", "w1", Driver::Claude, "h1", Phase::Working),
     ];
-    let existing = vec![conn("existing", "w1", "a", "b", ConnKind::Data)];
+    let existing = vec![conn("existing", "w1", "a", "b")];
     // (b, a) is the reverse of the existing (a, b): the direction-sensitive Duplicate
     // check does NOT fire (it's not the same (from,to) pair) — but the reverse edge
     // closes the 2-cycle a->b->a, so the Cycle check rejects it. Two-way links are
     // modeled as a single `bi` connection, never as two opposing edges. (spec §2.8/E5)
-    let proposed = conn("new", "w1", "b", "a", ConnKind::Data);
+    let proposed = conn("new", "w1", "b", "a");
     assert_eq!(
         validate_connection(&proposed, &nodes, &existing),
         Err(ConnError::Cycle)
@@ -183,10 +182,10 @@ fn edge_closing_a_directed_cycle_is_rejected() {
     ];
     // a -> b -> c already present; proposing c -> a closes the cycle.
     let existing = vec![
-        conn("c1", "w1", "a", "b", ConnKind::Data),
-        conn("c2", "w1", "b", "c", ConnKind::Data),
+        conn("c1", "w1", "a", "b"),
+        conn("c2", "w1", "b", "c"),
     ];
-    let proposed = conn("c3", "w1", "c", "a", ConnKind::Data);
+    let proposed = conn("c3", "w1", "c", "a");
     assert_eq!(
         validate_connection(&proposed, &nodes, &existing),
         Err(ConnError::Cycle)
