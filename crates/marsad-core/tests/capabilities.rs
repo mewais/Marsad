@@ -112,6 +112,47 @@ fn on_agent_line_second_update_for_same_key_replaces_not_merges() {
     );
 }
 
+/// A FAILED probe (errors non-empty) must NOT wipe previously-discovered
+/// models/sessions. On a slow remote host the bounded probe can time out and
+/// come back empty + `cli_available:false`; a plain replace would erase the good
+/// model list + session list that a prior successful probe found (the "models
+/// vanished after a timeout on agent33" bug). The errored update advances only
+/// the error log — the discovered data is preserved.
+#[test]
+fn on_agent_line_errored_update_preserves_prior_models_and_sessions() {
+    let (mut core, _peer) = make_core();
+    // A good claude probe for a project on "agent33": one model + one session.
+    let good = r#"{"type":"CapabilitiesUpdate","host_id":"agent33","driver":"claude","capabilities":{"driver":"claude","host_id":"agent33","cli_available":true,"models":{"models":[{"id":"claude-opus-4-8"}],"source":"Observed","free_text":true},"session_scope":{"Projects":["/work/mewais/Tajir"]},"sessions":[{"id":"sess-1","project":"/work/mewais/Tajir","snippet":"prev","modified_ms":1}],"fetched_at_ms":1,"errors":[]}}"#;
+    core.on_agent_line(good).expect("good update applies");
+
+    // A later scoped probe TIMED OUT: empty models/sessions, cli_available:false,
+    // errors present. It must preserve the model + session from the good probe.
+    let timed_out = r#"{"type":"CapabilitiesUpdate","host_id":"agent33","driver":"claude","capabilities":{"driver":"claude","host_id":"agent33","cli_available":false,"models":{"models":[],"source":"Observed","free_text":true},"session_scope":{"Projects":["/work/mewais/Tajir"]},"sessions":[],"fetched_at_ms":2,"errors":["claude discovery: timed out"]}}"#;
+    core.on_agent_line(timed_out).expect("errored update applies");
+
+    let snapshot = core.capabilities();
+    let caps = snapshot
+        .iter()
+        .find(|v| v.driver == "claude" && v.host_id == "agent33")
+        .expect("claude/agent33 caps present");
+    assert!(
+        caps.models.models.iter().any(|m| m.id == "claude-opus-4-8"),
+        "a timed-out probe must NOT wipe the model list; got {:?}",
+        caps.models.models
+    );
+    assert!(
+        caps.sessions.iter().any(|s| s.id == "sess-1"),
+        "a timed-out probe must NOT wipe the discovered sessions; got {:?}",
+        caps.sessions
+    );
+    assert!(caps.cli_available, "a timeout can't prove the CLI is absent");
+    assert_eq!(
+        caps.errors,
+        vec!["claude discovery: timed out".to_string()],
+        "the failed probe's error is still surfaced"
+    );
+}
+
 /// §3.5: "Missing `host_id`/`driver` is a serde `SchemaMismatch` →
 /// `CoreError::Protocol`, consistent with the M2 handler contract."
 #[test]

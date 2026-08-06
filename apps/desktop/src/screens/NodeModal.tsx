@@ -337,7 +337,16 @@ export function NodeModal() {
   // capDriver alias: wasl-* probes the underlying protocol's session store.
   useEffect(() => {
     if (!resume || !projectTrim) return;
-    refreshCapabilities({ host_id: hostId, driver: capDriver, project: projectTrim });
+    // DEBOUNCE: `projectTrim` changes on every keystroke of the path. Without a
+    // debounce this fired a full scoped probe PER CHARACTER — on a slow remote
+    // host (e.g. an HPC login shell ~7s/probe) that floods with overlapping
+    // probes that race and time out, and a timed-out probe used to wipe the model
+    // + session lists. Fire once, ~500ms after typing settles, so the settled
+    // path gets a single clean probe.
+    const t = setTimeout(() => {
+      refreshCapabilities({ host_id: hostId, driver: capDriver, project: projectTrim });
+    }, 500);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resume, hostId, driver, projectTrim]);
 

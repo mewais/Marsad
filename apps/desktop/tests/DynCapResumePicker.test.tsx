@@ -13,7 +13,7 @@
  * the project filtering / unknown-project grouping / staleness rendering.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { VmProvider, VmState } from "../src/bridge/useVm";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { NodeModal } from "../src/screens/NodeModal";
@@ -142,7 +142,7 @@ describe("NodeModal resume picker — capabilities-only source (U2 contract)", (
     );
   });
 
-  it("opening the resume picker fires refreshCapabilities({host_id, driver, project}) and renders the cached list instantly (no spinner-blocked wait)", () => {
+  it("opening the resume picker fires refreshCapabilities({host_id, driver, project}) (debounced) and renders the cached list instantly (no spinner-blocked wait)", async () => {
     renderNodeModal([
       makeCapabilities({
         driver: "claude",
@@ -156,8 +156,12 @@ describe("NodeModal resume picker — capabilities-only source (U2 contract)", (
 
     // Cached data renders synchronously off fireEvent — no waitFor needed.
     expect(screen.getByTestId("nm-resume-session-cached-sess")).toBeTruthy();
-    expect(api.refreshCapabilities as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
-      expect.objectContaining({ host_id: "local", driver: "claude", project: "~/projects/api" })
+    // The scoped re-probe is DEBOUNCED (~500ms) so per-keystroke typing doesn't
+    // flood a slow remote host — assert it fires after the debounce settles.
+    await waitFor(() =>
+      expect(api.refreshCapabilities as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+        expect.objectContaining({ host_id: "local", driver: "claude", project: "~/projects/api" })
+      )
     );
   });
 

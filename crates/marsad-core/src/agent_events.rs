@@ -74,26 +74,62 @@ impl Core {
                 //     every other project's rows intact.
                 let key = (driver.clone(), host_id.clone());
                 if let Some(existing) = self.capabilities.get(&key) {
-                    match &capabilities.session_scope {
-                        Some(marsad_proto::SessionScope::Projects(ps)) => {
-                            let replacing: std::collections::HashSet<&str> =
-                                ps.iter().map(|p| p.as_str()).collect();
-                            let mut merged: Vec<marsad_proto::DiscoveredSession> = existing
-                                .sessions
-                                .iter()
-                                .filter(|s| {
-                                    s.project
-                                        .as_deref()
-                                        .map(|p| !replacing.contains(p))
-                                        .unwrap_or(false)
-                                })
-                                .cloned()
-                                .collect();
-                            merged.extend(capabilities.sessions.iter().cloned());
-                            capabilities.sessions = merged;
+                    if !capabilities.errors.is_empty() {
+                        // A FAILED probe is NOT authoritative about what the host has
+                        // — on a slow remote (e.g. an HPC login shell that takes ~7s)
+                        // the bounded probe can TIME OUT, coming back with empty
+                        // models/sessions + `cli_available:false` even though claude
+                        // is installed and has sessions. A plain replace then WIPES the
+                        // model list + session list (the "models vanished after a
+                        // timeout" bug). So when this update carries errors, keep every
+                        // previously-discovered field the failed probe left empty/false
+                        // — only the error log + timestamp advance.
+                        if capabilities.models.models.is_empty() {
+                            capabilities.models = existing.models.clone();
                         }
-                        _ => {
+                        if capabilities.available_modes.is_empty() {
+                            capabilities.available_modes = existing.available_modes.clone();
+                        }
+                        if capabilities.sessions.is_empty() {
                             capabilities.sessions = existing.sessions.clone();
+                        }
+                        if capabilities.session_scope.is_none() {
+                            capabilities.session_scope = existing.session_scope.clone();
+                        }
+                        if !capabilities.cli_available {
+                            capabilities.cli_available = existing.cli_available;
+                        }
+                        if !capabilities.wasl_available {
+                            capabilities.wasl_available = existing.wasl_available;
+                        }
+                    } else {
+                        // Successful probe: merge sessions by project so a path-scoped
+                        // probe and the connect-time capability probe (which carries an
+                        // EMPTY session list) don't clobber each other.
+                        //   * Projects(p) → replace exactly project p's rows (an empty
+                        //     result correctly clears p), leaving other projects intact.
+                        //   * AllKnown → a capability probe: keep the sessions we had.
+                        match &capabilities.session_scope {
+                            Some(marsad_proto::SessionScope::Projects(ps)) => {
+                                let replacing: std::collections::HashSet<&str> =
+                                    ps.iter().map(|p| p.as_str()).collect();
+                                let mut merged: Vec<marsad_proto::DiscoveredSession> = existing
+                                    .sessions
+                                    .iter()
+                                    .filter(|s| {
+                                        s.project
+                                            .as_deref()
+                                            .map(|p| !replacing.contains(p))
+                                            .unwrap_or(false)
+                                    })
+                                    .cloned()
+                                    .collect();
+                                merged.extend(capabilities.sessions.iter().cloned());
+                                capabilities.sessions = merged;
+                            }
+                            _ => {
+                                capabilities.sessions = existing.sessions.clone();
+                            }
                         }
                     }
                 }
