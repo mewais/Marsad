@@ -27,7 +27,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useVm } from "../../bridge/useVm";
 import type { DraftNode } from "../../bridge/useVm";
-import { launchSession, launchWaslSession } from "../../bridge/api";
+import { launchSession, launchWaslSession, removeSession } from "../../bridge/api";
 import type { GraphNode, GraphView } from "../../bridge/workstreamTypes";
 import { GraphScreen } from "./GraphScreen";
 import { validateConnection, CONN_ERROR_MESSAGE } from "../../bridge/connValidate";
@@ -71,6 +71,9 @@ export function GraphScreenConnected(): JSX.Element {
     openNode,
     addConnection,
     addDraftEdge,
+    removeDraftNode,
+    removeDraftEdge,
+    removeConnection,
     clearDraft,
     assignSession,
     goToGraph,
@@ -302,6 +305,41 @@ export function GraphScreenConnected(): JSX.Element {
     }
   }
 
+  // Remove an authored node. A DRAFT (temp) node is discarded client-side (it
+  // never became a real session). A REAL node deletes its session (confirmed) —
+  // marsad-core cascades the workstream away if it was the last node (#5), so we
+  // fall back to the board when the graph empties out.
+  const draftEdgeIds = new Set(draftEdges.map((e) => e.tempId));
+  function onRemoveNode(id: string): void {
+    if (draftTempIds.has(id)) {
+      removeDraftNode(id);
+      return;
+    }
+    const node = realGraph.nodes.find((n) => n.id === id);
+    const label = node?.name || id;
+    const ok =
+      typeof window === "undefined" || typeof window.confirm !== "function"
+        ? true
+        : window.confirm(`Remove agent "${label}"? This deletes its session and cannot be undone.`);
+    if (!ok) return;
+    const wasLastReal = realGraph.nodes.length === 1;
+    void removeSession(id).then(() => {
+      // Last node → the workstream is gone (core cascade); return to the board.
+      if (wasLastReal) openBoard();
+      else void goToGraph(effectiveWsId);
+    });
+  }
+
+  // Remove a connection. A DRAFT edge is discarded client-side; a REAL edge hits
+  // the backend (removeConnection refreshes the graph itself).
+  function onRemoveConnection(id: string): void {
+    if (draftEdgeIds.has(id)) {
+      removeDraftEdge(id);
+      return;
+    }
+    void removeConnection(id);
+  }
+
   function onDeleteWorkstream(): void {
     const label = realGraph.name || effectiveWsId;
     const ok =
@@ -330,6 +368,8 @@ export function GraphScreenConnected(): JSX.Element {
       onDiscardDraft={onDiscardDraft}
       onAddAgent={onAddAgent}
       onConnect={onConnect}
+      onRemoveNode={onRemoveNode}
+      onRemoveConnection={onRemoveConnection}
       onPauseWorkstream={() => void pauseWorkstream(effectiveWsId)}
       onResumeWorkstream={() => void resumeWorkstream(effectiveWsId)}
       onDeleteWorkstream={onDeleteWorkstream}

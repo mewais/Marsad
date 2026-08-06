@@ -719,3 +719,63 @@ describe("GraphScreen — GS8 pulsing node state dot", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// P3 — design-mode remove affordances (node + connection)
+// ---------------------------------------------------------------------------
+
+describe("GraphScreen — design-mode remove affordances", () => {
+  it("each design-agent row has a remove button that calls onRemoveNode", () => {
+    const onRemoveNode = vi.fn();
+    render(
+      <ThemeProvider initialTheme="dark">
+        <GraphScreen
+          graph={makeGraph()}
+          selectedNode={null}
+          onSelectNode={vi.fn()}
+          onOpenNode={vi.fn()}
+          onOpenGate={vi.fn()}
+          designMode
+          onRemoveNode={onRemoveNode}
+        />
+      </ThemeProvider>
+    );
+    fireEvent.click(screen.getByTestId("agent-remove-n2"));
+    expect(onRemoveNode).toHaveBeenCalledWith("n2");
+  });
+
+  it("each edge shows a remove button that calls onRemoveConnection (design mode)", () => {
+    const onRemoveConnection = vi.fn();
+    render(
+      <ThemeProvider initialTheme="dark">
+        <GraphScreen
+          graph={makeGraph()}
+          selectedNode={null}
+          onSelectNode={vi.fn()}
+          onOpenNode={vi.fn()}
+          onOpenGate={vi.fn()}
+          designMode
+          onRemoveConnection={onRemoveConnection}
+        />
+      </ThemeProvider>
+    );
+    fireEvent.click(screen.getByTestId("edge-remove-e1"));
+    expect(onRemoveConnection).toHaveBeenCalledWith("e1");
+  });
+
+  it("edge remove buttons are NOT shown in operate mode", () => {
+    render(
+      <ThemeProvider initialTheme="dark">
+        <GraphScreen
+          graph={makeGraph()}
+          selectedNode={null}
+          onSelectNode={vi.fn()}
+          onOpenNode={vi.fn()}
+          onOpenGate={vi.fn()}
+          onRemoveConnection={vi.fn()}
+        />
+      </ThemeProvider>
+    );
+    expect(screen.queryByTestId("edge-remove-e1")).toBeNull();
+  });
+});

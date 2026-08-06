@@ -254,6 +254,11 @@ type Action =
   // CLEAR_DRAFT wipes both lists (after Confirm & launch, or on Discard).
   | { type: "ADD_DRAFT_NODE"; node: DraftNode }
   | { type: "ADD_DRAFT_EDGE"; edge: DraftEdge }
+  // Remove a draft node (by temp id) + every draft edge touching it; if the
+  // removed node was the lead, promote the next remaining draft node to lead.
+  | { type: "REMOVE_DRAFT_NODE"; tempId: string }
+  // Remove a single draft edge (by temp id).
+  | { type: "REMOVE_DRAFT_EDGE"; tempId: string }
   | { type: "CLEAR_DRAFT" };
 
 // ---------------------------------------------------------------------------
@@ -492,6 +497,29 @@ function reducer(state: VmState, action: Action): VmState {
     case "ADD_DRAFT_EDGE":
       return { ...state, draftEdges: [...state.draftEdges, action.edge] };
 
+    case "REMOVE_DRAFT_NODE": {
+      const draftNodes = state.draftNodes.filter((n) => n.tempId !== action.tempId);
+      // Drop every draft edge that touched the removed node (dangling wires).
+      let draftEdges = state.draftEdges.filter(
+        (e) => e.from !== action.tempId && e.to !== action.tempId
+      );
+      // If the removed node was the lead, promote the first remaining node so the
+      // draft always has a lead (Confirm & launch orders lead-first).
+      const removedWasLead = state.draftNodes.find((n) => n.tempId === action.tempId)?.isLead;
+      if (removedWasLead && draftNodes.length > 0 && !draftNodes.some((n) => n.isLead)) {
+        draftNodes[0] = { ...draftNodes[0], isLead: true };
+      }
+      // A fully-cleared draft also clears its now-meaningless edges.
+      if (draftNodes.length === 0) draftEdges = [];
+      return { ...state, draftNodes, draftEdges };
+    }
+
+    case "REMOVE_DRAFT_EDGE":
+      return {
+        ...state,
+        draftEdges: state.draftEdges.filter((e) => e.tempId !== action.tempId),
+      };
+
     case "CLEAR_DRAFT":
       return { ...state, draftNodes: [], draftEdges: [] };
 
@@ -598,6 +626,11 @@ export interface VmContextValue {
   addDraftNode: (cfg: Omit<DraftNode, "tempId" | "isLead">) => string;
   /** Record an explicit draft edge between two draft (temp) node ids. */
   addDraftEdge: (edge: Omit<DraftEdge, "tempId">) => void;
+  /** Remove a draft node by temp id (+ any draft edges touching it). No backend
+   *  call — a draft node has no real session yet. */
+  removeDraftNode: (tempId: string) => void;
+  /** Remove a single draft edge by temp id. No backend call. */
+  removeDraftEdge: (tempId: string) => void;
   /** Clear the whole design-mode draft (nodes + edges) — no backend call. */
   clearDraft: () => void;
   /** Pause every session in a workstream (backend stops each process; they
@@ -1248,6 +1281,14 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     dispatch({ type: "ADD_DRAFT_EDGE", edge: { tempId: genTempEdgeId(), ...edge } });
   }, []);
 
+  const removeDraftNode = React.useCallback((tempId: string) => {
+    dispatch({ type: "REMOVE_DRAFT_NODE", tempId });
+  }, []);
+
+  const removeDraftEdge = React.useCallback((tempId: string) => {
+    dispatch({ type: "REMOVE_DRAFT_EDGE", tempId });
+  }, []);
+
   const clearDraft = React.useCallback(() => {
     dispatch({ type: "CLEAR_DRAFT" });
   }, []);
@@ -1378,6 +1419,8 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     markDraftWorkstream,
     addDraftNode,
     addDraftEdge,
+    removeDraftNode,
+    removeDraftEdge,
     clearDraft,
     pauseWorkstream,
     resumeWorkstream,

@@ -100,6 +100,13 @@ export interface GraphScreenProps {
   onDiscardDraft?: () => void;
   /** Drag-to-connect finished + an edge kind was chosen. */
   onConnect?: (from: string, to: string, kind: ConnKind, bi: boolean) => void;
+  /** Remove an authored node (design mode). Draft nodes discard client-side;
+   *  real nodes delete the session (the wrapper confirms). Omitted ⇒ no remove
+   *  affordance on agent rows. */
+  onRemoveNode?: (id: string) => void;
+  /** Remove a connection (design mode). Draft edges discard client-side; real
+   *  edges call the backend. Omitted ⇒ no edge remove affordance. */
+  onRemoveConnection?: (id: string) => void;
 
   // ---- Workstream lifecycle (#5, operate-mode inspector) — all optional ----
   /** Pause every session in this workstream. */
@@ -144,6 +151,8 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
     onConfirmDraft,
     onDiscardDraft,
     onConnect,
+    onRemoveNode,
+    onRemoveConnection,
     onPauseWorkstream,
     onResumeWorkstream,
     onDeleteWorkstream,
@@ -490,6 +499,53 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
                     </div>
                   );
                 })}
+
+                {/* Edge remove buttons (design mode): a small ✕ at each edge's
+                    midpoint so a wire can be deleted while authoring. Draft edges
+                    discard client-side; real edges hit the backend (wrapper). */}
+                {designMode &&
+                  onRemoveConnection &&
+                  layout.edges.map((edge) => {
+                    const src = edge.points[0];
+                    const tgt = edge.points[edge.points.length - 1];
+                    if (!src || !tgt) return null;
+                    const midX = (src.x + tgt.x) / 2;
+                    const midY = (src.y + tgt.y) / 2;
+                    return (
+                      <div
+                        key={`edge-remove-${edge.id}`}
+                        data-testid={`edge-remove-${edge.id}`}
+                        role="button"
+                        title="Remove connection"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          onRemoveConnection(edge.id);
+                        }}
+                        style={{
+                          position: "absolute",
+                          left: midX - 9,
+                          top: midY - 9,
+                          width: 18,
+                          height: 18,
+                          borderRadius: "50%",
+                          background: "var(--panel)",
+                          border: "1px solid var(--error)",
+                          color: "var(--error)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: 11,
+                          fontWeight: 800,
+                          lineHeight: 1,
+                          cursor: "pointer",
+                          zIndex: 5,
+                          boxShadow: "var(--shadow-sm)",
+                        }}
+                      >
+                        ✕
+                      </div>
+                    );
+                  })}
 
                 {/* Rubber-band drag-connect line (design mode) */}
                 {drag && (
@@ -917,7 +973,10 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              background: "rgba(5,7,10,0.4)",
+              // Match the shared Modal backdrop (deep + blurred), not a light wash.
+              background: "rgba(5,7,10,0.62)",
+              backdropFilter: "blur(3px)",
+              WebkitBackdropFilter: "blur(3px)",
             }}
           >
             <div
@@ -961,6 +1020,27 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
                   Both
                 </button>
               </div>
+              {/* Explicit cancel — the backdrop also dismisses, but an obvious
+                  button is clearer (the drag already committed a from→to). */}
+              <button
+                data-testid="edge-kind-cancel"
+                onClick={() => setEdgePick(null)}
+                style={{
+                  marginTop: 12,
+                  width: "100%",
+                  fontFamily: "inherit",
+                  fontWeight: 600,
+                  fontSize: "calc(11.5px * var(--fs,1))",
+                  padding: "8px 0",
+                  borderRadius: 9,
+                  border: "1px solid var(--border2)",
+                  background: "transparent",
+                  color: "var(--txt3)",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
             </div>
           </div>
         )}
@@ -1116,6 +1196,28 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
                   <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {n.name}
                   </span>
+                  {onRemoveNode && (
+                    <span
+                      data-testid={`agent-remove-${n.id}`}
+                      role="button"
+                      title="Remove agent"
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        onRemoveNode(n.id);
+                      }}
+                      style={{
+                        flexShrink: 0,
+                        color: "var(--txt3)",
+                        cursor: "pointer",
+                        fontSize: 13,
+                        fontWeight: 800,
+                        lineHeight: 1,
+                        padding: "0 2px",
+                      }}
+                    >
+                      ✕
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
