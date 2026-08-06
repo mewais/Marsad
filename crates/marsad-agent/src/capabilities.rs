@@ -157,6 +157,15 @@ const DEFAULT_PROBE_DEADLINE: Duration = Duration::from_secs(10);
 // run_remote_script_bounded logs the real elapsed time so this is tuned from data.
 const SETUP_PROBE_DEADLINE: Duration = Duration::from_secs(90);
 
+// Plain REMOTE (SSH/WSL) host with NO setup command: still inherently slower than
+// local — every non-multiplexed SSH probe re-pays connection + login-shell startup
+// before the discovery script runs. Measured on a real host (agent33): ~7.5–8.8s
+// per probe, spiking past 10s, so the 10s default TIMED OUT and the resume picker
+// reported "no sessions" for a project that had them. 30s gives comfortable
+// headroom over the measured cost while still failing a truly-dead host fast
+// (unreachable hosts fail at ~ConnectTimeout regardless). Local stays at 10s.
+const REMOTE_PROBE_DEADLINE: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct PersistedHostFile {
     /// driver -> last Capabilities snapshot for this host.
@@ -370,6 +379,9 @@ impl CapabilityProvider {
                 .unwrap_or(false);
             let deadline = if has_setup {
                 SETUP_PROBE_DEADLINE
+            } else if host_target.is_some() {
+                // Plain remote SSH/WSL — slower than local even without setup.
+                REMOTE_PROBE_DEADLINE
             } else {
                 DEFAULT_PROBE_DEADLINE
             };
