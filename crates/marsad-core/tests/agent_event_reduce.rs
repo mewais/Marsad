@@ -225,6 +225,29 @@ fn session_init_after_prompt_stays_working() {
     );
 }
 
+/// A just-launched session must have immediate launch-time VmUpdates (Session +
+/// Overview + Board) so the bridge can emit them and the new session appears at
+/// once on every subscriber — the fix for a fresh session that emitted no stream
+/// event until prompted (claude/codex), leaving it invisible + "loading" forever
+/// (#2/#4/#8). The Session view carries the launched id in `Starting` phase.
+#[test]
+fn session_launch_updates_yields_starting_session_view() {
+    let mut core = make_core();
+    let sid = launch(&mut core);
+    let updates = core.session_launch_updates(&sid);
+    let sv = last_sv(&updates);
+    assert_eq!(sv.id, sid, "launch updates must carry the launched session id");
+    assert_eq!(sv.state, Phase::Starting, "a fresh launch is Starting/ready");
+    assert!(
+        updates
+            .iter()
+            .any(|u| matches!(u, VmUpdate::Overview(_))),
+        "launch updates must include an Overview so the session shows on the dashboard"
+    );
+    // An unknown id is a defensive no-op, never a panic.
+    assert!(core.session_launch_updates("no-such-id").is_empty());
+}
+
 // ---------------------------------------------------------------------------
 // Test 4: TurnCompleted sets a terminal phase
 // ---------------------------------------------------------------------------

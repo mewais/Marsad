@@ -16,6 +16,31 @@ impl Core {
         self.launch_session_with_id(id, spec)
     }
 
+    /// Build the launch-time VmUpdates for a just-launched session id: its
+    /// initial `SessionView` (Phase::Starting) plus the derived Overview + Board.
+    /// `launch_session`/`launch_wasl_session` return only the id (the caller needs
+    /// it to select the session), so the bridge command emits THESE so the new
+    /// session appears immediately on every subscriber — the board, the sidebar,
+    /// and the session view — without waiting for the backend's first stream
+    /// event. claude/codex emit nothing until prompted, so without this a fresh
+    /// session was invisible (and its optimistic placeholder never retired → the
+    /// "Loading transcript…" that never cleared, #2/#4/#8). Empty for an unknown
+    /// id (a defensive no-op, never a panic).
+    pub fn session_launch_updates(&self, id: &str) -> Vec<VmUpdate> {
+        match self.sessions.get(id) {
+            Some(rec) => {
+                let sv = self.make_session_view(id, rec);
+                let snap = self.snapshot();
+                vec![
+                    VmUpdate::Session(sv),
+                    VmUpdate::Overview(marsad_viewmodel::group_overview(&snap)),
+                    VmUpdate::Board(self.board()),
+                ]
+            }
+            None => vec![],
+        }
+    }
+
     /// X6 (Wasl Backend, §6.1): launch a `WaslManaged` session — one whose
     /// underlying process is owned END-TO-END by Wasl. Emits `LaunchWaslSession`
     /// (NOT `LaunchSession` — no container/argv semantics apply), registers a

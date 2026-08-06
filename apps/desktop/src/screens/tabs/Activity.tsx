@@ -1328,7 +1328,7 @@ interface ActivityTabProps {
 }
 
 export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
-  const { selectedSession, selectedGate, selectedSessionLoading } = useVm();
+  const { selectedSession, selectedGate } = useVm();
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   // True while the user is at (or very near) the bottom; new content auto-scrolls
@@ -1383,38 +1383,14 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
     );
   }
 
-  // Launch gap: the session is selected and its name/header already show, but the
-  // real SessionView (with transcript) hasn't arrived yet — show an honest
-  // loading state instead of an empty body.
-  if (selectedSessionLoading && sv.transcript.length === 0) {
-    return (
-      <div
-        data-testid="transcript-loading"
-        style={{
-          padding: 24,
-          color: "var(--txt3)",
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-        }}
-      >
-        <span
-          aria-hidden="true"
-          style={{
-            width: 13,
-            height: 13,
-            border: "2px solid var(--border2)",
-            borderTopColor: "var(--accent)",
-            borderRadius: "50%",
-            animation: "spin .8s linear infinite",
-            display: "inline-block",
-          }}
-        />
-        Loading transcript…
-      </div>
-    );
-  }
-
+  // A freshly-launched session (or any session with no turns yet) has NO
+  // transcript to load — claude/codex emit nothing until prompted, so there is
+  // no "loading" to wait on. We must NOT gate the whole body (composer included)
+  // behind a spinner: doing so left the session showing "Loading transcript…"
+  // forever with no way to send the first prompt (#2/#4/#8). Instead we fall
+  // through to the normal render — the transcript area shows a ready empty-state
+  // (below) and the composer is available so the first prompt actually starts
+  // the session.
   const messages = deriveTranscript(sv, buildHitlMessages(sv));
 
   // Derive prompt history for the Composer (Up/Down arrow recall).
@@ -1652,6 +1628,30 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
                   return null;
               }
             };
+
+            // No turns yet (a fresh session, or one still awaiting its first
+            // prompt): show a ready empty-state instead of a blank pane. The
+            // composer below is enabled, so this is an honest "ready to start"
+            // state — not the old perpetual "Loading transcript…" (#2/#4/#8).
+            // `deriveTranscript` always prepends the "sys-0" session-started note,
+            // so "nothing has happened yet" is `length <= 1` (only that note; no
+            // real transcript entry, gate/HITL card, or spinner).
+            if (messages.length <= 1) {
+              return (
+                <div
+                  data-testid="transcript-empty"
+                  style={{
+                    padding: "40px 0",
+                    textAlign: "center",
+                    color: "var(--txt3)",
+                    fontSize: "calc(14px * var(--fs,1))",
+                    lineHeight: 1.6,
+                  }}
+                >
+                  Session ready — send your first prompt below to begin.
+                </div>
+              );
+            }
 
             // Weave in day separators + idle-gap markers between messages, and a
             // muted per-turn time: below a user prompt (end-aligned), and below the

@@ -80,6 +80,7 @@ pub fn snapshot(state: State<'_, ManagedState>) -> Result<AppSnapshot, String> {
 #[tauri::command(rename_all = "snake_case")]
 #[allow(clippy::too_many_arguments)]
 pub fn launch_session(
+    app: tauri::AppHandle,
     state: State<'_, ManagedState>,
     project: String,
     host_id: String,
@@ -96,40 +97,53 @@ pub fn launch_session(
     // #3 — agent driver override. Absent ⇒ "claude".
     driver: Option<String>,
 ) -> Result<String, String> {
-    let mut guard = state.lock().map_err(|e| e.to_string())?;
-    match &mut *guard {
-        AppState::Live(core) => {
-            // Non-empty resume id → resume that session; else continue-recent →
-            // --continue; else a fresh session.
-            let mode = if let Some(id) = resume_session_id.filter(|s| !s.is_empty()) {
-                LaunchMode::Resume(id)
-            } else if continue_recent == Some(true) {
-                LaunchMode::Continue
-            } else {
-                LaunchMode::Fresh
-            };
-            let spec = LaunchSpec {
-                project,
-                host_id,
-                // Core resolves the remote target from host_id via its registry.
-                host_target: None,
-                // Core resolves claude_bin/setup/env from the host config too.
-                claude_bin: None,
-                setup: None,
-                env: Vec::new(),
-                model,
-                session_mode,
-                first_prompt,
-                mode,
-                name,
-                disallowed_tools: Vec::new(),
-                wasl: wasl.unwrap_or(false),
-                driver: driver.filter(|d| !d.is_empty()).unwrap_or_else(|| "claude".to_string()),
-            };
-            core.launch_session(spec).map_err(map_err)
+    // Launch under the lock, then emit the launch-time views OUTSIDE it.
+    let (id, updates) = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => {
+                // Non-empty resume id → resume that session; else continue-recent →
+                // --continue; else a fresh session.
+                let mode = if let Some(id) = resume_session_id.filter(|s| !s.is_empty()) {
+                    LaunchMode::Resume(id)
+                } else if continue_recent == Some(true) {
+                    LaunchMode::Continue
+                } else {
+                    LaunchMode::Fresh
+                };
+                let spec = LaunchSpec {
+                    project,
+                    host_id,
+                    // Core resolves the remote target from host_id via its registry.
+                    host_target: None,
+                    // Core resolves claude_bin/setup/env from the host config too.
+                    claude_bin: None,
+                    setup: None,
+                    env: Vec::new(),
+                    model,
+                    session_mode,
+                    first_prompt,
+                    mode,
+                    name,
+                    disallowed_tools: Vec::new(),
+                    wasl: wasl.unwrap_or(false),
+                    driver: driver
+                        .filter(|d| !d.is_empty())
+                        .unwrap_or_else(|| "claude".to_string()),
+                };
+                let id = core.launch_session(spec).map_err(map_err)?;
+                // Emit the initial Starting view so the new session shows up
+                // immediately (board/sidebar/session view) and the frontend's
+                // optimistic placeholder retires — claude/codex emit nothing until
+                // prompted, so without this the session stayed "loading" forever.
+                let updates = core.session_launch_updates(&id);
+                (id, updates)
+            }
+            AppState::Mock(_) => return Ok("mock-session-001".to_string()),
         }
-        AppState::Mock(_) => Ok("mock-session-001".to_string()),
-    }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(id)
 }
 
 /// X6 (Wasl Backend) — launch a Wasl-managed session on `host_id`. The session's
@@ -139,18 +153,30 @@ pub fn launch_session(
 /// lock/error-mapping shape exactly.
 #[tauri::command(rename_all = "snake_case")]
 pub fn launch_wasl_session(
+    app: tauri::AppHandle,
     state: State<'_, ManagedState>,
     host_id: String,
     wasl_target_key: serde_json::Value,
     name: Option<String>,
 ) -> Result<String, String> {
-    let mut guard = state.lock().map_err(|e| e.to_string())?;
-    match &mut *guard {
-        AppState::Live(core) => core
-            .launch_wasl_session(&host_id, wasl_target_key, name)
-            .map_err(map_err),
-        AppState::Mock(_) => Ok("mock-wasl-session-001".to_string()),
-    }
+    let (id, updates) = {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        match &mut *guard {
+            AppState::Live(core) => {
+                let id = core
+                    .launch_wasl_session(&host_id, wasl_target_key, name)
+                    .map_err(map_err)?;
+                // Same immediate-visibility emit as launch_session (#8): a
+                // WaslManaged session's runtime is idle until prompted, so emit
+                // the Starting view now rather than wait for the first observe event.
+                let updates = core.session_launch_updates(&id);
+                (id, updates)
+            }
+            AppState::Mock(_) => return Ok("mock-wasl-session-001".to_string()),
+        }
+    };
+    crate::events::emit_updates(&app, updates);
+    Ok(id)
 }
 
 /// U1/U2 (docs/specs/dynamic-capabilities.md §3.6) — initial snapshot of every

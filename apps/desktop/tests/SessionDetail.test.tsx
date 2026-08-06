@@ -403,6 +403,36 @@ describe("ActivityTab — composer", () => {
     expect(getSendPrompt()).not.toHaveBeenCalled();
   });
 
+  // #2/#4/#8: a freshly-launched session (empty transcript, Starting, live) must
+  // NOT be stuck on "Loading transcript…" — it shows a ready empty-state AND the
+  // composer is available so the first prompt actually starts the session.
+  it("a fresh empty session shows the ready empty-state and a usable composer (not a loading spinner)", () => {
+    // A brand-new id (not reused by other tests) avoids the module-level HITL
+    // episode store polluting this fresh session's transcript.
+    const fresh = {
+      ...MOCK_SNAPSHOT.sessions[0],
+      id: "s-fresh-empty",
+      state: "Starting" as const,
+      live: true,
+      transcript: [],
+      gate: null,
+      shell_running: false,
+      subagent_list: [],
+      running_subagents: 0,
+      subagents: 0,
+    };
+    const sessions = [...MOCK_SNAPSHOT.sessions, fresh];
+    renderWith({ sessions, selectedId: "s-fresh-empty" });
+    // The honest ready empty-state, never the perpetual loading spinner.
+    expect(screen.getByTestId("transcript-empty")).toBeTruthy();
+    expect(screen.queryByTestId("transcript-loading")).toBeNull();
+    // The composer is present and can send the first prompt.
+    const textarea = screen.getByPlaceholderText(/Send a prompt/i);
+    fireEvent.change(textarea, { target: { value: "first prompt" } });
+    fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+    expect(getSendPrompt()).toHaveBeenCalledWith("s-fresh-empty", "first prompt");
+  });
+
   it("Shift+Enter does NOT submit", () => {
     renderWith({ selectedId: "s04" });
     const textarea = screen.getByPlaceholderText(
