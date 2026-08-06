@@ -7,10 +7,17 @@
 use super::*;
 
 impl Agent {
-    /// Change a session config option on the running agent. Currently opencode
-    /// only: sends ACP `session/set_config_option {sessionId, configId, value}`.
-    /// The agent's reply (echoed configOptions) is parsed by the reader, which
-    /// surfaces the confirmed new state — we do not mutate anything here.
+    /// Change a session config option on the running agent. LIVE only for
+    /// opencode: sends ACP `session/set_config_option {sessionId, configId,
+    /// value}`; the agent's reply (echoed configOptions) is parsed by the reader,
+    /// which surfaces the confirmed new state — we do not mutate anything here.
+    /// claude + codex have NO live setter in the direct (Marsad-native) path — the
+    /// reader only reflects opencode configOptions back into `current_mode`, so a
+    /// direct claude/codex mode change is applied by RESTART (Config "Apply"),
+    /// which relaunches with `--permission-mode` / codex mode-settings and is
+    /// reflected via the fresh `system/init`. (Wasl-managed claude sessions switch
+    /// mode live through the Wasl runtime, which tracks the mode itself — a
+    /// different path that does not go through this handler.)
     pub(super) fn handle_set_session_config_option(
         &mut self,
         session_id: &str,
@@ -34,36 +41,15 @@ impl Agent {
                 .map(|s| s.driver)
                 .unwrap_or_else(|| "claude".to_string());
             if driver == "claude" {
-                // claude: a LIVE mode switch (no restart) via the control protocol —
-                // set_permission_mode (wasit encoder). Only `mode` is live-settable
-                // this way; `model` still requires a restart (Config "Apply" path).
-                if config_id != "mode" {
-                    eprintln!(
-                        "marsad-agent: session {session_id} claude set_config_option {config_id} not live-settable (use restart)"
-                    );
-                    return Ok(vec![]);
-                }
-                let line = wasit_claude::encode_set_permission_mode("req_setmode", value);
-                let writers = self.session_writers.0.lock().unwrap();
-                if let Some(shared) = writers.get(session_id) {
-                    let mut writer = shared.lock().unwrap();
-                    match writer
-                        .write_all(line.as_bytes())
-                        .and_then(|_| writer.write_all(b"\n"))
-                        .and_then(|_| writer.flush())
-                    {
-                        Ok(()) => eprintln!(
-                            "marsad-agent: session {session_id} claude set_permission_mode {value} (live)"
-                        ),
-                        Err(e) => eprintln!(
-                            "marsad-agent: session {session_id} claude set_permission_mode WRITE FAILED: {e}"
-                        ),
-                    }
-                } else {
-                    eprintln!(
-                        "marsad-agent: session {session_id} claude set_permission_mode DROPPED — no writer"
-                    );
-                }
+                // claude: NO live setter in the direct path. The reader only
+                // reflects opencode configOptions back into `current_mode`, so a
+                // live set_permission_mode write would apply invisibly (the UI
+                // radio would never move — the reported "mode unchangeable" bug).
+                // Honest no-op — claude model/mode changes are applied by restart
+                // (Config "Apply"), reflected via the fresh system/init.
+                eprintln!(
+                    "marsad-agent: session {session_id} claude set_config_option {config_id} not live-settable — use restart"
+                );
                 return Ok(vec![]);
             }
             if driver == "codex" {
