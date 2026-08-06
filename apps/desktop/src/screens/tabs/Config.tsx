@@ -57,6 +57,10 @@ export function ConfigTab() {
   // session's REAL model rather than a hardcoded default.
   const initialModel = selectedSession?.model ?? "";
   const [selectedModel, setSelectedModel] = useState(initialModel);
+  // Pending session mode for drivers that change mode via RESTART (claude/codex —
+  // they have no reliable live mode switch; opencode does, handled separately).
+  // Applied by "Apply" alongside the model. Defaults to the running mode.
+  const [pendingMode, setPendingMode] = useState<string>(selectedSession?.current_mode ?? "");
   // The currently RUNNING model for this session (from system/init, never
   // overridden by the UI's "next restart" picker state).
   const runningModel = selectedSession?.model ?? "";
@@ -76,8 +80,18 @@ export function ConfigTab() {
   // session shows its own real values, not values left over from the previous one.
   useEffect(() => {
     setSelectedModel(selectedSession?.model ?? "");
+    setPendingMode(selectedSession?.current_mode ?? "");
     setDisabledTools(new Set()); // reset tool overrides for the new session
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSession?.id]);
+
+  // Keep the pending mode in sync when the RUNNING mode changes underneath us
+  // (e.g. after an Apply-restart lands the new mode via system/init), so the
+  // highlighted radio tracks reality once applied.
+  useEffect(() => {
+    setPendingMode(selectedSession?.current_mode ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSession?.current_mode]);
 
   // Apply / Save-template busy + error state.
   const [applyBusy, setApplyBusy] = useState(false);
@@ -106,11 +120,17 @@ export function ConfigTab() {
     setApplyBusy(true);
     setApplyError(null);
     try {
+      // opencode switches mode LIVE (no restart), so a restart preserves its
+      // running mode. claude/codex have no reliable live switch → the picked
+      // `pendingMode` is applied here, on restart (launch honors --permission-mode
+      // / codex mode-settings).
+      const driver = selectedSession.driver ?? "claude";
+      const modeForRestart =
+        driver === "opencode" ? (selectedSession.current_mode ?? "") : pendingMode;
       await restartSession({
         id: selectedSession.id,
         model: selectedModel,
-        // Preserve the running mode across a model-change restart.
-        session_mode: selectedSession.current_mode ?? "",
+        session_mode: modeForRestart,
         disallowed_tools: Array.from(disabledTools),
       });
     } catch (e) {
@@ -250,18 +270,21 @@ export function ConfigTab() {
         </div>
 
         {/* Session mode — AGENT-REPORTED (never hardcoded). opencode's modes come
-            from configOptions; claude's from its version. The current mode is live
-            (follows the agent, e.g. claude entering plan mode on its own). Switched
-            in place with NO restart: opencode via set_config_option, claude via the
-            set_permission_mode control request. codex has no live setter. */}
+            from configOptions; claude's from its version. Only opencode has a
+            reliable LIVE switch (session/set_config_option, agent-confirmed on the
+            stream). claude/codex do NOT reliably switch live — their mode is applied
+            by RESTART (launch honors --permission-mode / codex mode-settings), so a
+            picked mode is pending until "Apply". */}
         {selectedSession && (selectedSession.available_modes?.length ?? 0) > 0 && (() => {
           const modes = selectedSession.available_modes ?? [];
           const current = selectedSession.current_mode;
           const driver = selectedSession.driver ?? "claude";
-          // opencode, claude, and codex all switch modes live in place; the agent
-          // confirms and the current mode follows on the stream (no optimism).
-          const liveSwitch =
-            driver === "opencode" || driver === "claude" || driver === "codex";
+          // Only opencode switches live in place. claude/codex apply on restart.
+          const liveSwitch = driver === "opencode";
+          // The mode shown as selected: the LIVE mode for opencode, the PENDING
+          // (to-be-applied) pick for claude/codex.
+          const selectedMode = liveSwitch ? current : pendingMode;
+          const modeDirty = !liveSwitch && pendingMode !== (current ?? "");
           return (
             <div>
               <div
@@ -282,22 +305,31 @@ export function ConfigTab() {
                       color: "var(--txt3)",
                     }}
                   >
-                    (agent-controlled — reflects the live mode)
+                    {modeDirty ? "(applies on Apply — restarts the session)" : "(applied on restart)"}
                   </span>
                 )}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                 {modes.map((m) => {
-                  const active = current === m.id;
-                  const clickable = liveSwitch;
+                  const active = selectedMode === m.id;
+                  // claude/codex rows are always clickable (they set the pending
+                  // pick); opencode rows are clickable only when not already active.
+                  const clickable = liveSwitch ? !active : true;
                   return (
                     <div
                       key={m.id}
                       data-testid={`mode-${m.id}`}
                       data-active={active ? "true" : "false"}
                       onClick={
-                        clickable && !active
-                          ? () => setSessionConfigOption(selectedSession.id, "mode", m.id)
+                        clickable
+                          ? () => {
+                              if (liveSwitch) {
+                                setSessionConfigOption(selectedSession.id, "mode", m.id);
+                              } else {
+                                // claude/codex: stage the pick; Apply restarts with it.
+                                setPendingMode(m.id);
+                              }
+                            }
                           : undefined
                       }
                       style={{
@@ -306,7 +338,7 @@ export function ConfigTab() {
                         gap: 11,
                         padding: "12px 14px",
                         borderRadius: 10,
-                        cursor: clickable && !active ? "pointer" : "default",
+                        cursor: clickable ? "pointer" : "default",
                         border: active
                           ? "1px solid var(--accent)"
                           : "1px solid var(--border)",
