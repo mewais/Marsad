@@ -404,14 +404,18 @@ describe("ActivityTab — composer", () => {
   });
 
   // #2/#4/#8: a freshly-launched session (empty transcript, Starting, live) must
-  // NOT be stuck on "Loading transcript…" — it shows a ready empty-state AND the
-  // composer is available so the first prompt actually starts the session.
-  it("a fresh empty session shows the ready empty-state and a usable composer (not a loading spinner)", () => {
+  // NOT be stuck on "Loading transcript…" and must NOT hide the composer. It shows
+  // the FAMILIAR "Session <name> · <model>" started note (consistent with every
+  // other session — no bespoke placeholder copy) and a usable composer so the
+  // first prompt actually starts the session.
+  it("a fresh empty session shows the familiar session-started note + a usable composer (never a loading spinner)", () => {
     // A brand-new id (not reused by other tests) avoids the module-level HITL
     // episode store polluting this fresh session's transcript.
     const fresh = {
       ...MOCK_SNAPSHOT.sessions[0],
       id: "s-fresh-empty",
+      name: "Fresh Node",
+      model: "claude-opus-4-8",
       state: "Starting" as const,
       live: true,
       transcript: [],
@@ -423,8 +427,12 @@ describe("ActivityTab — composer", () => {
     };
     const sessions = [...MOCK_SNAPSHOT.sessions, fresh];
     renderWith({ sessions, selectedId: "s-fresh-empty" });
-    // The honest ready empty-state, never the perpetual loading spinner.
-    expect(screen.getByTestId("transcript-empty")).toBeTruthy();
+    // The familiar "Session <name> · <model>" note — same as any session, no
+    // bespoke fresh-session copy (consistency).
+    expect(
+      screen.getByText(/Session "Fresh Node" · claude-opus-4-8/)
+    ).toBeTruthy();
+    // Never the perpetual loading spinner.
     expect(screen.queryByTestId("transcript-loading")).toBeNull();
     // The composer is present and can send the first prompt.
     const textarea = screen.getByPlaceholderText(/Send a prompt/i);

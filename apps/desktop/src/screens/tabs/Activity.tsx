@@ -1629,30 +1629,6 @@ export function ActivityTab({ sessionId, onOpenGate }: ActivityTabProps) {
               }
             };
 
-            // No turns yet (a fresh session, or one still awaiting its first
-            // prompt): show a ready empty-state instead of a blank pane. The
-            // composer below is enabled, so this is an honest "ready to start"
-            // state — not the old perpetual "Loading transcript…" (#2/#4/#8).
-            // `deriveTranscript` always prepends the "sys-0" session-started note,
-            // so "nothing has happened yet" is `length <= 1` (only that note; no
-            // real transcript entry, gate/HITL card, or spinner).
-            if (messages.length <= 1) {
-              return (
-                <div
-                  data-testid="transcript-empty"
-                  style={{
-                    padding: "40px 0",
-                    textAlign: "center",
-                    color: "var(--txt3)",
-                    fontSize: "calc(14px * var(--fs,1))",
-                    lineHeight: 1.6,
-                  }}
-                >
-                  Session ready — send your first prompt below to begin.
-                </div>
-              );
-            }
-
             // Weave in day separators + idle-gap markers between messages, and a
             // muted per-turn time: below a user prompt (end-aligned), and below the
             // LAST entry of an assistant turn (a run of response/tool/result/
