@@ -150,6 +150,7 @@ impl Agent {
             marsad_proto::IpcMsg::AttachWaslSession {
                 session_id,
                 after_seq,
+                ..
             } => self.handle_attach_wasl_session(session_id, after_seq),
             marsad_proto::IpcMsg::AnswerWaslNativeGate {
                 session_id,

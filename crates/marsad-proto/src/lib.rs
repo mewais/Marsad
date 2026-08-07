@@ -710,6 +710,21 @@ pub enum IpcMsg {
         session_id: String,
         #[serde(default)]
         after_seq: u64,
+        /// The Wasl target key (core sources it from the persisted binding's
+        /// `provider_key`) so the agent can (re)attach the observe pump to the
+        /// node target directly — the attach IPC is self-sufficient, exactly like
+        /// `LaunchWaslSession`, and needs no session→key map in the agent. Omitted
+        /// (null) by minimal/legacy senders; the agent then falls back to any
+        /// still-registered client for that session.
+        #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+        wasl_target_key: serde_json::Value,
+        /// The host id the node lives on (mirrors `LaunchWaslSession.host_id`).
+        /// Required for the agent to re-adopt the node + re-register the provider
+        /// factory after a cold restart (the agent's in-memory registry is empty).
+        /// Empty string / absent → agent falls back to whatever is already
+        /// registered (warm restart / session-local re-attach).
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        host_id: String,
     },
     /// NEW: resolve a native gate (Wasl `gate approve|deny`, §8) — the SAME
     /// human decision the gate UI produces, routed to `resolve_native_gate`.

@@ -272,6 +272,12 @@ fn attach_wasl_session() -> IpcMsg {
     IpcMsg::AttachWaslSession {
         session_id: "s-1".to_string(),
         after_seq: 42,
+        // Null → omitted from the wire (skip_serializing_if), so the golden
+        // minimal contract string stays byte-identical.
+        wasl_target_key: serde_json::Value::Null,
+        // Empty → omitted from the wire (skip_serializing_if = "String::is_empty"),
+        // so the golden minimal contract string stays byte-identical.
+        host_id: String::new(),
     }
 }
 
@@ -291,6 +297,7 @@ fn attach_wasl_session_absent_after_seq_defaults_to_zero() {
         IpcMsg::AttachWaslSession {
             session_id,
             after_seq,
+            ..
         } => {
             assert_eq!(session_id, "s-1");
             assert_eq!(after_seq, 0);

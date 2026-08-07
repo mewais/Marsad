@@ -203,11 +203,13 @@ impl Core {
             RuntimeOwner::MarsadManaged => self.send_ipc(&IpcMsg::AttachSession {
                 session_id: id.to_string(),
             }),
-            RuntimeOwner::WaslManaged { .. } => {
+            RuntimeOwner::WaslManaged { binding } => {
                 let after_seq = self.sessions.get(id).map(|r| r.wasl_last_seq).unwrap_or(0);
                 self.send_ipc(&IpcMsg::AttachWaslSession {
                     session_id: id.to_string(),
                     after_seq,
+                    wasl_target_key: binding.provider_key.clone(),
+                    host_id: binding.host_id.clone(),
                 })
             }
         }

@@ -40,6 +40,71 @@ fn default_wasl_session_provider_factory(
     ))
 }
 
+/// Spawn (or skip, if already live) the per-session Wasl observe pump thread.
+///
+/// Dedup: if `sid` is already in `live`, the pump is already running — a
+/// second spawn would race on the same event stream. Return immediately.
+///
+/// On entry: `sid` is inserted into `live` to mark the pump as running.
+/// On thread exit: `sid` is removed from `live` so a future re-attach can
+/// spawn a fresh pump (e.g., after a terminal `SessionExited` + re-launch).
+///
+/// `client` is a `Box<dyn WaslSessionClient>` (Send) obtained via
+/// `wasl_observe_client_and_after_seq`, which calls `get_or_start` — the
+/// same live target the synchronous IPC arms drive. `after_seq` is the
+/// §6.1 reconnect cursor; `0` on a fresh launch.
+///
+/// `#[cfg(not(coverage))]` mirrors the inline spawn it replaces — the
+/// observe thread needs a live socket and a real WaslSessionClient, neither
+/// of which exist in the coverage build.
+#[cfg(not(coverage))]
+fn spawn_wasl_observe(
+    sid: String,
+    client: Box<dyn marsad_wasl_session::WaslSessionClient>,
+    mut after_seq: u64,
+    subscribers: std::sync::Arc<std::sync::Mutex<Vec<std::sync::mpsc::Sender<String>>>>,
+    live: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+) {
+    // Dedup: return without spawning if a pump is already running for this session.
+    {
+        let mut live_set = live.lock().unwrap();
+        if live_set.contains(&sid) {
+            eprintln!(
+                "marsad-agent: wasl observe thread already live for session {sid} — skipping re-spawn"
+            );
+            return;
+        }
+        live_set.insert(sid.clone());
+    }
+    eprintln!("marsad-agent: wasl observe thread started for session {sid}");
+    std::thread::spawn(move || {
+        let client = client;
+        let mut backoff = crate::RECONNECT_INITIAL_BACKOFF_SECS;
+        loop {
+            let subs = std::sync::Arc::clone(&subscribers);
+            let mut emit = |line: String| {
+                if let Ok(s) = subs.lock() {
+                    s.iter().for_each(|tx| {
+                        let _ = tx.send(line.clone());
+                    });
+                }
+            };
+            let end = crate::pump_wasl_observe(&sid, &*client, after_seq, &mut emit);
+            if !crate::wasl_observe_should_reconnect(&end) {
+                // Terminal SessionExited — the process is Wasl's and is gone; end gracefully.
+                break;
+            }
+            // Bare disconnect: resume from the high-water seq after a bounded backoff
+            // (no gap/dup via Wasl's `events(after_seq)` replay).
+            after_seq = end.last_seq;
+            std::thread::sleep(std::time::Duration::from_secs(backoff));
+            backoff = crate::reconnect_backoff_next(backoff);
+        }
+        // Remove from live-set so a future re-attach can spawn a fresh pump.
+        live.lock().unwrap().remove(&sid);
+    });
+}
+
 impl Agent {
     /// Blocking event loop — real socket/pipe IO, excluded from the coverage
     /// build because it requires a live socket/pipe and loops forever.
@@ -159,6 +224,15 @@ impl Agent {
         // Session FIFO reader threads and the client reader thread on disconnect
         // both hold a clone of this Arc.
         let subscribers: Arc<Mutex<Vec<mpsc::Sender<String>>>> = Arc::new(Mutex::new(Vec::new()));
+
+        // ── Wasl observe live-set ──────────────────────────────────────────
+        // Dedup guard: tracks which session ids currently have an observe pump
+        // thread running. `spawn_wasl_observe` inserts the id before spawning
+        // and skips if already present; the thread removes it on exit. This
+        // prevents a second pump racing on the same session's event stream when
+        // an `AttachWaslSession` arrives while a prior pump is still alive.
+        let wasl_observe_live: Arc<Mutex<std::collections::HashSet<String>>> =
+            Arc::new(Mutex::new(std::collections::HashSet::new()));
 
         // ── Session writers registry ───────────────────────────────────────
         // Shared across the serve thread (handle_send_prompt via self) and the
@@ -1046,40 +1120,81 @@ impl Agent {
                     // A fresh launch has no persisted binding yet → resume/reset
                     // coincide at 0 (`wasl_reconnect_after_seq(_, 0)` == 0).
                     match self.wasl_observe_client_and_after_seq(key, 0) {
-                        Ok((client, mut after_seq)) => {
-                            let subs_for_observe = Arc::clone(&subscribers);
-                            std::thread::spawn(move || {
-                                let client = client;
-                                let mut backoff = crate::RECONNECT_INITIAL_BACKOFF_SECS;
-                                loop {
-                                    let subs = Arc::clone(&subs_for_observe);
-                                    let mut emit = |line: String| {
-                                        if let Ok(s) = subs.lock() {
-                                            s.iter().for_each(|tx| {
-                                                let _ = tx.send(line.clone());
-                                            });
-                                        }
-                                    };
-                                    let end = crate::pump_wasl_observe(
-                                        &sid, &*client, after_seq, &mut emit,
-                                    );
-                                    if !crate::wasl_observe_should_reconnect(&end) {
-                                        // Terminal SessionExited — the process is
-                                        // Wasl's and is gone; end gracefully.
-                                        break;
-                                    }
-                                    // Bare disconnect: resume from the high-water
-                                    // seq after a bounded backoff (no gap/dup via
-                                    // Wasl's `events(after_seq)` replay).
-                                    after_seq = end.last_seq;
-                                    std::thread::sleep(std::time::Duration::from_secs(backoff));
-                                    backoff = crate::reconnect_backoff_next(backoff);
-                                }
-                            });
-                            eprintln!("marsad-agent: wasl observe thread started for session");
+                        Ok((client, after_seq)) => {
+                            spawn_wasl_observe(
+                                sid,
+                                client,
+                                after_seq,
+                                Arc::clone(&subscribers),
+                                Arc::clone(&wasl_observe_live),
+                            );
                         }
                         Err(e) => {
                             eprintln!("marsad-agent: wasl observe thread not started: {e}");
+                        }
+                    }
+                }
+            }
+
+            // ── X6 Wasl Backend attach re-pump (docs/design/wasl-backend-plan.md
+            // §6.1) ────────────────────────────────────────────────────────────
+            // `AttachWaslSession` is emitted by core whenever the GUI opens /
+            // reconnects a WaslManaged session.  Previously it was a no-op
+            // (the session's transcript stayed empty because no observe pump was
+            // running after a GUI reconnect).  Now: idempotently re-adopt the
+            // node (via `ensure_wasl_runtime_node`, which is the exact same
+            // call `LaunchWaslSession` uses — it is a cheap no-op if the factory
+            // is already registered), then (re)spawn the observe pump via
+            // `spawn_wasl_observe` (which itself dedups, so a racing warm-pump
+            // returns immediately without spawning a second thread).
+            if out_lines.is_ok() && cmd.line.contains("\"AttachWaslSession\"") {
+                if let Some((sid, after_seq, host_id_str, key)) =
+                    serde_json::from_str::<serde_json::Value>(&cmd.line)
+                        .ok()
+                        .and_then(|v| {
+                            let sid = v.get("session_id")?.as_str()?.to_string();
+                            let after_seq = v
+                                .get("after_seq")
+                                .and_then(|s| s.as_u64())
+                                .unwrap_or(0);
+                            let host_id_str = v
+                                .get("host_id")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let key = v
+                                .get("wasl_target_key")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
+                            Some((sid, after_seq, host_id_str, key))
+                        })
+                {
+                    // Re-adopt the node so a cold-start agent (empty registry)
+                    // can dial the node again — identical to what LaunchWaslSession
+                    // calls, so there is no parallel re-adopt path.
+                    if !host_id_str.is_empty() {
+                        let host_target = self.wasl_host_target(&host_id_str);
+                        if let Err(e) =
+                            self.ensure_wasl_runtime_node(&host_id_str, host_target.as_deref(), &[], None)
+                        {
+                            eprintln!(
+                                "marsad-agent: wasl observe (attach) ensure_wasl_runtime_node failed: {e}"
+                            );
+                        }
+                    }
+                    // (Re)spawn the observe pump from the reported after_seq.
+                    match self.wasl_observe_client_and_after_seq(key, after_seq) {
+                        Ok((client, resolved_after_seq)) => {
+                            spawn_wasl_observe(
+                                sid,
+                                client,
+                                resolved_after_seq,
+                                Arc::clone(&subscribers),
+                                Arc::clone(&wasl_observe_live),
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("marsad-agent: wasl observe (attach) not started: {e}");
                         }
                     }
                 }

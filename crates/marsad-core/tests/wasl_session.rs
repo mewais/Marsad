@@ -784,6 +784,7 @@ fn reconnect_reattaches_from_last_observed_seq() {
             IpcMsg::AttachWaslSession {
                 session_id,
                 after_seq,
+                ..
             } if session_id == &id => Some(*after_seq),
             _ => None,
         })
@@ -791,6 +792,51 @@ fn reconnect_reattaches_from_last_observed_seq() {
     assert!(
         attach >= 3,
         "reconnect must re-attach from the last observed seq (>=3), not replay from 0; got {attach}"
+    );
+}
+
+/// New test: `AttachWaslSession` emitted on `attach_session` carries the
+/// binding's `provider_key` as `wasl_target_key` and `host_id` from the
+/// binding — so the agent can re-adopt the node + re-attach the observe pump
+/// after a cold restart without any session→key map in the agent.
+#[test]
+fn attach_wasl_session_carries_provider_key_and_host_id() {
+    let (mut core, mut peer) = make_core();
+    // Launch with a specific host + non-trivial key so we can assert both fields.
+    let target_key = serde_json::json!({
+        "protocol": "claude",
+        "context": {"cwd": "/home/u/proj"},
+    });
+    let id = core
+        .launch_wasl_session("host-42", target_key.clone(), None)
+        .expect("launch_wasl_session must succeed");
+    let _ = peer.drain_outbound();
+
+    core.attach_session(&id).expect("attach");
+    let out: Vec<IpcMsg> = peer
+        .drain_outbound()
+        .iter()
+        .filter_map(|l| parse_ipc(l).ok())
+        .collect();
+
+    let found = out.iter().find_map(|m| match m {
+        IpcMsg::AttachWaslSession {
+            session_id,
+            wasl_target_key,
+            host_id,
+            ..
+        } if session_id == &id => Some((wasl_target_key.clone(), host_id.clone())),
+        _ => None,
+    });
+    let (wk, hid) = found
+        .expect("attach_session on WaslManaged must emit AttachWaslSession with key+host");
+    assert_eq!(
+        wk, target_key,
+        "AttachWaslSession must carry wasl_target_key == the binding's provider_key"
+    );
+    assert_eq!(
+        hid, "host-42",
+        "AttachWaslSession must carry host_id == the binding's host_id"
     );
 }
 
