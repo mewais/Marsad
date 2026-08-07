@@ -36,6 +36,8 @@ pub use reader::{
     assistant_has_file_modifying_tool_use, conn_on_drop, reconnect_action, reconnect_backoff_next,
     ReconnectAction, RECONNECT_INITIAL_BACKOFF_SECS, RECONNECT_MAX_BACKOFF_SECS,
 };
+#[cfg(not(coverage))]
+pub use reader::{codex_turn_start_lines, opencode_config_line};
 pub use remote::{
     build_remote_spawn_cmd, exec_prefix_for,
     remote_durable_launch_script, remote_kill_script, remote_liveness_script, remote_reader_argv,
@@ -516,6 +518,53 @@ impl fmt::Debug for AcpSessionsWrap {
     }
 }
 
+// Fix #2: per-session queue of raw prompt TEXT for codex sessions that arrived
+// BEFORE the threadId was known (`thread/started` not yet seen). The threadId
+// is needed to build the `turn/start` JSON-RPC, so the text is held here —
+// NOT in `pending_prompts` (which stores pre-encoded bytes for claude/opencode,
+// drained raw by the writer-registration path: writing codex prompt text raw
+// would corrupt the JSON-RPC stream). Dedicated map means zero conflation risk.
+//
+// Drained right after `codex_threads.insert` in `reader.rs` by building a real
+// `turn/start` for each queued text. Bounded by `PENDING_PROMPT_MAX` (same
+// cap); overflow surfaces a log like `pending_prompts`.
+//
+// Type alias for clarity (same shape as `PendingPrompts` but element is `String`
+// not `Vec<u8>` — we need to build the JSON-RPC at drain time, not store bytes).
+#[cfg(not(coverage))]
+pub(crate) type PendingCodexPrompts =
+    std::sync::Arc<std::sync::Mutex<HashMap<String, Vec<(std::time::Instant, String)>>>>;
+
+#[cfg(not(coverage))]
+struct PendingCodexPromptsWrap(PendingCodexPrompts);
+
+#[cfg(not(coverage))]
+impl fmt::Debug for PendingCodexPromptsWrap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PendingCodexPromptsWrap")
+    }
+}
+
+// Fix #6: per-session queue of (config_id, value) pairs for opencode sessions
+// whose `set_config_option` arrived BEFORE the ACP sessionId was known. Drained
+// right after `acp_sessions.insert` in `reader.rs` (opencode_handshake_intercept
+// already inserted by then) by sending `encode_set_mode`/`encode_set_model`.
+// Only "mode" and "model" are wired knobs; others are explicitly ignored with a
+// log (same as the live path). Production builds only.
+#[cfg(not(coverage))]
+pub(crate) type PendingConfigOptions =
+    std::sync::Arc<std::sync::Mutex<HashMap<String, Vec<(String, String)>>>>;
+
+#[cfg(not(coverage))]
+struct PendingConfigOptionsWrap(PendingConfigOptions);
+
+#[cfg(not(coverage))]
+impl fmt::Debug for PendingConfigOptionsWrap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PendingConfigOptionsWrap")
+    }
+}
+
 /// A `can_use_tool` permission request claude is blocked on, awaiting an answer.
 /// Keyed by session_id (claude asks one tool at a time per session and blocks
 /// until the control_response arrives).
@@ -670,6 +719,16 @@ pub struct Agent {
     /// Production builds only.
     #[cfg(not(coverage))]
     acp_sessions: AcpSessionsWrap,
+    /// Fix #2: codex prompts queued before the threadId was known — raw TEXT
+    /// (not bytes) because the `turn/start` JSON-RPC must be built at drain
+    /// time once the threadId is available. Distinct from `pending_prompts`
+    /// (which stores pre-encoded bytes for claude/opencode). Production only.
+    #[cfg(not(coverage))]
+    pending_codex_prompts: PendingCodexPromptsWrap,
+    /// Fix #6: opencode set_config_option pairs queued before the ACP
+    /// sessionId was known. Drained after `acp_sessions.insert`. Production only.
+    #[cfg(not(coverage))]
+    pending_config_options: PendingConfigOptionsWrap,
     /// Wasl connector registry (X2), keyed by host_id. Always compiled — see
     /// `WaslConnectorsWrap`'s doc comment.
     wasl_connectors: WaslConnectorsWrap,
@@ -757,6 +816,14 @@ impl Agent {
             acp_sessions: AcpSessionsWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
+            #[cfg(not(coverage))]
+            pending_codex_prompts: PendingCodexPromptsWrap(std::sync::Arc::new(
+                std::sync::Mutex::new(HashMap::new()),
+            )),
+            #[cfg(not(coverage))]
+            pending_config_options: PendingConfigOptionsWrap(std::sync::Arc::new(
+                std::sync::Mutex::new(HashMap::new()),
+            )),
             wasl_connectors: WaslConnectorsWrap(empty_wasl_connector_map()),
             wasl_connector_factory: WaslConnectorFactoryWrap(None),
             wasl_session_clients: WaslSessionClientsWrap(empty_wasl_session_client_map()),
@@ -834,6 +901,12 @@ impl Agent {
             acp_sessions: AcpSessionsWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
+            pending_codex_prompts: PendingCodexPromptsWrap(std::sync::Arc::new(
+                std::sync::Mutex::new(HashMap::new()),
+            )),
+            pending_config_options: PendingConfigOptionsWrap(std::sync::Arc::new(
+                std::sync::Mutex::new(HashMap::new()),
+            )),
             wasl_connectors: WaslConnectorsWrap(empty_wasl_connector_map()),
             wasl_connector_factory: WaslConnectorFactoryWrap(None),
             wasl_session_clients: WaslSessionClientsWrap(empty_wasl_session_client_map()),
@@ -863,6 +936,19 @@ impl Agent {
     /// Return the ordered call log of the injected `FakeContainer`.
     pub fn container_calls(&self) -> &[String] {
         self.container.0.calls()
+    }
+
+    /// Test seam (Fix #4): inject a session writer directly into the registry so
+    /// tests can simulate a live writer without spawning a real reader thread.
+    /// Production builds only — the SharedWriter type alias is cfg(not(coverage)).
+    /// Not exposed in coverage builds (no IO test seams needed there).
+    #[cfg(not(coverage))]
+    pub fn inject_session_writer(&self, session_id: &str, writer: SharedWriter) {
+        self.session_writers
+            .0
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), writer);
     }
 
     fn next_session_id(&mut self) -> String {

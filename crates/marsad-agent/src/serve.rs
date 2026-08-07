@@ -276,6 +276,18 @@ impl Agent {
         // threads (which insert the sessionId when the session/new result arrives).
         let acp_sessions_for_reader = Arc::clone(&self.acp_sessions.0);
 
+        // ── Fix #2: pending codex prompts (pre-threadId) ────────────────────
+        // Shared across the serve thread (handle_send_prompt enqueues raw text
+        // when threadId not yet known) and the FIFO reader threads (which drain
+        // as turn/start calls right after codex_threads.insert).
+        let pending_codex_prompts_for_reader = Arc::clone(&self.pending_codex_prompts.0);
+
+        // ── Fix #6: pending opencode config options (pre-sessionId) ─────────
+        // Shared across the serve thread (handle_set_session_config_option enqueues
+        // when ACP sessionId not yet known) and the FIFO reader threads (which drain
+        // as set_mode/set_model calls right after acp_sessions.insert).
+        let pending_config_options_for_reader = Arc::clone(&self.pending_config_options.0);
+
         // ── WAVE 3b pty registry ────────────────────────────────────────────
         // Shared across the serve thread (handle_pty_input/handle_pty_resize
         // via self, handle_stop_session's teardown via self) and the pty
@@ -457,6 +469,8 @@ impl Agent {
                                 Arc::clone(&codex_threads_for_reader),
                                 None, // opencode_spec: not re-sent on reconnect
                                 Arc::clone(&acp_sessions_for_reader),
+                                Arc::clone(&pending_codex_prompts_for_reader),
+                                Arc::clone(&pending_config_options_for_reader),
                                 Arc::clone(&self.live_readers),
                             );
                             eprintln!("marsad-agent: reconnected live remote session {}", s.id);
@@ -531,6 +545,8 @@ impl Agent {
                         Arc::clone(&codex_threads_for_reader),
                         None, // opencode_spec: not re-sent on reconnect
                         Arc::clone(&acp_sessions_for_reader),
+                        Arc::clone(&pending_codex_prompts_for_reader),
+                        Arc::clone(&pending_config_options_for_reader),
                         Arc::clone(&self.live_readers),
                     );
                     eprintln!("marsad-agent: reconnected live session {}", s.id);
@@ -677,6 +693,8 @@ impl Agent {
                 let pty_entries_for_client = Arc::clone(&pty_entries_for_reader);
                 let codex_threads_for_client = Arc::clone(&codex_threads_for_reader);
                 let acp_sessions_for_client = Arc::clone(&acp_sessions_for_reader);
+                let pending_codex_prompts_for_client = Arc::clone(&pending_codex_prompts_for_reader);
+                let pending_config_options_for_client = Arc::clone(&pending_config_options_for_reader);
                 let live_readers_for_client = Arc::clone(&live_readers_for_fifo);
 
                 // Split the client into independent write and read halves so
@@ -797,6 +815,8 @@ impl Agent {
                                                 Arc::clone(&codex_threads_for_client),
                                                 reply.opencode_spec,
                                                 Arc::clone(&acp_sessions_for_client),
+                                                Arc::clone(&pending_codex_prompts_for_client),
+                                                Arc::clone(&pending_config_options_for_client),
                                                 Arc::clone(&live_readers_for_client),
                                             );
                                         }

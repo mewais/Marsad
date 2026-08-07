@@ -7,17 +7,27 @@
 use super::*;
 
 impl Agent {
-    /// Change a session config option on the running agent. LIVE only for
-    /// opencode: sends ACP `session/set_config_option {sessionId, configId,
-    /// value}`; the agent's reply (echoed configOptions) is parsed by the reader,
-    /// which surfaces the confirmed new state — we do not mutate anything here.
-    /// claude + codex have NO live setter in the direct (Marsad-native) path — the
-    /// reader only reflects opencode configOptions back into `current_mode`, so a
-    /// direct claude/codex mode change is applied by RESTART (Config "Apply"),
-    /// which relaunches with `--permission-mode` / codex mode-settings and is
-    /// reflected via the fresh `system/init`. (Wasl-managed claude sessions switch
-    /// mode live through the Wasl runtime, which tracks the mode itself — a
-    /// different path that does not go through this handler.)
+    /// Change a session config option on the running agent.
+    ///
+    /// **claude `mode`** (Fix #4): LIVE-settable via `wasit_claude::encode_set_permission_mode`.
+    /// claude does NOT echo the new mode back, so on a successful write we REFLECT it by
+    /// emitting `wasit_core::AgentEvent::ModesUpdated { current_mode: Some(value) }` as an
+    /// IPC line — the same event core folds into `SessionView.current_mode`. Reflection is
+    /// tied to the actual write succeeding (honest — no write, no reflection).
+    /// claude `model` is NOT live-settable; restart required (honest no-op log).
+    ///
+    /// **codex** (model AND mode): NOT live-settable — wasit codex reports
+    /// `model_switchable=false`/`mode_switchable=false` and exposes no live encoder.
+    /// Honest no-op; restart required (Config "Apply"). Do NOT touch.
+    ///
+    /// **opencode** (model AND mode): LIVE via ACP `session/set_config_option`. If the ACP
+    /// sessionId is not yet known (session/new result hasn't arrived yet), QUEUE the
+    /// (config_id, value) pair in `pending_config_options` instead of dropping it; the reader
+    /// drains it right after `acp_sessions.insert` (Fix #6). Unknown config_ids are
+    /// EXPLICITLY logged and ignored (no silent swallow).
+    ///
+    /// (Wasl-managed claude sessions switch mode live through the Wasl runtime — a separate
+    /// path that does not go through this handler.)
     pub(super) fn handle_set_session_config_option(
         &mut self,
         session_id: &str,
@@ -40,29 +50,79 @@ impl Agent {
                 .and_then(|r| r.sessions.into_iter().find(|s| s.id == session_id))
                 .map(|s| s.driver)
                 .unwrap_or_else(|| "claude".to_string());
+
             if driver == "claude" {
-                // claude: NO live setter in the direct path. The reader only
-                // reflects opencode configOptions back into `current_mode`, so a
-                // live set_permission_mode write would apply invisibly (the UI
-                // radio would never move — the reported "mode unchangeable" bug).
-                // Honest no-op — claude model/mode changes are applied by restart
-                // (Config "Apply"), reflected via the fresh system/init.
+                // Fix #4: claude permission-mode IS live-settable via
+                // `encode_set_permission_mode`. claude model is NOT live-settable
+                // (no encoder; restart required). Reflect on successful write so the
+                // UI radio moves immediately — claude does not echo mode changes back.
+                if config_id == "mode" {
+                    let req_id = format!(
+                        "req_mode_{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .subsec_millis()
+                    );
+                    let line = wasit_claude::encode_set_permission_mode(&req_id, value);
+                    let writers = self.session_writers.0.lock().unwrap();
+                    if let Some(shared) = writers.get(session_id) {
+                        let mut writer = shared.lock().unwrap();
+                        match writer
+                            .write_all(line.as_bytes())
+                            .and_then(|_| writer.write_all(b"\n"))
+                            .and_then(|_| writer.flush())
+                        {
+                            Ok(()) => {
+                                eprintln!(
+                                    "marsad-agent: session {session_id} claude set_permission_mode → {value}"
+                                );
+                                // Reflect the new mode so the UI radio updates immediately
+                                // (claude does not echo mode changes; we synthesize the event
+                                // tied to the actual successful write — honest, not optimistic).
+                                drop(writer);
+                                drop(writers);
+                                let reflect_event = wasit_core::AgentEvent::ModesUpdated {
+                                    available_modes: vec![],
+                                    current_mode: Some(value.to_string()),
+                                };
+                                let reflect_line =
+                                    marsad_proto::encode_ipc(&marsad_proto::IpcMsg::AgentEvent {
+                                        session_id: session_id.to_string(),
+                                        event: reflect_event,
+                                    });
+                                return Ok(vec![reflect_line]);
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "marsad-agent: session {session_id} claude set_permission_mode WRITE FAILED: {e} — mode NOT reflected"
+                                );
+                            }
+                        }
+                    } else {
+                        eprintln!(
+                            "marsad-agent: session {session_id} claude set_permission_mode DROPPED — writer not ready (mode NOT reflected)"
+                        );
+                    }
+                    return Ok(vec![]);
+                }
+                // claude model (and any other config_id): not live-settable — restart required.
                 eprintln!(
-                    "marsad-agent: session {session_id} claude set_config_option {config_id} not live-settable — use restart"
+                    "marsad-agent: session {session_id} claude set_config_option {config_id} not live-settable — use restart (Config Apply)"
                 );
                 return Ok(vec![]);
             }
+
             if driver == "codex" {
-                // codex app-server: the wasit codex driver reports model_switchable
-                // = false / mode_switchable = false and exposes NO live-config
-                // encoder (thread/settings/update was Marsad's own, removed with the
-                // codex_appserver module). Honest no-op — a codex model/mode change
-                // is applied by restarting the session (Config "Apply"), not live.
+                // codex app-server: model AND mode are both not live-settable —
+                // wasit codex reports model_switchable=false / mode_switchable=false
+                // and exposes no live-config encoder. Honest no-op; restart required.
                 eprintln!(
-                    "marsad-agent: session {session_id} codex set_config_option {config_id} not live-settable via wasit — use restart"
+                    "marsad-agent: session {session_id} codex set_config_option {config_id} not live-settable via wasit — use restart (Config Apply)"
                 );
                 return Ok(vec![]);
             }
+
             if driver != "opencode" {
                 // other drivers: no wired live setter. Don't fake it.
                 eprintln!(
@@ -70,13 +130,34 @@ impl Agent {
                 );
                 return Ok(vec![]);
             }
+
+            // opencode: check that this is a wired knob BEFORE looking up the session.
+            // Unknown options are explicitly logged and ignored (no silent swallow).
+            match config_id {
+                "mode" | "model" => {}
+                other => {
+                    eprintln!(
+                        "marsad-agent: session {session_id} opencode set_config_option {other} not wired — explicitly ignored (only mode/model are live knobs)"
+                    );
+                    return Ok(vec![]);
+                }
+            }
+
             let acp_session_id = self.acp_sessions.0.lock().unwrap().get(session_id).cloned();
             let Some(acp_sid) = acp_session_id else {
+                // Fix #6: ACP sessionId not yet known — QUEUE instead of DROP.
+                // The reader drains this right after acp_sessions.insert (on the
+                // session/new result), sending the queued items as set_mode/set_model.
+                let mut q = self.pending_config_options.0.lock().unwrap();
+                let entry = q.entry(session_id.to_string()).or_default();
+                entry.push((config_id.to_string(), value.to_string()));
                 eprintln!(
-                    "marsad-agent: session {session_id} set_config_option DROPPED — ACP sessionId not yet known"
+                    "marsad-agent: session {session_id} opencode set_config_option {config_id}={value} QUEUED — ACP sessionId not yet known ({} queued)",
+                    entry.len()
                 );
                 return Ok(vec![]);
             };
+
             // Millis-based id > the reserved handshake ids (1/2/3/4), matching
             // handle_send_prompt's scheme. opencode live model/mode via the wasit
             // set_model/set_mode encoders (session/set_config_option under the hood).
@@ -87,13 +168,8 @@ impl Agent {
                 + 200u64;
             let line = match config_id {
                 "mode" => wasit_opencode::encode_set_mode(req_id, &acp_sid, value),
-                "model" => wasit_opencode::encode_set_model(req_id, &acp_sid, value),
-                other => {
-                    eprintln!(
-                        "marsad-agent: session {session_id} opencode set_config_option {other} not wired — ignored"
-                    );
-                    return Ok(vec![]);
-                }
+                // "model" is the only other reachable arm (guarded above)
+                _ => wasit_opencode::encode_set_model(req_id, &acp_sid, value),
             };
             let writers = self.session_writers.0.lock().unwrap();
             if let Some(shared) = writers.get(session_id) {
@@ -111,8 +187,16 @@ impl Agent {
                     ),
                 }
             } else {
+                // Writer not ready but sessionId is known — queue as config option
+                // so the drain (which runs right after the writer registers on
+                // acp_sessions.insert) will send it. This window shouldn't normally
+                // occur (acp_sessions.insert happens before the writer is registered
+                // for reconnect paths), but guard it explicitly.
+                let mut q = self.pending_config_options.0.lock().unwrap();
+                let entry = q.entry(session_id.to_string()).or_default();
+                entry.push((config_id.to_string(), value.to_string()));
                 eprintln!(
-                    "marsad-agent: session {session_id} set_config_option DROPPED — writer not ready"
+                    "marsad-agent: session {session_id} opencode set_config_option {config_id}={value} QUEUED — writer not ready"
                 );
             }
         }
@@ -248,8 +332,29 @@ impl Agent {
                         );
                     }
                 } else {
+                    // Fix #2: threadId not yet known — QUEUE the raw text instead
+                    // of dropping it. The drain fires in reader.rs right after
+                    // `codex_threads.insert` (when `thread/started` arrives) by
+                    // building a real `turn/start` for each queued text using the
+                    // then-known threadId. We MUST NOT store pre-encoded bytes here
+                    // (that would write raw text as a JSON-RPC line — wire corruption);
+                    // the dedicated `pending_codex_prompts` map holds raw strings.
+                    let mut q = self.pending_codex_prompts.0.lock().unwrap();
+                    let entry = q.entry(session_id.to_string()).or_default();
+                    entry.push((std::time::Instant::now(), text.to_string()));
+                    let n = entry.len();
+                    if n > crate::PENDING_PROMPT_MAX {
+                        let overflow = n - crate::PENDING_PROMPT_MAX;
+                        eprintln!(
+                            "marsad-agent: session {session_id} pending-codex-prompt queue over cap ({n} > {}) — dropping {overflow} oldest",
+                            crate::PENDING_PROMPT_MAX
+                        );
+                        entry.drain(0..overflow);
+                    }
                     eprintln!(
-                        "marsad-agent: session {session_id} codex send_prompt DROPPED — threadId not yet known"
+                        "marsad-agent: session {session_id} codex send_prompt QUEUED ({} chars) — threadId not yet known, will deliver as turn/start on thread/started ({} queued)",
+                        text.len(),
+                        entry.len()
                     );
                 }
             } else {
@@ -316,15 +421,25 @@ impl Agent {
     }
 
     pub(super) fn handle_interrupt(&mut self, session_id: &str) -> Result<Vec<String>, AgentError> {
-        // Write an `interrupt` control_request to claude's stdin (via the session
-        // writer) to stop the current turn. claude acks + ends the turn with
-        // `result: error_during_execution`. Mirrors handle_answer_gate's writer
-        // use. Under cfg(coverage) the IO block is absent (fake path = no-op ack).
-        // CODEX: `codex exec` turns are one-shot; there is no per-turn interrupt
-        // control message. This is a documented no-op for codex sessions — the
-        // turn runs to completion or failure. We log it but do not write anything
-        // to the eval-loop writer (sending a random line would corrupt the
-        // eval-loop's command sequence).
+        // Send a per-driver interrupt to the session:
+        //
+        //   claude  — writes a `control_request {subtype:"interrupt"}` to claude's stdin
+        //             via the session writer. claude acks + ends the turn with
+        //             `result: error_during_execution`. Any pending MCP elicitation or
+        //             `can_use_tool` gate is DECLINED first (same writer, gate first).
+        //             Mirrors handle_answer_gate's writer use.
+        //
+        //   opencode — DECLINES any pending permission gate(s) via `encode_gate_deny`
+        //              (keyed on the raw ACP JSON-RPC id), then sends `session/cancel`
+        //              (wasit opencode encoder). Both go to the same session writer.
+        //
+        //   codex   — DECLINES any pending gate(s) via `wasit_codex::encode_gate_deny`
+        //             (keyed on method+raw id), then sends `turn/interrupt {threadId, turnId}`
+        //             (wasit codex encoder) for the in-flight turn. The turn_id is taken
+        //             and cleared from `codex_threads` so it cannot be reused as a stale
+        //             target if a `turn/completed` is missed.
+        //
+        // Under cfg(coverage) the IO block is absent (fake path = no-op ack).
         #[cfg(not(coverage))]
         {
             use std::io::Write;

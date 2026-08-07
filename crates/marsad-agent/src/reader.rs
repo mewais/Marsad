@@ -605,6 +605,52 @@ fn codex_init_response_intercept(
     true
 }
 
+/// Build one `turn/start` JSON-RPC line per queued text, using the now-known
+/// `thread_id`.
+///
+/// This is the single source of truth for the Fix-2 codex drain: the reader calls
+/// this helper immediately after inserting into `codex_threads` (once the
+/// `thread/started` notification arrives), so every queued text is built with the
+/// correct `thread_id`. `base_id` is the first request-id to use; each subsequent
+/// text increments it by one (avoids id collisions on the wire).
+///
+/// Pure line-builder — no IO. Exposed `pub` so the integration tests in `tests/`
+/// can import it via `marsad_agent::codex_turn_start_lines` and assert the same
+/// output the reader sends, rather than duplicating the logic.
+#[cfg(not(coverage))]
+pub fn codex_turn_start_lines(texts: &[String], thread_id: &str, base_id: u64) -> Vec<String> {
+    texts
+        .iter()
+        .enumerate()
+        .map(|(idx, text)| wasit_codex::encode_turn_start(base_id + idx as u64, thread_id, text))
+        .collect()
+}
+
+/// Build the `set_config_option` JSON-RPC line for one opencode queued config item.
+///
+/// This is the single source of truth for the Fix-6 opencode config drain: the
+/// reader calls this helper immediately after inserting into `acp_sessions` (once
+/// the `session/new`/`session/load` response arrives), so every queued item is
+/// built with the correct ACP `acp_sid`. Returns `None` for unknown config keys
+/// (the caller logs the ignore and skips the write).
+///
+/// Pure line-builder — no IO. Exposed `pub` so the integration tests in `tests/`
+/// can import it via `marsad_agent::opencode_config_line` and assert the same
+/// output the reader sends, rather than duplicating the logic.
+#[cfg(not(coverage))]
+pub fn opencode_config_line(
+    config_id: &str,
+    value: &str,
+    acp_sid: &str,
+    req_id: u64,
+) -> Option<String> {
+    match config_id {
+        "mode" => Some(wasit_opencode::encode_set_mode(req_id, acp_sid, value)),
+        "model" => Some(wasit_opencode::encode_set_model(req_id, acp_sid, value)),
+        _ => None,
+    }
+}
+
 /// Spawn the per-session reader thread: connect the transport (local FIFO/pipe, or a
 /// remote durable FIFO bridge), send the control `initialize` handshake + an optional
 /// first prompt, register the writer, then stream claude's stdout to every subscriber
@@ -684,6 +730,13 @@ pub(crate) fn spawn_session_reader(
     // (or session/load) result. Shared with handle_send_prompt / handle_interrupt /
     // handle_answer_gate so they can address subsequent ACP requests.
     acp_sessions: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
+    // Fix #2: codex prompts queued before the threadId was known (raw text;
+    // built into turn/start at drain time). Drained here right after
+    // codex_threads.insert when the threadId first becomes available.
+    pending_codex_prompts: super::PendingCodexPrompts,
+    // Fix #6: opencode set_config_option pairs queued before the ACP sessionId
+    // was known. Drained here right after acp_sessions.insert.
+    pending_config_options: super::PendingConfigOptions,
     // Reader-liveness registry (see `LiveReaders`). This reader inserts its sid
     // here on spawn and removes it when it gives up (unless superseded), so the
     // resume guard knows whether a live reader owns the session.
@@ -1535,6 +1588,35 @@ pub(crate) fn spawn_session_reader(
                                                 turn_id: None,
                                             },
                                         );
+                                        // Fix #2: drain any codex prompts that arrived
+                                        // before the threadId was known. These were queued
+                                        // in `pending_codex_prompts` as raw text (not bytes)
+                                        // because we needed the threadId to build the
+                                        // `turn/start` JSON-RPC. Build + send each one now.
+                                        // Use id 10+ to stay clear of handshake (1/2/3/5)
+                                        // and first-turn (3) ids.
+                                        {
+                                            use std::io::Write;
+                                            let queued = pending_codex_prompts
+                                                .lock()
+                                                .unwrap()
+                                                .remove(&sid)
+                                                .unwrap_or_default();
+                                            if !queued.is_empty() {
+                                                let texts: Vec<String> = queued.iter().map(|(_ts, t)| t.clone()).collect();
+                                                let lines = codex_turn_start_lines(&texts, &nid, 10);
+                                                let mut w = writer.lock().unwrap();
+                                                let mut delivered = 0usize;
+                                                for line in &lines {
+                                                    if w.write_all(line.as_bytes()).and_then(|_| w.write_all(b"\n")).and_then(|_| w.flush()).is_ok() {
+                                                        delivered += 1;
+                                                    }
+                                                }
+                                                if delivered > 0 {
+                                                    eprintln!("marsad-agent: session {sid} codex drained {delivered} queued prompt(s) as turn/start on threadId known");
+                                                }
+                                            }
+                                        }
                                         // Deliver the first turn now that the thread
                                         // id is known — FIRST ATTACH ONLY. This runs
                                         // inside the read loop (after `is_first_attach`
@@ -1568,6 +1650,40 @@ pub(crate) fn spawn_session_reader(
                                             .lock()
                                             .unwrap()
                                             .insert(sid.clone(), nid.clone());
+                                        // Fix #6: drain any set_config_option pairs that
+                                        // arrived before the ACP sessionId was known.
+                                        // Build + send encode_set_mode / encode_set_model
+                                        // for each queued (config_id, value) pair using
+                                        // the now-known sessionId. Use ids 20+ to avoid
+                                        // collisions with handshake (1/2) and prompt ids.
+                                        {
+                                            use std::io::Write;
+                                            let queued = pending_config_options
+                                                .lock()
+                                                .unwrap()
+                                                .remove(&sid)
+                                                .unwrap_or_default();
+                                            if !queued.is_empty() {
+                                                let mut w = writer.lock().unwrap();
+                                                let mut delivered = 0usize;
+                                                for (idx, (config_id, value)) in queued.iter().enumerate() {
+                                                    let req_id = 20u64 + idx as u64;
+                                                    match opencode_config_line(config_id.as_str(), value, &nid, req_id) {
+                                                        Some(line) => {
+                                                            if w.write_all(line.as_bytes()).and_then(|_| w.write_all(b"\n")).and_then(|_| w.flush()).is_ok() {
+                                                                delivered += 1;
+                                                            }
+                                                        }
+                                                        None => {
+                                                            eprintln!("marsad-agent: session {sid} opencode queued set_config_option {config_id} not wired — ignored on drain");
+                                                        }
+                                                    }
+                                                }
+                                                if delivered > 0 {
+                                                    eprintln!("marsad-agent: session {sid} opencode drained {delivered} queued set_config_option(s) on sessionId known");
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
