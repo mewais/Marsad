@@ -282,8 +282,10 @@ impl Agent {
                 // added one) to the true session directory now that
                 // `container_name` — hence the session id — is known, and
                 // write the file there. No-op when `wasl:false` (no
-                // placeholder present). Also a no-op for codex sessions
-                // (codex_argv never injects --mcp-config).
+                // placeholder present). Also a no-op for codex sessions:
+                // codex receives its MCP servers via `-c mcp_servers.*`
+                // overrides in `wasit_codex::codex_argv` (not --mcp-config),
+                // so no placeholder is injected and nothing needs rewriting.
                 self.materialize_wasl_mcp_config(container_name, &mut argv);
                 let cmd = self.build_spawn_cmd(
                     container_name,
@@ -511,6 +513,14 @@ fn shell_quote(s: &str) -> String {
 /// placeholder — `materialize_wasl_mcp_config` rewrites it to the true absolute
 /// path (and writes the file) once the session id is known. `wasl:false`
 /// produces `None`, keeping the argv byte-identical to a non-wasl launch.
+///
+/// For claude sessions the resolved path is forwarded via `--mcp-config`.
+/// For direct-codex sessions from Marsad the placeholder is a filename (not
+/// JSON), so `codex_argv` will silently skip it — codex sessions launched
+/// through Marsad do not yet receive MCP servers this way. Wasl-managed codex
+/// workers (launched by the Wasl runtime, not directly by Marsad) receive a
+/// real JSON blob in `mcp_config` (set by `wasl_worker_mcp_config`), which
+/// `wasit_codex::codex_argv` now translates into `-c mcp_servers.*` overrides.
 fn spawn_spec_from_launch(spec: &marsad_proto::LaunchSpec) -> wasit_core::SpawnSpec {
     let resume = match &spec.mode {
         marsad_proto::LaunchMode::Fresh => wasit_core::ResumeMode::Fresh,
