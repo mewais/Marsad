@@ -14,14 +14,18 @@
  */
 import type { Driver } from "./workstreamTypes";
 
+/**
+ * The user-pickable drivers — NATIVE only. Whether an agent actually runs over
+ * the Wasl transport is decided by the WORKSTREAM TYPE, not by the driver the
+ * user picks (a single-session workstream launches native; a "Build it out"
+ * multi-agent workstream launches every agent via Wasl behind the scenes). The
+ * user never picks — nor sees — a "wasl-*" driver; names are always native (#8).
+ */
 export const DRIVERS: { id: Driver; label: string }[] = [
   { id: "claude", label: "Claude Code" },
   { id: "codex", label: "Codex" },
   { id: "gemini", label: "Gemini" },
   { id: "opencode", label: "opencode" },
-  { id: "wasl-claude", label: "Wasl · Claude" },
-  { id: "wasl-opencode", label: "Wasl · OpenCode" },
-  { id: "wasl-codex", label: "Wasl · Codex" },
 ];
 
 /**

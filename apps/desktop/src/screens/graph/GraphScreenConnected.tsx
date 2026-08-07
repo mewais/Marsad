@@ -27,12 +27,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useVm } from "../../bridge/useVm";
 import type { DraftNode } from "../../bridge/useVm";
-import { launchSession, launchWaslSession, removeSession } from "../../bridge/api";
+import { launchWaslSession, removeSession } from "../../bridge/api";
 import type { GraphNode, GraphView } from "../../bridge/workstreamTypes";
 import { GraphScreen } from "./GraphScreen";
 import { validateConnection, CONN_ERROR_MESSAGE } from "../../bridge/connValidate";
 import { orderDraftLaunch } from "../../bridge/draftOrder";
-import { isWaslDriver, waslProtocol } from "../../bridge/drivers";
 import { peersForNode } from "../../bridge/peersForNode";
 import { buildWaslTargetKey } from "../../bridge/waslTargetKey";
 
@@ -224,8 +223,11 @@ export function GraphScreenConnected(): JSX.Element {
   // building a temp→real map; then submit each draft edge with the resolved
   // real endpoint ids. Finally clear the draft + leave design mode and refresh
   // the graph so the now-real nodes render.
-  // Phase C: use orderDraftLaunch for launch ordering; call launchWaslSession
-  // for wasl-* drivers; on failure surface designError and do NOT clearDraft.
+  // A "Build it out" workstream runs EVERY agent over the Wasl transport (#8,
+  // decision A) — the picked driver is the NATIVE protocol, launched via Wasl
+  // behind the scenes (the user only ever sees native names). So this path
+  // always launchWaslSession, protocol = node.driver. Uses orderDraftLaunch for
+  // ordering; on failure surface designError and do NOT clearDraft.
   async function onConfirmDraft(): Promise<void> {
     if (draftNodes.length === 0) {
       // No draft authored — just leave design mode (operate-mode "done").
@@ -238,46 +240,35 @@ export function GraphScreenConnected(): JSX.Element {
     const tempToReal = new Map<string, string>();
     try {
       for (const node of ordered) {
-        let realId: string;
-        if (isWaslDriver(node.driver)) {
-          const protocol = waslProtocol(node.driver) ?? node.driver;
-          // Build peers: outbound edges from this node, mapped to {agent_id, host_id}.
-          // Both node.tempId (this node's id) and the peer's agent_id use the same
-          // draft node id namespace — CRITICAL consistency rule.
-          const outboundIds = peersForNode(node.tempId, draftEdges).outbound;
-          const peers = outboundIds.flatMap((peerId) => {
-            const peerNode = draftNodes.find((n) => n.tempId === peerId);
-            if (!peerNode) return []; // skip unresolvable peer
-            return [{ agent_id: peerId, host_id: peerNode.hostId }];
-          });
-          // W2b: thread resume state captured at draft-authoring time.
-          const wasl_target_key = buildWaslTargetKey(
-            node.tempId,
-            protocol,
-            node.project,
-            node.model,
-            node.session_mode,
-            peers,
-            node.resume ?? false,
-            node.selectedResume ?? "continue",
-            node.resumeSessions ?? []
-          );
-          realId = await launchWaslSession({
-            host_id: node.hostId,
-            wasl_target_key,
-            name: node.name,
-          });
-        } else {
-          realId = await launchSession({
-            project: node.project,
-            host_id: node.hostId,
-            model: node.model,
-            session_mode: node.session_mode,
-            first_prompt: node.firstPrompt,
-            name: node.name,
-            driver: node.driver,
-          });
-        }
+        // The native driver ("claude"/"codex"/"opencode") IS the Wasl protocol.
+        const protocol = node.driver;
+        // Build peers: outbound edges from this node (own from-edges + reverse
+        // of consult edges — peersForNode honours `bi`), mapped to
+        // {agent_id, host_id}. node.tempId and the peer agent_id share the same
+        // draft-node id namespace — CRITICAL consistency rule.
+        const outboundIds = peersForNode(node.tempId, draftEdges).outbound;
+        const peers = outboundIds.flatMap((peerId) => {
+          const peerNode = draftNodes.find((n) => n.tempId === peerId);
+          if (!peerNode) return []; // skip unresolvable peer
+          return [{ agent_id: peerId, host_id: peerNode.hostId }];
+        });
+        // W2b: thread resume state captured at draft-authoring time.
+        const wasl_target_key = buildWaslTargetKey(
+          node.tempId,
+          protocol,
+          node.project,
+          node.model,
+          node.session_mode,
+          peers,
+          node.resume ?? false,
+          node.selectedResume ?? "continue",
+          node.resumeSessions ?? []
+        );
+        const realId = await launchWaslSession({
+          host_id: node.hostId,
+          wasl_target_key,
+          name: node.name,
+        });
         await assignSession(realId, effectiveWsId, node.isLead);
         tempToReal.set(node.tempId, realId);
       }

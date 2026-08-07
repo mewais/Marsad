@@ -16,11 +16,10 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { useVm } from "../bridge/useVm";
-import { launchSession, launchWaslSession, fetchGraph, capsKey, getSettings, refreshCapabilities } from "../bridge/api";
+import { launchSession, fetchGraph, capsKey, getSettings, refreshCapabilities } from "../bridge/api";
 import type { CapabilitiesView, DiscoveredSession, ModelCatalog, SessionMode } from "../bridge/types";
 import type { Driver, GraphNode } from "../bridge/workstreamTypes";
 import { DRIVERS, DRIVER_COLOR, isWaslDriver, waslProtocol } from "../bridge/drivers";
-import { buildWaslTargetKey } from "../bridge/waslTargetKey";
 import { Modal } from "../components/Modal";
 
 // ---------------------------------------------------------------------------
@@ -161,7 +160,11 @@ export function NodeModal() {
         for (const [d, mode] of s.default_modes ?? []) dmodes[d] = mode;
         setDefaultModes(dmodes);
         if (!userModifiedDriver && s.default_driver) {
-          setDriver(s.default_driver as Driver);
+          // The picker offers NATIVE drivers only (#8); coerce a legacy wasl-*
+          // default (from an older settings file) to its native protocol so the
+          // picker shows a valid selection instead of an unpickable ghost.
+          const dd = s.default_driver as Driver;
+          setDriver(isWaslDriver(dd) ? ((waslProtocol(dd) as Driver) ?? "claude") : dd);
         }
       })
       .catch(() => {/* keep fallbacks on error */});
@@ -219,15 +222,14 @@ export function NodeModal() {
     return dirs.slice(0, 6);
   }, [state.snapshot, hostId]);
 
-  // Capability aliasing: wasl drivers are launched via Wasl transport, but their
-  // underlying CLI facts (models, available_modes, sessions) are the SAME as
-  // the non-wasl protocol on that host. "wasl-claude" → reads from "claude"
-  // slot, "wasl-opencode" → "opencode", "wasl-codex" → "codex".
-  // For non-wasl drivers `capDriver === driver` (identity). Only capability
-  // READS + the discovery TRIGGER alias; the launch path keeps the real driver.
-  const capDriver: Driver = isWaslDriver(driver)
-    ? ((waslProtocol(driver) as Driver) ?? driver)
-    : driver;
+  // The user always picks a NATIVE driver (#8) — the driver id IS the capability
+  // slot. Whether the agent runs over Wasl is a workstream-TYPE decision (a
+  // "Build it out" / design-mode workstream launches every agent via Wasl), not
+  // a driver identity, so there is no wasl-* aliasing to unwind here.
+  const capDriver: Driver = driver;
+  // True while a "Build it out" workstream is being authored — every agent will
+  // launch over the Wasl transport, so the host additionally needs wasl-mcpd.
+  const willUseWasl = ctx?.designMode === true;
 
   // Capabilities-driven driver availability + model catalog — NEVER a
   // hardcoded list (dynamic-capabilities.md §5). A driver with no reported
@@ -238,11 +240,9 @@ export function NodeModal() {
   }
   /** True while REAL discovery for this (driver, host) hasn't landed yet — caps
    *  are absent. We stay optimistic during this window (never grey), and show a
-   *  loading indicator instead of the empty state. Wasl drivers alias to their
-   *  underlying protocol for the lookup. */
+   *  loading indicator instead of the empty state. */
   function driverDiscovering(d: Driver): boolean {
-    const aliased: Driver = isWaslDriver(d) ? ((waslProtocol(d) as Driver) ?? d) : d;
-    return capsForDriver(aliased) === undefined;
+    return capsForDriver(d) === undefined;
   }
   // Driver availability from REAL per-host discovery (dynamic-capabilities.md
   // §5). While caps are absent (discovery in flight) stay optimistic — never
@@ -251,14 +251,12 @@ export function NodeModal() {
   // actually detected on the host (`cli_available`). gemini → launchable:false
   // → greyed; a driver not installed on the host → cli_available:false → greyed.
   //
-  // Wasl drivers alias to their underlying protocol for the caps lookup, but a
-  // managed `wasl-*` driver requires TWO things on the host, ANDed together:
-  // (1) its native CLI is present (the aliased `cli_available`), AND (2) wasl
-  // itself (`wasl-mcpd`) is installed (`wasl_available`, host-global on every
-  // driver's caps). Missing either → greyed.
+  // A "Build it out" (design-mode) workstream launches every agent over Wasl, so
+  // it additionally requires wasl itself (`wasl-mcpd` → `wasl_available`,
+  // host-global) on the host, ANDed with the native CLI. A single-session launch
+  // is native and needs only the CLI.
   function driverAvailable(d: Driver): boolean {
-    const aliased: Driver = isWaslDriver(d) ? ((waslProtocol(d) as Driver) ?? d) : d;
-    const c = capsForDriver(aliased);
+    const c = capsForDriver(d);
     if (!c) return true; // discovery in flight — optimistic
     if (!c.launchable) return false; // no Marsad driver (e.g. gemini) — hard no
     // A probe that ERRORED/TIMED OUT (slow-setup remote hosts) says nothing about
@@ -266,15 +264,14 @@ export function NodeModal() {
     // probe; only grey out when the probe SUCCEEDED (no errors) and cli was absent.
     if (c.errors.length > 0) return true;
     const nativeAvail = c.cli_available === true;
-    // wasl-* needs BOTH the native mirror AND wasl-mcpd on the host.
-    if (isWaslDriver(d)) return nativeAvail && c.wasl_available === true;
+    if (willUseWasl) return nativeAvail && c.wasl_available === true;
     return nativeAvail;
   }
   /** Known-unavailable: caps are PRESENT and report the driver as not
    *  launchable (gemini) or its CLI not detected. Absent caps (loading) are
    *  never known-unavailable. */
   function driverKnownUnavailable(d: Driver): boolean {
-    const c = capsForDriver(isWaslDriver(d) ? ((waslProtocol(d) as Driver) ?? d) : d);
+    const c = capsForDriver(d);
     return !!c && !driverAvailable(d);
   }
 
@@ -446,10 +443,12 @@ export function NodeModal() {
       model,
       session_mode: sessionMode,
       firstPrompt: firstPrompt.trim() || undefined,
-      // W2b: carry resume state for wasl drivers so onConfirmDraft can thread it.
-      resume: isWaslDriver(driver) ? resume : undefined,
-      selectedResume: isWaslDriver(driver) ? selectedResume : undefined,
-      resumeSessions: isWaslDriver(driver) ? visibleSessions.map((s) => ({ id: s.id })) : undefined,
+      // A design-mode node launches over Wasl (build-it-out), which threads resume
+      // via the target key — so carry the authored resume state for onConfirmDraft
+      // to use (#3: build-it-out agents get continue/resume just like native).
+      resume,
+      selectedResume,
+      resumeSessions: visibleSessions.map((s) => ({ id: s.id })),
     });
     // Honor explicit Controlled-by / Feeds-from picks against existing DRAFT
     // nodes — recorded as draft edges (temp ids), never a real addConnection.
@@ -484,53 +483,27 @@ export function NodeModal() {
     setBusy(true);
     setLaunchError(null);
     try {
-      let newId: string;
-      if (isWaslDriver(driver)) {
-        // Generate a stable id for this worker. The NodeModal single-launch
-        // path does NOT have workstream connections in scope, so peers is
-        // empty — the agent tolerates this. If connections are ever wired
-        // here, compute peers via peersForNode(nodeId, connections).
-        // TODO(phase E): single-launch peers when connections are in scope.
-        const nodeId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-          ? `node-${crypto.randomUUID()}`
-          : `node-${Date.now()}`;
-        const protocol = waslProtocol(driver) ?? driver;
-        const wasl_target_key = buildWaslTargetKey(
-          nodeId,
-          protocol,
-          project.trim(),
-          model,
-          sessionMode,
-          [],
-          resume,
-          selectedResume,
-          visibleSessions
-        );
-        newId = await launchWaslSession({
-          host_id: hostId,
-          wasl_target_key,
-          name: sessionName,
-        });
-      } else {
-        const resumeArgs: { resume_session_id?: string; continue_recent?: boolean } = {};
-        if (resume) {
-          if (selectedResume === "continue") {
-            resumeArgs.continue_recent = true;
-          } else {
-            resumeArgs.resume_session_id = selectedResume;
-          }
+      // A single-session workstream launches NATIVE (#8, decision A) — the
+      // "Build it out" (Wasl) path is handled by onConfirmDraft, never here
+      // (design-mode adds routed to handleAddToGraph above).
+      const resumeArgs: { resume_session_id?: string; continue_recent?: boolean } = {};
+      if (resume) {
+        if (selectedResume === "continue") {
+          resumeArgs.continue_recent = true;
+        } else {
+          resumeArgs.resume_session_id = selectedResume;
         }
-        newId = await launchSession({
-          project: project.trim(),
-          host_id: hostId,
-          model,
-          session_mode: sessionMode,
-          first_prompt: firstPrompt.trim() || undefined,
-          name: sessionName,
-          driver,
-          ...resumeArgs,
-        });
       }
+      const newId = await launchSession({
+        project: project.trim(),
+        host_id: hostId,
+        model,
+        session_mode: sessionMode,
+        first_prompt: firstPrompt.trim() || undefined,
+        name: sessionName,
+        driver,
+        ...resumeArgs,
+      });
       // A session now exists for this workstream — it is no longer an empty
       // draft, so cancelling afterwards must NOT discard it (BUG #2).
       launchedRef.current = true;
@@ -790,8 +763,9 @@ export function NodeModal() {
 
         {/* Resume / continue — #3, mirrors NewSession. Sourced from
             capabilities[(driver,host)].sessions (claude: scoped to the chosen
-            project). Hidden for wasl drivers (wasl sessions don't resume). */}
-        {!isWaslDriver(driver) && <div>
+            project). Shown for every driver: a single-session launch resumes
+            natively; a build-it-out node resumes over Wasl via its target key. */}
+        <div>
           <div style={sectionLabel}>Resume</div>
           <div
             data-testid="nm-resume-toggle"
@@ -917,7 +891,7 @@ export function NodeModal() {
               )}
             </div>
           )}
-        </div>}
+        </div>
 
         {/* Controlled by / Feeds from — only when the workstream already has
             nodes to wire to (nmHasNodes). Single-select toggle each. */}

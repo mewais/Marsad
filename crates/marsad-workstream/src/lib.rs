@@ -25,6 +25,7 @@ pub enum Driver {
     Claude,
     Codex,
     Gemini,
+    Opencode,
 }
 
 impl Driver {
@@ -34,6 +35,7 @@ impl Driver {
             Driver::Claude => "claude",
             Driver::Codex => "codex",
             Driver::Gemini => "gemini",
+            Driver::Opencode => "opencode",
         }
     }
 
@@ -43,6 +45,7 @@ impl Driver {
             Driver::Claude => "#d97757",
             Driver::Codex => "#3fb6a8",
             Driver::Gemini => "#9b8cf0",
+            Driver::Opencode => "#f0a050",
         }
     }
 }

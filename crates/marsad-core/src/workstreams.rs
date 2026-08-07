@@ -16,9 +16,15 @@ impl Core {
     fn node_of(&self, id: &str, record: &SessionRecord) -> marsad_workstream::Node {
         let ws = self.membership.get(id).cloned().unwrap_or_default();
         let lead = self.ws_leads.get(&ws).map(String::as_str) == Some(id);
+        // `record.driver` is a DISPLAY marker (routing keys on RuntimeOwner, not
+        // this string). A WaslManaged session stores its NATIVE protocol here
+        // ("claude"/"codex"/"opencode") so the graph shows the native name — the
+        // user never sees "wasl". A legacy record still stamped bare "wasl" (or
+        // anything unknown) falls back to Claude.
         let driver = match record.driver.as_str() {
             "codex" => marsad_workstream::Driver::Codex,
             "gemini" => marsad_workstream::Driver::Gemini,
+            "opencode" => marsad_workstream::Driver::Opencode,
             _ => marsad_workstream::Driver::Claude,
         };
         marsad_workstream::Node {

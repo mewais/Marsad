@@ -102,6 +102,8 @@ const createWorkstream = vi.fn(
 );
 let launchCounter = 0;
 const launchSession = vi.fn(async (_args: unknown) => `real-sess-${++launchCounter}`);
+// A "Build it out" workstream materializes every node via launchWaslSession (#8).
+const launchWaslSession = vi.fn(async (_args: unknown) => `real-wasl-${++launchCounter}`);
 const assignSession = vi.fn(async (_sessionId: string, _wsId: string, _lead: boolean) => {});
 const addConnection = vi.fn(
   async (_id: string, _ws: string, _from: string, _to: string, _bi: boolean) => {}
@@ -125,6 +127,8 @@ vi.mock("../src/bridge/api", async (importOriginal) => {
       createWorkstream(...args),
     launchSession: (...args: Parameters<typeof original.launchSession>) =>
       launchSession(...args),
+    launchWaslSession: (...args: Parameters<typeof original.launchWaslSession>) =>
+      launchWaslSession(...args),
     assignSession: (...args: Parameters<typeof original.assignSession>) =>
       assignSession(...args),
     deleteWorkstream: (...args: Parameters<typeof original.deleteWorkstream>) =>
@@ -140,6 +144,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   launchCounter = 0;
   launchSession.mockImplementation(async () => `real-sess-${++launchCounter}`);
+  launchWaslSession.mockImplementation(async () => `real-wasl-${++launchCounter}`);
   fetchGraph.mockResolvedValue(null);
   fetchBoard.mockResolvedValue(emptyBoard());
 });
@@ -175,6 +180,9 @@ function claudeCapabilities(hostId: string): Record<string, CapabilitiesView> {
       driver: "claude",
       host_id: hostId,
       cli_available: true,
+      // A "Build it out" workstream launches over Wasl, so the host must also
+      // have wasl-mcpd for the driver to be available (#8).
+      wasl_available: true,
       launchable: true,
       models: {
         models: [{ id: "claude-sonnet-4-6" }, { id: "claude-opus-4-8" }],
@@ -279,6 +287,7 @@ function renderNodeModal(
 /** No backend materialization command was called at all. */
 function expectNoBackendCalls() {
   expect(launchSession).not.toHaveBeenCalled();
+  expect(launchWaslSession).not.toHaveBeenCalled();
   expect(assignSession).not.toHaveBeenCalled();
   expect(addConnection).not.toHaveBeenCalled();
   expect(createWorkstream).not.toHaveBeenCalled();
@@ -443,13 +452,23 @@ describe("Design mode — connecting two draft nodes records a draft edge (no ad
 // launch (lead first) → assign(realId) → connect(realFrom, realTo).
 //
 // SEAM: GraphScreen `onConfirmDraft` in GraphScreenConnected materializes the
-// draft: for each draft node launchSession → real id → assignSession(realId,
-// wsId, isLead); then for each draft edge addConnection(id, wsId, realFrom,
-// realTo, bi) using the temp→real map built during the launch loop.
+// draft. A "Build it out" workstream launches every agent over Wasl (#8), so
+// each draft node → launchWaslSession → real id → assignSession(realId, wsId,
+// isLead); then each draft edge → addConnection(id, wsId, realFrom, realTo, bi)
+// using the temp→real map built during the launch loop.
 // ===========================================================================
 
+/** The project (context.cwd) of the Nth launchWaslSession call. */
+function waslCwdOf(callIndex: number): string {
+  return (
+    launchWaslSession.mock.calls[callIndex][0] as {
+      wasl_target_key: { context: { cwd: string } };
+    }
+  ).wasl_target_key.context.cwd;
+}
+
 describe("Confirm & launch — materializes the whole draft with REAL ids", () => {
-  it("launches each draft node (lead first), assigns with the returned real id, then connects with real ids", async () => {
+  it("launches each draft node (lead first) via Wasl, assigns with the returned real id, then connects with real ids", async () => {
     const captured: { current: VmState | null } = { current: null };
     renderGraph(captured, emptyBuildOutGraph("ws-1"));
 
@@ -485,39 +504,36 @@ describe("Confirm & launch — materializes the whole draft with REAL ids", () =
     // ── Confirm & launch ──────────────────────────────────────────────────
     fireEvent.click(screen.getByTestId("confirm-draft-btn"));
 
-    // Every draft node is launched exactly once.
-    await waitFor(() => expect(launchSession).toHaveBeenCalledTimes(2));
+    // Every draft node is launched over Wasl exactly once; never natively.
+    await waitFor(() => expect(launchWaslSession).toHaveBeenCalledTimes(2));
+    expect(launchSession).not.toHaveBeenCalled();
     // The lead (first authored) launches first.
-    expect(launchSession.mock.calls[0][0]).toEqual(
-      expect.objectContaining({ project: "~/code/lead", host_id: "local" })
-    );
-    expect(launchSession.mock.calls[1][0]).toEqual(
-      expect.objectContaining({ project: "~/code/feed", host_id: "local" })
-    );
+    expect(waslCwdOf(0)).toBe("~/code/lead");
+    expect(waslCwdOf(1)).toBe("~/code/feed");
 
-    // Each launched id is assigned with the REAL id launchSession returned
-    // (real-sess-1, real-sess-2), NOT a temp id. Lead flag true only for #1.
+    // Each launched id is assigned with the REAL id launchWaslSession returned
+    // (real-wasl-1, real-wasl-2), NOT a temp id. Lead flag true only for #1.
     await waitFor(() => expect(assignSession).toHaveBeenCalledTimes(2));
-    expect(assignSession).toHaveBeenNthCalledWith(1, "real-sess-1", "ws-1", true);
-    expect(assignSession).toHaveBeenNthCalledWith(2, "real-sess-2", "ws-1", false);
+    expect(assignSession).toHaveBeenNthCalledWith(1, "real-wasl-1", "ws-1", true);
+    expect(assignSession).toHaveBeenNthCalledWith(2, "real-wasl-2", "ws-1", false);
 
     // Assigns come from real ids — never a temp/fabricated node id.
     for (const call of assignSession.mock.calls) {
-      expect(call[0]).toMatch(/^real-sess-/);
+      expect(call[0]).toMatch(/^real-wasl-/);
     }
 
     // The draft edge is submitted with the REAL resolved ids for BOTH endpoints.
     await waitFor(() => expect(addConnection).toHaveBeenCalledTimes(1));
     const [, connWs, connFrom, connTo] = addConnection.mock.calls[0];
     expect(connWs).toBe("ws-1");
-    expect(connFrom).toBe("real-sess-1");
-    expect(connTo).toBe("real-sess-2");
+    expect(connFrom).toBe("real-wasl-1");
+    expect(connTo).toBe("real-wasl-2");
 
     // Ordering invariants: both launches AND both assigns happen before the
     // first connect (endpoint ids must be resolved), and each assign follows its
     // launch. We assert via invocationCallOrder.
     const firstConnectOrder = addConnection.mock.invocationCallOrder[0];
-    for (const o of launchSession.mock.invocationCallOrder) {
+    for (const o of launchWaslSession.mock.invocationCallOrder) {
       expect(o).toBeLessThan(firstConnectOrder);
     }
     for (const o of assignSession.mock.invocationCallOrder) {
@@ -525,14 +541,14 @@ describe("Confirm & launch — materializes the whole draft with REAL ids", () =
     }
     // assign(i) follows launch(i).
     expect(assignSession.mock.invocationCallOrder[0]).toBeGreaterThan(
-      launchSession.mock.invocationCallOrder[0]
+      launchWaslSession.mock.invocationCallOrder[0]
     );
     expect(assignSession.mock.invocationCallOrder[1]).toBeGreaterThan(
-      launchSession.mock.invocationCallOrder[1]
+      launchWaslSession.mock.invocationCallOrder[1]
     );
   });
 
-  it("Confirm & launch with a single draft node launches + assigns(lead:true) and never connects", async () => {
+  it("Confirm & launch with a single draft node launches (Wasl) + assigns(lead:true) and never connects", async () => {
     const captured: { current: VmState | null } = { current: null };
     renderGraph(captured, emptyBuildOutGraph("ws-1"));
 
@@ -543,9 +559,10 @@ describe("Confirm & launch — materializes the whole draft with REAL ids", () =
 
     fireEvent.click(screen.getByTestId("confirm-draft-btn"));
 
-    await waitFor(() => expect(launchSession).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(launchWaslSession).toHaveBeenCalledTimes(1));
+    expect(launchSession).not.toHaveBeenCalled();
     await waitFor(() =>
-      expect(assignSession).toHaveBeenCalledWith("real-sess-1", "ws-1", true)
+      expect(assignSession).toHaveBeenCalledWith("real-wasl-1", "ws-1", true)
     );
     // No edges authored ⇒ no connections.
     expect(addConnection).not.toHaveBeenCalled();

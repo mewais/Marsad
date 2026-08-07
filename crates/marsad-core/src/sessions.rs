@@ -73,11 +73,23 @@ impl Core {
             provider_key: wasl_target_key.clone(),
         };
 
+        // #8: the session's DISPLAY driver is its NATIVE protocol (claude / codex
+        // / opencode), taken from the target key. Routing is unaffected — it keys
+        // on `RuntimeOwner::WaslManaged`, never this string — so surfacing the
+        // native name lets the graph/board show "codex" not "wasl" (the user never
+        // sees a "wasl-*" identity). Unknown/absent protocol → "wasl" sentinel.
+        let display_driver = wasl_target_key
+            .get("protocol")
+            .and_then(|v| v.as_str())
+            .filter(|p| matches!(*p, "claude" | "codex" | "gemini" | "opencode"))
+            .unwrap_or("wasl")
+            .to_string();
+
         // Persist a session record + the Wasl binding so a fresh Core restores
         // this as WaslManaged (routing the `*Wasl*` family) and can reconnect.
         // A WaslManaged session has no claude container/argv; the persisted
-        // `driver` is a display marker ("wasl") and every claude-only field is
-        // empty/default.
+        // `driver` is a display marker (the NATIVE protocol — see `display_driver`
+        // below) and every claude-only field is empty/default.
         let custom_name = name
             .as_deref()
             .map(str::trim)
@@ -99,7 +111,7 @@ impl Core {
             last_phase: "Starting".to_string(),
             mode: None,
             disallowed_tools: Vec::new(),
-            driver: "wasl".to_string(),
+            driver: display_driver.clone(),
             slash_commands: Vec::new(),
             tools: Vec::new(),
             mcp_servers: Vec::new(),
@@ -133,8 +145,9 @@ impl Core {
                 seen_msg_ids: std::collections::HashSet::new(),
                 name: custom_name,
                 shell_running: false,
-                // Display driver only — the real driver is Wasl's (§6.1).
-                driver: "wasl".to_string(),
+                // Display driver = native protocol (§6.1); routing keys on
+                // RuntimeOwner::WaslManaged, so this string is display-only (#8).
+                driver: display_driver,
                 live: true,
                 conn_health: marsad_proto::ConnHealth::Connected,
                 runtime_owner: RuntimeOwner::WaslManaged { binding },

@@ -66,6 +66,45 @@ fn last_session_view(updates: &[VmUpdate], id: &str) -> marsad_viewmodel::Sessio
 }
 
 // ===========================================================================
+// #8 — a WaslManaged session's DISPLAY driver is its NATIVE protocol, so the
+// graph/board show "codex"/"opencode"/"claude", never "wasl".
+// ===========================================================================
+
+fn launch_wasl_proto(core: &mut Core, peer: &mut LoopbackFake, protocol: &str) -> String {
+    let id = core
+        .launch_wasl_session(
+            "local",
+            serde_json::json!({ "protocol": protocol, "ctx": "proto-test" }),
+            None,
+        )
+        .expect("launch_wasl_session must succeed");
+    let _ = peer.drain_outbound();
+    id
+}
+
+fn node_driver(core: &Core, id: &str) -> marsad_workstream::Driver {
+    core.nodes()
+        .into_iter()
+        .find(|n| n.id == id)
+        .unwrap_or_else(|| panic!("no node for {id}"))
+        .driver
+}
+
+#[test]
+fn wasl_node_shows_native_protocol_driver_not_wasl() {
+    let (mut core, mut peer) = make_core();
+
+    let claude = launch_wasl_proto(&mut core, &mut peer, "claude");
+    assert_eq!(node_driver(&core, &claude), marsad_workstream::Driver::Claude);
+
+    let codex = launch_wasl_proto(&mut core, &mut peer, "codex");
+    assert_eq!(node_driver(&core, &codex), marsad_workstream::Driver::Codex);
+
+    let oc = launch_wasl_proto(&mut core, &mut peer, "opencode");
+    assert_eq!(node_driver(&core, &oc), marsad_workstream::Driver::Opencode);
+}
+
+// ===========================================================================
 // UsageUpdate
 // ===========================================================================
 

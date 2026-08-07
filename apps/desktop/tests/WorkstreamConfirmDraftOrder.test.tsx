@@ -1,23 +1,19 @@
 /**
- * Phase C — RED suite for onConfirmDraft extended behavior.
+ * onConfirmDraft — materializing a "Build it out" draft.
  *
- * Target behaviors (NOT YET IMPLEMENTED):
+ * Post-#8: a build-it-out (design-mode) workstream launches EVERY agent over the
+ * Wasl transport — the picked driver is the NATIVE protocol, launched via Wasl
+ * behind the scenes (the user only ever sees native names). So onConfirmDraft
+ * always calls `launchWaslSession` (never `launchSession`), with the target key
+ * carrying `protocol = node.driver` and `context: { cwd, model, session_mode }`.
  *
- *   1. onConfirmDraft launches draft nodes in DEPENDENCY ORDER (via
- *      `orderDraftLaunch`) — not just lead-first, but full topological sort
- *      so A→B→C authored out-of-order (C, B, A) still launches A, B, C.
- *
- *   2. onConfirmDraft calls `launchWaslSession` for `wasl-*` draft nodes,
- *      with the correct `wasl_target_key` shape:
- *        { protocol: waslProtocol(driver), context: { cwd, model, session_mode } }
- *      and calls `launchSession` for non-wasl (`claude`, etc.) nodes.
- *
- *   3. temp→real edge resolution still works, including a draft↔real edge
- *      (one endpoint is a real session already in the graph, the other is
- *      a draft node whose tempId is replaced with its real id after launch).
- *
- *   4. On launch failure, the draft is NOT cleared and the designError is
- *      surfaced.
+ * Verified here:
+ *   1. Nodes launch in DEPENDENCY ORDER (via orderDraftLaunch) — lead/depth-0
+ *      first, dependents after — regardless of authored order.
+ *   2. Each node → launchWaslSession with the correct target-key shape; the
+ *      native driver id becomes the wasl protocol. `launchSession` is NEVER used.
+ *   3. temp→real edge resolution, including a draft↔real edge.
+ *   4. On launch failure the draft is NOT cleared and designError is surfaced.
  *
  * Mocking pattern mirrors WorkstreamNodeCreation.test.tsx.
  */
@@ -100,6 +96,13 @@ function StateCapture({ onState, children }: { onState: (s: VmState) => void; ch
   );
 }
 
+/** Read each launchWaslSession call's cwd (context.cwd), in call order. */
+function launchedCwds(): string[] {
+  return launchWaslSession.mock.calls.map(
+    (c) => (c[0] as { wasl_target_key: { context: { cwd: string } } }).wasl_target_key.context.cwd
+  );
+}
+
 function emptyGraph(wsId = "ws1"): GraphView {
   return {
     ws_id: wsId,
@@ -164,18 +167,6 @@ function claudeCapabilities(hostId = "local"): Record<string, CapabilitiesView> 
       fetched_at_ms: 0,
       errors: [],
     },
-    [`wasl-claude::${hostId}`]: {
-      driver: "wasl-claude",
-      host_id: hostId,
-      cli_available: true,
-      wasl_available: true,
-      launchable: true,
-      models: { models: [{ id: "claude-sonnet-latest" }], source: "Listed", free_text: true },
-      session_scope: null,
-      sessions: [],
-      fetched_at_ms: 0,
-      errors: [],
-    },
   };
 }
 
@@ -218,9 +209,6 @@ function renderGraphConnected(preState: Partial<VmState>, captured?: { current: 
 
 describe("onConfirmDraft — dependency order via orderDraftLaunch", () => {
   it("launches A before B before C for a chain authored in reverse (C, B, A)", async () => {
-    // Draft order (authored order): C, B, A
-    // Edges: A→B, B→C (chain)
-    // Expected launch order: A (depth 0 + lead), B (depth 1), C (depth 2)
     const draftA = makeDraftNode("draft-A", { isLead: true, name: "Agent A", project: "/code/A" });
     const draftB = makeDraftNode("draft-B", { name: "Agent B", project: "/code/B" });
     const draftC = makeDraftNode("draft-C", { name: "Agent C", project: "/code/C" });
@@ -229,7 +217,6 @@ describe("onConfirmDraft — dependency order via orderDraftLaunch", () => {
       makeDraftEdge("draft-B", "draft-C"),
     ];
 
-    // Authored in reverse (C, B, A) to test that the sort is NOT authored order
     renderGraphConnected({
       wsId: "ws1",
       graph: emptyGraph("ws1"),
@@ -239,24 +226,21 @@ describe("onConfirmDraft — dependency order via orderDraftLaunch", () => {
 
     fireEvent.click(screen.getByTestId("confirm-draft-btn"));
 
-    await waitFor(() => expect(launchSession).toHaveBeenCalledTimes(3), { timeout: 2000 });
+    await waitFor(() => expect(launchWaslSession).toHaveBeenCalledTimes(3), { timeout: 2000 });
+    expect(launchSession).not.toHaveBeenCalled();
 
-    // The order of launchSession calls must be A, B, C (by dependency depth)
-    const projects = launchSession.mock.calls.map((c) => (c[0] as { project: string }).project);
-    expect(projects[0]).toBe("/code/A");
-    expect(projects[1]).toBe("/code/B");
-    expect(projects[2]).toBe("/code/C");
+    const cwds = launchedCwds();
+    expect(cwds[0]).toBe("/code/A");
+    expect(cwds[1]).toBe("/code/B");
+    expect(cwds[2]).toBe("/code/C");
   });
 
   it("lead (depth 0) is always first, even when authored last", async () => {
-    // Two depth-0 nodes (lead + sibling), one depth-1 dependent
     const lead = makeDraftNode("lead", { isLead: true, name: "Lead", project: "/code/lead" });
     const sibling = makeDraftNode("sibling", { name: "Sibling", project: "/code/sibling" });
     const dep = makeDraftNode("dep", { name: "Dep", project: "/code/dep" });
-    // lead → dep, sibling has no edges
     const edges = [makeDraftEdge("lead", "dep")];
 
-    // Authored order: dep, sibling, lead
     renderGraphConnected({
       wsId: "ws1",
       graph: emptyGraph("ws1"),
@@ -266,35 +250,31 @@ describe("onConfirmDraft — dependency order via orderDraftLaunch", () => {
 
     fireEvent.click(screen.getByTestId("confirm-draft-btn"));
 
-    await waitFor(() => expect(launchSession).toHaveBeenCalledTimes(3), { timeout: 2000 });
+    await waitFor(() => expect(launchWaslSession).toHaveBeenCalledTimes(3), { timeout: 2000 });
 
-    const projects = launchSession.mock.calls.map((c) => (c[0] as { project: string }).project);
-    // Lead must be first
-    expect(projects[0]).toBe("/code/lead");
-    // dep must come after lead (depth 1 > depth 0)
-    expect(projects.indexOf("/code/lead")).toBeLessThan(projects.indexOf("/code/dep"));
+    const cwds = launchedCwds();
+    expect(cwds[0]).toBe("/code/lead");
+    expect(cwds.indexOf("/code/lead")).toBeLessThan(cwds.indexOf("/code/dep"));
   });
 });
 
 // ===========================================================================
-// Test 2: wasl-claude draft node → launchWaslSession with correct target_key
+// Test 2: every build-it-out node → launchWaslSession (native protocol)
 // ===========================================================================
 
-describe("onConfirmDraft — launchWaslSession for wasl-* draft nodes", () => {
-  it("calls launchWaslSession (not launchSession) for a wasl-claude draft node", async () => {
-    const waslNode = makeDraftNode("wasl-node", {
+describe("onConfirmDraft — launchWaslSession for every draft node", () => {
+  it("calls launchWaslSession (not launchSession) for a native draft node", async () => {
+    const node = makeDraftNode("node", {
       isLead: true,
-      driver: "wasl-claude",
-      model: "claude-sonnet-latest",
-      session_mode: "",
-      project: "/code/wasl-proj",
-      name: "Wasl Agent",
+      driver: "claude",
+      project: "/code/proj",
+      name: "Agent",
     });
 
     renderGraphConnected({
       wsId: "ws1",
       graph: emptyGraph("ws1"),
-      draftNodes: [waslNode],
+      draftNodes: [node],
       draftEdges: [],
     });
 
@@ -304,19 +284,13 @@ describe("onConfirmDraft — launchWaslSession for wasl-* draft nodes", () => {
     expect(launchSession).not.toHaveBeenCalled();
   });
 
-  it("launchWaslSession is called with wasl_target_key.protocol === 'claude'", async () => {
-    const waslNode = makeDraftNode("wasl-node", {
-      isLead: true,
-      driver: "wasl-claude",
-      model: "claude-sonnet-latest",
-      session_mode: "",
-      project: "/code/proj",
-    });
+  it("wasl_target_key.protocol === the node's native driver", async () => {
+    const node = makeDraftNode("node", { isLead: true, driver: "claude", project: "/code/proj" });
 
     renderGraphConnected({
       wsId: "ws1",
       graph: emptyGraph("ws1"),
-      draftNodes: [waslNode],
+      draftNodes: [node],
       draftEdges: [],
     });
 
@@ -330,20 +304,19 @@ describe("onConfirmDraft — launchWaslSession for wasl-* draft nodes", () => {
     );
   });
 
-  it("launchWaslSession context.cwd === the draft node's project", async () => {
-    const project = "/code/wasl-proj";
-    const waslNode = makeDraftNode("wasl-node", {
+  it("context.cwd / model / session_mode mirror the draft node", async () => {
+    const node = makeDraftNode("node", {
       isLead: true,
-      driver: "wasl-claude",
-      project,
-      model: "claude-sonnet-latest",
-      session_mode: "",
+      driver: "claude",
+      project: "/code/wasl-proj",
+      model: "claude-opus-latest",
+      session_mode: "plan",
     });
 
     renderGraphConnected({
       wsId: "ws1",
       graph: emptyGraph("ws1"),
-      draftNodes: [waslNode],
+      draftNodes: [node],
       draftEdges: [],
     });
 
@@ -353,108 +326,44 @@ describe("onConfirmDraft — launchWaslSession for wasl-* draft nodes", () => {
     expect(launchWaslSession).toHaveBeenCalledWith(
       expect.objectContaining({
         wasl_target_key: expect.objectContaining({
-          context: expect.objectContaining({ cwd: project }),
+          context: expect.objectContaining({
+            cwd: "/code/wasl-proj",
+            model: "claude-opus-latest",
+            session_mode: "plan",
+          }),
         }),
       })
     );
   });
 
-  it("launchWaslSession context.model === the draft node's model", async () => {
-    const model = "claude-opus-latest";
-    const waslNode = makeDraftNode("wasl-node", {
-      isLead: true,
-      driver: "wasl-claude",
-      model,
-      session_mode: "",
-      project: "/code/proj",
-    });
-
-    renderGraphConnected({
-      wsId: "ws1",
-      graph: emptyGraph("ws1"),
-      draftNodes: [waslNode],
-      draftEdges: [],
-    });
-
-    fireEvent.click(screen.getByTestId("confirm-draft-btn"));
-
-    await waitFor(() => expect(launchWaslSession).toHaveBeenCalledTimes(1));
-    expect(launchWaslSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        wasl_target_key: expect.objectContaining({
-          context: expect.objectContaining({ model }),
-        }),
-      })
-    );
-  });
-
-  it("launchWaslSession context.session_mode === the draft node's session_mode", async () => {
-    const session_mode = "plan";
-    const waslNode = makeDraftNode("wasl-node", {
-      isLead: true,
-      driver: "wasl-claude",
-      session_mode,
-      project: "/code/proj",
-      model: "claude-sonnet-latest",
-    });
-
-    renderGraphConnected({
-      wsId: "ws1",
-      graph: emptyGraph("ws1"),
-      draftNodes: [waslNode],
-      draftEdges: [],
-    });
-
-    fireEvent.click(screen.getByTestId("confirm-draft-btn"));
-
-    await waitFor(() => expect(launchWaslSession).toHaveBeenCalledTimes(1));
-    expect(launchWaslSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        wasl_target_key: expect.objectContaining({
-          context: expect.objectContaining({ session_mode }),
-        }),
-      })
-    );
-  });
-
-  it("mixed draft: wasl-claude calls launchWaslSession, claude calls launchSession", async () => {
+  it("two native drivers both launch via Wasl with their respective protocols", async () => {
     const claudeNode = makeDraftNode("claude-node", {
       isLead: true,
       driver: "claude",
       project: "/code/claude",
-      model: "claude-sonnet-latest",
     });
-    const waslNode = makeDraftNode("wasl-node", {
-      driver: "wasl-claude",
-      project: "/code/wasl",
-      model: "claude-sonnet-latest",
-      session_mode: "",
+    const codexNode = makeDraftNode("codex-node", {
+      driver: "codex",
+      project: "/code/codex",
     });
 
     renderGraphConnected({
       wsId: "ws1",
       graph: emptyGraph("ws1"),
-      draftNodes: [claudeNode, waslNode],
+      draftNodes: [claudeNode, codexNode],
       draftEdges: [],
     });
 
     fireEvent.click(screen.getByTestId("confirm-draft-btn"));
 
-    await waitFor(() => {
-      expect(launchSession).toHaveBeenCalledTimes(1);
-      expect(launchWaslSession).toHaveBeenCalledTimes(1);
-    }, { timeout: 2000 });
+    await waitFor(() => expect(launchWaslSession).toHaveBeenCalledTimes(2), { timeout: 2000 });
+    expect(launchSession).not.toHaveBeenCalled();
 
-    // claude node used launchSession
-    expect(launchSession).toHaveBeenCalledWith(
-      expect.objectContaining({ project: "/code/claude", driver: "claude" })
+    const protocols = launchWaslSession.mock.calls.map(
+      (c) => (c[0] as { wasl_target_key: { protocol: string } }).wasl_target_key.protocol
     );
-    // wasl-claude node used launchWaslSession
-    expect(launchWaslSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        wasl_target_key: expect.objectContaining({ protocol: "claude" }),
-      })
-    );
+    expect(protocols).toContain("claude");
+    expect(protocols).toContain("codex");
   });
 });
 
@@ -477,21 +386,18 @@ describe("onConfirmDraft — temp→real edge resolution", () => {
 
     fireEvent.click(screen.getByTestId("confirm-draft-btn"));
 
-    await waitFor(() => expect(launchSession).toHaveBeenCalledTimes(2), { timeout: 2000 });
+    await waitFor(() => expect(launchWaslSession).toHaveBeenCalledTimes(2), { timeout: 2000 });
     await waitFor(() => expect(addConnection).toHaveBeenCalledTimes(1));
 
     const [, , from, to] = addConnection.mock.calls[0] as [string, string, string, string, ...unknown[]];
-    // Both endpoints must be real ids (real-sess-*), not temp ids
-    expect(from).toMatch(/^real-sess-/);
-    expect(to).toMatch(/^real-sess-/);
+    // Both endpoints must be real ids (real-wasl-*), not temp ids.
+    expect(from).toMatch(/^real-wasl-/);
+    expect(to).toMatch(/^real-wasl-/);
     expect(from).not.toBe("draft-A");
     expect(to).not.toBe("draft-B");
   });
 
   it("draft↔real edge: draft endpoint replaced with real id, real endpoint unchanged", async () => {
-    // Real node "real-existing" is already in the graph.
-    // Draft node "draft-new" is authored.
-    // Draft edge: real-existing → draft-new (one endpoint is real, one is a temp id).
     const draftNew = makeDraftNode("draft-new", { isLead: false, project: "/code/new" });
     const edgeMixed = makeDraftEdge("real-existing", "draft-new");
 
@@ -504,14 +410,13 @@ describe("onConfirmDraft — temp→real edge resolution", () => {
 
     fireEvent.click(screen.getByTestId("confirm-draft-btn"));
 
-    await waitFor(() => expect(launchSession).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    await waitFor(() => expect(launchWaslSession).toHaveBeenCalledTimes(1), { timeout: 2000 });
     await waitFor(() => expect(addConnection).toHaveBeenCalledTimes(1));
 
     const [, , from, to] = addConnection.mock.calls[0] as [string, string, string, string, ...unknown[]];
-    // The "real-existing" endpoint is already real — must stay as "real-existing"
+    // The already-real endpoint stays; the draft endpoint resolves to a real id.
     expect(from).toBe("real-existing");
-    // The draft endpoint must be resolved to the real id returned by launchSession
-    expect(to).toMatch(/^real-sess-/);
+    expect(to).toMatch(/^real-wasl-/);
     expect(to).not.toBe("draft-new");
   });
 });
@@ -521,58 +426,34 @@ describe("onConfirmDraft — temp→real edge resolution", () => {
 // ===========================================================================
 
 describe("onConfirmDraft — launch failure → draft not cleared + designError shown", () => {
-  it("when launchSession throws, the draft is not cleared", async () => {
+  it("when launchWaslSession throws, the draft is not cleared", async () => {
     const captured: { current: VmState | null } = { current: null };
-    launchSession.mockRejectedValue(new Error("backend unavailable"));
+    launchWaslSession.mockRejectedValue(new Error("wasl backend unavailable"));
 
     const nodeA = makeDraftNode("draft-A", { isLead: true, project: "/code/A" });
 
-    const preloaded: Partial<VmState> = {
-      snapshot: MOCK_SNAPSHOT,
-      screen: "graph",
-      wsId: "ws1",
-      graph: emptyGraph("ws1"),
-      draftNodes: [nodeA],
-      draftEdges: [],
-      selectedId: null,
-      tab: "Activity",
-      filter: "All",
-      search: "",
-      wsMenuOpen: false,
-      draftWsId: "ws1",
-      capabilities: claudeCapabilities(),
-      board: {
-        summary: { workstreams: 0, sessions: 0, hosts: 0 },
-        host_chips: [],
-        link_chips: [],
-        attention: [],
-        all: [],
+    renderGraphConnected(
+      {
+        wsId: "ws1",
+        graph: emptyGraph("ws1"),
+        draftNodes: [nodeA],
+        draftEdges: [],
+        draftWsId: "ws1",
       },
-    };
-
-    render(
-      <ThemeProvider initialTheme="dark">
-        <VmProvider initialState={preloaded}>
-          <StateCapture onState={(s) => (captured.current = s)}>
-            <GraphScreenConnected />
-          </StateCapture>
-        </VmProvider>
-      </ThemeProvider>
+      captured
     );
 
     fireEvent.click(screen.getByTestId("confirm-draft-btn"));
 
-    // Wait for the async confirm to complete (with failure)
-    await waitFor(() => expect(launchSession).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    await waitFor(() => expect(launchWaslSession).toHaveBeenCalledTimes(1), { timeout: 2000 });
     await new Promise((r) => setTimeout(r, 50));
 
-    // Draft must NOT be cleared (draftNodes still contains nodeA)
     expect(captured.current?.draftNodes).toHaveLength(1);
     expect(captured.current?.draftNodes[0].tempId).toBe("draft-A");
   });
 
-  it("when launchSession throws, designError banner is shown", async () => {
-    launchSession.mockRejectedValue(new Error("backend unavailable"));
+  it("when launchWaslSession throws, designError banner is shown", async () => {
+    launchWaslSession.mockRejectedValue(new Error("wasl backend unavailable"));
 
     const nodeA = makeDraftNode("draft-A", { isLead: true, project: "/code/A" });
 
@@ -585,68 +466,10 @@ describe("onConfirmDraft — launch failure → draft not cleared + designError 
 
     fireEvent.click(screen.getByTestId("confirm-draft-btn"));
 
-    await waitFor(() => expect(launchSession).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(launchWaslSession).toHaveBeenCalledTimes(1));
 
-    // After failure, the error should be shown
     await waitFor(() => {
       expect(screen.getByTestId("design-conn-error")).toBeTruthy();
     }, { timeout: 1000 });
-  });
-
-  it("when launchWaslSession throws for a wasl node, the draft is not cleared", async () => {
-    launchWaslSession.mockRejectedValue(new Error("wasl backend unavailable"));
-
-    const captured: { current: VmState | null } = { current: null };
-    const waslNode = makeDraftNode("wasl-node", {
-      isLead: true,
-      driver: "wasl-claude",
-      project: "/code/wasl",
-      model: "claude-sonnet-latest",
-      session_mode: "",
-    });
-
-    const preloaded: Partial<VmState> = {
-      snapshot: MOCK_SNAPSHOT,
-      screen: "graph",
-      wsId: "ws1",
-      graph: emptyGraph("ws1"),
-      draftNodes: [waslNode],
-      draftEdges: [],
-      selectedId: null,
-      tab: "Activity",
-      filter: "All",
-      search: "",
-      wsMenuOpen: false,
-      draftWsId: "ws1",
-      capabilities: claudeCapabilities(),
-      board: {
-        summary: { workstreams: 0, sessions: 0, hosts: 0 },
-        host_chips: [],
-        link_chips: [],
-        attention: [],
-        all: [],
-      },
-    };
-
-    render(
-      <ThemeProvider initialTheme="dark">
-        <VmProvider initialState={preloaded}>
-          <StateCapture onState={(s) => (captured.current = s)}>
-            <GraphScreenConnected />
-          </StateCapture>
-        </VmProvider>
-      </ThemeProvider>
-    );
-
-    fireEvent.click(screen.getByTestId("confirm-draft-btn"));
-
-    await waitFor(() => {
-      // Either launchWaslSession or launchSession was tried
-      return launchWaslSession.mock.calls.length > 0 || launchSession.mock.calls.length > 0;
-    }, { timeout: 2000 });
-    await new Promise((r) => setTimeout(r, 50));
-
-    // Draft must NOT be cleared
-    expect(captured.current?.draftNodes).toHaveLength(1);
   });
 });

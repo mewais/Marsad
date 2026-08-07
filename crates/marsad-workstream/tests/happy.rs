@@ -69,10 +69,19 @@ fn driver_serde_round_trips_gemini() {
 }
 
 #[test]
+fn driver_serde_round_trips_opencode() {
+    let json = serde_json::to_string(&Driver::Opencode).unwrap();
+    assert_eq!(json, "\"opencode\"");
+    let back: Driver = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, Driver::Opencode);
+}
+
+#[test]
 fn driver_as_str_all_variants() {
     assert_eq!(Driver::Claude.as_str(), "claude");
     assert_eq!(Driver::Codex.as_str(), "codex");
     assert_eq!(Driver::Gemini.as_str(), "gemini");
+    assert_eq!(Driver::Opencode.as_str(), "opencode");
 }
 
 #[test]
@@ -80,6 +89,7 @@ fn driver_color_all_variants() {
     assert_eq!(Driver::Claude.color(), "#d97757");
     assert_eq!(Driver::Codex.color(), "#3fb6a8");
     assert_eq!(Driver::Gemini.color(), "#9b8cf0");
+    assert_eq!(Driver::Opencode.color(), "#f0a050");
 }
 
 // ── T2: HeadState serde ─────────────────────────────────────────────────────
