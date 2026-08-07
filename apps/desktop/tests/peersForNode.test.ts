@@ -208,3 +208,38 @@ describe("peersForNode — unrelated edges excluded", () => {
     expect(result.inbound).toEqual(["Z"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Consult (bi) edges — the reverse leg counts both ways (#7)
+// ---------------------------------------------------------------------------
+
+describe("peersForNode — consult (bi) edges", () => {
+  it("a consult edge A↔B makes each an outbound AND inbound peer of the other", () => {
+    const conns = [{ from: "A", to: "B", bi: true }];
+    const a = peersForNode("A", conns);
+    expect(a.outbound).toEqual(["B"]);
+    expect(a.inbound).toEqual(["B"]);
+    const b = peersForNode("B", conns);
+    // B authored as the `to` of a consult edge can still initiate back to A.
+    expect(b.outbound).toEqual(["A"]);
+    expect(b.inbound).toEqual(["A"]);
+  });
+
+  it("a directed edge A→B does NOT give B an outbound peer (controller/worker)", () => {
+    const conns = [{ from: "A", to: "B", bi: false }];
+    const b = peersForNode("B", conns);
+    expect(b.outbound).toEqual([]);
+    expect(b.inbound).toEqual(["A"]);
+  });
+
+  it("mixes directed and consult edges for the same node", () => {
+    // A→B directed, A↔C consult. A can send to B and C; only C can send back to A.
+    const conns = [
+      { from: "A", to: "B", bi: false },
+      { from: "A", to: "C", bi: true },
+    ];
+    const a = peersForNode("A", conns);
+    expect(a.outbound).toEqual(["B", "C"]);
+    expect(a.inbound).toEqual(["C"]);
+  });
+});

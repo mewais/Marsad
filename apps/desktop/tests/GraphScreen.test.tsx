@@ -50,7 +50,6 @@ function edge(over: Partial<GraphEdge> & Pick<GraphEdge, "id" | "from" | "to">):
     id: over.id,
     from: over.from,
     to: over.to,
-    kind: over.kind ?? "data",
     bi: over.bi ?? false,
     status: over.status ?? "normal",
     has_gate: over.has_gate ?? false,
@@ -522,7 +521,7 @@ describe("GraphScreen — GS11 gate diamond placement", () => {
 });
 
 // ---------------------------------------------------------------------------
-// GS12 — design mode: connect handles, drag-to-connect, edge-kind picker
+// GS12 — design mode: connect handles, drag-to-connect, connection dialog
 // ---------------------------------------------------------------------------
 
 describe("GraphScreen — GS12 design mode", () => {
@@ -616,7 +615,7 @@ describe("GraphScreen — GS12 design mode", () => {
     expect(onDiscardDraft).toHaveBeenCalledTimes(1);
   });
 
-  it("drag-connecting from one node's handle to another opens the edge-kind picker, and picking a kind calls onConnect(from, to, kind, false)", () => {
+  it("drag-connecting from one node's handle to another opens the connection dialog, and picking Consult calls onConnect(from, to, true)", () => {
     const g = makeGraph();
     const onConnect = vi.fn();
     render(
@@ -649,15 +648,48 @@ describe("GraphScreen — GS12 design mode", () => {
       window.dispatchEvent(new MouseEvent("mouseup", { clientX: 60, clientY: 90, bubbles: true }));
     });
 
-    expect(screen.getByTestId("edge-kind-picker")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("edge-kind-command"));
-    expect(onConnect).toHaveBeenCalledWith("n1", "n3", "command", false);
-    expect(screen.queryByTestId("edge-kind-picker")).toBeNull();
+    expect(screen.getByTestId("connection-dialog")).toBeTruthy();
+    // A NEW edge has no Delete option (nothing to delete yet).
+    expect(screen.queryByTestId("edge-delete")).toBeNull();
+    fireEvent.click(screen.getByTestId("edge-dir-consult"));
+    expect(onConnect).toHaveBeenCalledWith("n1", "n3", true);
+    expect(screen.queryByTestId("connection-dialog")).toBeNull();
 
     spy.mockRestore();
   });
 
-  it("dropping a drag-connect on the SAME node it started from does not open the edge-kind picker", () => {
+  it("picking Directed in the connection dialog calls onConnect(from, to, false)", () => {
+    const g = makeGraph();
+    const onConnect = vi.fn();
+    render(
+      <ThemeProvider initialTheme="dark">
+        <GraphScreen
+          graph={g}
+          selectedNode={null}
+          onSelectNode={vi.fn()}
+          onOpenNode={vi.fn()}
+          onOpenGate={vi.fn()}
+          designMode
+          onConnect={onConnect}
+        />
+      </ThemeProvider>
+    );
+    const canvas = screen.getByTestId("graph-canvas");
+    canvas.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 2000, bottom: 2000, width: 2000, height: 2000, x: 0, y: 0, toJSON() {} } as DOMRect);
+    const handle = screen.getByTestId("connect-handle-n1");
+    const targetNode = screen.getByTestId("graph-node-n3");
+    const spy = vi.spyOn(document, "elementFromPoint").mockReturnValue(targetNode);
+    fireEvent.mouseDown(handle, { clientX: 10, clientY: 10 });
+    act(() => {
+      window.dispatchEvent(new MouseEvent("mouseup", { clientX: 60, clientY: 90, bubbles: true }));
+    });
+    fireEvent.click(screen.getByTestId("edge-dir-directed"));
+    expect(onConnect).toHaveBeenCalledWith("n1", "n3", false);
+    spy.mockRestore();
+  });
+
+  it("dropping a drag-connect on the SAME node it started from does not open the connection dialog", () => {
     const g = makeGraph();
     render(
       <ThemeProvider initialTheme="dark">
@@ -683,7 +715,7 @@ describe("GraphScreen — GS12 design mode", () => {
       window.dispatchEvent(new MouseEvent("mouseup", { clientX: 12, clientY: 12, bubbles: true }));
     });
 
-    expect(screen.queryByTestId("edge-kind-picker")).toBeNull();
+    expect(screen.queryByTestId("connection-dialog")).toBeNull();
     spy.mockRestore();
   });
 });
@@ -744,7 +776,7 @@ describe("GraphScreen — design-mode remove affordances", () => {
     expect(onRemoveNode).toHaveBeenCalledWith("n2");
   });
 
-  it("each edge shows a remove button that calls onRemoveConnection (design mode)", () => {
+  it("clicking an edge handle opens the connection dialog whose Delete calls onRemoveConnection (design mode)", () => {
     const onRemoveConnection = vi.fn();
     render(
       <ThemeProvider initialTheme="dark">
@@ -759,11 +791,33 @@ describe("GraphScreen — design-mode remove affordances", () => {
         />
       </ThemeProvider>
     );
-    fireEvent.click(screen.getByTestId("edge-remove-e1"));
+    fireEvent.click(screen.getByTestId("edge-edit-e1"));
+    // Existing edge → the dialog offers Delete.
+    fireEvent.click(screen.getByTestId("edge-delete"));
     expect(onRemoveConnection).toHaveBeenCalledWith("e1");
   });
 
-  it("edge remove buttons are NOT shown in operate mode", () => {
+  it("clicking an edge handle then Consult calls onSetConnectionBi to flip its direction", () => {
+    const onSetConnectionBi = vi.fn();
+    render(
+      <ThemeProvider initialTheme="dark">
+        <GraphScreen
+          graph={makeGraph()}
+          selectedNode={null}
+          onSelectNode={vi.fn()}
+          onOpenNode={vi.fn()}
+          onOpenGate={vi.fn()}
+          designMode
+          onSetConnectionBi={onSetConnectionBi}
+        />
+      </ThemeProvider>
+    );
+    fireEvent.click(screen.getByTestId("edge-edit-e1"));
+    fireEvent.click(screen.getByTestId("edge-dir-consult"));
+    expect(onSetConnectionBi).toHaveBeenCalledWith("e1", true);
+  });
+
+  it("edge edit handles are NOT shown in operate mode", () => {
     render(
       <ThemeProvider initialTheme="dark">
         <GraphScreen
@@ -776,6 +830,6 @@ describe("GraphScreen — design-mode remove affordances", () => {
         />
       </ThemeProvider>
     );
-    expect(screen.queryByTestId("edge-remove-e1")).toBeNull();
+    expect(screen.queryByTestId("edge-edit-e1")).toBeNull();
   });
 });

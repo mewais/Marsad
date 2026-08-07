@@ -25,14 +25,7 @@ const createWorkstream = vi.fn(
 const launchSession = vi.fn(async (_args: unknown) => "new-sess-1");
 const assignSession = vi.fn(async (_sessionId: string, _wsId: string, _lead: boolean) => {});
 const addConnection = vi.fn(
-  async (
-    _id: string,
-    _ws: string,
-    _from: string,
-    _to: string,
-    _kind: string,
-    _bi: boolean
-  ) => {}
+  async (_id: string, _ws: string, _from: string, _to: string, _bi: boolean) => {}
 );
 const deleteWorkstream = vi.fn(async (_id: string) => {});
 const fetchGraph = vi.fn(async (_wsId: string): Promise<GraphView | null> => null);
@@ -57,7 +50,7 @@ vi.mock("../src/bridge/api", async (importOriginal) => {
     deleteWorkstream: (...args: Parameters<typeof original.deleteWorkstream>) =>
       deleteWorkstream(...args),
     addConnection: (...args: Parameters<typeof original.addConnection>) =>
-      addConnection(...args as [string, string, string, string, "data" | "command" | "both", boolean]),
+      addConnection(...args as [string, string, string, string, boolean]),
     fetchGraph: (...args: Parameters<typeof original.fetchGraph>) => fetchGraph(...args),
     fetchBoard: (...args: Parameters<typeof original.fetchBoard>) => fetchBoard(...args),
   };
@@ -406,7 +399,6 @@ describe("NodeModal — Launch behavior", () => {
         "ws-1",
         "n1",
         "new-sess-1",
-        "command",
         false
       );
       expect(addConnection).toHaveBeenCalledWith(
@@ -414,7 +406,6 @@ describe("NodeModal — Launch behavior", () => {
         "ws-1",
         "n2",
         "new-sess-1",
-        "data",
         false
       );
     });

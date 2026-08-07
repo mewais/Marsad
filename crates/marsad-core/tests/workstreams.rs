@@ -2223,3 +2223,47 @@ fn peers_for_node_unrelated_edges_are_excluded() {
     assert!(result.outbound.is_empty(), "outbound must be empty");
     assert!(result.inbound.is_empty(), "inbound must be empty");
 }
+
+/// Helper: a CONSULT (two-way) connection.
+fn mk_conn_bi(id: &str, from: &str, to: &str) -> Connection {
+    let mut c = mk_conn(id, from, to);
+    c.bi = true;
+    c
+}
+
+#[test]
+fn peers_for_node_consult_edge_is_peer_both_ways() {
+    // A consult edge node-a ↔ node-b makes each an outbound AND inbound peer of
+    // the other, regardless of which endpoint authored the edge.
+    let conns = vec![mk_conn_bi("c1", "node-a", "node-b")];
+
+    let a = peers_for_node("node-a", &conns);
+    assert_eq!(a.outbound, vec!["node-b"]);
+    assert_eq!(a.inbound, vec!["node-b"]);
+
+    let b = peers_for_node("node-b", &conns);
+    // node-b, authored as the `to` of the consult edge, can still initiate to a.
+    assert_eq!(b.outbound, vec!["node-a"]);
+    assert_eq!(b.inbound, vec!["node-a"]);
+}
+
+#[test]
+fn peers_for_node_directed_edge_gives_worker_no_outbound() {
+    // Directed node-a → node-b: only node-a initiates (controller/worker).
+    let conns = vec![mk_conn("c1", "node-a", "node-b")];
+    let b = peers_for_node("node-b", &conns);
+    assert!(b.outbound.is_empty(), "the worker never initiates");
+    assert_eq!(b.inbound, vec!["node-a"]);
+}
+
+#[test]
+fn peers_for_node_mixes_directed_and_consult() {
+    // node-a → node-b directed, node-a ↔ node-c consult.
+    let conns = vec![
+        mk_conn("c1", "node-a", "node-b"),
+        mk_conn_bi("c2", "node-a", "node-c"),
+    ];
+    let a = peers_for_node("node-a", &conns);
+    assert_eq!(a.outbound, vec!["node-b", "node-c"]);
+    assert_eq!(a.inbound, vec!["node-c"]);
+}

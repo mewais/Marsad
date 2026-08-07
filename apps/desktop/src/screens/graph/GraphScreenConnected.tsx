@@ -128,7 +128,6 @@ export function GraphScreenConnected(): JSX.Element {
         id: e.tempId,
         from: e.from,
         to: e.to,
-        kind: e.kind,
         bi: e.bi,
         status: "normal" as const,
         has_gate: false,
@@ -176,12 +175,7 @@ export function GraphScreenConnected(): JSX.Element {
   // Phase C: validate draft wires via validateConnection; surface errors via
   // designError state. Fix the silent `void` discard for real edges: catch and
   // surface rejection as a designError.
-  function onConnect(
-    from: string,
-    to: string,
-    kind: Parameters<typeof addConnection>[4],
-    bi: boolean
-  ): void {
+  function onConnect(from: string, to: string, bi: boolean): void {
     if (effectiveDesignMode && (draftTempIds.has(from) || draftTempIds.has(to))) {
       // Validate over the merged draft+real graph.
       const mergedNodes = g.nodes.map((n) => ({ id: n.id, ws: effectiveWsId }));
@@ -192,16 +186,36 @@ export function GraphScreenConnected(): JSX.Element {
         return;
       }
       setDesignError(null);
-      addDraftEdge({ from, to, kind, bi });
+      addDraftEdge({ from, to, bi });
       return;
     }
     // Real edge: fix the silent void — catch rejections and surface as designError.
-    addConnection(genConnId(), effectiveWsId, from, to, kind, bi)
+    addConnection(genConnId(), effectiveWsId, from, to, bi)
       .then(() => { setDesignError(null); })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         setDesignError(msg);
       });
+  }
+
+  // Change an EXISTING connection's direction (Directed ⇄ Consult). A draft edge
+  // is re-authored client-side (remove + re-add with the new `bi`, preserving its
+  // endpoints); a real edge is remove+re-add against the backend (there is no
+  // in-place mutate on core — the peer topology is derived from the edge set, so
+  // a clean replace keeps registration consistent).
+  function onSetConnectionBi(id: string, bi: boolean): void {
+    if (draftEdgeIds.has(id)) {
+      const edge = draftEdges.find((e) => e.tempId === id);
+      if (!edge) return;
+      removeDraftEdge(id);
+      addDraftEdge({ from: edge.from, to: edge.to, bi });
+      return;
+    }
+    const edge = realGraph.edges.find((e) => e.id === id);
+    if (!edge) return;
+    void removeConnection(id).then(() =>
+      addConnection(genConnId(), effectiveWsId, edge.from, edge.to, bi)
+    );
   }
 
   // "Confirm & launch" — the ONE backend materialization point. Launch every
@@ -270,7 +284,7 @@ export function GraphScreenConnected(): JSX.Element {
       for (const edge of draftEdges) {
         const from = tempToReal.get(edge.from) ?? edge.from;
         const to = tempToReal.get(edge.to) ?? edge.to;
-        await addConnection(genConnId(), effectiveWsId, from, to, edge.kind, edge.bi);
+        await addConnection(genConnId(), effectiveWsId, from, to, edge.bi);
       }
       clearDraft();
       setDesignMode(false);
@@ -368,6 +382,7 @@ export function GraphScreenConnected(): JSX.Element {
       onDiscardDraft={onDiscardDraft}
       onAddAgent={onAddAgent}
       onConnect={onConnect}
+      onSetConnectionBi={onSetConnectionBi}
       onRemoveNode={onRemoveNode}
       onRemoveConnection={onRemoveConnection}
       onPauseWorkstream={() => void pauseWorkstream(effectiveWsId)}

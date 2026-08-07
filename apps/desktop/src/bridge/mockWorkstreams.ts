@@ -7,7 +7,6 @@
 import type { Connection, Profile, Workstream } from "./types";
 import type {
   BoardView,
-  ConnKind,
   Driver,
   EdgeStatus,
   GraphEdge,
@@ -92,7 +91,6 @@ function seedState(): MockState {
         ws: "ws-build-pipeline",
         from: "s07",
         to: "s06",
-        kind: "both",
         bi: false,
         has_gate: true,
       },
@@ -201,7 +199,6 @@ function connToGraphEdge(c: Connection): GraphEdge {
     id: c.id,
     from: c.from,
     to: c.to,
-    kind: c.kind as ConnKind,
     bi: c.bi,
     status: edgeStatusFor(c),
     has_gate: !!c.has_gate,
@@ -356,16 +353,8 @@ export const mockWorkstreams = {
     }
   },
 
-  addConnection(
-    id: string,
-    ws: string,
-    from: string,
-    to: string,
-    kind: ConnKind,
-    bi: boolean,
-  ): void {
-    const hasGate = kind === "both";
-    const conn: Connection = { id, ws, from, to, kind, bi, has_gate: hasGate };
+  addConnection(id: string, ws: string, from: string, to: string, bi: boolean): void {
+    const conn: Connection = { id, ws, from, to, bi, has_gate: false };
     const idx = state.connections.findIndex((c) => c.id === id);
     if (idx >= 0) state.connections[idx] = conn;
     else state.connections.push(conn);

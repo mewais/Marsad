@@ -42,7 +42,7 @@ function makeNode(overrides: Partial<DraftNode> & { tempId: string }): DraftNode
 }
 
 function makeEdge(from: string, to: string): DraftEdge {
-  return { tempId: `e-${from}-${to}`, from, to, kind: "data", bi: false };
+  return { tempId: `e-${from}-${to}`, from, to, bi: false };
 }
 
 // ---------------------------------------------------------------------------

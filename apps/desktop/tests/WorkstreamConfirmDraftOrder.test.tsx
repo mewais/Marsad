@@ -147,7 +147,7 @@ function makeDraftNode(tempId: string, opts: Partial<DraftNode> = {}): DraftNode
 }
 
 function makeDraftEdge(from: string, to: string): DraftEdge {
-  return { tempId: `de-${from}-${to}`, from, to, kind: "data", bi: false };
+  return { tempId: `de-${from}-${to}`, from, to, bi: false };
 }
 
 function claudeCapabilities(hostId = "local"): Record<string, CapabilitiesView> {

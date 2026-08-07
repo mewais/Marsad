@@ -49,7 +49,7 @@ import {
   assignSession as apiAssignSession,
   setActiveProfile as apiSetActiveProfile,
 } from "./api";
-import type { BoardView, ConnKind, Driver, GraphView } from "./workstreamTypes";
+import type { BoardView, Driver, GraphView } from "./workstreamTypes";
 
 // ---------------------------------------------------------------------------
 // Screen / nav state (UI only — not in AppSnapshot)
@@ -136,7 +136,8 @@ export interface DraftEdge {
   tempId: string;
   from: string;
   to: string;
-  kind: ConnKind;
+  /** `bi=false` → Directed (from drives to), `bi=true` → Consult (mutual).
+   *  Direction is the only edge axis (post-#7 — no "kind"). */
   bi: boolean;
 }
 
@@ -486,7 +487,6 @@ function reducer(state: VmState, action: Action): VmState {
             tempId: `dedge-${action.node.tempId}`,
             from: lead.tempId,
             to: action.node.tempId,
-            kind: "data",
             bi: false,
           },
         ];
@@ -643,7 +643,6 @@ export interface VmContextValue {
     ws: string,
     from: string,
     to: string,
-    kind: ConnKind,
     bi: boolean
   ) => Promise<void>;
   removeConnection: (id: string) => Promise<void>;
@@ -1310,15 +1309,8 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
   );
 
   const addConnection = React.useCallback(
-    async (
-      id: string,
-      ws: string,
-      from: string,
-      to: string,
-      kind: ConnKind,
-      bi: boolean
-    ) => {
-      await apiAddConnection(id, ws, from, to, kind, bi);
+    async (id: string, ws: string, from: string, to: string, bi: boolean) => {
+      await apiAddConnection(id, ws, from, to, bi);
       await refreshAfterMutation(state.wsId);
     },
     [refreshAfterMutation, state.wsId]

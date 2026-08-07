@@ -148,7 +148,6 @@ describe("bridge workstream commands (mock backend)", () => {
         wsId,
         nodeA.id,
         nodeB.id,
-        "data",
         false,
       );
 
@@ -158,7 +157,7 @@ describe("bridge workstream commands (mock backend)", () => {
       expect(edge).toBeTruthy();
       expect(edge!.from).toBe(nodeA.id);
       expect(edge!.to).toBe(nodeB.id);
-      expect(edge!.kind).toBe("data");
+      expect(edge!.bi).toBe(false);
       expect(edge!.status).toBe("normal");
     });
 
@@ -174,7 +173,6 @@ describe("bridge workstream commands (mock backend)", () => {
         wsId,
         nodeA.id,
         nodeB.id,
-        "command",
         true,
       );
 
@@ -186,43 +184,20 @@ describe("bridge workstream commands (mock backend)", () => {
     });
 
     it("a gated connection (has_gate) yields status 'needs' and a non-null inspector pending_handoff", async () => {
+      // A gate is a runtime handoff state, not something addConnection sets
+      // (direction is the only authored axis post-#7). The mock seeds a gated
+      // connection (conn-seed-1) so the gated-edge → needs mapping is exercised.
       const board = await api.fetchBoard();
-      const multi = board.all.find((c) => !c.is_single_node);
-      const wsId = multi!.id;
-      const graphBefore = await api.fetchGraph(wsId);
-      const [nodeA, nodeB] = graphBefore!.nodes;
-
-      await api.addConnection(
-        "conn-gated-1",
-        wsId,
-        nodeA.id,
-        nodeB.id,
-        "both",
-        false,
+      const gatedCard = board.all.find(
+        (c) => !c.is_single_node && c.id === "ws-build-pipeline",
       );
-
-      const graphAfter = await api.fetchGraph(wsId);
-      const edge = graphAfter!.edges.find((e) => e.id === "conn-gated-1");
-      expect(edge).toBeTruthy();
-      // Gated connections are surfaced via the edge's needs status.
-      if (edge!.has_gate) {
-        expect(edge!.status).toBe("needs");
-        expect(graphAfter!.inspector.pending_handoff).not.toBeNull();
-        // pending_handoff surfaces the FIRST gated connection of the ws (matching
-        // marsad-viewmodel::graph_view), so it is one of the ws's gated connections
-        // — not necessarily the just-added one.
-        expect(["conn-seed-1", "conn-gated-1"]).toContain(
-          graphAfter!.inspector.pending_handoff!.conn_id,
-        );
-      } else {
-        // If this particular addConnection call didn't produce a gate under
-        // the mock's rules, fall back to the seeded gated connection (the
-        // spec requires the seed to be realistic enough to exercise this).
-        const gatedEdge = graphAfter!.edges.find((e) => e.has_gate);
-        expect(gatedEdge).toBeTruthy();
-        expect(gatedEdge!.status).toBe("needs");
-        expect(graphAfter!.inspector.pending_handoff).not.toBeNull();
-      }
+      expect(gatedCard).toBeTruthy();
+      const graph = await api.fetchGraph(gatedCard!.id);
+      const gatedEdge = graph!.edges.find((e) => e.has_gate);
+      expect(gatedEdge).toBeTruthy();
+      expect(gatedEdge!.status).toBe("needs");
+      expect(graph!.inspector.pending_handoff).not.toBeNull();
+      expect(graph!.inspector.pending_handoff!.conn_id).toBe(gatedEdge!.id);
     });
   });
 
@@ -237,7 +212,7 @@ describe("bridge workstream commands (mock backend)", () => {
       const graphBefore = await api.fetchGraph(wsId);
       const [nodeA, nodeB] = graphBefore!.nodes;
 
-      await api.addConnection("conn-to-remove", wsId, nodeA.id, nodeB.id, "data", false);
+      await api.addConnection("conn-to-remove", wsId, nodeA.id, nodeB.id, false);
       let graph = await api.fetchGraph(wsId);
       expect(graph!.edges.find((e) => e.id === "conn-to-remove")).toBeTruthy();
 
@@ -341,41 +316,34 @@ describe("bridge workstream commands (mock backend)", () => {
       }
     });
 
-    it("a newly gated connection puts its workstream into board().attention", async () => {
-      // Build a fresh two-node workstream with a normal connection (not
-      // necessarily needing attention), then add a gated connection and
-      // confirm the workstream shows up under attention.
-      await api.createWorkstream("ws-gate-test", "Gate test", "exercise gating");
+    it("the seeded gated workstream appears in board().attention; a plain connect does not force attention", async () => {
+      // Gates are a runtime handoff state, not an authored property of a
+      // connection (direction is the only authored axis post-#7). So a fresh
+      // create/assign/connect pipeline yields a NON-attention workstream, while
+      // the mock's seeded gated workstream is surfaced under attention.
+      await api.createWorkstream("ws-gate-test", "Gate test", "exercise connect");
       await api.assignSession("sess-gate-a", "ws-gate-test", true);
       await api.assignSession("sess-gate-b", "ws-gate-test", false);
-
       await api.addConnection(
         "conn-gate-test",
         "ws-gate-test",
         "sess-gate-a",
         "sess-gate-b",
-        "both",
         false,
       );
 
       const graph = await api.fetchGraph("ws-gate-test");
-      const gatedEdge = graph!.edges.find((e) => e.id === "conn-gate-test");
-      expect(gatedEdge).toBeTruthy();
+      const edge = graph!.edges.find((e) => e.id === "conn-gate-test");
+      expect(edge).toBeTruthy();
+      expect(edge!.has_gate).toBe(false); // a plain connect is never gated
 
       const board = await api.fetchBoard();
-      const card = board.all.find((c) => c.id === "ws-gate-test");
-      expect(card).toBeTruthy();
+      const fresh = board.all.find((c) => c.id === "ws-gate-test");
+      expect(fresh).toBeTruthy();
+      expect(fresh!.needs_attention).toBe(false);
 
-      if (gatedEdge!.has_gate) {
-        expect(card!.needs_attention).toBe(true);
-        expect(board.attention.find((c) => c.id === "ws-gate-test")).toBeTruthy();
-      } else {
-        // The mock may not gate every connection by default; the seed data's
-        // gated workstream must still be represented in attention (already
-        // asserted above), so this branch just avoids a false failure while
-        // still exercising the create/assign/connect pipeline end-to-end.
-        expect(card).toBeTruthy();
-      }
+      // The seeded gated workstream is surfaced under attention.
+      expect(board.attention.find((c) => c.id === "ws-build-pipeline")).toBeTruthy();
     });
   });
 

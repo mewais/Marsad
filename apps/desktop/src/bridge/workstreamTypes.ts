@@ -109,9 +109,6 @@ export type Phase =
   | "Stale"
   | "Detached";
 
-/** Connection kind (mirrors marsad-workstream::ConnKind). */
-export type ConnKind = "data" | "command" | "both";
-
 /** Why a node's last turn ended (mirrors marsad_events::EndReason). Duplicated
  *  here to keep this view-types module self-contained, like `Phase`/`Driver`. */
 export type EndReason = "Cancelled" | "MaxTurns" | "ExecutionError";
@@ -136,7 +133,8 @@ export interface GraphEdge {
   id: string;
   from: string;
   to: string;
-  kind: ConnKind;
+  /** `bi=false` → Directed (from→to, single arrowhead), `bi=true` → Consult
+   *  (mutual, two arrowheads). Direction is the only edge axis. */
   bi: boolean;
   status: EdgeStatus;
   has_gate: boolean;

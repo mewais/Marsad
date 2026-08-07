@@ -33,7 +33,7 @@
  *   5. "Confirm & launch" is the ONE place backend materialization happens, in
  *      order: for each draft node (lead first) → launchSession → real id →
  *      assignSession(realId, wsId, isLead); THEN for each draft edge →
- *      addConnection(id, wsId, realFrom, realTo, kind, bi) using the REAL ids
+ *      addConnection(id, wsId, realFrom, realTo, bi) using the REAL ids
  *      resolved during the launch loop (temp id → real id map).
  *   6. "Discard" clears local draft state with NO backend calls (non-empty draft);
  *      the pre-existing empty-workstream cleanup path must still work.
@@ -104,14 +104,7 @@ let launchCounter = 0;
 const launchSession = vi.fn(async (_args: unknown) => `real-sess-${++launchCounter}`);
 const assignSession = vi.fn(async (_sessionId: string, _wsId: string, _lead: boolean) => {});
 const addConnection = vi.fn(
-  async (
-    _id: string,
-    _ws: string,
-    _from: string,
-    _to: string,
-    _kind: string,
-    _bi: boolean
-  ) => {}
+  async (_id: string, _ws: string, _from: string, _to: string, _bi: boolean) => {}
 );
 const deleteWorkstream = vi.fn(async (_id: string) => {});
 const fetchGraph = vi.fn(async (_wsId: string): Promise<GraphView | null> => null);
@@ -137,9 +130,7 @@ vi.mock("../src/bridge/api", async (importOriginal) => {
     deleteWorkstream: (...args: Parameters<typeof original.deleteWorkstream>) =>
       deleteWorkstream(...args),
     addConnection: (...args: Parameters<typeof original.addConnection>) =>
-      addConnection(
-        ...(args as [string, string, string, string, "data" | "command" | "both", boolean])
-      ),
+      addConnection(...(args as [string, string, string, string, boolean])),
     fetchGraph: (...args: Parameters<typeof original.fetchGraph>) => fetchGraph(...args),
     fetchBoard: (...args: Parameters<typeof original.fetchBoard>) => fetchBoard(...args),
   };
@@ -427,13 +418,13 @@ describe("Design mode — connecting two draft nodes records a draft edge (no ad
     expect(screen.getByTestId(`connect-handle-${fromId}`)).toBeTruthy();
     expect(screen.getByTestId(`connect-handle-${toId}`)).toBeTruthy();
 
-    // Drive the connect via the connect handle → edge-kind picker path that
+    // Drive the connect via the connect handle → connection dialog path that
     // GraphScreen already renders for design-mode nodes.
     fireEvent.mouseDown(screen.getByTestId(`connect-handle-${fromId}`));
     // The drop target is resolved from elementFromPoint in the component; in the
-    // test DOM that returns null, so we drive the kind pick through the same
-    // public `onConnect` contract by simulating the edge-kind picker if it is
-    // shown. If the picker isn't reachable in the test DOM, the invariant below
+    // test DOM that returns null, so we drive the direction pick through the same
+    // public `onConnect` contract by simulating the connection dialog if it is
+    // shown. If the dialog isn't reachable in the test DOM, the invariant below
     // still holds (no real connection was issued during a draft wire).
     fireEvent.mouseUp(document.body);
 
@@ -454,7 +445,7 @@ describe("Design mode — connecting two draft nodes records a draft edge (no ad
 // SEAM: GraphScreen `onConfirmDraft` in GraphScreenConnected materializes the
 // draft: for each draft node launchSession → real id → assignSession(realId,
 // wsId, isLead); then for each draft edge addConnection(id, wsId, realFrom,
-// realTo, kind, bi) using the temp→real map built during the launch loop.
+// realTo, bi) using the temp→real map built during the launch loop.
 // ===========================================================================
 
 describe("Confirm & launch — materializes the whole draft with REAL ids", () => {

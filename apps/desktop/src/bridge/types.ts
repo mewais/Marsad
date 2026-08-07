@@ -639,7 +639,8 @@ export interface Connection {
   ws: string;
   from: string;
   to: string;
-  kind: "data" | "command" | "both";
+  /** `bi=false` → Directed (from drives to), `bi=true` → Consult (mutual).
+   *  Direction is the only edge axis (post-#7 — no "kind"). */
   bi: boolean;
   has_gate?: boolean;
 }

@@ -1,12 +1,12 @@
 /**
  * Pure edge-semantics mapping for the Level 2 Workstream Graph.
  *
- * Design rule (docs/design/DESIGN_HANDOFF.md §"LEVEL 2" → Edges): **colour
- * encodes status, dash encodes type — never mix the two.** Kept as tiny pure
- * functions (no React/DOM) so the mapping itself is unit-testable in
- * isolation from rendering.
+ * Design rule (post-#7): a connection has NO "kind" — direction is the only axis
+ * (Directed vs Consult), shown by arrowheads (one vs two), not line style. So the
+ * stroke is a single SOLID style; only COLOUR (by status) and WIDTH vary. Kept as
+ * tiny pure functions (no React/DOM) so the mapping is unit-testable in isolation.
  */
-import type { ConnKind, EdgeStatus } from "../../bridge/workstreamTypes";
+import type { EdgeStatus } from "../../bridge/workstreamTypes";
 
 /** Edge colour is driven PURELY by status: blue=normal, grey=consulting
  *  (two-way), amber=needs (an unresolved gate sits on the wire). */
@@ -21,38 +21,9 @@ export function edgeColor(status: EdgeStatus): string {
   }
 }
 
-export interface EdgeDashStyle {
-  /** `undefined` = solid stroke ("both"). */
-  dasharray: string | undefined;
-  /** Marching-ants "flow" animation — data/message edges only. */
-  animated: boolean;
-  linecap: "round" | "butt";
-}
-
-/**
- * Dash pattern is driven PURELY by connection kind (never status):
- * - `data`    → dashed `8 7`, animated (marching ants)
- * - `command` → dotted `2 5`, round caps, static
- * - `both`    → solid, static
- */
-export function edgeDashStyle(kind: ConnKind): EdgeDashStyle {
-  if (kind === "command") {
-    return { dasharray: "2 5", animated: false, linecap: "round" };
-  }
-  if (kind === "both") {
-    return { dasharray: undefined, animated: false, linecap: "butt" };
-  }
-  // "data" (and any other/unknown kind defaults to the data/message style —
-  // the most common connection, never renders as blank).
-  return { dasharray: "8 7", animated: true, linecap: "butt" };
-}
-
-/** Stroke width per kind, mirroring the design reference's inline styles
- *  (both=2.6, command=2, data=2/2.4-when-attention). Status "needs" gets a
- *  touch heavier stroke so the attention read is unambiguous even before the
- *  gate diamond registers. */
-export function edgeStrokeWidth(kind: ConnKind, status: EdgeStatus): number {
-  if (kind === "both") return 2.6;
-  if (status === "needs") return 3;
-  return 2;
+/** Stroke width by status only (kind is gone): a "needs" edge gets a touch
+ *  heavier stroke so the attention read is unambiguous even before the gate
+ *  diamond registers; everything else is the base width. */
+export function edgeStrokeWidth(status: EdgeStatus): number {
+  return status === "needs" ? 3 : 2;
 }

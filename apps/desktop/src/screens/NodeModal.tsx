@@ -454,10 +454,10 @@ export function NodeModal() {
     // Honor explicit Controlled-by / Feeds-from picks against existing DRAFT
     // nodes — recorded as draft edges (temp ids), never a real addConnection.
     if (controller) {
-      addDraftEdge({ from: controller, to: tempId, kind: "command", bi: false });
+      addDraftEdge({ from: controller, to: tempId, bi: false });
     }
     if (feeder) {
-      addDraftEdge({ from: feeder, to: tempId, kind: "data", bi: false });
+      addDraftEdge({ from: feeder, to: tempId, bi: false });
     }
     // Back to the design canvas (the graph screen) so more nodes/connections
     // can be authored — never a live single session, never the board.
@@ -538,10 +538,10 @@ export function NodeModal() {
       // First agent added = effective lead (isFirstNode is exactly that).
       await assignSession(newId, ctx.wsId, ctx.isFirstNode);
       if (controller) {
-        await addConnection(`conn-${newId}-ctrl`, ctx.wsId, controller, newId, "command", false);
+        await addConnection(`conn-${newId}-ctrl`, ctx.wsId, controller, newId, false);
       }
       if (feeder) {
-        await addConnection(`conn-${newId}-feed`, ctx.wsId, feeder, newId, "data", false);
+        await addConnection(`conn-${newId}-feed`, ctx.wsId, feeder, newId, false);
       }
       if (ctx.isFirstNode) {
         // Straight to Level-3 — never via the graph (single-session nav rule).

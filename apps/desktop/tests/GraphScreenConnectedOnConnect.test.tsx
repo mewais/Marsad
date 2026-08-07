@@ -17,7 +17,7 @@
  *      valid edge (no cycle, no rejection) clears the designError banner.
  *
  * Mocking pattern mirrors WorkstreamNodeCreation.test.tsx (VmProvider + mock api).
- * We drive onConnect through GraphScreen's drag-to-connect + edge-kind picker
+ * We drive onConnect through GraphScreen's drag-to-connect + connection dialog
  * path, or directly via the connected wrapper's prop.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -106,7 +106,7 @@ function twoRealNodeGraph(wsId = "ws1"): GraphView {
     name: "Test WS",
     goal: "",
     nodes: [realNode("lead"), realNode("helper")],
-    edges: [{ id: "e1", from: "lead", to: "helper", kind: "data", bi: false, status: "normal", has_gate: false }],
+    edges: [{ id: "e1", from: "lead", to: "helper", bi: false, status: "normal", has_gate: false }],
     inspector: { working: 0, needs: 0, pending_handoff: null },
   };
 }
@@ -140,7 +140,7 @@ function draftNodeB(): DraftNode {
 
 /** Edge A→B (to establish it as "existing") so B→A is a cycle. */
 function draftEdgeAtoB() {
-  return { tempId: "de-AB", from: "draft-A", to: "draft-B", kind: "data" as const, bi: false };
+  return { tempId: "de-AB", from: "draft-A", to: "draft-B", bi: false };
 }
 
 function renderConnected(preState: Partial<VmState>) {
@@ -175,9 +175,10 @@ function renderConnected(preState: Partial<VmState>) {
 // Helper: drive onConnect via the GraphScreen's drag-to-connect + kind picker
 // ---------------------------------------------------------------------------
 
-/** Simulate a drag-connect gesture from handle `fromId` to node `toId`,
- *  then pick the given edge kind in the picker. Calls onConnect(from,to,kind,false). */
-function simulateDragConnect(fromId: string, toId: string, kind: "data" | "command" | "both" = "data") {
+/** Simulate a drag-connect gesture from handle `fromId` to node `toId`, then
+ *  pick a direction in the connection dialog. `bi=false` → Directed (default),
+ *  `bi=true` → Consult. Calls onConnect(from, to, bi). */
+function simulateDragConnect(fromId: string, toId: string, bi = false) {
   const canvas = screen.queryByTestId("graph-canvas");
   if (canvas) {
     canvas.getBoundingClientRect = () =>
@@ -198,9 +199,9 @@ function simulateDragConnect(fromId: string, toId: string, kind: "data" | "comma
   });
   spy.mockRestore();
 
-  const picker = screen.queryByTestId("edge-kind-picker");
-  if (picker) {
-    fireEvent.click(screen.getByTestId(`edge-kind-${kind}`));
+  const dialog = screen.queryByTestId("connection-dialog");
+  if (dialog) {
+    fireEvent.click(screen.getByTestId(bi ? "edge-dir-consult" : "edge-dir-directed"));
   }
   return true;
 }
@@ -226,7 +227,7 @@ describe("GraphScreenConnected onConnect — draft cycle → no addDraftEdge + e
     });
 
     // Drive B→A connection (cycle: A→B already exists).
-    simulateDragConnect("draft-B", "draft-A", "data");
+    simulateDragConnect("draft-B", "draft-A");
 
     // The cycle check must surface an error banner.
     await waitFor(() => {
@@ -313,7 +314,7 @@ describe("GraphScreenConnected onConnect — real addConnection rejection → er
     });
 
     // Try to connect helper→lead (creating a cycle: lead→helper + helper→lead).
-    simulateDragConnect("helper", "lead", "data");
+    simulateDragConnect("helper", "lead");
 
     await waitFor(() => {
       // addConnection was called and rejected.
@@ -344,7 +345,7 @@ describe("GraphScreenConnected onConnect — valid edge clears designError", () 
     });
 
     // Connect A→B (valid — no existing edges, not a cycle).
-    simulateDragConnect("draft-A", "draft-B", "data");
+    simulateDragConnect("draft-A", "draft-B");
 
     await new Promise((r) => setTimeout(r, 30));
 

@@ -62,7 +62,6 @@ function edge(over: Partial<GraphEdge> & Pick<GraphEdge, "id" | "from" | "to">):
     id: over.id,
     from: over.from,
     to: over.to,
-    kind: over.kind ?? "data",
     bi: over.bi ?? false,
     status: over.status ?? "normal",
     has_gate: over.has_gate ?? false,

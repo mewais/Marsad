@@ -102,7 +102,6 @@ function renderVm(overrides: Partial<VmState> = {}) {
         ws: string,
         from: string,
         to: string,
-        kind: string,
         bi: boolean
       ) => Promise<void>;
       removeConnection: (id: string) => Promise<void>;
@@ -387,7 +386,6 @@ describe("V5: addConnection helper", () => {
         MULTI_NODE_WS_ID,
         nodeA.id,
         nodeB.id,
-        "data",
         false
       );
     });
@@ -397,7 +395,6 @@ describe("V5: addConnection helper", () => {
       MULTI_NODE_WS_ID,
       nodeA.id,
       nodeB.id,
-      "data",
       false
     );
 

@@ -8,7 +8,7 @@
 import type { AppSnapshot, CapabilitiesView, CostRow, ModelInfo, PersistedTemplate, PtyEvent, SessionSummary, Settings, SideRow, SlashCommandInfo, WorkstreamCostBreakdown } from "./types";
 import { MOCK_SNAPSHOT } from "./mockFixture";
 import { mockWorkstreams } from "./mockWorkstreams";
-import type { BoardView, ConnKind, Driver, GraphView } from "./workstreamTypes";
+import type { BoardView, Driver, GraphView } from "./workstreamTypes";
 
 // ---------------------------------------------------------------------------
 // Tauri detection
@@ -726,12 +726,11 @@ export async function addConnection(
   ws: string,
   from: string,
   to: string,
-  kind: ConnKind,
   bi: boolean,
 ): Promise<void> {
-  if (!isTauri()) return mockWorkstreams.addConnection(id, ws, from, to, kind, bi);
+  if (!isTauri()) return mockWorkstreams.addConnection(id, ws, from, to, bi);
   const invoke = await getInvoke();
-  await invoke("add_connection", { id, ws, from, to, kind, bi });
+  await invoke("add_connection", { id, ws, from, to, bi });
 }
 
 export async function removeConnection(id: string): Promise<void> {

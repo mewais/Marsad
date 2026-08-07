@@ -16,7 +16,7 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
-import type { ConnKind, Driver, GraphView, Phase } from "../../bridge/workstreamTypes";
+import type { Driver, GraphView, Phase } from "../../bridge/workstreamTypes";
 import {
   buildFlowLayout,
   computeElkLayout,
@@ -26,7 +26,7 @@ import {
   LANE_GAP,
 } from "./layout";
 import type { GraphLayout, Point } from "./layout";
-import { edgeColor, edgeDashStyle, edgeStrokeWidth } from "./edgeStyle";
+import { edgeColor, edgeStrokeWidth } from "./edgeStyle";
 import type { Host } from "../../bridge/types";
 import { connHintForStatus, tallyConnHints } from "../../bridge/connectivity";
 import { ConnHintChip } from "../../components/ConnHintChip";
@@ -98,8 +98,14 @@ export interface GraphScreenProps {
   onConfirmDraft?: () => void;
   /** "Discard" in the Design panel. */
   onDiscardDraft?: () => void;
-  /** Drag-to-connect finished + an edge kind was chosen. */
-  onConnect?: (from: string, to: string, kind: ConnKind, bi: boolean) => void;
+  /** Drag-to-connect finished + a direction was chosen. `bi=false` → Directed
+   *  (controller→worker: `from` initiates, `to` answers), `bi=true` → Consult
+   *  (mutual). Direction is the only edge axis (no "kind"). */
+  onConnect?: (from: string, to: string, bi: boolean) => void;
+  /** Change an EXISTING connection's direction (Directed ⇄ Consult) from the
+   *  connection dialog. Draft edges re-author client-side; real edges call the
+   *  backend. Omitted ⇒ direction is not editable after creation. */
+  onSetConnectionBi?: (id: string, bi: boolean) => void;
   /** Remove an authored node (design mode). Draft nodes discard client-side;
    *  real nodes delete the session (the wrapper confirms). Omitted ⇒ no remove
    *  affordance on agent rows. */
@@ -151,6 +157,7 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
     onConfirmDraft,
     onDiscardDraft,
     onConnect,
+    onSetConnectionBi,
     onRemoveNode,
     onRemoveConnection,
     onPauseWorkstream,
@@ -173,7 +180,15 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
   const [zoom, setZoom] = useState(1);
   const [flowLayout, setFlowLayout] = useState<GraphLayout | null>(null);
   const [drag, setDrag] = useState<{ from: string; x: number; y: number } | null>(null);
-  const [edgePick, setEdgePick] = useState<{ from: string; to: string } | null>(null);
+  // The connection dialog. Opened two ways:
+  //  • drag A→B (new edge): {from, to} with no `existingId` ⇒ [Directed][Consult][Cancel].
+  //  • click an existing edge: {from, to, existingId, bi} ⇒ adds [Delete].
+  const [edgePick, setEdgePick] = useState<{
+    from: string;
+    to: string;
+    existingId?: string;
+    bi?: boolean;
+  } | null>(null);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
@@ -278,9 +293,30 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drag, zoom]);
 
-  function pickEdgeKind(kind: ConnKind): void {
+  // Resolve a node id to its authored name for the connection dialog (#4 — show
+  // real names, never `draft-node-<id>`). Falls back to the id if unknown.
+  const nodeNameOf = (id: string): string => graph.nodes.find((n) => n.id === id)?.name ?? id;
+
+  // Chose a direction in the connection dialog. For a NEW edge (no existingId)
+  // this authors the connection; for an EXISTING one it flips its direction
+  // (a no-op call is avoided when the direction is unchanged).
+  function pickDirection(bi: boolean): void {
     if (edgePick) {
-      onConnect?.(edgePick.from, edgePick.to, kind, false);
+      if (edgePick.existingId) {
+        if ((edgePick.bi ?? false) !== bi) {
+          onSetConnectionBi?.(edgePick.existingId, bi);
+        }
+      } else {
+        onConnect?.(edgePick.from, edgePick.to, bi);
+      }
+    }
+    setEdgePick(null);
+  }
+
+  // Delete from the connection dialog (existing edges only).
+  function deleteEdge(): void {
+    if (edgePick?.existingId) {
+      onRemoveConnection?.(edgePick.existingId);
     }
     setEdgePick(null);
   }
@@ -403,11 +439,12 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
                 >
                   {layout.edges.map((edge) => {
                     const graphEdge = graph.edges.find((e) => e.id === edge.id);
-                    const kind = graphEdge?.kind ?? "data";
+                    // Direction is the only axis: bi=false Directed (one head),
+                    // bi=true Consult (two heads). Single SOLID stroke; colour by
+                    // status, width by status. No dash/kind.
                     const bi = graphEdge?.bi ?? false;
                     const color = edgeColor(edge.status);
-                    const dash = edgeDashStyle(kind);
-                    const width = edgeStrokeWidth(kind, edge.status);
+                    const width = edgeStrokeWidth(edge.status);
                     const isDimmed = selectedNode != null && !(neighbourhood.has(edge.from) && neighbourhood.has(edge.to));
                     const target = edge.points[edge.points.length - 1];
                     const source = edge.points[0];
@@ -416,21 +453,18 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
                         <path
                           data-testid={`graph-edge-${edge.id}`}
                           data-status={edge.status}
-                          data-kind={kind}
+                          data-bi={bi ? "true" : "false"}
                           d={smoothEdgePath(edge.points)}
                           fill="none"
                           stroke={color}
                           strokeWidth={width}
-                          strokeDasharray={dash.dasharray}
-                          strokeLinecap={dash.linecap}
-                          style={dash.animated ? { animation: "flow 1.1s linear infinite" } : undefined}
                         />
                         {/* Arrowhead into the target (always) */}
                         <polygon
                           points={`${target.x - 5},${target.y - 8} ${target.x + 5},${target.y - 8} ${target.x},${target.y}`}
                           fill={color}
                         />
-                        {/* Arrowhead into the source too, for consulting/bi edges */}
+                        {/* Second arrowhead into the source for Consult (bi) edges */}
                         {bi && (
                           <polygon
                             points={`${source.x - 5},${source.y + 8} ${source.x + 5},${source.y + 8} ${source.x},${source.y}`}
@@ -500,26 +534,29 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
                   );
                 })}
 
-                {/* Edge remove buttons (design mode): a small ✕ at each edge's
-                    midpoint so a wire can be deleted while authoring. Draft edges
-                    discard client-side; real edges hit the backend (wrapper). */}
+                {/* Edge edit handles (design mode): a small dot at each edge's
+                    midpoint. Clicking it opens the connection dialog for that
+                    EXISTING edge ([Directed][Consult][Delete][Cancel]) — the
+                    single place to change direction or remove a wire (#6). */}
                 {designMode &&
-                  onRemoveConnection &&
+                  (onSetConnectionBi || onRemoveConnection) &&
                   layout.edges.map((edge) => {
                     const src = edge.points[0];
                     const tgt = edge.points[edge.points.length - 1];
                     if (!src || !tgt) return null;
                     const midX = (src.x + tgt.x) / 2;
                     const midY = (src.y + tgt.y) / 2;
+                    const ge = graph.edges.find((e) => e.id === edge.id);
+                    const bi = ge?.bi ?? false;
                     return (
                       <div
-                        key={`edge-remove-${edge.id}`}
-                        data-testid={`edge-remove-${edge.id}`}
+                        key={`edge-edit-${edge.id}`}
+                        data-testid={`edge-edit-${edge.id}`}
                         role="button"
-                        title="Remove connection"
+                        title="Edit connection"
                         onClick={(ev) => {
                           ev.stopPropagation();
-                          onRemoveConnection(edge.id);
+                          setEdgePick({ from: edge.from, to: edge.to, existingId: edge.id, bi });
                         }}
                         style={{
                           position: "absolute",
@@ -529,8 +566,8 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
                           height: 18,
                           borderRadius: "50%",
                           background: "var(--panel)",
-                          border: "1px solid var(--error)",
-                          color: "var(--error)",
+                          border: "1px solid var(--line)",
+                          color: "var(--txt2)",
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
@@ -542,7 +579,7 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
                           boxShadow: "var(--shadow-sm)",
                         }}
                       >
-                        ✕
+                        ⋯
                       </div>
                     );
                   })}
@@ -772,11 +809,9 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
             color: "var(--txt2)",
           }}
         >
-          <LegendRow color="var(--accent)" dash="8 5" label="Data / message" />
-          <LegendRow color="var(--accent)" dash="2 4" label="Command / prompt" />
-          <LegendRow color="var(--accent)" dash={undefined} label="Both" />
-          <LegendRow color="var(--txt2)" dash={undefined} label="Consulting (two-way)" biArrows />
-          <LegendRow color="var(--needs)" dash={undefined} label="Needs attention" />
+          <LegendRow color="var(--accent)" label="Directed (one → drives the other)" />
+          <LegendRow color="var(--txt2)" label="Consult (two-way ⇄)" biArrows />
+          <LegendRow color="var(--needs)" label="Needs attention" />
         </div>
 
         {/* ＋ Add agent / ✎ Update workflow (above canvas) */}
@@ -981,7 +1016,7 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              data-testid="edge-kind-picker"
+              data-testid="connection-dialog"
               style={{
                 background: "var(--elev)",
                 border: "1px solid var(--border2)",
@@ -992,41 +1027,58 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
               }}
             >
               <div style={{ fontSize: "calc(12.5px * var(--fs,1))", fontWeight: 700, marginBottom: 3 }}>
-                Connect {edgePick.from} → {edgePick.to}
+                {edgePick.existingId ? "Connection" : "Connect"} {nodeNameOf(edgePick.from)} → {nodeNameOf(edgePick.to)}
               </div>
               <div style={{ fontSize: "calc(11px * var(--fs,1))", color: "var(--txt3)", marginBottom: 13 }}>
-                What kind of connection?
+                Directed: {nodeNameOf(edgePick.from)} drives {nodeNameOf(edgePick.to)} (sends & receives).
+                Consult: both peers can prompt each other.
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button
-                  data-testid="edge-kind-data"
-                  onClick={() => pickEdgeKind("data")}
+                  data-testid="edge-dir-directed"
+                  onClick={() => pickDirection(false)}
                   style={pickerBtnStyle("var(--accent)", "var(--accent-bg)", "var(--accent2)")}
                 >
-                  Data / message
+                  Directed →
                 </button>
                 <button
-                  data-testid="edge-kind-command"
-                  onClick={() => pickEdgeKind("command")}
+                  data-testid="edge-dir-consult"
+                  onClick={() => pickDirection(true)}
                   style={pickerBtnStyle("var(--txt2)", "transparent", "var(--txt2)")}
                 >
-                  Command
-                </button>
-                <button
-                  data-testid="edge-kind-both"
-                  onClick={() => pickEdgeKind("both")}
-                  style={pickerBtnStyle("var(--border2)", "var(--panel2)", "var(--txt2)")}
-                >
-                  Both
+                  Consult ⇄
                 </button>
               </div>
+              {/* Delete — existing edges only (a brand-new drag has nothing to
+                  delete yet; per #6 the option is simply absent when creating). */}
+              {edgePick.existingId && onRemoveConnection && (
+                <button
+                  data-testid="edge-delete"
+                  onClick={deleteEdge}
+                  style={{
+                    marginTop: 8,
+                    width: "100%",
+                    fontFamily: "inherit",
+                    fontWeight: 600,
+                    fontSize: "calc(11.5px * var(--fs,1))",
+                    padding: "8px 0",
+                    borderRadius: 9,
+                    border: "1px solid var(--error)",
+                    background: "transparent",
+                    color: "var(--error)",
+                    cursor: "pointer",
+                  }}
+                >
+                  Delete connection
+                </button>
+              )}
               {/* Explicit cancel — the backdrop also dismisses, but an obvious
                   button is clearer (the drag already committed a from→to). */}
               <button
-                data-testid="edge-kind-cancel"
+                data-testid="edge-dir-cancel"
                 onClick={() => setEdgePick(null)}
                 style={{
-                  marginTop: 12,
+                  marginTop: 8,
                   width: "100%",
                   fontFamily: "inherit",
                   fontWeight: 600,
@@ -1438,8 +1490,8 @@ function pickerBtnStyle(border: string, bg: string, fg: string): CSSProperties {
   };
 }
 
-function LegendRow(props: { color: string; dash: string | undefined; label: string; biArrows?: boolean }): JSX.Element {
-  const { color, dash, label, biArrows } = props;
+function LegendRow(props: { color: string; label: string; biArrows?: boolean }): JSX.Element {
+  const { color, label, biArrows } = props;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <svg width="28" height="9">
@@ -1448,7 +1500,7 @@ function LegendRow(props: { color: string; dash: string | undefined; label: stri
           y1="4.5"
           x2={biArrows ? 23 : 22}
           y2="4.5"
-          style={{ stroke: color, strokeWidth: 2, strokeDasharray: dash }}
+          style={{ stroke: color, strokeWidth: 2 }}
         />
         <path d="M22 1 L27 4.5 L22 8 z" fill={biArrows ? "none" : color} />
         {biArrows && (

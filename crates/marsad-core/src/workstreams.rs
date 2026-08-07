@@ -512,10 +512,16 @@ impl Core {
 
 /// The peers of a node derived from the workstream connections.
 ///
-/// `outbound` = nodes that `node_id` is wired to send to
-///              (edges where `from == node_id`, collecting `to`).
-/// `inbound`  = nodes wired to send to `node_id`
-///              (edges where `to == node_id`, collecting `from`).
+/// Direction is the only edge axis (post-#7 — no "kind"):
+///   * Directed A→B (`bi == false`): A drives B — A initiates, B only answers.
+///   * Consult  A↔B (`bi == true`) : mutual — both can initiate.
+///
+/// `outbound` = nodes `node_id` can SEND to (initiate toward):
+///              `to` of every edge where `from == node_id`, PLUS `from` of every
+///              CONSULT edge where `to == node_id` (the reverse leg of a two-way wire).
+/// `inbound`  = nodes that can send to `node_id`:
+///              `from` of every edge where `to == node_id`, PLUS `to` of every
+///              CONSULT edge where `from == node_id`.
 ///
 /// Both slices are de-duplicated and sorted ascending for determinism.
 /// A self-edge (`from == to == node_id`) is ignored — a node is not its own peer.
@@ -528,19 +534,29 @@ pub struct NodePeers {
 /// Return the peer topology for `node_id` derived from the given connection
 /// slice. Pure function: no state mutations, no I/O.
 pub fn peers_for_node(node_id: &str, connections: &[marsad_workstream::Connection]) -> NodePeers {
-    let mut outbound: Vec<String> = connections
-        .iter()
-        .filter(|c| c.from == node_id && c.to != node_id)
-        .map(|c| c.to.clone())
-        .collect();
+    let mut outbound: Vec<String> = Vec::new();
+    let mut inbound: Vec<String> = Vec::new();
+
+    for c in connections {
+        if c.from == node_id && c.to == node_id {
+            continue; // self-edge
+        }
+        if c.from == node_id {
+            outbound.push(c.to.clone());
+            if c.bi {
+                inbound.push(c.to.clone()); // consult: target can initiate back
+            }
+        }
+        if c.to == node_id {
+            inbound.push(c.from.clone());
+            if c.bi {
+                outbound.push(c.from.clone()); // consult: we can initiate toward source
+            }
+        }
+    }
+
     outbound.sort();
     outbound.dedup();
-
-    let mut inbound: Vec<String> = connections
-        .iter()
-        .filter(|c| c.to == node_id && c.from != node_id)
-        .map(|c| c.from.clone())
-        .collect();
     inbound.sort();
     inbound.dedup();
 
