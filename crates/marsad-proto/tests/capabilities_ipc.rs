@@ -207,9 +207,9 @@ fn capabilities_refresh_queued_absent_host_id_parses_to_none_and_omits_on_reenco
 // CapabilitiesUpdate (§2 golden forms — "gemini"/AllKnown and "claude"/Projects)
 // ---------------------------------------------------------------------------
 
-const CAPABILITIES_UPDATE_AGY: &str = r#"{"type":"CapabilitiesUpdate","host_id":"local","driver":"gemini","capabilities":{"driver":"gemini","host_id":"local","cli_available":true,"launchable":false,"models":{"models":[{"id":"Gemini 3.5 Flash (Low)"}],"source":"Listed","free_text":false},"session_scope":"AllKnown","sessions":[{"id":"97197d46-2091-40e2-b36f-0dcedd34bcc4","project":"/work/mewais/OpenSource/Marsad","snippet":"x","modified_ms":1783100616000}],"fetched_at_ms":1783100620000,"errors":[],"available_modes":[]}}"#;
+const CAPABILITIES_UPDATE_AGY: &str = r#"{"type":"CapabilitiesUpdate","host_id":"local","driver":"gemini","capabilities":{"driver":"gemini","host_id":"local","cli_available":true,"wasl_available":false,"launchable":false,"models":{"models":[{"id":"Gemini 3.5 Flash (Low)"}],"source":"Listed","free_text":false},"session_scope":"AllKnown","sessions":[{"id":"97197d46-2091-40e2-b36f-0dcedd34bcc4","project":"/work/mewais/OpenSource/Marsad","snippet":"x","modified_ms":1783100616000}],"fetched_at_ms":1783100620000,"errors":[],"available_modes":[]}}"#;
 
-const CAPABILITIES_UPDATE_CLAUDE: &str = r#"{"type":"CapabilitiesUpdate","host_id":"hpc","driver":"claude","capabilities":{"driver":"claude","host_id":"hpc","cli_available":true,"launchable":true,"models":{"models":[{"id":"claude-opus-4-8"}],"source":"Observed","free_text":true},"session_scope":{"Projects":["/home/u/proj"]},"sessions":[],"fetched_at_ms":0,"errors":[],"available_modes":[]}}"#;
+const CAPABILITIES_UPDATE_CLAUDE: &str = r#"{"type":"CapabilitiesUpdate","host_id":"hpc","driver":"claude","capabilities":{"driver":"claude","host_id":"hpc","cli_available":true,"wasl_available":false,"launchable":true,"models":{"models":[{"id":"claude-opus-4-8"}],"source":"Observed","free_text":true},"session_scope":{"Projects":["/home/u/proj"]},"sessions":[],"fetched_at_ms":0,"errors":[],"available_modes":[]}}"#;
 
 fn capabilities_update_agy() -> IpcMsg {
     IpcMsg::CapabilitiesUpdate {
