@@ -167,6 +167,21 @@ export function GraphScreenConnected(): JSX.Element {
     });
   }
 
+  // #5 — clicking a node in design mode. Only DRAFT (unlaunched) nodes are
+  // modifiable (decision C): open the modal prefilled ("Modify node"). Real nodes
+  // are already launched — clicking them is a no-op here (their edit path is the
+  // live session, not the draft form).
+  function onModifyNode(id: string): void {
+    if (!draftTempIds.has(id)) return;
+    openNodeModal({
+      wsId: effectiveWsId,
+      wsName: realGraph.name,
+      isFirstNode: false,
+      designMode: true,
+      modifyTempId: id,
+    });
+  }
+
   // Drag-to-connect result. In design mode, a wire whose endpoint is a DRAFT
   // (temp) node cannot be a real connection (its endpoints aren't launched
   // sessions yet — core-ext.md:69-72); record a draft edge instead. A wire
@@ -374,6 +389,7 @@ export function GraphScreenConnected(): JSX.Element {
       onAddAgent={onAddAgent}
       onConnect={onConnect}
       onSetConnectionBi={onSetConnectionBi}
+      onModifyNode={onModifyNode}
       onRemoveNode={onRemoveNode}
       onRemoveConnection={onRemoveConnection}
       onPauseWorkstream={() => void pauseWorkstream(effectiveWsId)}

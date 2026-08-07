@@ -293,13 +293,13 @@ function expectNoBackendCalls() {
   expect(createWorkstream).not.toHaveBeenCalled();
 }
 
-/** Fill the node-modal form and submit it (project dir is the only required
- *  field for a first node; a name is required for non-first nodes). */
+/** Fill the node-modal form and submit it. Every design-mode node now carries a
+ *  NAME (#2) — including the first — so we always fill the name input (defaulting
+ *  to the project basename when the test doesn't pin a specific one). */
 function fillAndSubmitNodeModal(opts: { name?: string; project: string }) {
-  if (opts.name !== undefined) {
-    const nameInput = screen.queryByTestId("nm-name-input");
-    if (nameInput) fireEvent.change(nameInput, { target: { value: opts.name } });
-  }
+  const nameInput = screen.queryByTestId("nm-name-input");
+  const nameVal = opts.name ?? opts.project.split("/").pop() ?? "Agent";
+  if (nameInput) fireEvent.change(nameInput, { target: { value: nameVal } });
   fireEvent.change(screen.getByTestId("nm-project-input"), {
     target: { value: opts.project },
   });
@@ -365,6 +365,71 @@ describe("Design mode — '＋ Add agent' is a pure client-side draft (no backen
     await waitFor(() =>
       expect(screen.getByTestId("design-draft-count").textContent).toContain("3")
     );
+  });
+});
+
+// ===========================================================================
+// Builder UX — first-node name (#2) + modify a draft node in place (#5).
+// ===========================================================================
+
+describe("Builder UX — first-node name (#2) + modify draft node (#5)", () => {
+  it("first design node shows a NAME field and an 'Add agent' button (not 'Launch session')", async () => {
+    const captured: { current: VmState | null } = { current: null };
+    renderGraph(captured, emptyBuildOutGraph("ws-1"));
+
+    fireEvent.click(screen.getByTestId("add-agent-btn"));
+    await waitFor(() => expect(captured.current?.screen).toBe("node-modal"));
+
+    // #2 — the first node gets a name field (not hidden).
+    expect(screen.getByTestId("nm-name-input")).toBeTruthy();
+    // #2 — a design add says "Add agent", never "Launch session".
+    const btn = screen.getByTestId("nm-launch-btn");
+    expect(btn.textContent).toContain("Add agent");
+    expect(btn.textContent).not.toContain("Launch session");
+  });
+
+  it("clicking a draft node re-opens it as 'Modify node' prefilled; editing updates in place (no new node)", async () => {
+    const captured: { current: VmState | null } = { current: null };
+    renderGraph(captured, emptyBuildOutGraph("ws-1"));
+
+    // Author one draft node.
+    fireEvent.click(screen.getByTestId("add-agent-btn"));
+    await waitFor(() => expect(captured.current?.screen).toBe("node-modal"));
+    fillAndSubmitNodeModal({ name: "alpha", project: "~/code/a" });
+    await waitFor(() => expect(captured.current?.screen).toBe("graph"));
+    await waitFor(() =>
+      expect(screen.getByTestId("design-draft-count").textContent).toContain("1")
+    );
+
+    // Resolve the draft tempId from its inspector row, then click the NODE.
+    const row = document.querySelector('[data-testid^="design-agent-"]')!;
+    const tempId = row.getAttribute("data-testid")!.replace("design-agent-", "");
+    fireEvent.click(screen.getByTestId(`graph-node-${tempId}`));
+
+    // #5 — the modal re-opens in MODIFY mode, prefilled with the node's config.
+    await waitFor(() => expect(captured.current?.screen).toBe("node-modal"));
+    expect(captured.current?.nodeModalCtx?.modifyTempId).toBe(tempId);
+    expect(screen.getByText("Modify node")).toBeTruthy();
+    expect((screen.getByTestId("nm-name-input") as HTMLInputElement).value).toBe("alpha");
+    expect(screen.getByTestId("nm-launch-btn").textContent).toContain("Save changes");
+
+    // Edit the project and save.
+    fireEvent.change(screen.getByTestId("nm-project-input"), { target: { value: "~/code/b" } });
+    fireEvent.click(screen.getByTestId("nm-launch-btn"));
+    await waitFor(() => expect(captured.current?.screen).toBe("graph"));
+
+    // Still ONE draft node — modified in place, not appended.
+    await waitFor(() =>
+      expect(screen.getByTestId("design-draft-count").textContent).toContain("1")
+    );
+
+    // Confirm & launch → the launched cwd reflects the EDIT (~/code/b, not /a).
+    fireEvent.click(screen.getByTestId("confirm-draft-btn"));
+    await waitFor(() => expect(launchWaslSession).toHaveBeenCalledTimes(1));
+    expect(
+      (launchWaslSession.mock.calls[0][0] as { wasl_target_key: { context: { cwd: string } } })
+        .wasl_target_key.context.cwd
+    ).toBe("~/code/b");
   });
 });
 

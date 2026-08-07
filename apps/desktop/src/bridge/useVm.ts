@@ -93,6 +93,10 @@ export interface NodeModalCtx {
    *  separate, later, explicit "Confirm & launch" action. Falsy/absent = the
    *  single-session fast lane (launch immediately, straight to Level-3). */
   designMode?: boolean;
+  /** #5 — when set, the modal MODIFIES an existing unlaunched (draft) node with
+   *  this tempId instead of adding a new one: its fields are prefilled and submit
+   *  dispatches UPDATE_DRAFT_NODE. Only draft nodes are modifiable. */
+  modifyTempId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +258,9 @@ type Action =
   // that materializes at Confirm time). ADD_DRAFT_EDGE records an explicit wire.
   // CLEAR_DRAFT wipes both lists (after Confirm & launch, or on Discard).
   | { type: "ADD_DRAFT_NODE"; node: DraftNode }
+  // #5 — re-edit an unlaunched draft node in place (config fields only; tempId,
+  // isLead, and all draft edges are preserved). No new auto-wire is added.
+  | { type: "UPDATE_DRAFT_NODE"; tempId: string; cfg: Omit<DraftNode, "tempId" | "isLead"> }
   | { type: "ADD_DRAFT_EDGE"; edge: DraftEdge }
   // Remove a draft node (by temp id) + every draft edge touching it; if the
   // removed node was the lead, promote the next remaining draft node to lead.
@@ -494,6 +501,16 @@ function reducer(state: VmState, action: Action): VmState {
       return { ...state, draftNodes, draftEdges };
     }
 
+    case "UPDATE_DRAFT_NODE": {
+      // Re-edit a draft node in place: replace its config fields while keeping
+      // its tempId + isLead (and leaving draft edges untouched, since the node's
+      // identity/wiring is unchanged — only its launch config differs).
+      const draftNodes = state.draftNodes.map((n) =>
+        n.tempId === action.tempId ? { ...n, ...action.cfg, tempId: n.tempId, isLead: n.isLead } : n
+      );
+      return { ...state, draftNodes };
+    }
+
     case "ADD_DRAFT_EDGE":
       return { ...state, draftEdges: [...state.draftEdges, action.edge] };
 
@@ -624,6 +641,9 @@ export interface VmContextValue {
    *  NO backend call). When it's not the first node, a draft edge from the lead
    *  is auto-wired. Returns the generated temp id. */
   addDraftNode: (cfg: Omit<DraftNode, "tempId" | "isLead">) => string;
+  /** #5 — re-edit an existing draft node in place (config only; tempId + isLead
+   *  and draft edges preserved). No backend call. */
+  updateDraftNode: (tempId: string, cfg: Omit<DraftNode, "tempId" | "isLead">) => void;
   /** Record an explicit draft edge between two draft (temp) node ids. */
   addDraftEdge: (edge: Omit<DraftEdge, "tempId">) => void;
   /** Remove a draft node by temp id (+ any draft edges touching it). No backend
@@ -1276,6 +1296,13 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     [state.draftNodes.length]
   );
 
+  const updateDraftNode = React.useCallback(
+    (tempId: string, cfg: Omit<DraftNode, "tempId" | "isLead">) => {
+      dispatch({ type: "UPDATE_DRAFT_NODE", tempId, cfg });
+    },
+    []
+  );
+
   const addDraftEdge = React.useCallback((edge: Omit<DraftEdge, "tempId">) => {
     dispatch({ type: "ADD_DRAFT_EDGE", edge: { tempId: genTempEdgeId(), ...edge } });
   }, []);
@@ -1410,6 +1437,7 @@ export function VmProvider({ children, initialState: init }: VmProviderProps) {
     deleteWorkstream,
     markDraftWorkstream,
     addDraftNode,
+    updateDraftNode,
     addDraftEdge,
     removeDraftNode,
     removeDraftEdge,

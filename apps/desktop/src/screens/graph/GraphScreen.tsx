@@ -106,6 +106,10 @@ export interface GraphScreenProps {
    *  connection dialog. Draft edges re-author client-side; real edges call the
    *  backend. Omitted ⇒ direction is not editable after creation. */
   onSetConnectionBi?: (id: string, bi: boolean) => void;
+  /** #5 — clicking a node in DESIGN mode requests re-editing it. Only draft
+   *  (unlaunched) nodes are modifiable; the wrapper opens the "Modify node"
+   *  modal for those and ignores real nodes. Omitted ⇒ no modify affordance. */
+  onModifyNode?: (id: string) => void;
   /** Remove an authored node (design mode). Draft nodes discard client-side;
    *  real nodes delete the session (the wrapper confirms). Omitted ⇒ no remove
    *  affordance on agent rows. */
@@ -158,6 +162,7 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
     onDiscardDraft,
     onConnect,
     onSetConnectionBi,
+    onModifyNode,
     onRemoveNode,
     onRemoveConnection,
     onPauseWorkstream,
@@ -620,7 +625,12 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
                       data-state={n.state}
                       data-selected={isSelected ? "true" : "false"}
                       data-dimmed={isDimmed ? "true" : "false"}
-                      onClick={() => onSelectNode(n.id)}
+                      onClick={() => {
+                        onSelectNode(n.id);
+                        // #5 — in design mode, clicking a node re-opens it for
+                        // editing (the wrapper opens "Modify node" for drafts).
+                        if (designMode) onModifyNode?.(n.id);
+                      }}
                       style={{
                         position: "absolute",
                         left: `${positioned.x}px`,

@@ -104,10 +104,18 @@ export function NodeModal() {
     deleteWorkstream,
     markDraftWorkstream,
     addDraftNode,
+    updateDraftNode,
     addDraftEdge,
   } = useVm();
   const ctx = state.nodeModalCtx;
   const open = state.screen === "node-modal" && ctx !== null;
+
+  // #5 — MODIFY mode: the modal is re-editing an existing unlaunched draft node.
+  // Its fields are prefilled below and submit dispatches UPDATE_DRAFT_NODE.
+  const modifyNode = ctx?.modifyTempId
+    ? state.draftNodes.find((n) => n.tempId === ctx.modifyTempId)
+    : undefined;
+  const isModify = modifyNode !== undefined;
 
   // BUG #2 — a "Single session" fast-lane workstream is created (empty) BEFORE
   // this modal opens. If the user cancels without ever launching an agent, that
@@ -170,6 +178,32 @@ export function NodeModal() {
       .catch(() => {/* keep fallbacks on error */});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // #5 — prefill every field from the draft node being MODIFIED, once per open.
+  // The ref guards against clobbering the user's in-progress edits on re-render;
+  // it resets when the modal closes or targets a different node.
+  const prefilledForRef = React.useRef<string | null>(null);
+  useEffect(() => {
+    if (!open || !modifyNode) {
+      prefilledForRef.current = null;
+      return;
+    }
+    if (prefilledForRef.current === modifyNode.tempId) return;
+    prefilledForRef.current = modifyNode.tempId;
+    setName(modifyNode.name);
+    setProject(modifyNode.project);
+    setHostId(modifyNode.hostId);
+    setDriver(modifyNode.driver);
+    setUserModifiedDriver(true); // don't let the defaults effect override a prefill
+    setModel(modifyNode.model);
+    setUserModifiedModel(true);
+    setSessionMode(modifyNode.session_mode);
+    setUserModifiedSessionMode(true);
+    setFirstPrompt(modifyNode.firstPrompt ?? "");
+    setResume(modifyNode.resume ?? false);
+    if (modifyNode.selectedResume) setSelectedResume(modifyNode.selectedResume);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, modifyNode]);
 
   // Capability discovery (agents + versioned models). Re-probe when we have NO
   // data yet, OR when the cached result says this LAUNCHABLE driver's CLI isn't
@@ -423,33 +457,45 @@ export function NodeModal() {
     if (!project.trim()) return;
     if (!driverAvailable(driver)) return;
 
+    // Every authored design node carries a NAME (#2) — including the first one,
+    // so its real name (not a fallback) shows on the node + in the connection
+    // dialog (#4). Required for both add and modify.
     const typedName = name.trim();
-    if (!ctx.isFirstNode && !typedName) {
+    if (!typedName) {
       setLaunchError("Agent name is required");
       return;
     }
 
     setLaunchError(null);
-    // This add authored a node into the workstream — it is no longer an empty
+    // This authored/edited a node into the workstream — it is no longer an empty
     // draft, so cancelling afterwards must NOT discard the workstream (BUG #2).
     launchedRef.current = true;
     markDraftWorkstream(null);
 
-    const tempId = addDraftNode({
-      name: typedName || ctx.wsName || "Agent",
+    // A design-mode node launches over Wasl (build-it-out), which threads resume
+    // via the target key — so carry the authored resume state for onConfirmDraft
+    // to use (#3: build-it-out agents get continue/resume just like native).
+    const cfg = {
+      name: typedName,
       project: project.trim(),
       hostId,
       driver,
       model,
       session_mode: sessionMode,
       firstPrompt: firstPrompt.trim() || undefined,
-      // A design-mode node launches over Wasl (build-it-out), which threads resume
-      // via the target key — so carry the authored resume state for onConfirmDraft
-      // to use (#3: build-it-out agents get continue/resume just like native).
       resume,
       selectedResume,
       resumeSessions: visibleSessions.map((s) => ({ id: s.id })),
-    });
+    };
+
+    if (isModify && ctx.modifyTempId) {
+      // #5 — re-edit in place: replace config, keep identity + wiring.
+      updateDraftNode(ctx.modifyTempId, cfg);
+      dispatch({ type: "SET_SCREEN", screen: "graph" });
+      return;
+    }
+
+    const tempId = addDraftNode(cfg);
     // Honor explicit Controlled-by / Feeds-from picks against existing DRAFT
     // nodes — recorded as draft edges (temp ids), never a real addConnection.
     if (controller) {
@@ -545,7 +591,14 @@ export function NodeModal() {
     return <div style={{ display: "none" }} data-testid="node-modal-hidden" aria-hidden="true" />;
   }
 
-  const launchLabel = ctx.isFirstNode ? "Launch session →" : "Add agent →";
+  // In DESIGN mode every add authors into the graph — "Add agent" even for the
+  // first node (#2); only the single-session fast lane says "Launch session".
+  // A modify re-edit says "Save changes".
+  const launchLabel = isModify
+    ? "Save changes →"
+    : ctx.isFirstNode && !ctx.designMode
+      ? "Launch session →"
+      : "Add agent →";
 
   return (
     <Modal open={open} onClose={close} width={600}>
@@ -586,10 +639,10 @@ export function NodeModal() {
               color: "var(--txt)",
             }}
           >
-            Add an agent
+            {isModify ? "Modify node" : "Add an agent"}
           </h2>
           <div style={{ fontSize: "calc(13px * var(--fs,1))", color: "var(--txt3)" }}>
-            to {ctx.wsName}
+            {isModify ? `in ${ctx.wsName}` : `to ${ctx.wsName}`}
           </div>
         </div>
         <button
@@ -660,9 +713,10 @@ export function NodeModal() {
           )}
         </div>
 
-        {/* Name — hidden on the "single session" fast lane (defaults to the
-            workstream name / project dir basename). */}
-        {!ctx.isFirstNode && (
+        {/* Name — shown for every design-mode node (incl. the first, #2) so its
+            real name drives the node label + connection dialog (#4). Hidden ONLY
+            on the single-session fast lane (defaults to ws name / dir basename). */}
+        {(!ctx.isFirstNode || ctx.designMode) && (
           <div>
             <div style={sectionLabel}>Name</div>
             <input
