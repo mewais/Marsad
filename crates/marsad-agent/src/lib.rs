@@ -68,7 +68,9 @@ pub use wasl_session::{
 // pure and always compiled; the real spawn/resize API is production-only
 // (real OS IO), re-exported so `crates/marsad-agent/tests/pty.rs` can drive
 // it directly under plain `cargo test` (see `pty.rs`'s module doc).
-pub use pty::{default_shell, pty_exec_argv, shell_for};
+// `PtyScrollback` is pure (no real IO) and always compiled so its ring-buffer
+// logic can be unit-tested without a live pty.
+pub use pty::{default_shell, pty_exec_argv, shell_for, PtyScrollback};
 #[cfg(not(coverage))]
 pub use pty::{resize_pty, spawn_pty, PtyEntry, PtyError};
 

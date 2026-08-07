@@ -150,6 +150,71 @@ pub(crate) fn pty_key(session_id: &str, terminal_id: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Output ring buffer — pure logic, always compiled + unit-tested
+// ---------------------------------------------------------------------------
+
+/// A bounded FIFO ring buffer of encoded `PtyOutput` lines for scrollback
+/// replay on re-attach.
+///
+/// When the buffer is at capacity the OLDEST entry is dropped to make room
+/// for the newest (newest-first retention). The buffer is ordered oldest →
+/// newest, so iterating it in insertion order replays the terminal history
+/// faithfully.
+///
+/// `CAP` is the maximum number of encoded output lines retained.  At ~8 KiB
+/// per chunk and 500 entries that is at most 4 MiB per terminal — a
+/// reasonable upper bound for an in-memory scrollback.  The constant is a
+/// generic parameter so unit tests can exercise wrap-around without needing
+/// hundreds of entries.
+pub struct PtyScrollback<const CAP: usize> {
+    buf: std::collections::VecDeque<String>,
+}
+
+impl<const CAP: usize> PtyScrollback<CAP> {
+    /// Create an empty ring buffer.
+    pub fn new() -> Self {
+        Self {
+            buf: std::collections::VecDeque::with_capacity(CAP),
+        }
+    }
+
+    /// Push `line` into the ring buffer.  If the buffer is already at
+    /// capacity, the oldest entry is evicted first so the cap is never
+    /// exceeded.
+    pub fn push(&mut self, line: String) {
+        if CAP == 0 {
+            return;
+        }
+        if self.buf.len() >= CAP {
+            self.buf.pop_front();
+        }
+        self.buf.push_back(line);
+    }
+
+    /// Return a snapshot of the buffered lines ordered oldest → newest —
+    /// the replay order that reconstructs the terminal screen faithfully.
+    pub fn lines(&self) -> Vec<String> {
+        self.buf.iter().cloned().collect()
+    }
+
+    /// Number of lines currently buffered.
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// Returns `true` if the buffer contains no lines.
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+}
+
+impl<const CAP: usize> Default for PtyScrollback<CAP> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Real pty IO — production builds only (see module doc's "Coverage
 // discipline" section)
 // ---------------------------------------------------------------------------
@@ -164,6 +229,12 @@ pub struct PtyEntry {
     /// The owning session — lets `teardown_session` kill EVERY terminal of a
     /// session (the registry is keyed by terminal, not session, in v2).
     pub session_id: String,
+    /// Bounded scrollback ring — recent encoded `PtyOutput` lines.  Filled
+    /// by `pump_pty_output` on every read; replayed to reconnecting viewers
+    /// by `spawn_pty_session`'s re-attach path.  `Arc<Mutex<…>>` so the pump
+    /// thread and the re-attach path can both reach it without holding the
+    /// whole `PtyEntry` lock for the duration of the replay broadcast.
+    pub scrollback: std::sync::Arc<std::sync::Mutex<PtyScrollback<500>>>,
 }
 
 #[cfg(not(coverage))]
@@ -247,6 +318,7 @@ pub fn spawn_pty(
             child,
             // Set by the caller (spawn_pty_session) which knows the session.
             session_id: String::new(),
+            scrollback: std::sync::Arc::new(std::sync::Mutex::new(PtyScrollback::new())),
         },
         reader,
     ))
@@ -285,12 +357,23 @@ pub fn resize_pty(entry: &PtyEntry, cols: u16, rows: u16) -> Result<(), PtyError
 /// same "parse the request, not just the reply" pattern already used for
 /// `launch_first_prompt`).
 ///
-/// Idempotent: if a pty is already live for `sid` (the user re-opened the
-/// Terminal tab), this is a no-op — the existing pty keeps running
-/// (tmux-pane-style detach/reattach; the frontend simply won't see
-/// historical scrollback on re-attach, a documented gap — see
-/// `docs/GAPS.md`).
+/// Re-attach scrollback replay: if a pty is already live for `sid` (the
+/// user re-opened the Terminal tab or restarted the app while the pty was
+/// still running), the frontend sends a fresh `PtyStart` with a NEW xterm
+/// instance (module-level cache was cleared on app restart). We replay the
+/// ring-buffered lines as a broadcast so the reconnecting viewer reconstructs
+/// the recent screen content immediately.
+///
+/// Why broadcast (not per-requester reply) is safe: the frontend only sends
+/// `PtyStart` for a terminal when `entry.started === false` (fresh xterm,
+/// no prior content), so replaying to all subscribers cannot double-paint an
+/// already-populated xterm. Other subscribers that are already watching the
+/// live stream also receive a fresh xterm on their side for the same reason
+/// (app restart resets their cache too). The replay lines are
+/// indistinguishable from the normal live broadcast — xterm.js handles them
+/// identically.
 #[cfg(not(coverage))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_pty_session(
     sid: String,
     terminal_id: String,
@@ -303,8 +386,24 @@ pub(crate) fn spawn_pty_session(
 ) {
     std::thread::spawn(move || {
         let key = pty_key(&sid, &terminal_id);
-        if entries.lock().unwrap().contains_key(&key) {
-            eprintln!("marsad-agent: session {sid} PtyStart — pty {key} already live, no-op");
+
+        // Re-attach path: pty already live — replay the scrollback ring so
+        // the reconnecting viewer (fresh empty xterm after app restart) sees
+        // the recent terminal history without waiting for new output.
+        if let Some(entry_arc) = entries.lock().unwrap().get(&key).cloned() {
+            let replay_lines = entry_arc.lock().unwrap().scrollback.lock().unwrap().lines();
+            let n = replay_lines.len();
+            eprintln!(
+                "marsad-agent: session {sid} PtyStart — pty {key} already live, replaying {n} scrollback lines"
+            );
+            if n > 0 {
+                let subs_guard = subs.lock().unwrap();
+                for line in replay_lines {
+                    subs_guard.iter().for_each(|s| {
+                        let _ = s.send(line.clone());
+                    });
+                }
+            }
             return;
         }
 
@@ -326,13 +425,17 @@ pub(crate) fn spawn_pty_session(
         match spawn_pty(&argv, cwd, cols, rows) {
             Ok((mut entry, reader)) => {
                 entry.session_id = sid.clone();
+                // Clone the scrollback Arc BEFORE moving the entry into the
+                // Mutex so `pump_pty_output` can push to it without holding
+                // the full PtyEntry lock on every read.
+                let scrollback = std::sync::Arc::clone(&entry.scrollback);
                 let shared = std::sync::Arc::new(std::sync::Mutex::new(entry));
                 entries
                     .lock()
                     .unwrap()
                     .insert(key.clone(), std::sync::Arc::clone(&shared));
                 eprintln!("marsad-agent: session {sid} pty {key} started ({cols}x{rows})");
-                pump_pty_output(sid, terminal_id, key, reader, subs, entries);
+                pump_pty_output(sid, terminal_id, key, reader, subs, entries, scrollback);
             }
             Err(e) => {
                 eprintln!("marsad-agent: session {sid} pty spawn failed: {e}");
@@ -351,10 +454,11 @@ pub(crate) fn spawn_pty_session(
 }
 
 /// Read loop: pump raw bytes off the pty's reader end, base64-encode each
-/// chunk (see `marsad_proto::IpcMsg::PtyOutput`'s doc comment for why), and
-/// broadcast as `PtyOutput` to every subscriber. On EOF/read-error (the
-/// child exited or the pty tore down), reap the child for its real exit
-/// code, remove the registry entry, and broadcast `PtyExit`.
+/// chunk (see `marsad_proto::IpcMsg::PtyOutput`'s doc comment for why), push
+/// the encoded line into the scrollback ring buffer, then broadcast as
+/// `PtyOutput` to every subscriber. On EOF/read-error (the child exited or
+/// the pty tore down), reap the child for its real exit code, remove the
+/// registry entry, and broadcast `PtyExit`.
 #[cfg(not(coverage))]
 fn pump_pty_output(
     sid: String,
@@ -363,6 +467,7 @@ fn pump_pty_output(
     mut reader: Box<dyn Read + Send>,
     subs: std::sync::Arc<std::sync::Mutex<Vec<std::sync::mpsc::Sender<String>>>>,
     entries: PtyRegistry,
+    scrollback: std::sync::Arc<std::sync::Mutex<PtyScrollback<500>>>,
 ) {
     use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
@@ -378,6 +483,12 @@ fn pump_pty_output(
                     terminal_id: terminal_id.clone(),
                     data,
                 });
+                // Push into the scrollback ring BEFORE broadcasting so that a
+                // racing re-attach (PtyStart on the already-live path) cannot
+                // receive this line via broadcast AND again via the replay with
+                // a tiny window — the replay always reads a consistent snapshot
+                // taken under the scrollback lock.
+                scrollback.lock().unwrap().push(line.clone());
                 let subs_guard = subs.lock().unwrap();
                 subs_guard.iter().for_each(|s| {
                     let _ = s.send(line.clone());

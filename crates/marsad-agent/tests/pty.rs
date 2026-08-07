@@ -1,10 +1,10 @@
 //! WAVE 3b — pty escape-hatch terminal: pure selection logic (`shell_for`,
-//! `default_shell`, `pty_exec_argv`). Always compiled — no external
-//! dependency (no real pty, no OS process) — unlike the REAL pty spawn/IO
-//! tests in `tests/pty_live.rs`, which are `#![cfg(not(coverage))]` (see that
-//! file's header for why).
+//! `default_shell`, `pty_exec_argv`) plus the `PtyScrollback` ring-buffer
+//! helper. Always compiled — no external dependency (no real pty, no OS
+//! process) — unlike the REAL pty spawn/IO tests in `tests/pty_live.rs`,
+//! which are `#![cfg(not(coverage))]` (see that file's header for why).
 
-use marsad_agent::{default_shell, pty_exec_argv, shell_for};
+use marsad_agent::{default_shell, pty_exec_argv, shell_for, PtyScrollback};
 
 // ---------------------------------------------------------------------------
 // shell_for / default_shell
@@ -138,4 +138,96 @@ fn pty_exec_argv_plink_inserts_force_pty_flag_after_binary() {
             "my-session".to_string(),
         ]
     );
+}
+
+// ---------------------------------------------------------------------------
+// PtyScrollback — ring buffer: bounds, order, replay
+// ---------------------------------------------------------------------------
+
+/// A fresh buffer is empty and `lines()` returns an empty vec.
+#[test]
+fn scrollback_starts_empty() {
+    let sb: PtyScrollback<10> = PtyScrollback::new();
+    assert_eq!(sb.len(), 0);
+    assert!(sb.is_empty());
+    assert!(sb.lines().is_empty());
+}
+
+/// Pushing up to the capacity does not evict anything.
+#[test]
+fn scrollback_fills_to_cap_without_eviction() {
+    let mut sb: PtyScrollback<4> = PtyScrollback::new();
+    for i in 0..4usize {
+        sb.push(format!("line{i}"));
+    }
+    assert_eq!(sb.len(), 4);
+    let lines = sb.lines();
+    assert_eq!(lines, vec!["line0", "line1", "line2", "line3"]);
+}
+
+/// Pushing beyond the capacity evicts the OLDEST entries and retains the
+/// NEWEST, preserving insertion order in the remaining slice.
+#[test]
+fn scrollback_evicts_oldest_when_over_cap() {
+    let mut sb: PtyScrollback<3> = PtyScrollback::new();
+    // Push 5 entries into a cap-3 buffer.
+    for i in 0..5usize {
+        sb.push(format!("line{i}"));
+    }
+    // Only the 3 newest (line2, line3, line4) should remain, in order.
+    assert_eq!(sb.len(), 3);
+    let lines = sb.lines();
+    assert_eq!(lines, vec!["line2", "line3", "line4"]);
+}
+
+/// The lines returned by `lines()` are in oldest→newest insertion order —
+/// the correct replay order for xterm.js reconstruction.
+#[test]
+fn scrollback_lines_are_oldest_to_newest() {
+    let mut sb: PtyScrollback<5> = PtyScrollback::new();
+    let input: Vec<String> = (0..5).map(|i| format!("msg{i}")).collect();
+    for line in &input {
+        sb.push(line.clone());
+    }
+    assert_eq!(sb.lines(), input);
+}
+
+/// A CAP-0 buffer never stores anything (no-op push, always empty lines).
+#[test]
+fn scrollback_zero_cap_is_always_empty() {
+    let mut sb: PtyScrollback<0> = PtyScrollback::new();
+    sb.push("should be dropped".to_string());
+    assert_eq!(sb.len(), 0);
+    assert!(sb.lines().is_empty());
+}
+
+/// `lines()` returns a snapshot that is independent of subsequent pushes —
+/// i.e. calling `push` after `lines()` does not mutate the snapshot.
+#[test]
+fn scrollback_lines_snapshot_is_independent() {
+    let mut sb: PtyScrollback<4> = PtyScrollback::new();
+    sb.push("a".to_string());
+    sb.push("b".to_string());
+    let snapshot = sb.lines();
+    sb.push("c".to_string()); // mutate AFTER taking the snapshot
+    // The snapshot must still reflect the state at the time it was taken.
+    assert_eq!(snapshot, vec!["a", "b"]);
+    // The live buffer has the new entry.
+    assert_eq!(sb.lines(), vec!["a", "b", "c"]);
+}
+
+/// Wrap-around stress: push N entries into a cap-K buffer and verify that
+/// after wrapping many times, the K newest entries are retained in order.
+#[test]
+fn scrollback_wrap_around_stress() {
+    const CAP: usize = 7;
+    let n = 100usize;
+    let mut sb: PtyScrollback<CAP> = PtyScrollback::new();
+    for i in 0..n {
+        sb.push(format!("entry{i}"));
+    }
+    assert_eq!(sb.len(), CAP);
+    // The K newest are entries (n-CAP)..(n), in order.
+    let expected: Vec<String> = (n - CAP..n).map(|i| format!("entry{i}")).collect();
+    assert_eq!(sb.lines(), expected);
 }
