@@ -204,6 +204,54 @@ impl Agent {
         Ok(())
     }
 
+    /// Return a reference to the provider for `host_id`, materializing it from
+    /// that host's registered factory on first use. Falls back to the
+    /// host-agnostic DEFAULT provider (the test seam / single-host serve default)
+    /// when no per-host entry or factory exists — so single-host callers and the
+    /// existing seams keep working unchanged. Absent everything -> Protocol error.
+    ///
+    /// Multi-host routing: `ensure_wasl_runtime_node` registers a factory PER
+    /// host_id (capturing that host's runtime-control base_url), so a workstream
+    /// spanning two hosts materializes a distinct provider for each and each
+    /// session's `get_or_start` reaches its own node — unlike the single slot,
+    /// which could only ever hold ONE host's endpoint.
+    fn wasl_provider_for(
+        &mut self,
+        host_id: &str,
+    ) -> Result<&dyn marsad_wasl_session::WaslSessionProvider, AgentError> {
+        // Materialize from this host's factory on first use (only when no
+        // per-host provider is present yet). Do the insert, THEN a separate
+        // `.get()` to hand back the ref — never hold a map borrow across the
+        // insert (borrow-checker: the factory build + insert fully release their
+        // borrows before the terminal `get`).
+        if !self.wasl_session_providers_by_host.0.contains_key(host_id) {
+            if let Some(factory) = self.wasl_session_provider_factories_by_host.0.get(host_id) {
+                let provider = factory();
+                self.wasl_session_providers_by_host
+                    .0
+                    .insert(host_id.to_string(), provider);
+            }
+        }
+        if self.wasl_session_providers_by_host.0.contains_key(host_id) {
+            return self
+                .wasl_session_providers_by_host
+                .0
+                .get(host_id)
+                .map(|p| p.as_ref())
+                .ok_or_else(|| {
+                    AgentError::Protocol("no wasl session provider registered".to_string())
+                });
+        }
+        // Fallback: the host-agnostic DEFAULT single seam — materialize it from
+        // the DEFAULT factory (or use the directly-registered provider), exactly
+        // as the single-host launch/observe path always did.
+        self.ensure_wasl_session_provider()?;
+        self.wasl_session_provider
+            .0
+            .as_deref()
+            .ok_or_else(|| AgentError::Protocol("no wasl session provider registered".to_string()))
+    }
+
     /// Obtain the session's registered client handle (an `Arc` clone), dropping
     /// the map lock before returning it — so callers NEVER hold the map lock
     /// across a blocking client call (§8.1). Absent session -> `Protocol` error
@@ -235,22 +283,20 @@ impl Agent {
     #[cfg(not(coverage))]
     pub(crate) fn wasl_observe_client_and_after_seq(
         &mut self,
+        host_id: &str,
         wasl_target_key: serde_json::Value,
         persisted_last_seq: u64,
     ) -> Result<(Box<dyn WaslSessionClient>, u64), AgentError> {
         // Relaunch: the observe re-pump runs on a cold agent where only the provider
-        // FACTORY is registered (by `ensure_wasl_runtime_node`); materialize the
-        // provider from it first, exactly as the launch path does — otherwise this
-        // failed with "no wasl session provider for observe" and the transcript was
+        // FACTORY is registered (by `ensure_wasl_runtime_node`, per host);
+        // `wasl_provider_for` materializes the right host's provider (or the
+        // DEFAULT single seam for single-host callers) — otherwise this failed
+        // with "no wasl session provider for observe" and the transcript was
         // never re-pumped.
-        self.ensure_wasl_session_provider()
-            .map_err(|_| AgentError::Protocol("no wasl session provider for observe".to_string()))?;
         let key = WaslTargetKey(wasl_target_key);
         let (client, snapshot) = self
-            .wasl_session_provider
-            .0
-            .as_ref()
-            .expect("provider present after ensure_wasl_session_provider")
+            .wasl_provider_for(host_id)
+            .map_err(|_| AgentError::Protocol("no wasl session provider for observe".to_string()))?
             .get_or_start(&key)
             .map_err(|e| AgentError::Protocol(format!("observe get_or_start failed: {e}")))?;
         let after_seq = wasl_reconnect_after_seq(snapshot.last_seq, persisted_last_seq);
@@ -333,12 +379,25 @@ impl Agent {
             crate::wasl::wasl_control_bind(host_id)
         };
 
-        // Test-seam / serve()-pre-set precedence: if a provider or factory is
-        // already registered, return immediately with the real base_url — do NOT
-        // overwrite the pre-set seam with a new factory. (Identical for local and
-        // remote: once a node is up and its factory registered, a repeat launch is
-        // a cheap no-op regardless of where the node lives.)
-        if self.wasl_session_provider.0.is_some()
+        // Idempotent early-return. Per-host precedence: if THIS host already has a
+        // per-host provider/factory registered (a prior launch/adopt of this host),
+        // it's a cheap no-op — do NOT overwrite it. Multi-host workstreams register
+        // one factory per host, so each host registers independently; a second host
+        // no longer short-circuits on the first host's factory (the global
+        // early-return bug that routed every session to one node).
+        //
+        // The DEFAULT single seam is ALSO honored: if a provider/factory is set on
+        // the host-agnostic single slot (the test-seam / single-host serve default),
+        // return immediately — every existing single-host test relies on this (they
+        // set the DEFAULT seam and expect a cheap no-op). Production multi-host has
+        // NO default seam set for remote hosts, so each host falls through and
+        // registers its own per-host factory below.
+        if self
+            .wasl_session_provider_factories_by_host
+            .0
+            .contains_key(host_id)
+            || self.wasl_session_providers_by_host.0.contains_key(host_id)
+            || self.wasl_session_provider.0.is_some()
             || self.wasl_session_provider_factory.0.is_some()
         {
             return Ok(base_url);
@@ -522,13 +581,16 @@ impl Agent {
         // exactly what the node-less tests expect (`is_err()` + spawn logged).
         // In production the just-spawned node answers and the launch succeeds.
         let factory_base_url = base_url.clone();
-        self.wasl_session_provider_factory.0 = Some(Box::new(move || {
-            Box::new(marsad_wasl_session::RealWaslSessionProvider::new(
-                marsad_wasl_session::WaslSessionClientConfig {
-                    base_url: factory_base_url.clone(),
-                },
-            )) as Box<dyn marsad_wasl_session::WaslSessionProvider>
-        }));
+        self.wasl_session_provider_factories_by_host.0.insert(
+            host_id.to_string(),
+            Box::new(move || {
+                Box::new(marsad_wasl_session::RealWaslSessionProvider::new(
+                    marsad_wasl_session::WaslSessionClientConfig {
+                        base_url: factory_base_url.clone(),
+                    },
+                )) as Box<dyn marsad_wasl_session::WaslSessionProvider>
+            }),
+        );
 
         eprintln!(
             "marsad-agent: wasl-node: factory registered for host {host_id} at {base_url}"
@@ -728,15 +790,20 @@ impl Agent {
             );
         }
 
-        // Register the provider factory at the LOCAL control tunnel endpoint.
+        // Register the provider factory at the LOCAL control tunnel endpoint,
+        // keyed PER host so a multi-host workstream routes each host's sessions
+        // to its own tunnel endpoint (not the first host's).
         let factory_base_url = base_url.clone();
-        self.wasl_session_provider_factory.0 = Some(Box::new(move || {
-            Box::new(marsad_wasl_session::RealWaslSessionProvider::new(
-                marsad_wasl_session::WaslSessionClientConfig {
-                    base_url: factory_base_url.clone(),
-                },
-            )) as Box<dyn marsad_wasl_session::WaslSessionProvider>
-        }));
+        self.wasl_session_provider_factories_by_host.0.insert(
+            host_id.to_string(),
+            Box::new(move || {
+                Box::new(marsad_wasl_session::RealWaslSessionProvider::new(
+                    marsad_wasl_session::WaslSessionClientConfig {
+                        base_url: factory_base_url.clone(),
+                    },
+                )) as Box<dyn marsad_wasl_session::WaslSessionProvider>
+            }),
+        );
 
         eprintln!(
             "marsad-agent: wasl-node[remote {host_target:?}]: factory registered at {base_url}"
@@ -974,17 +1041,6 @@ impl Agent {
             key_val["context"] = serde_json::json!({ "mcp_config": mcp_config });
         }
 
-        // Ensure a provider exists: prefer the directly-registered one, else build
-        // one from the factory (once) and keep it. Absent both -> Protocol error.
-        self.ensure_wasl_session_provider().map_err(|_| {
-            AgentError::Protocol(format!(
-                "LaunchWaslSession {session_id}: no wasl session provider registered"
-            ))
-        })?;
-
-        // Resolve (or reattach to) the client. `get_or_start` is the potentially
-        // blocking call, but the provider is `&mut self`-borrowed here (not under
-        // any registry lock), so lock hygiene holds trivially.
         // Speak the Wasl node's canonical protocol name (opencode → opencode-acp)
         // before create, so the node's router finds the sub-provider. claude/codex
         // are identical on both sides. This is the one Marsad→Wasl boundary mapping.
@@ -993,11 +1049,20 @@ impl Agent {
             key_val["protocol"] = serde_json::Value::String(mapped);
         }
         let key = WaslTargetKey(key_val);
+
+        // Resolve (or reattach to) the client via THIS host's provider —
+        // materialized from the per-host factory `ensure_wasl_runtime_node`
+        // registered above (or the DEFAULT single seam for single-host callers).
+        // `get_or_start` is the potentially blocking call, but the provider is
+        // `&mut self`-borrowed here (not under any registry lock), so lock hygiene
+        // holds trivially.
         let (client, _snapshot) = self
-            .wasl_session_provider
-            .0
-            .as_ref()
-            .expect("provider present after the guard above")
+            .wasl_provider_for(&host_id)
+            .map_err(|_| {
+                AgentError::Protocol(format!(
+                    "LaunchWaslSession {session_id}: no wasl session provider registered"
+                ))
+            })?
             .get_or_start(&key)
             .map_err(|e| AgentError::Protocol(format!("get_or_start failed: {e}")))?;
 
@@ -1274,14 +1339,100 @@ mod attach_relaunch_tests {
             "precondition: provider not yet materialized, only the factory is set"
         );
         let key = serde_json::json!({"protocol": "claude", "ctx": "relaunch"});
-        let res = a.wasl_observe_client_and_after_seq(key, 0);
+        // No per-host factory is registered for this host, so `wasl_provider_for`
+        // (called inside `wasl_observe_client_and_after_seq`) must fall back to the
+        // host-agnostic DEFAULT factory set above and materialize the DEFAULT
+        // provider — proving the single-seam fallback keeps working unchanged.
+        let res = a.wasl_observe_client_and_after_seq("host-relaunch", key, 0);
         assert!(
             res.is_ok(),
-            "observe must materialize the provider from the factory on relaunch, got {res:?}"
+            "observe must materialize the provider from the DEFAULT factory on relaunch, got {res:?}"
         );
         assert!(
             a.wasl_session_provider.0.is_some(),
-            "the provider must now be materialized and kept for subsequent calls"
+            "the DEFAULT provider must now be materialized and kept for subsequent calls"
+        );
+    }
+
+    /// Multi-host routing: two hosts each register their OWN per-host factory
+    /// (exactly what `ensure_wasl_runtime_node` does per host). `wasl_provider_for`
+    /// must materialize a DISTINCT provider for each host and route each host's
+    /// `get_or_start` to that host's provider — never collapse both onto one node
+    /// (the single-slot bug that sent every session to the first host's endpoint).
+    /// A third host with no per-host factory must fall back to the DEFAULT seam.
+    #[test]
+    fn provider_for_routes_per_host_and_falls_back_to_default() {
+        use marsad_wasl_session::FakeWaslSessionProvider;
+        let mut a = agent();
+
+        // Two per-host factories, each handing out a fake that reattaches to a
+        // DISTINCT surviving target — so a mis-route (host-B hitting host-A's
+        // provider) is observable via the returned target_id.
+        let key = WaslTargetKey(serde_json::json!({"protocol": "claude", "ctx": "ws"}));
+        let key_a = key.clone();
+        a.wasl_session_provider_factories_by_host.0.insert(
+            "host-A".to_string(),
+            Box::new(move || {
+                let p = FakeWaslSessionProvider::new();
+                p.script_pre_existing(&key_a, "target-host-A", 0);
+                Box::new(p)
+            }),
+        );
+        let key_b = key.clone();
+        a.wasl_session_provider_factories_by_host.0.insert(
+            "host-B".to_string(),
+            Box::new(move || {
+                let p = FakeWaslSessionProvider::new();
+                p.script_pre_existing(&key_b, "target-host-B", 0);
+                Box::new(p)
+            }),
+        );
+
+        // host-A → its own provider (target-host-A).
+        let (client_a, _) = a
+            .wasl_provider_for("host-A")
+            .expect("host-A provider materializes from its per-host factory")
+            .get_or_start(&key)
+            .expect("get_or_start host-A");
+        assert_eq!(
+            client_a.target_id(),
+            "target-host-A",
+            "host-A must route to host-A's provider"
+        );
+
+        // host-B → its own provider (target-host-B), NOT host-A's.
+        let (client_b, _) = a
+            .wasl_provider_for("host-B")
+            .expect("host-B provider materializes from its per-host factory")
+            .get_or_start(&key)
+            .expect("get_or_start host-B");
+        assert_eq!(
+            client_b.target_id(),
+            "target-host-B",
+            "host-B must route to host-B's provider, not host-A's"
+        );
+
+        // Both hosts materialized DISTINCT entries.
+        assert_eq!(
+            a.wasl_session_providers_by_host.0.len(),
+            2,
+            "each host materializes its own provider entry"
+        );
+
+        // A host with no per-host factory falls back to the DEFAULT single seam.
+        a.set_wasl_session_provider_factory(Box::new(|| Box::new(FakeWaslSessionProvider::new())));
+        assert!(
+            a.wasl_provider_for("host-unknown").is_ok(),
+            "an unregistered host must fall back to the DEFAULT provider seam"
+        );
+        assert!(
+            a.wasl_session_provider.0.is_some(),
+            "the DEFAULT provider is materialized for the fallback host"
+        );
+        assert_eq!(
+            a.wasl_session_providers_by_host.0.len(),
+            2,
+            "the DEFAULT fallback does NOT add a per-host entry"
         );
     }
 }

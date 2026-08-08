@@ -259,6 +259,24 @@ pub type WaslSessionProviderFactoryFn =
 type WaslSessionProviderFactory = Option<WaslSessionProviderFactoryFn>;
 opaque_debug_wrap!(WaslSessionProviderFactoryWrap(WaslSessionProviderFactory));
 
+// Per-host provider routing (multi-host workstreams). The single slots above
+// are the host-agnostic DEFAULT fallback (test seams / the single-host serve
+// default); these two maps route a materialized provider (or its factory) PER
+// host_id so a workstream that spans two hosts (some sessions on host-A, some
+// on host-B) reaches each host's own runtime-control node — the global single
+// slot could only ever hold ONE host's endpoint. Keyed by host_id. Always
+// compiled (same gating as the single slots — the launch/attach path must be
+// reachable under coverage, and inserting a factory/provider performs no IO by
+// itself). Materialized lazily from the per-host factory on first use (mirrors
+// `ensure_wasl_session_provider` for the single slot).
+type WaslSessionProvidersByHost =
+    HashMap<String, Box<dyn marsad_wasl_session::WaslSessionProvider>>;
+opaque_debug_wrap!(WaslSessionProvidersByHostWrap(WaslSessionProvidersByHost));
+type WaslSessionProviderFactoriesByHost = HashMap<String, WaslSessionProviderFactoryFn>;
+opaque_debug_wrap!(WaslSessionProviderFactoriesByHostWrap(
+    WaslSessionProviderFactoriesByHost
+));
+
 // Real-IO container wrapper — production builds only.
 // Uses the same opaque Debug pattern so `derive(Debug)` on `Agent` compiles.
 #[cfg(not(coverage))]
@@ -770,6 +788,16 @@ pub struct Agent {
     /// Wasl Backend (X6): the provider-factory override test seam. Always
     /// compiled.
     wasl_session_provider_factory: WaslSessionProviderFactoryWrap,
+    /// Per-host materialized `WaslSessionProvider`s, keyed by host_id. Populated
+    /// lazily from `wasl_session_provider_factories_by_host` on first use so a
+    /// multi-host workstream routes each host's sessions to that host's own
+    /// runtime node (the single `wasl_session_provider` slot above can only hold
+    /// ONE host's endpoint). Always compiled.
+    wasl_session_providers_by_host: WaslSessionProvidersByHostWrap,
+    /// Per-host provider factories, keyed by host_id. Registered by
+    /// `ensure_wasl_runtime_node` (one factory per host, capturing that host's
+    /// base_url). Always compiled.
+    wasl_session_provider_factories_by_host: WaslSessionProviderFactoriesByHostWrap,
 }
 
 impl Agent {
@@ -860,6 +888,10 @@ impl Agent {
             wasl_session_clients: WaslSessionClientsWrap(empty_wasl_session_client_map()),
             wasl_session_provider: WaslSessionProviderWrap(None),
             wasl_session_provider_factory: WaslSessionProviderFactoryWrap(None),
+            wasl_session_providers_by_host: WaslSessionProvidersByHostWrap(HashMap::new()),
+            wasl_session_provider_factories_by_host: WaslSessionProviderFactoriesByHostWrap(
+                HashMap::new(),
+            ),
         })
     }
 
@@ -946,6 +978,10 @@ impl Agent {
             wasl_session_clients: WaslSessionClientsWrap(empty_wasl_session_client_map()),
             wasl_session_provider: WaslSessionProviderWrap(None),
             wasl_session_provider_factory: WaslSessionProviderFactoryWrap(None),
+            wasl_session_providers_by_host: WaslSessionProvidersByHostWrap(HashMap::new()),
+            wasl_session_provider_factories_by_host: WaslSessionProviderFactoriesByHostWrap(
+                HashMap::new(),
+            ),
         })
     }
 

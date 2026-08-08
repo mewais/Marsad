@@ -1137,17 +1137,23 @@ impl Agent {
             // a terminal `SessionExited` ends the thread (Marsad does not own the
             // process — there is nothing to reconnect to).
             if out_lines.is_ok() && cmd.line.contains("\"LaunchWaslSession\"") {
-                if let Some((sid, key)) = serde_json::from_str::<serde_json::Value>(&cmd.line)
-                    .ok()
-                    .and_then(|v| {
-                        let sid = v.get("session_id")?.as_str()?.to_string();
-                        let key = v.get("wasl_target_key")?.clone();
-                        Some((sid, key))
-                    })
+                if let Some((sid, host_id, key)) =
+                    serde_json::from_str::<serde_json::Value>(&cmd.line)
+                        .ok()
+                        .and_then(|v| {
+                            let sid = v.get("session_id")?.as_str()?.to_string();
+                            let host_id = v
+                                .get("host_id")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let key = v.get("wasl_target_key")?.clone();
+                            Some((sid, host_id, key))
+                        })
                 {
                     // A fresh launch has no persisted binding yet → resume/reset
                     // coincide at 0 (`wasl_reconnect_after_seq(_, 0)` == 0).
-                    match self.wasl_observe_client_and_after_seq(key, 0) {
+                    match self.wasl_observe_client_and_after_seq(&host_id, key, 0) {
                         Ok((client, after_seq)) => {
                             spawn_wasl_observe(
                                 sid,
@@ -1210,8 +1216,10 @@ impl Agent {
                             );
                         }
                     }
-                    // (Re)spawn the observe pump from the reported after_seq.
-                    match self.wasl_observe_client_and_after_seq(key, after_seq) {
+                    // (Re)spawn the observe pump from the reported after_seq,
+                    // routed through THIS host's provider (registered just above by
+                    // `ensure_wasl_runtime_node`).
+                    match self.wasl_observe_client_and_after_seq(&host_id_str, key, after_seq) {
                         Ok((client, resolved_after_seq)) => {
                             spawn_wasl_observe(
                                 sid,
