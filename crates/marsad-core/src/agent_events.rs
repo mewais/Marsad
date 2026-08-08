@@ -467,7 +467,7 @@ impl Core {
     /// Persist the WaslManaged session's advanced `wasl_last_seq` into its store
     /// binding so a reconnect re-attaches from the last observed seq (§6.1).
     /// Best-effort — a store error never fails event folding.
-    fn persist_wasl_last_seq(&mut self, session_id: &str) {
+    pub(crate) fn persist_wasl_last_seq(&mut self, session_id: &str) {
         // Caller (`handle_wasl_session_event`) verified the session exists
         // immediately before calling, and the single-threaded `&mut self` call
         // path removes nothing in between — so the session is always present.
@@ -487,6 +487,7 @@ impl Core {
                 host_id: binding.host_id,
                 provider_key: binding.provider_key,
                 last_seq,
+                transcript_json: serde_json::to_string(&r.transcript).unwrap_or_default(),
             });
     }
 

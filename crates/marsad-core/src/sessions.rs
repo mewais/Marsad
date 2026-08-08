@@ -129,6 +129,7 @@ impl Core {
                 host_id: binding.host_id.clone(),
                 provider_key: binding.provider_key.clone(),
                 last_seq: 0,
+                transcript_json: String::new(),
             });
 
         let mut state = SessionState::initial();
@@ -524,6 +525,7 @@ impl Core {
                     host_id: binding.host_id.clone(),
                     provider_key: new_key,
                     last_seq: 0,
+                    transcript_json: String::new(),
                 });
 
                 // 5. Return the same VmUpdates the native path returns.
@@ -954,6 +956,15 @@ impl Core {
             rec.state.phase = Phase::Working;
             rec.state.end_reason = None;
             rec.state.interrupt_requested = false;
+            // Persist the just-pushed User entry NOW for a WaslManaged session, so
+            // the prompt survives a relaunch even if the app exits before any node
+            // event folds. The node's observe replay does NOT carry prompt text
+            // (TurnAccepted has none), so this is the only durable record of it.
+            // MarsadManaged stays byte-identical (its transcript re-hydrates from
+            // the agent's TranscriptBackfill replay, never persisted here).
+            if matches!(self.runtime_owner(id), RuntimeOwner::WaslManaged { .. }) {
+                self.persist_wasl_last_seq(id);
+            }
         }
         // X6 (§6.1): route by RuntimeOwner — MarsadManaged emits SendPrompt;
         // WaslManaged emits SendWaslPrompt (fresh per-send UUID idempotency key).
@@ -1291,27 +1302,37 @@ impl Core {
             }
             // Recover the runtime owner (and the last observed seq) from the
             // persisted binding, if any. Absent binding → MarsadManaged (default).
-            let (runtime_owner, wasl_last_seq) = match wasl_bindings.get(&s.id) {
-                Some(b) => (
-                    RuntimeOwner::WaslManaged {
+            // For a WaslManaged binding we also recover the persisted transcript so
+            // the user's prompts survive relaunch (the node's observe replay carries
+            // no prompt text — TurnAccepted has none). `None` transcript means "not
+            // WaslManaged / no stored transcript, use the local read below".
+            let (runtime_owner, wasl_last_seq, wasl_transcript) = match wasl_bindings.get(&s.id) {
+                Some(b) => {
+                    let owner = RuntimeOwner::WaslManaged {
                         binding: WaslSessionBinding {
                             target_id: b.target_id.clone(),
                             host_id: b.host_id.clone(),
                             provider_key: b.provider_key.clone(),
                         },
-                    },
-                    // Cold restore ⇒ full node replay from seq 0 (§6.1). The
-                    // transcript is NOT persisted for WaslManaged sessions, so on
-                    // relaunch it must be rebuilt entirely by re-pumping the node's
-                    // history; re-attaching from the persisted `b.last_seq` would
-                    // replay NOTHING and leave the transcript empty forever.
-                    // `wasl_seen_seqs` starts empty here, so the replay folds each
-                    // event exactly once. `b.last_seq` remains meaningful only for a
-                    // warm in-process reconnect (which keeps the in-memory
-                    // transcript) — that path does NOT go through `load_sessions`.
-                    0,
-                ),
-                None => (RuntimeOwner::MarsadManaged, 0),
+                    };
+                    let stored: Vec<marsad_events::TranscriptEntry> =
+                        serde_json::from_str(&b.transcript_json).unwrap_or_default();
+                    if stored.is_empty() {
+                        // Pre-fix binding (no stored transcript) ⇒ full node replay
+                        // from seq 0 (§6.1) to at least rebuild the responses.
+                        // `wasl_seen_seqs` starts empty here, so the replay folds each
+                        // event exactly once. Re-attaching from `b.last_seq` here would
+                        // replay NOTHING and leave the transcript empty forever.
+                        (owner, 0, None)
+                    } else {
+                        // Post-fix binding: the complete transcript (prompts + folded
+                        // responses) is persisted, so restore it verbatim and reattach
+                        // from `b.last_seq` — the stream then resumes with only NEW
+                        // events (> last_seq), so no re-replay, no dup, prompts kept.
+                        (owner, b.last_seq, Some(stored))
+                    }
+                }
+                None => (RuntimeOwner::MarsadManaged, 0, None),
             };
             // opencode owns no claude `~/.claude` transcript — its history comes
             // from the ACP stream. Reading the project's claude transcript here
@@ -1408,7 +1429,10 @@ impl Core {
                     host_id: s.host_id.clone(),
                     state,
                     changes: initial_changes,
-                    transcript,
+                    // A WaslManaged session with a stored transcript restores that
+                    // verbatim (prompts + responses); everything else uses the local
+                    // claude-JSONL read above.
+                    transcript: wasl_transcript.unwrap_or(transcript),
                     seen_msg_ids: std::collections::HashSet::new(),
                     name: restored_name,
                     shell_running: false,

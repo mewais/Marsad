@@ -424,6 +424,15 @@ pub struct PersistedWaslBinding {
     /// (§6.1 step 2).
     #[serde(default)]
     pub last_seq: u64,
+    /// The folded Wasl transcript at persist time, serialized as JSON (a
+    /// `Vec<marsad_events::TranscriptEntry>`). Persisted so a relaunch restores the
+    /// COMPLETE transcript — including the user's prompts, which the node's observe
+    /// replay does NOT carry (TurnAccepted has no prompt text). Empty string for a
+    /// binding written before this field existed (then core falls back to a full
+    /// node replay). Stored as a string (not the typed Vec) to avoid coupling the
+    /// store record to marsad_events here.
+    #[serde(default)]
+    pub transcript_json: String,
 }
 
 /// A single transcript event.

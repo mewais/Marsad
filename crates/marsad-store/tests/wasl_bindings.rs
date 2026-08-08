@@ -40,6 +40,7 @@ fn binding(session_id: &str) -> PersistedWaslBinding {
         host_id: "local".to_string(),
         provider_key: serde_json::json!({ "protocol": "claude", "ctx": session_id }),
         last_seq: 0,
+        transcript_json: String::new(),
     }
 }
 
@@ -97,6 +98,7 @@ fn upsert_wasl_binding_preserves_all_fields_incl_provider_key_and_last_seq() {
             "ctx": { "nested": ["a", 1, true, null] }
         }),
         last_seq: 987_654_321,
+        transcript_json: String::new(),
     };
     store.upsert_wasl_binding(&b).expect("upsert");
     let bindings = store.wasl_bindings().expect("wasl_bindings");
@@ -146,6 +148,7 @@ fn upsert_wasl_binding_default_empty_provider_key_round_trips() {
         host_id: String::new(),
         provider_key: serde_json::Value::Null,
         last_seq: 0,
+        transcript_json: String::new(),
     };
     store.upsert_wasl_binding(&b).expect("upsert");
     let bindings = store.wasl_bindings().expect("wasl_bindings");

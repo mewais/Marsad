@@ -763,6 +763,22 @@ fn cold_restore_reattaches_from_seq_zero_full_replay() {
     }
     let _ = t1b.drain_outbound();
 
+    // Simulate a PRE-FIX binding: one written by an older Marsad that did not yet
+    // persist the transcript. Clear `transcript_json` on the stored binding so the
+    // restore takes the fallback (no stored transcript → full node replay from seq
+    // 0). The current-code binding does persist the transcript (covered by
+    // `cold_restore_with_stored_transcript_reattaches_from_last_seq`).
+    {
+        let mut store = marsad_store::Store::new(Box::new(backend.clone()));
+        let mut b = store
+            .wasl_bindings()
+            .expect("wasl_bindings")
+            .remove(&id)
+            .expect("binding must be persisted for the WaslManaged session");
+        b.transcript_json = String::new();
+        store.upsert_wasl_binding(&b).expect("rewrite pre-fix binding");
+    }
+
     let (t2a, mut t2b) = LoopbackFake::pair();
     let mut core2 = Core::with_deps(
         cfg(),
@@ -796,6 +812,126 @@ fn cold_restore_reattaches_from_seq_zero_full_replay() {
         attach, 0,
         "a cold restore must re-attach from seq 0 (full replay to rebuild the \
          unpersisted transcript), NOT from the persisted last_seq; got {attach}"
+    );
+}
+
+/// POST-FIX cold restore: a WaslManaged binding persisted WITH its transcript
+/// (the user's prompt + folded response) restores that transcript verbatim and
+/// reattaches from the persisted `last_seq` (NOT 0). This is the fix for the
+/// "prompts vanish after relaunch" bug: the node's observe replay carries no
+/// prompt text, so the prompt only survives because the transcript is persisted;
+/// and because it IS restored, reattach must pull only NEW events (> last_seq),
+/// never re-replay (which would drop the prompt-less TurnAccepted back over it).
+#[test]
+fn cold_restore_with_stored_transcript_reattaches_from_last_seq() {
+    let backend = marsad_store::MemoryBackend::new();
+    let (t1a, mut t1b) = LoopbackFake::pair();
+    let mut core1 = Core::with_deps(
+        cfg(),
+        Box::new(t1a),
+        Box::new(NoGit),
+        Box::new(NoTranscript),
+        Box::new(backend.clone()),
+    )
+    .expect("core1");
+    let id = core1
+        .launch_wasl_session("local", serde_json::json!({"ctx": "keepprompt"}), None)
+        .expect("launch WaslManaged");
+
+    // The user sends a prompt (recorded live + persisted immediately by the fix),
+    // then the node streams a turn — advancing the persisted last_seq past 0.
+    core1.send_prompt(&id, "my prompt").expect("send prompt");
+    core1
+        .on_agent_line(&event_line(
+            &id,
+            &ev(
+                1,
+                WaslSessionEventKind::TurnAccepted {
+                    turn_id: "turn-keep".to_string(),
+                    source: "LocalHuman".to_string(),
+                },
+            ),
+        ))
+        .expect("accepted");
+    core1
+        .on_agent_line(&event_line(
+            &id,
+            &ev(
+                2,
+                WaslSessionEventKind::AssistantDelta {
+                    turn_id: "turn-keep".to_string(),
+                    text: "the reply".to_string(),
+                },
+            ),
+        ))
+        .expect("delta");
+    let _ = t1b.drain_outbound();
+
+    // Sanity: the binding was persisted WITH a non-empty transcript and a
+    // non-zero last_seq (this is the post-fix path, distinct from the pre-fix
+    // tests above which clear transcript_json).
+    let persisted_last_seq = {
+        let store = marsad_store::Store::new(Box::new(backend.clone()));
+        let b = store
+            .wasl_bindings()
+            .expect("wasl_bindings")
+            .remove(&id)
+            .expect("binding must be persisted");
+        assert!(
+            !b.transcript_json.is_empty(),
+            "the current code must persist the folded transcript on the binding"
+        );
+        assert!(b.last_seq > 0, "last_seq must have advanced past 0");
+        b.last_seq
+    };
+
+    // Cold restore into a fresh Core over the same backend.
+    let (t2a, mut t2b) = LoopbackFake::pair();
+    let mut core2 = Core::with_deps(
+        cfg(),
+        Box::new(t2a),
+        Box::new(NoGit),
+        Box::new(NoTranscript),
+        Box::new(backend.clone()),
+    )
+    .expect("core2");
+    let updates = core2.load_sessions().expect("restore");
+    let _ = t2b.drain_outbound();
+
+    // (a) The restored session's transcript still contains the user's prompt.
+    let sv = last_session_view(&updates, &id);
+    assert!(
+        sv.transcript.iter().any(|e| matches!(
+            e,
+            marsad_events::TranscriptEntry::User { text, .. } if text == "my prompt"
+        )),
+        "the restored transcript must still contain the user's prompt \
+         (the whole point of persisting it); got {:?}",
+        sv.transcript
+    );
+
+    // (b) Reattach pulls only NEW events (> last_seq), not a full replay.
+    core2.attach_session(&id).expect("reattach");
+    let out: Vec<IpcMsg> = t2b
+        .drain_outbound()
+        .iter()
+        .filter_map(|l| parse_ipc(l).ok())
+        .collect();
+    let attach = out
+        .iter()
+        .find_map(|m| match m {
+            IpcMsg::AttachWaslSession {
+                session_id,
+                after_seq,
+                ..
+            } if session_id == &id => Some(*after_seq),
+            _ => None,
+        })
+        .expect("reconnect must emit AttachWaslSession for the WaslManaged session");
+    assert_eq!(
+        attach, persisted_last_seq,
+        "a restore WITH a stored transcript must reattach from the persisted \
+         last_seq ({persisted_last_seq}), NOT from 0; got {attach}"
     );
 }
 
@@ -836,6 +972,21 @@ fn load_sessions_restores_wasl_binding_with_seq_zero() {
             .expect("fold event");
     }
     let _ = t1b.drain_outbound();
+
+    // Simulate a PRE-FIX binding (no persisted transcript) so this test keeps
+    // exercising the seq-0 full-replay fallback. Clear `transcript_json`; a
+    // current-code binding persists the transcript and reattaches from last_seq
+    // (covered by `cold_restore_with_stored_transcript_reattaches_from_last_seq`).
+    {
+        let mut store = marsad_store::Store::new(Box::new(backend.clone()));
+        let mut b = store
+            .wasl_bindings()
+            .expect("wasl_bindings")
+            .remove(&id)
+            .expect("binding must be persisted for the WaslManaged session");
+        b.transcript_json = String::new();
+        store.upsert_wasl_binding(&b).expect("rewrite pre-fix binding");
+    }
 
     // Fresh Core over the SAME backend → a cold restore.
     let (t2a, mut t2b) = LoopbackFake::pair();
