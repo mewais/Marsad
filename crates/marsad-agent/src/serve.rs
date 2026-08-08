@@ -1216,6 +1216,18 @@ impl Agent {
                             );
                         }
                     }
+                    // Register the client in the session registry so the synchronous
+                    // control ops (interrupt / stop / send_prompt) work after a
+                    // relaunch — launch registers this, but the observe re-pump alone
+                    // did not, leaving a reattached session visible yet uncontrollable
+                    // ("no wasl-managed session"). Idempotent (get_or_start reuses).
+                    if let Err(e) =
+                        self.register_wasl_client_for_reattach(&sid, &host_id_str, key.clone())
+                    {
+                        eprintln!(
+                            "marsad-agent: wasl reattach client register failed for {sid}: {e}"
+                        );
+                    }
                     // (Re)spawn the observe pump from the reported after_seq,
                     // routed through THIS host's provider (registered just above by
                     // `ensure_wasl_runtime_node`).

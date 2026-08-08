@@ -303,6 +303,40 @@ impl Agent {
         Ok((client, after_seq))
     }
 
+    /// Register (or refresh) the session's client handle in `wasl_session_clients`
+    /// on a relaunch reattach. `handle_launch_wasl_session` registers this at
+    /// launch, but the observe re-pump path did NOT — so after a relaunch a
+    /// WaslManaged session showed its transcript (observe pump) yet every
+    /// synchronous control op (interrupt / stop / send_prompt) errored with "no
+    /// wasl-managed session", because those arms resolve the client via
+    /// `wasl_session_client(session_id)` from this registry. `get_or_start` reuses
+    /// the surviving durable target, so re-registering its handle is idempotent.
+    #[cfg(not(coverage))]
+    pub(crate) fn register_wasl_client_for_reattach(
+        &mut self,
+        session_id: &str,
+        host_id: &str,
+        wasl_target_key: serde_json::Value,
+    ) -> Result<(), AgentError> {
+        let key = WaslTargetKey(wasl_target_key);
+        let (client, _snapshot) = self
+            .wasl_provider_for(host_id)?
+            .get_or_start(&key)
+            .map_err(|e| {
+                AgentError::Protocol(format!("reattach register get_or_start failed: {e}"))
+            })?;
+        // Box -> Arc at the registry boundary (mirrors handle_launch_wasl_session)
+        // so control-op arms clone the handle out and drop the map lock before the
+        // blocking call.
+        let client: std::sync::Arc<dyn WaslSessionClient> = std::sync::Arc::from(client);
+        self.wasl_session_clients
+            .0
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), client);
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // §7 — the six inbound `*Wasl*` handle_ipc arms
     // -----------------------------------------------------------------------
@@ -1433,6 +1467,39 @@ mod attach_relaunch_tests {
             a.wasl_session_providers_by_host.0.len(),
             2,
             "the DEFAULT fallback does NOT add a per-host entry"
+        );
+    }
+
+    /// Relaunch regression (control ops): after a reattach the client MUST be in
+    /// `wasl_session_clients` so interrupt/stop/send_prompt resolve it — launch
+    /// registers this, but the observe re-pump alone did not, so a relaunched
+    /// session was visible yet uncontrollable ("no wasl-managed session").
+    #[cfg(not(coverage))]
+    #[test]
+    fn reattach_registers_client_for_control_ops() {
+        use marsad_wasl_session::FakeWaslSessionProvider;
+        let mut a = agent();
+        a.set_wasl_session_provider_factory(Box::new(|| Box::new(FakeWaslSessionProvider::new())));
+        // Before reattach: no registered client → a control op (interrupt) errors.
+        assert!(
+            !a.wasl_session_clients.0.lock().unwrap().contains_key("session-x"),
+            "precondition: no client registered yet"
+        );
+        assert!(
+            a.handle_interrupt_wasl_session("session-x".to_string()).is_err(),
+            "interrupt with no registered client must error"
+        );
+        // Reattach registers the client from the target key (get_or_start reuses).
+        a.register_wasl_client_for_reattach(
+            "session-x",
+            "host-A",
+            serde_json::json!({"protocol": "claude", "key": "session-x"}),
+        )
+        .expect("reattach register");
+        // The registry now resolves the client, so control ops find it.
+        assert!(
+            a.wasl_session_clients.0.lock().unwrap().contains_key("session-x"),
+            "reattach must register the client so interrupt/stop/send_prompt work"
         );
     }
 }
