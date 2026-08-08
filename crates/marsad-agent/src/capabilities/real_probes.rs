@@ -150,12 +150,20 @@ fn run_discovery(
 fn run_local_script(script: &str, deadline: Duration) -> Result<String, String> {
     use std::io::{Read, Write};
     use std::process::{Command, Stdio};
-    let mut child = Command::new("bash")
-        .arg("-l")
+    let mut cmd = Command::new("bash");
+    cmd.arg("-l")
         .arg("-s")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    // CREATE_NO_WINDOW so the probe's shell doesn't flash a console on Windows
+    // (matches every other agent spawn site).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("bash spawn failed: {e}"))?;
     {
@@ -351,11 +359,19 @@ fn probe_codex_modes_bounded(
         .map_err(|e| format!("build_probe_spawn_argv: {e}"))?;
     let bin = &argv[0];
 
-    let mut child = Command::new(bin)
-        .args(&argv[1..])
+    let mut cmd = Command::new(bin);
+    cmd.args(&argv[1..])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    // CREATE_NO_WINDOW so the remote probe (ssh.exe / wsl.exe) doesn't flash a
+    // console window on Windows (matches every other agent spawn site).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("spawn {bin}: {e}"))?;
 
@@ -923,11 +939,19 @@ fn probe_opencode_modes_bounded(
         .map_err(|e| format!("build_probe_spawn_argv: {e}"))?;
     let bin = &argv[0];
 
-    let mut child = Command::new(bin)
-        .args(&argv[1..])
+    let mut cmd = Command::new(bin);
+    cmd.args(&argv[1..])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    // CREATE_NO_WINDOW so the remote probe (ssh.exe / wsl.exe) doesn't flash a
+    // console window on Windows (matches every other agent spawn site).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("spawn {bin}: {e}"))?;
 
