@@ -693,7 +693,7 @@ impl Core {
     /// transcript is re-hydrated by the agent's TranscriptBackfill replay-on-subscribe).
     /// Idempotent: the agent's AttachWaslSession arm dedups a live pump, and core
     /// dedups folded events by seq.
-    pub fn reattach_wasl_on_relaunch(&mut self) -> Result<(), CoreError> {
+    pub fn reattach_wasl_on_relaunch(&mut self) -> Result<usize, CoreError> {
         // Collect ids first so the &mut self attach call below has no borrow
         // conflict with the sessions map.
         let wasl_ids: Vec<String> = self
@@ -702,13 +702,26 @@ impl Core {
             .filter(|(_, r)| matches!(r.runtime_owner, RuntimeOwner::WaslManaged { .. }))
             .map(|(id, _)| id.clone())
             .collect();
+        let n = wasl_ids.len();
         // Reuse the EXISTING routing method — it emits AttachWaslSession with
         // after_seq = wasl_last_seq (0 after a cold restore, i.e. a full replay).
         // Do NOT emit any VmUpdate: the transcript arrives via the observe stream.
         for id in wasl_ids {
             self.attach_session_events(&id)?;
         }
-        Ok(())
+        Ok(n)
+    }
+
+    /// DIAG (relaunch): total tracked sessions + how many are WaslManaged, so the
+    /// reader thread can log whether the snapshot was populated when it re-attached.
+    pub fn session_owner_counts(&self) -> (usize, usize) {
+        let total = self.sessions.len();
+        let wasl = self
+            .sessions
+            .values()
+            .filter(|r| matches!(r.runtime_owner, RuntimeOwner::WaslManaged { .. }))
+            .count();
+        (total, wasl)
     }
 
     pub fn attach_session(&mut self, id: &str) -> Result<(), CoreError> {

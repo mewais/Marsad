@@ -567,10 +567,14 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
         };
         match &mut *guard {
             AppState::Live(core) => {
-                if let Err(e) = core.reattach_wasl_on_relaunch() {
-                    diag_log(&format!(
-                        "marsad-desktop: reader thread: reattach_wasl_on_relaunch error: {e:?}"
-                    ));
+                let (total, wasl) = core.session_owner_counts();
+                match core.reattach_wasl_on_relaunch() {
+                    Ok(n) => diag_log(&format!(
+                        "marsad-desktop: reader thread: DIAG reattach_wasl_on_relaunch attached {n} wasl session(s); snapshot total={total} wasl={wasl}"
+                    )),
+                    Err(e) => diag_log(&format!(
+                        "marsad-desktop: reader thread: reattach_wasl_on_relaunch error: {e:?} (snapshot total={total} wasl={wasl})"
+                    )),
                 }
             }
             // Mock backend has no live agent/nodes — nothing to re-attach.
@@ -598,8 +602,30 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
                 // command acks (Subscribed, SessionLaunched, …) on this subscriber
                 // connection — skip those silently rather than feeding them to
                 // on_agent_line (which would log an "unknown IPC type").
+                // DIAG (relaunch transcript): set when this line is a
+                // TranscriptBackfill so we can log the resulting transcript length
+                // after `on_agent_line` folds it (below).
+                let mut backfill_sid_for_diag: Option<String> = None;
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
                     let ty = v.get("type").and_then(|t| t.as_str());
+
+                    // DIAG: confirm a remote session's TranscriptBackfill actually
+                    // REACHES the desktop reader (vs being lost before subscribe).
+                    if ty == Some("TranscriptBackfill") {
+                        let sid = v
+                            .get("session_id")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("?")
+                            .to_string();
+                        let jsonl = v.get("jsonl").and_then(|s| s.as_str()).unwrap_or("");
+                        let jlen = jsonl.len();
+                        let nlines = jsonl.lines().count();
+                        let head: String = jsonl.chars().take(200).collect();
+                        diag_log(&format!(
+                            "marsad-desktop: reader thread: DIAG RX TranscriptBackfill sid={sid} jsonl={jlen} bytes, {nlines} line(s); head200={head}"
+                        ));
+                        backfill_sid_for_diag = Some(sid);
+                    }
 
                     // WAVE 3b (pty escape-hatch terminal): `PtyOutput`/`PtyExit`
                     // are agent-originated but have no `Core::on_agent_line` arm
@@ -672,6 +698,19 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
                         && ty != Some("WaslGateRequested")
                         && ty != Some("WaslGateDecided")
                         && ty != Some("WaslObservation")
+                        // Wasl-managed session stream: the observe pump broadcasts
+                        // WaslSessionEvent (the actual transcript), WaslSessionStatus
+                        // (phase/liveness → Resumed vs Paused), and WaslPromptReceipt.
+                        // core's on_agent_line folds all three (agent_events.rs
+                        // §WaslSessionStatus/Event/PromptReceipt). They were MISSING
+                        // here, so every wasl transcript event was dropped before core
+                        // saw it — a WaslManaged session came up live but with an
+                        // empty transcript and never flipped to Resumed. (This is why
+                        // Wasl transcripts never appeared on relaunch even once the
+                        // observe pump was running.)
+                        && ty != Some("WaslSessionEvent")
+                        && ty != Some("WaslSessionStatus")
+                        && ty != Some("WaslPromptReceipt")
                     {
                         continue;
                     }
@@ -702,6 +741,38 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
                         AppState::Mock(_) => vec![],
                     }
                 }; // lock released here
+
+                // DIAG (relaunch transcript): if this line was a TranscriptBackfill,
+                // log the folded transcript length core produced — distinguishes
+                // "arrived but folded empty / dropped" from "arrived and populated".
+                if let Some(sid) = &backfill_sid_for_diag {
+                    let folded = updates.iter().find_map(|u| match u {
+                        VmUpdate::Session(sv) if &sv.id == sid => Some(sv.transcript.len()),
+                        _ => None,
+                    });
+                    diag_log(&format!(
+                        "marsad-desktop: reader thread: DIAG post-fold TranscriptBackfill sid={sid} -> {} update(s), session transcript.len={:?}",
+                        updates.len(),
+                        folded
+                    ));
+                    // DIAG (Tajir): dump the TYPE + a snippet of each folded entry so
+                    // we can see WHAT the single ~750KB entry is (huge user prompt? a
+                    // non-rendered type?) and why the UI shows nothing but the live
+                    // session-limit line. Truncated hard so a 750KB entry can't bloat
+                    // the log.
+                    if let Some(VmUpdate::Session(sv)) =
+                        updates.iter().find(|u| matches!(u, VmUpdate::Session(s) if &s.id == sid))
+                    {
+                        for (i, e) in sv.transcript.iter().enumerate().take(5) {
+                            let dbg = format!("{e:?}");
+                            let snip: String = dbg.chars().take(300).collect();
+                            diag_log(&format!(
+                                "marsad-desktop: reader thread: DIAG backfill entry[{i}] len={} :: {snip}",
+                                dbg.len()
+                            ));
+                        }
+                    }
+                }
 
                 // Fire OS notifications for sessions that transition to Needs/Error.
                 for update in &updates {
