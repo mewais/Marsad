@@ -548,6 +548,36 @@ fn run_reader_thread(app: tauri::AppHandle, socket_path: &str) {
 
     eprintln!("marsad-desktop: reader thread: subscribed to agent at {socket_path}");
 
+    // Reconnect-on-relaunch (X6 §6.1): re-attach the observe pump for every
+    // restored WaslManaged session so the node replays its history and the
+    // (unpersisted) transcript is rebuilt. This MUST run AFTER this reader
+    // connection is subscribed above and BEFORE the read loop below: the
+    // AttachWaslSession IPCs it emits cause the agent to (re)spawn the observe
+    // pump, whose resulting observe-stream broadcasts must reach THIS subscribed
+    // connection — issuing them any earlier would race the subscribe and the
+    // replayed events would be dropped. Runs exactly once per reader thread.
+    {
+        let state_ref = app.state::<ManagedState>();
+        let mut guard = match state_ref.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("marsad-desktop: reader thread: lock poisoned before reattach: {e}");
+                return;
+            }
+        };
+        match &mut *guard {
+            AppState::Live(core) => {
+                if let Err(e) = core.reattach_wasl_on_relaunch() {
+                    diag_log(&format!(
+                        "marsad-desktop: reader thread: reattach_wasl_on_relaunch error: {e:?}"
+                    ));
+                }
+            }
+            // Mock backend has no live agent/nodes — nothing to re-attach.
+            AppState::Mock(_) => {}
+        }
+    } // lock released here
+
     // Track the last-seen phase per session to detect transitions.
     // `None` means we haven't observed this session yet.
     let mut last_phase: HashMap<String, Phase> = HashMap::new();

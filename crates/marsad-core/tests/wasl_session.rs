@@ -723,13 +723,16 @@ fn wasl_managed_binding_survives_a_core_restart() {
     );
 }
 
-/// On reconnect, core re-attaches from the last observed sequence: a
-/// WaslManaged session that folded events up to seq N, after a restart+attach,
-/// issues `AttachWaslSession { after_seq }` (re-pump from the last known seq —
-/// §6.1 step 2). We assert the attach carries a non-zero `after_seq` reflecting
-/// prior progress rather than replaying from 0.
+/// Cold restore ⇒ FULL replay from seq 0 (§6.1). A WaslManaged session that
+/// folded events up to seq N is re-created by a fresh Core (`load_sessions`) with
+/// an EMPTY transcript (the transcript is not persisted for WaslManaged sessions)
+/// and an empty `wasl_seen_seqs`. Re-attaching from the persisted `last_seq` (N)
+/// would replay NOTHING and leave the transcript empty forever, so the cold
+/// restore path must re-pump from `after_seq == 0`; the empty `wasl_seen_seqs`
+/// folds each replayed event exactly once. (A warm in-process reconnect keeps its
+/// in-memory transcript and does NOT go through `load_sessions`.)
 #[test]
-fn reconnect_reattaches_from_last_observed_seq() {
+fn cold_restore_reattaches_from_seq_zero_full_replay() {
     let backend = marsad_store::MemoryBackend::new();
     let (t1a, mut t1b) = LoopbackFake::pair();
     let mut core1 = Core::with_deps(
@@ -789,9 +792,178 @@ fn reconnect_reattaches_from_last_observed_seq() {
             _ => None,
         })
         .expect("reconnect must emit AttachWaslSession for the WaslManaged session");
+    assert_eq!(
+        attach, 0,
+        "a cold restore must re-attach from seq 0 (full replay to rebuild the \
+         unpersisted transcript), NOT from the persisted last_seq; got {attach}"
+    );
+}
+
+/// `load_sessions` restores a persisted WaslManaged binding whose stored
+/// `last_seq` was NON-ZERO, but resets the restored session's `wasl_last_seq` to
+/// 0 so a cold restore does a FULL replay. Proven black-box: after restore, an
+/// `attach_session` emits `AttachWaslSession { after_seq: 0 }` — which ALSO
+/// proves the restored `runtime_owner` is `WaslManaged` (only that arm emits
+/// `AttachWaslSession`; a MarsadManaged restore would emit `AttachSession`).
+#[test]
+fn load_sessions_restores_wasl_binding_with_seq_zero() {
+    let backend = marsad_store::MemoryBackend::new();
+    let (t1a, mut t1b) = LoopbackFake::pair();
+    let mut core1 = Core::with_deps(
+        cfg(),
+        Box::new(t1a),
+        Box::new(NoGit),
+        Box::new(NoTranscript),
+        Box::new(backend.clone()),
+    )
+    .expect("core1");
+    let id = core1
+        .launch_wasl_session("local", serde_json::json!({"ctx": "seqreset"}), None)
+        .expect("launch WaslManaged");
+    // Advance the persisted last_seq to a non-zero value (5) by folding events.
+    for seq in 1..=5 {
+        core1
+            .on_agent_line(&event_line(
+                &id,
+                &ev(
+                    seq,
+                    WaslSessionEventKind::AssistantDelta {
+                        turn_id: "turn-seqreset".to_string(),
+                        text: format!("d{seq}"),
+                    },
+                ),
+            ))
+            .expect("fold event");
+    }
+    let _ = t1b.drain_outbound();
+
+    // Fresh Core over the SAME backend → a cold restore.
+    let (t2a, mut t2b) = LoopbackFake::pair();
+    let mut core2 = Core::with_deps(
+        cfg(),
+        Box::new(t2a),
+        Box::new(NoGit),
+        Box::new(NoTranscript),
+        Box::new(backend.clone()),
+    )
+    .expect("core2");
+    core2.load_sessions().expect("restore");
+    let _ = t2b.drain_outbound();
+
+    core2.attach_session(&id).expect("attach after cold restore");
+    let out: Vec<IpcMsg> = t2b
+        .drain_outbound()
+        .iter()
+        .filter_map(|l| parse_ipc(l).ok())
+        .collect();
+    let after_seq = out
+        .iter()
+        .find_map(|m| match m {
+            IpcMsg::AttachWaslSession {
+                session_id,
+                after_seq,
+                ..
+            } if session_id == &id => Some(*after_seq),
+            _ => None,
+        })
+        .expect("restored WaslManaged session must attach via AttachWaslSession");
+    assert_eq!(
+        after_seq, 0,
+        "a restored WaslManaged session must have wasl_last_seq reset to 0 even \
+         though the persisted binding's last_seq was 5; got {after_seq}"
+    );
     assert!(
-        attach >= 3,
-        "reconnect must re-attach from the last observed seq (>=3), not replay from 0; got {attach}"
+        !out.iter().any(|m| matches!(m, IpcMsg::AttachSession { .. })),
+        "the restored session must NOT degrade to MarsadManaged (AttachSession)"
+    );
+}
+
+/// `reattach_wasl_on_relaunch` emits `AttachWaslSession { after_seq: 0 }` for a
+/// restored WaslManaged session (re-pumping the node's full history) and emits
+/// NOTHING for a MarsadManaged session (its transcript is re-hydrated by the
+/// agent's replay-on-subscribe backfill, not by us).
+#[test]
+fn reattach_wasl_on_relaunch_attaches_only_wasl_sessions() {
+    let backend = marsad_store::MemoryBackend::new();
+    let (t1a, mut t1b) = LoopbackFake::pair();
+    let mut core1 = Core::with_deps(
+        cfg(),
+        Box::new(t1a),
+        Box::new(NoGit),
+        Box::new(NoTranscript),
+        Box::new(backend.clone()),
+    )
+    .expect("core1");
+    let wasl_id = launch_wasl(&mut core1, &mut t1b);
+    let marsad_id = launch_marsad(&mut core1, &mut t1b);
+    // Advance the Wasl session's persisted last_seq so we can prove the reset.
+    core1
+        .on_agent_line(&event_line(
+            &wasl_id,
+            &ev(
+                7,
+                WaslSessionEventKind::AssistantDelta {
+                    turn_id: "turn-relaunch".to_string(),
+                    text: "x".to_string(),
+                },
+            ),
+        ))
+        .expect("fold event");
+    let _ = t1b.drain_outbound();
+
+    // Cold restore into a fresh Core, then trigger the relaunch re-attach.
+    let (t2a, mut t2b) = LoopbackFake::pair();
+    let mut core2 = Core::with_deps(
+        cfg(),
+        Box::new(t2a),
+        Box::new(NoGit),
+        Box::new(NoTranscript),
+        Box::new(backend.clone()),
+    )
+    .expect("core2");
+    core2.load_sessions().expect("restore");
+    let _ = t2b.drain_outbound();
+
+    core2
+        .reattach_wasl_on_relaunch()
+        .expect("reattach_wasl_on_relaunch");
+    let out: Vec<IpcMsg> = t2b
+        .drain_outbound()
+        .iter()
+        .filter_map(|l| parse_ipc(l).ok())
+        .collect();
+
+    // Exactly one AttachWaslSession, for the WaslManaged session, at seq 0.
+    let wasl_attaches: Vec<u64> = out
+        .iter()
+        .filter_map(|m| match m {
+            IpcMsg::AttachWaslSession {
+                session_id,
+                after_seq,
+                ..
+            } if session_id == &wasl_id => Some(*after_seq),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        wasl_attaches,
+        vec![0],
+        "reattach_wasl_on_relaunch must emit exactly one AttachWaslSession(after_seq=0) \
+         for the WaslManaged session, got {out:?}"
+    );
+    // NOTHING for the MarsadManaged session: neither AttachWaslSession nor the
+    // MarsadManaged AttachSession is emitted for it.
+    assert!(
+        !out.iter().any(|m| matches!(
+            m,
+            IpcMsg::AttachWaslSession { session_id, .. } if session_id == &marsad_id
+        )),
+        "reattach_wasl_on_relaunch must NOT attach the MarsadManaged session, got {out:?}"
+    );
+    assert!(
+        !out.iter().any(|m| matches!(m, IpcMsg::AttachSession { .. })),
+        "reattach_wasl_on_relaunch must emit NO AttachSession (MarsadManaged is \
+         untouched), got {out:?}"
     );
 }
 

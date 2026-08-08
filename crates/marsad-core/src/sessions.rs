@@ -687,6 +687,30 @@ impl Core {
         ])
     }
 
+    /// Reconnect-on-relaunch (X6 §6.1): after a cold start, re-attach the observe
+    /// pump for every restored WaslManaged session so the node replays its history
+    /// and the transcript is rebuilt. MarsadManaged sessions are untouched (their
+    /// transcript is re-hydrated by the agent's TranscriptBackfill replay-on-subscribe).
+    /// Idempotent: the agent's AttachWaslSession arm dedups a live pump, and core
+    /// dedups folded events by seq.
+    pub fn reattach_wasl_on_relaunch(&mut self) -> Result<(), CoreError> {
+        // Collect ids first so the &mut self attach call below has no borrow
+        // conflict with the sessions map.
+        let wasl_ids: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|(_, r)| matches!(r.runtime_owner, RuntimeOwner::WaslManaged { .. }))
+            .map(|(id, _)| id.clone())
+            .collect();
+        // Reuse the EXISTING routing method — it emits AttachWaslSession with
+        // after_seq = wasl_last_seq (0 after a cold restore, i.e. a full replay).
+        // Do NOT emit any VmUpdate: the transcript arrives via the observe stream.
+        for id in wasl_ids {
+            self.attach_session_events(&id)?;
+        }
+        Ok(())
+    }
+
     pub fn attach_session(&mut self, id: &str) -> Result<(), CoreError> {
         self.require_session(id)?;
         // X6 (§6.1): route by RuntimeOwner — MarsadManaged emits today's
@@ -1263,7 +1287,16 @@ impl Core {
                             provider_key: b.provider_key.clone(),
                         },
                     },
-                    b.last_seq,
+                    // Cold restore ⇒ full node replay from seq 0 (§6.1). The
+                    // transcript is NOT persisted for WaslManaged sessions, so on
+                    // relaunch it must be rebuilt entirely by re-pumping the node's
+                    // history; re-attaching from the persisted `b.last_seq` would
+                    // replay NOTHING and leave the transcript empty forever.
+                    // `wasl_seen_seqs` starts empty here, so the replay folds each
+                    // event exactly once. `b.last_seq` remains meaningful only for a
+                    // warm in-process reconnect (which keeps the in-memory
+                    // transcript) — that path does NOT go through `load_sessions`.
+                    0,
                 ),
                 None => (RuntimeOwner::MarsadManaged, 0),
             };
