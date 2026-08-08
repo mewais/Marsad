@@ -1049,24 +1049,24 @@ impl Agent {
             })
             .unwrap_or_default();
 
-        // Render the TOML and write it to <data_root>/wasl-worker-<session_id>.toml.
+        // Render the worker TOML and deliver it to the inner agent's `wasl` MCP
+        // server BY VALUE (inline in mcp_config), NOT as a file path. The inner
+        // agent runs on the NODE's host — frequently a different machine than this
+        // Marsad agent — so a path written to THIS filesystem is meaningless there
+        // (that was the "no A2A MCP" bug: WASL_CONFIG pointed at an agent-local
+        // Windows path the remote node couldn't read). Nothing is written to disk.
         let toml_content =
             crate::wasl::render_wasl_worker_toml(&worker_agent_id, &worker_host, &peers);
-        let config_path = std::path::Path::new(&self.config.data_root)
-            .join(format!("wasl-worker-{session_id}.toml"));
-        let _ = std::fs::create_dir_all(&self.config.data_root);
-        let write_ok = std::fs::write(&config_path, &toml_content).is_ok();
 
         eprintln!(
             "marsad-agent: wasl-worker: session {session_id} host {worker_host} \
-             peers {} config {} write_ok {write_ok}",
+             peers {} (config delivered inline via WASL_CONFIG_CONTENT)",
             peers.len(),
-            config_path.display()
         );
 
-        // Build the mcp_config JSON string and inject it into context.
-        let config_path_str = config_path.to_string_lossy().into_owned();
-        let mcp_config = crate::wasl::wasl_worker_mcp_config(&config_path_str);
+        // Build the mcp_config JSON string (carries the TOML content inline) and
+        // inject it into context.
+        let mcp_config = crate::wasl::wasl_worker_mcp_config(&toml_content);
 
         // Ensure context is an object, then set mcp_config.
         if key_val.get("context").map(|v| v.is_object()).unwrap_or(false) {

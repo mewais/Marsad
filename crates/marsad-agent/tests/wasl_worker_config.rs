@@ -176,7 +176,8 @@ fn render_toml_with_peers_has_no_runtime_block() {
 /// NOT a `--config` flag (which it ignores → default config → useless send-tools).
 #[test]
 fn wasl_worker_mcp_config_parses_back_correctly() {
-    let json_str = wasl_worker_mcp_config("/x/y.toml");
+    let content = "[identity]\nagent_id = \"a\"\nhost_id = \"h\"\n";
+    let json_str = wasl_worker_mcp_config(content);
 
     let v: serde_json::Value =
         serde_json::from_str(&json_str).expect("wasl_worker_mcp_config must return valid JSON");
@@ -192,31 +193,32 @@ fn wasl_worker_mcp_config_parses_back_correctly() {
         .expect("args must be an array");
     assert!(
         args.is_empty(),
-        "args must be empty — the config path is passed via the WASL_CONFIG env var, \
+        "args must be empty — the config is delivered via the WASL_CONFIG_CONTENT env var, \
          not a --config flag (wasl-mcpd ignores --config)"
     );
     assert_eq!(
-        v["mcpServers"]["wasl"]["env"]["WASL_CONFIG"].as_str(),
-        Some("/x/y.toml"),
-        "the config path must be passed via the WASL_CONFIG env var"
+        v["mcpServers"]["wasl"]["env"]["WASL_CONFIG_CONTENT"].as_str(),
+        Some(content),
+        "the worker TOML must be delivered INLINE via WASL_CONFIG_CONTENT (machine-independent)"
+    );
+    assert!(
+        v["mcpServers"]["wasl"]["env"].get("WASL_CONFIG").is_none(),
+        "no filesystem path is embedded — delivery is by content, not a cross-host path"
     );
 }
 
-/// Path characters that need JSON escaping (e.g. backslash on Windows) are
-/// correctly escaped by `serde_json` — verifiable by round-tripping the path
-/// through the `env.WASL_CONFIG` value.
+/// Multi-line TOML content (newlines + quotes) must be correctly JSON-escaped by
+/// `serde_json` and round-trip through the `env.WASL_CONFIG_CONTENT` value.
 #[test]
-fn wasl_worker_mcp_config_escapes_special_path_chars() {
-    // Simulate a Windows-style path (unlikely in practice but the builder must
-    // produce valid JSON regardless).
-    let path = r#"C:\Users\foo\wasl-worker.toml"#;
-    let json_str = wasl_worker_mcp_config(path);
+fn wasl_worker_mcp_config_escapes_multiline_toml_content() {
+    let content = "[identity]\nagent_id = \"draft-node-x\"\n\n[[peers]]\nagent_id = \"p\"\nurl = \"http://127.0.0.1:48161\"\n";
+    let json_str = wasl_worker_mcp_config(content);
     let v: serde_json::Value = serde_json::from_str(&json_str)
-        .expect("a path with backslashes must still produce valid JSON");
+        .expect("multi-line TOML content must still produce valid JSON");
     assert_eq!(
-        v["mcpServers"]["wasl"]["env"]["WASL_CONFIG"].as_str(),
-        Some(path),
-        "the path must round-trip through JSON via the WASL_CONFIG env var"
+        v["mcpServers"]["wasl"]["env"]["WASL_CONFIG_CONTENT"].as_str(),
+        Some(content),
+        "multi-line TOML content must round-trip through JSON via WASL_CONFIG_CONTENT"
     );
 }
 

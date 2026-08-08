@@ -718,33 +718,36 @@ pub fn render_wasl_worker_toml(agent_id: &str, host_id: &str, peers: &[WaslWorke
     out
 }
 
-/// Build the compact JSON `mcp_config` string for a Wasl worker.
+/// Build the compact JSON `mcp_config` string for a Wasl worker, carrying the
+/// worker's peer/identity config BY VALUE (not a filesystem path).
 ///
 /// The returned string is the value to place in `SpawnContext.mcp_config` (a
 /// `--mcp-config` argument applied verbatim to the worker's inner agent
-/// binary). It configures `wasl-mcpd` as the `"wasl"` MCP server, pointing at
-/// `config_path` (the TOML file written by `handle_launch_wasl_session`).
+/// binary). It configures `wasl-mcpd` as the `"wasl"` MCP server, carrying the
+/// worker's TOML config INLINE via the `WASL_CONFIG_CONTENT` env var.
 ///
-/// Built with `serde_json` so the path is correctly JSON-escaped even if it
-/// contains special characters.
+/// Built with `serde_json` so the multi-line TOML is correctly JSON-escaped.
 ///
-/// `wasl-mcpd` reads its config from the `WASL_CONFIG` **env var**, NOT a
-/// `--config` flag (an unknown flag is ignored → it falls back to the default
-/// config, so the worker's peers/identity are lost and the send-tools MCP is
-/// useless). Pass the path via `env`, which the MCP client sets on the spawned
-/// server process.
+/// The config is delivered BY VALUE, not as a `WASL_CONFIG` file path: the inner
+/// agent (and thus its `wasl-mcpd` MCP server) runs on the NODE's host, which is
+/// frequently a DIFFERENT machine than the Marsad agent (a remote/WSL node). A
+/// path minted on the agent's filesystem does not exist there, so `wasl-mcpd`
+/// would fall back to defaults and the worker's peers/identity would be lost
+/// ("no A2A MCP"). `WASL_CONFIG_CONTENT` (read by `wasl-mcp`'s config loader,
+/// precedence over `WASL_CONFIG`) is machine-independent — nothing touches a
+/// cross-host filesystem.
 ///
 /// # Example output
 /// ```text
-/// {"mcpServers":{"wasl":{"command":"wasl-mcpd","args":[],"env":{"WASL_CONFIG":"/data/wasl-worker-sess.toml"}}}}
+/// {"mcpServers":{"wasl":{"command":"wasl-mcpd","args":[],"env":{"WASL_CONFIG_CONTENT":"[identity]\nagent_id = \"…\"\n…"}}}}
 /// ```
-pub fn wasl_worker_mcp_config(config_path: &str) -> String {
+pub fn wasl_worker_mcp_config(config_content: &str) -> String {
     serde_json::json!({
         "mcpServers": {
             "wasl": {
                 "command": "wasl-mcpd",
                 "args": [],
-                "env": { "WASL_CONFIG": config_path }
+                "env": { "WASL_CONFIG_CONTENT": config_content }
             }
         }
     })
