@@ -183,6 +183,27 @@ impl Agent {
         self.wasl_session_provider_factory.0 = Some(f);
     }
 
+    /// Materialize the `WaslSessionProvider` from its registered factory if not
+    /// already present, and keep it. BOTH the launch path AND the observe (attach)
+    /// re-pump need a live provider to `get_or_start` a client — but
+    /// `ensure_wasl_runtime_node` only registers the FACTORY, so on a relaunch the
+    /// observe path found `wasl_session_provider == None` and failed with "no wasl
+    /// session provider for observe", silently dropping the transcript re-pump.
+    /// Absent both provider and factory → Protocol error (caller adds context).
+    fn ensure_wasl_session_provider(&mut self) -> Result<(), AgentError> {
+        if self.wasl_session_provider.0.is_none() {
+            match self.wasl_session_provider_factory.0.as_ref() {
+                Some(factory) => self.wasl_session_provider.0 = Some(factory()),
+                None => {
+                    return Err(AgentError::Protocol(
+                        "no wasl session provider registered".to_string(),
+                    ))
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Obtain the session's registered client handle (an `Arc` clone), dropping
     /// the map lock before returning it — so callers NEVER hold the map lock
     /// across a blocking client call (§8.1). Absent session -> `Protocol` error
@@ -213,18 +234,23 @@ impl Agent {
     /// `wasl_reconnect_after_seq`) is the pure, always-compiled, unit-tested core.
     #[cfg(not(coverage))]
     pub(crate) fn wasl_observe_client_and_after_seq(
-        &self,
+        &mut self,
         wasl_target_key: serde_json::Value,
         persisted_last_seq: u64,
     ) -> Result<(Box<dyn WaslSessionClient>, u64), AgentError> {
+        // Relaunch: the observe re-pump runs on a cold agent where only the provider
+        // FACTORY is registered (by `ensure_wasl_runtime_node`); materialize the
+        // provider from it first, exactly as the launch path does — otherwise this
+        // failed with "no wasl session provider for observe" and the transcript was
+        // never re-pumped.
+        self.ensure_wasl_session_provider()
+            .map_err(|_| AgentError::Protocol("no wasl session provider for observe".to_string()))?;
         let key = WaslTargetKey(wasl_target_key);
         let (client, snapshot) = self
             .wasl_session_provider
             .0
             .as_ref()
-            .ok_or_else(|| {
-                AgentError::Protocol("no wasl session provider for observe".to_string())
-            })?
+            .expect("provider present after ensure_wasl_session_provider")
             .get_or_start(&key)
             .map_err(|e| AgentError::Protocol(format!("observe get_or_start failed: {e}")))?;
         let after_seq = wasl_reconnect_after_seq(snapshot.last_seq, persisted_last_seq);
@@ -950,16 +976,11 @@ impl Agent {
 
         // Ensure a provider exists: prefer the directly-registered one, else build
         // one from the factory (once) and keep it. Absent both -> Protocol error.
-        if self.wasl_session_provider.0.is_none() {
-            match self.wasl_session_provider_factory.0.as_ref() {
-                Some(factory) => self.wasl_session_provider.0 = Some(factory()),
-                None => {
-                    return Err(AgentError::Protocol(format!(
-                        "LaunchWaslSession {session_id}: no wasl session provider registered"
-                    )))
-                }
-            }
-        }
+        self.ensure_wasl_session_provider().map_err(|_| {
+            AgentError::Protocol(format!(
+                "LaunchWaslSession {session_id}: no wasl session provider registered"
+            ))
+        })?;
 
         // Resolve (or reattach to) the client. `get_or_start` is the potentially
         // blocking call, but the provider is `&mut self`-borrowed here (not under
@@ -1233,5 +1254,34 @@ mod attach_relaunch_tests {
             }
             other => panic!("expected SessionAttached ack, got {other:?}"),
         }
+    }
+
+    /// Relaunch regression (the SECOND layer): on a cold restart only the provider
+    /// FACTORY is registered (by `ensure_wasl_runtime_node`), NOT a materialized
+    /// provider. The observe re-pump must build the provider from the factory —
+    /// previously it failed with "no wasl session provider for observe" and the
+    /// transcript was never re-pumped even though AttachWaslSession was accepted.
+    #[cfg(not(coverage))]
+    #[test]
+    fn observe_materializes_provider_from_factory_on_relaunch() {
+        use marsad_wasl_session::FakeWaslSessionProvider;
+        let mut a = agent();
+        // Register ONLY a factory (no directly-registered provider) — exactly the
+        // cold-relaunch state after ensure_wasl_runtime_node.
+        a.set_wasl_session_provider_factory(Box::new(|| Box::new(FakeWaslSessionProvider::new())));
+        assert!(
+            a.wasl_session_provider.0.is_none(),
+            "precondition: provider not yet materialized, only the factory is set"
+        );
+        let key = serde_json::json!({"protocol": "claude", "ctx": "relaunch"});
+        let res = a.wasl_observe_client_and_after_seq(key, 0);
+        assert!(
+            res.is_ok(),
+            "observe must materialize the provider from the factory on relaunch, got {res:?}"
+        );
+        assert!(
+            a.wasl_session_provider.0.is_some(),
+            "the provider must now be materialized and kept for subsequent calls"
+        );
     }
 }
