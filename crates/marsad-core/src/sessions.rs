@@ -461,73 +461,149 @@ impl Core {
     ) -> Result<Vec<VmUpdate>, CoreError> {
         self.require_session(id)?;
 
-        // Snapshot what we need before mutating state.
-        let project = self.sessions[id].project.clone();
-        let host_id = self.sessions[id].host_id.clone();
-        let claude_uuid = self.sessions[id].state.session_id.clone();
-        // Preserve any custom name so a restart doesn't lose it.
-        let existing_name = self.sessions[id].name.clone();
+        // X6 (§6.1): route restart by RuntimeOwner.
+        // WaslManaged: StopWaslSession + LaunchWaslSession with updated context.
+        // MarsadManaged: today's StopSession + launch_session_with_id path.
+        match self.runtime_owner(id) {
+            RuntimeOwner::WaslManaged { binding } => {
+                // 1. Stop the Wasl-owned process.
+                self.send_ipc(&IpcMsg::StopWaslSession {
+                    session_id: id.to_string(),
+                    drain: false,
+                })?;
 
-        // 1. Stop the running claude process.
-        self.send_ipc(&IpcMsg::StopSession {
-            session_id: id.to_string(),
-        })?;
+                // 2. Build the new target key by merging model + session_mode into
+                // the binding's provider_key. The key is opaque JSON (a Value);
+                // Wasl's convention is {protocol, context:{cwd, model,
+                // session_mode, peers, …}}. We update context.model /
+                // context.session_mode in-place if the key is an Object with a
+                // "context" sub-object; otherwise we set them at the top level.
+                // Either way we keep every other field (cwd, peers, …) intact.
+                let mut new_key = binding.provider_key.clone();
+                if let Some(obj) = new_key.as_object_mut() {
+                    if let Some(ctx) = obj.get_mut("context").and_then(|c| c.as_object_mut()) {
+                        // Update inside the context sub-object.
+                        if !model.is_empty() {
+                            ctx.insert("model".to_string(), serde_json::Value::String(model.to_string()));
+                        }
+                        if !session_mode.is_empty() {
+                            ctx.insert("session_mode".to_string(), serde_json::Value::String(session_mode.clone()));
+                        }
+                    } else {
+                        // No context sub-object: merge at the top level.
+                        if !model.is_empty() {
+                            obj.insert("model".to_string(), serde_json::Value::String(model.to_string()));
+                        }
+                        if !session_mode.is_empty() {
+                            obj.insert("session_mode".to_string(), serde_json::Value::String(session_mode.clone()));
+                        }
+                    }
+                }
 
-        // 2. Choose the launch mode: Resume if we have the claude UUID, else Continue.
-        let mode = if let Some(uuid) = claude_uuid.filter(|u| !u.is_empty()) {
-            LaunchMode::Resume(uuid)
-        } else {
-            LaunchMode::Continue
-        };
+                // 3. Relaunch the Wasl session with the same Marsad session id
+                // and updated key. The Wasl node owns the durable process.
+                self.send_ipc(&IpcMsg::LaunchWaslSession {
+                    session_id: id.to_string(),
+                    host_id: binding.host_id.clone(),
+                    wasl_target_key: new_key.clone(),
+                    name: self.sessions.get(id).and_then(|r| r.name.clone()),
+                })?;
 
-        // 3. Relaunch with the SAME marsad session id.
-        // Preserve the session's original host so a restart re-launches on the
-        // same machine (WSL/SSH), not silently back on local.
-        //
-        // Load the persisted session to recover its per-session launch config
-        // (setup / env / claude_bin). The store is the authoritative source: it
-        // was written at launch time with the resolved values, so a restart
-        // reproduces EXACTLY what the initial launch used — even if the host
-        // registry has since been modified or the host removed.  If the record
-        // is absent (e.g. session was never persisted, or was already deleted),
-        // fall back to None/empty so launch_session_with_id re-resolves from
-        // the registry as before.
-        let (persisted_setup, persisted_env, persisted_claude_bin, persisted_driver) = self
-            .store
-            .restore()
-            .ok()
-            .and_then(|r| r.sessions.into_iter().find(|s| s.id == id))
-            .map(|s| (s.setup, s.env, s.claude_bin, s.driver))
-            .unwrap_or((None, Vec::new(), None, "claude".to_string()));
+                // 4. Update in-memory state: new key, phase Starting, live true.
+                // Also persist the updated binding's provider_key.
+                if let Some(rec) = self.sessions.get_mut(id) {
+                    rec.state.phase = Phase::Starting;
+                    rec.live = true;
+                    if let RuntimeOwner::WaslManaged { ref mut binding } = rec.runtime_owner {
+                        binding.provider_key = new_key.clone();
+                    }
+                }
+                let _ = self.store.upsert_wasl_binding(&marsad_store::PersistedWaslBinding {
+                    session_id: id.to_string(),
+                    target_id: binding.target_id.clone(),
+                    host_id: binding.host_id.clone(),
+                    provider_key: new_key,
+                    last_seq: 0,
+                });
 
-        let spec = LaunchSpec {
-            project,
-            host_id,
-            model: model.to_string(),
-            session_mode,
-            first_prompt: None,
-            mode,
-            host_target: None,
-            claude_bin: persisted_claude_bin,
-            setup: persisted_setup,
-            env: persisted_env,
-            name: existing_name,
-            disallowed_tools,
-            // A restart never re-attaches a Wasl MCP-server entry this cycle
-            // (mirrors the agent's own resume path, `marsad-agent/src/ipc.rs`
-            // — out of X4's scope; start a fresh `wasl:true` launch instead).
-            wasl: false,
-            // Preserve the original driver so a restart uses the same agent
-            // binary. Defaults to "claude" for pre-Stage-1 persisted records.
-            driver: persisted_driver,
-        };
-        self.launch_session_with_id(id.to_string(), spec)?;
+                // 5. Return the same VmUpdates the native path returns.
+                let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
+                let snap = self.snapshot();
+                let groups = marsad_viewmodel::group_overview(&snap);
+                Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
+            }
+            RuntimeOwner::MarsadManaged => {
+                // ── ORIGINAL MarsadManaged path — unchanged ─────────────────────
 
-        // 4. Return a session view so the UI can update immediately.
-        let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
-        let snap = self.snapshot();
-        let groups = marsad_viewmodel::group_overview(&snap);
-        Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
+                // Snapshot what we need before mutating state.
+                let project = self.sessions[id].project.clone();
+                let host_id = self.sessions[id].host_id.clone();
+                let claude_uuid = self.sessions[id].state.session_id.clone();
+                // Preserve any custom name so a restart doesn't lose it.
+                let existing_name = self.sessions[id].name.clone();
+
+                // 1. Stop the running claude process.
+                self.send_ipc(&IpcMsg::StopSession {
+                    session_id: id.to_string(),
+                })?;
+
+                // 2. Choose the launch mode: Resume if we have the claude UUID, else Continue.
+                let mode = if let Some(uuid) = claude_uuid.filter(|u| !u.is_empty()) {
+                    LaunchMode::Resume(uuid)
+                } else {
+                    LaunchMode::Continue
+                };
+
+                // 3. Relaunch with the SAME marsad session id.
+                // Preserve the session's original host so a restart re-launches on the
+                // same machine (WSL/SSH), not silently back on local.
+                //
+                // Load the persisted session to recover its per-session launch config
+                // (setup / env / claude_bin). The store is the authoritative source: it
+                // was written at launch time with the resolved values, so a restart
+                // reproduces EXACTLY what the initial launch used — even if the host
+                // registry has since been modified or the host removed.  If the record
+                // is absent (e.g. session was never persisted, or was already deleted),
+                // fall back to None/empty so launch_session_with_id re-resolves from
+                // the registry as before.
+                let (persisted_setup, persisted_env, persisted_claude_bin, persisted_driver) = self
+                    .store
+                    .restore()
+                    .ok()
+                    .and_then(|r| r.sessions.into_iter().find(|s| s.id == id))
+                    .map(|s| (s.setup, s.env, s.claude_bin, s.driver))
+                    .unwrap_or((None, Vec::new(), None, "claude".to_string()));
+
+                let spec = LaunchSpec {
+                    project,
+                    host_id,
+                    model: model.to_string(),
+                    session_mode,
+                    first_prompt: None,
+                    mode,
+                    host_target: None,
+                    claude_bin: persisted_claude_bin,
+                    setup: persisted_setup,
+                    env: persisted_env,
+                    name: existing_name,
+                    disallowed_tools,
+                    // A restart never re-attaches a Wasl MCP-server entry this cycle
+                    // (mirrors the agent's own resume path, `marsad-agent/src/ipc.rs`
+                    // — out of X4's scope; start a fresh `wasl:true` launch instead).
+                    wasl: false,
+                    // Preserve the original driver so a restart uses the same agent
+                    // binary. Defaults to "claude" for pre-Stage-1 persisted records.
+                    driver: persisted_driver,
+                };
+                self.launch_session_with_id(id.to_string(), spec)?;
+
+                // 4. Return a session view so the UI can update immediately.
+                let sv = self.make_session_view(id, self.sessions.get(id).unwrap());
+                let snap = self.snapshot();
+                let groups = marsad_viewmodel::group_overview(&snap);
+                Ok(vec![VmUpdate::Session(sv), VmUpdate::Overview(groups)])
+            }
+        }
     }
 
     /// Persist a named config template (model + mode).
@@ -570,10 +646,26 @@ impl Core {
     /// VmUpdates the bridge emits; typing a prompt then drives it to Active.
     pub fn resume_session(&mut self, id: &str) -> Result<Vec<VmUpdate>, CoreError> {
         self.require_session(id)?;
-        self.send_ipc(&IpcMsg::ResumeSession {
-            session_id: id.to_string(),
-            first_prompt: None,
-        })?;
+
+        // X6 (§6.1): route resume by RuntimeOwner.
+        // WaslManaged: the Wasl node owns the durable process — do NOT stop or
+        // native-relaunch it. Re-establish Marsad's view by re-attaching to the
+        // Wasl observe stream (attach_session_events emits AttachWaslSession).
+        // MarsadManaged: today's ResumeSession IPC path, unchanged.
+        match self.runtime_owner(id) {
+            RuntimeOwner::WaslManaged { .. } => {
+                // Re-attach to the existing Wasl session (re-pumps the observe
+                // stream from wasl_last_seq; the agent re-adopts the node).
+                self.attach_session_events(id)?;
+            }
+            RuntimeOwner::MarsadManaged => {
+                self.send_ipc(&IpcMsg::ResumeSession {
+                    session_id: id.to_string(),
+                    first_prompt: None,
+                })?;
+            }
+        }
+
         // require_session above guarantees it exists.
         {
             let rec = self.sessions.get_mut(id).unwrap();

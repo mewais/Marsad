@@ -2164,6 +2164,240 @@ fn stream_truncated_is_not_a_core_folding_concern() {
     }
 }
 
+// ===========================================================================
+// Part 10 — resume_session and restart_session routing (Bug Fix: §6.1)
+//
+// resume_session on WaslManaged must NOT emit ResumeSession (native) — it must
+// reuse attach_session_events (→ AttachWaslSession). The UI-state effects
+// (Phase::Starting, live=true, Board/Overview/Session VmUpdates) are preserved.
+//
+// restart_session on WaslManaged must NOT emit StopSession/LaunchSession —
+// it must emit StopWaslSession then LaunchWaslSession with the new model merged
+// into the binding's provider_key context. MarsadManaged paths: regression pins.
+// ===========================================================================
+
+/// WaslManaged resume_session emits AttachWaslSession (reuses attach_session_events),
+/// NOT ResumeSession, and still returns Phase::Starting + live + Board/Overview/Session
+/// VmUpdates (the UI effects resume_session always provided).
+#[test]
+fn wasl_managed_resume_session_emits_attach_wasl_not_resume() {
+    let (mut core, mut peer) = make_core();
+    let target_key = serde_json::json!({
+        "protocol": "claude",
+        "context": {"cwd": "/home/u/proj"},
+    });
+    let id = core
+        .launch_wasl_session("host-resume", target_key.clone(), None)
+        .expect("launch_wasl_session");
+    let _ = peer.drain_outbound();
+
+    // Call resume_session on the WaslManaged session.
+    let updates = core
+        .resume_session(&id)
+        .expect("resume_session on WaslManaged must succeed");
+
+    // Must emit AttachWaslSession, NOT ResumeSession.
+    let out: Vec<IpcMsg> = peer
+        .drain_outbound()
+        .iter()
+        .filter_map(|l| parse_ipc(l).ok())
+        .collect();
+    assert!(
+        out.iter().any(|m| matches!(
+            m,
+            IpcMsg::AttachWaslSession { session_id, wasl_target_key, host_id, .. }
+                if session_id == &id
+                    && wasl_target_key == &target_key
+                    && host_id == "host-resume"
+        )),
+        "resume_session on WaslManaged must emit AttachWaslSession with the binding's \
+         provider_key and host_id (reusing attach_session_events), got {out:?}"
+    );
+    assert!(
+        !out.iter().any(|m| matches!(m, IpcMsg::ResumeSession { .. })),
+        "resume_session on WaslManaged must NEVER emit the native ResumeSession, got {out:?}"
+    );
+
+    // UI-state effects: the session update must carry Phase::Starting and live=true,
+    // and the board must be updated (moved off Paused).
+    let sv = last_session_view(&updates, &id);
+    assert_eq!(
+        sv.state,
+        Phase::Starting,
+        "resume_session must optimistically set Phase::Starting on the WaslManaged session"
+    );
+    assert!(
+        sv.live,
+        "resume_session must set live=true on the WaslManaged session"
+    );
+    assert!(
+        updates.iter().any(|u| matches!(u, VmUpdate::Board(_))),
+        "resume_session must return a Board VmUpdate (the session moves off Paused)"
+    );
+    assert!(
+        updates.iter().any(|u| matches!(u, VmUpdate::Overview(_))),
+        "resume_session must return an Overview VmUpdate"
+    );
+}
+
+/// REGRESSION PIN: MarsadManaged resume_session still emits ResumeSession (native),
+/// NOT AttachWaslSession.
+#[test]
+fn marsad_managed_resume_session_still_emits_resume_session() {
+    let (mut core, mut peer) = make_core();
+    let id = launch_marsad(&mut core, &mut peer);
+
+    let _ = core
+        .resume_session(&id)
+        .expect("resume_session on MarsadManaged must succeed");
+    let out: Vec<IpcMsg> = peer
+        .drain_outbound()
+        .iter()
+        .filter_map(|l| parse_ipc(l).ok())
+        .collect();
+    assert!(
+        out.iter().any(|m| matches!(
+            m,
+            IpcMsg::ResumeSession { session_id, .. } if session_id == &id
+        )),
+        "MarsadManaged resume_session must still emit the native ResumeSession, got {out:?}"
+    );
+    assert!(
+        !out.iter().any(|m| matches!(m, IpcMsg::AttachWaslSession { .. })),
+        "MarsadManaged resume_session must NEVER emit AttachWaslSession, got {out:?}"
+    );
+}
+
+/// WaslManaged restart_session emits StopWaslSession + LaunchWaslSession with the
+/// new model merged into the provider_key's context (NOT native StopSession/LaunchSession).
+/// The Marsad session id is preserved (same row stays in place on the board).
+#[test]
+fn wasl_managed_restart_session_emits_stop_then_launch_wasl() {
+    let (mut core, mut peer) = make_core();
+    let target_key = serde_json::json!({
+        "protocol": "claude",
+        "context": {"cwd": "/home/u/proj", "model": "old-model", "session_mode": "default"},
+    });
+    let id = core
+        .launch_wasl_session("host-restart", target_key.clone(), None)
+        .expect("launch_wasl_session");
+    let _ = peer.drain_outbound();
+
+    let updates = core
+        .restart_session(&id, "new-model", "bypassPermissions".to_string(), vec![])
+        .expect("restart_session on WaslManaged must succeed");
+
+    let out: Vec<IpcMsg> = peer
+        .drain_outbound()
+        .iter()
+        .filter_map(|l| parse_ipc(l).ok())
+        .collect();
+
+    // Must emit StopWaslSession, not StopSession.
+    assert!(
+        out.iter().any(|m| matches!(
+            m,
+            IpcMsg::StopWaslSession { session_id, .. } if session_id == &id
+        )),
+        "restart_session on WaslManaged must emit StopWaslSession, got {out:?}"
+    );
+    assert!(
+        !out.iter().any(|m| matches!(m, IpcMsg::StopSession { .. })),
+        "restart_session on WaslManaged must NEVER emit the native StopSession, got {out:?}"
+    );
+
+    // Must emit LaunchWaslSession with the same session id and the new model in context.
+    let launch = out.iter().find_map(|m| match m {
+        IpcMsg::LaunchWaslSession {
+            session_id,
+            host_id,
+            wasl_target_key,
+            ..
+        } if session_id == &id => Some((host_id.clone(), wasl_target_key.clone())),
+        _ => None,
+    });
+    let (launched_host, launched_key) = launch.expect(
+        "restart_session on WaslManaged must emit LaunchWaslSession with the same session id",
+    );
+    assert_eq!(
+        launched_host, "host-restart",
+        "LaunchWaslSession must carry the binding's host_id"
+    );
+    // The new model must be merged into context.model.
+    let ctx = launched_key
+        .get("context")
+        .expect("LaunchWaslSession key must have a 'context' sub-object");
+    assert_eq!(
+        ctx.get("model").and_then(|v| v.as_str()),
+        Some("new-model"),
+        "LaunchWaslSession key's context.model must be the new model, got {ctx:?}"
+    );
+    assert_eq!(
+        ctx.get("session_mode").and_then(|v| v.as_str()),
+        Some("bypassPermissions"),
+        "LaunchWaslSession key's context.session_mode must be the new mode, got {ctx:?}"
+    );
+    // Other context fields must be preserved (cwd).
+    assert_eq!(
+        ctx.get("cwd").and_then(|v| v.as_str()),
+        Some("/home/u/proj"),
+        "LaunchWaslSession key must preserve context.cwd, got {ctx:?}"
+    );
+    // protocol must be preserved too.
+    assert_eq!(
+        launched_key.get("protocol").and_then(|v| v.as_str()),
+        Some("claude"),
+        "LaunchWaslSession key must preserve protocol, got {launched_key:?}"
+    );
+
+    // Must NOT emit native LaunchSession.
+    assert!(
+        !out.iter().any(|m| matches!(m, IpcMsg::LaunchSession { .. })),
+        "restart_session on WaslManaged must NEVER emit native LaunchSession, got {out:?}"
+    );
+
+    // The session view must show Phase::Starting and the same session id.
+    let sv = last_session_view(&updates, &id);
+    assert_eq!(
+        sv.state,
+        Phase::Starting,
+        "WaslManaged restart must flip phase to Starting"
+    );
+    assert!(sv.live, "WaslManaged restart must set live=true");
+}
+
+/// REGRESSION PIN: MarsadManaged restart_session still emits StopSession then
+/// LaunchSession (native), NOT StopWaslSession/LaunchWaslSession.
+#[test]
+fn marsad_managed_restart_session_still_native() {
+    let (mut core, mut peer) = make_core();
+    let id = launch_marsad(&mut core, &mut peer);
+
+    core.restart_session(&id, "new-model", String::new(), vec![])
+        .expect("MarsadManaged restart must succeed");
+    let out: Vec<IpcMsg> = peer
+        .drain_outbound()
+        .iter()
+        .filter_map(|l| parse_ipc(l).ok())
+        .collect();
+    assert!(
+        out.iter().any(|m| matches!(m, IpcMsg::StopSession { .. })),
+        "MarsadManaged restart must still emit StopSession, got {out:?}"
+    );
+    assert!(
+        !out.iter().any(|m| matches!(m, IpcMsg::StopWaslSession { .. })),
+        "MarsadManaged restart must NEVER emit StopWaslSession, got {out:?}"
+    );
+    assert!(
+        out.iter().any(|m| matches!(m, IpcMsg::LaunchSession { .. })),
+        "MarsadManaged restart must still emit LaunchSession, got {out:?}"
+    );
+    assert!(
+        !out.iter().any(|m| matches!(m, IpcMsg::LaunchWaslSession { .. })),
+        "MarsadManaged restart must NEVER emit LaunchWaslSession, got {out:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Local test doubles for the Core::with_deps injection seams (git + transcript)
 // so the reconnect tests don't touch the real filesystem/git.
