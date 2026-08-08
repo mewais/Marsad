@@ -241,7 +241,36 @@ struct JsonlCompactMetadata {
 
 #[derive(Deserialize)]
 struct JsonlMessage {
-    content: Option<Vec<JsonlContent>>,
+    content: Option<JsonlContentField>,
+}
+
+/// Claude records `message.content` as EITHER a bare string (simple user/assistant
+/// messages) OR an array of typed content blocks (rich messages). Typing it only
+/// as the array form made a string-content line FAIL to deserialize into
+/// `JsonlLine`, so it was silently skipped — dropping those prompts/replies from
+/// the transcript entirely (the root cause of "response shows but my prompt
+/// doesn't" for sessions whose prompt was stored as a plain string).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum JsonlContentField {
+    Text(String),
+    Blocks(Vec<JsonlContent>),
+}
+
+impl JsonlContentField {
+    /// Normalize to blocks so both shapes flow through the same iteration: a bare
+    /// string becomes a single `text` block.
+    fn into_blocks(self) -> Vec<JsonlContent> {
+        match self {
+            JsonlContentField::Text(s) => vec![JsonlContent {
+                content_type: Some("text".to_string()),
+                text: Some(s),
+                name: None,
+                input: None,
+            }],
+            JsonlContentField::Blocks(b) => b,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -276,7 +305,7 @@ pub fn first_user_prompt(jsonl: &str) -> Option<String> {
         let Some(contents) = message.content else {
             continue;
         };
-        for block in contents {
+        for block in contents.into_blocks() {
             if block.content_type.as_deref() == Some("text") {
                 if let Some(text) = block.text {
                     let text = text.trim().to_string();
@@ -400,6 +429,7 @@ pub fn parse_transcript(jsonl: &str) -> Vec<TranscriptEntry> {
         let Some(contents) = message.content else {
             continue;
         };
+        let contents = contents.into_blocks();
         match role {
             Some("user") => {
                 for block in contents {
@@ -736,6 +766,40 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::time::SystemTime;
+
+    /// Regression: Claude records simple messages with `content` as a bare STRING
+    /// (not an array of blocks). Such a user line previously failed to deserialize
+    /// and was silently dropped — losing the user's prompt from the transcript
+    /// (a real user hit this: the assistant reply showed, but the string-content
+    /// prompt above it did not). Both the string form and the array form must
+    /// yield entries.
+    #[test]
+    fn parse_transcript_handles_string_content_messages() {
+        let jsonl = concat!(
+            r#"{"type":"user","message":{"role":"user","content":"hello world"},"timestamp":"2026-01-01T00:00:00.000Z"}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi back"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":"plain string reply"}}"#,
+        );
+        let out = parse_transcript(jsonl);
+        assert_eq!(
+            out.len(),
+            3,
+            "string-content user + array-content assistant + string-content assistant all parse"
+        );
+        assert!(
+            matches!(&out[0], TranscriptEntry::User { text, .. } if text == "hello world"),
+            "string-content user message must yield a User entry, got {:?}",
+            out[0]
+        );
+        assert!(matches!(&out[1], TranscriptEntry::Assistant { text, .. } if text == "hi back"));
+        assert!(
+            matches!(&out[2], TranscriptEntry::Assistant { text, .. } if text == "plain string reply"),
+            "string-content assistant message must yield an Assistant entry, got {:?}",
+            out[2]
+        );
+    }
 
     // -------------------------------------------------------------------------
     // encode_project_dir
