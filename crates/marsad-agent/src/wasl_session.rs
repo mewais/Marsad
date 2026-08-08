@@ -1026,22 +1026,23 @@ impl Agent {
 
     /// `AttachWaslSession`: (re)subscribe the observe stream from `after_seq`.
     /// The per-session observe THREAD is spawned in `serve()` (real IO); here the
-    /// synchronous path validates the session exists (so the reconnect re-pump
-    /// wiring is exercised) and acks — the observe events themselves broadcast
-    /// through `wasl_session_event_lines` on the thread. Lock hygiene: the client
-    /// `Arc` is cloned out and the map lock dropped before touching it.
+    /// synchronous path just acks — the observe events themselves broadcast
+    /// through `wasl_session_event_lines` on the thread.
+    ///
+    /// CRITICAL (relaunch): do NOT require a pre-existing client here. On a cold
+    /// agent restart the client does NOT exist yet — the observe re-pump in
+    /// serve.rs re-adopts the node from THIS message's `wasl_target_key` via
+    /// `wasl_observe_client_and_after_seq` → `get_or_start`, which CREATES it. A
+    /// hard `wasl_session_client(..)?` here returned `Err` on relaunch, making
+    /// `out_lines` an error, which silently gated out the serve.rs re-pump (it runs
+    /// only `if out_lines.is_ok() && …`). That is exactly why a relaunched Wasl
+    /// session never replayed its transcript. The ack is only the routing signal;
+    /// the real (re)attach + client creation happens in serve.rs from the key.
     pub(crate) fn handle_attach_wasl_session(
         &mut self,
         session_id: String,
         after_seq: u64,
     ) -> Result<Vec<String>, AgentError> {
-        let _client = self.wasl_session_client(&session_id)?;
-        // The real observe re-pump (spawning the per-session observe thread that
-        // pumps `attach(after_seq)` and broadcasts `wasl_session_event_lines`)
-        // lives in serve.rs, which owns the subscriber broadcast list. Here the
-        // ack is the observable signal that the (re)attach was accepted and routed
-        // to the right session's client; the fake's replay-from-`after_seq`
-        // correctness is proven directly against the client in the test suite.
         let _ = after_seq;
         Ok(vec![encode_ipc(&IpcMsg::SessionAttached { session_id })])
     }
@@ -1187,5 +1188,50 @@ fn gate_decision_from_wire(outcome: &str, reason: Option<String>) -> WaslGateDec
         }
     } else {
         WaslGateDecision::Approve
+    }
+}
+
+#[cfg(test)]
+mod attach_relaunch_tests {
+    use super::*;
+    use crate::{AgentConfig, ListenSpec};
+    use marsad_lifecycle::FakeContainer;
+    use marsad_notify::CaptureNotifier;
+    use marsad_store::{MemoryBackend, Store};
+
+    fn agent() -> Agent {
+        Agent::with_fakes(
+            AgentConfig {
+                listen: ListenSpec::Stdio,
+                data_root: "/tmp/marsad-agent-test-attach-relaunch".to_string(),
+            },
+            Box::new(FakeContainer::new()),
+            Box::new(CaptureNotifier::new()),
+            Box::new(Store::new(Box::new(MemoryBackend::new()))),
+        )
+        .expect("Agent::with_fakes")
+    }
+
+    /// Relaunch regression: on a cold agent restart the client registry is EMPTY
+    /// (no prior `LaunchWaslSession`). `handle_attach_wasl_session` MUST still
+    /// return `Ok(SessionAttached)`. A prior version hard-failed here on the
+    /// missing client, which made `out_lines` an `Err` and silently gated out the
+    /// observe re-pump in `serve.rs` (it runs only `if out_lines.is_ok() && …`) —
+    /// so a relaunched Wasl session never replayed its transcript. The real node
+    /// re-adopt + client creation happens in `serve.rs` from the message's
+    /// `wasl_target_key`; this handler only produces the routing ack.
+    #[test]
+    fn attach_wasl_session_acks_even_with_no_prior_client() {
+        let mut a = agent();
+        let out = a
+            .handle_attach_wasl_session("session-cold-1".to_string(), 0)
+            .expect("attach must ack even when no client exists yet (relaunch)");
+        assert_eq!(out.len(), 1, "exactly one ack line");
+        match marsad_proto::parse_ipc(&out[0]) {
+            Ok(IpcMsg::SessionAttached { session_id }) => {
+                assert_eq!(session_id, "session-cold-1")
+            }
+            other => panic!("expected SessionAttached ack, got {other:?}"),
+        }
     }
 }
