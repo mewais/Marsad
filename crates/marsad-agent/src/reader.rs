@@ -708,6 +708,11 @@ pub(crate) fn spawn_session_reader(
     pending_fifo: std::sync::Arc<
         std::sync::Mutex<HashMap<String, std::collections::VecDeque<PendingGate>>>,
     >,
+    // Replay-on-subscribe cache for the one-shot transcript backfill (mirrors
+    // `pending_fifo` above): the reader stores the encoded `TranscriptBackfill`
+    // line here so `handle_subscribe` can re-deliver it to a late/restarted
+    // desktop that wasn't subscribed when the backfill was broadcast.
+    pending_backfills: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
     children: std::sync::Arc<std::sync::Mutex<HashMap<String, std::process::Child>>>,
     // U1 (§3.2 trigger 4): passive claude-model observation. `None` for
     // reconnect paths that don't carry the Arc (never actually passed as
@@ -1344,6 +1349,15 @@ pub(crate) fn spawn_session_reader(
                                 let subs = subs_fifo.lock().unwrap();
                                 for s in subs.iter() {
                                     let _ = s.send(line.clone());
+                                }
+                                // Cache the encoded line for replay on (re)subscribe —
+                                // mirrors `pending_fifo` for gates. The broadcast above
+                                // only reaches whoever is subscribed AT THIS INSTANT; a
+                                // cold app relaunch that auto-reconnects sessions
+                                // broadcasts this before the desktop re-subscribes, so
+                                // without the cache the backfill is lost forever.
+                                if let Ok(mut pb) = pending_backfills.lock() {
+                                    pb.insert(sid.clone(), line.clone());
                                 }
                                 eprintln!(
                                     "marsad-agent: session {sid} transcript backfill ({} bytes) broadcast",

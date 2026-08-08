@@ -279,6 +279,26 @@ impl Agent {
                 }
             }
         }
+
+        // Replay the last transcript backfill per session. Same one-shot-broadcast
+        // problem as the gates above, one step earlier: the reader broadcasts a
+        // REMOTE session's prior conversation ONCE when it re-attaches on agent
+        // startup. On a cold app relaunch the durable agent auto-reconnects and
+        // broadcasts the backfill BEFORE the desktop re-subscribes — so it hits zero
+        // subscribers and the transcript is lost forever. `pending_backfills` caches
+        // the ALREADY-ENCODED `TranscriptBackfill` line, so push it verbatim (no
+        // re-encode). core's `handle_transcript_backfill` folds it idempotently, so a
+        // replay to an already-populated client does not duplicate history.
+        //
+        // Gated to production builds for the same reason as the replays above:
+        // `pending_backfills` is a `#[cfg(not(coverage))]` real-IO registry.
+        #[cfg(not(coverage))]
+        {
+            let backfills = self.pending_backfills.0.lock().unwrap();
+            for (_session_id, line) in backfills.iter() {
+                out.push(line.clone());
+            }
+        }
         Ok(out)
     }
 
@@ -482,5 +502,57 @@ mod subscribe_gate_replay_tests {
         let mut a = fresh_agent();
         let out = a.handle_subscribe().expect("subscribe");
         assert!(agent_event_gates(&out).is_empty());
+    }
+
+    // Seed the pending-backfill cache with the ALREADY-ENCODED IPC line, exactly
+    // as the reader stores it at the broadcast site.
+    fn seed_backfill(a: &Agent, sid: &str, jsonl: &str) -> String {
+        let line = marsad_proto::encode_ipc(&marsad_proto::IpcMsg::TranscriptBackfill {
+            session_id: sid.to_string(),
+            jsonl: jsonl.to_string(),
+        });
+        a.pending_backfills
+            .0
+            .lock()
+            .unwrap()
+            .insert(sid.to_string(), line.clone());
+        line
+    }
+
+    #[test]
+    fn subscribe_replays_cached_transcript_backfill() {
+        let mut a = fresh_agent();
+        let expected = seed_backfill(&a, "s1", "{\"type\":\"user\"}\n");
+
+        let out = a.handle_subscribe().expect("subscribe");
+
+        // Ack + liveness are present; the cached backfill line is replayed verbatim
+        // (it is already an encoded IPC line, so it appears byte-identical in out).
+        assert!(matches!(
+            marsad_proto::parse_ipc(&out[0]),
+            Ok(marsad_proto::IpcMsg::Subscribed { .. })
+        ));
+        assert!(
+            out.iter().any(|l| l == &expected),
+            "handle_subscribe output must contain the exact cached TranscriptBackfill line"
+        );
+        // And it round-trips to the right session_id/jsonl.
+        let backfills: Vec<_> = out
+            .iter()
+            .filter_map(|l| match marsad_proto::parse_ipc(l) {
+                Ok(marsad_proto::IpcMsg::TranscriptBackfill { session_id, jsonl }) => {
+                    Some((session_id, jsonl))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(backfills.len(), 1, "exactly one backfill replayed");
+        assert_eq!(backfills[0].0, "s1");
+        assert_eq!(backfills[0].1, "{\"type\":\"user\"}\n");
+
+        // The cache is the durable source of truth — NOT consumed by a replay, so a
+        // second (re)subscribe replays it again (mirrors the gate-replay contract).
+        let second = a.handle_subscribe().expect("subscribe #2");
+        assert!(second.iter().any(|l| l == &expected));
     }
 }

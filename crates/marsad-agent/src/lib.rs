@@ -629,6 +629,26 @@ impl fmt::Debug for PendingGatesWrap {
     }
 }
 
+/// Per-session cache of the last `TranscriptBackfill` IPC line. Shared (Arc)
+/// between the FIFO reader threads (which insert the encoded line when they
+/// re-attach and broadcast the one-shot backfill) and `handle_subscribe` (which
+/// replays it to a late/reconnecting client). Mirrors `PendingGatesWrap`: the
+/// backfill is otherwise a single broadcast to whoever was subscribed the
+/// instant it fired, so a cold app relaunch that re-subscribes AFTER the durable
+/// agent already broadcast the backfill would never receive the prior
+/// conversation. The value is the ALREADY-ENCODED IPC line, pushed verbatim on
+/// replay (no re-encode). Keyed by session_id; the latest backfill per session
+/// overwrites the previous one.
+#[cfg(not(coverage))]
+struct PendingBackfillsWrap(std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>);
+
+#[cfg(not(coverage))]
+impl fmt::Debug for PendingBackfillsWrap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PendingBackfillsWrap")
+    }
+}
+
 // WAVE 3b per-session pty registry wrapper — production builds only. Gated
 // out of the coverage build so no uncovered lines appear (mirrors
 // `SessionWritersWrap`). See `pty.rs`'s `PtyRegistry` doc comment.
@@ -686,6 +706,11 @@ pub struct Agent {
     /// Production builds only — gated out of the coverage build.
     #[cfg(not(coverage))]
     pending_gates: PendingGatesWrap,
+    /// Per-session cache of the last `TranscriptBackfill` line, replayed on
+    /// (re)subscribe so a late/restarted desktop still gets the one-shot backfill
+    /// (mirrors `pending_gates`). Production builds only.
+    #[cfg(not(coverage))]
+    pending_backfills: PendingBackfillsWrap,
     /// WAVE 3b: per-session live pty registry (the Terminal tab's escape
     /// hatch). Production builds only — gated out of the coverage build.
     #[cfg(not(coverage))]
@@ -795,6 +820,10 @@ impl Agent {
                 HashMap::new(),
             ))),
             #[cfg(not(coverage))]
+            pending_backfills: PendingBackfillsWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
+            #[cfg(not(coverage))]
             pty_entries: PtyEntriesWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),
             #[cfg(not(coverage))]
             session_children: SessionChildrenWrap(std::sync::Arc::new(std::sync::Mutex::new(
@@ -884,6 +913,9 @@ impl Agent {
             ))),
             pending_prompts: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             pending_gates: PendingGatesWrap(std::sync::Arc::new(std::sync::Mutex::new(
+                HashMap::new(),
+            ))),
+            pending_backfills: PendingBackfillsWrap(std::sync::Arc::new(std::sync::Mutex::new(
                 HashMap::new(),
             ))),
             pty_entries: PtyEntriesWrap(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()))),

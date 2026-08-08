@@ -257,6 +257,10 @@ impl Agent {
         // Shared across the serve thread (handle_answer_gate via self) and the
         // FIFO threads (which insert when claude emits a `can_use_tool`).
         let pending_gates_for_fifo = Arc::clone(&self.pending_gates.0);
+        // Shared alongside the gate registry (same durable-agent + late-subscriber
+        // rationale): the reader inserts the encoded backfill line, handle_subscribe
+        // replays it.
+        let pending_backfills_for_fifo = Arc::clone(&self.pending_backfills.0);
 
         // ── Reader-liveness registry ───────────────────────────────────────
         // Shared across the serve thread (the resume guard + launch_with_id) and
@@ -462,6 +466,7 @@ impl Agent {
                                 Arc::clone(&self.session_writers.0),
                                 Arc::clone(&self.pending_prompts),
                                 Arc::clone(&self.pending_gates.0),
+                                Arc::clone(&self.pending_backfills.0),
                                 Arc::clone(&self.session_children.0),
                                 Some(Arc::clone(&capability_provider)),
                                 s.driver.clone(),
@@ -538,6 +543,7 @@ impl Agent {
                         Arc::clone(&self.session_writers.0),
                         Arc::clone(&self.pending_prompts),
                         Arc::clone(&self.pending_gates.0),
+                        Arc::clone(&self.pending_backfills.0),
                         Arc::clone(&self.session_children.0),
                         Some(Arc::clone(&capability_provider)),
                         s.driver.clone(),
@@ -688,6 +694,7 @@ impl Agent {
                 let writers_for_fifo = Arc::clone(&session_writers_for_fifo);
                 let pending_prompts_for_fifo = Arc::clone(&session_pending_prompts_for_fifo);
                 let pending_for_fifo = Arc::clone(&pending_gates_for_fifo);
+                let pending_backfills_for_reader = Arc::clone(&pending_backfills_for_fifo);
                 let children_for_reader = Arc::clone(&session_children_for_reader);
                 let capability_provider_for_reader = Arc::clone(&capability_provider_accept);
                 let pty_entries_for_client = Arc::clone(&pty_entries_for_reader);
@@ -808,6 +815,7 @@ impl Agent {
                                                 Arc::clone(&writers_for_fifo),
                                                 Arc::clone(&pending_prompts_for_fifo),
                                                 Arc::clone(&pending_for_fifo),
+                                                Arc::clone(&pending_backfills_for_reader),
                                                 Arc::clone(&children_for_reader),
                                                 Some(Arc::clone(&capability_provider_for_reader)),
                                                 reply.driver,

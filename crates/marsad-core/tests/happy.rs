@@ -3000,6 +3000,53 @@ fn transcript_backfill_populates_history() {
     );
 }
 
+/// The SAME backfill delivered twice to one core (e.g. the agent re-subscribes
+/// the reader after a restart and the cached backfill line replays again) must
+/// NOT duplicate the transcript — the fold is idempotent. One fold still
+/// prepends the history.
+#[test]
+fn transcript_backfill_is_idempotent_on_replay() {
+    let backend = MemoryBackend::new();
+    let mut seed = Store::new(Box::new(backend.clone()));
+    seed_session(&mut seed, "session-bf-dup", "host-5", Some("uuid"));
+    let mut core = core_with_backend(backend);
+    core.load_sessions().expect("load_sessions");
+
+    let jsonl = concat!(
+        r#"{"type":"user","message":{"content":[{"type":"text","text":"first ask"}]}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"first reply"}]}}"#,
+    );
+    let line = backfill_line("session-bf-dup", jsonl);
+
+    // First fold prepends the history (2 entries).
+    core.on_agent_line(&line).expect("backfill #1 applies");
+    let len_after_first = core
+        .snapshot()
+        .sessions
+        .into_iter()
+        .find(|s| s.id == "session-bf-dup")
+        .expect("session present")
+        .transcript
+        .len();
+    assert_eq!(len_after_first, 2, "first fold must prepend the history");
+
+    // Second identical fold must be a no-op on the transcript (same length).
+    core.on_agent_line(&line).expect("backfill #2 applies");
+    let len_after_second = core
+        .snapshot()
+        .sessions
+        .into_iter()
+        .find(|s| s.id == "session-bf-dup")
+        .expect("session present")
+        .transcript
+        .len();
+    assert_eq!(
+        len_after_second, len_after_first,
+        "replaying the same backfill must NOT duplicate the transcript"
+    );
+}
+
 /// Backfill for an unknown session is a silent no-op (no update, no panic).
 #[test]
 fn transcript_backfill_unknown_session_is_noop() {

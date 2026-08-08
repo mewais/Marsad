@@ -598,7 +598,17 @@ impl Core {
             record.state.phase = Phase::Done;
         }
         // Prepend history so it precedes any live entries already streamed.
-        if !history.is_empty() {
+        //
+        // IDEMPOTENCY: the same backfill can arrive twice at one core — the reader
+        // caches the encoded `TranscriptBackfill` line and replays it to a client
+        // that re-subscribes after an agent restart. `parse_transcript` yields
+        // id-less `TranscriptEntry` values (User/Assistant/Tool/Compaction — no
+        // stable message id to dedup on like live events do via `seen_msg_ids`), so
+        // instead guard on the history already sitting at the FRONT of the
+        // transcript: if the current transcript already starts with exactly this
+        // history slice, a prior fold placed it there — skip to avoid duplication.
+        // The first (fresh-core) fold still prepends unconditionally.
+        if !history.is_empty() && !record.transcript.starts_with(&history) {
             let mut combined = history;
             combined.append(&mut record.transcript);
             record.transcript = combined;
