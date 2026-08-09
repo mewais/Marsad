@@ -17,7 +17,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { ThemeProvider } from "../src/theme/ThemeProvider";
 import { GraphScreen } from "../src/screens/graph/GraphScreen";
-import { layoutByHost, NODE_W, LANE_W, LANE_GAP, ROW_H } from "../src/screens/graph/layout";
+import { layoutByHost, NODE_W, LANE_W, LANE_GAP, ROW_H, LANE_LABEL_H } from "../src/screens/graph/layout";
 import type {
   GraphView,
   GraphNode,
@@ -166,15 +166,17 @@ describe("GraphScreen — GS1 node positions from layoutByHost", () => {
     const n2 = screen.getByTestId("graph-node-n2");
     const n3 = screen.getByTestId("graph-node-n3");
 
+    // Rows are inset below the reserved host-label band (BUG #1): row R sits at
+    // LANE_LABEL_H + R * ROW_H so the first row never covers the lane label.
     // n1: host-a, depth 0 -> row 0
     expect(n1.style.left).toBe(`${centeredX(0)}px`);
-    expect(n1.style.top).toBe(`${0 * ROW_H}px`);
+    expect(n1.style.top).toBe(`${LANE_LABEL_H + 0 * ROW_H}px`);
     // n2: host-a, depth 1 -> row 1 (below n1 in the same lane)
     expect(n2.style.left).toBe(`${centeredX(0)}px`);
-    expect(n2.style.top).toBe(`${1 * ROW_H}px`);
+    expect(n2.style.top).toBe(`${LANE_LABEL_H + 1 * ROW_H}px`);
     // n3: host-b, depth 0 -> row 0, second lane column
     expect(n3.style.left).toBe(`${centeredX(1)}px`);
-    expect(n3.style.top).toBe(`${0 * ROW_H}px`);
+    expect(n3.style.top).toBe(`${LANE_LABEL_H + 0 * ROW_H}px`);
   });
 
   it("renders exactly one graph-node-{id} per node in graph.nodes (no extras, no omissions)", () => {

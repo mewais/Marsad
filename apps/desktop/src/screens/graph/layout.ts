@@ -16,6 +16,15 @@ export const LANE_W = 222;
 export const LANE_GAP = 30;
 export const ROW_H = 132;
 export const STUB = 40;
+/**
+ * Vertical space RESERVED at the top of each host swimlane for its group/host
+ * label (the "▪ host" chip GraphScreen renders inside the lane). Node rows are
+ * inset below this so the first row never overlaps the label (BUG #1 — the label
+ * used to be covered by the top row, with the equivalent slack sitting UNDER the
+ * group instead). The lane's total height includes this inset, so the reserved
+ * band is ABOVE the child nodes with no dead gap below them.
+ */
+export const LANE_LABEL_H = 34;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -91,7 +100,9 @@ export function layoutByHost(graph: GraphView): GraphLayout {
     const row = rowById.get(n.id) ?? 0;
     const laneX = col * (LANE_W + LANE_GAP);
     const x = laneX + (LANE_W - NODE_W) / 2;
-    const y = row * ROW_H;
+    // Inset every row below the reserved label band so the first row clears the
+    // lane's host label (BUG #1).
+    const y = LANE_LABEL_H + row * ROW_H;
     const positioned: PositionedNode = { id: n.id, x, y, w: NODE_W, h: NODE_H, node: n };
     positionedById.set(n.id, positioned);
     return positioned;
@@ -124,7 +135,9 @@ export function layoutByHost(graph: GraphView): GraphLayout {
   }
 
   const width = hosts.length > 0 ? hosts.length * (LANE_W + LANE_GAP) - LANE_GAP : 0;
-  const height = maxRows * ROW_H;
+  // Total height covers the reserved label band plus the node rows (the label
+  // band sits ABOVE the rows — no extra gap is added below them).
+  const height = maxRows > 0 ? LANE_LABEL_H + maxRows * ROW_H : 0;
 
   return {
     hosts,

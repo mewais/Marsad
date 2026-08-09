@@ -382,6 +382,15 @@ export function NodeModal() {
   }, [resume, hostId, driver, projectTrim]);
 
   useEffect(() => {
+    // BUG #3 — in MODIFY mode the prefill effect owns model/mode and sets the
+    // userModified* flags. But the catalog loads ASYNC, and on the first render
+    // where `modifyNode` becomes defined BOTH this effect and the prefill effect
+    // run in the same commit; this effect's closure still sees the OLD
+    // `userModifiedModel === false`, so it would clobber the just-prefilled model
+    // (to "" while caps are still loading — which then sticks, because the next
+    // run is correctly blocked by the now-true flag). Skip the default picker
+    // entirely in modify mode: the saved value is authoritative.
+    if (isModify) return;
     if (userModifiedModel) return;
     // Prefer the Settings per-driver default when it's a real option in this
     // (driver,host)'s catalog (or when free text is allowed); else the
@@ -395,11 +404,14 @@ export function NodeModal() {
       setModel("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelCatalog.models, modelCatalog.free_text, userModifiedModel, defaultModels, driver]);
+  }, [modelCatalog.models, modelCatalog.free_text, userModifiedModel, defaultModels, driver, isModify]);
 
   // Default session mode: Settings default_modes[driver] if present in modeList,
   // else modeList[0]?.id, else "" (backend default). Mirror of model default logic.
   useEffect(() => {
+    // BUG #3 — same as the model default effect: don't let the mode default run
+    // in modify mode and clobber the prefilled session_mode.
+    if (isModify) return;
     if (userModifiedSessionMode) return;
     const pref = defaultModes[driver];
     if (pref && modeList.some((m) => m.id === pref)) {
@@ -410,7 +422,7 @@ export function NodeModal() {
       setSessionMode("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modeList, userModifiedSessionMode, defaultModes, driver]);
+  }, [modeList, userModifiedSessionMode, defaultModes, driver, isModify]);
 
   function selectModel(id: string) {
     setUserModifiedModel(true);
@@ -425,6 +437,11 @@ export function NodeModal() {
   }
 
   function close() {
+    // BUG #4 — cancel must return to WHERE the modal was opened from, not always
+    // jump to the board. Only the first-node empty-discard case belongs on the
+    // board; adding a 2nd+ node or a MODIFY re-edit must go back to the builder
+    // graph it was opened from.
+    //
     // BUG #2 — discard a just-created empty draft on cancel. Only when this is
     // the first-node fast lane (`isFirstNode`), no agent was launched in this
     // modal session, AND the workstream genuinely has 0 sessions right now.
@@ -435,10 +452,21 @@ export function NodeModal() {
       const sessionCount = card?.session_count ?? 0;
       if (sessionCount === 0) {
         void deleteWorkstream(ctx.wsId);
+        // Draft consumed — clear the marker so a later openBoard doesn't try to
+        // discard it again — then land on the board (the workstream is gone).
+        markDraftWorkstream(null);
+        dispatch({ type: "SET_SCREEN", screen: "board" });
+        return;
       }
-      // Draft consumed (discarded above, or never a draft) — clear the marker
-      // so a later openBoard doesn't try to discard it again.
+      // Draft consumed (never actually a discardable empty draft) — clear the
+      // marker so a later openBoard doesn't try to discard it again.
       markDraftWorkstream(null);
+    }
+    // Adding a 2nd+ node, MODIFY, or a first-node modal over a non-empty
+    // workstream: return to the builder graph the modal was opened from.
+    if (ctx) {
+      void goToGraph(ctx.wsId);
+      return;
     }
     dispatch({ type: "SET_SCREEN", screen: "board" });
   }

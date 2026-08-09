@@ -30,6 +30,7 @@ import type { DraftNode } from "../../bridge/useVm";
 import { launchWaslSession, removeSession } from "../../bridge/api";
 import type { GraphNode, GraphView } from "../../bridge/workstreamTypes";
 import { GraphScreen } from "./GraphScreen";
+import { isPaused } from "../../bridge/sessionStatus";
 import { validateConnection, CONN_ERROR_MESSAGE } from "../../bridge/connValidate";
 import { orderDraftLaunch } from "../../bridge/draftOrder";
 import { peersForNode } from "../../bridge/peersForNode";
@@ -360,6 +361,24 @@ export function GraphScreenConnected(): JSX.Element {
     void removeConnection(id);
   }
 
+  // BUG #6 — the Pause-all / Resume-all affordances must reflect the workstream's
+  // ACTUAL session states, not both show unconditionally. A node is paused/stopped
+  // when it isn't live (authoritative `SessionView.live` — the SAME signal the
+  // dashboard card uses via sessionStatus.isPaused). When a node has no matching
+  // SessionView (e.g. a draft, or before its view lands) we fall back to its graph
+  // Phase, where a restored/stopped session surfaces as Stale/Detached.
+  // Show Pause-all only if at least one node is running; Resume-all only if at
+  // least one is paused; both only when mixed.
+  const sessions = state.snapshot?.sessions ?? [];
+  const nodePaused = (n: GraphNode): boolean => {
+    const sv = sessions.find((s) => s.id === n.id);
+    if (sv) return isPaused(sv);
+    return n.state === "Stale" || n.state === "Detached";
+  };
+  const realNodes = realGraph.nodes;
+  const canPause = realNodes.some((n) => !nodePaused(n));
+  const canResume = realNodes.some((n) => nodePaused(n));
+
   function onDeleteWorkstream(): void {
     const label = realGraph.name || effectiveWsId;
     const ok =
@@ -391,9 +410,10 @@ export function GraphScreenConnected(): JSX.Element {
       onSetConnectionBi={onSetConnectionBi}
       onModifyNode={onModifyNode}
       onRemoveNode={onRemoveNode}
+      isDraftNode={(id) => draftTempIds.has(id)}
       onRemoveConnection={onRemoveConnection}
-      onPauseWorkstream={() => void pauseWorkstream(effectiveWsId)}
-      onResumeWorkstream={() => void resumeWorkstream(effectiveWsId)}
+      onPauseWorkstream={canPause ? () => void pauseWorkstream(effectiveWsId) : undefined}
+      onResumeWorkstream={canResume ? () => void resumeWorkstream(effectiveWsId) : undefined}
       onDeleteWorkstream={onDeleteWorkstream}
       designError={designError}
     />

@@ -33,6 +33,9 @@ const LANE_W = 222;
 const LANE_GAP = 30;
 const ROW_H = 132;
 const STUB = 40;
+// Reserved label band at the top of each lane (BUG #1) — every row is inset
+// below it, and it is added to the lane's total height.
+const LANE_LABEL_H = 34;
 
 const laneX = (col: number): number => col * (LANE_W + LANE_GAP);
 const centeredX = (col: number): number => laneX(col) + (LANE_W - NODE_W) / 2;
@@ -115,7 +118,7 @@ describe("layoutByHost — GL1 host columns", () => {
 // GL2 — rows by depth
 // ---------------------------------------------------------------------------
 describe("layoutByHost — GL2 rows by depth", () => {
-  it("assigns row 0 and row 1 (y = 0 and y = ROW_H) to depths 0 and 1 on the same host", () => {
+  it("assigns row 0 and row 1 (inset below the label band) to depths 0 and 1 on the same host", () => {
     const g = graph([
       node({ id: "a", host: "h1", depth: 0 }),
       node({ id: "b", host: "h1", depth: 1 }),
@@ -124,9 +127,10 @@ describe("layoutByHost — GL2 rows by depth", () => {
 
     const a = findNode(layout, "a");
     const b = findNode(layout, "b");
-    expect(a.y).toBe(0);
-    expect(b.y).toBe(ROW_H);
-    expect(b.y).toBe(132);
+    // Rows sit at LANE_LABEL_H + row * ROW_H (BUG #1 reserved label band).
+    expect(a.y).toBe(LANE_LABEL_H);
+    expect(b.y).toBe(LANE_LABEL_H + ROW_H);
+    expect(b.y).toBe(34 + 132);
   });
 });
 
@@ -145,8 +149,9 @@ describe("layoutByHost — GL3 same-depth collision stacking", () => {
     const b = findNode(layout, "b");
 
     // Original graph.nodes order breaks the tie: a (index 0) comes first.
-    expect(a.y).toBe(0);
-    expect(b.y).toBe(ROW_H);
+    // Rows are inset below the reserved label band (BUG #1).
+    expect(a.y).toBe(LANE_LABEL_H);
+    expect(b.y).toBe(LANE_LABEL_H + ROW_H);
     expect(a.y).not.toBe(b.y);
   });
 });
@@ -212,12 +217,12 @@ describe("layoutByHost — GL5 edge routing points", () => {
     expect(e1.points[2]).toEqual(stubUp);
     expect(e1.points[3]).toEqual(targetTop);
 
-    // Exact numeric values for this fixture:
-    // A is at col 0 -> x=16, row 0 -> y=0. B is at col 1 -> x=268, row 0 -> y=0.
-    expect(e1.points[0]).toEqual({ x: 16 + 95, y: 0 + 66 }); // { x: 111, y: 66 }
-    expect(e1.points[1]).toEqual({ x: 111, y: 106 }); // 66 + STUB(40)
-    expect(e1.points[2]).toEqual({ x: 268 + 95, y: 0 - 40 }); // { x: 363, y: -40 }
-    expect(e1.points[3]).toEqual({ x: 363, y: 0 });
+    // Exact numeric values for this fixture (rows inset by LANE_LABEL_H=34, BUG #1):
+    // A is at col 0 -> x=16, row 0 -> y=34. B is at col 1 -> x=268, row 0 -> y=34.
+    expect(e1.points[0]).toEqual({ x: 16 + 95, y: 34 + 66 }); // { x: 111, y: 100 }
+    expect(e1.points[1]).toEqual({ x: 111, y: 140 }); // 100 + STUB(40)
+    expect(e1.points[2]).toEqual({ x: 268 + 95, y: 34 - 40 }); // { x: 363, y: -6 }
+    expect(e1.points[3]).toEqual({ x: 363, y: 34 });
   });
 });
 
@@ -236,9 +241,9 @@ describe("layoutByHost — GL6 gate midpoint", () => {
     const layout = layoutByHost(g);
     const e1 = findEdge(layout, "e1");
 
-    // sourceBottom = {111, 66}, targetTop = {363, 0} (see GL5 for derivation).
-    expect(e1.gate).toEqual({ x: (111 + 363) / 2, y: (66 + 0) / 2 });
-    expect(e1.gate).toEqual({ x: 237, y: 33 });
+    // sourceBottom = {111, 100}, targetTop = {363, 34} (see GL5 for derivation).
+    expect(e1.gate).toEqual({ x: (111 + 363) / 2, y: (100 + 34) / 2 });
+    expect(e1.gate).toEqual({ x: 237, y: 67 });
   });
 
   it("returns gate: null for a non-gated edge", () => {
@@ -320,8 +325,9 @@ describe("layoutByHost — GL9 canvas size", () => {
     expect(layout.hosts).toEqual(["h1", "h2", "h3"]);
     expect(layout.width).toBe(3 * (LANE_W + LANE_GAP) - LANE_GAP);
     expect(layout.width).toBe(726);
-    expect(layout.height).toBe(2 * ROW_H);
-    expect(layout.height).toBe(264);
+    // Height covers the reserved label band + rows (BUG #1).
+    expect(layout.height).toBe(LANE_LABEL_H + 2 * ROW_H);
+    expect(layout.height).toBe(298);
   });
 
   it("computes width for a two-host graph as N*(LANE_W+LANE_GAP)-LANE_GAP", () => {
@@ -333,8 +339,9 @@ describe("layoutByHost — GL9 canvas size", () => {
 
     expect(layout.width).toBe(2 * (LANE_W + LANE_GAP) - LANE_GAP);
     expect(layout.width).toBe(474);
-    expect(layout.height).toBe(1 * ROW_H);
-    expect(layout.height).toBe(132);
+    // Height covers the reserved label band + rows (BUG #1).
+    expect(layout.height).toBe(LANE_LABEL_H + 1 * ROW_H);
+    expect(layout.height).toBe(166);
   });
 });
 

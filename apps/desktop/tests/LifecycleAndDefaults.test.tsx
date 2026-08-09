@@ -505,10 +505,14 @@ describe("#5 Workstream lifecycle (Board)", () => {
 });
 
 describe("#5 Workstream lifecycle (Graph inspector)", () => {
-  function renderGraph() {
-    const g = graphView([
-      { id: "n1", name: "lead", driver: "claude", host: "local", state: "Working", status: "working", context_pct: 5, is_lead: true, depth: 0 },
-    ]);
+  // BUG #6 — Pause-all / Resume-all are now STATEFUL: a graph node is treated as
+  // paused when it isn't live. The connected wrapper prefers each node's
+  // SessionView.live (matching the dashboard) and falls back to the graph Phase
+  // (Stale/Detached = paused) when no matching SessionView exists. These graph
+  // fixture ids have no SessionView in MOCK_SNAPSHOT, so the Phase fallback drives
+  // the conditions: Working ⇒ running ⇒ Pause only; Stale/Detached ⇒ Resume only.
+  function renderGraph(nodes: GraphView["nodes"]) {
+    const g = graphView(nodes);
     // Post-mutation refresh re-fetches the graph; keep operate-mode nodes present.
     fetchGraph.mockResolvedValue(g);
     const preloaded: Partial<VmState> = {
@@ -527,9 +531,31 @@ describe("#5 Workstream lifecycle (Graph inspector)", () => {
     );
   }
 
-  it("operate-mode inspector Pause all / Resume all call the api fns", async () => {
-    renderGraph();
+  const runningNode: GraphView["nodes"][number] = { id: "n1", name: "lead", driver: "claude", host: "local", state: "Working", status: "working", context_pct: 5, is_lead: true, depth: 0 };
+  const stoppedNode: GraphView["nodes"][number] = { id: "n2", name: "worker", driver: "claude", host: "local", state: "Stale", status: "paused", context_pct: 0, is_lead: false, depth: 1 };
+
+  it("all-running workstream: only Pause all is shown and calls pauseWorkstream", async () => {
+    renderGraph([runningNode]);
     await waitFor(() => expect(screen.getByTestId("inspector-pause-ws")).toBeTruthy());
+    // Nothing paused → no Resume all.
+    expect(screen.queryByTestId("inspector-resume-ws")).toBeNull();
+    fireEvent.click(screen.getByTestId("inspector-pause-ws"));
+    await waitFor(() => expect(pauseWorkstream).toHaveBeenCalledWith("ws-1"));
+  });
+
+  it("all-stopped workstream: only Resume all is shown and calls resumeWorkstream", async () => {
+    renderGraph([stoppedNode]);
+    await waitFor(() => expect(screen.getByTestId("inspector-resume-ws")).toBeTruthy());
+    // Nothing running → no Pause all.
+    expect(screen.queryByTestId("inspector-pause-ws")).toBeNull();
+    fireEvent.click(screen.getByTestId("inspector-resume-ws"));
+    await waitFor(() => expect(resumeWorkstream).toHaveBeenCalledWith("ws-1"));
+  });
+
+  it("mixed workstream: both Pause all and Resume all are shown", async () => {
+    renderGraph([runningNode, stoppedNode]);
+    await waitFor(() => expect(screen.getByTestId("inspector-pause-ws")).toBeTruthy());
+    expect(screen.getByTestId("inspector-resume-ws")).toBeTruthy();
     fireEvent.click(screen.getByTestId("inspector-pause-ws"));
     await waitFor(() => expect(pauseWorkstream).toHaveBeenCalledWith("ws-1"));
     fireEvent.click(screen.getByTestId("inspector-resume-ws"));
@@ -538,7 +564,7 @@ describe("#5 Workstream lifecycle (Graph inspector)", () => {
 
   it("inspector Delete calls deleteWorkstream after confirm", async () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    renderGraph();
+    renderGraph([runningNode]);
     await waitFor(() => expect(screen.getByTestId("inspector-delete-ws")).toBeTruthy());
     fireEvent.click(screen.getByTestId("inspector-delete-ws"));
     await waitFor(() => expect(deleteWorkstream).toHaveBeenCalledWith("ws-1"));

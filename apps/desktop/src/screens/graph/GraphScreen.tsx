@@ -24,6 +24,7 @@ import {
   smoothEdgePath,
   LANE_W,
   LANE_GAP,
+  LANE_LABEL_H,
 } from "./layout";
 import type { GraphLayout, Point } from "./layout";
 import { edgeColor, edgeStrokeWidth } from "./edgeStyle";
@@ -114,6 +115,10 @@ export interface GraphScreenProps {
    *  real nodes delete the session (the wrapper confirms). Omitted ⇒ no remove
    *  affordance on agent rows. */
   onRemoveNode?: (id: string) => void;
+  /** #2 — whether a node id is a DRAFT (unlaunched, temp-id) node. Only draft
+   *  nodes get an on-canvas delete button in design mode (real nodes are removed
+   *  via session removal, not here). Omitted ⇒ no on-canvas delete is shown. */
+  isDraftNode?: (id: string) => boolean;
   /** Remove a connection (design mode). Draft edges discard client-side; real
    *  edges call the backend. Omitted ⇒ no edge remove affordance. */
   onRemoveConnection?: (id: string) => void;
@@ -164,6 +169,7 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
     onSetConnectionBi,
     onModifyNode,
     onRemoveNode,
+    isDraftNode,
     onRemoveConnection,
     onPauseWorkstream,
     onResumeWorkstream,
@@ -417,7 +423,14 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
                       <div
                         className="mono"
                         style={{
-                          padding: "8px 10px",
+                          // Occupy exactly the reserved label band (LANE_LABEL_H)
+                          // at the TOP of the lane so it sits ABOVE the node rows
+                          // rather than being covered by the first row (BUG #1).
+                          height: LANE_LABEL_H,
+                          boxSizing: "border-box",
+                          display: "flex",
+                          alignItems: "center",
+                          padding: "0 10px",
                           fontSize: "calc(10.5px * var(--fs,1))",
                           fontWeight: 700,
                           letterSpacing: 0.4,
@@ -681,6 +694,32 @@ export function GraphScreen(props: GraphScreenProps): JSX.Element {
                         >
                           {n.name}
                         </span>
+                        {/* #2 — on-canvas delete for a DRAFT (unlaunched) node in
+                            design mode. Only drafts get it (real nodes are removed
+                            via session removal). Stops propagation so it doesn't
+                            trigger the node's select/modify click. */}
+                        {designMode && onRemoveNode && isDraftNode?.(n.id) && (
+                          <span
+                            data-testid={`node-delete-${n.id}`}
+                            role="button"
+                            title="Delete draft agent"
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              onRemoveNode(n.id);
+                            }}
+                            style={{
+                              color: "var(--txt3)",
+                              cursor: "pointer",
+                              flexShrink: 0,
+                              fontSize: 13,
+                              fontWeight: 800,
+                              lineHeight: 1,
+                              padding: "0 2px",
+                            }}
+                          >
+                            ✕
+                          </span>
+                        )}
                       </div>
 
                       {/* Meta row: driver pill + (Flow) host chip + status + chevron */}
