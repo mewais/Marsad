@@ -461,11 +461,13 @@ fn every_event_kind_constructs_with_its_v3_shape_and_round_trips() {
     round_trip(WaslSessionEventKind::ToolStarted {
         turn_id: "t1".to_string(),
         name: "bash".to_string(),
+        input: serde_json::json!({ "command": "ls" }),
     });
     round_trip(WaslSessionEventKind::ToolFinished {
         turn_id: "t1".to_string(),
         name: "bash".to_string(),
         ok: true,
+        result: Some(serde_json::json!("file1\nfile2")),
     });
     round_trip(WaslSessionEventKind::NativeGateRequested {
         turn_id: "t1".to_string(),

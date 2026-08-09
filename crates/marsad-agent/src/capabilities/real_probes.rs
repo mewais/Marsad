@@ -259,10 +259,16 @@ impl CapabilityProbe for RealCodexProbe {
 
         // Task B: probe modes via a bounded codex app-server handshake (only
         // when the CLI is available — no point spinning up a binary that isn't
-        // there). The modes deadline is a fraction of the host deadline; on
-        // any failure it stays empty (honest, no fabrication).
+        // there). Use the SAME host-aware `ctx.deadline` the models discovery
+        // above used: an HPC login host (setup) legitimately takes ~47-58s just
+        // to bring the login shell up before `codex app-server` can answer
+        // `initialize`, so a hardcoded 10s cap fired before the handshake
+        // completed and modes came back empty on etx while models (full
+        // deadline) succeeded. `ctx.deadline` is already 10s local / 30s remote
+        // / 90s setup, so slow hosts get their window and fast hosts still
+        // return early. On any failure it stays empty (honest, no fabrication).
         let available_modes = if cli_available {
-            let modes_deadline = ctx.deadline.min(Duration::from_secs(10));
+            let modes_deadline = ctx.deadline;
             match probe_codex_modes_bounded(&command, ctx.host_target.as_deref(), ctx.setup.as_deref(), modes_deadline) {
                 Ok(modes) => {
                     eprintln!(
@@ -854,9 +860,13 @@ impl CapabilityProbe for RealOpencodeProbe {
         // Task B: probe modes via a bounded opencode acp handshake (only when
         // the CLI is available). Opencode modes are user-config-defined and only
         // available from the ACP `session/new` configOptions — there is no
-        // non-session subcommand. On any failure stay empty (honest).
+        // non-session subcommand. Use the SAME host-aware `ctx.deadline` the
+        // models discovery above used (10s local / 30s remote / 90s setup): a
+        // hardcoded 10s cap fired before the ACP handshake completed on a slow
+        // HPC login host, dropping modes there while models succeeded. On any
+        // failure stay empty (honest).
         let available_modes = if cli_available {
-            let modes_deadline = ctx.deadline.min(Duration::from_secs(10));
+            let modes_deadline = ctx.deadline;
             match probe_opencode_modes_bounded(&command, ctx.host_target.as_deref(), ctx.setup.as_deref(), modes_deadline)
             {
                 Ok((modes, _current)) => {

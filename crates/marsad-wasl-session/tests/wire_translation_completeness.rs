@@ -223,8 +223,11 @@ fn attach_maps_turn_queued() {
 
 #[test]
 fn attach_maps_tool_finished() {
-    // Plan §4.4 `ToolFinished { turn_id, name, ok }`; spec turn_event variant
-    // "tool_finished". (The shipped fixture only covers `tool_started`.)
+    // Plan §4.4 `ToolFinished { turn_id, name, ok }` + the additive `result`
+    // (Wasl `TurnEvent::ToolFinished.result`); spec turn_event variant
+    // "tool_finished". (The shipped fixture only covers `tool_started`.) A
+    // wire frame WITHOUT `result` maps to `result: None` (driver that reports
+    // only success/failure).
     assert_eq!(
         single_event_kind_from_wire(
             r#"{ "type": "tool_finished", "turn_id": "turn-7", "name": "ask_wasl", "ok": true }"#
@@ -233,6 +236,19 @@ fn attach_maps_tool_finished() {
             turn_id: "turn-7".to_string(),
             name: "ask_wasl".to_string(),
             ok: true,
+            result: None,
+        }
+    );
+    // A wire frame WITH `result` carries it through.
+    assert_eq!(
+        single_event_kind_from_wire(
+            r#"{ "type": "tool_finished", "turn_id": "turn-7", "name": "ask_wasl", "ok": true, "result": "done" }"#
+        ),
+        WaslSessionEventKind::ToolFinished {
+            turn_id: "turn-7".to_string(),
+            name: "ask_wasl".to_string(),
+            ok: true,
+            result: Some(serde_json::json!("done")),
         }
     );
 }

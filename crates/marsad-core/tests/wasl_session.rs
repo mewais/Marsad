@@ -2012,12 +2012,16 @@ fn tool_and_lifecycle_events_fold_into_transcript_and_phase() {
                 WaslSessionEventKind::ToolStarted {
                     turn_id: "t1".to_string(),
                     name: "Bash".to_string(),
+                    input: serde_json::json!({ "command": "ls -la" }),
                 },
             ),
         ))
         .expect("tool started");
     let sv = last_session_view(&started, &id);
-    let tool_rows = sv
+    // The Tool row must carry the folded JSON input (not an empty string) so the
+    // Wasl-managed session's expandable tool block shows the arguments, exactly
+    // like a native session (#7).
+    let tool_rows: Vec<&marsad_events::TranscriptEntry> = sv
         .transcript
         .iter()
         .filter(|e| {
@@ -2026,8 +2030,21 @@ fn tool_and_lifecycle_events_fold_into_transcript_and_phase() {
                 marsad_events::TranscriptEntry::Tool { name, .. } if name == "Bash"
             )
         })
-        .count();
-    assert_eq!(tool_rows, 1, "ToolStarted must push exactly one Tool row");
+        .collect();
+    assert_eq!(
+        tool_rows.len(),
+        1,
+        "ToolStarted must push exactly one Tool row"
+    );
+    match tool_rows[0] {
+        marsad_events::TranscriptEntry::Tool { input, .. } => {
+            assert_eq!(
+                input, r#"{"command":"ls -la"}"#,
+                "ToolStarted must fold the tool's JSON input into the Tool row"
+            );
+        }
+        other => panic!("expected a Tool entry, got {other:?}"),
+    }
 
     let before = sv.transcript.len();
     let finished = core
@@ -2039,6 +2056,7 @@ fn tool_and_lifecycle_events_fold_into_transcript_and_phase() {
                     turn_id: "t1".to_string(),
                     name: "Bash".to_string(),
                     ok: true,
+                    result: Some(serde_json::json!("total 0")),
                 },
             ),
         ))

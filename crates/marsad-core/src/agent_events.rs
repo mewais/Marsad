@@ -336,18 +336,35 @@ impl Core {
                     }
                 }
             }
-            K::ToolStarted { name, .. } => {
+            K::ToolStarted { name, input, .. } => {
+                // Fold the tool's JSON input into the transcript Tool entry, the
+                // same shape the native path uses (`serde_json::to_string(input)`
+                // in fold_agent_event) — so a Wasl-managed session's expandable
+                // tool block shows the invocation arguments instead of being
+                // empty. A `Null` input (driver that doesn't surface args)
+                // JSON-stringifies to "null"; render it as an empty string so
+                // the block matches native's "no args" case rather than a bare
+                // "null".
+                let input_str = if input.is_null() {
+                    String::new()
+                } else {
+                    serde_json::to_string(&input).unwrap_or_default()
+                };
                 record
                     .transcript
                     .push(marsad_events::TranscriptEntry::Tool {
                         name,
-                        input: String::new(),
+                        input: input_str,
                         at: Some(now_ms()),
                     });
             }
             K::ToolFinished { .. } => {
-                // Tool completion carries no new transcript content Marsad folds;
-                // the ToolStarted row already recorded the activity.
+                // Tool completion carries no new transcript content Marsad folds:
+                // `TranscriptEntry::Tool` has no result field (the native path
+                // does not store tool output in the transcript either), so the
+                // `result` the event now carries has no transcript slot to land
+                // in. The ToolStarted row (with its input) already recorded the
+                // activity. Kept as a no-op rather than fabricating a row.
             }
             K::NativeGateRequested { turn_id, detail } => {
                 // Map to the EXISTING Gate::Permission pipeline (§8), session

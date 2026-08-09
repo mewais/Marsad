@@ -766,11 +766,13 @@ fn wasl_session_event_line_round_trips_every_event_kind() {
         WaslSessionEventKind::ToolStarted {
             turn_id: "t1".to_string(),
             name: "Bash".to_string(),
+            input: serde_json::json!({ "command": "ls" }),
         },
         WaslSessionEventKind::ToolFinished {
             turn_id: "t1".to_string(),
             name: "Bash".to_string(),
             ok: true,
+            result: Some(serde_json::json!("ok")),
         },
         WaslSessionEventKind::NativeGateRequested {
             turn_id: "t1".to_string(),

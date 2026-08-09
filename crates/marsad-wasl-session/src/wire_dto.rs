@@ -377,11 +377,20 @@ enum TurnEventDto {
     ToolStarted {
         turn_id: String,
         name: String,
+        /// The tool's JSON input (Wasl `TurnEvent::ToolStarted.input`, added so
+        /// observers can render the tool's arguments). Absent/`null` on the wire
+        /// → `Null` (a driver that doesn't surface args, e.g. codex).
+        #[serde(default)]
+        input: serde_json::Value,
     },
     ToolFinished {
         turn_id: String,
         name: String,
         ok: bool,
+        /// The tool's result content (Wasl `TurnEvent::ToolFinished.result`).
+        /// Absent on the wire → `None` (a driver that reports only success).
+        #[serde(default)]
+        result: Option<serde_json::Value>,
     },
     NativeGateRequested {
         turn_id: String,
@@ -465,12 +474,26 @@ impl TurnEventDto {
             TurnEventDto::AssistantDelta { turn_id, text } => {
                 WaslSessionEventKind::AssistantDelta { turn_id, text }
             }
-            TurnEventDto::ToolStarted { turn_id, name } => {
-                WaslSessionEventKind::ToolStarted { turn_id, name }
-            }
-            TurnEventDto::ToolFinished { turn_id, name, ok } => {
-                WaslSessionEventKind::ToolFinished { turn_id, name, ok }
-            }
+            TurnEventDto::ToolStarted {
+                turn_id,
+                name,
+                input,
+            } => WaslSessionEventKind::ToolStarted {
+                turn_id,
+                name,
+                input,
+            },
+            TurnEventDto::ToolFinished {
+                turn_id,
+                name,
+                ok,
+                result,
+            } => WaslSessionEventKind::ToolFinished {
+                turn_id,
+                name,
+                ok,
+                result,
+            },
             TurnEventDto::NativeGateRequested { turn_id, detail } => {
                 WaslSessionEventKind::NativeGateRequested { turn_id, detail }
             }

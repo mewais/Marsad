@@ -183,6 +183,7 @@ fn attach_maps_tool_started() {
         WaslSessionEventKind::ToolStarted {
             turn_id: "turn-7".to_string(),
             name: "ask_wasl".to_string(),
+            input: serde_json::json!({ "question": "ready?" }),
         }
     );
 }

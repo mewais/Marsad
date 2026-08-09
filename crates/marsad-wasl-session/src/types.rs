@@ -258,11 +258,23 @@ pub enum WaslSessionEventKind {
     ToolStarted {
         turn_id: String,
         name: String,
+        /// The tool's JSON input as the driver reported it (Wasl
+        /// `TurnEvent::ToolStarted.input`). `Null` when the driver does not
+        /// surface args (e.g. codex). Folded into `TranscriptEntry::Tool.input`
+        /// (JSON-stringified) so a Wasl-managed session's tool block shows the
+        /// invocation arguments, exactly like a native session.
+        #[serde(default)]
+        input: serde_json::Value,
     },
     ToolFinished {
         turn_id: String,
         name: String,
         ok: bool,
+        /// The tool's result content, if the driver surfaced it (Wasl
+        /// `TurnEvent::ToolFinished.result`). `None` when absent (e.g. codex,
+        /// which reports only an exit code).
+        #[serde(default)]
+        result: Option<serde_json::Value>,
     },
     NativeGateRequested {
         turn_id: String,
