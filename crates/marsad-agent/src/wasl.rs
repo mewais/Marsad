@@ -686,6 +686,15 @@ pub struct WaslWorkerPeer {
     /// Absolute A2A URL (`http://127.0.0.1:<port>`).  Built from
     /// `wasl_a2a_bind(peer.host_id)` by the caller.
     pub url: String,
+    /// The peer node's USER-facing display name (the sibling session's
+    /// `SessionView.name`, e.g. `"Writer"`), threaded from the desktop's
+    /// `context.peers` roster so the inner agent can address a peer by the name
+    /// a human gave it rather than an opaque `draft-node-<uuid>` agent_id. Empty
+    /// when unknown (an un-upgraded roster / a peer the graph could not name).
+    pub name: String,
+    /// The peer node's host display name (its host's registry label). Empty when
+    /// unknown.
+    pub host_name: String,
 }
 
 /// Render a **tools-client** `wasl-mcpd` TOML config for a Wasl worker.
@@ -695,18 +704,32 @@ pub struct WaslWorkerPeer {
 /// ephemeral tools client, not a managed runtime node.
 ///
 /// Keys are exactly `identity.agent_id`, `identity.host_id`,
-/// `peers[].agent_id`, `peers[].host_id`, `peers[].url` (the `deny_unknown_fields`
-/// TOML parse in `wasl-mcpd` rejects any other key). String values are rendered
-/// with `{:?}` so Rust's `Debug` format quotes and escapes them correctly for
-/// TOML.
+/// `identity.host_name`, `peers[].agent_id`, `peers[].host_id`, `peers[].url`,
+/// `peers[].name`, `peers[].host_name` (the wasl-mcpd config parser accepts these;
+/// the name keys are serde-defaulted there so an older node still parses a roster
+/// that carries them — and an older Marsad that omits them still parses on a new
+/// node). String values are rendered with `{:?}` so Rust's `Debug` format quotes
+/// and escapes them correctly for TOML.
+///
+/// A name / host_name that is EMPTY is omitted from the rendered block entirely
+/// (rather than emitting `name = ""`), keeping the file minimal and matching the
+/// "unknown → absent, defaults to empty on parse" convention.
 ///
 /// The output is deterministic (peers in the given order) and pure (no IO).
-pub fn render_wasl_worker_toml(agent_id: &str, host_id: &str, peers: &[WaslWorkerPeer]) -> String {
+pub fn render_wasl_worker_toml(
+    agent_id: &str,
+    host_id: &str,
+    host_name: &str,
+    peers: &[WaslWorkerPeer],
+) -> String {
     let mut out = String::new();
     // [identity] block
     out.push_str("[identity]\n");
     out.push_str(&format!("agent_id = {:?}\n", agent_id));
     out.push_str(&format!("host_id = {:?}\n", host_id));
+    if !host_name.is_empty() {
+        out.push_str(&format!("host_name = {:?}\n", host_name));
+    }
     // [[peers]] blocks — one per peer, in the given order.
     for peer in peers {
         out.push('\n');
@@ -714,6 +737,12 @@ pub fn render_wasl_worker_toml(agent_id: &str, host_id: &str, peers: &[WaslWorke
         out.push_str(&format!("agent_id = {:?}\n", peer.agent_id));
         out.push_str(&format!("host_id = {:?}\n", peer.host_id));
         out.push_str(&format!("url = {:?}\n", peer.url));
+        if !peer.name.is_empty() {
+            out.push_str(&format!("name = {:?}\n", peer.name));
+        }
+        if !peer.host_name.is_empty() {
+            out.push_str(&format!("host_name = {:?}\n", peer.host_name));
+        }
     }
     out
 }

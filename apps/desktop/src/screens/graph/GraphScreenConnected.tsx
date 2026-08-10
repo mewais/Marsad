@@ -253,6 +253,12 @@ export function GraphScreenConnected(): JSX.Element {
 
     // Sort by dependency depth (lead first at depth 0, dependents after).
     const ordered = orderDraftLaunch(draftNodes, draftEdges);
+    // Feature A: host_id -> display label map (from the host registry) so each
+    // peer entry (and the self node) can carry its USER-facing host name, not
+    // just the opaque host id.
+    const hostLabel = new Map<string, string>(
+      (state.snapshot?.hosts ?? []).map((h) => [h.id, h.label])
+    );
     const tempToReal = new Map<string, string>();
     try {
       for (const node of ordered) {
@@ -260,13 +266,22 @@ export function GraphScreenConnected(): JSX.Element {
         const protocol = node.driver;
         // Build peers: outbound edges from this node (own from-edges + reverse
         // of consult edges — peersForNode honours `bi`), mapped to
-        // {agent_id, host_id}. node.tempId and the peer agent_id share the same
-        // draft-node id namespace — CRITICAL consistency rule.
+        // {agent_id, host_id, name, host_name}. node.tempId and the peer agent_id
+        // share the same draft-node id namespace — CRITICAL consistency rule.
+        // Feature A: also carry the peer's display name + host display name so the
+        // inner agent addresses peers by the names a human gave them.
         const outboundIds = peersForNode(node.tempId, draftEdges).outbound;
         const peers = outboundIds.flatMap((peerId) => {
           const peerNode = draftNodes.find((n) => n.tempId === peerId);
           if (!peerNode) return []; // skip unresolvable peer
-          return [{ agent_id: peerId, host_id: peerNode.hostId }];
+          return [
+            {
+              agent_id: peerId,
+              host_id: peerNode.hostId,
+              name: peerNode.name,
+              host_name: hostLabel.get(peerNode.hostId) ?? "",
+            },
+          ];
         });
         // W2b: thread resume state captured at draft-authoring time.
         const wasl_target_key = buildWaslTargetKey(
@@ -278,7 +293,9 @@ export function GraphScreenConnected(): JSX.Element {
           peers,
           node.resume ?? false,
           node.selectedResume ?? "continue",
-          node.resumeSessions ?? []
+          node.resumeSessions ?? [],
+          // Feature A: the self node's host display name.
+          hostLabel.get(node.hostId) ?? ""
         );
         const realId = await launchWaslSession({
           host_id: node.hostId,

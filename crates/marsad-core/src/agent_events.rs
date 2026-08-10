@@ -475,6 +475,37 @@ impl Core {
                         at: Some(now_ms()),
                     });
             }
+            // Feature B: the session-init capability catalog — fold it into the
+            // SAME SessionState fields the native `system/init` fold populates
+            // (see `marsad_events::reduce_agent_event`'s `SessionInit` arm), so the
+            // existing Config tab renders for a Wasl-managed session with NO
+            // frontend change. Only overwrite modes / current / permission when
+            // the driver actually reported them (non-empty) — matching native's
+            // "don't clobber a previously-learned list with an empty one" rule, so
+            // a driver that reports nothing (codex) leaves any prior values intact
+            // and never fabricates. tools/mcp_servers/slash_commands are replaced
+            // (they are the authoritative init snapshot, exactly as native does).
+            K::SessionCapabilities {
+                tools,
+                mcp_servers,
+                slash_commands,
+                available_modes,
+                current_mode,
+                permission_mode,
+            } => {
+                record.state.tools = tools;
+                record.state.mcp_servers = mcp_servers;
+                record.state.slash_commands = slash_commands;
+                if !available_modes.is_empty() {
+                    record.state.available_modes = available_modes;
+                }
+                if !current_mode.is_empty() {
+                    record.state.current_mode = Some(current_mode);
+                }
+                if !permission_mode.is_empty() {
+                    record.state.permission_mode = Some(permission_mode);
+                }
+            }
         }
 
         let sv = self.make_session_view(&session_id, self.sessions.get(&session_id).unwrap());

@@ -524,6 +524,102 @@ fn wasl_compaction_does_not_change_phase() {
 }
 
 // ===========================================================================
+// SessionCapabilities (Feature B) — folds the init catalog into the SAME
+// SessionState/SessionView fields the native `system/init` path populates, so
+// the Config tab renders for a Wasl-managed session with no frontend change.
+// ===========================================================================
+
+#[test]
+fn wasl_session_capabilities_folds_into_config_fields() {
+    use marsad_proto::McpServerInfo;
+    let (mut core, mut peer) = make_core();
+    let id = launch_wasl(&mut core, &mut peer);
+
+    let updates = core
+        .on_agent_line(&event_line(
+            &id,
+            1,
+            WaslSessionEventKind::SessionCapabilities {
+                tools: vec!["Read".to_string(), "Edit".to_string()],
+                mcp_servers: vec![McpServerInfo {
+                    name: "wasl".to_string(),
+                    status: "connected".to_string(),
+                }],
+                slash_commands: vec![SlashCommandInfo {
+                    name: "compact".to_string(),
+                    description: "Compact".to_string(),
+                    argument_hint: String::new(),
+                }],
+                available_modes: vec![SessionMode {
+                    id: "default".to_string(),
+                    label: "Default".to_string(),
+                    description: String::new(),
+                }],
+                current_mode: "default".to_string(),
+                permission_mode: "acceptEdits".to_string(),
+            },
+        ))
+        .expect("on_agent_line");
+
+    let sv = last_session_view(&updates, &id);
+    assert_eq!(sv.tools, vec!["Read", "Edit"], "tools must fold into SessionView");
+    assert_eq!(sv.mcp_servers.len(), 1, "mcp_servers must fold");
+    assert_eq!(sv.mcp_servers[0].name, "wasl");
+    assert_eq!(sv.slash_commands.len(), 1, "slash_commands must fold");
+    assert_eq!(sv.slash_commands[0].name, "compact");
+    assert_eq!(sv.available_modes.len(), 1, "available_modes must fold");
+    assert_eq!(sv.available_modes[0].id, "default");
+    assert_eq!(sv.current_mode.as_deref(), Some("default"));
+}
+
+#[test]
+fn wasl_session_capabilities_empty_modes_do_not_clobber_prior() {
+    // A later empty-modes catalog (e.g. codex reporting nothing) must NOT wipe a
+    // previously-learned mode list — matching native's "don't clobber" rule.
+    let (mut core, mut peer) = make_core();
+    let id = launch_wasl(&mut core, &mut peer);
+
+    // Learn modes first via ModesUpdated.
+    let _ = core.on_agent_line(&event_line(
+        &id,
+        1,
+        WaslSessionEventKind::ModesUpdated {
+            available_modes: vec![SessionMode {
+                id: "plan".to_string(),
+                label: "Plan".to_string(),
+                description: String::new(),
+            }],
+            current_mode: Some("plan".to_string()),
+        },
+    ));
+
+    // A capabilities event with EMPTY modes must leave the learned list intact.
+    let updates = core
+        .on_agent_line(&event_line(
+            &id,
+            2,
+            WaslSessionEventKind::SessionCapabilities {
+                tools: vec!["Bash".to_string()],
+                mcp_servers: vec![],
+                slash_commands: vec![],
+                available_modes: vec![],
+                current_mode: String::new(),
+                permission_mode: String::new(),
+            },
+        ))
+        .expect("on_agent_line");
+
+    let sv = last_session_view(&updates, &id);
+    assert_eq!(sv.tools, vec!["Bash"], "tools still fold (authoritative snapshot)");
+    assert_eq!(
+        sv.available_modes.len(),
+        1,
+        "empty available_modes must NOT clobber the previously-learned list"
+    );
+    assert_eq!(sv.current_mode.as_deref(), Some("plan"), "current_mode preserved");
+}
+
+// ===========================================================================
 // Rich events do NOT change phase (regression: informational events must be
 // no-ops for phase, like the existing SessionReady/TurnQueued/StatusChanged).
 // ===========================================================================

@@ -20,11 +20,27 @@
  * React, no API calls.
  */
 
+/** One A2A peer entry. `agent_id`/`host_id` are the opaque routing ids; `name`/
+ *  `host_name` are the USER-facing display names (the peer node's name and its
+ *  host's registry label) threaded through so the inner agent's `wasl` MCP
+ *  roster shows peers by the names a human gave them. Names are optional for
+ *  forward-compat (an older caller may omit them). */
+export interface WaslPeer {
+  agent_id: string;
+  host_id: string;
+  name?: string;
+  host_name?: string;
+}
+
 export interface WaslTargetKeyContext {
   cwd: string;
   model: string;
   session_mode: string;
-  peers: { agent_id: string; host_id: string }[];
+  peers: WaslPeer[];
+  /** The SELF node's host display name (its host's registry label), so the
+   *  inner agent can describe its own host by name via `list_peers`. Optional
+   *  (forward-compat). */
+  host_name?: string;
   resume?: string;
 }
 
@@ -52,11 +68,14 @@ type SessionWithId = Pick<DiscoveredSession, "id">;
  * @param cwd      The project directory.
  * @param model    The chosen model id.
  * @param sessionMode The chosen session mode id.
- * @param peers    The A2A peer list.
+ * @param peers    The A2A peer list (each carrying its display name + host name).
  * @param resume   Whether the user enabled resume/continue.
  * @param selectedResume "continue" for most-recent, or a specific session id.
  * @param sessions The session list to pick the most-recent from (when "continue").
  *                 Only `id` is required; accepts full `DiscoveredSession` too.
+ * @param selfHostName The SELF node's host display name (registry label), carried
+ *                 on `context.host_name` for the inner agent's self identity.
+ *                 Optional; omitted from the context when empty/undefined.
  */
 export function buildWaslTargetKey(
   nodeId: string,
@@ -64,10 +83,11 @@ export function buildWaslTargetKey(
   cwd: string,
   model: string,
   sessionMode: string,
-  peers: { agent_id: string; host_id: string }[],
+  peers: WaslPeer[],
   resume: boolean,
   selectedResume: string,
-  sessions: SessionWithId[]
+  sessions: SessionWithId[],
+  selfHostName?: string
 ): WaslTargetKeyShape {
   const context: WaslTargetKeyContext = {
     cwd,
@@ -75,6 +95,12 @@ export function buildWaslTargetKey(
     session_mode: sessionMode,
     peers,
   };
+
+  // Carry the self node's host display name when known (forward-compat: omit
+  // when empty so an un-upgraded path stays byte-identical).
+  if (selfHostName) {
+    context.host_name = selfHostName;
+  }
 
   if (resume) {
     if (selectedResume === "continue") {

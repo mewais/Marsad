@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 // Re-export the marsad_proto payload types that appear in the new rich variants
 // so callers don't need a direct marsad-proto dep just to pattern-match them.
-pub use marsad_proto::{CompactionInfo, PlanEntry, SessionMode, SlashCommandInfo};
+pub use marsad_proto::{CompactionInfo, McpServerInfo, PlanEntry, SessionMode, SlashCommandInfo};
 
 /// Monotonic event sequence number on the observe stream (Wasl `events`
 /// `after_seq`), used for gap/dup-free replay.
@@ -357,6 +357,27 @@ pub enum WaslSessionEventKind {
     /// Context compaction occurred. Mapped from `compaction`.
     Compaction {
         info: CompactionInfo,
+    },
+    /// The session's static capability catalog at init (tools / MCP servers /
+    /// slash commands / modes / permission mode). Mapped from the wire
+    /// `session_capabilities` event, folded into the SAME `SessionState` fields
+    /// the native `system/init` populates so the Config tab renders for a
+    /// Wasl-managed session with no frontend change. Session-global (no
+    /// `turn_id`). Fields default so an un-upgraded node (that never sends this
+    /// event) leaves the Config blank exactly as before — additive, no panic.
+    SessionCapabilities {
+        #[serde(default)]
+        tools: Vec<String>,
+        #[serde(default)]
+        mcp_servers: Vec<McpServerInfo>,
+        #[serde(default)]
+        slash_commands: Vec<SlashCommandInfo>,
+        #[serde(default)]
+        available_modes: Vec<SessionMode>,
+        #[serde(default)]
+        current_mode: String,
+        #[serde(default)]
+        permission_mode: String,
     },
 }
 

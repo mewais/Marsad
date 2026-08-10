@@ -307,3 +307,54 @@ describe("buildWaslTargetKey — peers + resume combined", () => {
     expect(key.context.resume).toBe("sess-uuid-most-recent");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Feature A — USER-facing names on peers + self host_name
+// ---------------------------------------------------------------------------
+
+describe("buildWaslTargetKey — Feature A names", () => {
+  it("carries peer name/host_name and self host_name into the context", () => {
+    const key = buildWaslTargetKey(
+      "node-writer",
+      "claude",
+      "/w",
+      "",
+      "",
+      [
+        {
+          agent_id: "node-reviewer",
+          host_id: "host-b",
+          name: "Reviewer",
+          host_name: "gpu-box",
+        },
+      ],
+      false,
+      "continue",
+      [],
+      "cpu-box" // self host display name
+    );
+    expect(key.context.peers).toEqual([
+      { agent_id: "node-reviewer", host_id: "host-b", name: "Reviewer", host_name: "gpu-box" },
+    ]);
+    expect(key.context.host_name).toBe("cpu-box");
+  });
+
+  it("omits context.host_name when the self host name is empty/undefined", () => {
+    const key = buildWaslTargetKey(
+      "node-a",
+      "claude",
+      "/w",
+      "",
+      "",
+      [],
+      false,
+      "continue",
+      [],
+      "" // empty → omitted
+    );
+    expect(key.context.host_name).toBeUndefined();
+
+    const key2 = buildWaslTargetKey("node-a", "claude", "/w", "", "", [], false, "continue", []);
+    expect(key2.context.host_name).toBeUndefined();
+  });
+});

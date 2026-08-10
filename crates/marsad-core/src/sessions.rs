@@ -453,6 +453,101 @@ impl Core {
     /// otherwise it falls back to `Continue` (most-recent session in that project).
     ///
     /// Returns `UnknownSession` for an unrecognised `id`.
+    /// Resolve a Wasl peer `agent_id` (the sibling node's draft-node key ==
+    /// its `binding.provider_key["key"]`) to that sibling's USER-facing display
+    /// name and its host's registry label. `None` for either field when the
+    /// sibling / its host can't be found in current state (a name-less peer is
+    /// left as-is on migration — never a hard failure). Pure over current
+    /// in-memory session + host state.
+    fn wasl_peer_display_names(&self, peer_agent_id: &str) -> (Option<String>, Option<String>) {
+        // Find the sibling session whose WaslManaged binding's provider_key
+        // string identity ("key") matches this peer agent_id. The desktop builds
+        // each node's agent_id from its own draft-node id, and the launch key's
+        // top-level "key" carries that same id (see wire_dto::target_context_id),
+        // so the peer agent_id == the sibling's provider_key["key"].
+        let sibling = self.sessions.iter().find(|(_, rec)| {
+            if let RuntimeOwner::WaslManaged { binding } = &rec.runtime_owner {
+                binding
+                    .provider_key
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    == Some(peer_agent_id)
+            } else {
+                false
+            }
+        });
+        let (_sid, rec) = match sibling {
+            Some(pair) => pair,
+            None => return (None, None),
+        };
+        let name = rec
+            .name
+            .clone()
+            .filter(|n| !n.is_empty())
+            .or_else(|| Some(session_display_name(&rec.project, _sid)));
+        let host_name = self
+            .hosts
+            .list()
+            .iter()
+            .find(|h| h.id == rec.host_id)
+            .map(|h| h.label.clone())
+            .filter(|l| !l.is_empty());
+        (name, host_name)
+    }
+
+    /// MIGRATION (Feature A): patch USER-facing names into a WaslManaged
+    /// session's `provider_key` before (re)launch — the self node's host_name and
+    /// each peer's name + host_name, re-derived from CURRENT state. Idempotent and
+    /// tolerant: an absent `context`/`peers`, a non-object key, or an unmappable
+    /// peer each leave the corresponding field untouched. This is what lets an
+    /// EXISTING workstream gain names on its next relaunch with no re-create.
+    fn rederive_wasl_peer_names(&self, session_id: &str, key: &mut serde_json::Value) {
+        let Some(obj) = key.as_object_mut() else {
+            return;
+        };
+        // Ensure a context object exists to hold the self host_name / peers.
+        let ctx = obj
+            .entry("context")
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        let Some(ctx) = ctx.as_object_mut() else {
+            return;
+        };
+
+        // Self node's host display name (from its own record's host).
+        if let Some(rec) = self.sessions.get(session_id) {
+            if let Some(host) = self.hosts.list().iter().find(|h| h.id == rec.host_id) {
+                if !host.label.is_empty() {
+                    ctx.insert(
+                        "host_name".to_string(),
+                        serde_json::Value::String(host.label.clone()),
+                    );
+                }
+            }
+        }
+
+        // Patch each peer entry with its re-derived name + host_name.
+        if let Some(peers) = ctx.get_mut("peers").and_then(|p| p.as_array_mut()) {
+            for peer in peers.iter_mut() {
+                let Some(peer_obj) = peer.as_object_mut() else {
+                    continue;
+                };
+                let Some(peer_agent_id) =
+                    peer_obj.get("agent_id").and_then(|v| v.as_str()).map(str::to_string)
+                else {
+                    continue;
+                };
+                let (name, host_name) = self.wasl_peer_display_names(&peer_agent_id);
+                if let Some(name) = name {
+                    peer_obj.insert("name".to_string(), serde_json::Value::String(name));
+                }
+                if let Some(host_name) = host_name {
+                    peer_obj
+                        .insert("host_name".to_string(), serde_json::Value::String(host_name));
+                }
+            }
+        }
+    }
+
     pub fn restart_session(
         &mut self,
         id: &str,
@@ -500,6 +595,17 @@ impl Core {
                         }
                     }
                 }
+
+                // 2b. MIGRATION (Feature A): re-derive USER-facing peer names +
+                // host_names from core's CURRENT state and patch them into
+                // context.peers (+ set the self node's context.host_name). The
+                // roster frozen in the persisted provider_key predates names
+                // (opaque draft-node agent_ids + host ids only), so a plain
+                // relaunch would carry no names. Re-deriving here means an EXISTING
+                // workstream (e.g. ArchAttention) gains names on its next relaunch
+                // with NO re-create. Pure over current in-memory state; a peer that
+                // can't be mapped is left name-less (never a hard failure).
+                self.rederive_wasl_peer_names(id, &mut new_key);
 
                 // 3. Relaunch the Wasl session with the same Marsad session id
                 // and updated key. The Wasl node owns the durable process.

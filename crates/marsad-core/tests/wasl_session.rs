@@ -2811,3 +2811,121 @@ fn last_session_view_or_prev(
         .find(|sv| sv.id == id)
         .unwrap_or_else(|| panic!("session {id} must exist in the snapshot"))
 }
+
+// ---------------------------------------------------------------------------
+// Feature A migration — restart_session re-derives peer names + host_names into
+// the frozen provider_key so an EXISTING workstream gains names with no
+// re-create. The peer roster in the persisted key predates names (opaque ids
+// only); re-derivation maps each peer agent_id -> the sibling session whose
+// provider_key["key"] == that agent_id -> its display name + host label.
+// ---------------------------------------------------------------------------
+
+/// Extract the host id (`host-N`) from an `add_host` Hosts VmUpdate batch by
+/// matching the label we just added.
+fn host_id_for_label(updates: &[VmUpdate], label: &str) -> String {
+    updates
+        .iter()
+        .rev()
+        .find_map(|u| match u {
+            VmUpdate::Hosts(hosts) => hosts
+                .iter()
+                .find(|h| h.label == label)
+                .map(|h| h.id.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no host with label {label} in {updates:?}"))
+}
+
+#[test]
+fn wasl_restart_rederives_peer_names_and_self_host_name_into_key() {
+    let (mut core, mut peer) = make_core();
+
+    // A host with a human label — the peer/self host_name source.
+    let hu = core
+        .add_host("gpu-box", "user@gpu.example", None, None, vec![], vec![])
+        .expect("add_host");
+    let host = host_id_for_label(&hu, "gpu-box");
+    let _ = peer.drain_outbound();
+
+    // The SIBLING ("Reviewer"): its provider_key's top-level "key" is the
+    // agent_id peers address it by (== the desktop's draft-node id).
+    let reviewer_key = serde_json::json!({
+        "protocol": "claude",
+        "key": "draft-node-reviewer",
+        "context": {"cwd": "/proj", "model": "m", "session_mode": "default", "peers": []},
+    });
+    let _reviewer = core
+        .launch_wasl_session(&host, reviewer_key, Some("Reviewer".to_string()))
+        .expect("launch reviewer");
+    let _ = peer.drain_outbound();
+
+    // The session under restart ("Writer"): its FROZEN roster references the
+    // reviewer by agent_id ONLY — no name/host_name (the pre-migration shape).
+    let writer_key = serde_json::json!({
+        "protocol": "claude",
+        "key": "draft-node-writer",
+        "context": {
+            "cwd": "/proj",
+            "model": "m",
+            "session_mode": "default",
+            "peers": [ {"agent_id": "draft-node-reviewer", "host_id": host } ]
+        },
+    });
+    let writer = core
+        .launch_wasl_session(&host, writer_key, Some("Writer".to_string()))
+        .expect("launch writer");
+    let _ = peer.drain_outbound();
+
+    // Restart Writer — the migration must patch names into the launch key.
+    let _ = core
+        .restart_session(&writer, "m2", "default".to_string(), vec![])
+        .expect("restart writer");
+    let out: Vec<IpcMsg> = peer
+        .drain_outbound()
+        .iter()
+        .filter_map(|l| parse_ipc(l).ok())
+        .collect();
+
+    let launched_key = out
+        .iter()
+        .find_map(|m| match m {
+            IpcMsg::LaunchWaslSession { session_id, wasl_target_key, .. }
+                if session_id == &writer =>
+            {
+                Some(wasl_target_key.clone())
+            }
+            _ => None,
+        })
+        .expect("restart must emit LaunchWaslSession for writer");
+
+    let ctx = launched_key.get("context").expect("context present");
+    // Self node's host display name was patched onto the key.
+    assert_eq!(
+        ctx.get("host_name").and_then(|v| v.as_str()),
+        Some("gpu-box"),
+        "self host_name must be re-derived onto context.host_name, got {ctx:?}"
+    );
+    // The peer entry gained the sibling's display name + its host label.
+    let peers = ctx
+        .get("peers")
+        .and_then(|p| p.as_array())
+        .expect("peers array present");
+    assert_eq!(peers.len(), 1, "roster preserved");
+    assert_eq!(
+        peers[0].get("agent_id").and_then(|v| v.as_str()),
+        Some("draft-node-reviewer"),
+        "peer agent_id preserved (routing unchanged)"
+    );
+    assert_eq!(
+        peers[0].get("name").and_then(|v| v.as_str()),
+        Some("Reviewer"),
+        "peer name must be re-derived from the sibling session's display name, got {:?}",
+        peers[0]
+    );
+    assert_eq!(
+        peers[0].get("host_name").and_then(|v| v.as_str()),
+        Some("gpu-box"),
+        "peer host_name must be re-derived from the sibling's host label, got {:?}",
+        peers[0]
+    );
+}

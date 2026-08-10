@@ -68,7 +68,7 @@ pub use real::{RealWaslSessionClient, RealWaslSessionProvider, WaslSessionClient
 pub use types::{
     // Rich-event payload types (re-exported from marsad_proto via types.rs so
     // callers don't need a separate marsad-proto dependency to pattern-match).
-    CompactionInfo, PlanEntry, SessionMode, SlashCommandInfo,
+    CompactionInfo, McpServerInfo, PlanEntry, SessionMode, SlashCommandInfo,
     // Core session vocabulary.
     WaslAgentCard, WaslBusyPolicy, WaslCancelReason, WaslCapabilities, WaslCausation, WaslEventSeq,
     WaslGateDecision, WaslNativeGateDetail, WaslSessionEvent, WaslSessionEventKind,

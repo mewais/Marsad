@@ -1026,6 +1026,10 @@ impl Agent {
         let worker_host = host_id.clone();
 
         // Build the peer list from context.peers (tolerate missing/non-array).
+        // Feature A: each peer entry may also carry `name`/`host_name` (the
+        // sibling session's display name + its host's registry label); read them
+        // when present so the inner agent's `wasl` MCP roster shows peers by name.
+        // Absent → empty (an un-upgraded roster), never a hard failure.
         let peers: Vec<crate::wasl::WaslWorkerPeer> = key_val
             .get("context")
             .and_then(|ctx| ctx.get("peers"))
@@ -1039,15 +1043,38 @@ impl Agent {
                             "http://{}",
                             crate::wasl::wasl_a2a_bind(&peer_host)
                         );
+                        let name = entry
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let host_name = entry
+                            .get("host_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
                         Some(crate::wasl::WaslWorkerPeer {
                             agent_id,
                             host_id: peer_host,
                             url,
+                            name,
+                            host_name,
                         })
                     })
                     .collect()
             })
             .unwrap_or_default();
+
+        // Feature A: this node's OWN host display name, carried on the key's
+        // context as `host_name` (the desktop/core threads the self node's host
+        // label). Absent → empty. Surfaced as the `[identity] host_name` so the
+        // inner agent can describe its own host by name via `list_peers`.
+        let self_host_name = key_val
+            .get("context")
+            .and_then(|ctx| ctx.get("host_name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
 
         // Render the worker TOML and deliver it to the inner agent's `wasl` MCP
         // server BY VALUE (inline in mcp_config), NOT as a file path. The inner
@@ -1055,8 +1082,12 @@ impl Agent {
         // Marsad agent — so a path written to THIS filesystem is meaningless there
         // (that was the "no A2A MCP" bug: WASL_CONFIG pointed at an agent-local
         // Windows path the remote node couldn't read). Nothing is written to disk.
-        let toml_content =
-            crate::wasl::render_wasl_worker_toml(&worker_agent_id, &worker_host, &peers);
+        let toml_content = crate::wasl::render_wasl_worker_toml(
+            &worker_agent_id,
+            &worker_host,
+            &self_host_name,
+            &peers,
+        );
 
         eprintln!(
             "marsad-agent: wasl-worker: session {session_id} host {worker_host} \

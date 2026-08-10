@@ -102,6 +102,42 @@ impl SlashCommandInfoDto {
     }
 }
 
+/// One MCP server for `SessionCapabilities`. Mirrors `wasl_runtime::McpServerInfo`.
+#[derive(Debug, Clone, Deserialize)]
+struct McpServerInfoDto {
+    pub name: String,
+    #[serde(default)]
+    pub status: String,
+}
+
+impl McpServerInfoDto {
+    fn into_mcp_server(self) -> marsad_proto::McpServerInfo {
+        marsad_proto::McpServerInfo {
+            name: self.name,
+            status: self.status,
+        }
+    }
+}
+
+/// The session-init capability catalog payload for `SessionCapabilities`.
+/// Mirrors `wasl_runtime::SessionCapabilities` (snake_case, all defaulted so a
+/// partial/absent report still parses — the forward-compat convention).
+#[derive(Debug, Clone, Deserialize)]
+struct SessionCapabilitiesDto {
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerInfoDto>,
+    #[serde(default)]
+    pub slash_commands: Vec<SlashCommandInfoDto>,
+    #[serde(default)]
+    pub available_modes: Vec<AgentModeDto>,
+    #[serde(default)]
+    pub current_mode: String,
+    #[serde(default)]
+    pub permission_mode: String,
+}
+
 /// Compaction metadata for `Compaction`. Mirrors `wasl_runtime::CompactionInfo`.
 #[derive(Debug, Clone, Deserialize)]
 struct CompactionInfoDto {
@@ -455,6 +491,12 @@ enum TurnEventDto {
     Compaction {
         info: CompactionInfoDto,
     },
+    /// The session's static capability catalog at init. Wire tag
+    /// `"session_capabilities"`. Every field defaults so a driver that reports
+    /// only some (or an older node that omits any) still parses.
+    SessionCapabilities {
+        capabilities: SessionCapabilitiesDto,
+    },
     // `thinking_delta` is deliberately NOT mapped — Marsad drops thinking deltas
     // (like the solo-session path does). An unknown `type` is still tolerantly
     // skipped by `turn_event_from_json` returning `None`.
@@ -562,6 +604,28 @@ impl TurnEventDto {
             TurnEventDto::Compaction { info } => WaslSessionEventKind::Compaction {
                 info: info.into_compaction_info(),
             },
+            TurnEventDto::SessionCapabilities { capabilities } => {
+                WaslSessionEventKind::SessionCapabilities {
+                    tools: capabilities.tools,
+                    mcp_servers: capabilities
+                        .mcp_servers
+                        .into_iter()
+                        .map(McpServerInfoDto::into_mcp_server)
+                        .collect(),
+                    slash_commands: capabilities
+                        .slash_commands
+                        .into_iter()
+                        .map(SlashCommandInfoDto::into_slash_command)
+                        .collect(),
+                    available_modes: capabilities
+                        .available_modes
+                        .into_iter()
+                        .map(AgentModeDto::into_session_mode)
+                        .collect(),
+                    current_mode: capabilities.current_mode,
+                    permission_mode: capabilities.permission_mode,
+                }
+            }
         }
     }
 }

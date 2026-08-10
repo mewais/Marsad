@@ -376,6 +376,94 @@ fn attach_maps_compaction_with_defaults() {
 }
 
 // ===========================================================================
+// session_capabilities (Feature B)
+// wire tag: "session_capabilities"
+// payload: { capabilities: { tools, mcp_servers, slash_commands,
+//            available_modes, current_mode, permission_mode } }
+// ===========================================================================
+
+#[test]
+fn attach_maps_session_capabilities_full() {
+    use marsad_wasl_session::McpServerInfo;
+    let kind = single_event_kind_from_wire(
+        r#"{
+            "type": "session_capabilities",
+            "capabilities": {
+                "tools": ["Read", "Edit", "Bash"],
+                "mcp_servers": [
+                    { "name": "wasl", "status": "connected" },
+                    { "name": "atlassian" }
+                ],
+                "slash_commands": [
+                    { "name": "compact", "description": "Compact", "argument_hint": "[x]" }
+                ],
+                "available_modes": [
+                    { "id": "default", "label": "Default", "description": "d" },
+                    { "id": "plan", "label": "Plan", "description": "p" }
+                ],
+                "current_mode": "default",
+                "permission_mode": "acceptEdits"
+            }
+        }"#,
+    );
+    match kind {
+        WaslSessionEventKind::SessionCapabilities {
+            tools,
+            mcp_servers,
+            slash_commands,
+            available_modes,
+            current_mode,
+            permission_mode,
+        } => {
+            assert_eq!(tools, vec!["Read", "Edit", "Bash"]);
+            assert_eq!(
+                mcp_servers,
+                vec![
+                    McpServerInfo { name: "wasl".to_string(), status: "connected".to_string() },
+                    // status defaults to empty when absent on the wire.
+                    McpServerInfo { name: "atlassian".to_string(), status: String::new() },
+                ]
+            );
+            assert_eq!(slash_commands.len(), 1);
+            assert_eq!(slash_commands[0].name, "compact");
+            assert_eq!(available_modes.len(), 2);
+            assert_eq!(available_modes[1].id, "plan");
+            assert_eq!(current_mode, "default");
+            assert_eq!(permission_mode, "acceptEdits");
+        }
+        other => panic!("expected SessionCapabilities, got {other:?}"),
+    }
+}
+
+#[test]
+fn attach_maps_session_capabilities_all_defaulted() {
+    // Every capability field is `#[serde(default)]`: a driver that reports
+    // nothing (codex) — or an empty capabilities object — must still parse,
+    // yielding empty collections + empty strings (never a parse error).
+    let kind = single_event_kind_from_wire(
+        r#"{ "type": "session_capabilities", "capabilities": {} }"#,
+    );
+    match kind {
+        WaslSessionEventKind::SessionCapabilities {
+            tools,
+            mcp_servers,
+            slash_commands,
+            available_modes,
+            current_mode,
+            permission_mode,
+        } => {
+            assert!(tools.is_empty());
+            assert!(mcp_servers.is_empty());
+            assert!(slash_commands.is_empty());
+            assert!(available_modes.is_empty());
+            assert_eq!(current_mode, "");
+            assert_eq!(permission_mode, "");
+        }
+        other => panic!("expected SessionCapabilities, got {other:?}"),
+    }
+}
+
+// ===========================================================================
 // thinking_delta — deliberately NOT surfaced; must still be tolerantly dropped
 // (no Unknown or parse error for a turn_event the new variants don't handle).
 // These two tests exercise the tolerant-skip path (turn_event_from_json returns

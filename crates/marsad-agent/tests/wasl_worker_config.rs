@@ -37,7 +37,7 @@ use marsad_wasl_session::{
 /// host_id, no `[[peers]]` blocks, and no `[runtime]` block.
 #[test]
 fn render_toml_zero_peers_has_identity_no_peers_no_runtime() {
-    let toml = render_wasl_worker_toml("marsad-local", "local", &[]);
+    let toml = render_wasl_worker_toml("marsad-local", "local", "", &[]);
 
     // Must contain [identity] block.
     assert!(
@@ -79,15 +79,19 @@ fn render_toml_two_peers_in_order_with_correct_fields() {
             agent_id: "agent-a".to_string(),
             host_id: "host-a".to_string(),
             url: "http://127.0.0.1:48001".to_string(),
+            name: String::new(),
+            host_name: String::new(),
         },
         WaslWorkerPeer {
             agent_id: "agent-b".to_string(),
             host_id: "host-b".to_string(),
             url: "http://127.0.0.1:48002".to_string(),
+            name: String::new(),
+            host_name: String::new(),
         },
     ];
 
-    let toml = render_wasl_worker_toml("marsad-local", "local", &peers);
+    let toml = render_wasl_worker_toml("marsad-local", "local", "", &peers);
 
     // Exactly two [[peers]] blocks.
     let peer_block_count = toml.matches("[[peers]]").count();
@@ -151,6 +155,61 @@ fn render_toml_two_peers_in_order_with_correct_fields() {
     );
 }
 
+/// Feature A: a peer's `name`/`host_name` and the self `host_name` render into
+/// the TOML when present; an EMPTY name/host_name is omitted (never `name = ""`).
+#[test]
+fn render_toml_emits_names_when_present_and_omits_when_empty() {
+    let peers = vec![
+        WaslWorkerPeer {
+            agent_id: "draft-node-writer".to_string(),
+            host_id: "host-17".to_string(),
+            url: "http://127.0.0.1:48001".to_string(),
+            name: "Writer".to_string(),
+            host_name: "cpu-box".to_string(),
+        },
+        // A name-less peer (un-upgraded roster entry) — names must be OMITTED.
+        WaslWorkerPeer {
+            agent_id: "draft-node-anon".to_string(),
+            host_id: "host-18".to_string(),
+            url: "http://127.0.0.1:48002".to_string(),
+            name: String::new(),
+            host_name: String::new(),
+        },
+    ];
+    let toml = render_wasl_worker_toml("draft-node-self", "host-16", "gpu-box", &peers);
+
+    // Self host_name in [identity].
+    assert!(
+        toml.contains(r#"host_name = "gpu-box""#),
+        "identity.host_name must render when present; got:\n{toml}"
+    );
+    // Named peer carries name + host_name.
+    assert!(
+        toml.contains(r#"name = "Writer""#),
+        "peer name must render when present; got:\n{toml}"
+    );
+    assert!(
+        toml.contains(r#"host_name = "cpu-box""#),
+        "peer host_name must render when present; got:\n{toml}"
+    );
+    // The name-less peer must NOT produce an empty `name = ""` line.
+    assert!(
+        !toml.contains(r#"name = """#),
+        "an empty name must be omitted, never rendered as name = \"\"; got:\n{toml}"
+    );
+}
+
+/// Feature A: with NO self host_name, the `[identity]` block omits the key
+/// entirely (forward-compat: an un-upgraded caller carries no self host_name).
+#[test]
+fn render_toml_omits_self_host_name_when_empty() {
+    let toml = render_wasl_worker_toml("marsad-local", "local", "", &[]);
+    assert!(
+        !toml.contains("host_name"),
+        "an empty self host_name must be omitted from [identity]; got:\n{toml}"
+    );
+}
+
 /// No `[runtime]` block even with peers.
 #[test]
 fn render_toml_with_peers_has_no_runtime_block() {
@@ -158,8 +217,10 @@ fn render_toml_with_peers_has_no_runtime_block() {
         agent_id: "agent-x".to_string(),
         host_id: "host-x".to_string(),
         url: "http://127.0.0.1:48100".to_string(),
+        name: String::new(),
+        host_name: String::new(),
     }];
-    let toml = render_wasl_worker_toml("marsad-x", "x", &peers);
+    let toml = render_wasl_worker_toml("marsad-x", "x", "", &peers);
     assert!(
         !toml.contains("[runtime]"),
         "a tools client must NOT have a [runtime] block even with peers; got:\n{toml}"
@@ -394,6 +455,68 @@ fn launch_with_peers_injects_mcp_config_into_get_or_start_key() {
         cfg["mcpServers"]["wasl"]["command"].as_str(),
         Some("wasl-mcpd"),
         "mcpServers.wasl.command must be wasl-mcpd"
+    );
+}
+
+/// Feature A: a `LaunchWaslSession` whose `context.peers` carry `name`/`host_name`
+/// (and whose `context.host_name` names the self node's host) must thread those
+/// names into the rendered worker TOML delivered inline via WASL_CONFIG_CONTENT.
+#[test]
+fn launch_threads_peer_and_self_names_into_worker_toml() {
+    let mut agent = make_agent();
+    let (provider, keys) = RecordingProvider::new();
+    agent.register_wasl_session_provider(Box::new(provider));
+
+    let target_key = serde_json::json!({
+        "protocol": "claude",
+        "key": "draft-node-self",
+        "context": {
+            "cwd": "/work/proj",
+            "model": "claude-opus-4-5",
+            "session_mode": "",
+            "host_name": "gpu-box",
+            "peers": [
+                {
+                    "agent_id": "draft-node-writer",
+                    "host_id": "peer-host-1",
+                    "name": "Writer",
+                    "host_name": "cpu-box"
+                }
+            ]
+        }
+    });
+
+    let line = encode_ipc(&IpcMsg::LaunchWaslSession {
+        session_id: "sess-names".to_string(),
+        host_id: "local".to_string(),
+        wasl_target_key: target_key,
+        name: None,
+    });
+    let _ = agent.handle_ipc(&line);
+
+    let recorded = keys.lock().unwrap();
+    assert!(!recorded.is_empty(), "get_or_start must be called");
+    let mcp_config = recorded[0]["context"]["mcp_config"]
+        .as_str()
+        .expect("context.mcp_config must be set");
+    // The inline worker TOML lives in env.WASL_CONFIG_CONTENT.
+    let cfg: serde_json::Value =
+        serde_json::from_str(mcp_config).expect("mcp_config must be valid JSON");
+    let toml = cfg["mcpServers"]["wasl"]["env"]["WASL_CONFIG_CONTENT"]
+        .as_str()
+        .expect("WASL_CONFIG_CONTENT must carry the worker TOML");
+
+    assert!(
+        toml.contains(r#"name = "Writer""#),
+        "the peer's display name must be threaded into the worker TOML; got:\n{toml}"
+    );
+    assert!(
+        toml.contains(r#"host_name = "cpu-box""#),
+        "the peer's host_name must be threaded into the worker TOML; got:\n{toml}"
+    );
+    assert!(
+        toml.contains(r#"host_name = "gpu-box""#),
+        "the self node's host_name must be threaded into [identity]; got:\n{toml}"
     );
 }
 
