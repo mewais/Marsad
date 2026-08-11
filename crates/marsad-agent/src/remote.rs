@@ -428,6 +428,13 @@ pub fn parse_liveness(output: Option<&str>) -> Liveness {
     Liveness::Unreachable
 }
 
+/// Generous bound for a decision-path liveness probe (`kill -0 claude.pid`). Sized
+/// well above the slowest known SSH round-trip (ETX login: 4–26s) so a slow host is
+/// never mistaken for a dead one — the 8s probe this replaces was exactly that bug.
+/// Once the connection is up the `kill -0` itself is instant, so on healthy hosts
+/// the probe returns in well under a second; this is only the flaky/slow-host cap.
+pub const LIVENESS_PROBE_TIMEOUT_SECS: u64 = 45;
+
 /// Probe a durable remote session's liveness over a NON-login `bash -s` (so an
 /// HPC login profile can't swallow the sentinel), returning a definitive
 /// tri-state. This is the reader's one source of connection truth.
@@ -811,10 +818,13 @@ if [ -n "$ka" ] && kill -0 "$ka" 2>/dev/null \
 
 /// Build the shell script that tears down a durable remote session.
 ///
-/// Sends SIGTERM to the keepalive holder and the detached claude process (both
-/// PIDs are stored in `$HOME/.marsad/<sid>/`), waits briefly for them to exit,
-/// then removes the session dir entirely.  Idempotent — missing PIDs or a
-/// missing dir are silently ignored.
+/// Terminates the keepalive holder and the detached claude process (both PIDs are
+/// stored in `$HOME/.marsad/<sid>/`), then removes the session dir entirely.
+///
+/// Sends SIGTERM first and WAITS for claude to actually exit (polling `kill -0`,
+/// up to ~5s) before escalating to SIGKILL — a hard `kill -9` mid-write loses the
+/// last turn(s) from claude's transcript `.jsonl`, so the graceful window lets it
+/// flush. Idempotent — missing PIDs or a missing dir are silently ignored.
 pub fn remote_kill_script(sid: &str) -> String {
     let dir = remote_session_dir(sid);
     format!(
@@ -822,9 +832,17 @@ pub fn remote_kill_script(sid: &str) -> String {
 if [ -d "$dir" ]; then
   ka=$(cat "$dir/ka.pid" 2>/dev/null || echo "")
   cl=$(cat "$dir/claude.pid" 2>/dev/null || echo "")
+  # SIGTERM first so claude can flush its transcript (.jsonl) and exit cleanly.
   [ -n "$ka" ] && kill "$ka" 2>/dev/null || true
   [ -n "$cl" ] && kill "$cl" 2>/dev/null || true
-  sleep 0.2
+  # Wait (up to ~5s, polling every 0.1s) for claude to actually exit BEFORE
+  # escalating to SIGKILL — a hard kill mid-write drops the last turn(s) on disk.
+  i=0
+  while [ -n "$cl" ] && kill -0 "$cl" 2>/dev/null && [ "$i" -lt 50 ]; do
+    sleep 0.1
+    i=$((i+1))
+  done
+  # Escalate to SIGKILL only if still alive after the grace window.
   [ -n "$ka" ] && kill -9 "$ka" 2>/dev/null || true
   [ -n "$cl" ] && kill -9 "$cl" 2>/dev/null || true
   rm -rf "$dir"

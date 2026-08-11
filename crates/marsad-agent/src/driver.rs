@@ -304,6 +304,27 @@ impl Agent {
                 let sid = container_name
                     .strip_prefix("marsad-")
                     .unwrap_or(container_name);
+                let host = spec.host_target.as_deref().unwrap_or("");
+                // Single-resume invariant: NEVER spawn a second `claude --resume
+                // <uuid>` while a durable session for this sid is already LIVE on the
+                // host. Two concurrent resumes run against the SAME transcript, and a
+                // bridge-backed resume rewrites the `.jsonl` from its checkpoint — the
+                // second one can truncate turns the first already wrote (the PhD
+                // data-loss path). If it's already live, don't relaunch; the caller's
+                // reader (re)attaches to the running session. On a fresh launch the
+                // session dir is absent → the probe returns DEAD in one round-trip, so
+                // this costs a single cheap check and never blocks a real launch.
+                if crate::remote::probe_liveness(
+                    host,
+                    sid,
+                    std::time::Duration::from_secs(crate::remote::LIVENESS_PROBE_TIMEOUT_SECS),
+                ) == crate::remote::Liveness::Live
+                {
+                    eprintln!(
+                        "marsad-agent: remote session {container_name} on {host:?} — durable session already LIVE; attaching without relaunch"
+                    );
+                    return Ok(());
+                }
                 let run_cmd = self
                     .session_run_cmds
                     .0
@@ -313,7 +334,6 @@ impl Agent {
                     .cloned()
                     .unwrap_or_default();
                 let script = remote_durable_launch_script(sid, &run_cmd);
-                let host = spec.host_target.as_deref().unwrap_or("");
                 eprintln!(
                     "marsad-agent: remote session {container_name} on {host:?} — launching durable session (FIFO + setsid)"
                 );

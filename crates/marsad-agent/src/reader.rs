@@ -672,7 +672,8 @@ pub fn opencode_config_line(
 ///     `run_remote_script` call.
 ///
 /// The writer child is stored in `children` so it can be reaped on thread exit.
-/// Killing the session runs `remote_kill_script` over ssh (SIGTERM to ka+claude, dir
+/// Killing the session runs `remote_kill_script` over ssh (SIGTERM to ka+claude,
+/// wait for a graceful flush+exit, then SIGKILL only if still alive, then dir
 /// removal) rather than killing a child process.
 ///
 /// # Auto-reconnect (connection-drop recovery)
@@ -1835,20 +1836,54 @@ pub(crate) fn spawn_session_reader(
                 break 'reconnect;
             }
 
-            // Decide from the reader child's OWN exit signal — NOT a fixed-timeout
-            // probe. A clean `tail --pid` exit (code 0, no connection error) means
-            // the watched process died → finalize (Pause). Any transport error
-            // (ssh 255 / a captured "connection reset" / "closed by remote host")
-            // means the connection dropped, not the process → reattach. This is the
-            // fix for slow hosts (ETX: 4–26s SSH round-trip) where an 8s probe timed
-            // out and stranded a LIVE session on Disconnected for ~25 min.
+            // Decide from the reader child's exit signal, which GATES the decision:
+            // a transport error (ssh 255 / captured "connection reset" / "closed by
+            // remote host") → the connection dropped, not the process → reattach; a
+            // clean `tail --pid` exit (code 0, no error) is AMBIGUOUS (see below) and
+            // is resolved by an authoritative liveness probe rather than assumed dead.
+            // The probe here is bounded generously (LIVENESS_PROBE_TIMEOUT_SECS), NOT
+            // the old racing 8s probe that stranded slow hosts (ETX: 4–26s RTT) on
+            // Disconnected — it only runs on the rare clean exit, off the hot path.
             let saw_err = saw_conn_error.load(Ordering::SeqCst);
-            match reconnect_action(reader_exit_code, saw_err) {
+            // `Some(0), no err` is AMBIGUOUS: a collapsed WSL2/ssh transport exits
+            // `tail --pid` 0 without claude dying. Resolve it AUTHORITATIVELY with a
+            // liveness probe (kill -0 claude.pid) before deciding — emit an honest
+            // Reconnecting for the duration of the probe so the card never shows a
+            // false Paused mid-probe. Dead → Pause; Live/Unreachable → Reattach (an
+            // Unreachable host still escalates to Disconnected via the backoff below,
+            // but is NEVER falsely Paused, which is what truncated PhD's transcript).
+            let action = match reconnect_action(reader_exit_code, saw_err) {
+                ReconnectAction::Probe => {
+                    if !cancel.load(Ordering::SeqCst) {
+                        emit_conn(conn_on_drop(lines_seen));
+                    }
+                    let host = host_target.as_deref().unwrap_or_default();
+                    let verdict = crate::remote::probe_liveness(
+                        host,
+                        &sid,
+                        std::time::Duration::from_secs(
+                            crate::remote::LIVENESS_PROBE_TIMEOUT_SECS,
+                        ),
+                    );
+                    eprintln!(
+                        "marsad-agent: session {sid} reader exited cleanly (code {reader_exit_code:?}) — liveness probe: {verdict:?}"
+                    );
+                    match verdict {
+                        crate::remote::Liveness::Dead => ReconnectAction::Pause,
+                        _ => ReconnectAction::Reattach,
+                    }
+                }
+                other => other,
+            };
+            match action {
                 ReconnectAction::Pause => {
                     eprintln!(
-                        "marsad-agent: session {sid} reader exited cleanly (code {reader_exit_code:?}) — process gone, finalizing"
+                        "marsad-agent: session {sid} process gone (liveness probe confirmed DEAD) — finalizing"
                     );
                     break 'reconnect;
+                }
+                ReconnectAction::Probe => {
+                    unreachable!("Probe is resolved to Pause/Reattach before this match")
                 }
                 ReconnectAction::Reattach => {
                     // A connection that was actually working (produced lines) then

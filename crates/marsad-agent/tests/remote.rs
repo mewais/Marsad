@@ -319,6 +319,12 @@ fn remote_kill_script_structure() {
     // Must kill and remove the dir.
     assert!(script.contains("kill"), "kill: {script}");
     assert!(script.contains("rm -rf"), "rm: {script}");
+    // Graceful drain: SIGTERM, then WAIT for claude to exit (kill -0 poll) BEFORE
+    // escalating to SIGKILL, so it can flush its transcript .jsonl. A bare 0.2s
+    // sleep then kill -9 (the old behavior) dropped the last turn(s) on disk.
+    assert!(script.contains("kill -0"), "waits for exit before SIGKILL: {script}");
+    assert!(script.contains("kill -9"), "escalates to SIGKILL: {script}");
+    assert!(!script.contains("sleep 0.2"), "no fixed 0.2s pre-SIGKILL sleep: {script}");
 }
 
 // ── remote_writer_argv / remote_reader_argv ────────────────────────────────────

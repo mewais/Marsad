@@ -37,7 +37,7 @@ pub fn conn_on_drop(lines_seen: u64) -> marsad_proto::ConnHealth {
 }
 
 /// What to do when a remote reader's stream ends — decided from the reader child's
-/// OWN exit signal, not a separate fixed-timeout probe (see `reconnect_action`).
+/// OWN exit signal (see `reconnect_action`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReconnectAction {
     /// The connection dropped (transport error). The durable setsid session is
@@ -46,28 +46,42 @@ pub enum ReconnectAction {
     /// The remote process is gone (the `tail --pid` reader exited cleanly) →
     /// finalize the session to Paused.
     Pause,
+    /// AMBIGUOUS: `tail --pid` exited 0 with no captured transport error. On a
+    /// clean local link that means the watched process died — but on WSL2/ssh a
+    /// collapsed transport (`Cannot send after transport endpoint shutdown`) also
+    /// exits `tail` 0 while claude is still alive. Don't guess: the caller must
+    /// run an AUTHORITATIVE `remote_liveness_script` probe (`kill -0 claude.pid`)
+    /// and map Dead→Pause, Live/Unreachable→Reattach. This is what stops a
+    /// transport blip from being falsely Paused (which triggers a relaunch churn
+    /// that can truncate a bridge-backed transcript).
+    Probe,
 }
 
 /// Classify why a remote reader (`ssh … tail --pid=<pid> -f out.log`) stopped, from
 /// the reader child's exit code plus whether its stderr showed a connection error:
 /// - a captured connection error ("Connection reset", "closed by remote host", …)
 ///   → the CONNECTION dropped → `Reattach`.
-/// - exit code 0, no connection error → the remote command (`tail --pid`) exited
-///   because the watched process DIED → `Pause`.
+/// - exit code 0, no connection error → AMBIGUOUS → `Probe`. `tail --pid` returns 0
+///   both when the watched process dies AND when the ssh transport collapses
+///   cleanly (WSL2's `Cannot send after transport endpoint shutdown` exits `tail` 0
+///   without landing in the stderr conn-error set). Blindly Pausing here falsely
+///   pauses a LIVE session → a relaunch churn that can truncate a bridge-backed
+///   transcript, so the caller must resolve it with an authoritative
+///   `remote_liveness_script` probe instead (Dead→Pause, Live/Unreachable→Reattach).
 /// - any other/unknown exit → a transport problem, NOT proof of death → `Reattach`
-///   (the durable session is presumed alive until a clean exit proves otherwise; a
+///   (the durable session is presumed alive until a probe proves otherwise; a
 ///   genuinely-unreachable host keeps failing fast so the backoff escalates
 ///   Reconnecting → Disconnected, but it is NEVER falsely Paused).
 ///
-/// This replaces gating re-attach on a fixed-timeout `probe_liveness`, which timed
-/// out on slow hosts (ETX's SSH round-trip is 4–26s vs an 8s probe) and stranded
-/// live sessions on `Disconnected`.
+/// The exit code no longer decides death on its own — it gates WHETHER to probe.
+/// This keeps the authoritative check off the hot path (only the ambiguous clean
+/// exit probes) while fixing the false-pause the exit-code-only heuristic caused.
 pub fn reconnect_action(exit_code: Option<i32>, saw_conn_error: bool) -> ReconnectAction {
     if saw_conn_error {
         return ReconnectAction::Reattach;
     }
     match exit_code {
-        Some(0) => ReconnectAction::Pause,
+        Some(0) => ReconnectAction::Probe,
         _ => ReconnectAction::Reattach,
     }
 }

@@ -76,9 +76,14 @@ fn drop_is_unstable_when_it_never_restabilized() {
 // ── Signal-driven reconnect decision (from the reader child's exit, not a probe) ─
 
 #[test]
-fn clean_reader_exit_means_process_died_pause() {
-    // `ssh … tail --pid=<pid>` returns 0 when the watched process dies → Pause.
-    assert_eq!(reconnect_action(Some(0), false), ReconnectAction::Pause);
+fn clean_reader_exit_is_ambiguous_and_probes() {
+    // `ssh … tail --pid=<pid>` returns 0 both when the watched process dies AND when
+    // the transport collapses cleanly (WSL2 `Cannot send after transport endpoint
+    // shutdown` exits tail 0 without landing in the stderr conn-error set). So a
+    // clean exit is NOT proof of death → Probe (the reader then runs an authoritative
+    // kill -0 liveness check and maps Dead→Pause, Live/Unreachable→Reattach). This is
+    // the fix for the false-pause churn that truncated PhD's transcript.
+    assert_eq!(reconnect_action(Some(0), false), ReconnectAction::Probe);
 }
 
 #[test]
