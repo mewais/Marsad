@@ -26,7 +26,7 @@
 export type ModelListSourceFixture = "Listed" | "Observed";
 
 export interface ModelInfoFixture {
-  /** Verbatim `--model` id — never normalized (§1: "agy model names contain
+  /** Verbatim `--model` id — never normalized (§1: "model names may contain
    *  spaces/parens"). */
   id: string;
   annotation?: string | null;
@@ -54,8 +54,8 @@ export interface CapabilitiesViewFixture {
   driver: string;
   host_id: string;
   cli_available: boolean;
-  /** Whether Marsad has a launch driver for this driver (claude/codex → true,
-   *  gemini → false). Defaults to true in `makeCapabilities`. */
+  /** Whether Marsad has a launch driver for this driver (claude/codex → true).
+   *  Defaults to true in `makeCapabilities`. */
   launchable: boolean;
   models: ModelCatalogFixture;
   session_scope: SessionScopeFixture | null;

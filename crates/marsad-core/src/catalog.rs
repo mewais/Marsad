@@ -261,7 +261,7 @@ impl Core {
     /// persisted). Returns the updated host list.
     /// The drivers Marsad probes on every host (mirrors the agent's probe set).
     /// A host is only `Connected` once ALL of these have reported their caps.
-    const PROBED_DRIVERS: [&'static str; 3] = ["claude", "codex", "gemini"];
+    const PROBED_DRIVERS: [&'static str; 2] = ["claude", "codex"];
 
     /// True once every probed driver's capability discovery has landed for `id`
     /// (agents + versioned models loaded) since the host last came online.

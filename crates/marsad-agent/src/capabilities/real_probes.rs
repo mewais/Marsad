@@ -111,7 +111,7 @@ pub fn build_probe_spawn_argv(
 
 // ===========================================================================
 // Part 5 — real, subprocess/$HOME-rooted probe implementations. Production
-// only: never unit-tested (no live `codex`/`agy`/`claude` on the test
+// only: never unit-tested (no live `codex`/`claude` on the test
 // machine, per the house guardrail — the `run` fixture-driven live suites
 // prove these against the real CLIs). Compiled out under coverage so the
 // crate's 100% bar stays on the pure/logic layer (§3.1: "Real subprocess/
@@ -537,58 +537,6 @@ fn probe_codex_modes_bounded(
     let _ = child.wait();
     Ok(modes)
 }
-/// Real agy/gemini probe: setup-first `command -v` + `<cmd> models`, run over
-/// the host connection (remote) or locally (setup honored).
-#[cfg(not(coverage))]
-pub struct RealAgyProbe;
-
-#[cfg(not(coverage))]
-impl CapabilityProbe for RealAgyProbe {
-    fn driver(&self) -> &'static str {
-        "gemini"
-    }
-
-    fn probe(&self, ctx: &HostProbeCtx) -> Capabilities {
-        let command = ctx.resolve_command("gemini");
-        let script = build_agy_discovery_script(&command, ctx.setup.as_deref());
-        let mut errors = Vec::new();
-        let (cli_available, wasl_available, models) =
-            match run_discovery(ctx.host_target.as_deref(), &script, ctx.deadline) {
-                Ok(out) => {
-                    let secs = parse_discovery_sections(&out);
-                    (
-                        parse_avail(secs.get("avail")),
-                        parse_avail(secs.get("wasl")),
-                        parse_agy_models(secs.get("models")),
-                    )
-                }
-                Err(e) => {
-                    errors.push(format!("gemini discovery: {e}"));
-                    (false, false, vec![])
-                }
-            };
-        Capabilities {
-            driver: "gemini".to_string(),
-            host_id: ctx.host_id.clone(),
-            cli_available,
-            wasl_available,
-            // gemini (agy) has NO launch driver in Marsad — the launch UI greys
-            // it with the "not yet launchable" note. Uses the trait default.
-            launchable: self.launchable(),
-            models: ModelCatalog {
-                models,
-                source: ModelListSource::Listed,
-                free_text: false,
-            },
-            available_modes: vec![],
-            session_scope: Some(SessionScope::AllKnown),
-            sessions: vec![],
-            fetched_at_ms: now_ms(),
-            errors,
-        }
-    }
-}
-
 /// Real claude probe: setup-first `command -v` (real availability, local AND
 /// remote) + the host's `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` env
 /// (claude has no "list models" command — the env is the only truthful per-host
@@ -805,7 +753,7 @@ pub fn parse_opencode_sessions(raw: &str) -> Vec<(String, Option<String>)> {
 
 /// Real opencode probe: setup-first `command -v` + `opencode models` +
 /// `opencode session list`, run over the host connection or locally.
-/// Registered in the probes list in `serve.rs` alongside claude/codex/agy.
+/// Registered in the probes list in `serve.rs` alongside claude/codex.
 ///
 /// Task B: performs a bounded `opencode acp` handshake at connect time to
 /// discover available modes via `configOptions` in the `session/new` result.

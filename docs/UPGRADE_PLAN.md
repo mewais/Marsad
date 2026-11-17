@@ -12,7 +12,7 @@ tested. Everything the Workstreams design adds is *additive* and lands on clean 
    - **Tier 1 — MCP elicitation** (clean in-band path): used when the calling client advertises
      `capabilities.elicitation` (Claude Code ✓, Codex ✓). Never carries secrets (spec rule).
    - **Tier 2 — self-owned `prepare`→`commit` handshake** (universal fallback): for clients without
-     elicitation (**Gemini ✗ — "Method not found", no timeline**) and whenever a real human gate must be
+     elicitation (some CLIs lack it) and whenever a real human gate must be
      guaranteed (elicitation can be silently auto-answered by client auto-approve policies).
    - **Tier 3 — optional direct-to-Marsad connector**: when Wasl is configured with Marsad present, it
      surfaces the gate straight to Marsad (reliable regardless of client elicitation support) AND emits an
@@ -24,9 +24,8 @@ tested. Everything the Workstreams design adds is *additive* and lands on clean 
    capability, not a specific wire format. Direct host-A→host-B transfer (scp -3/rsync), not routed-through-local.
 4. **Wasl topology:** a **per-host Wasl daemon mesh** — each host runs a daemon; daemons peer; local send =
    intra-daemon, cross-host = daemon→daemon, broadcast = fan-out. Keeps Wasl independent of Marsad's SSH.
-5. **All three drivers (Claude/Codex/Gemini) in the driver milestone.** No TUI scraping — each uses its
-   bidirectional embedding protocol: Claude control-protocol, Codex `app-server`, Gemini `--acp`.
-   (Gemini gate path is Wasl Tier-2/3, since ACP lacks elicitation.)
+5. **Both drivers (Claude/Codex) in the driver milestone.** No TUI scraping — each uses its
+   bidirectional embedding protocol: Claude control-protocol, Codex `app-server`.
 6. **Profiles ≠ Workstreams.** *Profile* (renamed from Workspace) = a named lens grouping workstreams
    (work/personal); pure organization. *Workstream* = a possibly-complex session: 1 agent/1 node (fast
    lane) → N agents/N nodes wired with connections. *Session/Node* = one agent on one host.
@@ -37,7 +36,7 @@ tested. Everything the Workstreams design adds is *additive* and lands on clean 
 
 ## Delivery phases
 - **Phase 1 — Workstreams core + graph UI (Claude-only, single driver behind the seam).**
-- **Phase 2 — Driver trait + Codex + Gemini drivers.**
+- **Phase 2 — Driver trait + Codex driver.**
 - **Phase 3 — Wasl A2A/MCP connection layer (live connections, consult/command/transfer, real gating).**
 
 The full block DAG below is delivered up front; the phases only set build/merge order so you can
@@ -134,14 +133,13 @@ Tests: Vitest against the mock fixture.
 **D01 src-tauri bridge (X)** — Tauri commands mirroring the new core API; emit the new `VmUpdate`
 variants. Lock-drop-before-await discipline preserved. Tests: Rust unit over `marsad-core` fakes.
 
-## Phase 2 — Driver trait + Codex + Gemini
+## Phase 2 — Driver trait + Codex
 
 **B16 `marsad-driver` (N, L1)** — the `Driver` trait:
 `spawn_argv(spec)`, `parse(native_line) -> Vec<Event>`, `encode(action) -> native_line`,
 `approval_channel` mapping (native approval req → `marsad_gates::Gate`, and decision → native reply),
 `model_catalog()`, `capabilities()`, `posture_map(Posture)`.
-- Impls: `ClaudeDriver` (extracts today's proto/events logic), `CodexDriver` (`app-server` JSON-RPC-lite),
-  `GeminiDriver` (`--acp`). Each verified against recorded-real fixtures captured from the real CLI.
+- Impls: `ClaudeDriver` (extracts today's proto/events logic), `CodexDriver` (`app-server` JSON-RPC-lite). Each verified against recorded-real fixtures captured from the real CLI.
 - `marsad-proto` (X): split per-driver wire types into driver submodules; keep shared GUI↔agent IPC.
 - `marsad-events` (X): reducer now consumes the driver-neutral `Event`; subagent/gate detection
   parameterized (drop the hardcoded `"Task"` tool assumption).
@@ -172,7 +170,7 @@ injected prompt/message; reply + fan-in for multicast. (Borrow mcp_agent_mail's 
 gateable call.
 **W5 Three-tier gate (N)** — the permission-before-send engine: Tier 1 MCP `elicitation/create` when the
 client supports it; Tier 2 self-owned `prepare`→`commit` handshake with Wasl's own approval channel
-(covers Gemini + any non-elicitation client, and guarantees a real human gate); Tier 3 **optional
+(covers any non-elicitation client, and guarantees a real human gate); Tier 3 **optional
 direct-to-Marsad connector** — surfaces the gate to Marsad and emits an **observation feed for every
 connection incl. auto-approved** so Marsad's graph stays complete. Feature-detects per client; degrades
 gracefully. This replaces the old "forward-everything-to-Marsad brain" design — Marsad coupling is now

@@ -12,20 +12,6 @@ use super::*;
 // Part 1 — pure parse functions (no IO)
 // ===========================================================================
 
-/// Parse `agy models` stdout: one model name per line, verbatim (spaces,
-/// parens, mixed vendors all preserved). Blank/whitespace-only lines and
-/// trailing whitespace are tolerated; empty input yields an empty list.
-pub fn parse_agy_models(raw: &str) -> Vec<ModelInfo> {
-    raw.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| ModelInfo {
-            id: line.to_string(),
-            annotation: None,
-        })
-        .collect()
-}
-
 /// claude has no `list-models` command (dynamic-capabilities.md §1.1), but the
 /// CLI DOES accept the model FAMILY words `opus`/`sonnet`/`haiku` directly (and
 /// the user's `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` env resolves each
@@ -269,27 +255,6 @@ pub fn filter_codex_sessions_by_project(
                 .unwrap_or(false)
         })
         .collect()
-}
-
-/// Strip the `<USER_REQUEST>…</USER_REQUEST>` wrapper (and sibling injected
-/// blocks) from an agy `transcript_full.jsonl` body, returning the first
-/// `USER_INPUT` step's real prompt text. `None` when the input is empty or no
-/// `USER_INPUT` step exists.
-pub fn agy_snippet_from_transcript(raw: &str) -> Option<String> {
-    for line in raw.lines() {
-        let v: serde_json::Value = serde_json::from_str(line).unwrap_or(serde_json::Value::Null);
-        if v.get("type").and_then(|t| t.as_str()) != Some("USER_INPUT") {
-            continue;
-        }
-        let content = v.get("content").and_then(|c| c.as_str()).unwrap_or("");
-        let start = content
-            .find("<USER_REQUEST>")
-            .map(|i| i + "<USER_REQUEST>".len())
-            .unwrap_or(0);
-        let end = content.find("</USER_REQUEST>").unwrap_or(content.len());
-        return content.get(start..end).map(|s| s.trim().to_string());
-    }
-    None
 }
 
 /// Parse the moved-from-bridge remote claude session list: one

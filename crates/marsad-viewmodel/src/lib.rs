@@ -213,7 +213,7 @@ pub struct CapabilitiesView {
     #[serde(default)]
     pub wasl_available: bool,
     /// Whether Marsad has a launch driver for this agent (static per-driver
-    /// truth: claude/codex → true, gemini → false). What the launch UI gates
+    /// truth: claude/codex → true). What the launch UI gates
     /// on — carried verbatim from `marsad_proto::Capabilities::launchable`.
     pub launchable: bool,
     pub models: marsad_proto::ModelCatalog,

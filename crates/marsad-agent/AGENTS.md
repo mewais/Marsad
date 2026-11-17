@@ -81,17 +81,16 @@ doubt, prefer the file the majority of its callers already live in.
 - **`capabilities.rs`** (`pub mod`, unlike the rest of this map — its seam is
   independently unit-tested per `tests/capabilities.rs`) — U1 dynamic
   capability discovery (`docs/specs/dynamic-capabilities.md`): the pure parse
-  functions (`parse_agy_models`, `parse_codex_debug_models`,
-  `parse_codex_rollout_meta`, `agy_snippet_from_transcript`,
-  `parse_remote_claude_session_list`), the temp-dir-rooted scanners
-  (`scan_codex_sessions`, `scan_agy_sessions`), the `CapabilityProbe` trait +
+  functions (`parse_codex_debug_models`,
+  `parse_codex_rollout_meta`, `parse_remote_claude_session_list`), the temp-dir-rooted scanners
+  (`scan_codex_sessions`), the `CapabilityProbe` trait +
   `HostProbeCtx`, the `CapabilityProvider` state machine (refresh-on-demand,
   cache replay, in-flight dedup, persistence to
   `<data_root>/capabilities/<host_id>.json`, spawned-thread probes with hard
   deadlines — never blocking the caller), and the real,
   subprocess/`$HOME`-rooted probe implementations (`RealCodexProbe`/
-  `RealAgyProbe`/`RealClaudeProbe`, `#[cfg(not(coverage))]` — untested by
-  design, no live `codex`/`agy`/`claude` on the test machine; production-only,
+  `RealClaudeProbe`/`RealOpencodeProbe`, `#[cfg(not(coverage))]` — untested by
+  design, no live `codex`/`claude` on the test machine; production-only,
   wired from `serve.rs`). `reader.rs`'s read loop calls
   `CapabilityProvider::observe_claude_model` on every `system:init` line
   (§3.2 trigger 4).

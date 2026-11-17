@@ -165,7 +165,7 @@ export interface Host {
   env?: Array<[string, string]>;
   /**
    * Per-driver command overrides as `[driver, command]` pairs.
-   * E.g. `[["codex", "codex --sandbox"], ["gemini", "/opt/gemini/bin/gemini"]]`.
+   * E.g. `[["codex", "codex --sandbox"], ["opencode", "/opt/opencode/bin/opencode"]]`.
    * When launching a session, the matching entry is used first; falls back to
    * `claude_bin` for the "claude" driver, or the bare driver name otherwise.
    */
@@ -563,7 +563,7 @@ export interface Settings {
   confirm_before_stop: boolean;
   default_model: string;
   /**
-   * Default agent driver for new sessions ("claude" | "codex" | "gemini").
+   * Default agent driver for new sessions ("claude" | "codex" | "opencode").
    * Absent in older persisted settings → defaults to "claude".
    */
   default_driver?: string;
@@ -656,7 +656,7 @@ export interface Connection {
 export type ModelListSource = "Listed" | "Observed";
 
 /** One selectable model, exactly as the driver reports it. Ids are verbatim —
- *  never normalized (agy model names contain spaces/parens). */
+ *  never normalized (model names may contain spaces/parens). */
 export interface ModelInfo {
   id: string;
   annotation?: string | null;
@@ -672,7 +672,7 @@ export interface ModelCatalog {
 /** One resumable past session discovered on the host. */
 export interface DiscoveredSession {
   id: string;
-  /** None where the store doesn't record it retrievably (e.g. agy). */
+  /** None where the store doesn't record it retrievably (e.g. codex). */
   project?: string | null;
   snippet: string;
   modified_ms: number;
@@ -692,8 +692,8 @@ export interface CapabilitiesView {
    *  its native CLI (`cli_available`) AND this are true. Defaults to false on
    *  old snapshots without the field. */
   wasl_available?: boolean;
-  /** Whether Marsad has a launch driver for this driver (claude/codex → true,
-   *  gemini → false) — carried verbatim from `marsad_proto::Capabilities`. A
+  /** Whether Marsad has a launch driver for this driver (claude/codex → true) —
+   *  carried verbatim from `marsad_proto::Capabilities`. A
    *  driver that isn't launchable is never offered even if its CLI is present. */
   launchable: boolean;
   models: ModelCatalog;

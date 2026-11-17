@@ -95,9 +95,9 @@ function StateCapture({
 }
 
 // ---------------------------------------------------------------------------
-// Capabilities fixture — claude is cli_available; codex/gemini are probed and
+// Capabilities fixture — claude is cli_available; codex/opencode are probed and
 // KNOWN-false (cli_available: false). BUG #2 made driver availability
-// optimistic: only a KNOWN-false probe greys a driver out, so codex/gemini are
+// optimistic: only a KNOWN-false probe greys a driver out, so codex/opencode are
 // present here explicitly false to keep the "disabled driver" assertions valid.
 // ---------------------------------------------------------------------------
 
@@ -129,11 +129,11 @@ function claudeOnlyCapabilities(hostId: string): Record<string, CapabilitiesView
       fetched_at_ms: 1,
       errors: [],
     },
-    [`gemini::${hostId}`]: {
-      driver: "gemini",
+    [`opencode::${hostId}`]: {
+      driver: "opencode",
       host_id: hostId,
       cli_available: false,
-      launchable: false,
+      launchable: true,
       models: { models: [], source: "Observed", free_text: true },
       session_scope: null,
       sessions: [],
@@ -273,14 +273,14 @@ function renderNodeModal(
 }
 
 describe("NodeModal — driver picker (capabilities-driven)", () => {
-  it("claude is enabled; codex/gemini are disabled with a 'not yet launchable' note", () => {
+  it("claude is enabled; codex/opencode are disabled with a 'not yet launchable' note", () => {
     renderNodeModal({ current: null });
     const claudeBtn = screen.getByTestId("nm-driver-claude") as HTMLButtonElement;
     const codexBtn = screen.getByTestId("nm-driver-codex") as HTMLButtonElement;
-    const geminiBtn = screen.getByTestId("nm-driver-gemini") as HTMLButtonElement;
+    const opencodeBtn = screen.getByTestId("nm-driver-opencode") as HTMLButtonElement;
     expect(claudeBtn.disabled).toBe(false);
     expect(codexBtn.disabled).toBe(true);
-    expect(geminiBtn.disabled).toBe(true);
+    expect(opencodeBtn.disabled).toBe(true);
   });
 
   it("clicking a disabled driver does not change the selection or model catalog", () => {

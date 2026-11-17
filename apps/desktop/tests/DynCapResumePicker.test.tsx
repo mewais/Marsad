@@ -2,8 +2,8 @@
  * U2 — NodeModal resume picker consumes ONLY dynamic capabilities.
  *
  * Contract pinned (docs/specs/dynamic-capabilities.md §5, "Resume picker"):
- *   "reads capabilities[...].sessions filtered by chosen project (agy
- *   `project: None` entries render under 'unknown project'); fires
+ *   "reads capabilities[...].sessions filtered by chosen project (`project: None`
+ *   entries render under 'unknown project'); fires
  *   `refreshCapabilities({host_id, driver, project})` on open and renders
  *   the cached list instantly with its `fetched_at_ms` ('as of …') —
  *   stale-then-fresh, never spinner-blocked."
@@ -116,11 +116,11 @@ describe("NodeModal resume picker — capabilities-only source (U2 contract)", (
     expect(screen.queryByTestId("nm-resume-session-sess-other")).toBeNull();
   });
 
-  it("agy-style sessions with project: null render under an 'unknown project' group, per SessionScope semantics", () => {
+  it("sessions with project: null render under an 'unknown project' group, per SessionScope semantics", () => {
     // NodeModal keeps the selected driver (default "claude") and does a strict
     // (driver, host) capabilities lookup, so the fixture is keyed to the
-    // selected driver on the switched host. The behavioral intent — agy-style
-    // project:null sessions render under the "unknown project" group — is
+    // selected driver on the switched host. The behavioral intent — project:null
+    // sessions render under the "unknown project" group — is
     // unchanged.
     renderNodeModal([
       makeCapabilities({
@@ -128,7 +128,7 @@ describe("NodeModal resume picker — capabilities-only source (U2 contract)", (
         host_id: "gpu",
         session_scope: "AllKnown",
         sessions: [
-          { id: "agy-sess-1", project: null, snippet: "conversation with no mapped project", modified_ms: 300 },
+          { id: "null-project-sess-1", project: null, snippet: "conversation with no mapped project", modified_ms: 300 },
         ],
       }),
     ]);
@@ -137,7 +137,7 @@ describe("NodeModal resume picker — capabilities-only source (U2 contract)", (
     fireEvent.click(screen.getByTestId("nm-resume-toggle"));
 
     expect(screen.getByTestId("nm-resume-unknown-project")).toBeTruthy();
-    expect(screen.getByTestId("nm-resume-session-agy-sess-1").textContent).toContain(
+    expect(screen.getByTestId("nm-resume-session-null-project-sess-1").textContent).toContain(
       "conversation with no mapped project"
     );
   });

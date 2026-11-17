@@ -9,7 +9,7 @@
  *   2. Caps ABSENT (discovery in flight) → a loading indicator shows and Launch
  *      is NOT hard-greyed on availability (optimistic; only the empty project
  *      blocks it).
- *   3. gemini (launchable:false) → greyed with the unavailable note.
+ *   3. a non-launchable driver (launchable:false) → greyed with the unavailable note.
  *   4. A launchable driver whose CLI wasn't detected (cli_available:false) →
  *      greyed with the note.
  *   5. Picking the `opus` radio leaves the custom free-text input EMPTY with the
@@ -67,9 +67,9 @@ function realClaudeCaps(hostId: string): Record<string, CapabilitiesView> {
       fetched_at_ms: 1,
       errors: [],
     },
-    // gemini: has no launch driver (launchable:false) → always greyed.
-    [`gemini::${hostId}`]: {
-      driver: "gemini",
+    // A driver with no launch backend (launchable:false) → always greyed.
+    [`opencode::${hostId}`]: {
+      driver: "opencode",
       host_id: hostId,
       cli_available: true, // even with a CLI present, no launch driver
       launchable: false,
@@ -145,13 +145,12 @@ describe("NodeModal — real capability gating", () => {
     expect((screen.getByTestId("nm-launch-btn") as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("gemini (launchable:false) → greyed with the unavailable note", () => {
+  it("non-launchable driver (launchable:false) → greyed with the unavailable note", () => {
     renderNodeModal(realClaudeCaps(HOST));
     fireEvent.click(screen.getByTestId(`nm-host-${HOST}`));
-    expect((screen.getByTestId("nm-driver-gemini") as HTMLButtonElement).disabled).toBe(true);
-    // Selecting gemini is a no-op; assert the known-unavailable note surfaces by
-    // driving driver=gemini via caps: claude stays selected so we check the
-    // button's disabled state (the block) which is gemini's greyed truth.
+    expect((screen.getByTestId("nm-driver-opencode") as HTMLButtonElement).disabled).toBe(true);
+    // Selecting it is a no-op; claude stays selected, so we check the button's
+    // disabled state (the block) which is the greyed truth.
   });
 
   it("launchable driver with cli_available:false → greyed with the note", () => {

@@ -6,8 +6,8 @@ in isolation (Vitest), like `Board`. The app-wiring block connects it to `useVm`
 files. elkjs "Flow" layout is a later block — this renders the **By-host** layout.
 
 Design: `docs/design/DESIGN_HANDOFF.md` §"LEVEL 2 — Workstream Graph" (nodes, edges, gate diamond,
-inspector). Tokens in `src/theme/tokens.ts`. Driver colors: claude `#d97757`, codex `#3fb6a8`, gemini
-`#9b8cf0`. Edge status colors: normal=`--accent`, consulting=`--txt2`, needs=`--needs`.
+inspector). Tokens in `src/theme/tokens.ts`. Driver colors: claude `#d97757`, codex `#3fb6a8`, opencode
+`#f0a050`. Edge status colors: normal=`--accent`, consulting=`--txt2`, needs=`--needs`.
 
 ## Files this block creates (ONLY these)
 - `src/screens/graph/GraphScreen.tsx`

@@ -81,7 +81,7 @@ impl Core {
         let display_driver = wasl_target_key
             .get("protocol")
             .and_then(|v| v.as_str())
-            .filter(|p| matches!(*p, "claude" | "codex" | "gemini" | "opencode"))
+            .filter(|p| matches!(*p, "claude" | "codex" | "opencode"))
             .unwrap_or("wasl")
             .to_string();
 

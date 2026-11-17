@@ -4,7 +4,7 @@
 
 use marsad_lifecycle::Persisted;
 
-use super::capabilities::{CapabilityProvider, RealAgyProbe, RealClaudeProbe, RealCodexProbe, RealOpencodeProbe};
+use super::capabilities::{CapabilityProvider, RealClaudeProbe, RealCodexProbe, RealOpencodeProbe};
 use super::reader::spawn_session_reader;
 use super::remote::exec_prefix_for;
 use super::{Agent, AgentError, ListenSpec, SessionRecord};
@@ -311,7 +311,6 @@ impl Agent {
             vec![
                 Box::new(RealClaudeProbe),
                 Box::new(RealCodexProbe),
-                Box::new(RealAgyProbe),
                 Box::new(RealOpencodeProbe),
             ],
             vec!["local".to_string()],

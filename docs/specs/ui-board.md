@@ -9,7 +9,7 @@ Design source of truth (port visuals/layout exactly): `docs/design/DESIGN_HANDOF
 Workstreams Board" and `docs/design/Marsad Workstreams.dc.html`. Theme tokens exist in
 `src/theme/tokens.ts` (`--panel`, `--panel2`, `--border`, `--txt`/`--txt2`/`--txt3`, `--accent`,
 `--needs`/`--needs-bg`, `--error`/`--error-bg`, `--done`/`--done-bg`, `--working-bg`, `--shadow`,
-`--shadow-sm`, `--font-mono`). Driver colors: claude `#d97757`, codex `#3fb6a8`, gemini `#9b8cf0`.
+`--shadow-sm`, `--font-mono`). Driver colors: claude `#d97757`, codex `#3fb6a8`, opencode `#f0a050`.
 
 ## Files this block creates (ONLY these)
 - `src/bridge/workstreamTypes.ts` — the new TS view types (see §Types). These mirror the Rust serde
@@ -22,7 +22,7 @@ Workstreams Board" and `docs/design/Marsad Workstreams.dc.html`. Theme tokens ex
 ## Types (`workstreamTypes.ts`) — mirror marsad-viewmodel exactly
 ```ts
 export type HeadState = "needs" | "error" | "working" | "done";
-export type Driver = "claude" | "codex" | "gemini";
+export type Driver = "claude" | "codex" | "opencode";
 export interface StateCounts { working: number; needs: number; error: number; done: number }
 export interface HostChip { id: string; label: string; kind: string; status: string } // status: connected|connecting|reconnecting|unreachable
 export interface LinkChip { a: string; b: string; status: string; note: string | null }  // status: degraded|down

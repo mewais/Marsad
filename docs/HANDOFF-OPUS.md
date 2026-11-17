@@ -98,17 +98,15 @@ already asserts inertness; keep it true).
 Also do the real cross-host / real `scp -3` leg of **Wasl W6** here if you have two hosts (parked on
 the build machine: single host, loopback stand-in only).
 
-## Prompt 4 — Marsad Phase-2 drivers: codex + Antigravity (optional; research is done)
+## Prompt 4 — Marsad Phase-2 drivers: codex (optional; research is done)
 
-Marsad still only LAUNCHES claude sessions. The *Wasl* side already drives all three CLIs (agent-to-
-agent); this is the different axis of Marsad supervising a codex/agy session. Research is committed and
+Marsad still only LAUNCHES claude sessions. The *Wasl* side already drives its CLIs (agent-to-
+agent); this is the different axis of Marsad supervising a codex session. Research is committed and
 verified: `Marsad/docs/specs/codex-research.md` (codex `exec`/`app-server`, JSON-RPC schema extracted
-live) and `docs/specs/antigravity-research.md` (`agy`; the old `gemini --acp` plan is VOID — Google
-killed the legacy gemini CLI, `agy` is the replacement). U1 already discovers codex/agy models +
+live). U1 already discovers codex models +
 sessions. Build the launch/supervise driver chain test-first against captured real-CLI transcripts;
 map approvals onto the existing gate pipeline. **Do not offer a driver in the UI until its full chain
-is green against the real CLI** (the same rule that caught 3 wrong `agy` assumptions this cycle — the
-CLI contracts are treacherous; verify live, cheaply, smallest models).
+is green against the real CLI** (the CLI contracts are treacherous; verify live, cheaply, smallest models).
 
 ## Prompt 5 — Mobile (optional, lowest priority)
 
@@ -122,7 +120,7 @@ adding a real UniFFI wrapper layer over `marsad-core`. Large; only if the owner 
 ## Cheat-sheet: what is DONE and verified (don't rebuild it)
 
 - **Wasl**: standalone MCP→A2A messaging, three-tier human gating, config-driven peers, generic
-  operator API (v1 frozen), **three CLI adapters — claude/codex/antigravity — each live-verified**, W5
+  operator API (v1 frozen), **CLI adapters — claude/codex/opencode — each live-verified**, W5
   two-node dress rehearsal green. Legacy transport deleted. Docs truthful.
 - **Marsad Rust + mock UI**: real-fixture-verified reducer, typed IPC (single wire schema), dynamic
   capabilities (no presets, CI-gated), honest cost (no clobber, labeled estimates), full activity
@@ -131,7 +129,7 @@ adding a real UniFFI wrapper layer over `marsad-core`. Large; only if the owner 
   + launch toggle, and the Wasl approval modal + activity surface (mock-tested). ~380 Vitest, Rust
   workspace green, coverage gates met.
 - **Only genuinely unrun here:** the compiled desktop app (Prompt 1), its live e2e (Prompts 2–3), the
-  codex/agy Marsad drivers (Prompt 4), and mobile (Prompt 5).
+  codex Marsad driver (Prompt 4), and mobile (Prompt 5).
 
 ---
 
@@ -142,19 +140,13 @@ approved decision on audit-write failure; operator `gate_decided`-before-`gate_r
 guessable sequential Tier-2 tokens) were fixed test-first this cycle. The following are real but
 non-blocking — address on the real machine or before a public release:
 
-- **No process-level timeout in any adapter's `ProcessCliInvoker::invoke`** (claude/codex/antigravity).
-  A wedged CLI (e.g. `agy -p` hitting an OAuth prompt on an unauthenticated box) blocks `deliver()`
+- **No process-level timeout in any adapter's `ProcessCliInvoker::invoke`** (claude/codex/opencode).
+  A wedged CLI (e.g. one hitting an OAuth prompt on an unauthenticated box) blocks `deliver()`
   forever. Add a `tokio::time::timeout`/deadline around `wait_with_output`.
 - **Unbounded state growth, no TTL/pruning:** `wasl-gate` `GateLedger.resolved`, `wasl-mcp`
   `pending_calls`/`decisions`, `wasl-operator` `resolved`. A client that prepares-and-never-commits
   leaks memory on a long-lived node. Add expiry/caps.
-- **Antigravity puts the whole prompt in one argv element** (`wasl-adapter-antigravity`), unlike
-  claude/codex which stream over stdin. Two consequences: (a) Linux `MAX_ARG_STRLEN` (~128 KiB) makes
-  large deliveries fail with an opaque `E2BIG`, and the blind retry re-sends the same oversized prompt
-  → deterministic double failure; (b) the prompt is visible via `/proc/<pid>/cmdline` for the process
-  lifetime (cross-agent message-body disclosure on a shared host). agy has no verified stdin path, so
-  this needs either an agy stdin/file-input mechanism or a documented size cap + local-host caveat.
-- **Blind Continuation→First retry** in codex + antigravity adapters can double-deliver content if a
+- **Blind Continuation→First retry** in the codex adapter can double-deliver content if a
   turn fails *after* the model consumed the input. The specs assume failure is always pre-token-spend;
   undefended. Consider idempotency/dedup or narrowing the retry trigger.
 - **Low:** default `gate.authority = "elicitation"` silently no-ops an attached `[operator]` for

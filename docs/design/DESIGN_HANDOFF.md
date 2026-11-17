@@ -14,7 +14,7 @@ It also has a **design mode** for authoring a new multi-agent workstream (place 
 There are three "layers" the product reasons about, worth understanding before implementing:
 - **Frontends:** desktop (this file), mobile (separate).
 - **Backends / hosts:** where a session runs — `local`, `WSL`, or `remote` (SSH).
-- **Drivers:** which agent CLI powers a session — **Claude Code**, **Codex**, or **Gemini**. Drivers are first-class and colour-coded everywhere.
+- **Drivers:** which agent CLI powers a session — **Claude Code**, **Codex**, or **opencode**. Drivers are first-class and colour-coded everywhere.
 
 ## About the Design Files
 The file in this bundle (`Marsad Workstreams.dc.html`) is a **design reference created in HTML** — a working, interactive prototype that demonstrates the intended look, layout, states, and behaviour. **It is not production code to ship or copy directly.**
@@ -134,7 +134,7 @@ Both modes: **top-to-bottom flow** (dependencies point downward), zoom auto-**fi
 
 **Usage tab:** a context-window bar (turns amber past 70% with a compaction warning), tokens/cost/turns stat tiles, and a **Cost breakdown** — **By host** and **By node**, each with a stacked bar and per-row entries (driver pill, cost, % share, sorted by cost).
 
-**Config tab:** driver-aware **model** picker (Opus/Sonnet/Haiku for Claude Code; GPT-5 variants for Codex; Gemini variants for Gemini), **permission posture** (Ask every time / Auto-approve safe / Full autonomy), and **tools + MCP** toggles.
+**Config tab:** driver-aware **model** picker (Opus/Sonnet/Haiku for Claude Code; GPT-5 variants for Codex), **permission posture** (Ask every time / Auto-approve safe / Full autonomy), and **tools + MCP** toggles.
 
 **Terminal tab:** the raw escape-hatch terminal for the session (mono, dark).
 
@@ -144,7 +144,7 @@ Both modes: **top-to-bottom flow** (dependencies point downward), zoom auto-**fi
 All modals: fixed overlay `rgba(5,7,10,0.64)` + `backdrop-filter blur(3px)`, centered, `z-index 60`; card `background var(--panel)`, `border 1px solid var(--border2)`, radius 18px, `box-shadow var(--shadow)`, `animation slideup .18s ease`.
 
 - **New workstream:** name + goal, then a two-path choice — **Single session** (fast lane → opens node modal → Launch → straight to Level 3) or **Build it out** (→ empty design-mode canvas).
-- **Node modal (add / configure an agent):** the classic launch form — name, project directory (with recent-dir chips), host picker, model override, permission override, first prompt — **plus** an **Agent/driver picker** (Claude Code / Codex / Gemini) and inline **"Controlled by" / "Feeds from"** pickers to wire the new node to existing ones without dragging. First agent added becomes the effective lead.
+- **Node modal (add / configure an agent):** the classic launch form — name, project directory (with recent-dir chips), host picker, model override, permission override, first prompt — **plus** an **Agent/driver picker** (Claude Code / Codex / opencode) and inline **"Controlled by" / "Feeds from"** pickers to wire the new node to existing ones without dragging. First agent added becomes the effective lead.
 - **HITL overlays** (question batch / plan / permission): a focused reading window. Questions overlay lists all pending questions together, each with option buttons + a "Write your own…" field, and one "Submit answers". Permission overlay shows the full (multi-line) command with **Approve & run / Approve all this session / Reject**. Plan overlay shows the numbered plan with **Approve / Keep planning**.
 - **Cross-host handoff gate:** shows Source→Destination hosts, the payload being transferred, a risk note, and **Approve handoff / Reject**.
 - **Settings** (⚙): 880px wide, ~86vh tall, tabbed:
@@ -191,7 +191,7 @@ Top-level UI state (from the prototype's `Component`):
 - **Host:** `{ id, label, kind: 'local'|'wsl'|'remote', status: 'connected'|'reconnecting'|'down', target?, agentCommands?, setupCommand?, env? }`.
 - **Host link:** `{ a, b, status: 'ok'|'degraded'|'down', note? }`.
 - **Workstream:** `{ id, name, goal }` (its sessions/connections are derived by `ws` foreign key).
-- **Session (node):** `{ id, ws, name, driver: 'claude'|'codex'|'gemini', host, state: 'working'|'needs'|'error'|'done'|'starting', role?, branch, contextPct, status, gate? }`.
+- **Session (node):** `{ id, ws, name, driver: 'claude'|'codex'|'opencode', host, state: 'working'|'needs'|'error'|'done'|'starting', role?, branch, contextPct, status, gate? }`.
 - **Connection (edge):** `{ id, ws, from, to, kind: 'data'|'command'|'both', dir?: 'bi', gate? }`.
 - **Gate (HITL):** on a session (permission) or on a connection (cross-host handoff): `{ kind, title, command?/payload?, cwd?, risk?, state?: 'pending'|'approved'|... }`.
 - **Transcript item:** discriminated union — `prompt | response | tool | bash | subagents | questions | permission | plan | system | error | working`.
@@ -228,7 +228,7 @@ Top-level UI state (from the prototype's `Component`):
 |---|---|---|
 | Claude Code | `--d-claude` | `#d97757` |
 | Codex | `--d-codex` | `#3fb6a8` |
-| Gemini | `--d-gemini` | `#9b8cf0` |
+| opencode | `--d-opencode` | `#f0a050` |
 
 Driver pills use the driver hex as text + border, over a ~12% tint of it as background.
 

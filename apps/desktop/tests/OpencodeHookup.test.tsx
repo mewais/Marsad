@@ -154,25 +154,24 @@ function renderActivity(sessionId: string, sessionOverrides?: Partial<SessionVie
 // =============================================================================
 //
 // The Settings Hosts tab must expose an "opencode" command field in BOTH:
-//   1. The local machine card (alongside Claude Code / Codex / Gemini rows)
-//   2. The add-host form (alongside host-add-claude-bin / host-add-codex-cmd /
-//      host-add-gemini-cmd rows)
+//   1. The local machine card (alongside Claude Code / Codex rows)
+//   2. The add-host form (alongside host-add-claude-bin / host-add-codex-cmd
+//      rows)
 //
-// RED: Settings.tsx's local machine section has `local-codex-cmd` and
-// `local-gemini-cmd` but NO `local-opencode-cmd`.
-// The add-host form has `host-add-codex-cmd` and `host-add-gemini-cmd` but
+// RED: Settings.tsx's local machine section has `local-codex-cmd` but
+// NO `local-opencode-cmd`.
+// The add-host form has `host-add-codex-cmd` but
 // NO `host-add-opencode-cmd`.
 
 describe("Settings Hosts — opencode command field [RED]", () => {
   it("local machine card exposes an opencode command input (data-testid='local-opencode-cmd')", () => {
-    // RED: The local machine card currently shows Claude Code / Codex / Gemini
+    // RED: The local machine card currently shows Claude Code / Codex
     // command rows but NOT opencode. A coder must add an opencode row with
     // data-testid="local-opencode-cmd" alongside the existing ones.
     renderSettings();
     // Verify the existing rows are there (sanity baseline)
     expect(screen.getByTestId("local-claude-bin")).toBeTruthy();
     expect(screen.getByTestId("local-codex-cmd")).toBeTruthy();
-    expect(screen.getByTestId("local-gemini-cmd")).toBeTruthy();
     // RED assertion: opencode row is ABSENT
     expect(
       screen.getByTestId("local-opencode-cmd"),
@@ -189,13 +188,12 @@ describe("Settings Hosts — opencode command field [RED]", () => {
   });
 
   it("add-host form exposes an opencode command input (data-testid='host-add-opencode-cmd')", () => {
-    // RED: The add-host form has Claude / Codex / Gemini rows but not opencode.
+    // RED: The add-host form has Claude / Codex rows but not opencode.
     // A coder must add data-testid="host-add-opencode-cmd".
     renderSettings();
     // Sanity baseline
     expect(screen.getByTestId("host-add-claude-bin")).toBeTruthy();
     expect(screen.getByTestId("host-add-codex-cmd")).toBeTruthy();
-    expect(screen.getByTestId("host-add-gemini-cmd")).toBeTruthy();
     // RED assertion: opencode row is ABSENT in the add-host form
     expect(
       screen.getByTestId("host-add-opencode-cmd"),
@@ -231,7 +229,7 @@ describe("Settings Hosts — opencode command field [RED]", () => {
 // (data-testid="session-driver-pill") with a real hex color (non-empty, not
 // the CSS variable fallback for an unknown driver, and not absent).
 //
-// RED: SessionDetail.tsx's DRIVER_COLOR map has entries for claude/codex/gemini
+// RED: SessionDetail.tsx's DRIVER_COLOR map has entries for claude/codex
 // but NOT opencode. Because `DRIVER_COLOR["opencode"]` is undefined, the
 // conditional `{driver && driverColor && <span>}` hides the pill entirely —
 // so getByTestId("session-driver-pill") throws "not found".

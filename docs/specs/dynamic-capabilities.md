@@ -40,9 +40,7 @@ commands stay session-scoped (already dynamic) and the UI consumes ONLY that. No
 below the CLI itself ships a list of models, commands, or sessions.
 
 All driver facts below are grounded in the verified research docs:
-[`codex-research.md`](./codex-research.md) (R2, live-verified against codex-cli 0.142.5) and
-[`antigravity-research.md`](./antigravity-research.md) (agy 1.0.15, binary/on-disk evidence,
-zero live calls). Anything those docs flag as unverified is treated as unverified here too.
+[`codex-research.md`](./codex-research.md) (R2, live-verified against codex-cli 0.142.5). Anything that doc flags as unverified is treated as unverified here too.
 
 ---
 
@@ -50,15 +48,14 @@ zero live calls). Anything those docs flag as unverified is treated as unverifie
 
 Lives in **`marsad-proto`** — it is wire schema, same DAG position as `SlashCommandInfo`
 (`crates/marsad-proto/src/lib.rs:93`). `driver` is the plain wire string (`"claude"` | `"codex"` |
-`"gemini"`), not the `marsad_workstream::Driver` enum (proto must not depend upward; the
-`"gemini"`→antigravity rename question is M7e/R1's, unchanged here).
+`"opencode"`), not the `marsad_workstream::Driver` enum (proto must not depend upward).
 
 ```rust
 /// One selectable model, exactly as the driver reports it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelInfo {
     /// The exact string passed to the CLI's model flag (`--model` / `-m`). Verbatim,
-    /// never normalized: agy model names contain spaces/parens ("Gemini 3.5 Flash (Low)").
+    /// never normalized: model names may contain spaces/parens.
     pub id: String,
     /// Driver-reported qualifier, verbatim (e.g. codex catalog priority/flagship info).
     /// NEVER synthesized by Marsad — no hand-written "Most capable" sublabels.
@@ -69,7 +66,7 @@ pub struct ModelInfo {
 /// Provenance of a model catalog — drives the UI's "unverified list" treatment.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ModelListSource {
-    /// The CLI enumerated it (codex `debug models`, `agy models`).
+    /// The CLI enumerated it (codex `debug models`).
     Listed,
     /// Inferred from observation (claude: models seen in `system:init` + persisted
     /// last-known). UI MUST label this "unverified" and MUST offer free-text entry.
@@ -82,9 +79,8 @@ pub struct ModelCatalog {
     pub models: Vec<ModelInfo>,
     pub source: ModelListSource,
     /// UI must additionally offer a free-text model field. true for claude (always)
-    /// and codex (account catalog may lag); false for agy (the CLI accepts exactly
-    /// the `agy models` strings — an unknown model is a designated error case,
-    /// antigravity-research §6#4).
+    /// and codex (account catalog may lag); false where the CLI accepts exactly
+    /// its own listed model strings.
     #[serde(default)]
     pub free_text: bool,
 }
@@ -99,10 +95,10 @@ impl Default for ModelCatalog {
 /// One resumable past session discovered on the host.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiscoveredSession {
-    /// Driver-native resume id (claude UUID stem / codex thread uuid / agy conversation uuid).
+    /// Driver-native resume id (claude UUID stem / codex thread uuid).
     pub id: String,
     /// Project/workspace directory. None where the store doesn't record it
-    /// retrievably (agy: only the most-recent conversation per workspace is mapped).
+    /// retrievably.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// First user prompt, trimmed + truncated (~100 chars), driver-appropriate parse.
@@ -116,10 +112,10 @@ pub struct DiscoveredSession {
 /// What the session scan covered — claude's on-disk project encoding is lossy
 /// (`encode_project_dir`, crates/marsad-core/src/discovery.rs:205 — `/` and `_` both
 /// map to `-`), so claude sessions can only be enumerated per REQUESTED project;
-/// codex/agy stores are globally enumerable.
+/// the codex store is globally enumerable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SessionScope {
-    /// Everything the driver's store contains (codex, agy).
+    /// Everything the driver's store contains (codex).
     AllKnown,
     /// Only these requested project paths (claude). Grows as projects are requested;
     /// persisted so the cache replays them.
@@ -147,7 +143,7 @@ pub struct Capabilities {
     /// first run). UI derives staleness from this — no boolean baked in.
     #[serde(default)]
     pub fetched_at_ms: u64,
-    /// Per-probe failures, verbatim, surfaced not swallowed ("agy models: exit 1: …").
+    /// Per-probe failures, verbatim, surfaced not swallowed ("codex debug models: exit 1: …").
     #[serde(default)]
     pub errors: Vec<String>,
 }
@@ -162,7 +158,6 @@ Serde conventions per typed-ipc.md §2: no `deny_unknown_fields` anywhere; all a
 |---|---|---|---|---|
 | claude | **No list command exists.** Fallback strategy (normative): union of (a) model ids observed in `system:init` events on that host — the agent's session readers already inspect stream lines (gate detection); they additionally extract `init.model`, which `marsad-events` also reduces per session (`events/src/lib.rs:255`) — accumulated across ALL sessions ever run on the host, and (b) the persisted last-known set (§3.4). First run = empty list + free text; that IS the correct behavior, never seeded. | `Observed` — UI flags "unverified list" | **true** (mandatory) | absence verified during R-series; init flow already in tree |
 | codex | Parse `codex debug models` — local, no network, reads the cached model catalog (`~/.codex/models_cache.json` exists as a secondary artifact). Lists per-account models with priority + flagship/hidden flags; **hidden models (e.g. `codex-auto-review`) are excluded**. Exact stdout format is NOT captured in the research doc — **capture the real output as a fixture before writing the parser** (house guardrail: no normalizer from docs alone). | `Listed` | true (account catalog may lag) | codex-research §"Model selection", §d |
-| agy | Parse `agy models` — static/cached list, zero cost, one model name per line, verbatim (8 lines captured in the research doc, including spaces/parens/mixed vendors). Pass ids unmodified to `--model`. | `Listed` | false | antigravity-research §0 (verbatim output) |
 
 ### 1.2 Resumable sessions, per driver
 
@@ -171,16 +166,15 @@ Serde conventions per typed-ipc.md §2: no `deny_unknown_fields` anywhere; all a
 | claude (local) | `~/.claude/projects/<encoded>/<uuid>.jsonl` (`$CLAUDE_CONFIG_DIR` honored, core:236–246) — **reuse `discovery::{list_sessions, first_user_prompt}`** (`crates/marsad-core/src/discovery.rs:574,243`); scope = requested project (encoding lossy, §1) | filename stem | requested project | `first_user_prompt` | `--resume <id>` (existing launch path) |
 | claude (remote) | existing agent SSH one-shot `fetch_remote_session_list` (`crates/marsad-agent/src/lib.rs:2199`); the tab-record parse moves from `src-tauri/bridge.rs:170` INTO the agent provider (the bridge must not know claude's listing format) | ditto | ditto | ditto | ditto |
 | codex | scan `~/.codex/sessions/<Y>/<M>/<D>/rollout-<ts>-<uuid>.jsonl` newest-first, capped (default 200 files) | trailing uuid of filename | first line `session_meta.payload.cwd` | first `event_msg`/`response_item` user message text | `codex exec resume <id>` / app-server `thread/resume` (M7b) |
-| agy | enumerate `~/.gemini/antigravity-cli/brain/<uuid>/` dirs; snippet from `brain/<id>/.system_generated/logs/transcript_full.jsonl` first `USER_INPUT` step, **stripping the `<USER_REQUEST>…</USER_REQUEST>` wrapper** (and sibling injected blocks); prefer `transcript_full.jsonl` over `transcript.jsonl` (double-escaping trap) | dir name uuid | reverse-map `cache/last_conversations.json` (workspace → most-recent id) where it hits; otherwise `None` (the `.db` is raw protobuf — not parsed) | as left | `--conversation <id>` |
 
 codex evidence: codex-research §d (paths, `session_meta`/`event_msg` line schema, append-on-resume
-all live-verified). agy evidence: antigravity-research §3.2/§4/§5 (real files on disk). The codex
+all live-verified). The codex
 app-server `thread/list` method exists but whether it reads sqlite or rescans is unverified
 (codex-research §f7) — the file scan is v1; a protocol-backed lister can replace it under M7b
 without changing this wire contract.
 
-**Remote hosts for codex/agy:** the same file scans run through `run_remote_script_bounded` when
-those drivers become remote-capable; until then a remote (codex|agy, host) probe returns
+**Remote hosts for codex:** the same file scans run through `run_remote_script_bounded` when
+those drivers become remote-capable; until then a remote (codex, host) probe returns
 `cli_available` honestly and `errors: ["remote discovery not implemented for <driver>"]` — an
 explicit gap, never a fabricated list.
 
@@ -198,7 +192,7 @@ What U1/U2 pin instead — the consumption contract:
   (`Composer.tsx:72`, `Activity.tsx:553–555` today pass it but fall back to the catalog).
 - Empty list (pre-init, or a driver that reports none) → **empty menu with a "waiting for the
   session to report commands" hint**. The empty state is first-class UX, never backfilled from a
-  catalog. codex/agy expose no command-listing surface in the research docs; their sessions report
+  catalog. codex exposes no command-listing surface in the research docs; their sessions report
   none until their drivers (M7b/M7c′) surface an equivalent into the same `SessionState` field.
 - Deleted: `SLASH_CATALOG` + the fallback arm of `filterSlash` (`api.ts:581–615`);
   `all_slash_entries` + `slash_catalog` (`viewmodel/src/lib.rs:545–608` — dead after the UI
@@ -251,7 +245,7 @@ Golden wire forms (normative; key order non-normative per typed-ipc.md §2):
 {"type":"RefreshCapabilities"}
 {"type":"RefreshCapabilities","host_id":"local","driver":"claude","project":"/work/mewais/OpenSource/Marsad"}
 {"type":"CapabilitiesRefreshQueued","host_id":"local"}
-{"type":"CapabilitiesUpdate","host_id":"local","driver":"gemini","capabilities":{"driver":"gemini","host_id":"local","cli_available":true,"models":{"models":[{"id":"Gemini 3.5 Flash (Low)"}],"source":"Listed","free_text":false},"session_scope":"AllKnown","sessions":[{"id":"97197d46-2091-40e2-b36f-0dcedd34bcc4","project":"/work/mewais/OpenSource/Marsad","snippet":"x","modified_ms":1783100616000}],"fetched_at_ms":1783100620000,"errors":[]}}
+{"type":"CapabilitiesUpdate","host_id":"local","driver":"codex","capabilities":{"driver":"codex","host_id":"local","cli_available":true,"models":{"models":[{"id":"gpt-5.5"}],"source":"Listed","free_text":false},"session_scope":"AllKnown","sessions":[{"id":"97197d46-2091-40e2-b36f-0dcedd34bcc4","project":"/work/mewais/OpenSource/Marsad","snippet":"x","modified_ms":1783100616000}],"fetched_at_ms":1783100620000,"errors":[]}}
 {"type":"CapabilitiesUpdate","host_id":"hpc","driver":"claude","capabilities":{"driver":"claude","host_id":"hpc","cli_available":true,"models":{"models":[{"id":"claude-opus-4-8"}],"source":"Observed","free_text":true},"session_scope":{"Projects":["/home/u/proj"]},"sessions":[],"fetched_at_ms":0,"errors":[]}}
 ```
 
@@ -298,9 +292,8 @@ pub struct HostProbeCtx {
 }
 ```
 
-**Pure parse functions are separated from IO** so tests need no CLI: `parse_agy_models(&str)`,
-`parse_codex_debug_models(&str)`, `parse_codex_rollout_meta(filename, first_line)`,
-`agy_snippet_from_transcript(&str)`, `parse_remote_claude_session_list(&str)` (moved from
+**Pure parse functions are separated from IO** so tests need no CLI: `parse_codex_debug_models(&str)`, `parse_codex_rollout_meta(filename, first_line)`,
+`parse_remote_claude_session_list(&str)` (moved from
 bridge.rs:170), plus reuse of `marsad_core::discovery::{list_sessions, first_user_prompt}`.
 Real subprocess/FS-rooted-at-`$HOME` paths follow the established `RealGit`/`RealTranscript`
 pattern (`#[cfg(not(coverage))]`, core:154–159, 235–259): compiled out under coverage, proven by
@@ -325,7 +318,7 @@ broadcast serves the requester). Tracked in a mutex-guarded set, held only for i
 
 ### 3.3 Staleness policy
 
-- Model catalogs: TTL **1 hour** (catalogs change rarely; `agy models` / `codex debug models` are
+- Model catalogs: TTL **1 hour** (catalogs change rarely; `codex debug models` is
   free but there's no reason to spam them).
 - Session lists: TTL **30 seconds** (sessions appear constantly), refreshed eagerly by trigger 3
   when a picker opens (U2 fires `refresh_capabilities` on open — and renders the cached list
@@ -422,7 +415,7 @@ U2 implements this; U1 fixes the contract so no preset can sneak back:
   persisted last-used model from settings if present, else the first catalog entry, else empty —
   **no `DEFAULT_MODEL` constant anywhere**.
 - **Resume picker** (`NewSession.tsx:124` today calls `listSessions`): reads
-  `capabilities[…].sessions` filtered by chosen project (agy `project: None` entries render under
+  `capabilities[…].sessions` filtered by chosen project (`project: None` entries render under
   "unknown project"); fires `refreshCapabilities({host_id, driver, project})` on open and renders
   the cached list instantly with its `fetched_at_ms` ("as of …") — stale-then-fresh, never
   spinner-blocked.
@@ -474,9 +467,6 @@ round-trip.
 
 **Pure providers, fixtures = the research docs' captured shapes** (checked into `fixtures/`):
 
-- `parse_agy_models`: the verbatim 8-line `agy models` output (antigravity-research §0) → 8
-  `ModelInfo`s with ids verbatim ("Claude Opus 4.6 (Thinking)" etc.); trailing
-  whitespace/blank-line tolerance; empty stdout → empty + no error.
 - `parse_codex_debug_models`: **capture the real stdout first** (free, local — house guardrail
   from phase2-drivers: never implement a normalizer from docs alone); assert hidden models
   excluded, priority text lands in `annotation` verbatim.
@@ -484,10 +474,6 @@ round-trip.
   with the verbatim `session_meta` first-line shape (codex-research §d) → id from filename, project
   from `payload.cwd`, snippet from the user message, newest-first ordering, file cap honored;
   malformed first line → session listed with empty project/snippet (skip, don't fail).
-- `agy_snippet_from_transcript`: the verbatim 5-line `transcript_full.jsonl` fixture
-  (antigravity-research §3.2) → snippet `"x"` with `<USER_REQUEST>`/metadata wrappers stripped;
-  brain-dir temp-tree scan + `last_conversations.json` reverse-map (hit → `Some(project)`,
-  miss → `None`).
 - `parse_remote_claude_session_list`: the existing `mtime\tid\tuser-line` records (moved logic;
   port bridge's cases verbatim).
 - claude observed-models: accumulate from init events, dedupe, survive a persistence round-trip
@@ -529,8 +515,8 @@ existing viewmodel test may change.
 
 ### Live (feature-gated, token-budget rule)
 
-`agy models` and `codex debug models` are zero-token local invocations — the live suite runs both
-and asserts the parsers digest the real current outputs (fixture drift alarm). Claude needs no
+`codex debug models` is a zero-token local invocation — the live suite runs it
+and asserts the parser digests the real current output (fixture drift alarm). Claude needs no
 extra spend: the existing i03 live launch already yields `system:init`; assert the observed model
 subsequently appears in a `CapabilitiesUpdate`. `i09`/`i10` socket suites must pass unmodified.
 
@@ -538,11 +524,10 @@ subsequently appears in a `CapabilitiesUpdate`. `i09`/`i10` socket suites must p
 
 ## 7. Non-goals
 
-- No driver launch/normalizer work (M7b/M7c′). Capabilities for codex/agy can exist while their
+- No driver launch/normalizer work (M7b/M7c′). Capabilities for codex can exist while their
   drivers stay UI-hidden — M7d's rule ("no driver appears until its full chain is green") governs
   picker *enablement*; discovery is deliberately ahead of it.
 - No slash-command execution change (`SlashCmd` forwarding is unchanged).
-- No `"gemini"`→`"antigravity"` wire-string decision (M7e/R1).
 - No deletion of the `list_sessions` Tauri command in U1 (U2, once the picker reads VM data).
 - No cost/pricing changes (U4).
 

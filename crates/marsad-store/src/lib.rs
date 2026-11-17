@@ -504,7 +504,7 @@ pub struct PersistedSettings {
     pub confirm_before_stop: bool,
     // Session defaults.
     pub default_model: String,
-    /// Default driver for new sessions ("claude" | "codex" | "gemini").
+    /// Default driver for new sessions ("claude" | "codex" | "opencode").
     /// `#[serde(default)]` keeps older records loading as "claude".
     #[serde(default = "default_driver_str")]
     pub default_driver: String,

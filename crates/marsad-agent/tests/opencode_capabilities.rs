@@ -30,7 +30,7 @@ use marsad_proto::ModelInfo;
 const OPENCODE_MODELS_PLAIN: &str = "anthropic/claude-sonnet-4-5\n\
 openai/gpt-5\n\
 openai/gpt-5-mini\n\
-google/gemini-2.5-pro\n\
+mistral/mistral-large\n\
 amazon/nova-pro\n";
 
 /// `opencode models --verbose` output adds cost metadata after the model name.
@@ -68,8 +68,8 @@ fn parse_opencode_models_plain_preserves_provider_and_model_name() {
         "openai/gpt-5-mini must be present; got {ids:?}"
     );
     assert!(
-        ids.contains(&"google/gemini-2.5-pro"),
-        "google/gemini-2.5-pro must be present; got {ids:?}"
+        ids.contains(&"mistral/mistral-large"),
+        "mistral/mistral-large must be present; got {ids:?}"
     );
     assert!(
         ids.contains(&"amazon/nova-pro"),

@@ -145,7 +145,7 @@ describe("NodeModal model picker — capabilities-only source (U2 contract)", ()
     ]);
 
     expect(screen.queryByTestId("nm-model-unverified-badge")).toBeNull();
-    // agy-shaped catalogs (Listed, free_text:false) must NOT show free text —
+    // Closed catalogs (Listed, free_text:false) must NOT show free text —
     // "an unknown model is a designated error case" (proto §1.1).
     expect(screen.queryByTestId("nm-model-freetext")).toBeNull();
   });

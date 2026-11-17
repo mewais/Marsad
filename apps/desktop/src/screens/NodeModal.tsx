@@ -212,7 +212,7 @@ export function NodeModal() {
   // "not available" would otherwise stick forever (the WSL-opencode bug). A
   // POSITIVE result (CLI found) stays cached so we don't redo the whole slow
   // remote probe (etx ~47s) or race the path-scoped session probe on every open.
-  // Non-launchable drivers (e.g. gemini) are never re-probed — they can't launch
+  // Non-launchable drivers (e.g. ones with no launch backend) are never re-probed — they can't launch
   // regardless. NO project here (this is "what agents/models exist").
   // Wasl drivers alias to their underlying protocol for the probe (capabilities
   // are host+CLI facts, not Wasl-transport facts).
@@ -268,7 +268,7 @@ export function NodeModal() {
   // Capabilities-driven driver availability + model catalog — NEVER a
   // hardcoded list (dynamic-capabilities.md §5). A driver with no reported
   // capabilities (or cli_available: false) is disabled with a note; today
-  // that's codex/gemini until the launch backend grows a driver parameter.
+  // that's codex until the launch backend grows a driver parameter.
   function capsForDriver(d: Driver): CapabilitiesView | undefined {
     return state.capabilities[capsKey(d, hostId)];
   }
@@ -282,7 +282,7 @@ export function NodeModal() {
   // §5). While caps are absent (discovery in flight) stay optimistic — never
   // grey a loading driver. Once caps are present the truth is authoritative:
   // available iff Marsad has a launch driver (`launchable`) AND the CLI was
-  // actually detected on the host (`cli_available`). gemini → launchable:false
+  // actually detected on the host (`cli_available`). a non-launchable driver
   // → greyed; a driver not installed on the host → cli_available:false → greyed.
   //
   // A "Build it out" (design-mode) workstream launches every agent over Wasl, so
@@ -292,7 +292,7 @@ export function NodeModal() {
   function driverAvailable(d: Driver): boolean {
     const c = capsForDriver(d);
     if (!c) return true; // discovery in flight — optimistic
-    if (!c.launchable) return false; // no Marsad driver (e.g. gemini) — hard no
+    if (!c.launchable) return false; // no Marsad driver (e.g. none today) — hard no
     // A probe that ERRORED/TIMED OUT (slow-setup remote hosts) says nothing about
     // whether the CLI is installed. Don't block a launchable driver on a flaky
     // probe; only grey out when the probe SUCCEEDED (no errors) and cli was absent.
@@ -302,7 +302,7 @@ export function NodeModal() {
     return nativeAvail;
   }
   /** Known-unavailable: caps are PRESENT and report the driver as not
-   *  launchable (gemini) or its CLI not detected. Absent caps (loading) are
+   *  launchable or its CLI not detected. Absent caps (loading) are
    *  never known-unavailable. */
   function driverKnownUnavailable(d: Driver): boolean {
     const c = capsForDriver(d);
@@ -324,7 +324,7 @@ export function NodeModal() {
 
   // #3 resume — sessions come ONLY from capabilities[(capDriver, host)].sessions
   // (populated by scan_claude_sessions once a project is in scope). String-
-  // project entries are filtered to the chosen project; agy-style null-project
+  // project entries are filtered to the chosen project; null-project
   // entries always show (they aren't scoped to a requested project).
   // capDriver alias: wasl-* reads sessions from the underlying protocol slot.
   const projectTrim = project.trim();
@@ -333,7 +333,7 @@ export function NodeModal() {
   const visibleSessions = allSessions.filter(
     (s) => s.project == null || s.project === projectTrim
   );
-  // agy-style `project: null` entries aren't scoped to a requested project —
+  // `project: null` entries aren't scoped to a requested project —
   // they always render under "unknown project". String-project entries are
   // filtered to the chosen project.
   const unknownProjectSessions = visibleSessions.filter((s) => s.project == null);

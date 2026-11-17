@@ -18,12 +18,12 @@ Design source: `docs/design/Marsad Workstreams.dc.html` (seed data in the `Compo
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Driver { Claude, Codex, Gemini }
+pub enum Driver { Claude, Codex, Opencode }
 ```
-- serde: serializes to `"claude" | "codex" | "gemini"` (matches design `driver:'claude'` etc.).
-- `Driver::as_str(&self) -> &'static str` → `"claude" | "codex" | "gemini"`.
+- serde: serializes to `"claude" | "codex" | "opencode"` (matches design `driver:'claude'` etc.).
+- `Driver::as_str(&self) -> &'static str` → `"claude" | "codex" | "opencode"`.
 - `Driver::color(&self) -> &'static str` → design driver hex: Claude `#d97757`, Codex `#3fb6a8`,
-  Gemini `#9b8cf0`.
+  Opencode `#f0a050`.
 
 ### 1.2 `Profile` (renamed from the old "workspace" — a grouping lens)
 ```rust
@@ -177,7 +177,7 @@ Split across `tests/happy.rs`, `tests/branches.rs`, `tests/errors.rs` (mirror si
 case below must be a real, running, asserting test — none `#[ignore]`d or stubbed.
 
 **Types / serde (`happy.rs`)**
-- T1  `Driver` serde round-trips to `"claude"|"codex"|"gemini"`; `as_str` + `color` for all three.
+- T1  `Driver` serde round-trips to `"claude"|"codex"|"opencode"`; `as_str` + `color` for all three.
 - T2  `ConnKind` serde ↔ `"data"|"command"|"both"`; `HeadState` serde ↔ lowercase.
 - T3  `Workstream` with `profile: None` omits/defaults correctly; `Some` round-trips.
 - T4  `Node` round-trips incl. `lead` default false, a `Phase` value, `context_pct` boundaries 0 and 100.
@@ -188,7 +188,7 @@ case below must be a real, running, asserting test — none `#[ignore]`d or stub
       Working+Done → `Some(Working)`; only Done → `Some(Done)`.
 - T7  `head_state`: `Starting` alone → `Some(Working)`; `Starting`+`Done` → `Some(Working)`.
 - T8  `state_counts`: a set covering all buckets incl. `Starting` folded into `working`.
-- T9  `driver_dots`: dedup + first-appearance order (e.g. gemini,claude,gemini,codex → [gemini,claude,codex]).
+- T9  `driver_dots`: dedup + first-appearance order (e.g. opencode,claude,opencode,codex → [opencode,claude,codex]).
 - T10 `host_chips`: dedup + first-appearance order.
 - T11 `nodes_of` / `conns_of`: filter by ws, order preserved; foreign ws excluded.
 - T12 `is_single_node`: 1 node → true; 2 → false; 0 → false.

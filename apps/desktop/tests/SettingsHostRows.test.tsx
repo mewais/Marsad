@@ -1,9 +1,9 @@
 /**
  * BUG #3 — Settings → Hosts row layout. Each host card (local machine, each
  * connected/added remote host, and the add-host form) lays out as distinct
- * labeled rows: Claude Code / Codex / Gemini command rows, a Setup command row,
+ * labeled rows: Claude Code / Codex / opencode command rows, a Setup command row,
  * then the larger Environment box. The three agent command rows edit
- * `agent_commands` (claude/codex/gemini), wired through updateHost/addHost.
+ * `agent_commands` (claude/codex/opencode), wired through updateHost/addHost.
  *
  * Harness mirrors LifecycleAndDefaults.test.tsx: mock the api module, inject
  * VmProvider initialState, click into the Hosts tab.
@@ -56,11 +56,11 @@ function renderSettings() {
 }
 
 describe("Settings Hosts — row layout (BUG #3)", () => {
-  it("local machine card exposes Claude/Codex/Gemini/Setup command rows + Environment box", () => {
+  it("local machine card exposes Claude/Codex/opencode/Setup command rows + Environment box", () => {
     renderSettings();
     expect(screen.getByTestId("local-claude-bin")).toBeTruthy();
     expect(screen.getByTestId("local-codex-cmd")).toBeTruthy();
-    expect(screen.getByTestId("local-gemini-cmd")).toBeTruthy();
+    expect(screen.getByTestId("local-opencode-cmd")).toBeTruthy();
     expect(screen.getByTestId("local-setup")).toBeTruthy();
     expect(screen.getByTestId("local-env")).toBeTruthy();
     // The labels are present as distinct rows.
@@ -76,18 +76,18 @@ describe("Settings Hosts — row layout (BUG #3)", () => {
       expect(screen.getByTestId(`host-row-${id}`)).toBeTruthy();
       expect(screen.queryByTestId(`host-claude-bin-${id}`)).toBeNull();
       expect(screen.queryByTestId(`host-codex-cmd-${id}`)).toBeNull();
-      expect(screen.queryByTestId(`host-gemini-cmd-${id}`)).toBeNull();
+      expect(screen.queryByTestId(`host-opencode-cmd-${id}`)).toBeNull();
       expect(screen.queryByTestId(`host-setup-${id}`)).toBeNull();
       expect(screen.queryByTestId(`host-env-${id}`)).toBeNull();
       expect(screen.queryByTestId(`host-save-${id}`)).toBeNull();
     }
   });
 
-  it("add-host form lays out one command per row (Claude/Codex/Gemini/Setup) + Environment", () => {
+  it("add-host form lays out one command per row (Claude/Codex/opencode/Setup) + Environment", () => {
     renderSettings();
     expect(screen.getByTestId("host-add-claude-bin")).toBeTruthy();
     expect(screen.getByTestId("host-add-codex-cmd")).toBeTruthy();
-    expect(screen.getByTestId("host-add-gemini-cmd")).toBeTruthy();
+    expect(screen.getByTestId("host-add-opencode-cmd")).toBeTruthy();
     expect(screen.getByTestId("host-add-setup")).toBeTruthy();
     expect(screen.getByTestId("host-add-env")).toBeTruthy();
   });

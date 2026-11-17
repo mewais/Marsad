@@ -72,62 +72,6 @@ pub fn scan_codex_sessions(root: &Path, cap: usize) -> Vec<DiscoveredSession> {
         .collect()
 }
 
-/// Enumerate `<brain_root>/<uuid>/` conversation directories (antigravity-
-/// research.md §3.2/§5). Prefers `.system_generated/logs/transcript_full.jsonl`
-/// over the sibling `transcript.jsonl` (double-escaping trap). `project` comes
-/// from a reverse lookup of `last_conversations_json` (`{"<workspace>":
-/// "<conversation-uuid>"}`) — a miss yields `None`, never a fabricated project.
-/// An absent/empty root yields an empty list.
-pub fn scan_agy_sessions(
-    brain_root: &Path,
-    last_conversations_json: &str,
-) -> Vec<DiscoveredSession> {
-    let reverse: HashMap<String, String> =
-        serde_json::from_str::<HashMap<String, String>>(last_conversations_json)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(workspace, conv_id)| (conv_id, workspace))
-            .collect();
-
-    let entries = match std::fs::read_dir(brain_root) {
-        Ok(e) => e,
-        Err(_) => return Vec::new(),
-    };
-
-    let out: Vec<DiscoveredSession> = entries
-        .flatten()
-        .filter(|entry| entry.path().is_dir())
-        .map(|entry| {
-            let path = entry.path();
-            let id = path
-                .file_name()
-                .and_then(|f| f.to_str())
-                .unwrap_or_default()
-                .to_string();
-            let logs_dir = path.join(".system_generated").join("logs");
-            let full = logs_dir.join("transcript_full.jsonl");
-            let plain = logs_dir.join("transcript.jsonl");
-            let content = std::fs::read_to_string(&full)
-                .ok()
-                .or(std::fs::read_to_string(&plain).ok())
-                .unwrap_or_default();
-            let snippet = agy_snippet_from_transcript(&content).unwrap_or_default();
-            let project = reverse.get(&id).cloned();
-            let modified_ms = std::fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .map(system_time_to_ms)
-                .unwrap_or(0);
-            DiscoveredSession {
-                id,
-                project,
-                snippet,
-                modified_ms,
-            }
-        })
-        .collect();
-    out
-}
-
 /// Encode a project's absolute path into claude's on-disk directory name:
 /// every `/` becomes `-` (claude stores sessions at
 /// `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`). Pure; no IO.

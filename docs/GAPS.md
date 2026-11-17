@@ -171,12 +171,10 @@ envelope arm + the `list_sessions` deletion. Mobile apps remain scaffolding.
   webServer is a TODO, so it was not run against a live dev server.
 
 ## Not built (as of this cycle's end)
-- ❌ **Codex / Antigravity Marsad DRIVERS (Phase 2).** Marsad still only LAUNCHES claude sessions. (Note:
-  the *Wasl* side has live-verified claude/codex/antigravity adapters — that is agent-to-agent messaging,
-  a different axis from Marsad supervising a codex/agy session.) Research is done: `docs/specs/codex-research.md`
-  (codex `exec`/`app-server`, verified live) and `docs/specs/antigravity-research.md` (`agy`; the old
-  `gemini --acp` plan in `phase2-drivers.md` is VOID — Google killed the legacy gemini CLI 2026-06-18,
-  replaced by Antigravity `agy`). U1 already discovers codex/agy models + sessions; the launch/supervise
+- ❌ **Codex Marsad DRIVER (Phase 2).** Marsad still only LAUNCHES claude sessions. (Note:
+  the *Wasl* side has live-verified claude/codex/opencode adapters — that is agent-to-agent messaging,
+  a different axis from Marsad supervising a codex session.) Research is done: `docs/specs/codex-research.md`
+  (codex `exec`/`app-server`, verified live). U1 already discovers codex models + sessions; the launch/supervise
   driver chain is the remaining work. Do not offer a driver in the UI until its full chain is green vs the
   real CLI.
 - ✅/⚠️ **Marsad↔Wasl**: the connector, agent/core/gates wiring, launch toggle, AND the X5 Wasl UI are built.

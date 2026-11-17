@@ -990,8 +990,8 @@ export function unionModelCatalog(
  *  lock-clone-return pattern as `fetchBoard()`. Mock mode: honest empty. */
 // Browser/test-mode capability data — a stand-in for what the real Rust
 // capabilities probe returns, so the driver/model pickers render a realistic
-// working state in preview (claude launchable; codex/gemini discovered-but-not-
-// launchable). These are MOCK BACKEND DATA (the pickers read them dynamically),
+// working state in preview (claude launchable; codex discovered-but-not-
+// detected). These are MOCK BACKEND DATA (the pickers read them dynamically),
 // NOT a hardcoded UI preset — model ids use the discovered "-latest" alias form,
 // never the versioned literals the kill-list forbids.
 const MOCK_HOSTS = ["localhost", "hetzner-cx51", "gpu-worker", "build-host", "wsl-dev"];
@@ -1009,14 +1009,12 @@ function mockCaps(): CapabilitiesView[] {
       session_scope: null, sessions: [], fetched_at_ms: Date.now(), errors: [],
     });
     // codex has a launch driver (launchable) but its CLI is not detected in
-    // this mock host; gemini has no launch driver at all (launchable: false).
-    for (const driver of ["codex", "gemini"]) {
-      out.push({
-        driver, host_id: host, cli_available: false, launchable: driver === "codex",
-        models: { models: [], source: "Observed", free_text: true },
-        session_scope: null, sessions: [], fetched_at_ms: 0, errors: [],
-      });
-    }
+    // this mock host.
+    out.push({
+      driver: "codex", host_id: host, cli_available: false, launchable: true,
+      models: { models: [], source: "Observed", free_text: true },
+      session_scope: null, sessions: [], fetched_at_ms: 0, errors: [],
+    });
   }
   return out;
 }

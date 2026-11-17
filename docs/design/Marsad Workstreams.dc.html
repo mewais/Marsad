@@ -20,7 +20,7 @@
     --accent:#5b8def; --accent2:#7aa2f5; --cmd:#b48ad9;
     --needs:#f1a83a; --error:#e0594a; --done:#46c08a; --neutral:#7e8896;
     --needs-bg:rgba(241,168,58,0.13); --error-bg:rgba(224,89,74,0.12); --done-bg:rgba(70,192,138,0.12); --work-bg:rgba(91,141,239,0.12); --accent-bg:rgba(91,141,239,0.14);
-    --d-claude:#d97757; --d-codex:#3fb6a8; --d-gemini:#9b8cf0;
+    --d-claude:#d97757; --d-codex:#3fb6a8; --d-opencode:#f0a050;
     --shadow:0 14px 44px rgba(0,0,0,0.5); --shadow-sm:0 2px 10px rgba(0,0,0,0.32);
   }
   *{box-sizing:border-box}
@@ -41,12 +41,12 @@
   .md pre{margin:8px 0;padding:11px 13px;border-radius:9px;background:var(--bg);border:1px solid var(--border2);overflow-x:auto}
   .md pre code{background:none;border:none;padding:0;font-size:11.5px;line-height:1.55;color:var(--txt)}
   .md strong{font-weight:700}.md em{font-style:italic}.md a{color:var(--accent2)}
-  .md .tok-k{color:var(--d-gemini)}.md .tok-s{color:var(--done)}.md .tok-c{color:var(--txt3);font-style:italic}.md .tok-n{color:var(--needs)}
+  .md .tok-k{color:var(--d-opencode)}.md .tok-s{color:var(--done)}.md .tok-c{color:var(--txt3);font-style:italic}.md .tok-n{color:var(--needs)}
 </style>
 </helmet>
 
 <div style="height:100vh;display:flex;flex-direction:column;background:var(--bg);color:var(--txt);overflow:hidden;font-size:13.5px;position:relative;{{ themeVars }}">
-  <div style="position:absolute;inset:0;z-index:0;background:radial-gradient(900px 620px at 10% -6%,rgba(91,141,239,0.13),transparent 60%),radial-gradient(820px 600px at 96% 8%,rgba(155,140,240,0.11),transparent 58%),radial-gradient(760px 760px at 78% 108%,rgba(63,182,168,0.08),transparent 58%)"></div>
+  <div style="position:absolute;inset:0;z-index:0;background:radial-gradient(900px 620px at 10% -6%,rgba(91,141,239,0.13),transparent 60%),radial-gradient(820px 600px at 96% 8%,rgba(240,160,80,0.11),transparent 58%),radial-gradient(760px 760px at 78% 108%,rgba(63,182,168,0.08),transparent 58%)"></div>
 
   <!-- ===== HEADER w/ breadcrumb ===== -->
   <header style="position:relative;z-index:5;display:flex;align-items:center;gap:14px;height:52px;padding:0 18px;border-bottom:1px solid var(--border);background:rgba(18,22,29,0.72);backdrop-filter:blur(22px);flex-shrink:0">
@@ -721,7 +721,7 @@ class Component extends DCLogic {
     sessTools:{Bash:true,Read:true,Edit:true,Write:false,WebSearch:false,'MCP·postgres':true},
     termLines:[ {c:'var(--done)',t:'✻ Claude Code — attached (tmux: marsad-session)'},{c:'var(--txt3)',t:'  type a command, or exit to detach'},{c:'var(--txt3)',t:''} ],
     gateOpen:false, gateRef:null, toast:null,
-    hosts:[ {id:'local',label:'localhost',kind:'local',status:'connected',agents:[{name:'Claude Code',cmd:''},{name:'Codex',cmd:'codex'}],setup:'',env:''}, {id:'hz',label:'hetzner-fra1',kind:'remote',target:'ssh:hetzner-fra1',status:'connected',agents:[{name:'Claude Code',cmd:''},{name:'Codex',cmd:'codex --sandbox'}],setup:'source ~/.profile',env:'NODE_ENV=staging'}, {id:'gpu',label:'gpu-box',kind:'remote',target:'wslssh:Ubuntu:gpu-box',status:'reconnecting',agents:[{name:'Claude Code',cmd:''},{name:'Gemini',cmd:'gemini'}],setup:'module load cuda',env:'CUDA_HOME=/usr/local/cuda\nHF_HOME=/data/hf'} ],
+    hosts:[ {id:'local',label:'localhost',kind:'local',status:'connected',agents:[{name:'Claude Code',cmd:''},{name:'Codex',cmd:'codex'}],setup:'',env:''}, {id:'hz',label:'hetzner-fra1',kind:'remote',target:'ssh:hetzner-fra1',status:'connected',agents:[{name:'Claude Code',cmd:''},{name:'Codex',cmd:'codex --sandbox'}],setup:'source ~/.profile',env:'NODE_ENV=staging'}, {id:'gpu',label:'gpu-box',kind:'remote',target:'wslssh:Ubuntu:gpu-box',status:'reconnecting',agents:[{name:'Claude Code',cmd:''},{name:'opencode',cmd:'opencode'}],setup:'module load cuda',env:'CUDA_HOME=/usr/local/cuda\nHF_HOME=/data/hf'} ],
     addHostOpen:false,
     hostLinks:[ {a:'hz',b:'gpu',status:'degraded',note:'packet loss · 38%'} ],
     workstreams:[
@@ -736,13 +736,13 @@ class Component extends DCLogic {
       {id:'r_build', ws:'w1', name:'Build frontend bundle', driver:'claude', host:'local', state:'done', branch:'release/2.4', contextPct:31, status:'Built — 12 files'},
       {id:'r_tests', ws:'w1', name:'Integration tests', driver:'codex', host:'hz', state:'working', branch:'release/2.4', contextPct:40, status:'Awaiting artifact'},
       {id:'r_deploy', ws:'w1', name:'Deploy to staging', driver:'codex', host:'hz', state:'needs', branch:'release/2.4', contextPct:18, status:'Blocked on inputs'},
-      {id:'r_bench', ws:'w1', name:'Benchmark ranking model', driver:'gemini', host:'gpu', state:'working', branch:'exp/v3', contextPct:77, status:'Eval 1.2M rows'},
+      {id:'r_bench', ws:'w1', name:'Benchmark ranking model', driver:'opencode', host:'gpu', state:'working', branch:'exp/v3', contextPct:77, status:'Eval 1.2M rows'},
       {id:'c_repro', ws:'w2', name:'Reproduce checkout bug', driver:'claude', host:'local', state:'done', branch:'fix/checkout', contextPct:22, status:'Reproduced'},
       {id:'c_test', ws:'w2', name:'Write failing test', driver:'codex', host:'local', state:'error', branch:'fix/checkout', contextPct:33, status:'TypeError in computeTax'},
       {id:'a_auth', ws:'w3', name:'Refactor auth middleware', driver:'claude', host:'local', state:'needs', branch:'feat/auth-store', contextPct:62, status:'Wants a DB migration',
         gate:{kind:'permission', title:'Run a database migration', command:'npx prisma migrate deploy', cwd:'~/code/api-gateway', risk:'Writes to the database; not easily reversible.'}},
-      {id:'d_docs', ws:'w4', name:'Update API reference docs', driver:'gemini', host:'hz', state:'done', branch:'main', contextPct:18, status:'Finished — 4 files'},
-      {id:'t_rank', ws:'w5', name:'Tune ranking model', driver:'gemini', host:'gpu', state:'working', branch:'exp/v3', contextPct:71, status:'Sweeping hyperparams'}
+      {id:'d_docs', ws:'w4', name:'Update API reference docs', driver:'opencode', host:'hz', state:'done', branch:'main', contextPct:18, status:'Finished — 4 files'},
+      {id:'t_rank', ws:'w5', name:'Tune ranking model', driver:'opencode', host:'gpu', state:'working', branch:'exp/v3', contextPct:71, status:'Sweeping hyperparams'}
     ],
     conns:[
       {id:'k1', ws:'w1', from:'r_orch', to:'r_build', kind:'command'},
@@ -757,7 +757,7 @@ class Component extends DCLogic {
       r_orch:[ {type:'prompt',text:'Take Release v2.4 to staging: build the web bundle, run integration tests, benchmark the new ranking model, then deploy.'},
         {type:'response',text:'I’ve split this into **four agents** across three hosts:\n\n- `build` on localhost — compiles the web bundle\n- `tests` on hetzner — runs the integration suite\n- `bench` on gpu-box — evaluates the ranking model\n\nThe entrypoint I’m wiring up:\n\n```ts\nasync function release() {\n  const artifact = await build();      // localhost\n  await handoff(artifact, HOST);       // gated\n  return deploy({ target: STAGING });\n}\n```'},
         {type:'tool',tool:'Bash',args:'npm run build',toolStatus:'exit 0',output:'compiled in 4.2s\n12 files, 2.1 MB\nno type errors'},
-        {type:'subagents',items:[{name:'test-runner',driver:'codex',status:'running'},{name:'benchmarker',driver:'gemini',status:'done'}]},
+        {type:'subagents',items:[{name:'test-runner',driver:'codex',status:'running'},{name:'benchmarker',driver:'opencode',status:'done'}]},
         {type:'questions',allowCustom:true,items:[{q:'Which deploy target should staging use?',options:['staging-eu (hetzner-fra1)','staging-us (gpu-box)']},{q:'Run the smoke-test suite after deploy?',options:['Yes, full smoke suite','Critical-path only','Skip']},{q:'Notify the #releases channel when done?',options:['Yes','No']}]},
         {type:'permission',cmd:'aws s3 sync ./dist s3://marsad-staging-eu/ \\\n  --delete --cache-control max-age=3600 \\\n  --exclude "*.map" --acl public-read',cwd:'~/code/web',risk:'Uploads the build to the staging bucket and deletes removed files. Affects the live staging site.'},
         {type:'plan',text:'Proposed release plan. Nothing runs until you approve.',steps:['Hand off the build artifact to the test host','Run the integration suite on staging','Gate on the benchmark result','Deploy to staging and smoke-test']},
@@ -776,7 +776,7 @@ class Component extends DCLogic {
     }
   };
 
-  drv(d){ return ({claude:{label:'Claude Code',short:'Claude',mark:'C',tint:'var(--d-claude)',bg:'rgba(217,119,87,0.12)'},codex:{label:'Codex',short:'Codex',mark:'Cx',tint:'var(--d-codex)',bg:'rgba(63,182,168,0.12)'},gemini:{label:'Gemini',short:'Gemini',mark:'G',tint:'var(--d-gemini)',bg:'rgba(155,140,240,0.12)'}})[d]; }
+  drv(d){ return ({claude:{label:'Claude Code',short:'Claude',mark:'C',tint:'var(--d-claude)',bg:'rgba(217,119,87,0.12)'},codex:{label:'Codex',short:'Codex',mark:'Cx',tint:'var(--d-codex)',bg:'rgba(63,182,168,0.12)'},opencode:{label:'opencode',short:'opencode',mark:'O',tint:'var(--d-opencode)',bg:'rgba(240,160,80,0.12)'}})[d]; }
   stm(s){ return ({working:{c:'var(--accent)',bg:'var(--work-bg)',label:'Working'},needs:{c:'var(--needs)',bg:'var(--needs-bg)',label:'Needs you'},error:{c:'var(--error)',bg:'var(--error-bg)',label:'Error'},done:{c:'var(--done)',bg:'var(--done-bg)',label:'Done'},starting:{c:'var(--neutral)',bg:'rgba(126,136,150,0.13)',label:'Starting'}})[s] || {c:'var(--neutral)',bg:'rgba(126,136,150,0.13)',label:s||'—'}; }
   hostIcon(k){ return k==='local'?'▪':(k==='wsl'?'⊞':'⤓'); }
   wsSessions(id){ return this.state.sessions.filter(s=>s.ws===id); }
@@ -816,7 +816,7 @@ class Component extends DCLogic {
     const fp=(this.nmPromptRef.current&&this.nmPromptRef.current.value.trim())||'';
     const existing=this.wsSessions(wsId);
     const id='n'+Date.now();
-    const modelMap={claude:['Opus 4.6','Sonnet 4.6','Haiku 4'],codex:['GPT-5.2 Codex','GPT-5.1'],gemini:['Gemini 2.5 Pro','Gemini 2.5 Flash']};
+    const modelMap={claude:['Opus 4.6','Sonnet 4.6','Haiku 4'],codex:['GPT-5.2 Codex','GPT-5.1'],opencode:['opencode default','opencode small']};
     const model=(modelMap[nm.driver]||['Default'])[nm.model]||'Default';
     const role=existing.length===0?'lead':'worker';
     const s={id,ws:wsId,name:nmeName,driver:nm.driver,host:nm.host,state:'starting',role,branch:'main',contextPct:2,status:'Booting…'};
@@ -947,7 +947,7 @@ class Component extends DCLogic {
     if(name==='/clear'){ tr[id]=[{type:'system',text:'⌘ /clear — conversation history cleared'}]; }
     else if(name==='/plan'){ arr.push({type:'plan',text:'Plan mode on — I’ll outline the approach before acting.',steps:['Explore the affected modules','Draft the change set','Run the tests','Report back for approval']}); tr[id]=arr; }
     else if(name==='/compact'){ const sessions=this.state.sessions.map(s=>s.id===id?{...s,contextPct:Math.max(12,Math.round(s.contextPct*0.4))}:s); this.setState({sessions}); arr.push({type:'system',text:'⌘ /compact — context compacted'}); tr[id]=arr; }
-    else if(name==='/agents'){ arr.push({type:'subagents',items:[{name:'test-runner',driver:'codex',status:'running'},{name:'benchmarker',driver:'gemini',status:'done'}]}); tr[id]=arr; }
+    else if(name==='/agents'){ arr.push({type:'subagents',items:[{name:'test-runner',driver:'codex',status:'running'},{name:'benchmarker',driver:'opencode',status:'done'}]}); tr[id]=arr; }
     else { arr.push({type:'system',text:'⌘ '+name}); tr[id]=arr; }
     this.setState({transcripts:tr,slashOpen:false}); }
 
@@ -1063,7 +1063,7 @@ class Component extends DCLogic {
       const gc=st.conns.find(c=>c.ws===st.wsId&&c.gate&&c.gate.state!=='approved');
       const _tot=ss.reduce((a,x)=>a+this.sesCost(x),0)||1;
       const _byHost={}; ss.forEach(x=>{ _byHost[x.host]=(_byHost[x.host]||0)+this.sesCost(x); });
-      const _hcol={local:'var(--accent)',hz:'var(--d-codex)',gpu:'var(--d-gemini)'};
+      const _hcol={local:'var(--accent)',hz:'var(--d-codex)',gpu:'var(--d-opencode)'};
       gWs={ name:w.name, goal:w.goal, nodeCount:ss.length, working, needs:need, needColor:need?'var(--needs)':'var(--txt3)', needBorder:need?'var(--needs)':'var(--border)', needBg:need?'var(--needs-bg)':'var(--panel)',
         costTotal:'$'+_tot.toFixed(2),
         hostCosts:Object.keys(_byHost).map(hid=>({label:hById[hid].label,icon:this.hostIcon(hById[hid].kind),cost:'$'+_byHost[hid].toFixed(2),pct:Math.round(_byHost[hid]/_tot*100),color:_hcol[hid]||'var(--neutral)'})),
@@ -1098,11 +1098,11 @@ class Component extends DCLogic {
       const tAdd=filesData.reduce((a,f)=>a+(f.add||0),0),tDel=filesData.reduce((a,f)=>a+(f.del||0),0);
       chg={ stat:'+'+tAdd+' −'+tDel, file:cf.name, staged:filesData.length+' file'+(filesData.length===1?'':'s')+' changed', rows:sxs(cf.diff), files:filesData.map((f,i)=>({name:f.name,status:f.status,statusColor:f.status==='A'?'var(--done)':(f.status==='D'?'var(--error)':'var(--accent2)'),add:f.add,del:f.del,sel:i===st.selFile?'background:var(--accent-bg)':'',onSelect:()=>this.setState({selFile:i})})) };
       const _totCost=s.contextPct*0.035; const _totTok=s.contextPct*1.9;
-      const _dcol={claude:'var(--d-claude)',codex:'var(--d-codex)',gemini:'var(--d-gemini)'};
-      const _mix=(s.role==='lead')?[[s.model,s.driver,0.52],['Codex',(('codex')),0.31],['Gemini 2.5 Pro','gemini',0.17]]:[[s.model,s.driver,1]];
+      const _dcol={claude:'var(--d-claude)',codex:'var(--d-codex)',opencode:'var(--d-opencode)'};
+      const _mix=(s.role==='lead')?[[s.model,s.driver,0.52],['Codex',(('codex')),0.31],['opencode default','opencode',0.17]]:[[s.model,s.driver,1]];
       usage={ pct:s.contextPct, warn:s.contextPct>=70, ctxColor:s.contextPct>=90?'var(--error)':(s.contextPct>=75?'var(--needs)':'var(--accent)'), tokens:Math.round(_totTok)+'k', cost:'$'+_totCost.toFixed(2), turns:(transcript.filter(x=>x.isPrompt).length)||3,
         breakdown:_mix.map(([model,drv,frac])=>({ model, driver:this.drv(drv).label, color:_dcol[drv]||'var(--accent)', tokens:Math.round(_totTok*frac)+'k', cost:'$'+(_totCost*frac).toFixed(2), pct:Math.round(frac*100) })) };
-      const modelsByDriver={claude:['Opus 4.6','Sonnet 4.6','Haiku 4'],codex:['GPT-5.2 Codex','GPT-5.1'],gemini:['Gemini 2.5 Pro','Gemini 2.5 Flash']}; const ml=modelsByDriver[s.driver]||['Default'];
+      const modelsByDriver={claude:['Opus 4.6','Sonnet 4.6','Haiku 4'],codex:['GPT-5.2 Codex','GPT-5.1'],opencode:['opencode default','opencode small']}; const ml=modelsByDriver[s.driver]||['Default'];
       cfg={ modelNote:'Models available for '+d.label+'.', models:ml.map((label,i)=>{const on=st.sessModel===('m'+i)||(st.sessModel==='opus'&&i===0);return{label,onClick:()=>this.setState({sessModel:'m'+i}),bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}),
         postures:[['ask','Ask every time','Pause before any side-effecting action'],['auto','Auto-approve safe actions','Reads and edits run freely; commands still ask'],['yolo','Full autonomy','Act without asking — sandboxes only']].map(([k,label,desc])=>{const on=st.sessPosture===k;return{label,desc,onClick:()=>this.setState({sessPosture:k}),bd:on?'var(--accent)':'var(--border)',bg:on?'var(--accent-bg)':'var(--panel2)',ring:on?'var(--accent)':'var(--border2)',dot:on?'var(--accent)':'transparent'};}),
         tools:Object.keys(st.sessTools).map(k=>{const on=st.sessTools[k];return{label:k,dot:on?'●':'○',onClick:()=>this.setState({sessTools:{...st.sessTools,[k]:!st.sessTools[k]}}),bd:on?'var(--accent)':'var(--border)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt3)'};}) };
@@ -1150,13 +1150,13 @@ class Component extends DCLogic {
       bgOpts:[['gradient','Gradient'],['image','Custom image'],['desktop','Desktop']].map(([k,label])=>{const on=st.bgSource===k;return{label,onClick:()=>this.setState({bgSource:k}),bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}),
       bgNote: st.bgSource==='image'?'Upload a photo or brand image — shows through translucent surfaces.':(st.bgSource==='desktop'?'Blurs your live desktop where the compositor supports it; falls back to the gradient otherwise.':'The app-painted gradient backdrop (always available).'),
       setModelNote:'Models for '+this.drv(st.defDriver).label+'.',
-      setModels:({claude:['Opus 4.6','Sonnet 4.6','Haiku 4'],codex:['GPT-5.2 Codex','GPT-5.1'],gemini:['Gemini 2.5 Pro','Gemini 2.5 Flash']}[st.defDriver]||['Default']).map((label,i)=>{const on=st.defModel===i;return{label,onClick:()=>this.setState({defModel:i}),bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}),
+      setModels:({claude:['Opus 4.6','Sonnet 4.6','Haiku 4'],codex:['GPT-5.2 Codex','GPT-5.1'],opencode:['opencode default','opencode small']}[st.defDriver]||['Default']).map((label,i)=>{const on=st.defModel===i;return{label,onClick:()=>this.setState({defModel:i}),bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}),
       setToggles:[['translucency','Translucent surfaces','Frosted glass panels over the backdrop'],['general.startup','Start Marsad on login','Launch automatically and reattach to sessions'],['general.restore','Restore workspace on launch','Reopen sessions and layout from last time'],['general.confirmStop','Confirm before stopping','Ask before any stop or end action']].map(([key,label,desc])=>{const v=key.indexOf('.')<0?st[key]:st.general[key.split('.')[1]];return{label,desc,onToggle:()=>{ if(key.indexOf('.')<0){this.setState({[key]:!st[key]});} else {const kk=key.split('.')[1];this.setState({general:{...st.general,[kk]:!st.general[kk]}});} },track:v?'var(--accent)':'var(--border2)',knob:v?'translateX(17px)':'translateX(0)'};}),
       setHosts:st.hosts.filter(h=>h.kind!=='local').map(h=>{const conn=h.status==='connected';const open=st.hostExpand===h.id;const env=(h.env||'').trim();return{label:h.label,icon:this.hostIcon(h.kind),sub:h.kind==='wsl'?'WSL':(h.target||'remote · SSH'),dot:conn?'var(--done)':'var(--needs)',anim:conn?'':'animation:dotpulse 1s infinite',status:h.status,sColor:conn?'var(--done)':'var(--needs)',open,caret:open?'▾':'▸',onToggle:()=>this.setState({hostExpand:open?null:h.id}),hasTarget:!!h.target,target:h.target||'',agents:(h.agents||[]).map(a=>({name:a.name,cmd:a.cmd?a.cmd:'(default: '+(a.name==='Claude Code'?'claude':a.name.toLowerCase())+')'})),hasSetup:!!(h.setup&&h.setup.trim()),setup:(h.setup&&h.setup.trim())?h.setup:'Not set',setupColor:(h.setup&&h.setup.trim())?'var(--txt2)':'var(--txt3)',hasEnv:!!env,env:env?env:'Not set',envColor:env?'var(--txt2)':'var(--txt3)'};}),
-      localHost:(()=>{const h=st.hosts.find(x=>x.kind==='local')||{};return{label:h.label||'localhost',icon:this.hostIcon('local'),setup:h.setup||'',env:h.env||'',agentEdits:[{name:'Claude Code',cmd:(h.agents&&(h.agents.find(a=>a.name==='Claude Code')||{}).cmd)||'',ph:'claude'},{name:'Codex',cmd:(h.agents&&(h.agents.find(a=>a.name==='Codex')||{}).cmd)||'',ph:'codex'},{name:'Gemini',cmd:(h.agents&&(h.agents.find(a=>a.name==='Gemini')||{}).cmd)||'',ph:'gemini'}]};})(),
+      localHost:(()=>{const h=st.hosts.find(x=>x.kind==='local')||{};return{label:h.label||'localhost',icon:this.hostIcon('local'),setup:h.setup||'',env:h.env||'',agentEdits:[{name:'Claude Code',cmd:(h.agents&&(h.agents.find(a=>a.name==='Claude Code')||{}).cmd)||'',ph:'claude'},{name:'Codex',cmd:(h.agents&&(h.agents.find(a=>a.name==='Codex')||{}).cmd)||'',ph:'codex'},{name:'opencode',cmd:(h.agents&&(h.agents.find(a=>a.name==='opencode')||{}).cmd)||'',ph:'opencode'}]};})(),
       addHostOpen:st.addHost, addHostClosed:!st.addHost, toggleAddHost:()=>this.setState({addHost:!st.addHost}), addHostSave:()=>{this.setState({addHost:false});this.toastMsg('⤓','var(--needs)','Connecting to new host over SSH…');},
-      newAgentRows:[{name:'Claude Code',ph:'claude'},{name:'Codex',ph:'codex'},{name:'Gemini',ph:'gemini'}],
-      setDrivers:[['claude','Claude Code'],['codex','Codex'],['gemini','Gemini']].map(([k,label])=>{const on=st.defDriver===k;const dm=this.drv(k);return{label,onClick:()=>this.setState({defDriver:k}),bd:on?dm.tint:'var(--border2)',bg:on?dm.bg:'var(--panel2)',fg:on?dm.tint:'var(--txt2)'};}),
+      newAgentRows:[{name:'Claude Code',ph:'claude'},{name:'Codex',ph:'codex'},{name:'opencode',ph:'opencode'}],
+      setDrivers:[['claude','Claude Code'],['codex','Codex'],['opencode','opencode']].map(([k,label])=>{const on=st.defDriver===k;const dm=this.drv(k);return{label,onClick:()=>this.setState({defDriver:k}),bd:on?dm.tint:'var(--border2)',bg:on?dm.bg:'var(--panel2)',fg:on?dm.tint:'var(--txt2)'};}),
       setPostures:[['ask','Ask every time','Pause before any side-effecting action'],['auto','Auto-approve safe actions','Reads and edits run freely; commands still ask'],['yolo','Full autonomy','Act without asking — sandboxes only']].map(([k,label,desc])=>{const on=st.defPosture===k;return{label,desc,onClick:()=>this.setState({defPosture:k}),bd:on?'var(--accent)':'var(--border)',bg:on?'var(--accent-bg)':'var(--panel2)',ring:on?'var(--accent)':'var(--border2)',dot:on?'var(--accent)':'transparent'};}),
       setNotif:[['needs','When a session needs you','Permission gates, questions, plans'],['done','When a session finishes','Task complete or idle'],['error','When a session errors','Crashes and failures'],['sound','Play a sound','Audible chime with each alert'],['group','Group bursts','Collapse many at once into one alert'],['dnd','Do Not Disturb','Silence all desktop alerts']].map(([k,label,desc])=>{const v=st.notif[k];return{label,desc,onToggle:()=>this.setState({notif:{...st.notif,[k]:!st.notif[k]}}),track:v?'var(--accent)':'var(--border2)',knob:v?'translateX(17px)':'translateX(0)'};}),
       isBoard:st.view==='board', isGraph:st.view==='graph', isSession:st.view==='session',
@@ -1175,9 +1175,9 @@ class Component extends DCLogic {
       edgeData:()=>this.makeEdge('data'), edgeCommand:()=>this.makeEdge('command'), edgeBoth:()=>this.makeEdge('both'),
       nmWsName: st.nm?((st.workstreams.find(w=>w.id===st.nm.wsId)||{}).name||'workstream'):'',
       nmLaunch:()=>this.nmLaunch(), nmLaunchLabel: (st.nm&&st.nm.firstAndLaunch)?'Launch session →':'Add agent →',
-      nmDrivers: st.nm?[['claude','Claude Code'],['codex','Codex'],['gemini','Gemini']].map(([k,label])=>{const on=st.nm.driver===k;const dm=this.drv(k);return{label,onClick:()=>this.nmSet({driver:k,model:0}),bd:on?dm.tint:'var(--border2)',bg:on?dm.bg:'var(--panel2)',fg:on?dm.tint:'var(--txt2)'};}):[],
+      nmDrivers: st.nm?[['claude','Claude Code'],['codex','Codex'],['opencode','opencode']].map(([k,label])=>{const on=st.nm.driver===k;const dm=this.drv(k);return{label,onClick:()=>this.nmSet({driver:k,model:0}),bd:on?dm.tint:'var(--border2)',bg:on?dm.bg:'var(--panel2)',fg:on?dm.tint:'var(--txt2)'};}):[],
       nmHosts: st.nm?st.hosts.map(h=>{const on=st.nm.host===h.id;const conn=h.status==='connected';return{label:h.label,onClick:()=>this.nmSet({host:h.id}),dot:conn?'var(--done)':'var(--needs)',bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}):[],
-      nmModels: st.nm?({claude:['Opus 4.6','Sonnet 4.6','Haiku 4'],codex:['GPT-5.2 Codex','GPT-5.1'],gemini:['Gemini 2.5 Pro','Gemini 2.5 Flash']}[st.nm.driver]||['Default']).map((label,i)=>{const on=st.nm.model===i;return{label,onClick:()=>this.nmSet({model:i}),bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}):[],
+      nmModels: st.nm?({claude:['Opus 4.6','Sonnet 4.6','Haiku 4'],codex:['GPT-5.2 Codex','GPT-5.1'],opencode:['opencode default','opencode small']}[st.nm.driver]||['Default']).map((label,i)=>{const on=st.nm.model===i;return{label,onClick:()=>this.nmSet({model:i}),bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}):[],
       nmPostures: st.nm?[['ask','Ask each time'],['auto','Auto-approve safe'],['yolo','Full autonomy']].map(([k,label])=>{const on=st.nm.posture===k;return{label,onClick:()=>this.nmSet({posture:k}),bd:on?'var(--accent)':'var(--border2)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}):[],
       nmHasNodes: st.nm?this.wsSessions(st.nm.wsId).length>0:false,
       nmControllers: st.nm?this.wsSessions(st.nm.wsId).map(x=>{const on=st.nm.controller===x.id;return{label:x.name,onClick:()=>this.nmSet({controller:on?null:x.id}),bd:on?'var(--accent)':'var(--border)',bg:on?'var(--accent-bg)':'var(--panel2)',fg:on?'var(--accent2)':'var(--txt2)'};}):[],

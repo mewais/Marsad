@@ -23,7 +23,6 @@ impl Core {
         // anything unknown) falls back to Claude.
         let driver = match record.driver.as_str() {
             "codex" => marsad_workstream::Driver::Codex,
-            "gemini" => marsad_workstream::Driver::Gemini,
             "opencode" => marsad_workstream::Driver::Opencode,
             _ => marsad_workstream::Driver::Claude,
         };

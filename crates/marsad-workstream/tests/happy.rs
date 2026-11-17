@@ -61,14 +61,6 @@ fn driver_serde_round_trips_codex() {
 }
 
 #[test]
-fn driver_serde_round_trips_gemini() {
-    let json = serde_json::to_string(&Driver::Gemini).unwrap();
-    assert_eq!(json, "\"gemini\"");
-    let back: Driver = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, Driver::Gemini);
-}
-
-#[test]
 fn driver_serde_round_trips_opencode() {
     let json = serde_json::to_string(&Driver::Opencode).unwrap();
     assert_eq!(json, "\"opencode\"");
@@ -80,7 +72,6 @@ fn driver_serde_round_trips_opencode() {
 fn driver_as_str_all_variants() {
     assert_eq!(Driver::Claude.as_str(), "claude");
     assert_eq!(Driver::Codex.as_str(), "codex");
-    assert_eq!(Driver::Gemini.as_str(), "gemini");
     assert_eq!(Driver::Opencode.as_str(), "opencode");
 }
 
@@ -88,7 +79,6 @@ fn driver_as_str_all_variants() {
 fn driver_color_all_variants() {
     assert_eq!(Driver::Claude.color(), "#d97757");
     assert_eq!(Driver::Codex.color(), "#3fb6a8");
-    assert_eq!(Driver::Gemini.color(), "#9b8cf0");
     assert_eq!(Driver::Opencode.color(), "#f0a050");
 }
 
@@ -180,7 +170,7 @@ fn node_round_trip_context_pct_zero() {
 
 #[test]
 fn node_round_trip_context_pct_hundred() {
-    let mut n = node("n3", "w1", Driver::Gemini, "h1", Phase::Needs);
+    let mut n = node("n3", "w1", Driver::Opencode, "h1", Phase::Needs);
     n.context_pct = 100;
     let json = serde_json::to_string(&n).unwrap();
     let back: Node = serde_json::from_str(&json).unwrap();
@@ -346,14 +336,14 @@ fn state_counts_all_buckets_with_starting_folded_into_done() {
 #[test]
 fn driver_dots_dedup_first_appearance_order() {
     let nodes = vec![
-        node("a", "w1", Driver::Gemini, "h1", Phase::Working),
+        node("a", "w1", Driver::Opencode, "h1", Phase::Working),
         node("b", "w1", Driver::Claude, "h1", Phase::Working),
-        node("c", "w1", Driver::Gemini, "h1", Phase::Working),
+        node("c", "w1", Driver::Opencode, "h1", Phase::Working),
         node("d", "w1", Driver::Codex, "h1", Phase::Working),
     ];
     assert_eq!(
         driver_dots(&nodes),
-        vec![Driver::Gemini, Driver::Claude, Driver::Codex]
+        vec![Driver::Opencode, Driver::Claude, Driver::Codex]
     );
 }
 

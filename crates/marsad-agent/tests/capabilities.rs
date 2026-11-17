@@ -10,10 +10,6 @@
 //! - `fixtures/codex/debug_models.json` — REAL captured `codex debug models`
 //!   stdout, codex-cli 0.142.5 (3 models: `gpt-5.5`/`gpt-5.4-mini` visible,
 //!   `codex-auto-review` hidden).
-//! - The verbatim 8-line `agy models` output and the verbatim 5-line
-//!   `transcript_full.jsonl` sample, both quoted in
-//!   `docs/specs/antigravity-research.md` §0/§3.2 — inlined here as string
-//!   literals per the task instructions (no live `agy` on this machine).
 //!
 //! NOTE(test-agent) — INVENTED API SURFACE: §3.1 pins the `CapabilityProbe`
 //! trait and `HostProbeCtx` struct verbatim, and §3.2/§3.3/§3.4/§4 pin the
@@ -70,13 +66,13 @@ use std::time::{Duration, Instant};
 use std::collections::HashMap;
 
 use marsad_agent::capabilities::{
-    agy_snippet_from_transcript, build_agy_discovery_script, build_claude_discovery_script,
+    build_claude_discovery_script,
     build_claude_model_catalog, build_codex_discovery_script, build_probe_spawn_argv, command_word,
     encode_claude_project_dir, filter_codex_sessions_by_project, merge_observed_into_catalog,
-    parse_agy_models, parse_avail, parse_claude_env_models, parse_claude_extra_models,
+    parse_avail, parse_claude_env_models, parse_claude_extra_models,
     parse_codex_collab_list_response, parse_codex_debug_models, parse_codex_rollout_meta,
     parse_discovery_sections, parse_opencode_config_modes, parse_remote_claude_session_list,
-    parse_remote_codex_session_list, scan_agy_sessions, scan_claude_sessions, scan_codex_sessions,
+    parse_remote_codex_session_list, scan_claude_sessions, scan_codex_sessions,
     CapabilityProbe, CapabilityProvider, HostLaunchCfg, HostProbeCtx,
 };
 use marsad_proto::{
@@ -154,69 +150,6 @@ fn wait_for<T>(timeout: Duration, mut f: impl FnMut() -> Option<T>) -> T {
 // ===========================================================================
 // Part 1 — pure parse functions (no IO; §3.1)
 // ===========================================================================
-
-// ---------------------------------------------------------------------------
-// parse_agy_models — the verbatim 8-line `agy models` output
-// (antigravity-research.md §0)
-// ---------------------------------------------------------------------------
-
-const AGY_MODELS_OUTPUT: &str = "Gemini 3.5 Flash (Medium)\n\
-Gemini 3.5 Flash (High)\n\
-Gemini 3.5 Flash (Low)\n\
-Gemini 3.1 Pro (Low)\n\
-Gemini 3.1 Pro (High)\n\
-Claude Sonnet 4.6 (Thinking)\n\
-Claude Opus 4.6 (Thinking)\n\
-GPT-OSS 120B (Medium)\n";
-
-#[test]
-fn parse_agy_models_verbatim_8_lines() {
-    let models = parse_agy_models(AGY_MODELS_OUTPUT);
-    assert_eq!(
-        models.len(),
-        8,
-        "the real `agy models` output has exactly 8 lines"
-    );
-    let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
-    assert_eq!(
-        ids,
-        vec![
-            "Gemini 3.5 Flash (Medium)",
-            "Gemini 3.5 Flash (High)",
-            "Gemini 3.5 Flash (Low)",
-            "Gemini 3.1 Pro (Low)",
-            "Gemini 3.1 Pro (High)",
-            "Claude Sonnet 4.6 (Thinking)",
-            "Claude Opus 4.6 (Thinking)",
-            "GPT-OSS 120B (Medium)",
-        ],
-        "ids must be verbatim — spaces/parens/mixed-vendor names untouched (§1.1)"
-    );
-    // §1.1: agy models are `Listed`, `free_text: false` — pass verbatim to --model.
-    for m in &models {
-        assert_eq!(
-            m.annotation, None,
-            "agy has no per-model annotation — one name per line"
-        );
-    }
-}
-
-#[test]
-fn parse_agy_models_tolerates_trailing_whitespace_and_blank_lines() {
-    let noisy = "Gemini 3.5 Flash (Low)\n\n  \nClaude Opus 4.6 (Thinking)  \n\n";
-    let models = parse_agy_models(noisy);
-    let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
-    assert_eq!(
-        ids,
-        vec!["Gemini 3.5 Flash (Low)", "Claude Opus 4.6 (Thinking)"]
-    );
-}
-
-#[test]
-fn parse_agy_models_empty_stdout_is_empty_not_error() {
-    assert_eq!(parse_agy_models(""), vec![]);
-    assert_eq!(parse_agy_models("\n\n  \n"), vec![]);
-}
 
 // ---------------------------------------------------------------------------
 // parse_codex_debug_models — REAL captured fixture,
@@ -687,136 +620,6 @@ fn scan_codex_sessions_empty_root_is_empty_not_error() {
 }
 
 // ---------------------------------------------------------------------------
-// agy_snippet_from_transcript + scan_agy_sessions
-// (antigravity-research.md §3.2 — the verbatim 5-line transcript_full.jsonl
-// sample, and §5's last_conversations.json shape)
-// ---------------------------------------------------------------------------
-
-/// Verbatim from antigravity-research.md §3.2 ("Real schema, from the actual
-/// 5-line file"). Only content is the smoke-test prompt `"x"`.
-const AGY_TRANSCRIPT_FULL_JSONL: &str = "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-07-02T15:23:36Z\",\"content\":\"<USER_REQUEST>\\nx\\n</USER_REQUEST>\\n<ADDITIONAL_METADATA>\\nThe current local time is: 2026-07-02T11:23:36-04:00.\\n</ADDITIONAL_METADATA>\\n<USER_SETTINGS_CHANGE>\\n...\\n</USER_SETTINGS_CHANGE>\"}\n\
-{\"step_index\":1,\"source\":\"SYSTEM\",\"type\":\"CONVERSATION_HISTORY\",\"status\":\"DONE\",\"created_at\":\"2026-07-02T15:23:36Z\"}\n\
-{\"step_index\":2,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-07-02T15:23:36Z\",\"tool_calls\":[{\"name\":\"list_dir\",\"args\":{\"DirectoryPath\":\"/home/mewais/.gemini/antigravity-cli\",\"toolAction\":\"Listing application directory\",\"toolSummary\":\"List App Data Directory\"}}]}\n\
-{\"step_index\":4,\"source\":\"SYSTEM\",\"type\":\"CHECKPOINT\",\"status\":\"DONE\",\"created_at\":\"2026-07-02T15:23:37Z\",\"content\":\"{{ CHECKPOINT 0 }}\\n **The earlier parts of this conversation have been truncated...**\"}\n\
-{\"step_index\":5,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-07-02T15:23:37Z\",\"content\":\"It looks like your request was just the letter \\\"x\\\". Could you please clarify...\"}\n";
-
-const AGY_CONVERSATION_ID: &str = "97197d46-2091-40e2-b36f-0dcedd34bcc4";
-
-#[test]
-fn agy_snippet_from_transcript_strips_user_request_wrapper() {
-    // §1.2/§3.2: "snippet ... stripping the <USER_REQUEST>...</USER_REQUEST>
-    // wrapper (and sibling injected blocks)." The real fixture's actual
-    // prompt content is the single character "x".
-    let snippet = agy_snippet_from_transcript(AGY_TRANSCRIPT_FULL_JSONL)
-        .expect("the fixture's first USER_INPUT step must yield a snippet");
-    assert_eq!(snippet, "x");
-}
-
-#[test]
-fn agy_snippet_from_transcript_empty_input_is_none() {
-    assert_eq!(agy_snippet_from_transcript(""), None);
-}
-
-#[test]
-fn agy_snippet_from_transcript_no_user_input_step_is_none() {
-    // Only SYSTEM/MODEL steps, no USER_INPUT.
-    let no_user = AGY_TRANSCRIPT_FULL_JSONL
-        .lines()
-        .filter(|l| !l.contains("USER_INPUT"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(agy_snippet_from_transcript(&no_user), None);
-}
-
-#[test]
-fn scan_agy_sessions_brain_dir_tree_with_reverse_mapped_project() {
-    let tmp = tempdir();
-    let brain_root = tmp.path().join("brain");
-    let logs_dir = brain_root
-        .join(AGY_CONVERSATION_ID)
-        .join(".system_generated/logs");
-    std::fs::create_dir_all(&logs_dir).unwrap();
-    write_file(
-        &logs_dir,
-        "transcript_full.jsonl",
-        AGY_TRANSCRIPT_FULL_JSONL,
-    );
-
-    // §5: last_conversations.json is exactly `{"<workspace>": "<conversation-uuid>"}`.
-    let last_conversations =
-        format!(r#"{{"/work/mewais/OpenSource/Marsad":"{AGY_CONVERSATION_ID}"}}"#);
-
-    let sessions = scan_agy_sessions(&brain_root, &last_conversations);
-    assert_eq!(sessions.len(), 1);
-    let s = &sessions[0];
-    assert_eq!(s.id, AGY_CONVERSATION_ID, "id is the brain-dir uuid");
-    assert_eq!(s.snippet, "x");
-    assert_eq!(
-        s.project.as_deref(),
-        Some("/work/mewais/OpenSource/Marsad"),
-        "the reverse-mapped hit must resolve the workspace"
-    );
-}
-
-/// §1.2: "otherwise `None` (the `.db` is raw protobuf — not parsed)" — a
-/// conversation whose id has no reverse-map hit must not fabricate a project.
-#[test]
-fn scan_agy_sessions_no_reverse_map_hit_yields_none_project() {
-    let tmp = tempdir();
-    let brain_root = tmp.path().join("brain");
-    let logs_dir = brain_root
-        .join(AGY_CONVERSATION_ID)
-        .join(".system_generated/logs");
-    std::fs::create_dir_all(&logs_dir).unwrap();
-    write_file(
-        &logs_dir,
-        "transcript_full.jsonl",
-        AGY_TRANSCRIPT_FULL_JSONL,
-    );
-
-    let sessions = scan_agy_sessions(&brain_root, "{}");
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].project, None);
-}
-
-/// §1.2: "prefer `transcript_full.jsonl` over `transcript.jsonl` (double-escaping trap)."
-#[test]
-fn scan_agy_sessions_prefers_transcript_full_over_transcript() {
-    let tmp = tempdir();
-    let brain_root = tmp.path().join("brain");
-    let logs_dir = brain_root
-        .join(AGY_CONVERSATION_ID)
-        .join(".system_generated/logs");
-    std::fs::create_dir_all(&logs_dir).unwrap();
-    // A DIFFERENT (double-escaped, per the doc's description of the trap)
-    // sibling file must be ignored when transcript_full.jsonl is present.
-    write_file(
-        &logs_dir,
-        "transcript.jsonl",
-        "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-07-02T15:23:36Z\",\"content\":\"<USER_REQUEST>\\nWRONG\\n</USER_REQUEST>\"}\n",
-    );
-    write_file(
-        &logs_dir,
-        "transcript_full.jsonl",
-        AGY_TRANSCRIPT_FULL_JSONL,
-    );
-
-    let sessions = scan_agy_sessions(&brain_root, "{}");
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(
-        sessions[0].snippet, "x",
-        "transcript_full.jsonl must win over transcript.jsonl"
-    );
-}
-
-#[test]
-fn scan_agy_sessions_empty_root_is_empty_not_error() {
-    let tmp = tempdir();
-    let sessions = scan_agy_sessions(&tmp.path().join("does-not-exist"), "{}");
-    assert_eq!(sessions, vec![]);
-}
-
-// ---------------------------------------------------------------------------
 // parse_remote_claude_session_list — moved from
 // apps/desktop/src-tauri/src/bridge.rs:170 (`mtime\tid\tuser-line` records
 // produced by `fetch_remote_session_list`)
@@ -918,18 +721,6 @@ fn build_codex_discovery_script_no_setup_omits_setup_line() {
     assert!(!script.contains("|| true\n@@") || !script.contains("module"));
     assert!(script.contains("command -v 'codex'"));
     assert!(script.contains("codex debug models"));
-}
-
-#[test]
-fn build_agy_discovery_script_avail_and_models_only() {
-    let script = build_agy_discovery_script("agy", Some("source ~/.gemrc"));
-    assert!(script.contains("source ~/.gemrc"));
-    assert!(script.contains("command -v 'agy'"));
-    assert!(script.contains("agy models"));
-    assert!(script.contains("@@MARSAD_SEC_BEGIN:avail"));
-    assert!(script.contains("@@MARSAD_SEC_BEGIN:models"));
-    // agy has no over-the-wire session enumeration.
-    assert!(!script.contains("@@MARSAD_SEC_BEGIN:sessions"));
 }
 
 #[test]
@@ -1255,7 +1046,7 @@ fn host_launch_cfg_resolve_command() {
     // claude falls back to claude_bin.
     assert_eq!(cfg.resolve_command("claude"), "genie");
     // unknown driver → bare name.
-    assert_eq!(cfg.resolve_command("gemini"), "gemini");
+    assert_eq!(cfg.resolve_command("mystery"), "mystery");
     // default cfg → bare names.
     let d = HostLaunchCfg::default();
     assert_eq!(d.resolve_command("claude"), "claude");
@@ -1268,13 +1059,13 @@ fn host_probe_ctx_resolve_command_matches_cfg() {
         host_id: "h".to_string(),
         host_target: None,
         setup: None,
-        agent_commands: vec![("gemini".to_string(), "/opt/g".to_string())],
+        agent_commands: vec![("opencode".to_string(), "/opt/g".to_string())],
         claude_bin: Some("genie".to_string()),
         scope: SessionScope::AllKnown,
         project: None,
         deadline: Duration::from_secs(1),
     };
-    assert_eq!(ctx.resolve_command("gemini"), "/opt/g");
+    assert_eq!(ctx.resolve_command("opencode"), "/opt/g");
     assert_eq!(ctx.resolve_command("claude"), "genie");
     assert_eq!(ctx.resolve_command("codex"), "codex");
 
@@ -1425,17 +1216,17 @@ fn handle_refresh_returns_ack_and_eventually_broadcasts_capabilities_update() {
 #[test]
 fn new_subscriber_receives_cached_replay_before_any_live_event() {
     let tmp = tempdir();
-    let probe = FakeProbe::new("agy");
+    let probe = FakeProbe::new("codex");
     let provider =
         CapabilityProvider::new(vec![Box::new(probe)], vec!["local".to_string()], tmp.path());
 
     // First subscriber drives + observes the first probe completing, so the
     // result lands in the cache.
     let rx_a = provider.subscribe();
-    provider.handle_refresh(Some("local".to_string()), Some("agy".to_string()), None, HostLaunchCfg::default());
+    provider.handle_refresh(Some("local".to_string()), Some("codex".to_string()), None, HostLaunchCfg::default());
     wait_for(Duration::from_secs(2), || {
         while let Ok(line) = rx_a.try_recv() {
-            if line.contains("agy") {
+            if line.contains("codex") {
                 return Some(());
             }
         }
@@ -1449,7 +1240,7 @@ fn new_subscriber_receives_cached_replay_before_any_live_event() {
         .recv_timeout(Duration::from_millis(200))
         .expect("new subscriber must receive the cached CapabilitiesUpdate without a live probe");
     match parse_ipc(&replayed).expect("must be valid IpcMsg") {
-        IpcMsg::CapabilitiesUpdate { driver, .. } => assert_eq!(driver, "agy"),
+        IpcMsg::CapabilitiesUpdate { driver, .. } => assert_eq!(driver, "codex"),
         other => panic!("expected CapabilitiesUpdate replay, got {other:?}"),
     }
 }
@@ -1488,12 +1279,12 @@ fn in_flight_refresh_for_same_driver_host_is_deduped() {
 #[test]
 fn failing_probe_populates_errors_and_still_broadcasts() {
     let tmp = tempdir();
-    let probe = FakeProbe::new("agy").with_errors(vec!["agy models: exit 1: boom".to_string()]);
+    let probe = FakeProbe::new("codex").with_errors(vec!["codex models: exit 1: boom".to_string()]);
     let provider =
         CapabilityProvider::new(vec![Box::new(probe)], vec!["local".to_string()], tmp.path());
     let rx = provider.subscribe();
 
-    let ack = provider.handle_refresh(Some("local".to_string()), Some("agy".to_string()), None, HostLaunchCfg::default());
+    let ack = provider.handle_refresh(Some("local".to_string()), Some("codex".to_string()), None, HostLaunchCfg::default());
     assert!(
         matches!(parse_ipc(&ack).unwrap(), IpcMsg::CapabilitiesRefreshQueued { .. }),
         "a probe that will fail must still be ACKED as queued — errors surface later, not as an ack failure"
@@ -1501,7 +1292,7 @@ fn failing_probe_populates_errors_and_still_broadcasts() {
 
     let update_line = wait_for(Duration::from_secs(2), || {
         while let Ok(line) = rx.try_recv() {
-            if line.contains("agy") {
+            if line.contains("codex") {
                 return Some(line);
             }
         }
@@ -1511,7 +1302,7 @@ fn failing_probe_populates_errors_and_still_broadcasts() {
         IpcMsg::CapabilitiesUpdate { capabilities, .. } => {
             assert_eq!(
                 capabilities.errors,
-                vec!["agy models: exit 1: boom".to_string()],
+                vec!["codex models: exit 1: boom".to_string()],
                 "the probe's error must be surfaced verbatim, not swallowed"
             );
         }
@@ -1627,20 +1418,16 @@ fn successful_probe_persists_to_data_root_capabilities_host_json() {
 // ---------------------------------------------------------------------------
 
 /// The real probes report `launchable()` from a static per-driver fact: claude
-/// and codex have launch drivers (true); gemini (agy) does not (false). This is
+/// and codex have launch drivers (true). This is
 /// the ground truth the launch UI gates on, independent of any host `which`.
 /// Real probes are `#[cfg(not(coverage))]`; this assertion only runs in the
 /// normal (non-coverage) test build, matching the crate's guardrail.
 #[cfg(not(coverage))]
 #[test]
 fn real_probes_report_correct_launchable() {
-    use marsad_agent::capabilities::{RealAgyProbe, RealClaudeProbe, RealCodexProbe};
+    use marsad_agent::capabilities::{RealClaudeProbe, RealCodexProbe};
     assert!(RealClaudeProbe.launchable(), "claude has a launch driver");
     assert!(RealCodexProbe.launchable(), "codex has a launch driver");
-    assert!(
-        !RealAgyProbe.launchable(),
-        "gemini (agy) has no launch driver"
-    );
 }
 
 #[test]
@@ -1801,7 +1588,7 @@ fn slow_probe_never_blocks_the_ack_or_a_concurrent_subscribe() {
 
 /// Companion assertion at the `DiscoveredSession`/type level (keeps this
 /// file's imports honest — `DiscoveredSession` is exercised structurally
-/// above via `scan_codex_sessions`/`scan_agy_sessions`/
+/// above via `scan_codex_sessions`/
 /// `parse_remote_claude_session_list`'s return values; this pins its Default
 /// derive-free field shape directly against §1's struct definition).
 #[test]

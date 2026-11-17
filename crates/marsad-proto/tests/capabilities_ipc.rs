@@ -204,26 +204,26 @@ fn capabilities_refresh_queued_absent_host_id_parses_to_none_and_omits_on_reenco
 }
 
 // ---------------------------------------------------------------------------
-// CapabilitiesUpdate (§2 golden forms — "gemini"/AllKnown and "claude"/Projects)
+// CapabilitiesUpdate (§2 golden forms — "codex"/AllKnown and "claude"/Projects)
 // ---------------------------------------------------------------------------
 
-const CAPABILITIES_UPDATE_AGY: &str = r#"{"type":"CapabilitiesUpdate","host_id":"local","driver":"gemini","capabilities":{"driver":"gemini","host_id":"local","cli_available":true,"wasl_available":false,"launchable":false,"models":{"models":[{"id":"Gemini 3.5 Flash (Low)"}],"source":"Listed","free_text":false},"session_scope":"AllKnown","sessions":[{"id":"97197d46-2091-40e2-b36f-0dcedd34bcc4","project":"/work/mewais/OpenSource/Marsad","snippet":"x","modified_ms":1783100616000}],"fetched_at_ms":1783100620000,"errors":[],"available_modes":[]}}"#;
+const CAPABILITIES_UPDATE_CODEX: &str = r#"{"type":"CapabilitiesUpdate","host_id":"local","driver":"codex","capabilities":{"driver":"codex","host_id":"local","cli_available":true,"wasl_available":false,"launchable":true,"models":{"models":[{"id":"gpt-5.5"}],"source":"Listed","free_text":false},"session_scope":"AllKnown","sessions":[{"id":"97197d46-2091-40e2-b36f-0dcedd34bcc4","project":"/work/mewais/OpenSource/Marsad","snippet":"x","modified_ms":1783100616000}],"fetched_at_ms":1783100620000,"errors":[],"available_modes":[]}}"#;
 
 const CAPABILITIES_UPDATE_CLAUDE: &str = r#"{"type":"CapabilitiesUpdate","host_id":"hpc","driver":"claude","capabilities":{"driver":"claude","host_id":"hpc","cli_available":true,"wasl_available":false,"launchable":true,"models":{"models":[{"id":"claude-opus-4-8"}],"source":"Observed","free_text":true},"session_scope":{"Projects":["/home/u/proj"]},"sessions":[],"fetched_at_ms":0,"errors":[],"available_modes":[]}}"#;
 
-fn capabilities_update_agy() -> IpcMsg {
+fn capabilities_update_codex() -> IpcMsg {
     IpcMsg::CapabilitiesUpdate {
         host_id: "local".to_string(),
-        driver: "gemini".to_string(),
+        driver: "codex".to_string(),
         capabilities: Capabilities {
-            driver: "gemini".to_string(),
+            driver: "codex".to_string(),
             host_id: "local".to_string(),
             cli_available: true,
             wasl_available: false,
-            launchable: false,
+            launchable: true,
             models: ModelCatalog {
                 models: vec![ModelInfo {
-                    id: "Gemini 3.5 Flash (Low)".to_string(),
+                    id: "gpt-5.5".to_string(),
                     annotation: None,
                 }],
                 source: ModelListSource::Listed,
@@ -271,8 +271,8 @@ fn capabilities_update_claude() -> IpcMsg {
 }
 
 #[test]
-fn capabilities_update_agy_golden_contract() {
-    assert_variant_contract(CAPABILITIES_UPDATE_AGY, &capabilities_update_agy());
+fn capabilities_update_codex_golden_contract() {
+    assert_variant_contract(CAPABILITIES_UPDATE_CODEX, &capabilities_update_codex());
 }
 
 #[test]
@@ -280,9 +280,7 @@ fn capabilities_update_claude_golden_contract() {
     assert_variant_contract(CAPABILITIES_UPDATE_CLAUDE, &capabilities_update_claude());
 }
 
-/// §2: "`driver` is the plain wire string (`"claude"` | `"codex"` | `"gemini"`)".
-/// The agy golden intentionally uses the wire string `"gemini"` (the
-/// gemini->antigravity rename is out of scope here, §7 non-goals / M7e).
+/// §2: "`driver` is the plain wire string (`"claude"` | `"codex"` | `"opencode"`)".
 #[test]
 fn capabilities_update_driver_field_is_plain_wire_string_not_an_enum() {
     // If `driver` were a typed enum, an arbitrary future string like
@@ -338,9 +336,9 @@ fn all_new_goldens() -> Vec<(&'static str, &'static str, IpcMsg)> {
             },
         ),
         (
-            "CapabilitiesUpdate (agy/AllKnown)",
-            CAPABILITIES_UPDATE_AGY,
-            capabilities_update_agy(),
+            "CapabilitiesUpdate (codex/AllKnown)",
+            CAPABILITIES_UPDATE_CODEX,
+            capabilities_update_codex(),
         ),
         (
             "CapabilitiesUpdate (claude/Projects)",

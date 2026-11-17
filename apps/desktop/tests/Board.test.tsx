@@ -452,7 +452,7 @@ describe("Board — UB7 driver dots", () => {
       all: [
         makeCard({
           id: "w-multi",
-          driver_dots: ["claude", "codex", "gemini"],
+          driver_dots: ["claude", "codex", "opencode"],
         }),
       ],
     });
@@ -463,7 +463,7 @@ describe("Board — UB7 driver dots", () => {
     expect(dots.map((d) => d.getAttribute("data-driver"))).toEqual([
       "claude",
       "codex",
-      "gemini",
+      "opencode",
     ]);
   });
 

@@ -5,11 +5,9 @@
 //! staleness policy, persistence), and §4 (the non-blocking rule).
 //!
 //! Layout:
-//! - Pure parse functions (`parse_agy_models`, `parse_codex_debug_models`,
-//!   `parse_codex_rollout_meta`, `agy_snippet_from_transcript`,
-//!   `parse_remote_claude_session_list`) — no IO, fully unit-tested.
-//! - Temp-dir-parameterized scanners (`scan_codex_sessions`,
-//!   `scan_agy_sessions`) — real filesystem IO but rooted at a caller-supplied
+//! - Pure parse functions (`parse_codex_debug_models`,
+//!   `parse_codex_rollout_meta`, `parse_remote_claude_session_list`) — no IO, fully unit-tested.
+//! - Temp-dir-parameterized scanners (`scan_codex_sessions`) — real filesystem IO but rooted at a caller-supplied
 //!   `&Path`, so tests can point them at a temp tree.
 //! - The `CapabilityProbe` trait + `HostProbeCtx` (§3.1) and `CapabilityProvider`
 //!   (the provider seam: refresh-on-demand, cache replay, in-flight dedup,
@@ -64,7 +62,7 @@ pub trait CapabilityProbe: Send + Sync + 'static {
 /// A host's launch configuration, carried from core's registry into the probe so
 /// discovery runs setup-first over the right connection with the exact per-driver
 /// command a launch would use (deliverable #1). `Default` = the local host with no
-/// setup and no overrides (bare `claude`/`codex`/`agy`).
+/// setup and no overrides (bare `claude`/`codex`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct HostLaunchCfg {
     /// The remote execution target (`user@host`, `wsl:<distro>`, …). `None` = the

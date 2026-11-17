@@ -757,7 +757,7 @@ fn capabilities_view_from_capabilities_maps_every_field_verbatim() {
             modified_ms: 42,
         }],
         fetched_at_ms: 1_700_000_000_000,
-        errors: vec!["agy models: exit 1".to_string()],
+        errors: vec!["codex models: exit 1".to_string()],
     };
 
     let view = CapabilitiesView::from(caps.clone());

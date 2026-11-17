@@ -38,20 +38,20 @@ fn make_core() -> (Core, LoopbackFake) {
     (core, b)
 }
 
-/// The §2 golden `CapabilitiesUpdate` line for the agy/AllKnown case, quoted
+/// The §2 golden `CapabilitiesUpdate` line for the codex/AllKnown case, quoted
 /// verbatim from `dynamic-capabilities.md` §2 (same golden the proto suite
 /// pins byte-for-byte).
-fn capabilities_update_line_agy() -> String {
-    r#"{"type":"CapabilitiesUpdate","host_id":"local","driver":"gemini","capabilities":{"driver":"gemini","host_id":"local","cli_available":true,"models":{"models":[{"id":"Gemini 3.5 Flash (Low)"}],"source":"Listed","free_text":false},"session_scope":"AllKnown","sessions":[{"id":"97197d46-2091-40e2-b36f-0dcedd34bcc4","project":"/work/mewais/OpenSource/Marsad","snippet":"x","modified_ms":1783100616000}],"fetched_at_ms":1783100620000,"errors":[]}}"#.to_string()
+fn capabilities_update_line_codex() -> String {
+    r#"{"type":"CapabilitiesUpdate","host_id":"local","driver":"codex","capabilities":{"driver":"codex","host_id":"local","cli_available":true,"models":{"models":[{"id":"gpt-5.5"}],"source":"Listed","free_text":false},"session_scope":"AllKnown","sessions":[{"id":"97197d46-2091-40e2-b36f-0dcedd34bcc4","project":"/work/mewais/OpenSource/Marsad","snippet":"x","modified_ms":1783100616000}],"fetched_at_ms":1783100620000,"errors":[]}}"#.to_string()
 }
 
 /// A second snapshot for the SAME (driver, host) key as
-/// `capabilities_update_line_agy`, with visibly different content (fewer
+/// `capabilities_update_line_codex`, with visibly different content (fewer
 /// models, a later `fetched_at_ms`) — used to prove replace-not-merge
 /// semantics (§2: "Always a COMPLETE snapshot (replace, not merge, on the
 /// receiving side)").
-fn capabilities_update_line_agy_v2() -> String {
-    r#"{"type":"CapabilitiesUpdate","host_id":"local","driver":"gemini","capabilities":{"driver":"gemini","host_id":"local","cli_available":true,"models":{"models":[],"source":"Listed","free_text":false},"session_scope":"AllKnown","sessions":[],"fetched_at_ms":1783100999000,"errors":["agy models: exit 1: boom"]}}"#.to_string()
+fn capabilities_update_line_codex_v2() -> String {
+    r#"{"type":"CapabilitiesUpdate","host_id":"local","driver":"codex","capabilities":{"driver":"codex","host_id":"local","cli_available":true,"models":{"models":[],"source":"Listed","free_text":false},"session_scope":"AllKnown","sessions":[],"fetched_at_ms":1783100999000,"errors":["codex models: exit 1: boom"]}}"#.to_string()
 }
 
 /// The §2 golden line for a DIFFERENT (driver, host) key — used for
@@ -71,7 +71,7 @@ fn capabilities_update_line_claude_hpc() -> String {
 fn on_agent_line_capabilities_update_golden_yields_one_capabilities_vm_update() {
     let (mut core, _peer) = make_core();
     let updates = core
-        .on_agent_line(&capabilities_update_line_agy())
+        .on_agent_line(&capabilities_update_line_codex())
         .expect("well-formed CapabilitiesUpdate must not error");
 
     assert_eq!(
@@ -84,7 +84,7 @@ fn on_agent_line_capabilities_update_golden_yields_one_capabilities_vm_update() 
             // §3.6: "CapabilitiesView — display-ready mirror of Capabilities
             // (ids verbatim; no label synthesis) — pure From<Capabilities>
             // mapping." The proto-level field values must survive unmangled.
-            assert_eq!(view.driver, "gemini");
+            assert_eq!(view.driver, "codex");
             assert_eq!(view.host_id, "local");
         }
         other => panic!("expected VmUpdate::Capabilities, got {other:?}"),
@@ -95,15 +95,15 @@ fn on_agent_line_capabilities_update_golden_yields_one_capabilities_vm_update() 
 #[test]
 fn on_agent_line_second_update_for_same_key_replaces_not_merges() {
     let (mut core, _peer) = make_core();
-    core.on_agent_line(&capabilities_update_line_agy())
+    core.on_agent_line(&capabilities_update_line_codex())
         .expect("first update must apply");
-    core.on_agent_line(&capabilities_update_line_agy_v2())
+    core.on_agent_line(&capabilities_update_line_codex_v2())
         .expect("second update for the same (driver, host) must apply");
 
     let snapshot = core.capabilities();
     let matching: Vec<_> = snapshot
         .iter()
-        .filter(|v| v.driver == "gemini" && v.host_id == "local")
+        .filter(|v| v.driver == "codex" && v.host_id == "local")
         .collect();
     assert_eq!(
         matching.len(),
@@ -158,7 +158,7 @@ fn on_agent_line_errored_update_preserves_prior_models_and_sessions() {
 #[test]
 fn on_agent_line_capabilities_update_missing_host_id_is_protocol_error() {
     let (mut core, _peer) = make_core();
-    let line = r#"{"type":"CapabilitiesUpdate","driver":"gemini","capabilities":{"driver":"gemini","host_id":"local"}}"#;
+    let line = r#"{"type":"CapabilitiesUpdate","driver":"codex","capabilities":{"driver":"codex","host_id":"local"}}"#;
     let err = core
         .on_agent_line(line)
         .expect_err("missing host_id must be a hard Protocol error, not tolerant-skip");
@@ -403,17 +403,17 @@ fn refresh_capabilities_then_board_and_capabilities_return_immediately_without_m
     let (mut core, mut peer) = make_core();
 
     // Seed one cached entry so `capabilities()` has something to reflect.
-    core.on_agent_line(&capabilities_update_line_agy())
+    core.on_agent_line(&capabilities_update_line_codex())
         .expect("seed update must apply");
     let _ = peer.drain_outbound(); // discard anything from the seed step
 
-    core.refresh_capabilities(Some("local".to_string()), Some("gemini".to_string()), None);
+    core.refresh_capabilities(Some("local".to_string()), Some("codex".to_string()), None);
 
     // Immediately, on the SAME thread, with nothing having replied on `peer`:
     let _board = core.board();
     let snapshot = core.capabilities();
     assert!(
-        snapshot.iter().any(|v| v.driver == "gemini" && v.host_id == "local"),
+        snapshot.iter().any(|v| v.driver == "codex" && v.host_id == "local"),
         "capabilities() must reflect the pre-existing cached entry without waiting for a fresh probe"
     );
 
@@ -442,7 +442,7 @@ fn capabilities_snapshot_reflects_upserts_across_distinct_keys() {
         "no capabilities before any update"
     );
 
-    core.on_agent_line(&capabilities_update_line_agy())
+    core.on_agent_line(&capabilities_update_line_codex())
         .expect("first key must apply");
     core.on_agent_line(&capabilities_update_line_claude_hpc())
         .expect("second, distinct key must apply");
@@ -455,7 +455,7 @@ fn capabilities_snapshot_reflects_upserts_across_distinct_keys() {
     );
     assert!(snapshot
         .iter()
-        .any(|v| v.driver == "gemini" && v.host_id == "local"));
+        .any(|v| v.driver == "codex" && v.host_id == "local"));
     assert!(snapshot
         .iter()
         .any(|v| v.driver == "claude" && v.host_id == "hpc"));

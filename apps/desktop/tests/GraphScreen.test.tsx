@@ -94,7 +94,7 @@ function makeGraph(): GraphView {
   const nodes: GraphNode[] = [
     node({ id: "n1", host: "host-a", name: "Lead", driver: "claude", state: "Working", depth: 0, is_lead: true }),
     node({ id: "n2", host: "host-a", name: "Helper", driver: "codex", state: "Needs", depth: 1 }),
-    node({ id: "n3", host: "host-b", name: "Reviewer", driver: "gemini", state: "Done", depth: 0 }),
+    node({ id: "n3", host: "host-b", name: "Reviewer", driver: "opencode", state: "Done", depth: 0 }),
   ];
   const edges: GraphEdge[] = [
     edge({ id: "e1", from: "n1", to: "n2", status: "normal", has_gate: false }),

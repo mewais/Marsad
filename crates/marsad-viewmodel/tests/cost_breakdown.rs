@@ -303,9 +303,9 @@ fn cb7_by_host_and_by_node_sorted_by_cost_descending() {
 fn cb8_by_host_driver_dots_dedup_first_appearance() {
     let workstreams = vec![ws("w1")];
     let nodes = vec![
-        node("n1", "w1", Driver::Gemini, "h1"),
+        node("n1", "w1", Driver::Opencode, "h1"),
         node("n2", "w1", Driver::Claude, "h1"),
-        node("n3", "w1", Driver::Gemini, "h1"),
+        node("n3", "w1", Driver::Opencode, "h1"),
     ];
     let sessions = vec![
         sv("n1", "h1", 1.0, false),
@@ -315,7 +315,7 @@ fn cb8_by_host_driver_dots_dedup_first_appearance() {
 
     let bd = workstream_cost_breakdown("w1", &workstreams, &nodes, &sessions).unwrap();
     let h1 = bd.by_host.iter().find(|r| r.key == "h1").unwrap();
-    assert_eq!(h1.driver_dots, vec![Driver::Gemini, Driver::Claude]);
+    assert_eq!(h1.driver_dots, vec![Driver::Opencode, Driver::Claude]);
 }
 
 #[test]

@@ -209,26 +209,6 @@ pub fn build_codex_discovery_script(command: &str, setup: Option<&str>) -> Strin
     with_setup(setup, &format!("{avail}{wasl}{models}{sessions}"))
 }
 
-/// Build the agy/gemini discovery script: after `setup`, availability of the
-/// resolved command word, then `<command> models` (parsed by `parse_agy_models`).
-/// Sessions are NOT enumerated over the connection (the agy brain-dir layout is
-/// scanned locally only); an empty sessions section keeps the output shape
-/// uniform.
-pub fn build_agy_discovery_script(command: &str, setup: Option<&str>) -> String {
-    let word = command_word(command);
-    let avail = section("avail", &format!("command -v {} 2>/dev/null", sh_squote(word)));
-    let models = section(
-        "models",
-        &format!(
-            "command -v {w} >/dev/null 2>&1 && {cmd} models 2>/dev/null || true",
-            w = sh_squote(word),
-            cmd = command,
-        ),
-    );
-    let wasl = wasl_avail_section();
-    with_setup(setup, &format!("{avail}{wasl}{models}"))
-}
-
 /// A parsed discovery output: the named sections extracted between the
 /// BEGIN/END sentinels. Unknown/duplicate section names keep the LAST body
 /// (probes only emit each name once). Text outside any section (setup noise,

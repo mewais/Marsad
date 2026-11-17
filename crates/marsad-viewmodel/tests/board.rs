@@ -85,7 +85,7 @@ fn bv1_summary_counts_multi_ws_multi_node_multi_host() {
     let nodes = vec![
         node("n1", "w1", Driver::Claude, "h1", Phase::Working),
         node("n2", "w1", Driver::Codex, "h2", Phase::Done),
-        node("n3", "w2", Driver::Gemini, "h1", Phase::Needs),
+        node("n3", "w2", Driver::Opencode, "h1", Phase::Needs),
     ];
     let connections: Vec<Connection> = vec![];
     let hosts = vec![
@@ -184,9 +184,9 @@ fn bv2_profile_filter_none_includes_all() {
 fn bv3_card_derivations_for_mixed_workstream() {
     let workstreams = vec![ws("w1", "Mixed", "goal", None)];
     let nodes = vec![
-        node("n1", "w1", Driver::Gemini, "host-b", Phase::Working),
+        node("n1", "w1", Driver::Opencode, "host-b", Phase::Working),
         node("n2", "w1", Driver::Claude, "host-a", Phase::Needs),
-        node("n3", "w1", Driver::Gemini, "host-b", Phase::Done),
+        node("n3", "w1", Driver::Opencode, "host-b", Phase::Done),
         node("n4", "w1", Driver::Codex, "host-c", Phase::Done),
     ];
     let connections: Vec<Connection> = vec![];
@@ -212,10 +212,10 @@ fn bv3_card_derivations_for_mixed_workstream() {
     assert_eq!(card.goal, "goal");
     // head_state: Needs beats Working/Done
     assert_eq!(card.head_state, Some(marsad_workstream::HeadState::Needs));
-    // driver_dots: first-appearance dedup order [Gemini, Claude, Codex]
+    // driver_dots: first-appearance dedup order [Opencode, Claude, Codex]
     assert_eq!(
         card.driver_dots,
-        vec![Driver::Gemini, Driver::Claude, Driver::Codex]
+        vec![Driver::Opencode, Driver::Claude, Driver::Codex]
     );
     // host_chips: first-appearance dedup order [host-b, host-a, host-c]
     assert_eq!(

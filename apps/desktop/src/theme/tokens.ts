@@ -36,7 +36,6 @@ export interface ColorTokens {
   // §Design Tokens > Driver colours). First-class, colour-coded everywhere.
   dClaude: string;
   dCodex: string;
-  dGemini: string;
   dOpencode: string;
   dWaslClaude: string;
   dWaslOpencode: string;
@@ -52,7 +51,6 @@ export interface Tokens extends ColorTokens {
 const DRIVER_COLORS = {
   dClaude: "#d97757",
   dCodex: "#3fb6a8",
-  dGemini: "#9b8cf0",
   dOpencode: "#f0a050",
   dWaslClaude: "#5a9fd4",
   dWaslOpencode: "#7ec87e",
@@ -183,7 +181,6 @@ export function tokensToCssVars(t: Tokens): Record<string, string> {
     "--glass-main": t.glassMain,
     "--d-claude": t.dClaude,
     "--d-codex": t.dCodex,
-    "--d-gemini": t.dGemini,
     "--d-opencode": t.dOpencode,
     "--d-wasl-claude": t.dWaslClaude,
     "--d-wasl-opencode": t.dWaslOpencode,

@@ -117,11 +117,11 @@ function caps(hostId: string, models: string[], codexAvailable = false): Record<
       fetched_at_ms: 0,
       errors: [],
     },
-    [`gemini::${hostId}`]: {
-      driver: "gemini",
+    [`opencode::${hostId}`]: {
+      driver: "opencode",
       host_id: hostId,
       cli_available: false,
-      launchable: false,
+      launchable: true,
       models: { models: [], source: "Observed", free_text: true },
       session_scope: null,
       sessions: [],
@@ -270,9 +270,9 @@ describe("#4/#2 NodeModal — driver + defaults", () => {
     });
   });
 
-  it("gemini is disabled (cli_available:false) with a not-yet-launchable note", () => {
+  it("opencode is disabled (cli_available:false) with a not-yet-launchable note", () => {
     renderNodeModal(caps("local", ["m-a"]));
-    expect((screen.getByTestId("nm-driver-gemini") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId("nm-driver-opencode") as HTMLButtonElement).disabled).toBe(true);
   });
 });
 
@@ -281,17 +281,16 @@ describe("#4/#2 NodeModal — driver + defaults", () => {
 // ---------------------------------------------------------------------------
 
 describe("#4 NodeModal — driver picker", () => {
-  it("renders a driver picker; gemini disabled; claude enabled", () => {
+  it("renders a driver picker; opencode disabled; claude enabled", () => {
     renderNodeModal(caps("local", ["m-a"]));
     expect((screen.getByTestId("nm-driver-claude") as HTMLButtonElement).disabled).toBe(false);
-    expect((screen.getByTestId("nm-driver-gemini") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId("nm-driver-opencode") as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("renders a button for all four known drivers (claude, codex, gemini, opencode)", () => {
+  it("renders a button for all three known drivers (claude, codex, opencode)", () => {
     renderNodeModal(caps("local", ["m-a"]));
     expect(screen.getByTestId("nm-driver-claude")).toBeTruthy();
     expect(screen.getByTestId("nm-driver-codex")).toBeTruthy();
-    expect(screen.getByTestId("nm-driver-gemini")).toBeTruthy();
     expect(screen.getByTestId("nm-driver-opencode")).toBeTruthy();
   });
 
@@ -325,11 +324,11 @@ describe("#1/#2 Settings", () => {
     );
   }
 
-  it("#1 Hosts: local card has per-driver Codex/Gemini command fields; save wires agentCommands", async () => {
+  it("#1 Hosts: local card has per-driver Codex/opencode command fields; save wires agentCommands", async () => {
     renderSettings(caps("local", ["m-a"]));
     fireEvent.click(screen.getByTestId("settings-tab-hosts"));
     fireEvent.change(screen.getByTestId("local-codex-cmd"), { target: { value: "codex --sandbox" } });
-    fireEvent.change(screen.getByTestId("local-gemini-cmd"), { target: { value: "/opt/gemini" } });
+    fireEvent.change(screen.getByTestId("local-opencode-cmd"), { target: { value: "/opt/opencode" } });
     fireEvent.click(screen.getByTestId("local-save-btn"));
     await waitFor(() => {
       expect(updateHost).toHaveBeenCalled();
@@ -340,16 +339,16 @@ describe("#1/#2 Settings", () => {
     expect(agentCommands).toEqual(
       expect.arrayContaining([
         ["codex", "codex --sandbox"],
-        ["gemini", "/opt/gemini"],
+        ["opencode", "/opt/opencode"],
       ])
     );
   });
 
-  it("#1 Hosts: add-host form has Codex/Gemini command fields", async () => {
+  it("#1 Hosts: add-host form has Codex/opencode command fields", async () => {
     renderSettings(caps("local", ["m-a"]));
     fireEvent.click(screen.getByTestId("settings-tab-hosts"));
     expect(screen.getByTestId("host-add-codex-cmd")).toBeTruthy();
-    expect(screen.getByTestId("host-add-gemini-cmd")).toBeTruthy();
+    expect(screen.getByTestId("host-add-opencode-cmd")).toBeTruthy();
   });
 
   it("#2 Session defaults: driver picker persists default_driver", async () => {

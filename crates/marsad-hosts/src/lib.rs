@@ -126,7 +126,7 @@ pub struct Host {
     #[serde(default)]
     pub env: Vec<(String, String)>,
     /// Per-driver command overrides for this host, as `(driver, command)` pairs.
-    /// E.g. `[("codex", "codex --sandbox"), ("gemini", "/opt/gemini/bin/gemini")]`.
+    /// E.g. `[("codex", "codex --sandbox"), ("opencode", "/opt/opencode/bin/opencode")]`.
     /// When launching a session with a given driver, `agent_commands` is checked first;
     /// if the driver has no entry, falls back to `claude_bin` (for the `"claude"` driver)
     /// or the bare driver name otherwise.

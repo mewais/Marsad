@@ -31,7 +31,7 @@ const waslProtocol = (driversModule as Record<string, unknown>).waslProtocol as 
 
 describe("DRIVERS — native only", () => {
   it("lists exactly the native drivers, in order", () => {
-    expect(DRIVERS.map((d) => d.id)).toEqual(["claude", "codex", "gemini", "opencode"]);
+    expect(DRIVERS.map((d) => d.id)).toEqual(["claude", "codex", "opencode"]);
   });
 
   it("contains NO wasl-* entry", () => {
@@ -44,8 +44,8 @@ describe("DRIVERS — native only", () => {
 // ---------------------------------------------------------------------------
 
 describe("DRIVER_COLOR", () => {
-  it("has colours for the four native drivers", () => {
-    for (const id of ["claude", "codex", "gemini", "opencode"]) {
+  it("has colours for the three native drivers", () => {
+    for (const id of ["claude", "codex", "opencode"]) {
       expect(typeof DRIVER_COLOR[id]).toBe("string");
       expect(DRIVER_COLOR[id].length).toBeGreaterThan(0);
     }
@@ -71,7 +71,7 @@ describe("isWaslDriver()", () => {
   });
 
   it("returns false for native ids", () => {
-    for (const id of ["claude", "codex", "gemini", "opencode"]) {
+    for (const id of ["claude", "codex", "opencode"]) {
       expect(isWaslDriver(id)).toBe(false);
     }
   });
@@ -89,7 +89,7 @@ describe("waslProtocol()", () => {
   });
 
   it("returns null for native ids", () => {
-    for (const id of ["claude", "codex", "gemini", "opencode"]) {
+    for (const id of ["claude", "codex", "opencode"]) {
       expect(waslProtocol(id)).toBeNull();
     }
   });

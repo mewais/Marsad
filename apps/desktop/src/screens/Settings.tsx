@@ -608,7 +608,7 @@ function envToText(env?: Array<[string, string]>): string {
 }
 
 /** Extract a `[driver, command]` list into a per-driver map for the codex /
- *  gemini command-override fields (claude uses the dedicated `claude_bin`). */
+ *  opencode command-override fields (claude uses the dedicated `claude_bin`). */
 function agentCommandsToMap(cmds?: Array<[string, string]>): Record<string, string> {
   const m: Record<string, string> = {};
   for (const [d, c] of cmds ?? []) m[d] = c;
@@ -616,26 +616,24 @@ function agentCommandsToMap(cmds?: Array<[string, string]>): Record<string, stri
 }
 
 /** Build the `agent_commands` `[driver, command]` list to persist, given the
- *  claude bin + the codex/gemini overrides. Only non-empty commands are kept.
+ *  claude bin + the codex/opencode overrides. Only non-empty commands are kept.
  *  Claude's override lives in `claude_bin` (its own field), so it's also
  *  mirrored into agent_commands here for a uniform per-driver record. */
 function buildAgentCommands(
   claudeBin: string,
   codexCmd: string,
-  geminiCmd: string,
   opencodeCmd = "",
 ): Array<[string, string]> {
   const out: Array<[string, string]> = [];
   if (claudeBin.trim()) out.push(["claude", claudeBin.trim()]);
   if (codexCmd.trim()) out.push(["codex", codexCmd.trim()]);
-  if (geminiCmd.trim()) out.push(["gemini", geminiCmd.trim()]);
   if (opencodeCmd.trim()) out.push(["opencode", opencodeCmd.trim()]);
   return out;
 }
 
 /**
  * A single registered REMOTE host card — header ONLY: label / status / Connect /
- * Remove. Per-host config (Claude/Codex/Gemini commands, Setup, Environment) is
+ * Remove. Per-host config (Claude/Codex/opencode commands, Setup, Environment) is
  * set once when ADDING the host (see the "Add a host" form) and is intentionally
  * NOT editable here: an existing host shows only actions, not settings.
  */
@@ -756,7 +754,6 @@ function HostsTab() {
   // Add-host launch config fields.
   const [addClaudeBin, setAddClaudeBin] = useState("");
   const [addCodexCmd, setAddCodexCmd] = useState("");
-  const [addGeminiCmd, setAddGeminiCmd] = useState("");
   const [addOpencodeCmd, setAddOpencodeCmd] = useState("");
   const [addSetup, setAddSetup] = useState("");
   const [addEnv, setAddEnv] = useState("");
@@ -768,7 +765,6 @@ function HostsTab() {
   const remoteHosts = hosts.filter((h) => !h.is_local);
   const [localClaudeBin, setLocalClaudeBin] = useState("");
   const [localCodexCmd, setLocalCodexCmd] = useState("");
-  const [localGeminiCmd, setLocalGeminiCmd] = useState("");
   const [localOpencodeCmd, setLocalOpencodeCmd] = useState("");
   const [localSetup, setLocalSetup] = useState("");
   const [localEnv, setLocalEnv] = useState("");
@@ -778,12 +774,11 @@ function HostsTab() {
   // Re-sync the local-machine fields whenever the localhost config changes
   // (e.g. after restore on launch or a save round-trip via vm-update).
   const localCmds = agentCommandsToMap(localHost?.agent_commands);
-  const localKey = `${localHost?.claude_bin ?? ""}|${localHost?.setup ?? ""}|${envToText(localHost?.env)}|${localCmds.codex ?? ""}|${localCmds.gemini ?? ""}|${localCmds.opencode ?? ""}`;
+  const localKey = `${localHost?.claude_bin ?? ""}|${localHost?.setup ?? ""}|${envToText(localHost?.env)}|${localCmds.codex ?? ""}|${localCmds.opencode ?? ""}`;
   useEffect(() => {
     const cmds = agentCommandsToMap(localHost?.agent_commands);
     setLocalClaudeBin(localHost?.claude_bin ?? cmds.claude ?? "");
     setLocalCodexCmd(cmds.codex ?? "");
-    setLocalGeminiCmd(cmds.gemini ?? "");
     setLocalOpencodeCmd(cmds.opencode ?? "");
     setLocalSetup(localHost?.setup ?? "");
     setLocalEnv(envToText(localHost?.env));
@@ -801,7 +796,7 @@ function HostsTab() {
         localSetup.trim(),
         parseEnv(localEnv),
         undefined,
-        buildAgentCommands(localClaudeBin, localCodexCmd, localGeminiCmd, localOpencodeCmd),
+        buildAgentCommands(localClaudeBin, localCodexCmd, localOpencodeCmd),
       );
       setLocalSaved(true);
       window.setTimeout(() => setLocalSaved(false), 2500);
@@ -841,14 +836,13 @@ function HostsTab() {
         addClaudeBin.trim(),
         addSetup.trim(),
         parseEnv(addEnv),
-        buildAgentCommands(addClaudeBin, addCodexCmd, addGeminiCmd, addOpencodeCmd),
+        buildAgentCommands(addClaudeBin, addCodexCmd, addOpencodeCmd),
       );
       // The host list refreshes via the "hosts" vm-update; clear the form.
       setLabel("");
       setTarget("");
       setAddClaudeBin("");
       setAddCodexCmd("");
-      setAddGeminiCmd("");
       setAddOpencodeCmd("");
       setAddSetup("");
       setAddEnv("");
@@ -953,17 +947,6 @@ function HostsTab() {
             value={localCodexCmd}
             onChange={(e) => setLocalCodexCmd(e.target.value)}
             placeholder="codex"
-            className="mono"
-            style={fieldInput}
-          />
-        </div>
-        <div>
-          <div style={fieldLabel}>Gemini command</div>
-          <input
-            data-testid="local-gemini-cmd"
-            value={localGeminiCmd}
-            onChange={(e) => setLocalGeminiCmd(e.target.value)}
-            placeholder="gemini"
             className="mono"
             style={fieldInput}
           />
@@ -1175,17 +1158,6 @@ function HostsTab() {
             value={addCodexCmd}
             onChange={(e) => setAddCodexCmd(e.target.value)}
             placeholder="codex"
-            className="mono"
-            style={fieldInput}
-          />
-        </div>
-        <div>
-          <div style={fieldLabel}>Gemini command</div>
-          <input
-            data-testid="host-add-gemini-cmd"
-            value={addGeminiCmd}
-            onChange={(e) => setAddGeminiCmd(e.target.value)}
-            placeholder="gemini"
             className="mono"
             style={fieldInput}
           />

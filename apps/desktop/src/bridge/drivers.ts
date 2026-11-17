@@ -24,7 +24,6 @@ import type { Driver } from "./workstreamTypes";
 export const DRIVERS: { id: Driver; label: string }[] = [
   { id: "claude", label: "Claude Code" },
   { id: "codex", label: "Codex" },
-  { id: "gemini", label: "Gemini" },
   { id: "opencode", label: "opencode" },
 ];
 
@@ -36,7 +35,6 @@ export const DRIVERS: { id: Driver; label: string }[] = [
 export const DRIVER_COLOR: Record<Driver, string> = {
   claude: "var(--d-claude, #d97757)",
   codex: "var(--d-codex, #3fb6a8)",
-  gemini: "var(--d-gemini, #9b8cf0)",
   opencode: "var(--d-opencode, #f0a050)",
   "wasl-claude": "var(--d-wasl-claude, #5a9fd4)",
   "wasl-opencode": "var(--d-wasl-opencode, #7ec87e)",

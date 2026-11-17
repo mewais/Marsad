@@ -40,7 +40,6 @@ const TABS: { id: Tab; label: string }[] = [
 const DRIVER_COLOR: Record<string, string> = {
   claude: "#d97757",
   codex: "#3fb6a8",
-  gemini: "#9b8cf0",
   opencode: "#f0a050",
 };
 
@@ -83,7 +82,7 @@ export function SessionDetail() {
   // Driver pill — the SESSION carries its own driver (SessionView.driver, from
   // the persisted record). A host can expose several drivers, so deriving from
   // the host's capabilities is arbitrary (capsForHostId returns whichever entry
-  // iterates first — codex/gemini/claude non-deterministically). Use the
+  // iterates first — codex/claude non-deterministically). Use the
   // session's real driver; default to "claude" if an old view lacks the field.
   const driver = selectedSession.driver ?? "claude";
   const driverColor = driver ? DRIVER_COLOR[driver] : undefined;

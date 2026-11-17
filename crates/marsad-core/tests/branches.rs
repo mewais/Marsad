@@ -885,7 +885,7 @@ fn connect_reprobes_even_when_persisted_caps_already_fully_loaded() {
             r#"{{"type":"CapabilitiesUpdate","host_id":"{host_id}","driver":"{driver}","capabilities":{{"driver":"{driver}","host_id":"{host_id}","cli_available":true,"launchable":true,"models":{{"models":[],"source":"Observed","free_text":true}},"session_scope":null,"sessions":[],"fetched_at_ms":0,"errors":[]}}}}"#
         )
     };
-    for d in ["claude", "codex", "gemini"] {
+    for d in ["claude", "codex"] {
         core.on_agent_line(&caps_line(d)).expect("seed persisted caps");
     }
     let _ = peer.drain_outbound(); // discard add_host + seeding traffic
@@ -960,9 +960,8 @@ fn host_connecting_until_all_drivers_discovered() {
     core.set_host_status(&host_id, HostStatus::Connected);
     assert_eq!(status_of(&core), HostStatus::Connecting, "no caps yet → Connecting");
 
-    // Two of three drivers land → still Connecting.
+    // One of two drivers lands → still Connecting.
     core.on_agent_line(&caps_line("claude")).expect("claude caps");
-    core.on_agent_line(&caps_line("codex")).expect("codex caps");
     assert_eq!(
         status_of(&core),
         HostStatus::Connecting,
@@ -970,7 +969,7 @@ fn host_connecting_until_all_drivers_discovered() {
     );
 
     // The last probed driver lands → promoted to Connected.
-    core.on_agent_line(&caps_line("gemini")).expect("gemini caps");
+    core.on_agent_line(&caps_line("codex")).expect("codex caps");
     assert_eq!(
         status_of(&core),
         HostStatus::Connected,

@@ -24,7 +24,6 @@ pub use marsad_events::Phase;
 pub enum Driver {
     Claude,
     Codex,
-    Gemini,
     Opencode,
 }
 
@@ -34,7 +33,6 @@ impl Driver {
         match self {
             Driver::Claude => "claude",
             Driver::Codex => "codex",
-            Driver::Gemini => "gemini",
             Driver::Opencode => "opencode",
         }
     }
@@ -44,7 +42,6 @@ impl Driver {
         match self {
             Driver::Claude => "#d97757",
             Driver::Codex => "#3fb6a8",
-            Driver::Gemini => "#9b8cf0",
             Driver::Opencode => "#f0a050",
         }
     }

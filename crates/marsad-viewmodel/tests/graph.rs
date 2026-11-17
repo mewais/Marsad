@@ -68,7 +68,7 @@ fn gv2_nodes_mapped_1_to_1_linear_chain_depths() {
     let nodes = vec![
         node("a", "w1", Driver::Claude, "h1", Phase::Working),
         node("b", "w1", Driver::Codex, "h2", Phase::Done),
-        node("c", "w1", Driver::Gemini, "h3", Phase::Needs),
+        node("c", "w1", Driver::Opencode, "h3", Phase::Needs),
     ];
     let connections = vec![
         conn("c1", "w1", "a", "b"),

@@ -141,7 +141,7 @@ pub struct LaunchSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelInfo {
     /// The exact string passed to the CLI's model flag (`--model` / `-m`). Verbatim,
-    /// never normalized: agy model names contain spaces/parens ("Gemini 3.5 Flash (Low)").
+    /// never normalized: model names may contain spaces/parens.
     pub id: String,
     /// Driver-reported qualifier, verbatim (e.g. codex catalog priority/flagship info).
     /// NEVER synthesized by Marsad — no hand-written "Most capable" sublabels.
@@ -152,7 +152,7 @@ pub struct ModelInfo {
 /// Provenance of a model catalog — drives the UI's "unverified list" treatment.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ModelListSource {
-    /// The CLI enumerated it (codex `debug models`, `agy models`).
+    /// The CLI enumerated it (codex `debug models`).
     Listed,
     /// Inferred from observation (claude: models seen in `system:init` + persisted
     /// last-known). UI MUST label this "unverified" and MUST offer free-text entry.
@@ -165,9 +165,8 @@ pub struct ModelCatalog {
     pub models: Vec<ModelInfo>,
     pub source: ModelListSource,
     /// UI must additionally offer a free-text model field. true for claude (always)
-    /// and codex (account catalog may lag); false for agy (the CLI accepts exactly
-    /// the `agy models` strings — an unknown model is a designated error case,
-    /// antigravity-research §6#4).
+    /// and codex (account catalog may lag); false where the CLI accepts exactly
+    /// its own listed model strings.
     #[serde(default)]
     pub free_text: bool,
 }
@@ -186,10 +185,10 @@ impl Default for ModelCatalog {
 /// One resumable past session discovered on the host.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiscoveredSession {
-    /// Driver-native resume id (claude UUID stem / codex thread uuid / agy conversation uuid).
+    /// Driver-native resume id (claude UUID stem / codex thread uuid).
     pub id: String,
     /// Project/workspace directory. None where the store doesn't record it
-    /// retrievably (agy: only the most-recent conversation per workspace is mapped).
+    /// retrievably.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// First user prompt, trimmed + truncated (~100 chars), driver-appropriate parse.
@@ -203,10 +202,10 @@ pub struct DiscoveredSession {
 /// What the session scan covered — claude's on-disk project encoding is lossy
 /// (`encode_project_dir`, crates/marsad-core/src/discovery.rs:205 — `/` and `_` both
 /// map to `-`), so claude sessions can only be enumerated per REQUESTED project;
-/// codex/agy stores are globally enumerable.
+/// the codex store is globally enumerable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SessionScope {
-    /// Everything the driver's store contains (codex, agy).
+    /// Everything the driver's store contains (codex).
     AllKnown,
     /// Only these requested project paths (claude). Grows as projects are requested;
     /// persisted so the cache replays them.
@@ -235,7 +234,7 @@ pub struct Capabilities {
     #[serde(default)]
     pub wasl_available: bool,
     /// Whether Marsad has a real LAUNCH DRIVER for this agent — a static,
-    /// per-driver fact (claude/codex → true, gemini → false), NOT a probe of
+    /// per-driver fact (claude/codex → true), NOT a probe of
     /// the host. This is what the launch UI gates on: a driver Marsad can
     /// actually spawn is launchable on every host; a bad host setup surfaces as
     /// a session error at launch, never a permanently greyed button.
@@ -261,7 +260,7 @@ pub struct Capabilities {
     /// first run). UI derives staleness from this — no boolean baked in.
     #[serde(default)]
     pub fetched_at_ms: u64,
-    /// Per-probe failures, verbatim, surfaced not swallowed ("agy models: exit 1: …").
+    /// Per-probe failures, verbatim, surfaced not swallowed ("codex debug models: exit 1: …").
     #[serde(default)]
     pub errors: Vec<String>,
 }

@@ -84,7 +84,7 @@ export const MOCK_BOARD: BoardView = {
       name: "Docs refresh",
       goal: "Bring the onboarding docs up to date with the new CLI flags",
       head_state: "working",
-      driver_dots: ["claude", "codex", "gemini"],
+      driver_dots: ["claude", "codex", "opencode"],
       host_chips: ["localhost", "wsl-box", "build-host"],
       session_count: 3,
       counts: { working: 2, needs: 0, error: 0, done: 1, paused: 0 },
