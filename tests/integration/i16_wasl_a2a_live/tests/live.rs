@@ -170,6 +170,7 @@ fn spawn_node(mcpd: &Path, tmpdir: &Path, label: &str) -> Node {
         default_protocol: "claude",
         claude_bin: None,
         opencode_bin: None,
+        codex_bin: None,
     });
     let cfg_path = tmpdir.join(format!("config-{label}-{id}.toml"));
     std::fs::write(&cfg_path, &toml).expect("write node config");
@@ -508,6 +509,7 @@ async fn dynamic_peer_consult_gate_answered_through_marsad() {
         default_protocol: "claude",
         claude_bin: None,
         opencode_bin: None,
+        codex_bin: None,
     });
     // render_wasl_node_toml emits no [gate] block → default authority is
     // "elicitation" (gate goes back to the MCP client). Force external-first so
