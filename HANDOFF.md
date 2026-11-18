@@ -13,7 +13,7 @@ CI (`ci.yml`, Linux/Windows/macOS): green at e60f4f5 —
 https://github.com/mewais/Marsad/actions/runs/44284211699
 
 ### Hardening round (flaky tests, stale gates, spawn deadlines)
-- **Flaky tests, root causes**: Wasit `create_id` (Windows CI) — `rename` answered before
+- **Flaky tests, root causes**: Wasit shim `echo_roundtrip_and_clean_exit` (Windows CI) — the endpoint now closes before the connections end; fake-cli `stderr_step` — read stderr to its end. Wasit `create_id` (Windows CI) — `rename` answered before
   `session.json` was written (coalescing writer); it now answers once the file holds the name.
   Wasl `ask_edge_gate_allow_once_then_result_returns` — `AuditLog::record` resolved before tokio's
   `File` reached the OS; entries are now flushed+synced before `record` returns and the node records
