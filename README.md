@@ -1,70 +1,65 @@
-# Marsad — مرصد
+# Marsad
 
-**A single control surface for managing many concurrent Claude Code sessions at once** — across the
-local machine and remote Linux hosts (over SSH). Launch, monitor, answer permission/plan/edit gates,
-prompt, review diffs & commit, configure, and revisit sessions — all without opening a terminal.
+Marsad is a dashboard for coding-agent CLI sessions (Claude Code, Codex, OpenCode, Kilo Code)
+on the local machine and on remote machines over SSH or WSL: launch, continue, watch and steer
+many sessions, answer their permission/question gates, review their git changes, open a
+terminal next to them. Orchestration across agents (Wasl) comes next.
 
-Marsad (Arabic *مرصد*, "observatory") removes terminal-tab sprawl. There are two clients:
+The backend is built on [Wasit](https://github.com/mewais/Wasit) (driver + session runtime +
+control protocol). See [ARCHITECTURE.md](ARCHITECTURE.md).
 
-- **Desktop** (primary): native Linux (also Windows/macOS), built with **Tauri** (Rust core + web
-  UI). Runs **local and remote** sessions.
-- **Mobile companion** (iOS + Android, **fully native**): SSH-only — monitor, answer gates, and
-  prompt on the go. Cannot run local sessions.
+## Layout
 
-## Status
+* `crates/marsad-proto` — wire types and the effective-config merge (`ts` feature → TypeScript)
+* `crates/marsad-store` — hub persistence
+* `crates/marsad-agent` — the daemon binary (`marsad-agent`)
+* `crates/marsad-client` — typed client used by the desktop shell
+* `apps/desktop` — Tauri + React desktop app (built separately; being rebuilt)
 
-Greenfield. This repository is currently **scaffolding**: an architecture decomposed into isolated
-blocks (Rust crates + native app packages), each with a separate, pre-written test suite. See
-[`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full block map, interface contracts, and the
-test-first build regime.
+## Build
 
-## How it works (architecture in one paragraph)
+Wasit is a cargo git dependency (branch `claude/awesome-euler-r7x45r`). To develop against a
+sibling checkout (`../Wasit`), create an untracked `.cargo/config.toml`:
 
-Almost all logic lives in a **shared Rust core** (`crates/marsad-*`): the Claude Code stream-json
-protocol, the session state machine, gates, diffing, persistence, host management, transport,
-lifecycle (reconnect-or-resume), notifications, and the dashboard view-models. The desktop wraps the
-core via **Tauri**; the phones bind it via **UniFFI** (generated Swift + Kotlin), keeping native code
-to UI + thin platform glue. A detached supervisor, **`marsad-agent`**, owns every `claude` process so
-**sessions outlive the GUI** — quitting or crashing the app never kills a running session. Every
-session is wrapped in **tmux** (Linux/macOS) or **ConPTY** (Windows) for resilience across SSH drops
-and sleep, and is re-adopted or `--resume`d on relaunch.
-
-Marsad never parses rendered terminal output. It drives Claude Code only through official, structured
-surfaces: `claude --print --input-format stream-json --output-format stream-json --verbose`, plus
-hooks and the permission/approval control protocol.
-
-## Repository layout
-
+```toml
+[patch."https://github.com/mewais/Wasit"]
+wasit-core = { path = "../Wasit/crates/wasit-core" }
+wasit-control = { path = "../Wasit/crates/wasit-control" }
+wasit-runtime = { path = "../Wasit/crates/wasit-runtime" }
+wasit-shim = { path = "../Wasit/crates/wasit-shim" }
+wasit-fake-cli = { path = "../Wasit/crates/wasit-fake-cli" }
 ```
-crates/            # the shared Rust core, one crate per block (B01–B13)
-apps/desktop/      # Tauri app: src-tauri (Rust bridge) + src (React/TS UI)
-apps/ios/          # native SwiftUI app over the UniFFI core
-apps/android/      # native Jetpack Compose app over the UniFFI core
-tests/integration/ # cross-block integration scenarios (i01–i08)
-docs/specs/        # full long-form spec per block
-fixtures/          # recorded real claude stream-json + hook payloads
-```
-
-## Building
-
-The Rust workspace builds with a stable toolchain:
 
 ```sh
-cargo build --workspace
-cargo test  --workspace        # block + integration suites
-cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
+cargo build --workspace --all-targets
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
 ```
 
-Desktop UI:
+TypeScript definitions for the GUI (every Marsad and Wasit wire type):
 
 ```sh
-pnpm --dir apps/desktop install
-pnpm --dir apps/desktop test   # Vitest
-cargo tauri dev                # run the desktop app
+cargo run -p marsad-proto --features ts --bin marsad-ts-export -- apps/desktop/src/bridge/generated
 ```
 
-Phones are built on their native toolchains (Xcode / Gradle). See each app's `AGENTS.md`.
+## Run
 
-## License
+```sh
+marsad-agent serve --hub            # the GUI machine's daemon (normally started by the client)
+marsad-agent stop                   # sessions keep running in their shims
+marsad-agent --version              # {"build":"…","target":"…"}
+```
 
-MIT © 2026 Mohammad Ewais
+Data lives in `~/.marsad` (`%LOCALAPPDATA%\Marsad` on Windows). Remote hosts get the same
+binary installed into `~/.marsad/bin/` on first connect; binaries for other target triples
+come from `$MARSAD_AGENT_BIN_DIR/<triple>/marsad-agent[.exe]`.
+
+## Tests
+
+All tests run real processes: the daemon binary, Wasit's scriptable fake agent CLI, and on
+Linux a real `sshd` started on a free localhost port (install `openssh-server` and
+`openssh-client`). Tests that need root (they create a local user with a password to exercise
+password and key+password sign-in) are `#[ignore]`d; run them with
+`cargo test -p marsad-agent --test remote -- --ignored`. Live tests against the real agent CLIs
+live in Wasit (`cargo test -p wasit-runtime --test live_config -- --ignored`).

@@ -3,12 +3,6 @@
 **/target
 Cargo.lock.bak
 
-# Nested sibling projects, kept as their OWN independent git repos inside this
-# working tree so they are in-ceiling for editing, but NEVER tracked by Marsad
-# (single source of truth per repo). Wasl = A2A/multi-agent runtime; Wasit =
-# the shared CLI-driver library both Wasl and Marsad depend on.
-/Wasl/
-/Wasit/
 
 # Local cargo registry cache (machine-specific; never commit)
 .cargo-cache/
@@ -28,27 +22,12 @@ apps/desktop/.vite/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
 
-# iOS
-apps/ios/build/
-apps/ios/*.xcodeproj/
-apps/ios/DerivedData/
-*.xcuserstate
-
-# Android
-apps/android/.gradle/
-apps/android/build/
-apps/android/app/build/
-apps/android/local.properties
-
 # Coverage
 *.profraw
 *.profdata
 /coverage/
 lcov.info
 
-# Fixtures captured locally that are too large / machine-specific go here;
-# the curated, checked-in fixtures live under fixtures/streams and fixtures/hooks.
-fixtures/_local/
 
 # Editor / OS
 .DS_Store
