@@ -1,7 +1,49 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { GateRequest, PendingGate, QuestionAnswer, QuestionPrompt } from "../../bridge/wire";
-import { gatePendingKey, useActions, usePending, type SessionView } from "../../state";
+import { gatePendingKey, useActions, useApp, usePending, type SessionView } from "../../state";
+import { toast } from "../../ui/toast";
 import { gateChoices, type GateChoice } from "./choices";
+
+/** What a gate asked for, in a few words (for "no longer needed"). */
+export function gateGist(g: GateRequest): string {
+  switch (g.gate_type) {
+    case "spawn":
+      return `${g.from} no longer waits to start ${g.name}.`;
+    case "handoff":
+      return `The handoff from ${g.from} to ${g.to} was withdrawn.`;
+    case "question":
+      return "The agent no longer waits for this answer.";
+    default:
+      return "The agent no longer waits for this decision.";
+  }
+}
+
+/**
+ * A gate the user has open (an expanded Inbox row, a session or inspector card) can disappear
+ * without an answer from here: its request was withdrawn (the asking turn was interrupted, the
+ * task cancelled, the session ended) or it was answered elsewhere. Say so instead of letting the
+ * card vanish silently. Unmounting for any other reason (navigation, a collapsed row, our own
+ * answer) says nothing.
+ */
+export function useGoneNotice(view: SessionView, pg: PendingGate, open: boolean) {
+  const { store } = useApp();
+  const rid = pg.gate.request_id;
+  const answered = usePending(gatePendingKey(view.key, rid));
+  const st = useRef({ open, answered: false, gate: pg.gate });
+  st.current.open = open;
+  st.current.gate = pg.gate;
+  if (answered) st.current.answered = true;
+  useEffect(
+    () => () => {
+      const { open: wasOpen, answered: ours, gate } = st.current;
+      if (!wasOpen || ours) return;
+      const snap = store.get().sessions[view.key];
+      if (snap?.pending_gates.some((g) => g.gate.request_id === rid)) return;
+      toast({ tone: "info", title: "No longer needed", detail: gateGist(gate) });
+    },
+    [store, view.key, rid],
+  );
+}
 
 export function useGateCommon(view: SessionView, pg: PendingGate) {
   const actions = useActions();

@@ -4,6 +4,7 @@ import { HandoffGate } from "./HandoffGate";
 import { PermissionGate } from "./PermissionGate";
 import { QuestionGate } from "./QuestionGate";
 import { SpawnGate } from "./SpawnGate";
+import { useGoneNotice } from "./useGate";
 import "./gates.css";
 
 /** Where the gate is drawn: Inbox row or the session view. */
@@ -23,6 +24,7 @@ export interface GateProps {
 
 /** The one gate component family used by Inbox rows and the session view. */
 export function Gate({ view, pg, density, active = false, expanded = false, onActivate }: GateProps) {
+  useGoneNotice(view, pg, density === "full" || expanded);
   const common = { view, density, active, expanded, onActivate };
   switch (pg.gate.gate_type) {
     case "question":

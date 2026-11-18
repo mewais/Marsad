@@ -106,7 +106,7 @@ pub async fn ask_user(
                     };
                 }
                 SessionEventKind::Agent {
-                    event: AgentEvent::GateResolved { request_id },
+                    event: AgentEvent::GateResolved { request_id, .. },
                 } if request_id == r.request_id => {
                     guard.armed = false;
                     break 'outer AskUserReply::cancelled("the question was withdrawn");

@@ -192,3 +192,55 @@ describe("spawn gates", () => {
     await waitFor(() => expect(sent().slice(-1)[0]?.params).toMatchObject({ command: { command: "answer_gate", request_id: "wasl-spawn-t1", decision: { choice: "deny", text: "not now" } } }));
   });
 });
+
+describe("a gate that goes away while it is open", () => {
+  const spawn: GateRequest = {
+    gate_type: "spawn", request_id: "wasl-spawn-gone", from: "planner", name: "scout", role: "Looks around the repo", host: "hetzner-ax41", driver: "Claude Code", model: null, cwd: "~/src/x", mode: null, instruction: null,
+    workstream: "Invoice export v2", new_workstream: false, details: null, choices: SPAWN_CHOICES,
+  };
+
+  async function openRow() {
+    localStorage.clear();
+    const { toastStore } = await import("../../src/ui/toast");
+    toastStore.set([]);
+    const backend = quietBackend();
+    const app = createApp(backend);
+    const s = sessionByName(backend, "tile-cache-eviction");
+    await waitFor(() => expect(app.store.get().sessions[s.key]).toBeDefined());
+    backend.raiseGate(s.host, s.id, spawn);
+    await waitFor(() => expect(app.store.get().sessions[s.key].pending_gates.some((g) => g.gate.request_id === spawn.request_id)).toBe(true));
+    const { ToastRegion } = await import("../../src/ui");
+    const { InboxRow } = await import("../../src/features/inbox/InboxRow");
+    render(
+      <AppProvider value={app}>
+        <RouterProvider history={memoryHistory()}>
+          <InboxRow sessionKey={s.key} selected onSelect={() => {}} onOpen={() => {}} />
+          <ToastRegion />
+        </RouterProvider>
+      </AppProvider>,
+    );
+    await waitFor(() => expect(document.querySelector('[data-gate="spawn"]')).not.toBeNull());
+    return { backend, app, s };
+  }
+
+  it("withdrawn: the card leaves with a 'no longer needed' toast, and a late answer says the same instead of failing", async () => {
+    const { backend, app, s } = await openRow();
+    backend.withdrawGate(s.host, s.id, spawn.request_id);
+    await waitFor(() => expect(document.querySelector('[data-gate="spawn"]')).toBeNull());
+    expect(await screen.findByText("No longer needed")).toBeInTheDocument();
+    expect(screen.getByText("planner no longer waits to start scout.")).toBeInTheDocument();
+    // An answer already on its way (or sent from another view) meets the typed refusal.
+    expect(await app.actions.answerGate(s.key, spawn.request_id, { choice: "allow_once" })).toBe(false);
+    await waitFor(() => expect(screen.getByText(/withdrawn before your answer arrived/)).toBeInTheDocument());
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("answered from here: the card leaves without a toast", async () => {
+    const user = userEvent.setup();
+    await openRow();
+    const row = document.querySelector('[data-gate="spawn"]') as HTMLElement;
+    await user.click(within(row).getByRole("button", { name: /^Allow once/ }));
+    await waitFor(() => expect(document.querySelector('[data-gate="spawn"]')).toBeNull());
+    expect(screen.queryByText("No longer needed")).toBeNull();
+  });
+});

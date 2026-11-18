@@ -25,6 +25,12 @@ export interface Actions {
   refreshGit(key: SessionKey): void;
 }
 
+/** The answer reached a gate whose request is gone (the runtime's typed `gate_withdrawn`). */
+export function isGateWithdrawn(e: unknown): boolean {
+  const r = e as { code?: string; data?: { error?: string } | null } | undefined;
+  return r?.code === "gate_withdrawn" || r?.data?.error === "gate_withdrawn";
+}
+
 export const gatePendingKey = (key: SessionKey, requestId: string) => `gate:${key}:${requestId}`;
 
 /**
@@ -53,7 +59,8 @@ export function createActions(store: AppStore, api: Api): Actions {
       return r ?? (true as never);
     } catch (e) {
       setPending(pk, null);
-      toast({ tone: "err", title: failTitle, detail: errorMessage(e) });
+      if (isGateWithdrawn(e)) toast({ tone: "info", title: "No longer needed", detail: "The request was withdrawn before your answer arrived; nothing was done." });
+      else toast({ tone: "err", title: failTitle, detail: errorMessage(e) });
       return undefined;
     }
   };

@@ -3,4 +3,4 @@
 /**
  * What a command did when the session applied it (journal order).
  */
-export type CommandStatus = { "status": "sent" } | { "status": "queued" } | { "status": "unsupported", operation: string, } | { "status": "rejected", reason: string, } | { "status": "not_running", reason: string, };
+export type CommandStatus = { "status": "sent" } | { "status": "queued" } | { "status": "unsupported", operation: string, } | { "status": "rejected", reason: string, } | { "status": "not_running", reason: string, } | { "status": "withdrawn", request_id: string, };

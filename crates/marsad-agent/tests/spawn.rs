@@ -833,3 +833,83 @@ async fn fake_agent_spawns_through_its_mcp_tools() {
     assert!(all[0].node("calc").unwrap().spawned_by.is_some());
     stop_hub(&c).await;
 }
+
+/// A spawn gate raised from a turn (the agent's `spawn_agent` call blocks it) is withdrawn when
+/// the user interrupts that turn: the call fails "withdrawn", the gate leaves the session with
+/// `gate_resolved` reason "withdrawn", a late "allow" is refused with the typed
+/// `gate_withdrawn` error, and nothing is launched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spawn_gate_is_withdrawn_when_the_asking_turn_is_interrupted() {
+    let d = TempDir::new();
+    let c = hub_client(&d.path().join("l"));
+    let hub = HostId::new("hub");
+    let work = d.path().join("w");
+    std::fs::create_dir_all(&work).unwrap();
+    set_host_layers(&c, d.path(), &[&hub]).await;
+    let mut req = LaunchRequest::new("claude");
+    req.cwd = Some(work.to_string_lossy().into_owned());
+    req.overrides = OverrideLayer {
+        env: scenario_env(
+            d.path(),
+            &Scenario::builder()
+                .turn(Turn::builder().say("thinking").wait_for_interrupt())
+                .build(),
+        ),
+        ..OverrideLayer::default()
+    };
+    let solo = c.launch(req).await.unwrap();
+    let me = NodeSession {
+        host: hub.clone(),
+        session: solo.id.clone(),
+    };
+    let rt = c.runtime(None);
+    wait_snap(&c, &me, "idle", |s| s.phase.name() == "idle").await;
+    rt.command(&solo.id, Command::Prompt { text: "go".into() })
+        .await
+        .unwrap();
+    wait_snap(&c, &me, "turn running", |s| s.turn.is_some()).await;
+
+    let mut pending = spawn_bg(
+        &c,
+        &me,
+        "w1",
+        json!({"name": "scout", "role": "looks around"}),
+    );
+    let gate = gate_on(&c, &me, &mut pending).await;
+    rt.command(&solo.id, Command::Interrupt).await.unwrap();
+    let e = tokio::time::timeout(Duration::from_secs(120), pending)
+        .await
+        .expect("spawn answered")
+        .unwrap()
+        .expect_err("withdrawn");
+    assert!(e.contains("withdrawn"), "{e}");
+    wait_snap(&c, &me, "gate gone", |s| spawn_gate_of(s).is_none()).await;
+    let history = rt.history(&solo.id, None, 1000).await.unwrap();
+    assert!(history.events.iter().any(|ev| matches!(
+        &ev.kind,
+        marsad_proto::runtime::SessionEventKind::Agent {
+            event: marsad_proto::AgentEvent::GateResolved { request_id, reason }
+        } if request_id == gate.request_id() && reason.as_deref() == Some("withdrawn")
+    )));
+    let late = rt
+        .command(
+            &solo.id,
+            Command::AnswerGate {
+                request_id: gate.request_id().into(),
+                decision: SpawnDecision::AllowOnce.to_gate(),
+            },
+        )
+        .await;
+    assert!(
+        matches!(
+            &late,
+            Err(wasit_runtime::ClientError::Command(
+                wasit_runtime::wire::CommandError::GateWithdrawn { .. }
+            ))
+        ),
+        "{late:?}"
+    );
+    assert!(c.workstreams().await.unwrap().is_empty());
+    assert_eq!(rt.list().await.unwrap().len(), 1);
+    stop_hub(&c).await;
+}

@@ -3,4 +3,4 @@
 /**
  * Why a command was not accepted.
  */
-export type CommandError = { "error": "unsupported", operation: string, } | { "error": "not_running", reason: string, } | { "error": "rejected", reason: string, } | { "error": "timeout" } | { "error": "busy" } | { "error": "session_not_found", id: string, };
+export type CommandError = { "error": "unsupported", operation: string, } | { "error": "not_running", reason: string, } | { "error": "rejected", reason: string, } | { "error": "timeout" } | { "error": "busy" } | { "error": "session_not_found", id: string, } | { "error": "gate_withdrawn", request_id: string, };

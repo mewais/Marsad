@@ -8,6 +8,8 @@ export interface Entry {
   events: SessionEvent[];
   subs: Set<(e: unknown) => void>;
   host: HostId;
+  /** External gates withdrawn without an answer (a late answer is refused, typed). */
+  withdrawn?: Set<string>;
 }
 
 export const err = (code: string, message: string, data?: unknown): RpcError => ({ code, message, data: (data ?? null) as RpcError["data"] });
@@ -37,6 +39,7 @@ export class SessionSim {
       case "answer_gate":
       case "answer_question": {
         const g = e.snap.pending_gates.find((x) => x.gate.request_id === c.request_id);
+        if (!g && e.withdrawn?.has(c.request_id)) throw err("gate_withdrawn", `the gate ${c.request_id} is no longer needed (withdrawn)`, { error: "gate_withdrawn", request_id: c.request_id });
         if (!g) throw err("rejected", `Gate ${c.request_id} is not pending.`, { error: "rejected", reason: "gate not pending" });
         const picked = c.command === "answer_gate" ? g.gate.gate_type !== "question" && g.gate.choices.find((x) => x.id === c.decision.choice) : undefined;
         if (c.command === "answer_gate" && !picked) throw err("rejected", `Gate ${c.request_id} offers no choice ${c.decision.choice}.`, { error: "rejected", reason: "no such choice" });
@@ -96,6 +99,16 @@ export class SessionSim {
     if (gates.length) return this.h.publish(e);
     this.setPhase(e, { state: "working" });
     this.h.after(1200, () => this.finishTurn(e, reply));
+  }
+
+  /** The request behind an external gate went away: the gate leaves without an answer. */
+  withdrawGate(e: Entry, requestId: string) {
+    (e.withdrawn ??= new Set()).add(requestId);
+    const gates = e.snap.pending_gates.filter((g) => g.gate.request_id !== requestId);
+    this.emit(e, { kind: "agent", event: { type: "gate_resolved", request_id: requestId, reason: "withdrawn" } });
+    e.snap = { ...e.snap, pending_gates: gates };
+    if (gates.length) return this.h.publish(e);
+    this.setPhase(e, { state: e.snap.turn ? "working" : "idle" });
   }
 
   raiseGate(e: Entry, gate: GateRequest) {

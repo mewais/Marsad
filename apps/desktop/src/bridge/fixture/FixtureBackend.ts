@@ -432,6 +432,11 @@ export class FixtureBackend implements Backend {
     this.sim.raiseGate(this.hosts.get(hostId)!.sessions.get(sessionId)!, gate);
   }
 
+  /** Withdraw a pending external gate, as if its request went away. */
+  withdrawGate(hostId: HostId, sessionId: string, requestId: string) {
+    this.sim.withdrawGate(this.hosts.get(hostId)!.sessions.get(sessionId)!, requestId);
+  }
+
   sessionIds(hostId: HostId): string[] {
     return [...(this.hosts.get(hostId)?.sessions.keys() ?? [])];
   }
