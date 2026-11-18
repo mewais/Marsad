@@ -160,7 +160,7 @@ jobs:
         working-directory: apps/desktop
       - name: Build installers
         working-directory: apps/desktop
-        run: pnpm tauri build --config src-tauri/tauri.bundle.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+        run: pnpm tauri build --config src-tauri/tauri.bundle.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --ignore-version-mismatches
         env:
           NO_STRIP: "true"
       - name: Collect installers
