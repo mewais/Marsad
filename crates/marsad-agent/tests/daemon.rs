@@ -412,7 +412,11 @@ async fn fs_and_base_config() {
         .fs_list(
             None,
             marsad_proto::fs::FsListRequest {
-                path: "/definitely/not/here".into(),
+                path: d
+                    .path()
+                    .join("definitely/not/here")
+                    .to_string_lossy()
+                    .into_owned(),
                 show_hidden: false,
                 dirs_only: false,
             },
