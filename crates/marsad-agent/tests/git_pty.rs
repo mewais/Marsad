@@ -149,6 +149,24 @@ fn line(cmd: &str) -> String {
     }
 }
 
+/// The next output event; on a timeout, fail with what the terminal printed so far.
+async fn next_or_dump(
+    s: &mut marsad_client::Subscription<PtyEvent>,
+    text: &str,
+) -> (wasit_control::Cursor, PtyEvent) {
+    match tokio::time::timeout(std::time::Duration::from_secs(30), s.next()).await {
+        Ok(Some(Ok(x))) => x,
+        other => panic!(
+            "no terminal output ({}); printed so far: {text:?}",
+            match other {
+                Ok(Some(Err(e))) => e.to_string(),
+                Ok(None) => "ended".into(),
+                _ => "timed out".into(),
+            }
+        ),
+    }
+}
+
 fn decode(e: &PtyEvent) -> (u64, String) {
     match e {
         PtyEvent::Output { offset, data } => (
@@ -185,10 +203,14 @@ async fn pty_echo_and_scrollback_replay() {
     let mut text = String::new();
     let mut last = 0u64;
     while !text.contains("marsad-42") {
-        let (cur, ev) = next(&mut out).await;
+        let (cur, ev) = next_or_dump(&mut out, &text).await;
         let (off, chunk) = decode(&ev);
         assert_eq!(off, last, "contiguous output");
         last = cur.as_u64().unwrap();
+        // Answer a cursor-position query like a terminal does (ConPTY asks before it draws).
+        if chunk.contains("\x1b[6n") {
+            c.pty_input(None, &info.id, "\x1b[1;1R").await.unwrap();
+        }
         text.push_str(&chunk);
     }
     drop(out);
@@ -204,7 +226,7 @@ async fn pty_echo_and_scrollback_replay() {
     let mut resumed = c.pty_output(None, &info.id, Some(last));
     let mut text = String::new();
     while !text.contains("after-2") {
-        let (_, ev) = next(&mut resumed).await;
+        let (_, ev) = next_or_dump(&mut resumed, &text).await;
         let (off, chunk) = decode(&ev);
         assert!(off >= last);
         text.push_str(&chunk);
