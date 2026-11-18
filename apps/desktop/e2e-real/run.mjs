@@ -16,6 +16,7 @@
 // and a display (run under `xvfb-run -a dbus-run-session`; `pnpm test:real` does that).
 
 import { spawn, spawnSync, execFileSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -256,6 +257,12 @@ const go = (hash) => wd.exec((h) => { location.hash = h; }, hash);
 const rpc = (method, params = null, host = null) => wd.execAsync((m, p, h) => window.__TAURI__.core.invoke("rpc", { method: m, params: p, host: h }), method, params, host);
 const state = () => wd.exec(() => window.__marsad?.state?.() ?? null);
 
+/** The UI theme is a per-window preference (localStorage), applied on load. */
+async function setTheme(t) {
+  await wd.exec((t) => { localStorage.setItem("marsad.theme", t); location.reload(); }, t).catch(() => {});
+  await waitFor(() => wd.exec((t) => document.documentElement.getAttribute("data-theme") === t && !!document.querySelector(".ibx-item, .placeholder, .empty, .sd-head, main"), t), `theme ${t}`, 30_000);
+}
+
 async function shot(name) {
   if (!dirs.shots) return;
   await sleep(400);
@@ -418,6 +425,7 @@ scenario_("model-mode-slash", async () => {
   await button("Apply to running session");
   await waitFor(async () => { const x = await snapOf(s.id); return x.model === "fake/haiku-4" && x.mode === "plan"; }, "model and mode applied");
   await shot("13-session-config");
+  if (!(await snapOf(s.id)).slash_commands.some((c) => c.name === "review")) return "model and mode only: this persona reports no slash commands (live-*-slash covers them)";
   await openSession(s);
   await type("textarea[aria-label=Message]", "/rev");
   await el("[role=listbox][aria-label='Slash commands']");
@@ -485,7 +493,9 @@ scenario_("continue-latest-and-resume", async () => {
 });
 
 scenario_("stop-delete", async () => {
-  const s = launched.kilo ?? launched.codex;
+  // Its own session: the others are used by later scenarios.
+  const s = await launchViaDialog({ agent: DRIVER_NAMES.codex, cwd: project, prompt: "a session to stop and delete" });
+  await waitPhase(s.id, "idle");
   await openSession(s);
   await button("Stop");
   await waitPhase(s.id, "exited");
@@ -747,6 +757,64 @@ scenario_("ssh-host-password", async () => {
   await waitFor(async () => (await linkOf("lab-pc"))?.state?.state === "connected", "lab-pc connected again", 120_000);
 });
 
+// A host that signs in with a password and a second factor: sshd with keyboard-interactive
+// through PAM (pam_unix, then pam_oath with a TOTP secret); both prompts are answered in the
+// sign-in dialog. Changes /etc/pam.d/sshd for the run (restored in the teardown).
+const otp = { port: 0, restore: null };
+function totp(hex, t = Date.now()) {
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(t / 1000 / 30)));
+  const h = crypto.createHmac("sha1", Buffer.from(hex, "hex")).update(counter).digest();
+  const o = h[h.length - 1] & 0xf;
+  return String((h.readUInt32BE(o) & 0x7fffffff) % 1_000_000).padStart(6, "0");
+}
+scenario_("ssh-host-second-factor", async () => {
+  if (!startSshd()) return "skipped: needs root and sshd";
+  const pamOath = ["/lib/x86_64-linux-gnu/security/pam_oath.so", "/usr/lib/x86_64-linux-gnu/security/pam_oath.so"].find((p) => fs.existsSync(p));
+  if (!pamOath) return "skipped: needs pam_oath (libpam-oath)";
+  const d = path.join(root, "ssh");
+  const secret = crypto.randomBytes(20).toString("hex");
+  const users = path.join(d, "users.oath");
+  fs.writeFileSync(users, `HOTP/T30/6 ${sshd.pwUser} - ${secret}\n`, { mode: 0o600 });
+  otp.restore = fs.readFileSync("/etc/pam.d/sshd", "utf8");
+  fs.writeFileSync("/etc/pam.d/sshd", ["auth requisite pam_unix.so", `auth required ${pamOath} usersfile=${users} window=4 digits=6`, "account required pam_unix.so", "session required pam_permit.so", ""].join("\n"));
+  otp.port = sshd.port + 1;
+  fs.writeFileSync(path.join(d, "sshd_otp_config"), [
+    `Port ${otp.port}`, "ListenAddress 127.0.0.1", `HostKey ${path.join(d, "hostkey")}`, "UsePAM yes", "KbdInteractiveAuthentication yes",
+    "PasswordAuthentication no", "PubkeyAuthentication no", "AuthenticationMethods keyboard-interactive", "StrictModes no",
+    `PidFile ${path.join(d, "sshd_otp.pid")}`, "LogLevel ERROR", "",
+  ].join("\n"));
+  const hostpub = fs.readFileSync(path.join(d, "hostkey.pub"), "utf8").trim().split(/\s+/);
+  fs.appendFileSync(sshd.knownHosts, `[127.0.0.1]:${otp.port} ${hostpub[0]} ${hostpub[1]}\n`);
+  otp.child = spawn("/usr/sbin/sshd", ["-D", "-e", "-f", path.join(d, "sshd_otp_config")], { stdio: ["ignore", "ignore", fs.openSync(path.join(d, "sshd_otp.log"), "a")] });
+  await sleep(500);
+  await go("#/hosts");
+  await button("Add host");
+  await el("[role=dialog]");
+  await field("Name", "secure-box");
+  await field("SSH target", `${sshd.pwUser}@127.0.0.1`);
+  await field("Port", String(otp.port));
+  await field("Extra ssh options", `UserKnownHostsFile=${sshd.knownHosts}`);
+  await click("[role=dialog] button.primary", "Add and connect");
+  const answer = async (want, value) => {
+    await waitFor(async () => {
+      if (await wd.exec(() => !!document.querySelector(".authp-input"))) return true;
+      if ((await linkOf("secure-box"))?.state?.state === "auth_needed") { await resetUi(); await go("#/hosts"); await click(".hrow[data-host]", "secure-box"); await click("button.primary", "Connect", 20_000); }
+      return false;
+    }, `the ${want} prompt`, 90_000);
+    const prompt = await wd.exec(() => document.querySelector("[role=dialog]")?.innerText ?? "");
+    if (!new RegExp(want, "i").test(prompt)) throw new Error(`expected a ${want} prompt, got ${JSON.stringify(prompt.slice(0, 200))}`);
+    if (want === "one-time") await shot("43-host-sign-in-second-factor");
+    await type(".authp-input", value());
+    await button("Sign in");
+    await waitFor(async () => !(await wd.exec(() => !!document.querySelector(".authp-input"))), "the prompt answered", 20_000).catch(() => {});
+  };
+  await answer("password", () => sshd.password);
+  await answer("one-time", () => totp(secret));
+  await waitFor(async () => (await linkOf("secure-box"))?.state?.state === "connected", "secure-box connected", 180_000);
+  await resetUi();
+});
+
 // Live CLIs: tiny prompts, cheapest models. Each driver: launch, every one of its own gate
 // choices, interrupt, model + mode switch, a slash command, and continue-latest / resume-by-id
 // of conversations started in a terminal, outside Marsad.
@@ -892,7 +960,7 @@ for (const [d, L] of Object.entries(LIVE)) {
     if (!s) return "no session";
     const x = await snapOf(s.id);
     const names = x.slash_commands.map((c) => c.name);
-    const name = ["context", "cost", "status", "review", "init"].find((n) => names.includes(n)) ?? names[0];
+    const name = ["context", "cost", "status", "compact", "review", "init"].find((n) => names.includes(n)) ?? names[0];
     if (!name) throw new Error("the CLI reported no slash commands");
     const before = x.turns_completed;
     await openSession(s);
@@ -1069,7 +1137,7 @@ scenario_("showcase", async () => {
   if (lo) { await openSession(lo); await sendPrompt("Use the ask_user tool (marsad MCP server) to ask me which export format to ship first, as a single choice between PDF, CSV and XLSX, each with a one-line description. Then reply with my choice."); await waitFor(async () => (await pendingGate(lo.id))?.gate_type === "question", "ask_user question", 120_000).catch(() => {}); }
   await sleep(1500);
 
-  await rpc("store.settings.set", { key: "theme", value: "dark" });
+  await setTheme("dark");
   await go("#/inbox");
   await sleep(1500);
   await shot("dark-01-inbox");
@@ -1111,10 +1179,10 @@ scenario_("showcase", async () => {
   await key("k", { ctrlKey: true }); await sleep(700); await shot("dark-17-command-palette"); await key("Escape"); await resetUi();
   await key("?"); await sleep(700); await shot("dark-18-shortcut-sheet"); await key("Escape"); await resetUi();
   // Light.
-  await rpc("store.settings.set", { key: "theme", value: "light" });
+  await setTheme("light");
   await go("#/inbox"); await sleep(1200); await shot("light-01-inbox");
   await go(`#/workstreams/${ws.id}`); await sleep(1200); await shot("light-02-workstream-graph-running");
-  await rpc("store.settings.set", { key: "theme", value: "dark" });
+  await setTheme("dark");
   // Leave nothing waiting on a person.
   for (const id of [lc?.id, lo?.id].filter(Boolean)) {
     const g = await pendingGate(id);
@@ -1144,7 +1212,7 @@ try {
   await startApp();
   local = (await rpc("hosts.list")).hosts.find((h) => h.kind.kind === "local").id;
   // Screenshots for the owner are taken in the dark theme (the showcase adds light ones).
-  if (dirs.shots) await rpc("store.settings.set", { key: "theme", value: "dark" });
+  if (dirs.shots) await setTheme("dark");
   for (const sc of scenarios) {
     if (sc.real && !REAL) continue;
     if (ONLY && !ONLY.includes(sc.name)) continue;
@@ -1172,6 +1240,8 @@ try {
   await wd.quit().catch(() => {});
   driver.kill();
   sshd.child?.kill();
+  otp.child?.kill();
+  if (otp.restore != null) fs.writeFileSync("/etc/pam.d/sshd", otp.restore);
   if (sshd.pwUser) spawnSync("userdel", ["-r", sshd.pwUser], { stdio: "ignore" });
   spawnSync(bin.agent, ["stop", "--data", dirs.data], { stdio: "ignore" });
   // Sessions outlive the daemon by design (their shims hold them); end this run's ones.
