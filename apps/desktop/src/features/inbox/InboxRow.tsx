@@ -1,10 +1,10 @@
 import { memo } from "react";
 import { agoShort, money } from "../../lib/format";
 import { Button, DriverBadge, HostChip, ConnState, Icon, StatusPill } from "../../ui";
-import { useDriver, useHostLink, useRenderProbe, useSessionView } from "../../state";
+import { linkView, useDriver, useHost, useRenderProbe, useSessionView } from "../../state";
 import { Gate } from "../gates/Gate";
 import { DoneActions, FailedActions, NewDot, WorkstreamTag } from "../common/SessionBits";
-import type { SessionKey } from "../../bridge/types";
+import type { SessionKey } from "../../bridge/wire";
 
 export interface InboxRowProps {
   sessionKey: SessionKey;
@@ -17,7 +17,7 @@ export interface InboxRowProps {
 export const InboxRow = memo(function InboxRow({ sessionKey, selected, onSelect, onOpen }: InboxRowProps) {
   useRenderProbe(`row:${sessionKey}`);
   const v = useSessionView(sessionKey);
-  const host = useHostLink(v?.host ?? "");
+  const host = useHost(v?.host ?? "");
   const drv = useDriver(v?.driver ?? "");
   if (!v) return null;
   const needs = v.status === "needs";
@@ -42,7 +42,7 @@ export const InboxRow = memo(function InboxRow({ sessionKey, selected, onSelect,
           {host ? (
             <>
               <HostChip host={host} />
-              {host.link !== "connected" ? <ConnState host={host} short /> : null}
+              {!linkView(host.link, host.authPrompt).connected ? <ConnState host={host} short /> : null}
             </>
           ) : null}
         </div>

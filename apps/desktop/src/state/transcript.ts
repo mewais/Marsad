@@ -1,6 +1,7 @@
-import type { Backend } from "../bridge/backend";
-import type { HistoryPage, SessionEvent, SessionKey } from "../bridge/types";
-import { methods, splitKey, topics } from "../bridge/types";
+import type { Api } from "../bridge/api";
+import { errorMessage } from "../bridge/api";
+import type { SessionEvent, SessionKey } from "../bridge/wire";
+import { splitKey } from "../bridge/wire";
 import type { AppStore, TranscriptSlice } from "./model";
 
 const PAGE = 60;
@@ -9,7 +10,7 @@ const PAGE = 60;
  * Per-session transcripts are loaded lazily when a session view opens: the latest page of history,
  * then a live subscription from its last cursor. Older pages load on demand.
  */
-export function createTranscripts(store: AppStore, backend: Backend) {
+export function createTranscripts(store: AppStore, api: Api) {
   const live = new Map<SessionKey, { n: number; off: () => void }>();
 
   const blank: TranscriptSlice = { events: [], hasMore: false, loading: false };
@@ -29,11 +30,11 @@ export function createTranscripts(store: AppStore, backend: Backend) {
     const { host, id } = splitKey(key);
     patch(key, { loading: true, error: undefined });
     try {
-      const page = await backend.request<HistoryPage>(methods.SESSION_HISTORY, { id, limit: PAGE }, { host });
+      const page = await api.history(host, { id, limit: PAGE });
       patch(key, { events: page.events, hasMore: page.has_more, loading: false });
       return page.events[page.events.length - 1]?.cursor ?? 0;
     } catch (e) {
-      patch(key, { loading: false, error: (e as { message?: string }).message ?? "Could not load history" });
+      patch(key, { loading: false, error: errorMessage(e) });
       return null;
     }
   }
@@ -62,7 +63,7 @@ export function createTranscripts(store: AppStore, backend: Backend) {
       void (async () => {
         const from = existing?.events.length ? existing.events[existing.events.length - 1].cursor : await load(key);
         if (from == null || live.get(key) !== entry) return;
-        entry.off = backend.subscribe(topics.sessionEvents(id), { host, from }, (e) => append(key, e as SessionEvent));
+        entry.off = api.subscribe.sessionEvents(host, id, from, (e) => append(key, e));
       })();
       return () => release(key);
     },
@@ -73,13 +74,13 @@ export function createTranscripts(store: AppStore, backend: Backend) {
       if (!cur || cur.loading || !cur.hasMore || !cur.events.length) return;
       patch(key, { loading: true });
       try {
-        const page = await backend.request<HistoryPage>(methods.SESSION_HISTORY, { id, before: cur.events[0].cursor, limit: PAGE }, { host });
+        const page = await api.history(host, { id, before: cur.events[0].cursor, limit: PAGE });
         store.set((s) => {
           const t = s.transcripts[key];
           return { ...s, transcripts: { ...s.transcripts, [key]: { ...t, events: [...page.events, ...t.events], hasMore: page.has_more, loading: false } } };
         });
       } catch (e) {
-        patch(key, { loading: false, error: (e as { message?: string }).message });
+        patch(key, { loading: false, error: errorMessage(e) });
       }
     },
   };

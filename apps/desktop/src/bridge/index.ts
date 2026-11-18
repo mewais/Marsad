@@ -3,7 +3,8 @@ import { FixtureBackend } from "./fixture/FixtureBackend";
 import { TauriBackend } from "./tauri";
 
 export * from "./backend";
-export * from "./types";
+export * from "./wire";
+export * from "./api";
 
 /** Tauri when its runtime is present, otherwise the in-memory fixture (browser dev, Playwright). */
 export function createBackend(search = typeof location !== "undefined" ? location.search : ""): Backend {

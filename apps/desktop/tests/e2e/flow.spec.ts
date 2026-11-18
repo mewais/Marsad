@@ -8,10 +8,10 @@ test("inbox to answered gate to session to prompt", async ({ page }) => {
   await expect(list.getByText("pdf-renderer-worker")).toBeVisible();
   await expect(page.getByText("4 need you")).toBeVisible();
 
-  // Answer the permission gate with the agent's own first choice.
+  // Answer the permission gate (Claude sends no wording, so Marsad labels it "Allow").
   const pdf = page.locator('[data-session^="hz/"]', { hasText: "pdf-renderer-worker" });
   await expect(pdf).toHaveAttribute("data-status", "needs");
-  await pdf.getByRole("button", { name: /^Yes$/ }).click();
+  await pdf.getByRole("button", { name: /^Allow$/ }).click();
   await expect(pdf).not.toHaveAttribute("data-status", "needs");
   await expect(page.getByText("3 need you")).toBeVisible();
 

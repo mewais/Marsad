@@ -32,7 +32,7 @@ describe("session slices", () => {
     return { backend, app };
   }
 
-  it("loads all hosts, keyed by hostId/sessionId, and learns drivers from host.info", async () => {
+  it("loads all hosts, keyed by hostId/sessionId, and learns drivers from drivers.inventory", async () => {
     const { app } = await boot();
     const keys = Object.keys(app.store.get().sessions);
     expect(keys.every((k) => /^(x1|hz|win)\/.+/.test(k))).toBe(true);
@@ -69,8 +69,8 @@ describe("session slices", () => {
     expect(g.needs.length).toBe(4);
     expect(g.failed.length).toBe(2);
     expect(g.done.length).toBe(3);
-    expect(g.working.length).toBe(3);
-    expect(g.idle.length).toBe(3);
+    expect(g.working.length).toBe(2);
+    expect(g.idle.length).toBe(4);
   });
 
   it("loads transcripts lazily, paged, then follows live events", async () => {

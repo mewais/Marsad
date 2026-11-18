@@ -17,8 +17,21 @@ export function deriveInitials(displayName: string): string {
   return (w.length > 1 ? w[0] + w[w.length - 1] : w[0]).toUpperCase();
 }
 
-export function makeDriver(id: string, displayName: string, slot: number): DriverDescriptor {
-  return { id, displayName, initials: deriveInitials(displayName), slot: slot % 8 };
+/** Colour slot derived deterministically from the driver id (FNV-1a; seeded so the four known CLIs get distinct slots). */
+export function driverSlot(id: string): number {
+  let x = (2166136261 ^ 74711) >>> 0;
+  for (const c of id) {
+    x ^= c.charCodeAt(0);
+    x = Math.imul(x, 16777619) >>> 0;
+  }
+  x ^= x >>> 15;
+  return x % 8;
+}
+
+/** Presentation of a driver: colour from its id, initials from the display name the inventory reports (else the id). */
+export function makeDriver(id: string, displayName?: string): DriverDescriptor {
+  const name = displayName || id;
+  return { id, displayName: name, initials: deriveInitials(name), slot: driverSlot(id) };
 }
 
 export interface DriverBadgeProps {

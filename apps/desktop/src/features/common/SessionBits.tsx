@@ -1,4 +1,3 @@
-import type { HostLink } from "../../bridge/types";
 import { Button, Icon, Kbd } from "../../ui";
 import { sessionPath, useNavigate } from "../../router";
 import { useActions, type SessionView } from "../../state";
@@ -50,6 +49,4 @@ export function DoneActions({ view, showStat = true, keys }: { view: SessionView
   );
 }
 
-export function hostName(links: Record<string, HostLink>, id: string): string {
-  return links[id]?.name ?? id;
-}
+

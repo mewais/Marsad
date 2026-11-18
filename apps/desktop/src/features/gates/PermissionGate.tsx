@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { GateRequest, PendingGate } from "../../bridge/types";
+import type { GateRequest, PendingGate } from "../../bridge/wire";
 import { agoLong } from "../../lib/format";
 import { useShortcut } from "../../shortcuts/useShortcut";
 import { useDriver, type SessionView } from "../../state";

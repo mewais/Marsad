@@ -1,4 +1,7 @@
-import type { AgentEvent, Command, PendingGate, PlanEntry, SessionEvent, SessionEventKind } from "../types";
+import type { AgentEvent, Command, JsonValue, PendingGate, PlanEntry, SessionEvent } from "../wire";
+
+/** A session event without its cursor and time (distributes over the kinds). */
+export type SessionEventKind = SessionEvent extends infer E ? (E extends unknown ? Omit<E, "cursor" | "t"> : never) : never;
 import type { Spec } from "./sessions";
 
 /** Fixture-only: scripted transcripts. Cursors follow wire.rs (`seq << 16 | index`). */
@@ -22,7 +25,7 @@ class Builder {
     const c: Command = { command: "prompt", text };
     return this.push({ kind: "input", command: c, status: { status: "sent" } });
   }
-  tool(name: string, call_id: string, input: unknown, ok: boolean, result: unknown, dt = 3000) {
+  tool(name: string, call_id: string, input: JsonValue, ok: boolean, result: JsonValue, dt = 3000) {
     this.agent({ type: "tool_call_started", name, call_id, input, is_subagent: false }, dt);
     this.agent({ type: "tool_call_finished", call_id, name, ok, result }, 900);
   }
@@ -67,9 +70,18 @@ function genericTranscript(b: Builder, spec: Spec, rounds: number) {
     b.push({ kind: "phase", phase: { state: "failed", reason: spec.line } });
   } else if (spec.kind === "done" || spec.kind === "idle") {
     b.agent({ type: "assistant_delta", text: spec.line, message_id: "mdone" }, 3000);
-    b.agent({ type: "turn_completed", was_interrupted: false, num_turns: 3, usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: spec.cost }, reply: spec.line });
+    const usage = { input_tokens: Math.round(spec.cost * 170_000), output_tokens: Math.round(spec.cost * 15_000), cache_read_tokens: Math.round(spec.cost * 120_000), cache_creation_tokens: Math.round(spec.cost * 9_000), cost_usd: spec.cost };
+    const per_model = spec.driver === "claude" ? {
+      "claude-sonnet-4.5": { input_tokens: Math.round(usage.input_tokens * 0.8), output_tokens: Math.round(usage.output_tokens * 0.85), cost_usd: +(spec.cost * 0.86).toFixed(2), estimated: false },
+      "claude-haiku-4.5": { input_tokens: Math.round(usage.input_tokens * 0.2), output_tokens: Math.round(usage.output_tokens * 0.15), cost_usd: +(spec.cost * 0.14).toFixed(2), estimated: false },
+    } : undefined;
+    b.agent({ type: "turn_completed", was_interrupted: false, num_turns: 3, usage, per_model, reply: spec.line });
   } else if (spec.kind === "working") {
     b.agent({ type: "tool_call_started", name: "Edit", call_id: "edit-live", input: { file_path: "src-tauri/capabilities/default.json" }, is_subagent: false }, 2000);
+  }
+  if (spec.longHistory) {
+    b.agent({ type: "compaction", info: { trigger: "auto", pre_tokens: 168_400, post_tokens: 41_200, cumulative_dropped_tokens: 127_200, duration_ms: 9_400 } });
+    b.agent({ type: "rate_limit_notice", info: { status: "allowed_warning", resets_at: Math.floor(b.t / 1000) + 3 * 3600, rate_limit_type: "five_hour", overage_status: "allowed", is_using_overage: false } });
   }
   if (spec.n === 3) b.agent({ type: "plan_updated", entries: [{ content: "Run vitest on packages/export", priority: "high", status: "in_progress" }] });
 }

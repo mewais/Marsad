@@ -1,5 +1,5 @@
 import type { IconName } from "./Icon";
-import type { PhaseKind } from "../bridge/types";
+import type { PhaseKind } from "../bridge/wire";
 
 /** Everything the UI shows for a session's state: word, icon, colour class. One place. */
 export type StatusKey = "needs" | "failed" | "done" | "working" | "idle";

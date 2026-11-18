@@ -1,9 +1,10 @@
+import { linkView } from "../../src/state/hosts";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import {
-  Button, Checkbox, deriveInitials, Dialog, DriverBadge, linkWord, makeDriver, Menu, phaseToStatus, RadioGroup, Segmented, Select, StatusPill, Tabs, toast, ToastRegion, toastStore,
+  Button, Checkbox, deriveInitials, Dialog, DriverBadge, driverSlot, makeDriver, Menu, phaseToStatus, RadioGroup, Segmented, Select, StatusPill, Tabs, toast, ToastRegion, toastStore,
   VirtualList, ConnState, STATUS,
 } from "../../src/ui";
 
@@ -30,13 +31,18 @@ describe("DriverBadge and host link", () => {
     expect(deriveInitials("Claude Code")).toBe("CC");
     expect(deriveInitials("Codex")).toBe("CX");
     expect(deriveInitials("OpenCode")).toBe("OC");
-    render(<DriverBadge driver={makeDriver("zed", "Zed Agent", 5)} />);
+    render(<DriverBadge driver={makeDriver("zed", "Zed Agent")} />);
     expect(screen.getByText("ZA")).toBeInTheDocument();
+    expect(makeDriver("zed").slot).toBe(driverSlot("zed"));
+    expect(new Set(["claude", "codex", "opencode", "kilo"].map(driverSlot)).size).toBe(4);
   });
   it("states the link in words", () => {
-    expect(linkWord({ link: "reconnecting", retry_in_ms: 4000 })).toBe("Reconnecting in 4s");
-    render(<ConnState host={{ link: "offline" }} />);
-    expect(screen.getByText("Offline")).toBeInTheDocument();
+    const now = 1_000_000;
+    const at = (ms: number) => ({ secs_since_epoch: Math.floor(ms / 1000), nanos_since_epoch: 0 });
+    expect(linkView({ link: "remote", state: { state: "reconnecting", attempt: 2, next_at: at(now + 4000), last_error: "reset" } }, null, now).detail).toBe("Reconnecting in 4s");
+    expect(linkView({ link: "remote", state: { state: "provisioning", reason: { kind: "command_not_found", detail: "" } } }).word).toBe("Installing helper");
+    render(<ConnState host={{ link: { link: "remote", state: { state: "auth_needed", problem: "auth_needed", detail: "key rejected" } }, authPrompt: null }} />);
+    expect(screen.getByText("Sign-in needed")).toBeInTheDocument();
   });
 });
 

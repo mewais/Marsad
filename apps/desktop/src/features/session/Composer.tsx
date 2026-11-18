@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import type { SessionSnapshot } from "../../bridge/types";
+import type { SessionSnapshot } from "../../bridge/wire";
 import { useActions, usePending } from "../../state";
 import { Button, Icon, IconButton, Kbd, Select } from "../../ui";
 
@@ -62,11 +62,11 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
         <div className="comp-bar">
           <IconButton icon="slash" label="Slash commands" onClick={() => { setText("/"); ta.current?.focus(); }} disabled={!snap.capabilities.slash_commands} />
           {snap.available_modes.length ? (
-            <Select compact up label="Mode" leading={<Icon name="shield" size="xs" />} value={snap.mode} options={snap.available_modes.map((m) => ({ value: m.id, label: m.label, description: m.description }))}
+            <Select compact up label="Mode" leading={<Icon name="shield" size="xs" />} value={snap.mode ?? undefined} options={snap.available_modes.map((m) => ({ value: m.id, label: m.label, description: m.description }))}
               onChange={(v) => void actions.command(sessionKey, { command: "set_mode", mode: v }, { failTitle: "Could not change the mode" })} />
           ) : null}
           {snap.available_models.length ? (
-            <Select compact up label="Model" leading={<Icon name="sparkle" size="xs" />} value={snap.model} options={snap.available_models.map((m) => ({ value: m.id, label: m.display_name || m.id, description: m.description }))}
+            <Select compact up label="Model" leading={<Icon name="sparkle" size="xs" />} value={snap.model ?? undefined} options={snap.available_models.map((m) => ({ value: m.id, label: m.display_name || m.id, description: m.description }))}
               onChange={(v) => void actions.command(sessionKey, { command: "set_model", model: v }, { failTitle: "Could not change the model" })} />
           ) : null}
           <span className="sp" />

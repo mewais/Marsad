@@ -1,12 +1,26 @@
-import type { HostId, SessionKey } from "../bridge/types";
-import { splitKey } from "../bridge/types";
+import type { HostId, SessionKey } from "../bridge/wire";
+import { sessionKey, splitKey } from "../bridge/wire";
+import type { Workstream } from "../bridge/provisional/workstreams";
 import { STATUS_ORDER, type StatusKey } from "../ui/status";
 import { buildView, type SessionView } from "./domain";
+import { hostView, type HostView } from "./hosts";
 import type { AppState } from "./model";
+
+const wsIndex = new WeakMap<Workstream[], Map<SessionKey, string>>();
+/** Session key → workstream name, from the stored workstream documents. */
+export function workstreamIndex(list: Workstream[]): Map<SessionKey, string> {
+  let m = wsIndex.get(list);
+  if (!m) {
+    m = new Map();
+    for (const w of list) for (const n of w.nodes) if (n.session) m.set(sessionKey(n.host, n.session), w.name);
+    wsIndex.set(list, m);
+  }
+  return m;
+}
 
 export function selectView(s: AppState, key: SessionKey): SessionView | undefined {
   const snap = s.sessions[key];
-  return snap ? buildView(splitKey(key).host, snap, s.seen[key], s.lookedAt) : undefined;
+  return snap ? buildView(splitKey(key).host, snap, s.seen[key], s.git[key], workstreamIndex(s.workstreams).get(key) ?? "") : undefined;
 }
 
 export interface Filters {
@@ -36,7 +50,7 @@ export function selectGroups(s: AppState, f: Filters): Groups {
   const rows: { v: SessionView; at: number }[] = [];
   for (const key of Object.keys(s.sessions)) {
     const v = selectView(s, key)!;
-    if (matches(v, f, s.links[v.host]?.name ?? v.host)) rows.push({ v, at: v.lastMs });
+    if (matches(v, f, s.hosts[v.host]?.entry.name ?? v.host)) rows.push({ v, at: v.lastMs });
   }
   rows.sort((a, b) => b.at - a.at);
   for (const r of rows) out[r.v.status].push(r.v.key);
@@ -75,4 +89,6 @@ export function selectCounts(s: AppState): Counts {
   return c;
 }
 
-export const selectHostLinks = (s: AppState) => s.hostOrder.map((id) => s.links[id]);
+export const selectHosts = (s: AppState): HostView[] => s.hostOrder.filter((id) => s.hosts[id]).map((id) => hostView(s.hosts[id]));
+export const selectHost = (s: AppState, id: HostId): HostView | undefined => (s.hosts[id] ? hostView(s.hosts[id]) : undefined);
+export const sessionsOnHost = (s: AppState, id: HostId): SessionKey[] => Object.keys(s.sessions).filter((k) => k.startsWith(id + "/"));

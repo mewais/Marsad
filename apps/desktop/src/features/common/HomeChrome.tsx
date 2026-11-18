@@ -39,7 +39,7 @@ export const FILTER_INPUT_ID = "home-filter";
 
 export function HomeToolbar() {
   const f = useStore(filterStore, (s) => s);
-  const links = useAppState((s) => s.links);
+  const hostsMap = useAppState((s) => s.hosts);
   const order = useAppState((s) => s.hostOrder);
   const drivers = useAppState((s) => s.drivers);
   const driverOrder = useAppState((s) => s.driverOrder);
@@ -50,7 +50,8 @@ export function HomeToolbar() {
     window.addEventListener("marsad:focus-filter", focus);
     return () => window.removeEventListener("marsad:focus-filter", focus);
   }, []);
-  const ws = Array.from(new Set(Object.values(sessions).map((s) => s.labels?.workstream).filter(Boolean) as string[]));
+  const ws = useAppState((s) => s.workstreams).map((w) => w.name);
+  void sessions;
   const opt = (value: string, label: string): SelectOption => ({ value, label });
   return (
     <div className="toolbar" role="search">
@@ -60,8 +61,8 @@ export function HomeToolbar() {
         options={[opt("all", "All"), ...STATUS_ORDER.map((s) => opt(s, STATUS[s].label))]} onChange={(v) => setFilters({ status: v as typeof f.status })} />
       <Select label="Driver" buttonClass={`chip ${f.driver !== "any" ? "on" : ""}`} display={`Driver: ${f.driver === "any" ? "any" : drivers[f.driver]?.displayName ?? f.driver}`} value={f.driver}
         options={[opt("any", "Any"), ...driverOrder.map((d) => opt(d, drivers[d]?.displayName ?? d))]} onChange={(v) => setFilters({ driver: v })} />
-      <Select label="Host" buttonClass={`chip ${f.hosts !== "all" ? "on" : ""}`} display={f.hosts === "all" ? `Host: ${order.length} of ${order.length}` : `Host: ${links[f.hosts[0]]?.name ?? f.hosts[0]}`} value={f.hosts === "all" ? "all" : f.hosts[0]}
-        options={[opt("all", "All hosts"), ...order.map((h) => opt(h, links[h]?.name ?? h))]} onChange={(v) => setFilters({ hosts: v === "all" ? "all" : [v] })} />
+      <Select label="Host" buttonClass={`chip ${f.hosts !== "all" ? "on" : ""}`} display={f.hosts === "all" ? `Host: ${order.length} of ${order.length}` : `Host: ${hostsMap[f.hosts[0]]?.entry.name ?? f.hosts[0]}`} value={f.hosts === "all" ? "all" : f.hosts[0]}
+        options={[opt("all", "All hosts"), ...order.map((h) => opt(h, hostsMap[h]?.entry.name ?? h))]} onChange={(v) => setFilters({ hosts: v === "all" ? "all" : [v] })} />
       <Select label="Workstream" buttonClass={`chip hide-n ${f.workstream !== "any" ? "on" : ""}`} display={`Workstream: ${f.workstream === "any" ? "any" : f.workstream}`} value={f.workstream}
         options={[opt("any", "Any"), ...ws.map((w) => opt(w, w))]} onChange={(v) => setFilters({ workstream: v })} />
       {filtersActive(f) ? <button type="button" className="chip" onClick={resetFilters}><Icon name="x" size="xs" /> Clear filters</button> : null}

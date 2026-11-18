@@ -1,39 +1,39 @@
-import type { DriverCapabilities, DriverSummary, HostId, HostInfo, HostLink, ModelInfo, SessionMode, SlashCommandInfo } from "../types";
+import type { ConfigItem, DriverCapabilities, DriverInventory, HostEntry, LinkState, ModelInfo, ResumableSession, SessionMode, SlashCommandInfo } from "../wire";
 
-/** Fixture-only data: drivers, models, modes and hosts as the runtime would report them. */
+/** Fixture-only data: drivers and hosts as discovery and the hub would report them. */
 
 const caps = (over: Partial<DriverCapabilities> = {}): DriverCapabilities => ({
-  interrupt: true,
-  set_model: true,
-  set_mode: true,
-  slash_commands: true,
-  permission_gates: true,
-  questions: true,
-  plan_gate: true,
-  usage: true,
-  cost: true,
-  resume: true,
-  continue_latest: true,
-  streaming_output: false,
-  prompt_while_busy: "queued_by_cli",
-  ...over,
+  interrupt: true, set_model: true, set_mode: true, slash_commands: true, permission_gates: true, questions: true, plan_gate: true,
+  usage: true, cost: true, resume: true, continue_latest: true, streaming_output: false, prompt_while_busy: "queued_by_cli", ...over,
 });
 
-export const DRIVER_CATALOG: (DriverSummary & { models: ModelInfo[]; modes: SessionMode[]; slash: SlashCommandInfo[]; version: string })[] = [
+export interface DriverDef {
+  id: string;
+  display_name: string;
+  binary: string;
+  capabilities: DriverCapabilities;
+  version: string;
+  models: ModelInfo[];
+  modes: SessionMode[];
+  slash: SlashCommandInfo[];
+  config: ConfigItem[];
+}
+
+const m = (id: string, is_default = false, display_name = id, description = ""): ModelInfo => ({ id, display_name, description, is_default });
+const src = (scope: string, path: string) => ({ scope, path });
+const mcp = (name: string, scope: string, path: string, command: string, args: string[] = [], enabled = true, description?: string): ConfigItem => ({
+  kind: "mcp_server", name, source: src(scope, path), enabled, description, mcp: { transport: "stdio", command, args, env: {} },
+});
+
+export const DRIVERS: DriverDef[] = [
   {
-    id: "claude",
-    display_name: "Claude Code",
-    capabilities: caps(),
-    version: "2.1.4",
-    models: [
-      { id: "claude-sonnet-4.5", display_name: "claude-sonnet-4.5", description: "Balanced", is_default: true },
-      { id: "claude-opus-4.1", display_name: "claude-opus-4.1", description: "Most capable", is_default: false },
-      { id: "claude-haiku-4.5", display_name: "claude-haiku-4.5", description: "Fast", is_default: false },
-    ],
+    id: "claude", display_name: "Claude Code", binary: "claude", capabilities: caps(), version: "2.1.4",
+    models: [m("claude-sonnet-4.5", true, "claude-sonnet-4.5", "Balanced"), m("claude-opus-4.1", false, "claude-opus-4.1", "Most capable"), m("claude-haiku-4.5", false, "claude-haiku-4.5", "Fast")],
     modes: [
-      { id: "default", label: "Default mode", description: "Ask before edits and commands" },
+      { id: "default", label: "Default", description: "Ask before edits and commands" },
       { id: "acceptEdits", label: "Accept edits", description: "Edit files without asking" },
       { id: "plan", label: "Plan mode", description: "Plan first, then ask to proceed" },
+      { id: "bypassPermissions", label: "Bypass permissions", description: "Never ask" },
     ],
     slash: [
       { name: "review", description: "Review uncommitted changes", argument_hint: "" },
@@ -43,77 +43,108 @@ export const DRIVER_CATALOG: (DriverSummary & { models: ModelInfo[]; modes: Sess
       { name: "db-migrations", description: "Run the migration checklist skill", argument_hint: "" },
       { name: "cost", description: "Show token use and cost", argument_hint: "" },
     ],
+    config: [
+      mcp("github", "user", "~/.claude.json", "github-mcp-server"),
+      mcp("postgres-ledgerline", "project", ".mcp.json", "postgres-mcp", ["postgres://localhost/ledgerline_dev"]),
+      mcp("sentry", "user", "~/.claude.json", "npx", ["@sentry/mcp-server"]),
+      { kind: "skill", name: "release-notes", source: src("user", "~/.claude/skills/"), enabled: true, description: "Writes CHANGELOG entries from merged PRs", path: "~/.claude/skills/release-notes" },
+      { kind: "skill", name: "db-migrations", source: src("project", ".claude/skills/"), enabled: true, description: "Checklist and scripts for Prisma migrations", path: ".claude/skills/db-migrations" },
+      { kind: "plugin", name: "commit-guard", source: src("user", "~/.claude/settings.json"), enabled: true, description: "Blocks commits that touch .env* or secrets/", path: "~/.claude/plugins/commit-guard" },
+      { kind: "command", name: "review", source: src("project", ".claude/commands/"), enabled: true, description: "Slash command", path: ".claude/commands/review.md" },
+      { kind: "command", name: "deploy-preview", source: src("project", ".claude/commands/"), enabled: true, description: "Slash command", path: ".claude/commands/deploy-preview.md" },
+    ],
   },
   {
-    id: "codex",
-    display_name: "Codex",
-    capabilities: caps({ prompt_while_busy: "steered", streaming_output: true }),
-    version: "0.58.0",
-    models: [
-      { id: "gpt-5-codex", display_name: "gpt-5-codex", description: "", is_default: true },
-      { id: "gpt-5-codex-mini", display_name: "gpt-5-codex-mini", description: "", is_default: false },
-    ],
+    id: "codex", display_name: "Codex", binary: "codex", capabilities: caps({ prompt_while_busy: "steered", streaming_output: true }), version: "0.58.0",
+    models: [m("gpt-5-codex", true), m("gpt-5-codex-mini"), m("gpt-5"), m("o4-mini")],
     modes: [
       { id: "read-only", label: "Read only", description: "" },
-      { id: "auto", label: "Auto", description: "" },
+      { id: "auto", label: "Auto", description: "Edit and run in the workspace" },
       { id: "full-access", label: "Full access", description: "" },
     ],
     slash: [
       { name: "review", description: "Review the working tree", argument_hint: "" },
       { name: "status", description: "Show session configuration", argument_hint: "" },
     ],
+    config: [
+      mcp("github", "global", "~/.codex/config.toml", "github-mcp-server"),
+      mcp("postgres-ledgerline", "project", ".codex/config.toml", "postgres-mcp"),
+      { kind: "skill", name: "release-notes", source: src("user", "~/.codex/skills/"), enabled: true, path: "~/.codex/skills/release-notes" },
+      { kind: "command", name: "fix-ci", source: src("user", "~/.codex/prompts/"), enabled: true, description: "Custom prompt", path: "~/.codex/prompts/fix-ci.md" },
+    ],
   },
   {
-    id: "opencode",
-    display_name: "OpenCode",
-    capabilities: caps({ prompt_while_busy: "queued_by_protocol" }),
-    version: "0.15.2",
-    models: [{ id: "anthropic/claude-sonnet-4.5", display_name: "claude-sonnet-4.5 (anthropic)", description: "", is_default: true }],
+    id: "opencode", display_name: "OpenCode", binary: "opencode", capabilities: caps({ prompt_while_busy: "queued_by_protocol" }), version: "1.3.2",
+    models: [m("anthropic/claude-sonnet-4.5", true, "claude-sonnet-4.5 (anthropic)"), m("openai/gpt-5", false, "gpt-5 (openai)")],
     modes: [
       { id: "build", label: "Build", description: "Full tool access" },
       { id: "plan", label: "Plan", description: "Read only" },
     ],
     slash: [{ name: "init", description: "Create AGENTS.md", argument_hint: "" }],
+    config: [
+      mcp("github", "global", "~/.config/opencode/opencode.json", "github-mcp-server"),
+      { kind: "agent", name: "reviewer", source: src("global", "~/.config/opencode/agent/"), enabled: true, description: "Reviews diffs before commit", path: "~/.config/opencode/agent/reviewer.md" },
+      { kind: "plugin", name: "notify", source: src("global", "~/.config/opencode/opencode.json"), enabled: true, path: "~/.config/opencode/plugin/notify" },
+    ],
   },
   {
-    id: "kilo",
-    display_name: "Kilo Code",
-    capabilities: caps({ prompt_while_busy: "queued_by_protocol", plan_gate: false }),
-    version: "4.2.0",
-    models: [{ id: "kilo/auto", display_name: "auto", description: "", is_default: true }],
+    id: "kilo", display_name: "Kilo Code", binary: "kilo", capabilities: caps({ prompt_while_busy: "queued_by_protocol", plan_gate: false }), version: "7.8.27",
+    models: [m("kilo/claude-sonnet-4.5", true), m("kilo/gpt-5")],
     modes: [
       { id: "code", label: "Code", description: "" },
       { id: "architect", label: "Architect", description: "" },
+      { id: "debug", label: "Debug", description: "" },
     ],
     slash: [],
+    config: [mcp("github", "global", "~/.config/kilo/kilo.jsonc", "github-mcp-server")],
   },
 ];
+export const driverDef = (id: string) => DRIVERS.find((d) => d.id === id)!;
 
 export interface FixtureHost {
-  id: HostId;
-  name: string;
-  where: "local" | "ssh";
-  os: string;
-  drivers: string[];
-  link: HostLink["link"];
-  retry_in_ms?: number;
+  entry: HostEntry;
+  /** Initial link (`null` = the local host). */
+  link: LinkState | null;
+  drivers: Record<string, string>;
 }
 
+const t0 = Date.UTC(2026, 9, 1);
+const linux = { os: "linux", arch: "x86_64", target: "x86_64-unknown-linux-gnu" };
 export const FIXTURE_HOSTS: FixtureHost[] = [
-  { id: "x1", name: "thinkpad-x1", where: "local", os: "Ubuntu 24.04", drivers: ["claude", "codex", "opencode"], link: "connected" },
-  { id: "hz", name: "hetzner-ax41", where: "ssh", os: "Debian 12", drivers: ["claude", "codex", "opencode"], link: "connected" },
-  { id: "win", name: "win-build", where: "ssh", os: "Windows 11 Pro", drivers: ["claude", "kilo"], link: "reconnecting", retry_in_ms: 4000 },
+  { entry: { id: "x1", name: "thinkpad-x1", kind: { kind: "local" }, platform: linux, created_at_ms: t0, interactive_auth: false }, link: null, drivers: { claude: "2.1.4", codex: "0.58.0", opencode: "1.3.2" } },
+  { entry: { id: "hz", name: "hetzner-ax41", kind: { kind: "ssh", target: "dev@95.217.40.12", port: 22, identity_file: "~/.ssh/id_ed25519" }, platform: linux, created_at_ms: t0, interactive_auth: false },
+    link: { state: "connected", hello: { protocol: { major: 1, minor: 0 }, build: "fixture", host_id: "hz", role: "daemon", features: [] } }, drivers: { claude: "2.1.4", codex: "0.58.0", opencode: "1.3.2" } },
+  { entry: { id: "win", name: "win-build", kind: { kind: "ssh", target: "build@win-build.lan", port: 22 }, platform: { os: "windows", arch: "x86_64", target: "x86_64-pc-windows-msvc" }, created_at_ms: t0, interactive_auth: false },
+    link: { state: "reconnecting", attempt: 3, next_at: { secs_since_epoch: 0, nanos_since_epoch: 0 }, last_error: "connection reset by peer" }, drivers: { claude: "2.1.2", kilo: "7.8.27" } },
+  { entry: { id: "gpu", name: "gpu-box", kind: { kind: "ssh", target: "ml@10.0.4.21", port: 22 }, platform: linux, created_at_ms: t0, interactive_auth: true },
+    link: { state: "auth_needed", problem: "auth_needed", detail: "This host asks for a password and a one-time code. Connect when you are ready to sign in." }, drivers: { claude: "2.0.9", codex: "0.51.1" } },
+  { entry: { id: "pi", name: "pi-runner", kind: { kind: "ssh", target: "pi@pi-runner.lan" }, platform: { os: "linux", arch: "aarch64", target: "aarch64-unknown-linux-gnu" }, created_at_ms: t0, interactive_auth: false },
+    link: { state: "provisioning", reason: { kind: "build_mismatch", expected: "0.7.3", found: "0.7.1" } }, drivers: { opencode: "1.3.0" } },
 ];
 
-export function hostInfo(h: FixtureHost, now: number): HostInfo {
-  return {
-    host_id: h.id,
-    build: "fixture",
-    pid: 4242,
-    started_at_ms: now - 86_400_000,
-    data_dir: "~/.local/share/wasit",
-    os: h.os,
-    arch: "x86_64",
-    drivers: DRIVER_CATALOG.filter((d) => h.drivers.includes(d.id)).map(({ id, display_name, capabilities }) => ({ id, display_name, capabilities })),
-  };
+/** Sessions each CLI has on disk for a project (some started in a terminal, some by Marsad). */
+export function resumable(driver: string, project: string, now: number): ResumableSession[] {
+  const h = 3_600_000;
+  const rows: [string, string, number][] = driver === "claude"
+    ? [["Refactor invoice totals rounding", "native-7", 2 * h], ["Fix Stripe webhook idempotency", "c-term-1", 26 * h], ["", "c-term-2", 50 * h],
+       ["Spike: Postgres row-level security", "native-14", 170 * h], ["Add CSV export endpoint", "c-term-3", 340 * h], ["Bump Node to 22", "c-term-4", 500 * h]]
+    : [["Tidy the LRU cache tests", `${driver}-term-1`, 5 * h], ["Investigate flaky ssh tunnel test", `${driver}-term-2`, 30 * h]];
+  return rows.map(([title, id, ago]) => ({ id, project, title, modified_ms: now - ago }));
+}
+
+export function inventoryFor(host: FixtureHost, project: string | null, now: number): DriverInventory[] {
+  return DRIVERS.map((d) => {
+    const version = host.drivers[d.id];
+    return {
+      driver: d.id, display_name: d.display_name, capabilities: d.capabilities, installed: !!version,
+      binary_path: version ? (host.entry.platform?.os === "windows" ? `C:\\Users\\build\\AppData\\Roaming\\npm\\${d.binary}.cmd` : `/usr/local/bin/${d.binary}`) : null,
+      error: version ? null : `${d.binary} was not found on PATH`,
+      version: version ?? null,
+      models: version ? d.models : [], modes: version ? d.modes : [],
+      sessions: version && project ? resumable(d.id, project, now) : [],
+      config: version ? d.config : [], project, refreshing: false,
+      probes: version ? [{ kind: "version", ok: true, duration_ms: 41 }, { kind: "models", ok: true, duration_ms: 230 }, { kind: "sessions", ok: true, duration_ms: 88 }] : [{ kind: "version", ok: false, error: "not installed", duration_ms: 3 }],
+      refreshed_at_ms: now - 4 * 60_000,
+    };
+  });
 }

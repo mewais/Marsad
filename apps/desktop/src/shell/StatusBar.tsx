@@ -1,25 +1,28 @@
-import { useCounts, useHostLinks } from "../state";
+import { linkView, useCounts, useHosts } from "../state";
 import { money } from "../lib/format";
-import { ConnState, Icon, linkTone, linkWord } from "../ui";
+import { ConnState, Icon } from "../ui";
+import { useNavigate } from "../router";
 
 export function StatusBar({ onHelp }: { onHelp: () => void }) {
-  const hosts = useHostLinks();
+  const hosts = useHosts();
   const counts = useCounts();
+  const nav = useNavigate();
   return (
     <footer className="statusbar" aria-label="Status">
-      {hosts.map((h) =>
-        h.link === "connected" ? (
+      {hosts.map((h) => {
+        const l = linkView(h.link, h.authPrompt);
+        return l.connected ? (
           <span key={h.id} className="sb-item">
-            <ConnState host={{ link: "connected" }} short />
+            <ConnState host={h} short />
             {h.name}
           </span>
         ) : (
-          <span key={h.id} className={`sb-item ${linkTone(h.link) === "bad" ? "c-failed" : "c-needs"}`} data-link={h.link}>
-            <Icon name="refresh" size="xs" />
-            {h.name} {linkWord(h).toLowerCase()}
-          </span>
-        ),
-      )}
+          <button type="button" key={h.id} className={`sb-item ${l.tone === "bad" ? "c-failed" : l.tone === "info" ? "c-working" : "c-needs"}`} data-link={l.key} onClick={() => nav(`/hosts?h=${encodeURIComponent(h.id)}`)}>
+            <Icon name={l.tone === "bad" ? "warn" : "refresh"} size="xs" />
+            {h.name} · {l.word.toLowerCase()}
+          </button>
+        );
+      })}
       <span className="sp" />
       {counts.failed ? (
         <span className="sb-item c-failed">

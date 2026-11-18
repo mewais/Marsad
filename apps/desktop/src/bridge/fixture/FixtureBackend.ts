@@ -1,11 +1,17 @@
-import type { Backend, ConnectionState, RequestOptions, SubscribeOptions, Unsubscribe } from "../backend";
+import type { Backend, RequestOptions, SubscribeOptions, Unsubscribe } from "../backend";
 import type {
-  AgentEvent, Command, CommandReply, CommandRequest, DriverCapabilities, HistoryPage, HistoryRequest, HostEvent, HostId, HostInfo,
-  HostLink, RpcError, SessionEvent, SessionEventKind, SessionList, SessionRef, SessionSnapshot,
-} from "../types";
-import { topics, methods } from "../types";
-import { FIXTURE_HOSTS, hostInfo, type FixtureHost } from "./catalog";
+  AuthAnswer, AuthCancel, AuthPrompt, BaseRequest, FleetEvent, FleetHost, FsListRequest, FsPathRequest, GateRequest, GitCommitRequest, GitDiffRequest,
+  GitDiscardRequest, GitStatusRequest, GitTarget, HistoryRequest, HostId, InventoryRequest, LinkState, SessionRef, SessionSnapshot, CommandRequest,
+} from "../wire";
+import { methods as M, topics as T } from "../wire";
+import { waslTopics, type TaskView } from "../provisional/workstreams";
+import { DRIVERS, FIXTURE_HOSTS, driverDef, inventoryFor, type FixtureHost } from "./catalog";
+import { fsExists, fsHome, fsList } from "./fs";
+import { buildTree, diffOf, type Tree } from "./git";
+import { FixtureHub } from "./hub";
+import { err, SessionSim, type Entry } from "./runtime";
 import { buildSession, SPECS, type Spec } from "./sessions";
+import { seedTasks } from "./workstreams";
 
 export interface FixtureOptions {
   /** Background chatter (timers): live tool calls, reconnect countdown, a session finishing. Default true. */
@@ -18,45 +24,63 @@ export interface FixtureOptions {
   specs?: Spec[];
 }
 
-interface Entry {
-  snap: SessionSnapshot;
-  events: SessionEvent[];
-  subs: Set<(e: unknown) => void>;
-  host: HostId;
+interface HostRec {
+  def: FixtureHost;
+  prompt: AuthPrompt | null;
+  sessions: Map<string, Entry>;
 }
 
-const err = (code: string, message: string, data?: unknown): RpcError => ({ code, message, data });
+const connected = (id: string): LinkState => ({ state: "connected", hello: { protocol: { major: 1, minor: 0 }, build: "fixture", host_id: id, role: "daemon", features: [] } });
+const nextAt = (ms: number) => ({ secs_since_epoch: Math.floor(ms / 1000), nanos_since_epoch: (ms % 1000) * 1e6 });
 
 /**
- * In-memory scripted backend for browser dev, tests and Playwright. Speaks the same methods and
- * topics as the runtime (wire.rs); state changes plausibly when commands arrive.
+ * In-memory scripted backend for browser dev, tests and Playwright. Speaks the same methods,
+ * topics and payloads as the hub and host daemons (marsad-proto, wasit-runtime); state changes
+ * plausibly when requests arrive.
  */
 export class FixtureBackend implements Backend {
   readonly opts: Required<Omit<FixtureOptions, "specs">>;
-  private hosts = new Map<HostId, { def: FixtureHost; link: HostLink; sessions: Map<string, Entry>; subs: Set<(e: unknown) => void> }>();
-  private conn: ConnectionState;
-  private connSubs = new Set<(s: ConnectionState) => void>();
+  readonly hub: FixtureHub;
+  private hosts = new Map<HostId, HostRec>();
+  private fleetSubs = new Set<(e: unknown) => void>();
+  private taskSubs = new Map<HostId, Set<(e: unknown) => void>>();
+  private trees = new Map<string, Tree>();
+  private tasks: TaskView[];
   private timers = new Set<ReturnType<typeof setTimeout>>();
   private interval: ReturnType<typeof setInterval> | undefined;
   private tickN = 0;
+  private promptN = 1;
   private reqLog: { method: string; params: unknown; host?: HostId }[] = [];
+  readonly sim: SessionSim;
 
   constructor(o: FixtureOptions = {}) {
     this.opts = { live: o.live ?? true, latencyMs: o.latencyMs ?? 140, speed: o.speed ?? 1, now: o.now ?? Date.now };
     const now = this.opts.now();
+    this.sim = new SessionSim({ now: this.opts.now, after: (ms, fn) => this.later(ms * this.opts.speed, fn), publish: (e) => this.publish(e) });
     for (const def of FIXTURE_HOSTS) {
-      this.hosts.set(def.id, {
-        def,
-        link: { id: def.id, name: def.name, where: def.where, os: def.os, link: def.link, retry_in_ms: def.retry_in_ms },
-        sessions: new Map(),
-        subs: new Set(),
-      });
+      const d = structuredClone(def);
+      if (d.link?.state === "reconnecting") d.link.next_at = nextAt(now + 4000);
+      this.hosts.set(d.entry.id, { def: d, prompt: null, sessions: new Map() });
     }
     for (const spec of o.specs ?? SPECS) {
       const { snap, events } = buildSession(spec, now);
       this.hosts.get(spec.host)!.sessions.set(snap.id, { snap, events, subs: new Set(), host: spec.host });
+      this.trees.set(`${spec.host}/${snap.id}`, buildTree(spec));
     }
-    this.conn = { hosts: [...this.hosts.values()].map((h) => h.link) };
+    this.tasks = seedTasks(now);
+    this.hub = new FixtureHub({
+      now: this.opts.now,
+      hostDefs: () => [...this.hosts.values()].map((h) => h.def),
+      addHost: (def) => this.addHost(def),
+      removeHost: (id) => this.removeHost(id),
+      reconnect: (id) => this.reconnect(id),
+      answerAuth: (a) => this.answerAuth(a),
+      cancelAuth: (a) => this.cancelAuth(a),
+      createSession: (host, snap, first) => this.createSession(host, snap, first),
+      sessionCwd: (host, id) => this.hosts.get(host)?.sessions.get(id)?.snap.cwd ?? null,
+    });
+    // A returning user has seen the old idle sessions.
+    for (const [hid, h] of this.hosts) for (const [id, e] of h.sessions) if (e.snap.phase.state === "idle" && e.snap.last_activity_ms < now - 60 * 60_000) this.hub.seen.push({ host: hid, session: id, cursor: e.snap.cursor, at_ms: now - 45 * 60_000 });
     if (this.opts.live) this.interval = setInterval(() => this.tick(), 1000);
   }
 
@@ -73,27 +97,12 @@ export class FixtureBackend implements Backend {
 
   // ── Backend ───────────────────────────────────────────────────────────────
 
-  connection = {
-    get: () => this.conn,
-    subscribe: (cb: (s: ConnectionState) => void): Unsubscribe => {
-      this.connSubs.add(cb);
-      return () => this.connSubs.delete(cb);
-    },
-  };
-
   request<T>(method: string, params?: unknown, opts: RequestOptions = {}): Promise<T> {
-    const hostId = opts.host ?? FIXTURE_HOSTS[0].id;
-    this.reqLog.push({ method, params, host: hostId });
+    this.reqLog.push({ method, params, host: opts.host });
     return new Promise<T>((resolve, reject) => {
       this.later(this.opts.latencyMs, () => {
-        const host = this.hosts.get(hostId);
-        if (!host) return reject(err("unknown_host", `No host ${hostId}`));
-        // host.info is served from the daemon's cache, so drivers are known even while a link is down.
-        if (host.link.link !== "connected" && method !== methods.HOST_INFO) {
-          return reject(err("host_unreachable", `${host.def.name} is ${host.link.link === "offline" ? "offline" : "reconnecting"}; try again once it is connected.`));
-        }
         try {
-          resolve(this.handle(host, method, params) as T);
+          resolve((opts.host ? this.hostRequest(opts.host, method, params) : this.hubRequest(method, params)) as T);
         } catch (e) {
           reject(e);
         }
@@ -102,12 +111,24 @@ export class FixtureBackend implements Backend {
   }
 
   subscribe(topic: string, opts: SubscribeOptions, onEvent: (e: unknown) => void): Unsubscribe {
-    const host = this.hosts.get(opts.host ?? FIXTURE_HOSTS[0].id);
+    if (topic === T.FLEET) {
+      this.fleetSubs.add(onEvent);
+      this.later(0, () => onEvent({ kind: "reset", hosts: [...this.hosts.values()].map((h) => this.fleetHost(h)) } satisfies FleetEvent));
+      return () => this.fleetSubs.delete(onEvent);
+    }
+    const host = this.hosts.get(opts.host ?? "x1");
     if (!host) return () => undefined;
-    if (topic === topics.HOST_SESSIONS) {
-      host.subs.add(onEvent);
-      this.later(0, () => onEvent({ kind: "reset", sessions: [...host.sessions.values()].map((e) => e.snap) } satisfies HostEvent));
-      return () => host.subs.delete(onEvent);
+    if (topic === T.DRIVERS_INVENTORY) {
+      this.later(0, () => this.isUp(host) && onEvent({ drivers: inventoryFor(host.def, null, this.opts.now()) }));
+      return () => undefined;
+    }
+    if (topic === waslTopics.TASKS) {
+      const set = this.taskSubs.get(host.def.entry.id) ?? new Set();
+      this.taskSubs.set(host.def.entry.id, set);
+      set.add(onEvent);
+      const id = host.def.entry.id;
+      this.later(0, () => this.tasks.filter((t) => t.task.from.startsWith(id + "/") || t.task.to.startsWith(id + "/")).forEach((t) => onEvent({ ...t, side: t.task.from.startsWith(id + "/") ? "outbound" : "inbound" })));
+      return () => set.delete(onEvent);
     }
     const m = /^session\.events:(.+)$/.exec(topic);
     const entry = m ? host.sessions.get(m[1]) : undefined;
@@ -118,163 +139,211 @@ export class FixtureBackend implements Backend {
     return () => entry.subs.delete(onEvent);
   }
 
-  // ── request handlers ──────────────────────────────────────────────────────
+  // ── host services (routed by `host`) ──────────────────────────────────────
 
-  private handle(host: { def: FixtureHost; sessions: Map<string, Entry> }, method: string, params: unknown): unknown {
+  private isUp(h: HostRec) {
+    return !h.def.link || h.def.link.state === "connected";
+  }
+
+  private hostRequest(hostId: HostId, method: string, p: unknown): unknown {
+    const host = this.hosts.get(hostId);
+    if (!host) throw err("not_found", `No host ${hostId}`, { marsad_error: "not_found", what: `host ${hostId}` });
+    if (!this.isUp(host)) throw err("upstream", `${host.def.entry.name} is not connected; try again once it is back.`);
+    const now = this.opts.now();
     switch (method) {
-      case methods.HOST_INFO:
-        return hostInfo(host.def, this.opts.now()) satisfies HostInfo;
-      case methods.SESSIONS_LIST:
-        return { sessions: [...host.sessions.values()].map((e) => e.snap) } satisfies SessionList;
-      case methods.SESSION_SNAPSHOT:
-        return this.entry(host, params as SessionRef).snap;
-      case methods.SESSION_HISTORY: {
-        const r = params as HistoryRequest;
+      case M.HOST_INFO:
+        return { host_id: hostId, build: "fixture", pid: 4242, started_at_ms: now - 86_400_000, data_dir: "~/.local/share/marsad", os: host.def.entry.platform?.os ?? "linux", arch: host.def.entry.platform?.arch ?? "x86_64",
+          drivers: DRIVERS.filter((d) => host.def.drivers[d.id]).map(({ id, display_name, capabilities }) => ({ id, display_name, capabilities })) };
+      case M.DRIVERS_INVENTORY:
+        return { drivers: inventoryFor(host.def, (p as InventoryRequest | undefined)?.project ?? null, now) };
+      case M.DRIVERS_REFRESH:
+        return {};
+      case M.SESSIONS_LIST:
+        return { sessions: [...host.sessions.values()].map((e) => e.snap) };
+      case M.SESSION_SNAPSHOT:
+        return this.entry(host, p as SessionRef).snap;
+      case M.SESSION_HISTORY: {
+        const r = p as HistoryRequest;
         const all = this.entry(host, r).events.filter((e) => r.before == null || e.cursor < r.before);
         const events = all.slice(Math.max(0, all.length - r.limit));
-        return { events, has_more: all.length > events.length } satisfies HistoryPage;
+        return { events, has_more: all.length > events.length };
       }
-      case methods.SESSION_COMMAND: {
-        const r = params as CommandRequest;
-        return this.command(this.entry(host, r), r.command);
+      case M.SESSION_COMMAND: {
+        const r = p as CommandRequest;
+        const e = this.entry(host, r);
+        if (r.command.command === "answer_gate") this.onHandoffAnswer(r.command.request_id, r.command.decision.action === "deny");
+        return this.sim.command(e, r.command);
       }
-      case methods.SESSIONS_CONTINUE: {
-        const e = this.entry(host, params as SessionRef);
-        this.setPhase(e, { state: "idle" });
+      case M.SESSIONS_CONTINUE:
+        this.sim.setPhase(this.entry(host, p as SessionRef), { state: "idle" });
+        return {};
+      case M.SESSIONS_STOP:
+        this.sim.setPhase(this.entry(host, p as SessionRef), { state: "exited", code: 0 });
+        return {};
+      case M.GIT_STATUS:
+        return this.tree(hostId, (p as GitStatusRequest).target).status;
+      case M.GIT_DIFF: {
+        const r = p as GitDiffRequest;
+        return diffOf(this.tree(hostId, r.target), r.path, r.side, r.max_bytes ?? undefined);
+      }
+      case M.GIT_COMMIT: {
+        const r = p as GitCommitRequest;
+        if (!r.message.trim()) throw err("invalid_params", "A commit needs a message.", { marsad_error: "invalid_request", message: "empty commit message" });
+        if (!r.files.length) throw err("invalid_params", "Pick at least one file to commit.");
+        const t = this.tree(hostId, r.target);
+        t.status = { ...t.status, ahead: t.status.ahead + 1, files: t.status.files.filter((f) => !r.files.includes(f.path)) };
+        return { commit: (Math.floor(now / 1000) % 0xfffffff).toString(16).padStart(7, "0") };
+      }
+      case M.GIT_DISCARD: {
+        const r = p as GitDiscardRequest;
+        const t = this.tree(hostId, r.target);
+        t.status = { ...t.status, files: t.status.files.filter((f) => !r.files.includes(f.path)) };
         return {};
       }
-      case methods.SESSIONS_STOP: {
-        const e = this.entry(host, params as SessionRef);
-        this.setPhase(e, { state: "exited", code: 0 });
-        return {};
+      case M.FS_LIST:
+        return fsList(p as FsListRequest);
+      case M.FS_HOME:
+        return fsHome();
+      case M.FS_EXISTS:
+        return fsExists((p as FsPathRequest).path);
+      case M.AGENTCONFIG_BASE: {
+        const r = p as BaseRequest;
+        if (!host.def.drivers[r.driver]) throw err("not_found", `${r.driver} is not installed here`);
+        return { driver: r.driver, project: r.project ?? null, items: driverDef(r.driver).config, refreshing: false, errors: [], refreshed_at_ms: now - 4 * 60_000 };
       }
-      case methods.HANDOFF_DECIDE: {
-        const p = params as { request_id: string; choice: string };
-        for (const h of this.hosts.values()) for (const e of h.sessions.values()) {
-          const g = e.snap.pending_gates.find((x) => x.gate.request_id === p.request_id);
-          if (g) {
-            this.resolveGate(e, p.request_id, `Handoff ${p.choice === "deny" ? "denied" : "allowed"}`);
-            return {};
-          }
-        }
-        throw err("rejected", "That handoff is no longer pending.");
-      }
+      case M.PTY_START:
+      case M.PTY_LIST:
+        throw err("unsupported", "Terminals need the Marsad helper on a real host; the demo backend has none.", { marsad_error: "unsupported", message: "no pty in the demo backend" });
       default:
         throw err("method_not_found", `Fixture does not implement ${method}`);
     }
   }
 
-  private entry(host: { sessions: Map<string, Entry> }, r: SessionRef): Entry {
+  private hubRequest(method: string, p: unknown): unknown {
+    return this.hub.handle(method, p);
+  }
+
+  private entry(host: HostRec, r: SessionRef): Entry {
     const e = host.sessions.get(r.id);
     if (!e) throw err("session_not_found", `No such session: ${r.id}`);
     return e;
   }
 
-  private command(e: Entry, c: Command): CommandReply {
-    const live = ["starting", "idle", "working", "needs_you"].includes(e.snap.phase.state);
-    if (!live && c.command !== "prompt") throw err("not_running", "The session is not running.", { error: "not_running", reason: e.snap.phase.state });
-    this.emit(e, { kind: "input", command: c, status: { status: "sent" } });
-    switch (c.command) {
-      case "prompt":
-        this.startTurn(e, c.text);
-        return { outcome: e.snap.phase.state === "working" ? "queued" : "sent" };
-      case "run_slash":
-        this.startTurn(e, `/${c.name} ${c.args}`.trim());
-        return { outcome: "sent" };
-      case "answer_gate":
-      case "answer_question": {
-        const g = e.snap.pending_gates.find((x) => x.gate.request_id === c.request_id);
-        if (!g) throw err("rejected", `Gate ${c.request_id} is not pending.`, { error: "rejected", reason: "gate not pending" });
-        this.resolveGate(e, c.request_id, c.command === "answer_gate" && c.decision.action === "deny" ? "Understood, I will not do that." : "Thanks, continuing.");
-        return { outcome: "sent" };
-      }
-      case "interrupt":
-        e.snap = { ...e.snap, pending_gates: [], turn: undefined };
-        this.setPhase(e, { state: "idle" });
-        return { outcome: "sent" };
-      case "set_model":
-        this.patch(e, { model: c.model });
-        return { outcome: "sent" };
-      case "set_mode":
-        this.patch(e, { mode: c.mode });
-        return { outcome: "sent" };
-      case "shutdown":
-        this.setPhase(e, { state: "exited", code: 0 });
-        return { outcome: "sent" };
+  private tree(host: HostId, t: GitTarget): Tree {
+    const key = t.session ? `${host}/${t.session}` : `${host}:${t.cwd}`;
+    let tree = this.trees.get(key);
+    if (!tree && t.session) {
+      const snap = this.hosts.get(host)?.sessions.get(t.session)?.snap;
+      if (!snap) throw err("session_not_found", `No such session: ${t.session}`);
+      tree = buildTree({ n: 99, name: "new-session", driver: snap.driver, host, proj: "project", branch: "main", agoMin: 0, cost: 0, kind: "idle", line: "", stat: [0, 0, 0] });
+      this.trees.set(key, tree);
     }
+    if (!tree) throw err("not_a_repo", `${t.cwd} is not a git repository`, { marsad_error: "not_a_repo", path: t.cwd ?? "" });
+    return tree;
   }
 
-  // ── scripted agent behaviour ──────────────────────────────────────────────
+  // ── fleet ─────────────────────────────────────────────────────────────────
 
-  private startTurn(e: Entry, prompt: string) {
-    const now = this.opts.now();
-    e.snap = { ...e.snap, turn: { started_at_ms: now, prompt, tool_calls: 0 }, last_activity_ms: now };
-    this.setPhase(e, { state: "working" });
-    this.emit(e, { kind: "agent", event: { type: "turn_started" } });
-    this.after(450, () => this.emit(e, { kind: "agent", event: { type: "assistant_delta", text: `On it: ${prompt.slice(0, 80)}`, message_id: `r${now}` } }));
-    this.after(900, () => this.fakeTool(e, "Read", { file_path: "README.md" }, true, "# Project\n"));
-    this.after(1700, () => this.finishTurn(e, `Done: ${prompt.slice(0, 80)}. Nothing else needs your attention.`));
+  private fleetHost(h: HostRec): FleetHost {
+    return { host: h.def.entry, link: h.def.link ? { link: "remote", state: h.def.link } : { link: "local" }, sessions_live: this.isUp(h), sessions: [...h.sessions.values()].map((e) => e.snap), auth_prompt: h.prompt };
   }
 
-  private fakeTool(e: Entry, name: string, input: unknown, ok: boolean, result: unknown) {
-    const id = `t${this.opts.now()}${Math.floor(Math.random() * 1e4)}`;
-    this.emit(e, { kind: "agent", event: { type: "tool_call_started", name, call_id: id, input, is_subagent: false } });
-    this.emit(e, { kind: "agent", event: { type: "tool_call_finished", name, call_id: id, ok, result } });
-    e.snap = { ...e.snap, turn: e.snap.turn ? { ...e.snap.turn, tool_calls: e.snap.turn.tool_calls + 1, last_tool: name } : e.snap.turn };
-    this.publish(e);
-  }
-
-  private finishTurn(e: Entry, reply: string) {
-    const now = this.opts.now();
-    const usage = { ...e.snap.usage, cost_usd: +(e.snap.usage.cost_usd + 0.06).toFixed(2) };
-    this.emit(e, { kind: "agent", event: { type: "assistant_delta", text: reply, message_id: `d${now}` } });
-    this.emit(e, { kind: "agent", event: { type: "turn_completed", was_interrupted: false, num_turns: 1, usage, reply } });
-    e.snap = {
-      ...e.snap, usage, turn: undefined, turns_completed: e.snap.turns_completed + 1,
-      last_turn: { ended_at_ms: now, was_interrupted: false, num_turns: 1, reply }, last_activity_ms: now,
-    };
-    this.setPhase(e, { state: "idle" });
-  }
-
-  private resolveGate(e: Entry, requestId: string, reply: string) {
-    const gates = e.snap.pending_gates.filter((g) => g.gate.request_id !== requestId);
-    this.emit(e, { kind: "agent", event: { type: "gate_resolved", request_id: requestId } });
-    e.snap = { ...e.snap, pending_gates: gates, last_activity_ms: this.opts.now() };
-    if (gates.length) return this.publish(e);
-    this.setPhase(e, { state: "working" });
-    this.after(1200, () => this.finishTurn(e, reply));
-  }
-
-  // ── state plumbing ────────────────────────────────────────────────────────
-
-  private patch(e: Entry, p: Partial<SessionSnapshot>) {
-    e.snap = { ...e.snap, ...p, cursor: e.events[e.events.length - 1]?.cursor ?? e.snap.cursor };
-    this.publish(e);
-  }
-
-  private setPhase(e: Entry, phase: SessionSnapshot["phase"]) {
-    this.emit(e, { kind: "phase", phase });
-    this.patch(e, { phase, last_activity_ms: this.opts.now() });
-  }
-
-  private emit(e: Entry, kind: SessionEventKind) {
-    const last = e.events[e.events.length - 1]?.cursor ?? 0;
-    const ev = { cursor: (Math.floor(last / 65536) + 1) * 65536, t: this.opts.now(), ...kind } as SessionEvent;
-    e.events.push(ev);
-    e.snap = { ...e.snap, cursor: ev.cursor };
-    if (kind.kind === "agent" && kind.event.type === "gate_requested") {
-      e.snap = { ...e.snap, pending_gates: [...e.snap.pending_gates, { gate: kind.event.gate, raised_at_ms: ev.t, cursor: ev.cursor }] };
-    }
-    e.subs.forEach((s) => s(ev));
+  private fleet(e: FleetEvent) {
+    this.fleetSubs.forEach((s) => s(e));
   }
 
   private publish(e: Entry) {
-    const host = this.hosts.get(e.host)!;
-    host.subs.forEach((s) => s({ kind: "upsert", session: e.snap } satisfies HostEvent));
+    this.fleet({ kind: "session_upserted", host: e.host, session: e.snap });
   }
 
-  private after(ms: number, fn: () => void) {
-    this.later(ms * this.opts.speed, fn);
+  /** Force a link state (tests, demos). */
+  setLink(id: HostId, state: LinkState) {
+    const h = this.hosts.get(id)!;
+    h.def.link = state;
+    this.fleet({ kind: "link", host: id, state });
+  }
+
+  /** Show a sign-in prompt for a host (tests, demos). */
+  setAuthPrompt(id: HostId, prompt: Omit<AuthPrompt, "id" | "host" | "expires_at_ms"> | null) {
+    const h = this.hosts.get(id)!;
+    h.prompt = prompt ? { ...prompt, id: this.promptN++, host: id, expires_at_ms: this.opts.now() + 120_000 } : null;
+    this.fleet({ kind: "auth_prompt", host: id, prompt: h.prompt });
+  }
+
+  private addHost(def: FixtureHost) {
+    this.hosts.set(def.entry.id, { def, prompt: null, sessions: new Map() });
+    this.fleet({ kind: "host_upserted", host: def.entry });
+    this.fleet({ kind: "link", host: def.entry.id, state: { state: "connecting" } });
+    this.later(600 * this.opts.speed, () => this.setLink(def.entry.id, { state: "provisioning", reason: { kind: "command_not_found", detail: "marsad-agent: command not found" } }));
+    this.later(2400 * this.opts.speed, () => {
+      def.entry = { ...def.entry, platform: { os: "linux", arch: "x86_64", target: "x86_64-unknown-linux-gnu" } };
+      this.fleet({ kind: "host_upserted", host: def.entry });
+      this.setLink(def.entry.id, connected(def.entry.id));
+    });
+  }
+
+  private removeHost(id: HostId) {
+    const h = this.hosts.get(id);
+    if (!h) throw err("not_found", `No host ${id}`);
+    if (!h.def.link) throw err("invalid_params", "The local host cannot be removed.");
+    this.hosts.delete(id);
+    this.fleet({ kind: "host_removed", id });
+  }
+
+  private reconnect(id: HostId) {
+    const h = this.hosts.get(id);
+    if (!h) throw err("not_found", `No host ${id}`);
+    if (!h.def.link) return;
+    this.setLink(id, { state: "connecting" });
+    if (h.def.entry.interactive_auth) {
+      this.later(300 * this.opts.speed, () => this.setAuthPrompt(id, { prompt: `${h.def.entry.kind.kind === "ssh" ? h.def.entry.kind.target : id}'s password: `, kind: "secret", attempt: 1 }));
+    } else this.later(800 * this.opts.speed, () => this.setLink(id, connected(id)));
+  }
+
+  private answerAuth(a: AuthAnswer) {
+    const h = this.hosts.get(a.host);
+    if (!h?.prompt || h.prompt.id !== a.id) throw err("not_found", "That sign-in prompt has expired.");
+    const p = h.prompt;
+    if (p.kind === "secret") {
+      if (a.answer === "wrong") return this.setAuthPrompt(a.host, { prompt: p.prompt, kind: "secret", attempt: p.attempt + 1 });
+      return this.setAuthPrompt(a.host, { prompt: "Verification code: ", kind: "code", attempt: 1 });
+    }
+    if (p.kind === "code") {
+      this.setAuthPrompt(a.host, { prompt: "Duo Push sent to “iPhone 15”. Approve the request on your device to continue.", kind: "info", attempt: 1 });
+      this.later(2500 * this.opts.speed, () => this.finishAuth(a.host, p.id + 1));
+      return;
+    }
+    this.finishAuth(a.host, a.id);
+  }
+
+  private finishAuth(id: HostId, promptId: number) {
+    const h = this.hosts.get(id);
+    if (!h?.prompt || h.prompt.id !== promptId) return;
+    this.setAuthPrompt(id, null);
+    this.setLink(id, connected(id));
+  }
+
+  private cancelAuth(a: AuthCancel) {
+    const h = this.hosts.get(a.host);
+    if (!h?.prompt) return;
+    this.setAuthPrompt(a.host, null);
+    this.setLink(a.host, { state: "auth_needed", problem: "auth_needed", detail: "Sign-in was cancelled." });
+  }
+
+  private createSession(host: HostId, snap: SessionSnapshot, first: string | null) {
+    const e: Entry = { snap, events: [], subs: new Set(), host };
+    this.hosts.get(host)!.sessions.set(snap.id, e);
+    this.sim.emit(e, { kind: "spawned", generation: 1, pid: snap.pid ?? null, argv: [driverDef(snap.driver).binary] });
+    this.publish(e);
+    this.later(300 * this.opts.speed, () => (first ? this.sim.startTurn(e, first) : this.sim.setPhase(e, { state: "idle" })));
+  }
+
+  private onHandoffAnswer(requestId: string, denied: boolean) {
+    const t = this.tasks.find((x) => `wasl-handoff-${x.task.id}` === requestId);
+    if (!t) return;
+    t.state = denied ? { state: "denied", reason: "denied by you" } : { state: "queued" };
+    t.updated_ms = this.opts.now();
+    for (const [hid, subs] of this.taskSubs) if (t.task.from.startsWith(hid + "/") || t.task.to.startsWith(hid + "/")) subs.forEach((s) => s({ ...t, side: t.task.from.startsWith(hid + "/") ? "outbound" : "inbound" }));
   }
 
   private later(ms: number, fn: () => void) {
@@ -287,62 +356,41 @@ export class FixtureBackend implements Backend {
 
   // ── background chatter (live mode) ────────────────────────────────────────
 
-  private setLink(id: HostId, link: HostLink["link"], retry?: number) {
-    const h = this.hosts.get(id)!;
-    h.link = { ...h.link, link, retry_in_ms: retry };
-    this.conn = { hosts: [...this.hosts.values()].map((x) => x.link) };
-    this.connSubs.forEach((s) => s(this.conn));
-  }
-
-  /** Force a link state (tests, demos). */
-  setHostLink(id: HostId, link: HostLink["link"], retry?: number) {
-    this.setLink(id, link, retry);
-  }
-
   private tick() {
     const n = ++this.tickN;
     const win = this.hosts.get("win")!;
-    if (win.link.link === "reconnecting") {
-      const left = (win.link.retry_in_ms ?? 4000) - 1000;
-      if (n > 15 && left <= 0) this.setLink("win", "connected");
-      else this.setLink("win", "reconnecting", left > 0 ? left : 4000);
-    }
-    if (n === 70) this.setLink("hz", "reconnecting", 5000);
-    if (n === 75) this.setLink("hz", "connected");
+    if (win.def.link?.state === "reconnecting" && n > 15) this.setLink("win", connected("win"));
+    else if (win.def.link?.state === "reconnecting" && n % 5 === 0) this.setLink("win", { ...win.def.link, attempt: win.def.link.attempt + 1, next_at: nextAt(this.opts.now() + 4000) });
+    if (n === 8) this.setLink("pi", connected("pi"));
     const x1 = this.hosts.get("x1")!;
     for (const e of x1.sessions.values()) {
       if (e.snap.phase.state !== "working" || n % 4 !== 0) continue;
       const tools: [string, unknown][] = [["Edit", { file_path: "src-tauri/capabilities/default.json" }], ["Bash", { command: "cargo check" }], ["Read", { file_path: "Cargo.toml" }]];
       const [name, input] = tools[(n / 4) % tools.length | 0];
-      this.fakeTool(e, name, input, true, "ok");
-      e.snap = { ...e.snap, live_usage: { ...e.snap.usage, cost_usd: +(e.snap.usage.cost_usd + 0.01).toFixed(2) }, usage: { ...e.snap.usage, cost_usd: +(e.snap.usage.cost_usd + 0.01).toFixed(2) } };
+      this.sim.fakeTool(e, name, input, true, "ok");
+      const usage = { ...e.snap.usage, cost_usd: +(e.snap.usage.cost_usd + 0.01).toFixed(2) };
+      e.snap = { ...e.snap, live_usage: usage, usage };
       this.publish(e);
-      if (n === 48) this.finishTurn(e, "Tauri 2.5 upgrade is in: capabilities migrated, cargo check and the UI tests pass.");
+      if (n === 48) this.sim.finishTurn(e, "Tauri 2.5 upgrade is in: capabilities migrated, cargo check and the UI tests pass.");
     }
-  }
-
-  /** Fixture-only: the "seen" state a returning user would have (idle sessions were seen). */
-  initialSeen(): { seen: Record<string, number>; lookedAt: number } {
-    const now = this.opts.now();
-    const seen: Record<string, number> = {};
-    for (const [hid, h] of this.hosts) for (const [id, e] of h.sessions) if (e.snap.phase.state === "idle" && e.snap.last_activity_ms < now - 60 * 60_000) seen[`${hid}/${id}`] = now;
-    return { seen, lookedAt: now - 45 * 60_000 };
   }
 
   // ── test helpers ──────────────────────────────────────────────────────────
 
   /** Add a pending gate to a session, as if the agent just asked. */
-  raiseGate(hostId: HostId, sessionId: string, gate: import("../types").GateRequest) {
-    const e = this.hosts.get(hostId)!.sessions.get(sessionId)!;
-    this.emit(e, { kind: "agent", event: { type: "gate_requested", gate } satisfies AgentEvent });
-    this.setPhase(e, { state: "needs_you" });
+  raiseGate(hostId: HostId, sessionId: string, gate: GateRequest) {
+    this.sim.raiseGate(this.hosts.get(hostId)!.sessions.get(sessionId)!, gate);
   }
 
   sessionIds(hostId: HostId): string[] {
-    return [...this.hosts.get(hostId)!.sessions.keys()];
+    return [...(this.hosts.get(hostId)?.sessions.keys() ?? [])];
   }
 
-  capabilities(hostId: HostId, id: string): DriverCapabilities {
-    return this.hosts.get(hostId)!.sessions.get(id)!.snap.capabilities;
+  snapshot(hostId: HostId, id: string): SessionSnapshot {
+    return this.hosts.get(hostId)!.sessions.get(id)!.snap;
+  }
+
+  hostIds(): HostId[] {
+    return [...this.hosts.keys()];
   }
 }

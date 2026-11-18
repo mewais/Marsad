@@ -1,4 +1,4 @@
-import type { SessionEvent } from "../../bridge/types";
+import type { SessionEvent } from "../../bridge/wire";
 
 export type Item =
   | { kind: "user"; key: string; text: string; queued: boolean }
@@ -28,7 +28,7 @@ export function buildItems(events: SessionEvent[]): Item[] {
           const prev = out[out.length - 1];
           if (prev && prev.kind === kind && (a.message_id === undefined || a.message_id === lastMsg)) prev.text += a.text;
           else out.push({ kind, key, text: a.text });
-          lastMsg = a.message_id;
+          lastMsg = a.message_id ?? undefined;
           break;
         }
         case "tool_call_started":
@@ -38,7 +38,7 @@ export function buildItems(events: SessionEvent[]): Item[] {
           break;
         case "tool_call_updated": {
           const t = out[tools.get(a.call_id) ?? -1];
-          if (t?.kind === "tool") t.status = a.status;
+          if (t?.kind === "tool") t.status = a.status ?? undefined;
           break;
         }
         case "tool_call_finished": {

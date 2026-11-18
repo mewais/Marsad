@@ -1,13 +1,12 @@
 import { useMemo, useState } from "react";
-import type { GateRequest, PendingGate, QuestionAnswer, QuestionPrompt } from "../../bridge/types";
-import { gatePendingKey, useActions, useApp, usePending, type SessionView } from "../../state";
+import type { GateRequest, PendingGate, QuestionAnswer, QuestionPrompt } from "../../bridge/wire";
+import { gatePendingKey, useActions, usePending, type SessionView } from "../../state";
 import { permissionChoices, type GateChoice } from "./choices";
 
 export function useGateCommon(view: SessionView, pg: PendingGate) {
   const actions = useActions();
-  const { localHost } = useApp();
   const pending = usePending(gatePendingKey(view.key, pg.gate.request_id));
-  return { actions, pending, localHost, busy: !!pending };
+  return { actions, pending, busy: !!pending };
 }
 
 /** Permission / plan gates: the agent's choices, with the "tell it what to do differently" reason flow. */

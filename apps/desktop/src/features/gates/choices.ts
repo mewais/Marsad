@@ -1,11 +1,12 @@
-import type { GateDecision, GateRequest, PermissionChoice } from "../../bridge/types";
+import type { GateDecision, GateRequest, JsonValue } from "../../bridge/wire";
 
 /**
  * One place that turns a gate into the buttons the human sees. The agent's own wording always wins:
- *   1. `choices` carried by the gate (provisional wire field),
- *   2. ACP-style options in `permission_suggestions` ({optionId, name, kind}),
- *   3. `elicitation_choices`,
- *   4. only then Marsad's generic Allow / Deny, flagged `source: "marsad"` so the UI says so.
+ *   1. ACP-style options in `permission_suggestions` ({optionId, name, kind}),
+ *   2. `elicitation_choices`,
+ *   3. only then Marsad's generic Allow / Deny, flagged `source: "marsad"` so the UI says so. When the
+ *      agent sent "always allow" suggestions (claude rule objects), one extra choice echoes them back
+ *      verbatim as `permission_updates`, labelled with the agent's own rule text.
  * Handoffs are Marsad's own gate and always offer the same three choices.
  */
 export type GateKind = "permission" | "plan" | "question" | "handoff";
@@ -36,29 +37,24 @@ export const labelText = (parts: LabelPart[]) => parts.map((p) => p.text).join("
 
 const approve = (extra: Partial<Extract<GateDecision, { action: "approve" }>> = {}): GateDecision => ({ action: "approve", ...extra });
 const deny = (reason?: string): GateDecision => (reason ? { action: "deny", reason } : { action: "deny" });
-
-function fromChoices(g: Extract<GateRequest, { gate_type: "permission" | "plan" }>, cs: PermissionChoice[]): GateChoice[] {
-  const suggestions = g.gate_type === "permission" ? g.permission_suggestions : undefined;
-  return cs.map((c) => ({
-    id: c.id,
-    label: labelParts(c.label),
-    kind: c.kind,
-    asksReason: !!c.asks_reason,
-    decision: (reason) => (c.kind === "deny" ? deny(reason) : c.kind === "always" ? approve({ permission_updates: suggestions?.length ? suggestions : true }) : approve()),
-  }));
-}
+void 0;
 
 interface AcpOption {
   optionId: string;
   name: string;
   kind?: string;
 }
+/** The agent's own rule text inside a claude suggestion object (`rules[].ruleContent`), verbatim. */
+function ruleTexts(o: unknown): string[] {
+  const rules = (o as { rules?: { toolName?: string; ruleContent?: string }[] } | null)?.rules;
+  return Array.isArray(rules) ? rules.map((r) => (r.ruleContent ? `${r.toolName ?? ""}(${r.ruleContent})` : r.toolName ?? "")).filter(Boolean) : [];
+}
+
 const isAcp = (o: unknown): o is AcpOption => !!o && typeof o === "object" && "optionId" in o && "name" in o;
 
 export function permissionChoices(g: Extract<GateRequest, { gate_type: "permission" | "plan" }>): ChoiceSet {
-  if (g.choices?.length) return { choices: fromChoices(g, g.choices), source: "agent" };
   if (g.gate_type === "permission") {
-    const acp = (g.permission_suggestions ?? []).filter(isAcp);
+    const acp = ((g.permission_suggestions ?? []) as unknown[]).filter(isAcp);
     if (acp.length) {
       return {
         source: "agent",
@@ -91,10 +87,15 @@ export function permissionChoices(g: Extract<GateRequest, { gate_type: "permissi
     }
   }
   const plan = g.gate_type === "plan";
+  const suggestions = g.gate_type === "permission" ? (g.permission_suggestions ?? []) : [];
+  const rules = suggestions.flatMap(ruleTexts);
   return {
     source: "marsad",
     choices: [
       { id: "allow", label: [{ text: plan ? "Approve plan" : "Allow" }], kind: "allow", asksReason: false, decision: () => approve() },
+      ...(suggestions.length
+        ? [{ id: "always", label: [{ text: "Always allow " }, ...(rules.length ? rules.flatMap((r, i) => [...(i ? [{ text: ", " }] : []), { text: r, code: true }]) : [{ text: "as suggested" }])], kind: "always" as const, asksReason: false, decision: () => approve({ permission_updates: suggestions as JsonValue }) }]
+        : []),
       { id: "deny", label: [{ text: plan ? "Keep planning" : "Deny" }], kind: "deny", asksReason: true, decision: deny },
     ],
   };

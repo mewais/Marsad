@@ -19,7 +19,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const nav = useNavigate();
   const actions = useStore(actionStore, (s) => s);
   const sessions = useStore(store, (s) => s.sessions);
-  const hosts = useStore(store, (s) => s.links);
+  const hosts = useStore(store, (s) => s.hosts);
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -38,10 +38,10 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       const found: SessionView[] = [];
       for (const key of Object.keys(sessions)) {
         const v = selectView(store.get(), key)!;
-        if (`${v.name} ${v.project} ${v.branch} ${hosts[v.host]?.name ?? ""}`.toLowerCase().includes(n)) found.push(v);
+        if (`${v.name} ${v.project} ${v.branch} ${hosts[v.host]?.entry.name ?? ""}`.toLowerCase().includes(n)) found.push(v);
       }
       for (const v of found.slice(0, 8)) {
-        out.push({ id: `s:${v.key}`, section: "Sessions", title: v.name, hint: `${hosts[v.host]?.name ?? v.host} · ${v.project}`, icon: "inbox", run: () => nav(sessionPath(v.host, v.id)) });
+        out.push({ id: `s:${v.key}`, section: "Sessions", title: v.name, hint: `${hosts[v.host]?.entry.name ?? v.host} · ${v.project}`, icon: "inbox", run: () => nav(sessionPath(v.host, v.id)) });
       }
     }
     return out;

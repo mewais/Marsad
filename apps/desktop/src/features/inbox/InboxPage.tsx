@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { SessionKey } from "../../bridge/types";
+import type { SessionKey } from "../../bridge/wire";
 import { useStore } from "../../lib/store";
 import { sessionPath, useNavigate } from "../../router";
 import { useShortcut } from "../../shortcuts/useShortcut";
@@ -18,7 +18,7 @@ export function InboxPage() {
   const nav = useNavigate();
   const actions = useActions();
   const { store } = useApp();
-  const loaded = useAppState((s) => Object.keys(s.hostLoaded).length > 0);
+  const loaded = useAppState((s) => s.fleetReady);
   const list = useRef<VirtualListHandle>(null);
   const [selected, setSelected] = useState<SessionKey | null>(null);
 

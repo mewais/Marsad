@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { GateRequest, PendingGate } from "../../bridge/types";
+import type { GateRequest, PendingGate } from "../../bridge/wire";
 import { useShortcut } from "../../shortcuts/useShortcut";
 import type { SessionView } from "../../state";
 import { Button, Icon, Kbd } from "../../ui";
@@ -7,6 +7,13 @@ import { HANDOFF_CHOICES } from "./choices";
 import type { GateDensity } from "./Gate";
 import { SourceCaption } from "./parts";
 import { useGateCommon } from "./useGate";
+
+/** The handoff's structured context, shown as the agent sent it (keys and values, one per line). */
+export function detailsText(d: unknown): string {
+  if (d == null) return "";
+  if (typeof d !== "object") return String(d);
+  return Object.entries(d as Record<string, unknown>).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v)}`).join("\n");
+}
 
 type P = PendingGate & { gate: Extract<GateRequest, { gate_type: "handoff" }> };
 
@@ -25,7 +32,7 @@ export function HandoffGate({ view, pg, density, active, expanded, onActivate }:
   const c = useGateCommon(view, pg);
   const [payload, setPayload] = useState(false);
   const g = pg.gate;
-  const pick = (i: number) => void c.actions.decideHandoff(view.key, g.request_id, HANDOFF_CHOICES[i].id, c.localHost);
+  const pick = (i: number) => void c.actions.decideHandoff(view.key, g.request_id, HANDOFF_CHOICES[i].id);
   const buttons = (keys: boolean) => (
     <div className="choices" role="group" aria-label="Handoff choices" aria-busy={c.busy || undefined}>
       {HANDOFF_CHOICES.map((o, i) => (
@@ -36,7 +43,8 @@ export function HandoffGate({ view, pg, density, active, expanded, onActivate }:
       ))}
     </div>
   );
-  const payloadBox = payload && g.payload ? <div className="payload" data-testid="handoff-payload">{g.payload}</div> : null;
+  const details = detailsText(g.details);
+  const payloadBox = payload ? <div className="payload" data-testid="handoff-payload"><span><b>Mode</b> {g.mode} · task {g.task_id}</span>{details ? <span className="mono">{details}</span> : null}</div> : null;
   const keysOn = active;
   const keys = active ? <Keys pick={pick} /> : null;
 
@@ -45,7 +53,7 @@ export function HandoffGate({ view, pg, density, active, expanded, onActivate }:
       <div className="gate-inline compact" data-gate="handoff">
         {keys}
         <Icon name="handoff" size="sm" className="c-needs" />
-        <span className="gs">Handoff from <b>{g.from_name}</b>: “{g.task}”</span>
+        <span className="gs">Handoff from <b>{g.from}</b>: “{g.instruction}”</span>
         <SourceCaption source="handoff" />
         {buttons(false)}
         <button type="button" className="iconbtn" aria-label="Review payload" title="Review payload" onClick={onActivate}><Icon name="chevr" size="sm" /></button>
@@ -57,7 +65,7 @@ export function HandoffGate({ view, pg, density, active, expanded, onActivate }:
         {keys}
         <div className="gq">
           <Icon name="handoff" />
-          <div><b>Handoff</b> from <b>{g.from_name}</b> to <b>{g.to_name}</b><br />“{g.task}”</div>
+          <div><b>Handoff</b> from <b>{g.from}</b> to <b>{g.to}</b><br />“{g.instruction}”</div>
         </div>
         <div className="acts">
           {buttons(keysOn)}
@@ -73,11 +81,11 @@ export function HandoffGate({ view, pg, density, active, expanded, onActivate }:
       {keys}
       <div className="gate-h"><Icon name="handoff" size="sm" />Handoff waiting for you</div>
       <div className="hop">
-        <div className="end"><span className="eyebrow">From</span><b>{g.from_name}</b></div>
+        <div className="end"><span className="eyebrow">From</span><b>{g.from}</b></div>
         <Icon name="chevr" size="lg" className="faint" />
-        <div className="end"><span className="eyebrow">To</span><b>{g.to_name}</b></div>
+        <div className="end"><span className="eyebrow">To</span><b>{g.to}</b></div>
       </div>
-      <div className="payload"><b>Task</b>{g.task}{g.payload ? <span className="muted">{g.payload}</span> : null}</div>
+      <div className="payload"><b>Task</b>{g.instruction}<span className="muted">Mode: {g.mode}</span>{details ? <span className="muted mono">{details}</span> : null}</div>
       <div className="acts">{buttons(keysOn)}<span className="sp" /><SourceCaption source="handoff" /></div>
     </div>
   );

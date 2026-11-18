@@ -18,11 +18,10 @@ export async function renderApp(path = "/inbox", backend = quietBackend()) {
 }
 
 export const sessionByName = (backend: FixtureBackend, name: string) => {
-  for (const h of ["x1", "hz", "win"]) {
+  for (const h of backend.hostIds()) {
     for (const id of backend.sessionIds(h)) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const snap = (backend as any).hosts.get(h).sessions.get(id).snap;
-      if (snap.labels?.name === name) return { host: h, id, key: `${h}/${id}`, snap };
+      const snap = backend.snapshot(h, id);
+      if (snap.title === name) return { host: h, id, key: `${h}/${id}`, snap };
     }
   }
   throw new Error(`no fixture session ${name}`);

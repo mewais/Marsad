@@ -1,48 +1,47 @@
-import type { HostLink, LinkState } from "../bridge/types";
+import { useEffect, useState } from "react";
+import { linkView, type HostView } from "../state/hosts";
+import type { FleetLink } from "../bridge/wire";
 import { Icon, type IconName } from "./Icon";
 
-export function hostIcon(h: Pick<HostLink, "where" | "os">): IconName {
-  if (h.os && /windows/i.test(h.os)) return "monitor";
-  return h.where === "local" ? "laptop" : "server";
+export function hostIcon(h: Pick<HostView, "local" | "os" | "kind">): IconName {
+  if (h.os === "windows" || h.kind.kind === "wsl") return "monitor";
+  return h.local ? "laptop" : "server";
 }
 
-export function linkTone(link: LinkState): "ok" | "warn" | "bad" | "info" {
-  return link === "connected" ? "ok" : link === "offline" ? "bad" : link === "connecting" ? "info" : "warn";
+/** Re-render every `ms` while `on` (countdowns). */
+export function useNow(on: boolean, ms = 1000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!on) return;
+    const h = setInterval(() => setNow(Date.now()), ms);
+    return () => clearInterval(h);
+  }, [on, ms]);
+  return now;
 }
 
 /** The link state in words, never just a dot. */
-export function linkWord(h: Pick<HostLink, "link" | "retry_in_ms">, short = false): string {
-  switch (h.link) {
-    case "connected":
-      return "Connected";
-    case "connecting":
-      return "Connecting";
-    case "offline":
-      return "Offline";
-    case "reconnecting":
-      if (short) return "Reconnecting";
-      return h.retry_in_ms != null ? `Reconnecting in ${Math.max(1, Math.round(h.retry_in_ms / 1000))}s` : "Reconnecting";
-  }
-}
-
-export function ConnState({ host, short }: { host: Pick<HostLink, "link" | "retry_in_ms">; short?: boolean }) {
+export function ConnState({ host, short }: { host: Pick<HostView, "link" | "authPrompt">; short?: boolean }) {
+  const ticking = host.link.link === "remote" && host.link.state.state === "reconnecting" && !short;
+  const now = useNow(ticking);
+  const v = linkView(host.link as FleetLink, host.authPrompt, now);
   return (
-    <span className={`conn ${linkTone(host.link)}`} data-link={host.link}>
+    <span className={`conn ${v.tone}`} data-link={v.key}>
       <span className="pip" aria-hidden="true" />
-      {linkWord(host, short)}
+      {short || v.key === "auth_needed" || v.key === "failed" ? v.word : v.detail.split(" · ")[0]}
     </span>
   );
 }
 
 export interface HostChipProps {
-  host: HostLink;
-  /** Show the link state next to the name (omit when it is connected and the context is crowded). */
+  host: HostView;
+  /** Show the link state next to the name. */
   showLink?: boolean | "unless-connected";
   shortLink?: boolean;
 }
 
 export function HostChip({ host, showLink = false, shortLink }: HostChipProps) {
-  const link = showLink === true || (showLink === "unless-connected" && host.link !== "connected");
+  const connected = linkView(host.link, host.authPrompt).connected;
+  const link = showLink === true || (showLink === "unless-connected" && !connected);
   return (
     <span className="host">
       <Icon name={hostIcon(host)} size="sm" />

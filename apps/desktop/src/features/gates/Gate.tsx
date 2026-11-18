@@ -1,4 +1,4 @@
-import type { PendingGate } from "../../bridge/types";
+import type { PendingGate } from "../../bridge/wire";
 import type { SessionView } from "../../state";
 import { HandoffGate } from "./HandoffGate";
 import { PermissionGate } from "./PermissionGate";
