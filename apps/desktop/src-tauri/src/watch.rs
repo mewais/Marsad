@@ -113,12 +113,41 @@ async fn show(app: &AppHandle, shell: &Shell, notes: Vec<Note>) {
             NotificationPrefs::default()
         }
     };
-    let focused = app
-        .get_webview_window("main")
-        .and_then(|w| w.is_focused().ok())
-        .unwrap_or(false);
+    // The Settings page's switches (UI settings in the hub store): do not disturb, and
+    // whether to stay quiet while the app is focused (default on).
+    let settings = shell
+        .client
+        .call_raw(None, methods::STORE_SETTINGS_GET, serde_json::Value::Null)
+        .await
+        .ok()
+        .and_then(|v| serde_json::from_value::<marsad_proto::store::Settings>(v).ok())
+        .unwrap_or_default();
+    let flag = |k: &str, default: bool| {
+        settings
+            .values
+            .get(k)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(default)
+    };
+    let dnd = flag("notify.dnd", false);
+    let quiet_when_focused = flag("notify.only_unfocused", true);
+    let focused = quiet_when_focused
+        && app
+            .get_webview_window("main")
+            .and_then(|w| w.is_focused().ok())
+            .unwrap_or(false);
     for n in notes {
-        if !n.kind.enabled(&prefs) || focused {
+        let suppressed = if !n.kind.enabled(&prefs) {
+            Some("prefs")
+        } else if dnd {
+            Some("dnd")
+        } else if focused {
+            Some("focus")
+        } else {
+            None
+        };
+        record(&n, suppressed);
+        if suppressed.is_some() {
             continue;
         }
         if let Some(s) = &n.session {
@@ -136,6 +165,30 @@ async fn show(app: &AppHandle, shell: &Shell, notes: Vec<Note>) {
         {
             tracing::warn!(error = %e, "cannot show a notification");
         }
+    }
+}
+
+/// Test hook: with `$MARSAD_NOTIFY_LOG` set, every notification decision is appended to that
+/// file as one JSON line `{kind, title, body, suppressed}` (`suppressed`: `"prefs"`, `"dnd"`,
+/// `"focus"` or `null` = shown), so a test can check them without scraping the OS.
+fn record(n: &Note, suppressed: Option<&str>) {
+    let Some(path) = std::env::var_os("MARSAD_NOTIFY_LOG") else {
+        return;
+    };
+    let line = serde_json::json!({
+        "kind": format!("{:?}", n.kind),
+        "title": n.title,
+        "body": n.body,
+        "suppressed": suppressed,
+    });
+    use std::io::Write;
+    let r = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut f| writeln!(f, "{line}"));
+    if let Err(e) = r {
+        tracing::warn!(error = %e, "cannot write the notification log");
     }
 }
 

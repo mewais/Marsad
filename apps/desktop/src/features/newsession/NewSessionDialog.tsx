@@ -57,12 +57,16 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
   const { drivers, loading, error } = useInventory(f.host, f.cwd, open && hostUp);
   const inv = drivers.find((d) => d.driver === f.driver);
 
-  // Pick a driver (settings default, else the first installed) and the CLI's own defaults.
+  // Pick a driver (settings default, else the first installed) and the CLI's own defaults —
+  // unless one is chosen and not known to be missing: a folder's inventory starts out
+  // `refreshing` (not yet resolved), which must not override the user's pick.
   useEffect(() => {
-    if (!open || !drivers.length || (inv && inv.installed)) return;
+    if (!open || !drivers.length) return;
+    if (f.driver && (!inv || inv.installed || inv.refreshing)) return;
     const pref = typeof settings["defaults.driver"] === "string" ? (settings["defaults.driver"] as string) : "";
     const d = drivers.find((x) => x.driver === pref && x.installed) ?? drivers.find((x) => x.installed);
     if (d) set({ driver: d.driver, ...defaultsFor(d), resumeId: "" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, drivers, inv, settings]);
 
   const hostSessions = useMemo(() => Object.entries(allSessions).filter(([k]) => k.startsWith(f.host + "/")).map(([, s]) => s), [allSessions, f.host]);
