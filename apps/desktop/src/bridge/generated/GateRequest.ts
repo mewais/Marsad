@@ -58,7 +58,7 @@ instruction: string,
 /**
  * Extra structured context (peer names, hop count, …).
  */
-details?: JsonValue, choices: Array<GateChoice>, } | { "gate_type": "spawn", request_id: string, 
+details?: JsonValue, choices: Array<GateChoice>, } | { "gate_type": "spawn", request_id: string, choices: Array<GateChoice>, 
 /**
  * The agent asking (display name).
  */
@@ -98,4 +98,4 @@ new_workstream: boolean,
 /**
  * Extra structured context (ids, limits, …).
  */
-details?: JsonValue, choices: Array<GateChoice>, };
+details?: JsonValue, };

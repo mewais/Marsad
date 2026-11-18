@@ -357,25 +357,15 @@ async fn spawn_across_local_and_ssh_host() {
     let g = &v.pending_spawns[0];
     assert_eq!(g.node, "orch");
     match &g.gate {
-        GateRequest::Spawn {
-            from,
-            name,
-            role,
-            host,
-            driver,
-            workstream,
-            new_workstream,
-            instruction,
-            ..
-        } => {
-            assert_eq!(from, "orchestrator");
-            assert_eq!(name, "calc");
-            assert_eq!(role, "does arithmetic");
-            assert_eq!(host, "Box");
-            assert!(!driver.is_empty());
-            assert_eq!(workstream, "Spawning");
-            assert!(!new_workstream);
-            assert_eq!(instruction.as_deref(), Some("what is 6*7?"));
+        GateRequest::Spawn { spawn: g, .. } => {
+            assert_eq!(g.from, "orchestrator");
+            assert_eq!(g.name, "calc");
+            assert_eq!(g.role, "does arithmetic");
+            assert_eq!(g.host, "Box");
+            assert!(!g.driver.is_empty());
+            assert_eq!(g.workstream, "Spawning");
+            assert!(!g.new_workstream);
+            assert_eq!(g.instruction.as_deref(), Some("what is 6*7?"));
         }
         other => panic!("not a spawn gate: {other:?}"),
     }
@@ -456,14 +446,10 @@ async fn spawn_across_local_and_ssh_host() {
     );
     let gate = gate_on(&c, &calc, &mut pending).await;
     match &gate {
-        GateRequest::Spawn {
-            from,
-            host,
-            cwd: gcwd,
-            ..
-        } => {
-            assert_eq!(from, "calc");
-            assert_eq!(host, "Box");
+        GateRequest::Spawn { spawn: g, .. } => {
+            let gcwd = &g.cwd;
+            assert_eq!(g.from, "calc");
+            assert_eq!(g.host, "Box");
             assert_eq!(gcwd, &cwd);
         }
         _ => unreachable!(),
@@ -652,15 +638,10 @@ async fn spawn_from_a_standalone_session() {
     );
     let gate = gate_on(&c, &me, &mut pending).await;
     match &gate {
-        GateRequest::Spawn {
-            workstream,
-            new_workstream,
-            from,
-            ..
-        } => {
-            assert_eq!(workstream, "Planner + workers");
-            assert!(new_workstream);
-            assert_eq!(from, "Planner");
+        GateRequest::Spawn { spawn: g, .. } => {
+            assert_eq!(g.workstream, "Planner + workers");
+            assert!(g.new_workstream);
+            assert_eq!(g.from, "Planner");
         }
         _ => unreachable!(),
     }

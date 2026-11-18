@@ -293,14 +293,9 @@ async fn live_claude_spawns_an_opencode_worker() {
                     continue;
                 }
                 let kind = match &g.gate {
-                    GateRequest::Spawn {
-                        name,
-                        driver,
-                        model,
-                        ..
-                    } => {
+                    GateRequest::Spawn { spawn: sg, .. } => {
                         spawn_gates += 1;
-                        eprintln!("spawn gate: {name} ({driver}, {model:?})");
+                        eprintln!("spawn gate: {} ({}, {:?})", sg.name, sg.driver, sg.model);
                         GateChoiceKind::AllowOnce
                     }
                     GateRequest::Handoff { .. } => {
