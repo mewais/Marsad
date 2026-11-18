@@ -1,0 +1,1683 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Marsad Design Review</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: slim review bar on top; below it a framed desktop app window (rail + main + status bar) that fills the viewport.
+   Dark-first: dark values on bare :root, light under prefers-color-scheme / data-theme. */
+:root{
+  color-scheme: dark;
+  --bg:#0c0f14; --win:#10141a; --surface:#141920; --surface-2:#191f28; --raised:#1f2632; --sunken:#0b0e12;
+  --line:#242b37; --line-2:#323b4a;
+  --fg:#e7ebf1; --fg-2:#a2acbb; --fg-3:#7d8798;
+  --accent:#86a3ff; --accent-strong:#6f8ff7; --accent-fg:#0b1020; --accent-bg:rgba(134,163,255,.13);
+  --on-needs:#1d1404;
+  --needs:#f2ae45; --needs-bg:rgba(242,174,69,.13); --needs-line:rgba(242,174,69,.45);
+  --failed:#f2695c; --failed-bg:rgba(242,105,92,.13); --failed-line:rgba(242,105,92,.45);
+  --done:#52c992; --done-bg:rgba(82,201,146,.12); --done-line:rgba(82,201,146,.4);
+  --working:#4cc0e4; --working-bg:rgba(76,192,228,.12); --working-line:rgba(76,192,228,.4);
+  --idle:#8f98a8; --idle-bg:rgba(143,152,168,.12);
+  --d-cc:#e0957a; --d-cx:#62c2b6; --d-oc:#ae98f5; --d-kc:#e38cc1;
+  --add:#52c992; --add-bg:rgba(82,201,146,.10); --del:#f2695c; --del-bg:rgba(242,105,92,.10);
+  --scrim:rgba(5,7,10,.62);
+  --shadow:0 18px 50px rgba(0,0,0,.55); --shadow-sm:0 2px 10px rgba(0,0,0,.35);
+  --grid:rgba(160,175,200,.05);
+  --f-ui:'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --f-mono:'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  --rb-h:48px;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+  --r1:4px; --r2:6px; --r3:10px;
+}
+@media (prefers-color-scheme: light){ :root:not([data-theme="dark"]){
+  color-scheme: light;
+  --bg:#e7eaf0; --win:#f6f7fa; --surface:#ffffff; --surface-2:#f4f6f9; --raised:#ffffff; --sunken:#eef1f5;
+  --line:#e0e4eb; --line-2:#c9d0db;
+  --fg:#141a24; --fg-2:#4a5466; --fg-3:#5f6a7c;
+  --accent:#3b5bdb; --accent-strong:#2f4fcf; --accent-fg:#ffffff; --accent-bg:rgba(59,91,219,.09);
+  --on-needs:#ffffff;
+  --needs:#9a5b00; --needs-bg:rgba(214,140,20,.13); --needs-line:rgba(170,105,0,.45);
+  --failed:#c2321f; --failed-bg:rgba(210,60,40,.09); --failed-line:rgba(194,50,31,.4);
+  --done:#147a4d; --done-bg:rgba(30,150,95,.10); --done-line:rgba(20,122,77,.35);
+  --working:#0a6f93; --working-bg:rgba(15,130,170,.10); --working-line:rgba(10,111,147,.35);
+  --idle:#5d6676; --idle-bg:rgba(93,102,118,.10);
+  --d-cc:#b4532f; --d-cx:#167a6e; --d-oc:#6a4fd0; --d-kc:#b1407f;
+  --add:#147a4d; --add-bg:rgba(30,150,95,.09); --del:#c2321f; --del-bg:rgba(210,60,40,.08);
+  --scrim:rgba(20,26,36,.38);
+  --shadow:0 18px 50px rgba(20,30,50,.18); --shadow-sm:0 2px 10px rgba(20,30,50,.08);
+  --grid:rgba(40,60,100,.05);
+}}
+:root[data-theme="light"]{
+  color-scheme: light;
+  --bg:#e7eaf0; --win:#f6f7fa; --surface:#ffffff; --surface-2:#f4f6f9; --raised:#ffffff; --sunken:#eef1f5;
+  --line:#e0e4eb; --line-2:#c9d0db;
+  --fg:#141a24; --fg-2:#4a5466; --fg-3:#5f6a7c;
+  --accent:#3b5bdb; --accent-strong:#2f4fcf; --accent-fg:#ffffff; --accent-bg:rgba(59,91,219,.09);
+  --on-needs:#ffffff;
+  --needs:#9a5b00; --needs-bg:rgba(214,140,20,.13); --needs-line:rgba(170,105,0,.45);
+  --failed:#c2321f; --failed-bg:rgba(210,60,40,.09); --failed-line:rgba(194,50,31,.4);
+  --done:#147a4d; --done-bg:rgba(30,150,95,.10); --done-line:rgba(20,122,77,.35);
+  --working:#0a6f93; --working-bg:rgba(15,130,170,.10); --working-line:rgba(10,111,147,.35);
+  --idle:#5d6676; --idle-bg:rgba(93,102,118,.10);
+  --d-cc:#b4532f; --d-cx:#167a6e; --d-oc:#6a4fd0; --d-kc:#b1407f;
+  --add:#147a4d; --add-bg:rgba(30,150,95,.09); --del:#c2321f; --del-bg:rgba(210,60,40,.08);
+  --scrim:rgba(20,26,36,.38);
+  --shadow:0 18px 50px rgba(20,30,50,.18); --shadow-sm:0 2px 10px rgba(20,30,50,.08);
+  --grid:rgba(40,60,100,.05);
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{display:flex;flex-direction:column;margin:0;background:var(--bg);color:var(--fg);font:13px/1.45 var(--f-ui);-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--f-mono);font-size:12px}
+.tnum{font-variant-numeric:tabular-nums}
+.muted{color:var(--fg-2)} .faint{color:var(--fg-3)}
+.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
+.i.sm{width:14px;height:14px;vertical-align:-2px} .i.xs{width:12px;height:12px;vertical-align:-2px} .i.lg{width:20px;height:20px}
+@media (prefers-reduced-motion: no-preference){ .spin{animation:spin 1.4s linear infinite;transform-origin:50% 50%} @keyframes spin{to{transform:rotate(360deg)}} }
+
+/* ---------- Review bar ---------- */
+.review{position:sticky;top:env(safe-area-inset-top,0px);z-index:50;min-height:var(--rb-h);display:flex;align-items:center;gap:var(--s4);flex-wrap:wrap;
+  padding-block:6px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  background:var(--surface);border-bottom:1px solid var(--line)}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:60;background:var(--surface)}
+.rb-title{display:flex;align-items:center;gap:8px;font-weight:600;white-space:nowrap}
+.rb-title small{font-weight:500;color:var(--fg-3);font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+.rb-group{display:flex;align-items:center;gap:6px}
+.rb-label{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3)}
+.seg{display:inline-flex;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r2);padding:2px;gap:2px}
+.seg button{border:0;background:transparent;padding:4px 10px;border-radius:4px;color:var(--fg-2);font-size:12px;font-weight:500;white-space:nowrap}
+.seg button[aria-pressed="true"]{background:var(--raised);color:var(--fg);box-shadow:var(--shadow-sm)}
+.seg button:hover{color:var(--fg)}
+.rb-caption{flex:1 1 260px;min-width:0;color:var(--fg-2);font-size:12px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.rb-screens .short{display:none}
+@media (max-width:1300px){ .rb-caption{display:none} }
+@media (max-width:1200px){ .rb-screens .short{display:inline} .rb-screens .long,.review .long,.rb-label,.rb-title small{display:none} .review{gap:8px 10px;flex-wrap:wrap} .rb-group{flex-wrap:wrap} .seg{flex-wrap:wrap} }
+.rb-screens button .n{font-family:var(--f-mono);font-size:10px;color:var(--fg-3);margin-right:4px}
+
+/* ---------- Stage + app window ---------- */
+.stage{flex:1;min-height:0;display:flex;flex-direction:column;padding-block:12px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));overflow-x:auto}
+.win{position:relative;min-width:992px;flex:1;min-height:640px;background:var(--win);border:1px solid var(--line-2);border-radius:10px;box-shadow:var(--shadow);
+  display:grid;grid-template-rows:40px 1fr 26px;overflow:hidden}
+@media (max-width:1100px){ .stage{padding-block:0;padding-left:0;padding-right:0} .win{border-radius:0;border-left:0;border-right:0} }
+.titlebar{position:relative;z-index:25;display:flex;align-items:center;gap:var(--s3);padding:0 6px 0 12px;border-bottom:1px solid var(--line);background:var(--surface)}
+.brand{display:flex;align-items:center;gap:8px;font-weight:700;letter-spacing:.01em;min-width:150px}
+.brand .ar{font-weight:500;color:var(--fg-3);font-size:12px}
+.cmdk{flex:0 1 420px;margin:0 auto;display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;border:1px solid var(--line);border-radius:var(--r2);background:var(--sunken);color:var(--fg-3);font-size:12px}
+.cmdk span{flex:1}
+kbd{font-family:var(--f-mono);font-size:10.5px;padding:1px 5px;border-radius:4px;border:1px solid var(--line-2);border-bottom-width:2px;color:var(--fg-2);background:var(--surface-2);white-space:nowrap}
+.tb-right{display:flex;align-items:center;gap:6px}
+.winctl{display:flex;margin-left:6px}
+.winctl span{width:36px;height:28px;display:grid;place-items:center;color:var(--fg-3)}
+.body{display:grid;grid-template-columns:78px 1fr;min-height:0}
+.rail{border-right:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column;align-items:stretch;padding:8px 6px;gap:2px}
+.rail a{display:flex;flex-direction:column;align-items:center;gap:3px;padding:7px 2px;border-radius:var(--r2);color:var(--fg-2);font-size:10.5px;font-weight:500;text-decoration:none;position:relative;cursor:pointer}
+.rail a:hover{background:var(--surface-2);color:var(--fg)}
+.rail a[aria-current="true"]{background:var(--accent-bg);color:var(--accent)}
+.rail .badge{position:absolute;top:3px;right:8px;min-width:16px;height:16px;border-radius:8px;background:var(--needs);color:var(--on-needs);font-size:10px;font-weight:700;display:grid;place-items:center;padding:0 4px}
+.rail .sp{flex:1}
+.main{min-width:0;min-height:0;overflow:hidden;position:relative;display:flex;flex-direction:column}
+.statusbar{display:flex;align-items:center;gap:var(--s4);padding:0 12px;border-top:1px solid var(--line);background:var(--surface);font-size:11.5px;color:var(--fg-2);white-space:nowrap;overflow:hidden}
+.statusbar .sb-item{display:flex;align-items:center;gap:5px}
+.statusbar .sp{flex:1}
+
+/* ---------- Buttons, chips, pills ---------- */
+.btn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:var(--r2);border:1px solid var(--line-2);background:var(--surface-2);color:var(--fg);font-size:12.5px;font-weight:500;white-space:nowrap}
+.btn:hover{border-color:var(--fg-3)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.btn.primary:hover{background:var(--accent-strong)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--fg-2)} .btn.ghost:hover{background:var(--surface-2);color:var(--fg)}
+.btn.sm{height:24px;padding:0 8px;font-size:12px}
+.btn.allow{background:var(--done-bg);border-color:var(--done-line);color:var(--done)}
+.btn.always{background:transparent;border-color:var(--line-2);color:var(--fg)}
+.btn.deny{background:transparent;border-color:var(--failed-line);color:var(--failed)}
+.btn.warn{background:var(--needs);border-color:var(--needs);color:var(--on-needs)}
+.btn kbd{border-color:currentColor;background:transparent;color:inherit;opacity:.75;padding:0 4px;font-size:10px}
+.iconbtn{width:28px;height:28px;display:inline-grid;place-items:center;border-radius:var(--r2);border:1px solid transparent;background:transparent;color:var(--fg-2);position:relative}
+.iconbtn:hover{background:var(--surface-2);color:var(--fg)}
+.iconbtn .dotn{position:absolute;top:2px;right:2px;min-width:14px;height:14px;border-radius:7px;background:var(--needs);color:var(--on-needs);font-size:9.5px;font-weight:700;display:grid;place-items:center;padding:0 3px}
+
+.st{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px 0 6px;border-radius:11px;font-size:11.5px;font-weight:600;white-space:nowrap;border:1px solid transparent}
+.st.needs{color:var(--needs);background:var(--needs-bg);border-color:var(--needs-line)}
+.st.failed{color:var(--failed);background:var(--failed-bg);border-color:var(--failed-line)}
+.st.done{color:var(--done);background:var(--done-bg);border-color:var(--done-line)}
+.st.working{color:var(--working);background:var(--working-bg);border-color:var(--working-line)}
+.st.idle{color:var(--idle);background:var(--idle-bg);border-color:transparent}
+.st.plain{background:transparent;border-color:transparent;padding:0;height:auto}
+.c-needs{color:var(--needs)} .c-failed{color:var(--failed)} .c-done{color:var(--done)} .c-working{color:var(--working)} .c-idle{color:var(--idle)} .c-accent{color:var(--accent)}
+
+.drv{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:12px;color:var(--fg-2)}
+.drv b{display:inline-grid;place-items:center;width:20px;height:18px;border-radius:4px;font:600 9.5px/1 var(--f-mono);border:1px solid currentColor;letter-spacing:-.02em}
+.drv.cc b{color:var(--d-cc)} .drv.cx b{color:var(--d-cx)} .drv.oc b{color:var(--d-oc)} .drv.kc b{color:var(--d-kc)}
+.drv.compact span{display:none}
+.host{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-size:12px;color:var(--fg-2)}
+.conn{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;white-space:nowrap}
+.conn .pip{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 0 2px color-mix(in srgb, currentColor 22%, transparent)}
+.conn.ok{color:var(--done)} .conn.warn{color:var(--needs)} .conn.bad{color:var(--failed)} .conn.info{color:var(--working)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 9px;border-radius:13px;border:1px solid var(--line-2);background:var(--surface);color:var(--fg-2);font-size:12px;font-weight:500;white-space:nowrap}
+.chip:hover{color:var(--fg);border-color:var(--fg-3)}
+.chip.on{background:var(--accent-bg);border-color:color-mix(in srgb,var(--accent) 45%,transparent);color:var(--accent)}
+.chip .x{opacity:.7}
+.tag{display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 6px;border-radius:4px;background:var(--surface-2);border:1px solid var(--line);color:var(--fg-2);font-size:11px;font-weight:500;white-space:nowrap}
+.tag.ws{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,transparent);background:var(--accent-bg)}
+.newdot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none;display:inline-block}
+.eyebrow{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-3)}
+h1,h2,h3{margin:0;text-wrap:balance}
+.h1{font-size:20px;font-weight:700;letter-spacing:-.01em}
+.h2{font-size:15px;font-weight:600}
+.h3{font-size:13px;font-weight:600}
+.input{display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;border:1px solid var(--line-2);border-radius:var(--r2);background:var(--sunken);color:var(--fg-3);font-size:12.5px}
+.input input{border:0;background:transparent;outline:0;flex:1;min-width:0;color:var(--fg)}
+.input input::placeholder{color:var(--fg-3)}
+.field{display:flex;flex-direction:column;gap:6px}
+.field>label{font-size:12px;font-weight:600;color:var(--fg)}
+.field .hint{font-size:11.5px;color:var(--fg-3)}
+.selbox{display:flex;align-items:center;justify-content:space-between;gap:8px;height:30px;padding:0 10px;border:1px solid var(--line-2);border-radius:var(--r2);background:var(--surface);font-size:12.5px;color:var(--fg)}
+.selbox .i{color:var(--fg-3)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r3)}
+.scroll{overflow:auto;min-height:0}
+.sep{height:1px;background:var(--line)}
+.bar{height:4px;border-radius:2px;background:var(--line);overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--accent);border-radius:2px}
+.bar.w>i{background:var(--working)} .bar.n>i{background:var(--needs)}
+
+/* ---------- Page header ---------- */
+.ph{display:flex;align-items:center;gap:var(--s3);padding:14px 20px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.ph .h1{margin-right:4px}
+.ph .summary{display:flex;gap:14px;font-size:12.5px;color:var(--fg-2);flex-wrap:wrap}
+.ph .summary b{font-weight:600}
+.ph .sp{flex:1}
+.toolbar{display:flex;align-items:center;gap:8px;padding:10px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.toolbar .sp{flex:1}
+.keyhints{display:flex;gap:14px;align-items:center;padding:7px 20px;border-top:1px solid var(--line);font-size:11.5px;color:var(--fg-3);flex-wrap:wrap;background:var(--surface)}
+.keyhints span{display:inline-flex;gap:5px;align-items:center}
+
+/* ---------- Home A: inbox ---------- */
+.ibx{flex:1;min-height:0;overflow:auto}
+.ibx-head,.ibx-row{display:grid;grid-template-columns:118px minmax(200px,1.5fr) 118px 140px minmax(170px,1.3fr) 66px 58px;gap:12px;align-items:center;padding:0 20px}
+.ibx-head{position:sticky;top:0;z-index:2;height:30px;background:var(--win);border-bottom:1px solid var(--line);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3)}
+.ibx-head .r,.ibx-row .r{text-align:right}
+.grp{display:flex;align-items:center;gap:8px;padding:14px 20px 6px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.grp .cnt{font-family:var(--f-mono);font-weight:500;color:var(--fg-3)}
+.grp .gline{flex:1;height:1px;background:var(--line)}
+.grp .gact{font-size:11.5px;text-transform:none;letter-spacing:0;font-weight:500;color:var(--fg-2)}
+.ibx-item{border-bottom:1px solid var(--line);position:relative}
+.ibx-row{min-height:46px;padding-block:6px;cursor:pointer}
+.ibx-item:hover{background:color-mix(in srgb,var(--surface) 70%,transparent)}
+.ibx-item.sel{background:var(--surface);box-shadow:inset 2px 0 0 var(--accent)}
+.sn{display:flex;flex-direction:column;min-width:0;gap:1px}
+.sn .t{display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px;min-width:0}
+.sn .t .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sn .s{font-size:12px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sn .s.err{color:var(--failed);font-family:var(--f-mono);font-size:11.5px}
+.pb{display:flex;flex-direction:column;min-width:0;font-size:12px}
+.pb .p{color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pb .b{color:var(--fg-3);font-family:var(--f-mono);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cost{font-family:var(--f-mono);font-size:12px;color:var(--fg-2);font-variant-numeric:tabular-nums}
+.ago{font-size:12px;color:var(--fg-2);font-variant-numeric:tabular-nums}
+.gate-inline{margin:0 20px 10px 150px;padding:10px 12px;border:1px solid var(--needs-line);border-radius:var(--r3);background:var(--needs-bg);display:flex;flex-direction:column;gap:8px}
+.gate-inline .gq{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;color:var(--fg)}
+.gate-inline .gq .i{color:var(--needs);margin-top:1px}
+.gate-inline code,.code-inline{font-family:var(--f-mono);font-size:12px;background:var(--sunken);border:1px solid var(--line);border-radius:4px;padding:1px 6px;color:var(--fg)}
+.gate-inline.compact{flex-direction:row;flex-wrap:wrap;align-items:center;gap:6px 8px;padding:6px 8px 6px 12px}
+.gate-inline .gs{flex:1 1 280px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--fg)}
+.gate-inline .acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.gate-inline .acts .sp{flex:1}
+.opts{display:flex;gap:6px;flex-wrap:wrap}
+.opt{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:var(--r2);border:1px solid var(--line-2);background:var(--surface);font-size:12px;cursor:pointer}
+.opt .k{font-family:var(--f-mono);font-size:10.5px;color:var(--fg-3)}
+.opt.on{border-color:var(--accent);background:var(--accent-bg);color:var(--fg)}
+.opt .rad{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--fg-3);flex:none}
+.opt.on .rad{border-color:var(--accent);background:radial-gradient(circle,var(--accent) 0 3px,transparent 3.5px)}
+.donebox{margin:0 20px 10px 150px;display:flex;gap:10px;align-items:center;font-size:12px;color:var(--fg-2)}
+.donebox .stat{font-family:var(--f-mono);font-size:11.5px}
+.add{color:var(--add)} .del{color:var(--del)}
+
+/* shared list items (settings nav) */
+.lr-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--r2);font-size:12.5px;color:var(--fg-2);cursor:pointer}
+.lr-item:hover{background:var(--surface-2);color:var(--fg)}
+.lr-item.on{background:var(--accent-bg);color:var(--fg)}
+
+/* ---------- Agent-offered choices ---------- */
+.srccap{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--fg-3);white-space:nowrap}
+.srccap .drv b{width:18px;height:16px;font-size:9px}
+.srccap.wasl{color:var(--accent)}
+.choices{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+.choices .btn{white-space:normal;height:auto;min-height:24px;padding-block:3px;text-align:left;line-height:1.3}
+.choices .btn.lg{min-height:28px;padding-block:5px}
+.choices .btn code{font-family:var(--f-mono);font-size:11px;padding:0 4px;border-radius:3px;background:var(--sunken);border:1px solid var(--line);color:var(--fg)}
+.tell{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.tell .input{flex:1 1 240px;height:28px}
+.optother{display:inline-flex;align-items:center;gap:6px}
+.optother input{border:0;border-bottom:1px solid var(--line-2);background:transparent;outline:0;font-size:12px;color:var(--fg);width:150px;padding:1px 2px}
+.optother input::placeholder{color:var(--fg-3)}
+
+/* ---------- Home C: attention board ---------- */
+.attn{flex:1;min-height:0;display:flex;flex-direction:column}
+.acols{flex:1;min-height:0;overflow:auto;padding:12px 20px 16px;display:flex;gap:12px;align-items:flex-start}
+.acol{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:8px}
+.acol.wide{flex-grow:1.55}
+.acol.empty{flex:0 0 44px;align-self:stretch;border:1px dashed var(--line-2);border-radius:var(--r3);align-items:center;padding:12px 0;gap:10px;color:var(--fg-3)}
+.acol.empty .vlab{writing-mode:vertical-rl;font-size:12px;font-weight:600;white-space:nowrap;letter-spacing:.02em}
+.acol-h{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;padding:2px 2px 2px;min-height:26px}
+.acol-h .cnt{font-family:var(--f-mono);font-weight:500;color:var(--fg-3)}
+.acol-h .sp{flex:1}
+.acard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r3);padding:10px 12px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.acard.needs{border-color:var(--needs-line)} .acard.failed{border-color:var(--failed-line)}
+.acard .t{display:flex;align-items:center;gap:6px;font-weight:600;min-width:0;flex-wrap:wrap}
+.acard .t .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.acard .m{display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--fg-3);flex-wrap:wrap}
+.acard .ask{font-size:12.5px;color:var(--fg);display:flex;gap:8px;align-items:flex-start}
+.acard .ask .i{margin-top:1px}
+.acard .l{font-size:12px;color:var(--fg-2)}
+.acard .l.err{color:var(--failed);font-family:var(--f-mono);font-size:11.5px}
+.acard .foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.acard .foot .sp{flex:1}
+.acard code{font-family:var(--f-mono);font-size:11.5px;background:var(--sunken);border:1px solid var(--line);border-radius:4px;padding:1px 6px;color:var(--fg)}
+.acard .cmdb{display:block;margin-top:4px;padding:5px 8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.qlist{display:flex;flex-direction:column;gap:4px}
+.qlist .qopt{padding:5px 8px;font-size:12px;gap:8px;align-items:center}
+.qlist .qopt .rad{margin-top:0}
+.quiet{border-top:1px solid var(--line);background:var(--surface)}
+.quiet-h{display:flex;align-items:center;gap:10px;padding:7px 20px;font-size:12.5px;color:var(--fg-2);flex-wrap:wrap}
+.quiet-h b{color:var(--fg);font-weight:600}
+.quiet-h .sp{flex:1}
+.qrows{max-height:232px;overflow:auto;border-top:1px solid var(--line)}
+.qrow{display:grid;grid-template-columns:18px minmax(150px,1.1fr) 26px 128px minmax(180px,2fr) 44px 52px;gap:10px;align-items:center;padding:5px 20px;font-size:12px;border-bottom:1px solid var(--line);cursor:pointer}
+.qrow:hover{background:var(--surface-2)}
+.qrow .nm{font-weight:600;display:flex;gap:6px;align-items:center;min-width:0}
+.qrow .nm span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qrow .ln{color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---------- Workstreams list ---------- */
+.wsl{flex:1;min-height:0;overflow:auto;padding:12px 20px 18px;display:flex;flex-direction:column;gap:8px}
+.wsh,.wsrow{display:grid;grid-template-columns:minmax(220px,1.7fr) minmax(150px,1fr) 70px minmax(170px,1.2fr) 64px 92px 18px;gap:14px;align-items:center}
+.wsh{padding:0 14px 2px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3)}
+.wsrow{padding:12px 14px;border:1px solid var(--line);border-radius:var(--r3);background:var(--surface);cursor:pointer}
+.wsrow:hover{border-color:var(--line-2)}
+.wsrow .nm{display:flex;flex-direction:column;gap:2px;min-width:0}
+.wsrow .nm b{font-size:13.5px;display:flex;gap:8px;align-items:center}
+.wsrow .nm span{font-size:12px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wsrow .hm{display:flex;flex-direction:column;gap:2px}
+.wsrow .sw{font-size:12.5px;display:flex;flex-direction:column;gap:2px}
+.wsrow .r{text-align:right}
+.tpl{display:flex;gap:10px;flex-wrap:wrap}
+.tpl .card{padding:10px 12px;display:flex;flex-direction:column;gap:4px;min-width:220px;flex:1 1 220px}
+.startopts{display:flex;flex-direction:column;gap:6px}
+.startopts .pol label{align-items:flex-start}
+
+/* ---------- Session detail ---------- */
+.sd-head{padding:12px 20px 0;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px;background:var(--win)}
+.crumbs{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg-3)}
+.crumbs a{color:var(--fg-2);text-decoration:none;cursor:pointer} .crumbs a:hover{color:var(--fg)}
+.sd-title{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.sd-meta{display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--fg-2)}
+.sd-meta .kv{display:inline-flex;align-items:center;gap:6px}
+.ctx{display:inline-flex;align-items:center;gap:6px}
+.ctx .bar{width:64px}
+.tabs{display:flex;gap:2px;margin-top:2px}
+.tabs button{border:0;background:transparent;padding:8px 12px;font-size:12.5px;font-weight:500;color:var(--fg-2);border-bottom:2px solid transparent;display:inline-flex;gap:6px;align-items:center}
+.tabs button:hover{color:var(--fg)}
+.tabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
+.tabs .n{font-family:var(--f-mono);font-size:10.5px;padding:0 5px;border-radius:8px;background:var(--surface-2);color:var(--fg-2);border:1px solid var(--line)}
+.sd-body{flex:1;min-height:0;display:grid;grid-template-columns:1fr 268px}
+.sd-body.full{grid-template-columns:1fr}
+.tr-wrap{display:flex;flex-direction:column;min-height:0;min-width:0;position:relative}
+.transcript{flex:1;overflow:auto;padding:16px 24px 8px}
+.tr{max-width:820px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.msg-user{align-self:flex-end;max-width:78%;background:var(--surface-2);border:1px solid var(--line);border-radius:10px 10px 2px 10px;padding:9px 12px;font-size:13px}
+.msg-ai{font-size:13.5px;line-height:1.55;color:var(--fg)}
+.msg-ai p{margin:0 0 6px}
+.who{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--fg-3);margin-bottom:4px}
+.think{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg-3);cursor:pointer;width:max-content}
+.think:hover{color:var(--fg-2)}
+.tool{border:1px solid var(--line);border-radius:var(--r2);background:var(--surface);overflow:hidden}
+.tool-h{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px;cursor:pointer}
+.tool-h .nm{font-weight:600}
+.tool-h .arg{font-family:var(--f-mono);font-size:11.5px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.tool-h .res{font-size:11.5px;color:var(--fg-3);white-space:nowrap}
+.tool-b{border-top:1px solid var(--line);background:var(--sunken);padding:8px 10px;font-family:var(--f-mono);font-size:11.5px;color:var(--fg-2);white-space:pre;overflow:auto;line-height:1.55}
+.diff{font-family:var(--f-mono);font-size:11.5px;line-height:1.6;background:var(--sunken);overflow:auto}
+.diff .ln{display:grid;grid-template-columns:38px 38px 16px 1fr;white-space:pre}
+.diff .ln span:nth-child(-n+2){color:var(--fg-3);text-align:right;padding-right:8px;user-select:none}
+.diff .ln.a{background:var(--add-bg)} .diff .ln.a span:nth-child(3){color:var(--add)}
+.diff .ln.d{background:var(--del-bg)} .diff .ln.d span:nth-child(3){color:var(--del)}
+.diff .hunk{color:var(--fg-3);padding:2px 10px;background:var(--surface-2);white-space:pre}
+.subag{border:1px solid var(--line);border-left:3px solid var(--d-oc);border-radius:var(--r2);background:var(--surface);padding:8px 12px;display:flex;flex-direction:column;gap:6px}
+.subag-h{display:flex;align-items:center;gap:8px;font-size:12px}
+.subag ul{margin:0;padding-left:18px;font-size:12px;color:var(--fg-2)}
+.gate{border:1px solid var(--needs-line);background:var(--needs-bg);border-radius:var(--r3);padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.gate-h{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--needs);font-size:12.5px}
+.gate-h .sp{flex:1}
+.gate .cmd{font-family:var(--f-mono);font-size:12.5px;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r2);padding:8px 10px;color:var(--fg);overflow:auto;white-space:pre}
+.gate .risk{display:flex;gap:8px;font-size:12px;color:var(--fg)}
+.gate .acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.gate .acts .sp{flex:1}
+.gate .q{font-size:13.5px;color:var(--fg);font-weight:500}
+.qopts{display:flex;flex-direction:column;gap:6px}
+.qopt{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border:1px solid var(--line-2);border-radius:var(--r2);background:var(--surface);cursor:pointer}
+.qopt .rad{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--fg-3);flex:none;margin-top:2px}
+.qopt.on{border-color:var(--accent);background:var(--accent-bg)}
+.qopt.on .rad{border-color:var(--accent);background:radial-gradient(circle,var(--accent) 0 3.5px,transparent 4px)}
+.qopt .d{font-size:12px;color:var(--fg-2)}
+.qopt .k{margin-left:auto}
+.composer-wrap{padding:8px 24px 14px;position:relative}
+.composer{max-width:820px;margin:0 auto;border:1px solid var(--line-2);border-radius:var(--r3);background:var(--surface);box-shadow:var(--shadow-sm);position:relative}
+.composer textarea{width:100%;border:0;background:transparent;resize:none;outline:0;padding:10px 12px 4px;font-size:13px;color:var(--fg);height:44px}
+.composer textarea::placeholder{color:var(--fg-3)}
+.comp-bar{display:flex;align-items:center;gap:6px;padding:4px 6px 6px}
+.comp-bar .sp{flex:1}
+.pick{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border-radius:var(--r2);border:1px solid var(--line);background:var(--surface-2);font-size:11.5px;color:var(--fg-2);white-space:nowrap}
+.pick:hover{color:var(--fg)}
+.slash{position:absolute;left:0;bottom:calc(100% + 6px);width:420px;background:var(--raised);border:1px solid var(--line-2);border-radius:var(--r3);box-shadow:var(--shadow);padding:6px;z-index:5}
+.slash .it{display:grid;grid-template-columns:118px 1fr auto;gap:8px;align-items:center;padding:6px 8px;border-radius:var(--r2);font-size:12px}
+.slash .it.on{background:var(--accent-bg)}
+.slash .it b{font-family:var(--f-mono);font-weight:500;color:var(--fg);white-space:nowrap}
+.slash .it span{color:var(--fg-2)}
+.slash .src{font-size:10.5px;color:var(--fg-3)}
+.side{border-left:1px solid var(--line);overflow:auto;padding:14px;display:flex;flex-direction:column;gap:16px;background:var(--surface)}
+.side h4{margin:0 0 8px;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-3)}
+.todo{display:flex;flex-direction:column;gap:6px;font-size:12px}
+.todo div{display:flex;gap:8px;align-items:flex-start}
+.todo .dn{color:var(--fg-3);text-decoration:line-through}
+.kvl{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;font-size:12px}
+.kvl dt{color:var(--fg-3)} .kvl dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+.jump{display:flex;flex-direction:column;gap:6px}
+.jump a{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:var(--r2);border:1px solid var(--needs-line);background:var(--needs-bg);font-size:12px;color:var(--fg);text-decoration:none;cursor:pointer}
+/* changes tab */
+.chg{display:grid;grid-template-columns:300px 1fr;flex:1;min-height:0}
+.flist{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.frow{display:flex;align-items:center;gap:8px;padding:6px 12px;font-size:12px;cursor:pointer}
+.frow:hover{background:var(--surface)}
+.frow.on{background:var(--surface);box-shadow:inset 2px 0 0 var(--accent)}
+.frow .fn{font-family:var(--f-mono);font-size:11.5px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+.frow .ms{font-family:var(--f-mono);font-size:10.5px;width:14px;text-align:center;font-weight:600}
+.commit{margin-top:auto;border-top:1px solid var(--line);padding:12px;display:flex;flex-direction:column;gap:8px}
+.ta{border:1px solid var(--line-2);border-radius:var(--r2);background:var(--sunken);padding:8px 10px;font-size:12.5px;color:var(--fg);min-height:64px;line-height:1.45}
+.term{flex:1;margin:12px 20px 16px;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r3);padding:12px 14px;font-family:var(--f-mono);font-size:12px;line-height:1.6;color:var(--fg-2);overflow:auto;white-space:pre}
+.term .p{color:var(--accent)} .term .ok{color:var(--done)} .term .er{color:var(--failed)} .term .w{color:var(--needs)}
+.cfgcols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;padding:16px 20px;overflow:auto;align-content:start}
+.cfgcols .card{padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+.usage{padding:16px 20px;overflow:auto;display:flex;flex-direction:column;gap:16px}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.tile{padding:12px 14px;display:flex;flex-direction:column;gap:2px}
+.tile .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.tile .k{font-size:11.5px;color:var(--fg-3)}
+table.t{width:100%;border-collapse:collapse;font-size:12px}
+table.t th{text-align:left;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--fg-3);padding:8px 10px;border-bottom:1px solid var(--line)}
+table.t td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+table.t td.r,table.t th.r{text-align:right;font-variant-numeric:tabular-nums}
+
+/* ---------- Graph ---------- */
+.gx{display:grid;grid-template-columns:1fr 340px;flex:1;min-height:0}
+.gx>*{min-height:0;min-width:0}
+.canvas-wrap{position:relative;overflow:auto;background-color:var(--win);background-image:radial-gradient(var(--grid) 1px,transparent 1.2px);background-size:16px 16px}
+.canvas{position:relative;width:1000px;height:600px;margin:0 auto}
+.lanebg{position:absolute;left:12px;right:12px;border:1px solid var(--line);border-radius:var(--r3);background:color-mix(in srgb,var(--surface) 55%,transparent)}
+.lanelab{position:absolute;left:12px;top:10px;display:flex;flex-direction:column;gap:3px;width:150px}
+.lanelab .hn{font-weight:600;font-size:12.5px;display:flex;align-items:center;gap:6px;color:var(--fg)}
+.lanelab .hm{font-size:11px;color:var(--fg-3)}
+.gsvg{position:absolute;inset:0;overflow:visible}
+.gsvg path{fill:none;stroke-width:1.8}
+.gn{position:absolute;width:230px;background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r3);padding:9px 11px;display:flex;flex-direction:column;gap:6px;cursor:pointer;box-shadow:var(--shadow-sm)}
+.gn:hover{border-color:var(--fg-3)}
+.gn.sel{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
+.gn .t{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px}
+.gn .t span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gn .row{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--fg-2)}
+.gn .row .sp{flex:1}
+.gn .task{font-size:11.5px;color:var(--fg-2);display:flex;flex-direction:column;gap:4px;border-top:1px solid var(--line);padding-top:6px}
+.gn.orch{border-color:color-mix(in srgb,var(--accent) 55%,var(--line-2))}
+.el{position:absolute;transform:translate(-50%,-50%);display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:12px;border:1px solid var(--line-2);background:var(--raised);font-size:11px;font-weight:600;white-space:nowrap;cursor:pointer;box-shadow:var(--shadow-sm)}
+.el.ask{color:var(--needs);border-color:var(--needs-line)}
+.el.allow{color:var(--done);border-color:var(--done-line)}
+.el.block{color:var(--failed);border-color:var(--failed-line)}
+.el.sel{box-shadow:0 0 0 3px var(--accent-bg);border-color:var(--accent)}
+.el .tk{color:var(--fg-2);font-weight:500;display:inline-flex;align-items:center;gap:5px}
+.el .tk .bar{width:34px;display:inline-block}
+.el.pending{background:var(--needs);color:var(--on-needs);border-color:var(--needs)}
+.gbanner{position:sticky;top:12px;left:0;margin:12px auto 0;width:max-content;z-index:3;display:flex;align-items:center;gap:10px;padding:6px 6px 6px 12px;border-radius:var(--r3);border:1px solid var(--needs-line);background:var(--raised);box-shadow:var(--shadow);font-size:12.5px;white-space:nowrap}
+.gctl{position:absolute;right:12px;bottom:12px;display:flex;gap:6px;z-index:3}
+.glegend{position:absolute;left:12px;bottom:12px;z-index:3;display:flex;gap:14px;padding:6px 10px;border-radius:var(--r2);background:var(--raised);border:1px solid var(--line);font-size:11px;color:var(--fg-2)}
+.glegend span{display:inline-flex;align-items:center;gap:6px}
+.insp{border-left:1px solid var(--line);background:var(--surface);overflow:auto;padding:16px;display:flex;flex-direction:column;gap:16px}
+.insp .sec{display:flex;flex-direction:column;gap:8px}
+.pol{display:flex;flex-direction:column;gap:6px}
+.pol label{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-radius:var(--r2);border:1px solid var(--line-2);cursor:pointer;font-size:12px}
+.pol label.on{border-color:var(--accent);background:var(--accent-bg)}
+.pol label b{display:block;font-size:12.5px}
+.pol label .drv b{display:inline-grid;font-size:9.5px}
+.pol .d{color:var(--fg-2);font-size:11.5px}
+.hist{display:flex;flex-direction:column}
+.hist .h{display:grid;grid-template-columns:16px 1fr auto;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);font-size:12px;align-items:start}
+.hist .h .w{font-size:11px;color:var(--fg-3);white-space:nowrap}
+.hist .h .d{font-size:11.5px;color:var(--fg-2)}
+.hostline{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg-2)}
+
+/* ---------- Modal / dialogs ---------- */
+.scrim{position:absolute;inset:0;background:var(--scrim);z-index:20;display:flex;align-items:center;justify-content:center;padding:16px}
+.scrim.left{justify-content:flex-start;padding-left:40px;padding-right:400px}
+.scrim.left .dlg{width:min(820px,100%)}
+.dlg{background:var(--surface);border:1px solid var(--line-2);border-radius:12px;box-shadow:var(--shadow);display:flex;flex-direction:column;max-height:100%;width:min(920px,100%);min-height:0}
+.dlg-h{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.dlg-h .sp{flex:1}
+.dlg-b{padding:14px 18px;overflow:auto;min-height:0}
+.dlg-f{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
+.dlg-f .sp{flex:1}
+.ns{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.ns .col{display:flex;flex-direction:column;gap:12px;min-width:0}
+.drvpick{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.dp{border:1px solid var(--line-2);border-radius:var(--r2);padding:8px;display:flex;flex-direction:column;gap:4px;cursor:pointer;background:var(--surface)}
+.dp.on{border-color:var(--accent);background:var(--accent-bg)}
+.dp .v{font-size:11px;color:var(--fg-3);font-family:var(--f-mono)}
+.dp .drv{color:var(--fg);font-weight:600}
+.hostpick{display:flex;flex-direction:column;border:1px solid var(--line-2);border-radius:var(--r2);overflow:hidden}
+.hp{display:flex;align-items:center;gap:10px;padding:7px 10px;font-size:12.5px;cursor:pointer;border-bottom:1px solid var(--line)}
+.hp:last-child{border-bottom:0}
+.hp.on{background:var(--accent-bg)}
+.hp .sp{flex:1}
+.hp.dis{opacity:.62;cursor:not-allowed}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.rlist{border:1px solid var(--line-2);border-radius:var(--r2);overflow:hidden;display:flex;flex-direction:column}
+.rlist .rs{padding:6px 10px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:14px 1fr auto;gap:2px 8px;cursor:pointer;font-size:12px}
+.rlist .rs:last-child{border-bottom:0}
+.rlist .rs.on{background:var(--accent-bg)}
+.rlist .rs .t{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rlist .rs .d{grid-column:2/4;color:var(--fg-3);font-size:11px;font-family:var(--f-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.profile{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px dashed var(--line-2);border-radius:var(--r2);font-size:12px;color:var(--fg-2)}
+
+/* ---------- Agent config ---------- */
+.ac{display:grid;grid-template-columns:372px 1fr;flex:1;min-height:0}
+.ac>*{min-height:0;min-width:0}
+.stack{border-right:1px solid var(--line);overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:0;background:var(--surface)}
+.layer{border:1px solid var(--line-2);border-radius:var(--r3);padding:10px 12px;display:flex;flex-direction:column;gap:6px;background:var(--win);cursor:pointer}
+.layer.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
+.layer .lh{display:flex;align-items:center;gap:8px;font-weight:600;font-size:12.5px}
+.layer .lh .lv{font-family:var(--f-mono);font-size:10.5px;color:var(--fg-3);font-weight:500}
+.layer .lh .sp{flex:1}
+.layer .dl{font-size:11.5px;display:flex;gap:6px;align-items:center;color:var(--fg-2)}
+.layer .dl .op{font-family:var(--f-mono);width:12px;text-align:center;font-weight:700}
+.arrowdown{display:flex;justify-content:center;color:var(--fg-3);padding:3px 0}
+.eff{display:flex;flex-direction:column;min-height:0}
+.eff-h{padding:12px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.eff-b{overflow:auto;flex:1;padding:4px 20px 16px}
+.etab{width:100%;border-collapse:collapse;font-size:12px}
+.etab th{position:sticky;top:0;background:var(--win);text-align:left;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--fg-3);padding:10px 8px 8px;border-bottom:1px solid var(--line);z-index:1}
+.etab td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}
+.etab .cat td{padding:14px 8px 6px;font-size:12px;font-weight:700;border-bottom:1px solid var(--line-2);color:var(--fg)}
+.etab .nm{font-weight:600;display:flex;align-items:center;gap:8px}
+.etab .ds{font-size:11.5px;color:var(--fg-3)}
+.etab tr.off td:not(.keep){opacity:.55}
+.etab .c{text-align:center;width:44px}
+.prov{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:10px;font-size:11px;font-weight:500;white-space:nowrap;border:1px solid var(--line-2);color:var(--fg-2);background:var(--surface)}
+.prov.g{} .prov.h{color:var(--working);border-color:var(--working-line)} .prov.w{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,transparent)} .prov.s{color:var(--d-oc);border-color:color-mix(in srgb,var(--d-oc) 45%,transparent)}
+.prov.x{color:var(--failed);border-color:var(--failed-line)}
+.sup{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:5px}
+.sup.y{color:var(--done)} .sup.p{color:var(--needs)} .sup.n{color:var(--fg-3);background:var(--surface-2)}
+.reason{font-size:11px;color:var(--fg-3);margin-top:2px}
+/* ---------- Hosts ---------- */
+.hs{display:grid;grid-template-columns:minmax(480px,1fr) 400px;flex:1;min-height:0}
+.hs>*{min-height:0;min-width:0}
+.hlist{overflow:auto;padding:12px 20px}
+.hrow{display:grid;grid-template-columns:26px minmax(150px,1.2fr) minmax(150px,1fr) 70px minmax(140px,1fr);gap:12px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r3);margin-bottom:8px;background:var(--surface);cursor:pointer}
+.hrow.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
+.hrow .hn{font-weight:600;display:flex;flex-direction:column;gap:1px}
+.hrow .hn small{font-weight:400;color:var(--fg-3);font-size:11.5px}
+.clis{display:flex;gap:4px;flex-wrap:wrap}
+.hd{border-left:1px solid var(--line);overflow:auto;padding:16px;background:var(--surface);display:flex;flex-direction:column;gap:16px}
+.steps{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--fg-3)}
+.steps .s{display:inline-flex;align-items:center;gap:6px}
+.steps .s b{width:20px;height:20px;border-radius:50%;display:inline-grid;place-items:center;border:1px solid var(--line-2);font-size:11px}
+.steps .s.on{color:var(--fg)} .steps .s.on b{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.steps .s.dn b{background:var(--done-bg);border-color:var(--done-line);color:var(--done)}
+.check{display:flex;flex-direction:column;gap:6px;font-size:12px}
+.check div{display:flex;gap:8px;align-items:center}
+
+/* ---------- Gate overlay ---------- */
+.gov{width:min(860px,100%)}
+.gtabs{display:flex;gap:4px;padding:0 18px;border-bottom:1px solid var(--line)}
+.gtabs button{border:0;background:transparent;padding:9px 10px;font-size:12.5px;font-weight:500;color:var(--fg-2);border-bottom:2px solid transparent;display:inline-flex;align-items:center;gap:6px}
+.gtabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--needs)}
+.riskbox{display:grid;grid-template-columns:auto 1fr;gap:10px 12px;padding:12px 14px;border-radius:var(--r3);border:1px solid var(--needs-line);background:var(--needs-bg);font-size:12.5px}
+.riskbox .lvl{font-weight:700;color:var(--needs);display:flex;align-items:center;gap:6px}
+.riskbox ul{margin:0;padding-left:16px;color:var(--fg);display:flex;flex-direction:column;gap:3px}
+.scope{display:flex;flex-direction:column;gap:6px}
+.ctxline{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--fg-2)}
+.plan ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px;font-size:13px}
+.plan ol li span{display:block;font-size:12px;color:var(--fg-2)}
+.hop{display:grid;grid-template-columns:1fr 60px 1fr;align-items:center;gap:8px}
+.hop .end{border:1px solid var(--line-2);border-radius:var(--r3);padding:10px 12px;display:flex;flex-direction:column;gap:4px;background:var(--win)}
+.payload{border:1px solid var(--line);border-radius:var(--r3);background:var(--sunken);padding:10px 12px;font-size:12.5px;display:flex;flex-direction:column;gap:6px}
+.toasts{position:absolute;right:14px;bottom:14px;z-index:30;display:flex;flex-direction:column;gap:8px;width:360px}
+.toast{display:grid;grid-template-columns:20px 1fr auto;gap:4px 10px;padding:10px 12px;border-radius:var(--r3);background:var(--raised);border:1px solid var(--line-2);box-shadow:var(--shadow);font-size:12.5px}
+.toast .t{font-weight:600}
+.toast .d{grid-column:2/3;font-size:12px;color:var(--fg-2)}
+.toast .a{grid-column:2/4;display:flex;gap:6px;margin-top:4px}
+.toast.err{border-color:var(--failed-line);box-shadow:inset 3px 0 0 var(--failed),var(--shadow)}
+.toast.warn{border-color:var(--needs-line);box-shadow:inset 3px 0 0 var(--needs),var(--shadow)}
+.toast.ok{box-shadow:inset 3px 0 0 var(--done),var(--shadow)}
+/* settings */
+.set{display:grid;grid-template-columns:200px 1fr;flex:1;min-height:0}
+.set>*{min-height:0;min-width:0}
+.setnav{border-right:1px solid var(--line);padding:14px 8px;display:flex;flex-direction:column;gap:2px;background:var(--surface)}
+.setbody{overflow:auto;padding:18px 24px;display:flex;flex-direction:column;gap:18px}
+.nt th.c,.nt td.c{text-align:center;width:110px}
+.tg{width:30px;height:18px;border-radius:9px;background:var(--line-2);position:relative;display:inline-block;vertical-align:middle;border:0}
+.tg::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--fg-2);transition:left .15s}
+.tg.on{background:var(--accent)} .tg.on::after{left:14px;background:var(--accent-fg)}
+.cb{width:16px;height:16px;border-radius:4px;border:1.5px solid var(--fg-3);display:inline-grid;place-items:center;vertical-align:middle;color:var(--accent-fg)}
+.cb.on{background:var(--accent);border-color:var(--accent)}
+.sample{display:flex;gap:10px;flex-wrap:wrap}
+
+
+/* ---------- Split button ---------- */
+.split{position:relative;display:inline-flex}
+.split>.btn:first-child{border-top-right-radius:0;border-bottom-right-radius:0}
+.split>.btn.caret{border-top-left-radius:0;border-bottom-left-radius:0;padding:0 6px;border-left-color:color-mix(in srgb,var(--accent-fg) 35%,var(--accent))}
+.menu{position:absolute;right:0;top:calc(100% + 6px);width:290px;background:var(--raised);border:1px solid var(--line-2);border-radius:var(--r3);box-shadow:var(--shadow);padding:4px;z-index:45;display:flex;flex-direction:column}
+.menu button{display:grid;grid-template-columns:18px 1fr auto;gap:10px;align-items:center;text-align:left;border:0;background:transparent;padding:8px;border-radius:var(--r2);font-size:12.5px;font-weight:600;color:var(--fg)}
+.menu button:hover,.menu button.on{background:var(--accent-bg)}
+.menu small{display:block;color:var(--fg-3);font-size:11.5px;font-weight:400}
+
+/* ---------- Gate overlay caption ---------- */
+.gcap{display:flex;gap:10px;align-items:flex-start;padding:9px 18px;border-bottom:1px solid var(--line);background:var(--surface-2);font-size:12px;color:var(--fg-2);line-height:1.45}
+.gcap .i{margin-top:1px;color:var(--fg-3)}
+.gcap b{color:var(--fg);font-weight:600}
+.gcap .hl{background:var(--accent-bg);color:var(--fg);border-radius:3px;padding:0 3px}
+.drvswitch{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11.5px;color:var(--fg-3)}
+
+/* ---------- Workstream design mode ---------- */
+.gn.design{cursor:grab;width:256px}
+.gn .wasl{display:inline-flex;gap:4px;align-items:center;white-space:nowrap;font-size:11px;color:var(--accent)}
+.gn .port{position:absolute;width:11px;height:11px;border-radius:50%;background:var(--surface);border:2px solid var(--accent)}
+.gn .port.on{background:var(--accent)}
+.gn .meta{font-size:11.5px;color:var(--fg-2);display:flex;flex-direction:column;gap:3px;border-top:1px solid var(--line);padding-top:6px}
+.slot{position:absolute;border:1.5px dashed var(--line-2);border-radius:var(--r3);display:flex;align-items:center;justify-content:center;gap:6px;color:var(--fg-2);font-size:12px;font-weight:500;background:color-mix(in srgb,var(--surface) 40%,transparent);cursor:pointer}
+.slot:hover{border-color:var(--fg-3);color:var(--fg)}
+.slot.hot{border-color:var(--accent);color:var(--accent);background:var(--accent-bg)}
+.draghint{position:absolute;display:flex;gap:8px;align-items:flex-start;padding:7px 10px;border-radius:var(--r2);background:var(--raised);border:1px solid color-mix(in srgb,var(--accent) 50%,var(--line-2));box-shadow:var(--shadow-sm);font-size:11.5px;color:var(--fg);width:226px;line-height:1.4}
+.draghint .i{color:var(--accent);margin-top:1px}
+.lanebg.off{opacity:.6;background:repeating-linear-gradient(135deg,transparent 0 8px,var(--grid) 8px 16px)}
+.lanenote{position:absolute;left:190px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--fg-2);display:flex;gap:6px;align-items:center}
+.cl{display:flex;flex-direction:column;gap:8px}
+.cl .ci{display:grid;grid-template-columns:18px 1fr;gap:8px;font-size:12.5px;align-items:start}
+.cl .ci .d{font-size:11.5px;color:var(--fg-2);margin-top:1px}
+.summ{display:flex;gap:8px;align-items:flex-start;padding:9px 11px;border-radius:var(--r2);background:var(--accent-bg);border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);font-size:12.5px;font-weight:600}
+.insp-foot{display:flex;gap:6px;flex-wrap:wrap;border-top:1px solid var(--line);margin:auto -16px -16px;padding:12px 16px;position:sticky;bottom:-16px;background:var(--surface)}
+.st.draft{color:var(--accent);background:var(--accent-bg);border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
+
+/* ---------- New session: resumable list ---------- */
+.recent{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line-2);border-radius:var(--r2);background:var(--surface-2);font-size:12px}
+.recent .tx{flex:1;min-width:0}
+.recent .tx div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slist{border:1px solid var(--line-2);border-radius:var(--r2);overflow:auto;max-height:226px}
+.slist .sh,.slist .sr{display:grid;grid-template-columns:14px minmax(0,1fr) 88px 64px 38px;gap:8px;align-items:center;padding:6px 10px}
+.slist .sh{position:sticky;top:0;z-index:1;background:var(--surface-2);font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--fg-3);border-bottom:1px solid var(--line)}
+.slist .sr{border-bottom:1px solid var(--line);cursor:pointer;font-size:12px}
+.slist .sr:last-child{border-bottom:0}
+.slist .sr:hover{background:var(--surface-2)}
+.slist .sr.on{background:var(--accent-bg)}
+.slist .tt{display:flex;flex-direction:column;min-width:0}
+.slist .tt b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slist .tt span{font-size:11px;color:var(--fg-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slist .r{text-align:right;font-variant-numeric:tabular-nums;color:var(--fg-2)}
+.tag.trm{color:var(--fg-2)}
+.disc{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--fg-3)}
+
+/* ---------- Agent config (mirror + overrides) ---------- */
+.layer.base{background:var(--sunken);border-style:dashed;cursor:default}
+.layer .ro{font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--fg-3);border:1px solid var(--line-2);border-radius:4px;padding:0 5px}
+.layer .srcs{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
+.layer .srcs .mono{font-size:10.5px;color:var(--fg);padding:0 5px;border:1px solid var(--line-2);border-radius:4px;background:var(--surface);white-space:nowrap}
+.arrowup{display:flex;justify-content:center;color:var(--fg-3);padding:3px 0}
+.arrowup .i{transform:rotate(180deg)}
+.ctxsel{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.ctxsel .seg{display:grid;grid-template-columns:1fr 1fr}
+.ctxsel .seg button{display:inline-flex;align-items:center;gap:6px;justify-content:flex-start}
+.stack .layer{padding:8px 11px;gap:4px}
+.stack .arrowup{padding:1px 0}
+.stack .arrowup .i{width:12px;height:12px}
+.eff-b .note{margin:12px 0 4px}
+.note{display:flex;gap:8px;align-items:flex-start;font-size:11.5px;color:var(--fg-2);padding:9px 10px;border:1px solid var(--line);border-radius:var(--r2);background:var(--win);margin-top:12px;line-height:1.45}
+.note .i{color:var(--fg-3);margin-top:1px}
+.provs{display:flex;gap:4px;flex-wrap:wrap}
+.prov.a{color:var(--fg)}
+.prov.wasl{color:var(--accent-fg);background:var(--accent);border-color:var(--accent)}
+.prov.g{color:var(--fg-2)}
+.etab tr.uns .nm,.etab tr.uns .ds,.etab tr.uns .prov,.etab tr.uns td.src{opacity:.5}
+.etab .src{font-family:var(--f-mono);font-size:11px;color:var(--fg-3);white-space:nowrap}
+.etab tr.wasl td{background:var(--accent-bg)}
+.lockcell{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--fg-3);white-space:nowrap}
+
+@media (max-width:1240px){
+  .gx{grid-template-columns:1fr 300px}
+  .sd-body{grid-template-columns:1fr 236px}
+  .hs{grid-template-columns:1fr 340px}
+  .ac{grid-template-columns:330px 1fr}
+}
+@media (max-width:1100px){
+  .toolbar .input{width:200px!important} .toolbar .chip.hide-n{display:none}
+  .ibx-head,.ibx-row{grid-template-columns:108px minmax(190px,1.5fr) 44px 128px minmax(150px,1.2fr) 56px 54px;gap:10px}
+  .ibx-row .drv span,.ibx-head .drvh{font-size:0}
+  .gate-inline,.donebox{margin-left:128px}
+  .sd-body{grid-template-columns:1fr}
+  .sd-body .side{display:none}
+  .hrow{grid-template-columns:26px minmax(130px,1fr) minmax(140px,1fr) 56px}
+  .hrow .clis{display:none}
+}
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-needs" viewBox="0 0 24 24"><path d="M12 3 21.5 12 12 21 2.5 12Z"/><path d="M12 8v4.5"/><path d="M12 15.8v.2"/></symbol>
+    <symbol id="i-failed" viewBox="0 0 24 24"><path d="M8 2.8h8l5.2 5.2v8L16 21.2H8L2.8 16V8Z"/><path d="m9 9 6 6M15 9l-6 6"/></symbol>
+    <symbol id="i-done" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.7 2.7L16.2 9.4"/></symbol>
+    <symbol id="i-working" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" opacity=".3"/><path d="M12 3a9 9 0 0 1 9 9"/></symbol>
+    <symbol id="i-idle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-dasharray="3 3"/><path d="M10 9v6M14 9v6"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+    <symbol id="i-chevr" viewBox="0 0 24 24"><path d="m10 7 5 5-5 5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3 13h5l1.5 3h5L16 13h5"/><path d="M5.5 5h13L21 13v6H3v-6Z"/></symbol>
+    <symbol id="i-graph" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="5" rx="1.2"/><rect x="14" y="16" width="7" height="5" rx="1.2"/><rect x="3" y="16" width="7" height="5" rx="1.2"/><path d="M6.5 8v8M6.5 12h11v4"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="6.5" rx="1.5"/><rect x="3.5" y="13.5" width="17" height="6.5" rx="1.5"/><path d="M7 7.2h.01M7 16.8h.01"/></symbol>
+    <symbol id="i-laptop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="10" rx="1.4"/><path d="M2.5 19h19"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="1.4"/><path d="M9 20h6M12 16v4"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5Z"/><path d="m3 12.5 9 5 9-5"/><path d="m3 17 9 5 9-5" opacity=".6"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15Z"/><path d="M10 21h4"/></symbol>
+    <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="5.5" r="2"/><circle cx="6" cy="18.5" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7.5v9M18 10c0 4-6 3.5-11 7"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18Z"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12.5 15H17"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 19.5 6v5.5c0 4.5-3.2 8-7.5 9.5-4.3-1.5-7.5-5-7.5-9.5V6Z"/><path d="M12 8.5v4M12 15.5v.1"/></symbol>
+    <symbol id="i-handoff" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="2.5"/><circle cx="18.5" cy="12" r="2.5"/><path d="M8 12h8M13.5 9l2.8 3-2.8 3"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6.5 8h11v3a5.5 5.5 0 0 1-11 0Z"/><path d="M12 16.5V21"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5Z"/><path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3"/><path d="M9 7.5h6"/></symbol>
+    <symbol id="i-puzzle" viewBox="0 0 24 24"><path d="M10 4a2 2 0 1 1 4 0v1.5h4.5V10H17a2 2 0 1 0 0 4h1.5v4.5H14V17a2 2 0 1 0-4 0v1.5H5.5V14H7a2 2 0 1 0 0-4H5.5V5.5H10Z"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+    <symbol id="i-coin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M14.8 9.2c-.5-.9-1.6-1.4-2.8-1.4-1.6 0-2.8.8-2.8 2.1 0 2.9 5.8 1.4 5.8 4.3 0 1.3-1.3 2.1-3 2.1-1.3 0-2.4-.5-2.9-1.5M12 6v1.8M12 16.3V18"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12 20 4l-5 16-3-7Z"/><path d="m12 13 8-9"/></symbol>
+    <symbol id="i-slash" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m14.5 7-5 10"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 24 24"><path d="m20 11.5-8 8a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"/></symbol>
+    <symbol id="i-dots" viewBox="0 0 24 24"><path d="M6 12h.01M12 12h.01M18 12h.01" stroke-width="3"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v4h4"/></symbol>
+    <symbol id="i-commit" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5"/><path d="M3 12h5.5M15.5 12H21"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 8.5-8.5M16.5 6.5l2.5 2.5M14 9l2 2"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.6-4.5L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.6 4.5L20 16"/><path d="M20 20v-4h-4"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 20h14"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5h16l-6 7.5V19l-4 1.5v-8Z"/></symbol>
+    <symbol id="i-sort" viewBox="0 0 24 24"><path d="M7 4v16M3.5 16.5 7 20l3.5-3.5M17 20V4M13.5 7.5 17 4l3.5 3.5"/></symbol>
+    <symbol id="i-sub" viewBox="0 0 24 24"><path d="M6 4v9a3 3 0 0 0 3 3h9"/><path d="m15 13 3 3-3 3"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 4c.6 3.8 2.2 5.4 6 6-3.8.6-5.4 2.2-6 6-.6-3.8-2.2-5.4-6-6 3.8-.6 5.4-2.2 6-6Z"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m6 6 12 12"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16Z"/><path d="m13.5 6.5 4 4"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></symbol>
+    <symbol id="i-board" viewBox="0 0 24 24"><rect x="3" y="4" width="5" height="16" rx="1.2"/><rect x="10" y="4" width="5" height="11" rx="1.2"/><rect x="17" y="4" width="4" height="7" rx="1.2"/></symbol>
+    <symbol id="i-panes" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M8 4v16M14 4v16"/></symbol>
+    <symbol id="i-arrowdown" viewBox="0 0 24 24"><path d="M12 5v14M7 14l5 5 5-5"/></symbol>
+    <symbol id="i-dome" viewBox="0 0 24 24"><path d="M3.5 18.5h17"/><path d="M5.5 18.5V14a6.5 6.5 0 0 1 13 0v4.5"/><path d="M12 7.5 15.5 3"/><path d="M10.5 18.5v-3h3v3"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 4 21.5 20h-19Z"/><path d="M12 10v4M12 17v.1"/></symbol>
+  </defs>
+</svg>
+
+<header class="review" id="review">
+  <div class="rb-title"><svg class="i"><use href="#i-dome"/></svg>Marsad <small>Design review</small></div>
+  <div class="rb-group"><span class="rb-label">Screen</span><div class="seg rb-screens" id="rb-screens"></div></div>
+  <div class="rb-group" id="rb-var-wrap"><span class="rb-label">Variant</span><div class="seg" id="rb-var"></div></div>
+  <div class="rb-group"><span class="rb-label">Theme</span><div class="seg" id="rb-theme"><button data-t="light">Light</button><button data-t="dark">Dark</button></div></div>
+  <div class="rb-caption" id="rb-caption"></div>
+</header>
+
+<div class="stage">
+  <div class="win" id="win">
+    <div class="titlebar">
+      <div class="brand"><svg class="i lg c-accent"><use href="#i-dome"/></svg>Marsad <span class="ar" lang="ar">مرصد</span></div>
+      <div class="cmdk"><svg class="i sm"><use href="#i-search"/></svg><span>Search sessions, hosts, commands</span><kbd>Ctrl K</kbd></div>
+      <div class="tb-right">
+        <button class="iconbtn" title="Notifications" data-go="notify"><svg class="i"><use href="#i-bell"/></svg><span class="dotn">6</span></button>
+        <div class="split" id="split">
+          <button class="btn primary sm" data-go="new:s"><svg class="i sm"><use href="#i-plus"/></svg>New session <kbd>N</kbd></button>
+          <button class="btn primary sm caret" id="split-caret" aria-haspopup="menu" aria-expanded="false" title="More ways to start"><svg class="i sm"><use href="#i-chev"/></svg></button>
+          <div class="menu" id="split-menu" role="menu" hidden>
+            <button role="menuitem" data-go="new:s"><svg class="i sm"><use href="#i-plus"/></svg><span>New session<small>One agent on one host</small></span><kbd>N</kbd></button>
+            <button role="menuitem" data-go="workstreams:new"><svg class="i sm"><use href="#i-graph"/></svg><span>New workstream<small>Several agents that hand work to each other</small></span><kbd>⇧N</kbd></button>
+          </div>
+        </div>
+        <div class="winctl" aria-hidden="true"><span><svg class="i sm"><use href="#i-minus"/></svg></span><span><svg class="i sm"><rect x="5" y="5" width="14" height="14" rx="1"/></svg></span><span><svg class="i sm"><use href="#i-x"/></svg></span></div>
+      </div>
+    </div>
+    <div class="body">
+      <nav class="rail" id="rail">
+        <a data-go="home"><svg class="i lg"><use href="#i-inbox"/></svg>Inbox<span class="badge">4</span></a>
+        <a data-go="workstreams:list"><svg class="i lg"><use href="#i-graph"/></svg>Workstreams</a>
+        <a data-go="hosts"><svg class="i lg"><use href="#i-server"/></svg>Hosts</a>
+        <a data-go="config"><svg class="i lg"><use href="#i-layers"/></svg>Config</a>
+        <span class="sp"></span>
+        <a data-go="notify"><svg class="i lg"><use href="#i-gear"/></svg>Settings</a>
+      </nav>
+      <main class="main" id="main"></main>
+    </div>
+    <div class="statusbar">
+      <span class="sb-item"><span class="conn ok"><span class="pip"></span></span>thinkpad-x1</span>
+      <span class="sb-item"><span class="conn ok"><span class="pip"></span></span>hetzner-ax41</span>
+      <span class="sb-item c-needs"><svg class="i xs"><use href="#i-refresh"/></svg>win-build reconnecting in 4s</span>
+      <span class="sp"></span>
+      <span class="sb-item"><svg class="i xs"><use href="#i-failed"/></svg>2 failed</span>
+      <span class="sb-item tnum">Today $18.47 · 14 sessions</span>
+      <span class="sb-item"><kbd>?</kbd> Shortcuts</span>
+    </div>
+    <div id="overlay"></div>
+  </div>
+</div>
+
+<script>
+/* ================= DATA ================= */
+const DRV={cc:'Claude Code',cx:'Codex',oc:'OpenCode',kc:'Kilo Code'};
+const HOSTS={
+  x1:{name:'thinkpad-x1',os:'Ubuntu 24.04',kind:'laptop',icon:'i-laptop',conn:['ok','Connected'],where:'Local'},
+  hz:{name:'hetzner-ax41',os:'Debian 12',kind:'server',icon:'i-server',conn:['ok','Connected'],where:'SSH'},
+  win:{name:'win-build',os:'Windows 11 Pro',kind:'windows',icon:'i-monitor',conn:['warn','Reconnecting in 4s'],where:'SSH'},
+};
+const WS={inv:'Invoice export v2',ci:'Flaky CI triage'};
+const STL={needs:'Needs you',failed:'Failed',done:'Finished',working:'Working',idle:'Idle'};
+const S=[
+ {id:'s7',name:'migrate-auth-middleware',st:'needs',drv:'cc',host:'x1',proj:'ledgerline',br:'refactor/auth-mw',ws:null,ago:'1m',cost:2.41,
+  line:'Asks: how should legacy session cookies be handled during rollout?',gate:'q'},
+ {id:'s2',name:'pdf-renderer-worker',st:'needs',drv:'cc',host:'hz',proj:'ledgerline',br:'feat/invoice-pdf',ws:'inv',ago:'3m',cost:1.12,
+  line:'Wants to run pnpm add @react-pdf/renderer@4.1.0',gate:'perm'},
+ {id:'s15',name:'ws-reconnect-backoff',st:'needs',drv:'cx',host:'hz',proj:'marsad',br:'fix/ws-backoff',ws:null,ago:'4m',cost:0.58,
+  line:'Wants to run cargo test -p marsad-net --features e2e',gate:'perm'},
+ {id:'s4',name:'windows-print-check',st:'needs',drv:'cc',host:'win',proj:'ledgerline',br:'feat/invoice-export-v2',ws:'inv',ago:'6m',cost:0.37,
+  line:'Handoff waiting: orchestrator wants to delegate "Verify PDFs print through the Windows spooler"',gate:'hand'},
+ {id:'s5',name:'ci-triage-lead',st:'failed',drv:'cc',host:'hz',proj:'marsad',br:'fix/flaky-ssh-test',ws:'ci',ago:'12m',cost:1.96,
+  line:'pnpm test exited 1 · 3 failing in ssh-tunnel.spec.ts (timeout 5000ms)',err:true},
+ {id:'s11',name:'msi-installer',st:'failed',drv:'kc',host:'win',proj:'marsad',br:'feat/msi-installer',ws:null,ago:'38m',cost:0.84,
+  line:'WiX build failed: error ICE03 invalid language id 1025 in Product.wxs:14',err:true},
+ {id:'s6',name:'ci-repro-windows',st:'done',drv:'kc',host:'win',proj:'marsad',br:'fix/flaky-ssh-test',ws:'ci',ago:'9m',cost:0.52,unseen:true,
+  line:'Reproduced on Windows: named-pipe handshake races the 5s timeout. Report attached.',stat:['2 files','+41','−6']},
+ {id:'s8',name:'tile-cache-eviction',st:'done',drv:'cx',host:'hz',proj:'tilemap-renderer',br:'perf/lru-eviction',ws:null,ago:'21m',cost:0.88,unseen:true,
+  line:'LRU eviction now bounded by bytes, not entries. p95 render 212ms → 131ms; 48 tests pass.',stat:['5 files','+212','−38']},
+ {id:'s13',name:'rename-api-v1-routes',st:'done',drv:'oc',host:'hz',proj:'ledgerline',br:'chore/routes-v1',ws:null,ago:'47m',cost:0.31,unseen:true,
+  line:'Renamed 23 routes under /v1, kept 301 redirects for the old paths. OpenAPI spec regenerated.',stat:['11 files','+168','−151']},
+ {id:'s1',name:'invoice-export-orchestrator',st:'working',drv:'cc',host:'x1',proj:'ledgerline',br:'feat/invoice-export-v2',ws:'inv',ago:'now',cost:3.84,
+  line:'Waiting on 2 of 3 delegated tasks · merging CSV schema from csv-schema-worker',prog:58},
+ {id:'s3',name:'csv-schema-worker',st:'working',drv:'oc',host:'hz',proj:'ledgerline',br:'feat/invoice-csv',ws:'inv',ago:'now',cost:0.95,
+  line:'Running vitest on packages/export (34/52 passed so far)',prog:62},
+ {id:'s10',name:'upgrade-tauri-2-5',st:'working',drv:'cc',host:'x1',proj:'marsad',br:'chore/tauri-2.5',ws:null,ago:'now',cost:1.27,
+  line:'Editing src-tauri/capabilities/default.json for the new permission schema',prog:35},
+ {id:'s9',name:'docs-search-index',st:'idle',drv:'oc',host:'x1',proj:'docs-site',br:'main',ws:null,ago:'2h',cost:0.44,line:'Finished yesterday 18:10 · seen'},
+ {id:'s12',name:'sqlite-wal-tuning',st:'idle',drv:'cx',host:'hz',proj:'ledgerline',br:'perf/wal',ws:null,ago:'5h',cost:0.62,line:'Paused by you at 10:32'},
+ {id:'s14',name:'release-notes-1-4',st:'idle',drv:'cc',host:'x1',proj:'marsad',br:'release/1.4',ws:null,ago:'1d',cost:0.33,line:'Draft ready in CHANGELOG.md · seen'},
+];
+const by=id=>S.find(s=>s.id===id);
+/* Permission and question choices are the agent's own, in its own words. Only handoffs (agent to agent, via Wasl) use Marsad's fixed set. */
+const PCMD={s2:'pnpm add @react-pdf/renderer@4.1.0 --filter @ledgerline/export',s15:'cargo test -p marsad-net --features e2e'};
+const SCOPE={s2:'pnpm add',s15:'cargo test',s7:'pnpm prisma migrate'};
+const AG={
+ cc:sc=>[['Yes','allow'],[`Yes, and don't ask again for <code>${sc}</code> commands in this project`,'always'],['No, and tell Claude what to do differently','deny',1]],
+ cx:()=>[['Approve','allow'],['Approve for this session','always'],['Deny','deny']],
+ oc:()=>[['Allow once','allow'],['Always allow','always'],['Reject','deny']],
+};
+AG.kc=AG.oc;
+const AG_EDIT=[['Yes','allow'],['Yes, allow all edits during this session','always'],['No, and tell Claude what to do differently','deny',1]];
+const AG_PLAN=[['Yes, and auto-accept edits','allow'],['Yes, and manually approve edits','always'],['No, keep planning','deny',1]];
+const HAND=[['Allow once','allow'],['Always allow on this connection','always'],['Deny','deny']];
+
+/* ================= HELPERS ================= */
+const I=(id,c='')=>`<svg class="i ${c}"><use href="#${id}"/></svg>`;
+const stIcon=(st,c='')=>`<svg class="i ${c} ${st==='working'?'spin':''}"><use href="#i-${st}"/></svg>`;
+const stPill=(st,label)=>`<span class="st ${st}">${stIcon(st,'sm')}${label||STL[st]}</span>`;
+const drv=(d,compact)=>`<span class="drv ${d}${compact?' compact':''}" title="${DRV[d]}"><b>${d.toUpperCase()}</b><span>${DRV[d]}</span></span>`;
+const hostEl=h=>`<span class="host">${I(HOSTS[h].icon,'sm')}${HOSTS[h].name}</span>`;
+const conn=(k,t)=>`<span class="conn ${k}"><span class="pip"></span>${t}</span>`;
+const money=v=>'$'+v.toFixed(2);
+const kbd=k=>`<kbd>${k}</kbd>`;
+
+/* ================= REVIEW BAR STATE ================= */
+const SCREENS=[
+ {id:'home',n:1,label:'Home',short:'Home',vars:[['a','A · Inbox'],['c','C · Attention board']]},
+ {id:'session',n:2,label:'Session',short:'Session'},
+ {id:'workstreams',n:3,label:'Workstreams',short:'Streams',vars:[['list','List'],['new','New workstream']]},
+ {id:'graph',n:4,label:'Workstream',short:'Graph',vars:[['run','Running'],['design','Design']]},
+ {id:'new',n:5,label:'New session',short:'New',vars:[['s','New session'],['w','Add agent']]},
+ {id:'config',n:6,label:'Agent config',short:'Config'},
+ {id:'hosts',n:7,label:'Hosts',short:'Hosts',vars:[['a','Host list'],['b','Add host']]},
+ {id:'gates',n:8,label:'Gates + alerts',short:'Gates',vars:[['a','Gate review'],['b','Notifications']]},
+];
+const CAPTIONS={
+ 'home-a':'Every session in one list, including the ones inside workstreams (tagged). Sorted by what needs you. Choices on each row are the agent\'s own.',
+ 'home-c':'Only sessions with something for you get a card. Working and idle ones fold into the strip at the bottom. Try "No failures" to see an empty column collapse.',
+ 'session':'Full transcript with gates inline. The permission and question choices are exactly what Claude Code offered. Click "/" in the composer for the slash menu.',
+ 'workstreams-list':'All workstreams with hosts, session count and status in words. Start a new one from here or from the caret next to New session.',
+ 'workstreams-new':'Step 1 of 2: name it and choose a starting point. Next comes the design graph.',
+ 'graph-run':'Hosts are lanes, connections are routed around agents. Click a connection to set its policy; the amber pill is a handoff waiting for you.',
+ 'graph-design':'Step 2: place agents in host lanes, drag from a dot to connect them, set each connection\'s policy, then launch or save as a draft.',
+ 'new-s':'Start or continue a session. The list shows every session this CLI has for the folder on that host, including ones started in a terminal.',
+ 'new-w':'The same launch form, opened from "Add agent" in a workstream design. Nothing starts until you launch the workstream.',
+ 'config':'Marsad shows what each agent CLI already has, read-only, then layers your overrides on top. Only the Wasl connector is added by Marsad itself.',
+ 'hosts-a':'Every machine with its connection state in words, installed CLIs and versions, and what runs there.',
+ 'hosts-b':'Add-host flow: connect over SSH, install the helper, detect CLIs.',
+ 'gates-a':'Full gate review. Permission, edit and plan choices mirror the agent; handoffs use Marsad\'s three fixed choices. Toasts bottom-right are the error surface.',
+ 'gates-b':'Settings collapsed into six sections. Notifications are one table: event by channel.',
+};
+const state={screen:'home',vars:{home:'a',workstreams:'list',graph:'run',new:'s',hosts:'a',gates:'a'},tab:'activity',sel:'s7',quiet:false,strip:false,slash:false,edge:'e-win',gtab:'perm',gdrv:'cc',cdrv:'cc',qopt:0,ibxq:{s7:0},wstart:'sessions'};
+
+function readHash(){
+  const h=(location.hash||'').slice(1); if(!h) return;
+  const [sc,v]=h.split('-');
+  const d=SCREENS.find(s=>s.id===sc);
+  if(d){state.screen=sc; if(v&&d.vars&&d.vars.some(x=>x[0]===v)) state.vars[sc]=v;}
+}
+function writeHash(){
+  const sc=state.screen, v=state.vars[sc];
+  const h=sc+(v?'-'+v:'');
+  if(location.hash.slice(1)!==h) history.replaceState(null,'','#'+h);
+}
+
+function renderReview(){
+  document.getElementById('rb-screens').innerHTML=SCREENS.map(s=>`<button data-sc="${s.id}" aria-pressed="${s.id===state.screen}"><span class="n">${s.n}</span><span class="long">${s.label}</span><span class="short">${s.short}</span></button>`).join('');
+  const sc=SCREENS.find(s=>s.id===state.screen);
+  const vw=document.getElementById('rb-var-wrap');
+  vw.hidden=!sc.vars;
+  if(sc.vars) document.getElementById('rb-var').innerHTML=sc.vars.map(([k,l])=>`<button data-v="${k}" aria-pressed="${state.vars[sc.id]===k}" title="${l}">${l.includes(' · ')?`${l.split(' · ')[0]}<span class="long"> · ${l.split(' · ')[1]}</span>`:l}</button>`).join('');
+  const key=state.screen+(sc.vars?'-'+state.vars[sc.id]:'');
+  document.getElementById('rb-caption').textContent=CAPTIONS[key]||''; document.getElementById('review').title=CAPTIONS[key]||'';
+  const t=document.documentElement.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');
+  document.querySelectorAll('#rb-theme button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.t===t));
+  const navmap={home:'home',session:'home',new:'home',workstreams:'workstreams:list',graph:'workstreams:list',hosts:'hosts',config:'config',gates:'home'};
+  let cur=navmap[state.screen]; if(state.screen==='gates'&&state.vars.gates==='b') cur='notify'; if(state.screen==='new'&&state.vars.new==='w') cur='workstreams:list';
+  document.querySelectorAll('#rail a').forEach(a=>a.setAttribute('aria-current',a.dataset.go===cur));
+}
+
+/* ================= SHARED: agent choices ================= */
+const wsTag=w=>`<span class="tag ws">${I('i-graph','xs')}${WS[w]}</span>`;
+const agoTxt=a=>a==='now'?'now':a+' ago';
+function srcCap(kind,d){
+  return kind==='hand'?`<span class="srccap wasl" title="Handoffs between agents always offer these three choices">${I('i-handoff','xs')}Marsad handoff choices</span>`
+    :`<span class="srccap" title="Shown exactly as ${DRV[d]} offered them">${drv(d,true)}${DRV[d]}'s own choices</span>`;
+}
+function choiceSet(kind,d,sc){ return kind==='hand'?HAND:kind==='edit'?AG_EDIT:kind==='plan'?AG_PLAN:AG[d](sc); }
+function choiceBtns(set,{keys=false,size='sm'}={}){
+  return set.map(([l,c,tell],i)=>`<button class="btn ${size} ${c}">${i===0?I('i-check','xs'):''}${l}${tell&&size==='sm'?'…':''}${keys?' '+kbd(i+1):''}</button>`).join('');
+}
+const tellBox=(who='Claude')=>`<div class="tell"><div class="input">${I('i-edit','sm')}<input placeholder="Tell ${who} what to do differently (sent with “No”)" aria-label="Tell ${who} what to do differently"></div></div>`;
+
+/* ================= SCREEN: HOME A ================= */
+function homeToolbar(extra=''){
+  return `<div class="toolbar">
+    <div class="input" style="width:280px">${I('i-search','sm')}<input id="q-ibx" placeholder="Filter by name, project, branch, error" aria-label="Filter sessions">${kbd('/')}</div>
+    <button class="chip">${I('i-filter','xs')}Status: all</button>
+    <button class="chip">Driver: any ${I('i-chev','xs')}</button>
+    <button class="chip on">Host: 3 of 3 ${I('i-chev','xs')}</button>
+    <button class="chip hide-n">Workstream: any ${I('i-chev','xs')}</button>
+    <button class="chip hide-n">Project: any ${I('i-chev','xs')}</button>
+    <span class="sp"></span>${extra}
+    <button class="chip">${I('i-sort','xs')}Sort: attention</button>
+  </div>`;
+}
+function homeHeader(sub){
+  return `<div class="ph"><div style="display:flex;flex-direction:column;gap:1px;margin-right:8px"><h1 class="h1">Inbox</h1><span class="faint" style="font-size:12px">All sessions, including those in workstreams</span></div>
+   <div class="summary">
+    <span class="c-needs">${I('i-needs','sm')} <b>4</b> need you</span>
+    <span class="c-failed">${I('i-failed','sm')} <b>2</b> failed</span>
+    <span class="c-done">${I('i-done','sm')} <b>3</b> finished since you looked at 14:20</span>
+    <span class="c-working">${I('i-working','sm spin')} <b>3</b> working</span>
+    <span class="muted">${I('i-idle','sm')} 3 idle</span>
+   </div><span class="sp"></span>${sub||''}</div>`;
+}
+const QOPTS=['Accept legacy cookie for 30 days','Migrate on first request','Invalidate all at deploy'];
+function inlineGate(s){
+  const sel=s.id===state.sel;
+  if(s.gate==='q'){
+    if(!sel) return `<div class="gate-inline compact">${I('i-needs','sm c-needs')}<span class="gs">How should legacy session cookies be handled during rollout? <span class="faint">3 options + Other</span></span>${srcCap('q',s.drv)}<button class="btn sm warn" data-selrow="${s.id}">Answer</button></div>`;
+    const o=state.ibxq.s7;
+    return `<div class="gate-inline">
+     <div class="gq">${I('i-needs')}<div><b>How should legacy session cookies be handled during rollout?</b><div class="faint" style="font-size:11.5px">connect.sid is read by 6 routes; ~41k active sessions in prod (from Redis key count).</div></div></div>
+     <div class="acts"><div class="opts">${QOPTS.map((t,i)=>`<span class="opt ${o===i?'on':''}" data-q="${i}"><span class="rad"></span>${t}<span class="k">${i+1}</span></span>`).join('')}<span class="opt ${o===3?'on':''}" data-q="3"><span class="rad"></span><span class="optother">Other<input placeholder="type your own answer" aria-label="Other answer"></span><span class="k">4</span></span></div><span class="sp"></span>${srcCap('q',s.drv)}<button class="btn sm primary">${I('i-send','xs')}Send ${kbd('Enter')}</button></div></div>`;
+  }
+  const kind=s.gate==='hand'?'hand':'perm';
+  const set=choiceSet(kind,s.drv,SCOPE[s.id]);
+  if(!sel){
+    const what=kind==='hand'?`${I('i-handoff','sm c-needs')}<span class="gs">Handoff from <b>invoice-export-orchestrator</b>: “Verify the invoice PDFs print through the Windows spooler”</span>`
+      :`${I('i-shield','sm c-needs')}<span class="gs">Run <code>${PCMD[s.id]}</code></span>`;
+    return `<div class="gate-inline compact">${what}${srcCap(kind,s.drv)}<div class="choices">${choiceBtns(set)}</div><button class="iconbtn" data-gate="${kind}" title="Review details">${I('i-chevr','sm')}</button></div>`;
+  }
+  if(kind==='perm') return `<div class="gate-inline">
+     <div class="gq">${I('i-shield')}<div><b>Run a shell command</b> on ${HOSTS[s.host].name}<br><code>${PCMD[s.id]}</code></div></div>
+     <div class="acts"><div class="choices">${choiceBtns(set,{keys:true})}</div><span class="sp"></span>${srcCap(kind,s.drv)}<button class="btn sm ghost" data-gate="perm">Review details ${I('i-chevr','xs')}</button></div>${s.drv==='cc'?tellBox():''}</div>`;
+  return `<div class="gate-inline">
+     <div class="gq">${I('i-handoff')}<div><b>Handoff</b> from <b>invoice-export-orchestrator</b> to <b>windows-print-check</b><br>“Verify the generated invoice PDFs print correctly through the Windows print spooler at A4 and Letter.”</div></div>
+     <div class="acts"><div class="choices">${choiceBtns(set,{keys:true})}</div><span class="sp"></span>${srcCap('hand')}<button class="btn sm ghost" data-gate="hand">Review payload ${I('i-chevr','xs')}</button></div></div>`;
+}
+function ibxRow(s){
+  const sel=s.id===state.sel?' sel':'';
+  const nameLine=`<div class="t">${s.unseen?'<span class="newdot" title="Not seen yet"></span>':''}<span class="nm">${s.name}</span>${s.ws?wsTag(s.ws):''}</div>`;
+  const sub=s.st==='needs'?'':`<div class="s${s.err?' err':''}">${s.line}</div>`;
+  let extra='';
+  if(s.st==='needs') extra=inlineGate(s);
+  if(s.st==='done') extra=`<div class="donebox"><span class="stat">${s.stat[0]} <span class="add">${s.stat[1]}</span> <span class="del">${s.stat[2]}</span></span><button class="btn sm ghost" data-go="session">${I('i-file','xs')}Review changes</button><button class="btn sm ghost">${I('i-eye','xs')}Mark seen ${kbd('E')}</button></div>`;
+  if(s.st==='failed') extra=`<div class="donebox"><button class="btn sm">${I('i-refresh','xs')}Retry last step</button><button class="btn sm ghost" data-go="session">${I('i-term','xs')}Open log</button><button class="btn sm ghost">Ask agent to fix</button></div>`;
+  return `<div class="ibx-item${sel}"><div class="ibx-row" ${s.st==='needs'&&s.id!==state.sel?`data-selrow="${s.id}"`:'data-go="session"'}>
+    <div>${stPill(s.st)}</div>
+    <div class="sn">${nameLine}${sub}</div>
+    <div>${drv(s.drv)}</div>
+    <div class="host">${I(HOSTS[s.host].icon,'sm')}<span>${HOSTS[s.host].name}${s.host==='win'?`<br><span class="conn warn" style="font-size:11px">reconnecting</span>`:''}</span></div>
+    <div class="pb"><span class="p">${s.proj}</span><span class="b">${I('i-branch','xs')} ${s.br}</span></div>
+    <div class="ago r">${s.ago}</div>
+    <div class="cost r">${money(s.cost)}</div>
+  </div>${extra}</div>`;
+}
+function homeA(){
+  const groups=[['needs','Needs you','Answer here or press Enter to open'],['failed','Failed',''],['done','Finished, not seen yet','<button class="btn sm ghost">Mark all seen</button>'],['working','Working',''],['idle','Idle','']];
+  return homeHeader(`<button class="btn sm ghost">${I('i-eye','xs')}Mark all seen</button>`)+homeToolbar()+
+  `<div class="ibx"><div class="ibx-head"><span>Status</span><span>Session</span><span class="drvh">Driver</span><span>Host</span><span>Project · branch</span><span class="r">Last</span><span class="r">Cost</span></div>`+
+  groups.map(([st,label,act])=>{const L=S.filter(s=>s.st===st);
+    return `<div class="grp c-${st}">${stIcon(st,'sm')}${label}<span class="cnt">${L.length}</span><span class="gline"></span>${act?`<span class="gact">${act}</span>`:''}</div>`+L.map(ibxRow).join('');}).join('')+
+  `</div><div class="keyhints"><span>${kbd('J')}${kbd('K')} move</span><span>${kbd('Enter')} open</span><span>${kbd('1')}–${kbd('3')} pick the agent's choice</span><span>${kbd('E')} mark seen</span><span>${kbd('/')} filter</span><span>${kbd('G')} then ${kbd('W')} workstreams</span></div>`;
+}
+
+/* ================= SCREEN: HOME C (attention board) ================= */
+function acard(s){
+  const head=`<div class="t">${s.unseen?'<span class="newdot" title="Not seen yet"></span>':''}<span class="nm">${s.name}</span>${s.ws?wsTag(s.ws):''}</div>
+    <div class="m">${drv(s.drv)}${hostEl(s.host)}${s.host==='win'?conn('warn','reconnecting'):''}<span class="tnum">${agoTxt(s.ago)}</span></div>`;
+  let body='';
+  if(s.st==='needs'){
+    if(s.gate==='q'){ const o=state.ibxq.s7;
+      body=`<div class="ask">${I('i-needs','sm c-needs')}<span>How should legacy session cookies be handled during rollout?</span></div>
+      <div class="qlist">${QOPTS.map((t,i)=>`<div class="qopt ${o===i?'on':''}" data-q="${i}"><span class="rad"></span><span>${t}</span></div>`).join('')}<div class="qopt ${o===3?'on':''}" data-q="3"><span class="rad"></span><span class="optother">Other<input placeholder="type your own answer" aria-label="Other answer"></span></div></div>
+      <div class="foot">${srcCap('q',s.drv)}<span class="sp"></span><button class="btn sm primary">${I('i-send','xs')}Send</button></div>`;
+    } else if(s.gate==='perm'){
+      body=`<div class="ask">${I('i-shield','sm c-needs')}<span style="min-width:0;flex:1">Wants to run<code class="cmdb">${PCMD[s.id]}</code></span></div>
+      <div class="choices">${choiceBtns(choiceSet('perm',s.drv,SCOPE[s.id]))}</div>
+      <div class="foot">${srcCap('perm',s.drv)}<span class="sp"></span><button class="btn sm ghost" data-gate="perm">Details ${I('i-chevr','xs')}</button></div>`;
+    } else {
+      body=`<div class="ask">${I('i-handoff','sm c-needs')}<span><b>invoice-export-orchestrator</b> wants to hand off: “Verify the invoice PDFs print through the Windows spooler at A4 and Letter.”</span></div>
+      <div class="choices">${choiceBtns(HAND)}</div>
+      <div class="foot">${srcCap('hand')}<span class="sp"></span><button class="btn sm ghost" data-gate="hand">Payload ${I('i-chevr','xs')}</button></div>`;
+    }
+  } else if(s.st==='failed'){
+    body=`<div class="l err">${s.line}</div><div class="foot"><button class="btn sm">${I('i-refresh','xs')}Retry last step</button><button class="btn sm ghost" data-go="session">${I('i-term','xs')}Open log</button><button class="btn sm ghost">Ask agent to fix</button></div>`;
+  } else {
+    body=`<div class="l">${s.line}</div><div class="foot"><span class="mono" style="font-size:11.5px">${s.stat[0]} <span class="add">${s.stat[1]}</span> <span class="del">${s.stat[2]}</span></span><span class="sp"></span><button class="btn sm ghost" data-go="session">${I('i-file','xs')}Review</button><button class="btn sm ghost">${I('i-eye','xs')}Mark seen</button></div>`;
+  }
+  return `<div class="acard ${s.st}">${head}${body}</div>`;
+}
+function qrow(s){
+  return `<div class="qrow" data-go="session"><span class="c-${s.st}">${stIcon(s.st,'sm')}</span><span class="nm"><span>${s.name}</span>${s.ws?wsTag(s.ws):''}</span>${drv(s.drv,true)}${hostEl(s.host)}<span class="ln">${s.line}</span><span class="ago" style="text-align:right">${s.ago}</span><span class="cost" style="text-align:right">${money(s.cost)}</span></div>`;
+}
+function homeC(){
+  const cols=[['needs','Needs you',S.filter(s=>s.st==='needs')],['failed','Failed',state.quiet?[]:S.filter(s=>s.st==='failed')],['done','Finished · unseen',S.filter(s=>s.st==='done'&&s.unseen)]];
+  const colsHtml=cols.map(([st,l,L])=>L.length?`<div class="acol ${st==='needs'?'wide':''}"><div class="acol-h c-${st}">${stIcon(st,'sm')}${l}<span class="cnt">${L.length}</span>${st==='done'?`<span class="sp"></span><button class="btn sm ghost">Mark all seen</button>`:''}</div>${L.map(acard).join('')}</div>`
+    :`<div class="acol empty" title="${l}: nothing right now">${I('i-'+st,'sm')}<span class="vlab">${l} · none</span></div>`).join('');
+  const W=S.filter(s=>s.st==='working'),Id=S.filter(s=>s.st==='idle');
+  const strip=`<div class="quiet"><div class="quiet-h"><span class="c-working" style="display:inline-flex;gap:5px;align-items:center">${I('i-working','sm spin')}<b>${W.length} working</b></span><span>·</span><span style="display:inline-flex;gap:5px;align-items:center">${I('i-idle','sm')}<b>${Id.length} idle</b></span><span class="faint">Nothing for you here. A card appears above when one of them asks, fails or finishes.</span><span class="sp"></span><button class="btn sm" id="strip-tg" aria-expanded="${state.strip}">${state.strip?'Hide':'Show all'} ${I(state.strip?'i-chev':'i-chevr','xs')}</button></div>
+    ${state.strip?`<div class="qrows">${[...W,...Id].map(qrow).join('')}</div>`:''}</div>`;
+  return homeHeader()+homeToolbar(`<span class="faint" style="font-size:11.5px">Example data</span><div class="seg"><button id="quiet-off" aria-pressed="${!state.quiet}">Busy</button><button id="quiet-on" aria-pressed="${state.quiet}">No failures</button></div>`)+
+    `<div class="attn"><div class="acols">${colsHtml}</div>${strip}</div>`;
+}
+
+/* ================= SHARED: gates + composer ================= */
+function questionGate(){
+  const opts=[['Accept the legacy cookie for 30 days, then require sign-in','No forced logouts; compat code is deleted after the window. (Recommended)'],
+   ['Migrate each session on its first request','Reads connect.sid, issues the new token, deletes the old key. Adds ~4ms to the first request.'],
+   ['Invalidate all legacy sessions at deploy','Simplest. About 41k users get signed out once.']];
+  return `<div class="gate" id="gate-q">
+    <div class="gate-h">${I('i-needs','sm')}Question from Claude Code<span class="sp"></span><span class="faint" style="font-weight:500">asked 1m ago</span></div>
+    <div class="q">How should legacy session cookies be handled during the rollout?</div>
+    <div class="qopts">${opts.map((o,i)=>`<div class="qopt ${state.qopt===i?'on':''}" data-qo="${i}"><span class="rad"></span><div><div>${o[0]}</div><div class="d">${o[1]}</div></div><span class="k">${kbd(i+1)}</span></div>`).join('')}
+      <div class="qopt ${state.qopt===3?'on':''}" data-qo="3"><span class="rad"></span><div style="flex:1"><div>Other</div><div class="optother" style="margin-top:3px"><input style="width:100%;min-width:260px" placeholder="Type your own answer" aria-label="Other answer"></div></div><span class="k">${kbd(4)}</span></div></div>
+    <div class="acts"><button class="btn primary">${I('i-send','xs')}Send answer ${kbd('Enter')}</button><span class="sp"></span>${srcCap('q','cc')}</div>
+  </div>`;
+}
+function permGate(){
+  return `<div class="gate" id="gate-p">
+    <div class="gate-h">${I('i-shield','sm')}Permission needed · Bash<span class="sp"></span><span class="faint" style="font-weight:500">asked 2m ago</span></div>
+    <div class="cmd">pnpm prisma migrate dev --name session_tokens</div>
+    <div class="risk">${I('i-warn','sm c-needs')}<span><b>Writes to a database.</b> Creates <span class="code-inline">prisma/migrations/20261117_session_tokens</span> and applies it to <span class="code-inline">postgres://localhost:5432/ledgerline_dev</span>. Reversible with <span class="code-inline">migrate reset</span>; dev data would be lost.</span></div>
+    <div class="acts"><div class="choices">${choiceBtns(AG.cc(SCOPE.s7),{keys:true})}</div><span class="sp"></span>${srcCap('perm','cc')}</div>
+    ${tellBox()}
+  </div>`;
+}
+function composer(withSlash){
+  const items=[['/review','Review uncommitted changes','built-in'],['/compact','Summarize history to free context (38% used)','built-in'],['/plan','Switch to plan mode until you approve','built-in'],['/model','Change model for this session','built-in'],['/handoff','Delegate a task to another session','Marsad'],['/db-migrations','Run the migration checklist skill','skill · host'],['/cost','Show token use and cost','built-in']];
+  return `<div class="composer-wrap"><div class="composer">
+    ${withSlash?`<div class="slash" role="listbox">${items.map((it,i)=>`<div class="it ${i===0?'on':''}"><b>${it[0]}</b><span>${it[1]}</span><span class="src">${it[2]}</span></div>`).join('')}</div>`:''}
+    <textarea id="composer-ta" aria-label="Message">${withSlash?'/':''}</textarea>
+    <div class="comp-bar">
+      <button class="iconbtn" title="Attach">${I('i-clip','sm')}</button>
+      <button class="iconbtn" id="slash-btn" title="Slash commands">${I('i-slash','sm')}</button>
+      <button class="pick">${I('i-shield','xs')}Default mode ${I('i-chev','xs')}</button>
+      <button class="pick">${I('i-sparkle','xs')}claude-sonnet-4.5 ${I('i-chev','xs')}</button>
+      <span class="sp"></span><span class="faint" style="font-size:11.5px">${kbd('Enter')} send · ${kbd('⇧ Enter')} new line</span>
+      <button class="btn primary sm">${I('i-send','xs')}Send</button>
+    </div></div></div>`;
+}
+
+/* ================= SCREEN: SESSION ================= */
+function sessionHead(){
+  const s=by('s7');
+  const tabs=[['activity','Activity'],['changes','Changes','7'],['config','Config'],['usage','Usage'],['terminal','Terminal']];
+  return `<div class="sd-head">
+   <div class="crumbs"><a data-go="home">${I('i-inbox','xs')} Inbox</a>${I('i-chevr','xs')}<span>ledgerline</span>${I('i-chevr','xs')}<span style="color:var(--fg)">${s.name}</span></div>
+   <div class="sd-title"><h1 class="h1">${s.name}</h1>${stPill('needs','Waiting for you · 1 permission, 1 question')}<span style="flex:1"></span>
+     <button class="btn sm">${I('i-pause','xs')}Pause</button><button class="btn sm">${I('i-stop','xs')}Stop</button><button class="iconbtn" title="More">${I('i-dots','sm')}</button></div>
+   <div class="sd-meta">
+     <span class="kv">${drv('cc')}<span class="faint mono">v2.1.4</span></span>
+     <span class="kv">${hostEl('x1')}${conn('ok','Connected · local')}</span>
+     <span class="kv">${I('i-folder','sm')}<span class="mono">~/src/ledgerline</span></span>
+     <span class="kv">${I('i-branch','sm')}<span class="mono">refactor/auth-mw</span><span class="faint">3 ahead of main</span></span>
+     <span class="kv ctx">Context <span class="bar"><i style="width:38%"></i></span><span class="tnum">38%</span></span>
+     <span class="kv">${I('i-coin','sm')}<span class="tnum">$2.41</span><span class="faint">· 1h 12m</span></span>
+   </div>
+   <div class="tabs" role="tablist">${tabs.map(([k,l,n])=>`<button role="tab" data-tab="${k}" aria-selected="${state.tab===k}">${l}${n?`<span class="n">${n}</span>`:''}</button>`).join('')}</div>
+  </div>`;
+}
+function activityTab(){
+  return `<div class="sd-body"><div class="tr-wrap"><div class="transcript"><div class="tr">
+   <div class="msg-user">Move session auth from express-session to the new <span class="code-inline">authMiddleware</span> in packages/auth. Existing cookies must keep working during the rollout. Don't touch the billing routes.</div>
+   <div class="think">${I('i-chevr','xs')}${I('i-sparkle','xs')}Thought for 14s</div>
+   <div class="msg-ai"><div class="who">${drv('cc',true)} Claude Code</div><p>I'll find every place that reads <span class="code-inline">req.session</span>, wire the middleware in behind a compat shim, then run the auth test suite.</p></div>
+   <div class="tool"><div class="tool-h">${I('i-done','sm c-done')}<span class="nm">Grep</span><span class="arg">"req\\.session" in apps/api/src</span><span class="res">14 matches in 6 files</span>${I('i-chev','xs faint')}</div>
+     <div class="tool-b">apps/api/src/routes/login.ts:22        req.session.userId = user.id
+apps/api/src/routes/logout.ts:9        req.session.destroy(done)
+apps/api/src/routes/me.ts:14           if (!req.session.userId) return res.sendStatus(401)
+apps/api/src/routes/invoices.ts:31     const org = req.session.orgId
+<span class="faint">… 10 more</span></div></div>
+   <div class="subag"><div class="subag-h">${I('i-sub','sm')}<b>Subagent · Explore</b><span class="muted">“List routes that depend on session shape”</span><span style="flex:1"></span>${stPill('done','Finished')}<span class="faint">9 tool calls · 41s</span></div>
+     <ul><li>6 routes read <span class="code-inline">userId</span>; 2 also read <span class="code-inline">orgId</span> (invoices, members).</li><li>Billing webhooks never touch the session, safe to leave alone.</li><li><span class="code-inline">connect-redis</span> TTL is 30 days, so legacy cookies live at most that long.</li></ul></div>
+   <div class="tool"><div class="tool-h">${I('i-done','sm c-done')}<span class="nm">Edit</span><span class="arg">apps/api/src/server.ts</span><span class="res"><span class="add">+6</span> <span class="del">−4</span></span>${I('i-chev','xs faint')}</div>
+     <div class="diff"><div class="hunk">@@ -18,10 +18,12 @@ const app = express()</div>
+      <div class="ln"><span>18</span><span>18</span><span></span><span>app.use(helmet())</span></div>
+      <div class="ln d"><span>19</span><span></span><span>-</span><span>app.use(session({ store: new RedisStore({ client }), secret: env.SESSION_SECRET }))</span></div>
+      <div class="ln d"><span>20</span><span></span><span>-</span><span>app.use(passport.session())</span></div>
+      <div class="ln a"><span></span><span>19</span><span>+</span><span>app.use(legacySessionCompat({ client, until: env.LEGACY_COOKIE_UNTIL }))</span></div>
+      <div class="ln a"><span></span><span>20</span><span>+</span><span>app.use(authMiddleware({ issuer: env.AUTH_ISSUER, cookie: 'll_session' }))</span></div>
+      <div class="ln"><span>21</span><span>21</span><span></span><span>app.use('/v1', routes)</span></div></div></div>
+   <div class="tool"><div class="tool-h">${I('i-failed','sm c-failed')}<span class="nm">Bash</span><span class="arg">pnpm --filter api test auth</span><span class="res">27 passed · 2 failed · 8.4s</span>${I('i-chevr','xs faint')}</div></div>
+   <div class="msg-ai"><p>The two failures are the cookie-compat tests. Before I fix them I need the session table migration, and a decision on legacy cookies.</p></div>
+   ${permGate()}
+   ${questionGate()}
+  </div></div>${composer(state.slash)}</div>
+  <aside class="side">
+   <div><h4>Waiting for you</h4><div class="jump"><a href="#gate-p" data-jump="gate-p">${I('i-shield','sm c-needs')}Run prisma migrate dev<span style="margin-left:auto">${kbd('1')}–${kbd('3')}</span></a><a data-jump="gate-q">${I('i-needs','sm c-needs')}Legacy cookie question<span style="margin-left:auto">${kbd('1')}–${kbd('4')}</span></a></div></div>
+   <div><h4>Plan · 3 of 6</h4><div class="todo">
+     <div class="dn">${I('i-done','sm c-done')}Map session reads</div><div class="dn">${I('i-done','sm c-done')}Add legacySessionCompat shim</div><div class="dn">${I('i-done','sm c-done')}Wire authMiddleware in server.ts</div>
+     <div>${I('i-needs','sm c-needs')}Migration for session_tokens</div><div class="muted">${I('i-idle','sm')}Fix cookie-compat tests</div><div class="muted">${I('i-idle','sm')}Remove express-session dependency</div></div></div>
+   <div><h4>Session</h4><dl class="kvl"><dt>Model</dt><dd class="mono">claude-sonnet-4.5</dd><dt>Mode</dt><dd>Default</dd><dt>Tokens in / out</dt><dd>412k / 38k</dd><dt>Cache hits</dt><dd>71%</dd><dt>Started</dt><dd>14:30</dd><dt>Config</dt><dd><a class="c-accent" data-go="config" style="cursor:pointer">Claude Code + 2 overrides</a></dd></dl></div>
+  </aside></div>`;
+}
+function changesTab(){
+  const files=[['M','apps/api/src/server.ts','+6','−4',1],['A','packages/auth/src/legacy-compat.ts','+58','',0],['M','apps/api/src/routes/login.ts','+9','−7',0],['M','apps/api/src/routes/logout.ts','+3','−2',0],['M','apps/api/src/routes/me.ts','+2','−2',0],['M','apps/api/package.json','+1','',0],['M','pnpm-lock.yaml','+22','−3',0]];
+  return `<div class="chg"><div class="flist">
+    <div style="padding:10px 12px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line)"><span class="h3">7 files changed</span><span class="mono"><span class="add">+101</span> <span class="del">−18</span></span><span style="flex:1"></span><button class="btn sm ghost">Discard…</button></div>
+    <div class="scroll">${files.map(f=>`<div class="frow ${f[4]?'on':''}"><span class="cb on">${I('i-check','xs')}</span><span class="ms ${f[0]==='A'?'add':'c-working'}">${f[0]}</span><span class="fn">${f[1]}</span><span class="mono add" style="font-size:11px">${f[2]}</span><span class="mono del" style="font-size:11px">${f[3]}</span></div>`).join('')}</div>
+    <div class="commit"><div class="eyebrow">Commit to refactor/auth-mw</div><div class="ta">refactor(api): move session auth to authMiddleware<br><span class="faint">Adds legacySessionCompat so connect.sid cookies keep working until LEGACY_COOKIE_UNTIL.</span></div>
+     <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn primary sm">${I('i-commit','xs')}Commit 7 files</button><button class="btn sm">Commit and push</button><button class="btn sm ghost">Rewrite message</button></div></div>
+   </div>
+   <div style="display:flex;flex-direction:column;min-width:0">
+    <div style="padding:10px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px"><span class="mono" style="font-size:12.5px;color:var(--fg)">apps/api/src/server.ts</span><span class="mono"><span class="add">+6</span> <span class="del">−4</span></span><span style="flex:1"></span><div class="seg"><button aria-pressed="true">Unified</button><button>Split</button></div></div>
+    <div class="diff scroll" style="flex:1"><div class="hunk">@@ -1,8 +1,8 @@</div>
+     <div class="ln"><span>1</span><span>1</span><span></span><span>import express from 'express'</span></div>
+     <div class="ln"><span>2</span><span>2</span><span></span><span>import helmet from 'helmet'</span></div>
+     <div class="ln d"><span>3</span><span></span><span>-</span><span>import session from 'express-session'</span></div>
+     <div class="ln d"><span>4</span><span></span><span>-</span><span>import RedisStore from 'connect-redis'</span></div>
+     <div class="ln a"><span></span><span>3</span><span>+</span><span>import { authMiddleware } from '@ledgerline/auth'</span></div>
+     <div class="ln a"><span></span><span>4</span><span>+</span><span>import { legacySessionCompat } from '@ledgerline/auth/legacy-compat'</span></div>
+     <div class="ln"><span>5</span><span>5</span><span></span><span>import { client } from './redis'</span></div>
+     <div class="ln"><span>6</span><span>6</span><span></span><span>import { env } from './env'</span></div>
+     <div class="hunk">@@ -18,10 +18,12 @@ const app = express()</div>
+     <div class="ln"><span>18</span><span>18</span><span></span><span>app.use(helmet())</span></div>
+     <div class="ln d"><span>19</span><span></span><span>-</span><span>app.use(session({ store: new RedisStore({ client }), secret: env.SESSION_SECRET }))</span></div>
+     <div class="ln d"><span>20</span><span></span><span>-</span><span>app.use(passport.session())</span></div>
+     <div class="ln a"><span></span><span>19</span><span>+</span><span>app.use(legacySessionCompat({ client, until: env.LEGACY_COOKIE_UNTIL }))</span></div>
+     <div class="ln a"><span></span><span>20</span><span>+</span><span>app.use(authMiddleware({ issuer: env.AUTH_ISSUER, cookie: 'll_session' }))</span></div>
+     <div class="ln a"><span></span><span>21</span><span>+</span><span></span></div>
+     <div class="ln a"><span></span><span>22</span><span>+</span><span>// TODO(auth-mw): drop compat after LEGACY_COOKIE_UNTIL</span></div>
+     <div class="ln"><span>21</span><span>23</span><span></span><span>app.use('/v1', routes)</span></div>
+     <div class="ln"><span>22</span><span>24</span><span></span><span>app.use(errorHandler)</span></div>
+    </div></div></div>`;
+}
+function configTab(){
+  return `<div class="cfgcols">
+   <div class="card"><div class="h3">Model and mode</div>
+    <div class="field"><label>Model</label><div class="selbox"><span class="mono">claude-sonnet-4.5</span>${I('i-chev','sm')}</div><span class="hint">Discovered from claude 2.1.4 on thinkpad-x1: claude-sonnet-4.5, claude-opus-4.1, claude-haiku-4.5</span></div>
+    <div class="field"><label>Permission mode</label><div class="seg"><button aria-pressed="true">Default</button><button>Accept edits</button><button>Plan mode</button></div><span class="hint">Modes offered by Claude Code 2.1.4</span></div>
+    <div class="field"><label>Spend cap for this session</label><div class="selbox"><span class="tnum">$5.00, then pause and ask</span>${I('i-chev','sm')}</div></div>
+    <div style="display:flex;gap:6px"><button class="btn primary sm">Apply to running session</button><button class="btn sm ghost">Save as profile…</button></div></div>
+   <div class="card"><div class="h3" style="display:flex;align-items:center;gap:8px">Effective tools and connectors<span style="flex:1"></span><button class="btn sm ghost" data-go="config">Open Agent config ${I('i-chevr','xs')}</button></div>
+    <table class="t"><tbody>
+     <tr><td>${I('i-plug','sm')} github</td><td class="r"><span class="prov a">from Claude Code config</span></td></tr>
+     <tr><td>${I('i-plug','sm')} postgres-ledgerline</td><td class="r"><span class="prov h">changed at Host</span></td></tr>
+     <tr><td>${I('i-plug','sm')} sentry</td><td class="r"><span class="prov x">turned off at Host</span></td></tr>
+     <tr><td>${I('i-plug','sm')} linear</td><td class="r"><span class="prov g">added at Global</span></td></tr>
+     <tr><td>${I('i-book','sm')} db-migrations</td><td class="r"><span class="prov a">from Claude Code config</span></td></tr>
+     <tr><td>${I('i-puzzle','sm')} commit-guard</td><td class="r"><span class="prov a">from Claude Code config</span></td></tr>
+     <tr><td class="faint">${I('i-handoff','sm')} wasl</td><td class="r faint" style="font-size:11.5px">Not added: standalone session</td></tr>
+    </tbody></table></div>
+   <div class="card"><div class="h3">Always-allowed on this session <span class="faint" style="font-weight:400">· kept by Claude Code</span></div>
+    <table class="t"><tbody><tr><td class="mono">Read(**)</td><td class="r faint">Global</td></tr><tr><td class="mono">Bash(pnpm --filter api test *)</td><td class="r faint">allowed 13:58</td></tr><tr><td class="mono">Bash(git diff *)</td><td class="r faint">allowed 14:02</td></tr></tbody></table>
+    <button class="btn sm ghost" style="align-self:flex-start">Revoke all for this session</button></div>
+  </div>`;
+}
+function usageTab(){
+  const pts=[3,6,9,14,12,18,22,26,24,31,36,41];
+  const W=560,H=120,max=45;
+  const bars=pts.map((v,i)=>{const bw=W/pts.length-8;const x=i*(W/pts.length)+4;const h=v/max*H;return `<rect x="${x}" y="${H-h}" width="${bw}" height="${h}" rx="2" fill="var(--accent)" opacity="${i===pts.length-1?1:.55}"/>`}).join('');
+  const ticks=[0,15,30,45].map(t=>`<line x1="0" x2="${W}" y1="${H-t/max*H}" y2="${H-t/max*H}" stroke="var(--line)"/><text x="${W+6}" y="${H-t/max*H+4}" font-size="10" fill="var(--fg-3)" font-family="var(--f-mono)">${t}k</text>`).join('');
+  return `<div class="usage"><div class="tiles">
+   <div class="card tile"><span class="k">Cost so far</span><span class="v">$2.41</span><span class="k">cap $5.00</span></div>
+   <div class="card tile"><span class="k">Input tokens</span><span class="v">412k</span><span class="k">71% from cache</span></div>
+   <div class="card tile"><span class="k">Output tokens</span><span class="v">38.2k</span><span class="k">incl. 9.1k thinking</span></div>
+   <div class="card tile"><span class="k">Context window</span><span class="v">38%</span><span class="k">76k of 200k</span></div></div>
+   <div class="card" style="padding:14px 16px"><div class="h3" style="margin-bottom:10px">Tokens per 6-minute window <span class="faint" style="font-weight:400">· 14:30 to now</span></div>
+    <svg viewBox="0 0 600 140" width="100%" style="max-width:720px;display:block" role="img" aria-label="Tokens per window rising from 3k to 41k">${ticks}${bars}<text x="0" y="136" font-size="10" fill="var(--fg-3)">14:30</text><text x="${W-30}" y="136" font-size="10" fill="var(--fg-3)">15:42</text></svg></div>
+   <div class="card"><table class="t"><thead><tr><th>Tool</th><th class="r">Calls</th><th class="r">Tokens</th><th class="r">Share</th></tr></thead><tbody>
+    <tr><td>Read</td><td class="r">31</td><td class="r">182k</td><td class="r">41%</td></tr><tr><td>Bash</td><td class="r">12</td><td class="r">96k</td><td class="r">21%</td></tr><tr><td>Edit</td><td class="r">9</td><td class="r">61k</td><td class="r">14%</td></tr><tr><td>Subagent (Explore)</td><td class="r">1</td><td class="r">74k</td><td class="r">17%</td></tr><tr><td>Grep / Glob</td><td class="r">8</td><td class="r">33k</td><td class="r">7%</td></tr></tbody></table></div></div>`;
+}
+function terminalTab(){
+  return `<div class="term"><span class="p">dev@thinkpad-x1</span>:<span class="c-accent">~/src/ledgerline</span>$ pnpm --filter api test auth
+
+ <span class="ok">✓</span> auth/login.spec.ts (8)
+ <span class="ok">✓</span> auth/logout.spec.ts (4)
+ <span class="ok">✓</span> auth/me.spec.ts (6)
+ <span class="er">✗</span> auth/legacy-cookie.spec.ts (11)
+   <span class="er">✗ accepts connect.sid issued before cutover</span>
+     Expected status 200, received 401
+     at legacy-cookie.spec.ts:48:31
+   <span class="er">✗ upgrades legacy session to ll_session on first request</span>
+     relation "session_tokens" does not exist
+ <span class="ok">✓</span> auth/orgs.spec.ts (... )
+
+ Test Files  <span class="er">1 failed</span> | <span class="ok">4 passed</span> (5)
+      Tests  <span class="er">2 failed</span> | <span class="ok">27 passed</span> (29)
+   Duration  8.41s
+
+<span class="p">dev@thinkpad-x1</span>:<span class="c-accent">~/src/ledgerline</span>$ <span class="w">▌</span></div>`;
+}
+function sessionScreen(){
+  const t=state.tab;
+  const body=t==='activity'?activityTab():t==='changes'?changesTab():t==='config'?configTab():t==='usage'?usageTab():terminalTab();
+  return sessionHead()+`<div style="flex:1;min-height:0;display:flex;flex-direction:column">${body}</div>`;
+}
+
+/* ================= SCREEN: GRAPH ================= */
+const GN=[
+ {id:'s1',x:380,y:44,orch:1,task:null},
+ {id:'s2',x:190,y:250,task:['Render invoice PDF template','Blocked on your approval',40,'n']},
+ {id:'s3',x:540,y:250,task:['Generate CSV schema + fixtures','3 of 5 steps',62,'w']},
+ {id:'s4',x:600,y:466,task:['Verify printing via spooler','Not started · handoff waiting',0,'n']},
+];
+const GE=[
+ {id:'e-pdf',d:'M450 140 V196 H305 V250',pol:'ask',lab:[378,196],txt:'Ask',tk:'1 task',p:40},
+ {id:'e-csv',d:'M495 140 V212 H655 V250',pol:'allow',lab:[575,212],txt:'Always allow',tk:'1 task',p:62},
+ {id:'e-win',d:'M540 140 V180 H830 V440 H715 V466',pol:'ask',lab:[830,330],txt:'Handoff waiting',pending:1},
+ {id:'e-peer',d:'M540 300 H420',pol:'allow',lab:[480,326],txt:'Always allow',arrowStart:1},
+ {id:'e-blk',d:'M640 466 V448 H270 V346',pol:'block',lab:[455,448],txt:'Blocked'},
+];
+function graphNode(n){
+  const s=by(n.id);
+  return `<div class="gn ${n.orch?'orch':''} ${state.gsel===n.id?'sel':''}" style="left:${n.x}px;top:${n.y}px" data-node="${n.id}">
+   <div class="t">${drv(s.drv,true)}<span>${s.name}</span></div>
+   <div class="row">${stPill(s.st,s.st==='needs'?(s.gate==='hand'?'Handoff waiting':'Needs you'):undefined)}<span class="sp"></span><span class="tnum">${money(s.cost)}</span></div>
+   ${n.orch?`<div class="task"><span>${I('i-handoff','xs')} Orchestrating 3 workers · step 4/7</span><div class="bar w"><i style="width:58%"></i></div></div>`:''}
+   ${n.task?`<div class="task"><span style="color:var(--fg)">${n.task[0]}</span><span style="display:flex;gap:8px;align-items:center"><span class="bar ${n.task[3]}" style="flex:1"><i style="width:${n.task[2]}%"></i></span><span>${n.task[1]}</span></span></div>`:''}
+  </div>`;
+}
+function graphScreen(){
+  const colors={ask:'var(--needs)',allow:'var(--done)',block:'var(--failed)'};
+  const lanes=[['x1',20,170],['hz',186,410],['win',426,580]];
+  const svg=`<svg class="gsvg" viewBox="0 0 1000 600" width="1000" height="600" aria-hidden="true">
+   <defs>${Object.entries(colors).map(([k,c])=>`<marker id="ar-${k}" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="${c}"/></marker>`).join('')}</defs>
+   ${GE.map(e=>`<path d="${e.d}" stroke="${colors[e.pol]}" ${e.pol==='block'?'stroke-dasharray="5 4"':''} ${state.edge===e.id?'stroke-width="3"':''} marker-end="url(#ar-${e.pol})" ${e.arrowStart?`marker-start="url(#ar-${e.pol})"`:''} data-edge="${e.id}"/>`).join('')}
+  </svg>`;
+  const lab=GE.map(e=>`<div class="el ${e.pending?'pending':e.pol} ${state.edge===e.id&&!e.pending?'sel':''}" style="left:${e.lab[0]}px;top:${e.lab[1]}px" data-edge="${e.id}">
+     ${e.pol==='ask'&&!e.pending?I('i-shield','xs'):e.pol==='allow'?I('i-check','xs'):e.pol==='block'?I('i-ban','xs'):I('i-needs','xs')}${e.txt}${e.tk?`<span class="tk">· ${e.tk}${e.p?`<span class="bar ${e.pol==='ask'?'n':'w'}"><i style="width:${e.p}%"></i></span>`:''}</span>`:''}</div>`).join('');
+  const laneEls=lanes.map(([h,y1,y2])=>{const H=HOSTS[h];const n=S.filter(s=>s.ws==='inv'&&s.host===h).length;return `<div class="lanebg" style="top:${y1}px;height:${y2-y1}px"><div class="lanelab"><span class="hn">${I(H.icon,'sm')}${H.name}</span><span class="hm">${H.os} · ${H.where}</span>${conn(H.conn[0],H.conn[1])}<span class="hm">${n} session${n>1?'s':''}</span></div></div>`}).join('');
+  return `<div class="ph" style="padding-bottom:10px"><div class="crumbs" style="width:100%"><a data-go="workstreams:list">${I('i-graph','xs')} Workstreams</a>${I('i-chevr','xs')}<span style="color:var(--fg)">Invoice export v2</span></div>
+    <h1 class="h1">Invoice export v2</h1>${stPill('needs','2 need you')}${stPill('working','2 working')}
+    <span class="muted" style="font-size:12px">4 sessions · 3 hosts · $6.28 · started 13:05</span><span class="sp"></span>
+    <div class="seg"><button aria-pressed="true">Lanes by host</button><button>Flow</button></div>
+    <button class="btn sm" data-go="new:w">${I('i-plus','xs')}Add agent</button><button class="btn sm">${I('i-pause','xs')}Pause all</button></div>
+   <div class="gx"><div class="canvas-wrap">
+     <div class="gbanner">${I('i-handoff','sm c-needs')}<span><b>Handoff waiting</b> · orchestrator → windows-print-check</span><button class="btn sm warn" data-gate="hand">Review ${kbd('R')}</button></div>
+     <div class="canvas">${laneEls}${svg}${GN.map(graphNode).join('')}${lab}</div>
+     <div class="glegend"><span><svg width="22" height="8"><path d="M0 4h22" stroke="var(--needs)" stroke-width="2"/></svg>Ask each time</span><span><svg width="22" height="8"><path d="M0 4h22" stroke="var(--done)" stroke-width="2"/></svg>Always allow</span><span><svg width="22" height="8"><path d="M0 4h22" stroke="var(--failed)" stroke-width="2" stroke-dasharray="5 4"/></svg>Blocked</span></div>
+     <div class="gctl"><button class="btn sm">${I('i-minus','xs')}</button><span class="btn sm tnum" style="pointer-events:none">100%</span><button class="btn sm">${I('i-plus','xs')}</button><button class="btn sm">Fit</button></div>
+   </div>${inspector()}</div>`;
+}
+function inspector(){
+  if(state.gsel){
+    const s=by(state.gsel);
+    return `<aside class="insp"><div class="sec"><div class="eyebrow">Agent</div><div class="h2">${s.name}</div><div style="display:flex;gap:8px;flex-wrap:wrap">${stPill(s.st)}${drv(s.drv)}</div>
+     <div class="hostline">${hostEl(s.host)}${conn(...HOSTS[s.host].conn)}</div><div class="mono faint">${s.proj} · ${s.br}</div></div>
+     <div class="sec"><div class="eyebrow">Now</div><div style="font-size:12.5px">${s.line}</div></div>
+     <div class="sec"><div class="eyebrow">Connections</div><div class="hist">
+       ${GE.filter(e=>true).slice(0,3).map(e=>`<div class="h">${I(e.pol==='block'?'i-ban':e.pol==='allow'?'i-check':'i-shield','sm c-'+(e.pol==='ask'?'needs':e.pol==='allow'?'done':'failed'))}<span>${e.id==='e-pdf'?'orchestrator → pdf-renderer':e.id==='e-csv'?'orchestrator → csv-schema':'orchestrator → windows-print'}</span><span class="w">${e.txt}</span></div>`).join('')}</div></div>
+     <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm primary" data-go="session">Open session</button><button class="btn sm" data-go="config">Edit node config</button><button class="btn sm ghost">Remove from workstream</button></div></aside>`;
+  }
+  const e=GE.find(x=>x.id===state.edge)||GE[2];
+  const names={'e-pdf':['invoice-export-orchestrator','pdf-renderer-worker'],'e-csv':['invoice-export-orchestrator','csv-schema-worker'],'e-win':['invoice-export-orchestrator','windows-print-check'],'e-peer':['csv-schema-worker','pdf-renderer-worker'],'e-blk':['windows-print-check','pdf-renderer-worker']}[e.id];
+  const pol=e.pol;
+  return `<aside class="insp">
+   <div class="sec"><div class="eyebrow">Connection</div>
+    <div style="display:flex;flex-direction:column;gap:6px;font-size:12.5px"><span><b>${names[0]}</b> <span class="faint">${HOSTS[by(GE===0?'s1':S.find(s=>s.name===names[0]).id).host].name}</span></span><span class="faint">${I('i-arrowdown','xs')} delegates to</span><span><b>${names[1]}</b> <span class="faint">${HOSTS[S.find(s=>s.name===names[1]).host].name}</span></span></div></div>
+   ${e.pending?`<div class="gate"><div class="gate-h">${I('i-handoff','sm')}Handoff waiting · 6m</div>
+     <div style="font-size:12.5px">“Verify the generated invoice PDFs print correctly through the Windows print spooler at A4 and Letter. Report any clipping of the totals table.”</div>
+     <div class="faint" style="font-size:11.5px">Attaches out/invoice-INV-2041.pdf, out/invoice-INV-2042.pdf · budget $1.50 · reply expected as a short report</div>
+     <div class="choices">${choiceBtns(HAND)}</div>${srcCap('hand')}
+     <button class="btn sm ghost" style="align-self:flex-start" data-gate="hand">Open full review ${I('i-chevr','xs')}</button></div>`:''}
+   <div class="sec"><div class="eyebrow">Policy for this connection</div><div class="pol">
+     <label class="${pol==='ask'?'on':''}">${I('i-shield','sm c-needs')}<span><b>Ask each time</b><span class="d">Every handoff stops for your approval.</span></span></label>
+     <label class="${pol==='allow'?'on':''}">${I('i-check','sm c-done')}<span><b>Always allow</b><span class="d">Handoffs go straight through. You still get a line in the inbox.</span></span></label>
+     <label class="${pol==='block'?'on':''}">${I('i-ban','sm c-failed')}<span><b>Blocked</b><span class="d">The agent is told this delegation is not allowed.</span></span></label></div></div>
+   <div class="sec"><div class="eyebrow">Handoff history</div><div class="hist">
+     <div class="h">${I('i-needs','sm c-needs')}<div>Verify printing via spooler<div class="d">waiting for you</div></div><span class="w">15:36</span></div>
+     <div class="h">${I('i-ban','sm c-failed')}<div>Install Ghostscript system-wide<div class="d">denied by you: “use the bundled pdfium instead”</div></div><span class="w">14:51</span></div>
+     <div class="h">${I('i-done','sm c-done')}<div>Check Windows font fallback for Arabic invoice lines<div class="d">allowed once · finished in 7m · $0.22</div></div><span class="w">14:12</span></div>
+     <div class="h">${I('i-done','sm c-done')}<div>Clone repo and install deps<div class="d">allowed once · finished in 3m · $0.06</div></div><span class="w">13:20</span></div></div></div>
+  </aside>`;
+}
+
+/* ================= SCREEN: WORKSTREAM DESIGN MODE ================= */
+function designScreen(){
+  const lanes=[['x1',20,206,0],['hz',222,408,0],['win',424,580,1]];
+  const laneEls=lanes.map(([h,y1,y2,off])=>{const H=HOSTS[h];return `<div class="lanebg ${off?'off':''}" style="top:${y1}px;height:${y2-y1}px"><div class="lanelab"><span class="hn">${I(H.icon,'sm')}${H.name}</span><span class="hm">${H.os} · ${H.where}</span>${conn(H.conn[0],H.conn[1])}</div>${off?`<div class="lanenote">${I('i-refresh','sm c-needs')}Reconnecting. You can place agents here once it is back.</div>`:''}</div>`}).join('');
+  const ports=(on)=>`<span class="port" style="left:calc(50% - 5.5px);top:-6px"></span><span class="port" style="left:calc(50% - 5.5px);bottom:-6px"></span><span class="port ${on?'on':''}" style="right:-6px;top:calc(50% - 5.5px)"></span>`;
+  const nodes=`<div class="gn design" style="left:250px;top:40px">
+      <div class="t">${drv('oc',true)}<span>docs-search-index</span></div>
+      <div class="row"><span class="tag">${I('i-refresh','xs')}Pulled in · keeps 41 messages</span><span class="sp"></span><span class="wasl" title="Wasl connector will be added">${I('i-lock','xs')}Wasl</span></div>
+      <div class="meta"><span class="mono" style="font-size:11px">~/src/docs-site · main</span><span>No first task. Waits for a handoff.</span></div>${ports(0)}</div>
+    <div class="gn design sel" style="left:250px;top:250px">
+      <div class="t">${drv('cc',true)}<span>search-lead</span></div>
+      <div class="row"><span class="tag">New</span><span class="faint">claude-sonnet-4.5</span><span class="sp"></span><span class="wasl" title="Wasl connector will be added">${I('i-lock','xs')}Wasl</span></div>
+      <div class="meta"><span class="mono" style="font-size:11px">~/src/docs-site · feat/search</span><span>First task: “Plan the search revamp, hand indexing to docs-search-index.”</span></div>${ports(1)}</div>`;
+  const svg=`<svg class="gsvg" viewBox="0 0 1000 600" width="1000" height="600" aria-hidden="true">
+     <defs><marker id="ar-d" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="var(--needs)"/></marker></defs>
+     <path d="M378 244 V158" stroke="var(--needs)" stroke-width="2.6" fill="none" marker-end="url(#ar-d)"/>
+     <path d="M512 316 C 580 316, 620 300, 696 300" stroke="var(--accent)" stroke-width="2" stroke-dasharray="6 5" fill="none"/>
+     <circle cx="512" cy="316" r="4" fill="var(--accent)"/>
+     <path d="M698 292 l0 17 l4.5 -4.2 l3.2 7 l2.8 -1.3 l-3.1 -6.8 l6.2 -.3 z" fill="var(--fg)" stroke="var(--win)" stroke-width="1.2"/>
+   </svg>`;
+  const extras=`<div class="el ask sel" style="left:378px;top:212px">${I('i-shield','xs')}Ask each time</div>
+    <div class="slot" style="left:690px;top:58px;width:230px;height:100px">${I('i-plus','sm')}Add agent on thinkpad-x1</div>
+    <div class="slot hot" style="left:690px;top:258px;width:230px;height:100px;flex-direction:column;gap:2px">${I('i-plus','sm')}<span>Drop to add a connected agent</span><span style="font-size:11px;font-weight:400">on hetzner-ax41</span></div>
+    <div class="draghint" style="left:528px;top:352px">${I('i-handoff','sm')}<span><b>Drawing a connection.</b> Release on an agent to connect them, or on an empty spot to add a new agent already connected. Esc cancels.</span></div>`;
+  return `<div class="ph" style="padding-bottom:10px"><div class="crumbs" style="width:100%"><a data-go="workstreams:list">${I('i-graph','xs')} Workstreams</a>${I('i-chevr','xs')}<span style="color:var(--fg)">Docs search revamp</span></div>
+    <h1 class="h1">Docs search revamp</h1><span class="st draft">${I('i-edit','sm')}Design · not launched</span>
+    <span class="muted" style="font-size:12px">Draft saved 10:42 · nothing is running yet</span><span class="sp"></span>
+    <button class="btn sm" data-go="new:w">${I('i-plus','xs')}Add agent</button><button class="btn sm">Save as draft</button><button class="btn sm primary">Launch</button></div>
+   <div class="gx"><div class="canvas-wrap">
+     <div class="canvas">${laneEls}${svg}${nodes}${extras}</div>
+     <div class="glegend"><span>${I('i-handoff','xs c-accent')}Drag from a dot on an agent to connect it</span><span><svg width="22" height="8"><path d="M0 4h22" stroke="var(--needs)" stroke-width="2"/></svg>Ask each time</span><span><svg width="22" height="8"><path d="M0 4h22" stroke="var(--done)" stroke-width="2"/></svg>Always allow</span><span><svg width="22" height="8"><path d="M0 4h22" stroke="var(--failed)" stroke-width="2" stroke-dasharray="5 4"/></svg>Blocked</span></div>
+     <div class="gctl"><button class="btn sm">${I('i-minus','xs')}</button><span class="btn sm tnum" style="pointer-events:none">100%</span><button class="btn sm">${I('i-plus','xs')}</button><button class="btn sm">Fit</button></div>
+   </div>
+   <aside class="insp">
+    <div class="summ">${I('i-check','sm')}<span>2 agents · 1 connection · Wasl connector will be added to both</span></div>
+    <div class="sec"><div class="eyebrow">Selected connection</div>
+     <div style="font-size:12.5px;display:flex;flex-direction:column;gap:4px"><span><b>search-lead</b> <span class="faint">hetzner-ax41</span></span><span class="faint">${I('i-arrowdown','xs')} can hand work to</span><span><b>docs-search-index</b> <span class="faint">thinkpad-x1</span></span></div>
+     <div class="pol">
+      <label class="on">${I('i-shield','sm c-needs')}<span><b>Ask each time</b><span class="d">Each handoff waits for your OK.</span></span></label>
+      <label>${I('i-check','sm c-done')}<span><b>Always allow</b><span class="d">Handoffs go straight through.</span></span></label>
+      <label>${I('i-ban','sm c-failed')}<span><b>Blocked</b><span class="d">This handoff is not allowed.</span></span></label></div></div>
+    <div class="sec"><div class="eyebrow">Before you launch</div><div class="cl">
+     <div class="ci">${I('i-done','sm c-done')}<div>2 agents on 2 hosts<div class="d">search-lead: Claude Code on hetzner-ax41, new. docs-search-index: OpenCode on thinkpad-x1, keeps its history.</div></div></div>
+     <div class="ci">${I('i-done','sm c-done')}<div>1 connection<div class="d">search-lead can hand work to docs-search-index · ask each time</div></div></div>
+     <div class="ci">${I('i-lock','sm c-accent')}<div>Wasl connector will be added to both<div class="d">It lets them hand off work to each other. Their own Claude Code and OpenCode config stays as it is.</div></div></div>
+     <div class="ci">${I('i-warn','sm c-needs')}<div>docs-search-index has no first task<div class="d">That is fine. It waits until search-lead hands it something.</div></div></div>
+    </div></div>
+    <div class="insp-foot"><button class="btn sm">Save as draft</button><span style="flex:1"></span><button class="btn sm primary">${I('i-send','xs')}Launch 2 agents</button></div>
+   </aside></div>`;
+}
+
+/* ================= SCREEN: WORKSTREAMS LIST ================= */
+const WSL=[
+ {n:'Invoice export v2',d:'CSV and PDF invoice export, checked on the Windows print spooler',h:['x1','hz','win'],s:'4',st:[['needs','2 need you'],['working','2 working']],c:6.28,t:'started 13:05',go:'graph:run'},
+ {n:'Flaky CI triage',d:'Find why ssh-tunnel.spec.ts times out on CI',h:['hz','win'],s:'2',st:[['failed','1 failed'],['done','1 finished, not seen']],c:2.48,t:'started 11:40',go:'graph:run'},
+ {n:'Docs search revamp',d:'Rebuild the docs search index and wire it into the site header',h:['x1','hz'],s:'2 planned',st:[['draft','Draft, not launched']],c:0,t:'edited 10:42',go:'graph:design',draft:1},
+ {n:'Nightly dependency bumps',d:'Renovate-style upgrades, one agent per repo, reviewer checks each PR',h:['x1'],s:'3',st:[['idle','All finished · seen']],c:1.12,t:'ran 06:00',go:'graph:run'},
+];
+function workstreamsList(){
+  return `<div class="ph"><div style="display:flex;flex-direction:column;gap:1px;margin-right:8px"><h1 class="h1">Workstreams</h1><span class="faint" style="font-size:12px">Agents that hand work to each other. Their sessions also show in your Inbox.</span></div>
+   <span class="sp"></span><button class="btn sm">${I('i-book','xs')}Templates</button><button class="btn sm primary" data-go="workstreams:new">${I('i-plus','xs')}New workstream</button></div>
+   <div class="wsl"><div class="wsh"><span>Name</span><span>Hosts</span><span>Sessions</span><span>Status</span><span style="text-align:right">Cost</span><span>Last</span><span></span></div>
+   ${WSL.map(w=>`<div class="wsrow" data-go="${w.go}">
+     <span class="nm"><b>${I('i-graph','sm '+(w.draft?'c-accent':''))}${w.n}</b><span>${w.d}</span></span>
+     <span class="hm">${w.h.map(h=>hostEl(h)).join('')}</span>
+     <span class="tnum">${w.s}</span>
+     <span class="sw">${w.st.map(([k,t])=>`<span class="c-${k==='draft'?'accent':k}" style="display:inline-flex;gap:6px;align-items:center">${k==='draft'?I('i-edit','sm'):stIcon(k,'sm')}${t}</span>`).join('')}</span>
+     <span class="cost r">${money(w.c)}</span>
+     <span class="ago">${w.t}</span>
+     <span class="faint">${I('i-chevr','sm')}</span></div>`).join('')}
+   <div class="eyebrow" style="margin-top:14px">Saved templates</div>
+   <div class="tpl">
+    <div class="card"><b>Orchestrator + 2 workers</b><span class="faint" style="font-size:12px">1 Claude Code lead, 2 workers on any hosts · ask each time</span></div>
+    <div class="card"><b>Linux build + Windows check</b><span class="faint" style="font-size:12px">2 agents, one per OS · always allow</span></div>
+    <div class="card"><b>Writer and reviewer</b><span class="faint" style="font-size:12px">Codex writes, Claude Code reviews · ask each time</span></div>
+   </div></div>`;
+}
+function newWsDialog(){
+  const pick=[['s9',1],['s14',0],['s10',0],['s12',0]];
+  const st=state.wstart;
+  return workstreamsList()+`<div class="scrim"><div class="dlg" role="dialog" aria-label="New workstream" style="width:min(600px,100%)">
+   <div class="dlg-h"><span class="h2">New workstream</span><div class="steps" style="margin-left:6px"><span class="s on"><b>1</b>Name and start</span>${I('i-chevr','xs')}<span class="s"><b>2</b>Design</span></div><span class="sp"></span><button class="iconbtn" data-go="workstreams:list" title="Close">${I('i-x','sm')}</button></div>
+   <div class="dlg-b" style="display:flex;flex-direction:column;gap:14px">
+    <div class="field"><label for="wsn">Name</label><div class="input"><input id="wsn" value="Docs search revamp"></div></div>
+    <div class="field"><label for="wsd">Description <span class="faint" style="font-weight:400">optional</span></label><textarea id="wsd" class="ta" style="resize:none;font:inherit;min-height:40px;height:40px">Rebuild the docs search index and wire it into the site header.</textarea></div>
+    <div class="field"><label>Start from</label><div class="pol startopts">
+      <label class="${st==='blank'?'on':''}" data-ws-start="blank">${I('i-plus','sm')}<span><b>Blank</b><span class="d">An empty graph with a lane for each connected host.</span></span></label>
+      <label class="${st==='tpl'?'on':''}" data-ws-start="tpl">${I('i-book','sm')}<span><b>A saved template</b><span class="d">Orchestrator + 2 workers · Linux build + Windows check · Writer and reviewer</span></span></label>
+      <label class="${st==='sessions'?'on':''}" data-ws-start="sessions">${I('i-refresh','sm')}<span style="flex:1;min-width:0"><b>From existing sessions</b><span class="d">Pull in sessions that are already running or paused. They keep their history.</span>
+       ${st==='sessions'?`<div style="margin-top:8px;display:flex;flex-direction:column;gap:6px"><div class="input" style="height:28px">${I('i-search','sm')}<input placeholder="Search your sessions" aria-label="Search sessions"></div>
+        <div class="hostpick">${pick.map(([id,on])=>{const x=by(id);return `<div class="hp ${on?'on':''}"><span class="cb ${on?'on':''}">${on?I('i-check','xs'):''}</span>${drv(x.drv,true)}<b style="font-weight:600">${x.name}</b><span class="faint">${HOSTS[x.host].name}</span><span class="sp"></span><span class="c-${x.st}" style="font-size:11.5px">${STL[x.st]}</span></div>`}).join('')}</div>
+        <span class="faint" style="font-size:11.5px">1 selected. Sessions already in another workstream are not listed.</span></div>`:''}</span></label>
+    </div></div>
+   </div>
+   <div class="dlg-f"><span class="faint" style="font-size:12px">Nothing starts until you launch from the design.</span><span class="sp"></span><button class="btn" data-go="workstreams:list">Cancel</button><button class="btn primary" data-go="graph:design">Continue to design ${I('i-chevr','xs')}</button></div>
+  </div></div>`;
+}
+
+/* ================= SCREEN: NEW SESSION ================= */
+function newScreen(){
+  const ws=state.vars.new==='w';
+  const vers={cc:'2.1.4',cx:'0.58.0',oc:'1.3.2',kc:'7.8.27'};
+  const rows=[['Refactor invoice totals rounding','“Totals are off by a cent on multi-currency invoices. Find where we round…”','marsad','2h ago',184,1],
+   ['Fix Stripe webhook idempotency','“Stripe retries are creating duplicate payments, add an idempotency key…”','term','yesterday',61,0],
+   ['(no title)','“why does pnpm build hang on the api package”','term','2d ago',12,0],
+   ['Spike: Postgres row-level security','“Prototype RLS for the orgs table and measure the query cost”','marsad','1w ago',233,0],
+   ['Add CSV export endpoint','“GET /v1/invoices/export.csv with the same filters as the list view”','term','2w ago',97,0],
+   ['Bump Node to 22','“Move CI and the Dockerfile to Node 22, fix whatever breaks”','term','3w ago',18,0]];
+  const close=ws?'graph:design':'home';
+  return (ws?designScreen():homeA())+`<div class="scrim"><div class="dlg" role="dialog" aria-label="${ws?'Add agent':'New session'}" style="width:min(960px,100%)">
+   <div class="dlg-h"><span class="h2">${ws?'Add agent to Docs search revamp':'New session'}</span><span class="faint" style="font-size:12px">${ws?'Same form as New session. Nothing starts until you launch the workstream.':'Starts on the host you pick and appears in your inbox'}</span><span class="sp"></span><button class="iconbtn" data-go="${close}" title="Close">${I('i-x','sm')}</button></div>
+   <div class="dlg-b"><div class="ns">
+    <div class="col">
+     <div class="field"><label>Agent</label><div class="drvpick">${Object.keys(DRV).map(d=>`<div class="dp ${d==='cc'?'on':''}">${drv(d)}<span class="v">v${vers[d]}</span></div>`).join('')}</div></div>
+     <div class="field"><label>Host</label><div class="hostpick">
+       <div class="hp on">${I('i-laptop','sm')}<b>thinkpad-x1</b><span class="faint">Ubuntu · local</span><span class="sp"></span>${conn('ok','Connected')}</div>
+       <div class="hp">${I('i-server','sm')}<b>hetzner-ax41</b><span class="faint">Debian · SSH</span><span class="sp"></span>${conn('ok','Connected')}</div>
+       <div class="hp dis">${I('i-monitor','sm')}<b>win-build</b><span class="faint">Windows · SSH</span><span class="sp"></span>${conn('warn','Reconnecting in 4s')}</div></div></div>
+     <div class="field"><label>Project folder</label><div class="input">${I('i-folder','sm')}<input value="~/src/ledgerline" aria-label="Project folder"><span class="mono faint" style="font-size:11px">${I('i-branch','xs')} main</span></div>
+       <span class="hint">Recent: ~/src/marsad · ~/src/docs-site · ~/src/tilemap-renderer</span></div>
+     <div class="two"><div class="field"><label>Model</label><div class="selbox"><span class="mono" style="font-size:12px">claude-sonnet-4.5</span>${I('i-chev','sm')}</div></div>
+      <div class="field"><label>Mode</label><div class="selbox"><span>Default · ask before edits</span>${I('i-chev','sm')}</div></div></div>
+     <span class="disc">${I('i-refresh','xs')}Models and modes discovered from claude 2.1.4 on thinkpad-x1 · 3 models, 4 modes</span>
+     <div class="profile">${I('i-layers','sm')}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Config <b style="color:var(--fg)">Claude Code's own setup on thinkpad-x1</b> + 2 Marsad overrides${ws?' + Wasl':''}</span><span style="flex:1"></span><a class="c-accent" data-go="config" style="cursor:pointer">View</a></div>
+    </div>
+    <div class="col">
+     <div class="field"><label>Start</label><div class="seg" style="align-self:flex-start"><button>New conversation</button><button aria-pressed="true">Continue an existing one</button></div></div>
+     <div class="recent">${I('i-clock','sm')}<div class="tx"><div><b>Continue most recent</b> <span class="faint">· 2h ago · 184 messages</span></div><div class="faint">Refactor invoice totals rounding</div></div><button class="btn sm">Continue</button></div>
+     <div class="field"><div class="input">${I('i-search','sm')}<input placeholder="Search title or first prompt" aria-label="Search sessions"></div>
+      <span class="hint">23 Claude Code sessions in ~/src/ledgerline on thinkpad-x1, including ones started in a terminal</span>
+      <div class="slist"><div class="sh"><span></span><span>Title · first prompt</span><span>Started in</span><span style="text-align:right">Last</span><span style="text-align:right">Msgs</span></div>
+       ${rows.map(r=>`<div class="sr ${r[5]?'on':''}"><span>${r[5]?I('i-check','xs c-accent'):''}</span><span class="tt"><b${r[0].startsWith('(')?' class="faint"':''}>${r[0]}</b><span>${r[1]}</span></span><span>${r[2]==='term'?`<span class="tag trm">${I('i-term','xs')}Terminal</span>`:`<span class="tag">${I('i-dome','xs')}Marsad</span>`}</span><span class="r">${r[3]}</span><span class="r">${r[4]}</span></div>`).join('')}</div>
+      <span class="hint">Showing 6 of 23 · scroll for more</span></div>
+     <div class="field"><label for="fp">Message to send on resume <span class="faint" style="font-weight:400">optional</span></label><textarea id="fp" class="ta" style="resize:none;font:inherit;min-height:48px">Rebase onto main first, then finish the rounding tests for multi-currency invoices.</textarea></div>
+    </div></div></div>
+   <div class="dlg-f">${ws?`<span class="faint" style="font-size:12px;display:inline-flex;gap:6px;align-items:center">${I('i-lock','xs')}Wasl connector will be added automatically</span>`:`<label style="display:flex;gap:8px;align-items:center;font-size:12px;color:var(--fg-2)"><span class="cb"></span>Add to workstream…</label>`}<span class="sp"></span><button class="btn" data-go="${close}">Cancel</button><button class="btn primary">${ws?`${I('i-plus','xs')}Add to design`:`${I('i-refresh','xs')}Continue session ${kbd('Ctrl Enter')}`}</button></div>
+  </div></div>`;
+}
+
+/* ================= SCREEN: AGENT CONFIG ================= */
+const BASE={
+ cc:{ver:'2.1.4',bin:'claude',sess:'s1',src:[['~/.claude.json','MCP servers'],['.mcp.json','project MCP servers'],['~/.claude/skills/','skills'],['.claude/skills/','project skills'],['~/.claude/settings.json','plugins, model'],['.claude/commands/','slash commands']],counts:'4 MCP servers · 2 skills · 1 plugin · 9 slash commands · 3 models'},
+ cx:{ver:'0.58.0',bin:'codex',sess:'s15',src:[['~/.codex/config.toml','MCP servers'],['.codex/config.toml','project MCP servers'],['~/.codex/skills/','skills'],['.codex/skills/','project skills'],['~/.codex/config.toml','model, profiles'],['~/.codex/prompts/','custom prompts']],counts:'3 MCP servers · 2 skills · 2 profiles · 5 prompts · 4 models'},
+ oc:{ver:'1.3.2',bin:'opencode',sess:'s3',src:[['~/.config/opencode/opencode.json','MCP servers'],['opencode.json','project MCP servers'],['~/.config/opencode/agent/','agents'],['.opencode/agent/','project agents'],['~/.config/opencode/opencode.json','plugins, model'],['.opencode/command/','commands']],counts:'4 MCP servers · 3 agents · 2 plugins · 6 commands · 11 models'},
+ kc:{ver:'7.8.27',bin:'kilo',sess:'s6',src:[['~/.config/kilo/kilo.jsonc','MCP servers'],['.kilo/mcp.json','project MCP servers'],['~/.config/kilo/rules/','rules'],['.kilo/rules/','project rules'],['~/.config/kilo/kilo.jsonc','modes, model'],['.kilo/workflows/','workflows']],counts:'3 MCP servers · 4 rules · 5 modes · 2 workflows · 9 models'},
+};
+const CHOST={s1:'x1',s15:'hz',s3:'hz',s6:'win'};
+const MODEL={cc:['claude-sonnet-4.5','claude-opus-4.1'],cx:['gpt-5-codex','gpt-5'],oc:['anthropic/claude-sonnet-4.5','openai/gpt-5'],kc:['kilo/claude-sonnet-4.5','kilo/gpt-5']};
+function effRows(d){
+  const B=BASE[d], s=by(B.sess), inWs=!!s.ws, from=`from ${DRV[d]} config`, node=inWs?(d==='cc'?'orchestrator':s.name):null;
+  const nodeRow=(r)=>inWs?r:{...r,uns:`Not applied: ${s.name} is not in a workstream.`};
+  return [
+   {cat:'MCP servers',ic:'i-plug',rows:[
+    {n:'github',d:'stdio · github-mcp-server',src:B.src[0][0],prov:[['a',from]]},
+    {n:'postgres-ledgerline',d:'stdio · DATABASE_URL → postgres://localhost/ledgerline_dev',src:B.src[1][0],prov:[['a',from],['h','changed at Host']]},
+    {n:'sentry',d:'stdio · @sentry/mcp-server',src:B.src[0][0],prov:[['a',from],['x','turned off at Host']],off:1},
+    nodeRow({n:'playwright',d:'stdio · npx @playwright/mcp',src:'Marsad · node',prov:[['w','added at Workstream node']]}),
+    {n:'linear',d:'HTTP · mcp.linear.app',src:'Marsad · Global',prov:[['g','added at Global']]},
+    inWs?{n:'wasl',d:'Added automatically for sessions in a workstream so agents can hand off work. Not added to standalone sessions.',src:'Marsad',prov:[['wasl','automatic · Wasl']],lock:1,wasl:1}
+        :{n:'wasl',d:'Added automatically for sessions in a workstream so agents can hand off work.',src:'Marsad',prov:[['g','not added']],uns:`${s.name} is a standalone session, so it does not get the Wasl connector.`,lock:1},
+   ]},
+   {cat:d==='cc'||d==='cx'?'Skills':d==='oc'?'Agents':'Rules',ic:'i-book',rows:[
+    {n:d==='kc'?'release-checklist':'release-notes',d:'Writes CHANGELOG entries from merged PRs',src:B.src[2][0],prov:[['a',from]]},
+    {n:'db-migrations',d:'Checklist and scripts for Prisma migrations',src:B.src[3][0],prov:[['a',from]]},
+    nodeRow({n:'pdf-tools',d:'Render, diff and rasterize PDFs',src:'Marsad · node',prov:[['w','added at Workstream node']]}),
+   ]},
+   {cat:'Plugins and commands',ic:'i-puzzle',rows:[
+    {n:'commit-guard',d:'Blocks commits that touch .env* or secrets/',src:B.src[4][0],prov:[['a',from]],uns:d==='kc'?'Kilo Code has no plugin hooks. Use a git pre-commit hook instead.':null},
+    {n:'/review, /deploy-preview + 7 more',d:'Slash commands',src:B.src[5][0],prov:[['a',from]]},
+   ]},
+   {cat:'Model and instructions',ic:'i-sparkle',rows:[
+    {n:'Model',d:`${MODEL[d][0]} → ${MODEL[d][1]}`,src:B.src[4][0],prov:[['a',from],['s','changed at Session']]},
+    {n:'AGENTS.md',d:'Shared instructions file for every agent',src:'Marsad · Global',prov:[['g','added at Global']],uns:d==='cc'?'Claude Code reads CLAUDE.md, not AGENTS.md. Add “@AGENTS.md” to CLAUDE.md to use it.':null},
+   ]},
+  ];
+}
+function configScreen(){
+  const d=state.cdrv, B=BASE[d], s=by(B.sess), h=HOSTS[CHOST[B.sess]], inWs=!!s.ws;
+  const opC={add:'add',ovr:'c-working',dis:'del',lock:'c-accent'};
+  const lay=[['Session',s.name,'this session only','i-term',[['~',`model → ${MODEL[d][1]}`,'ovr']]],
+   ['Workstream node',inWs?`${d==='cc'?'orchestrator':s.name} · ${WS[s.ws]}`:'none · standalone session','','i-graph',inWs?[['+','playwright MCP','add'],['+','pdf-tools skill','add'],[I('i-lock','xs'),'Wasl connector · automatic','lock']]:[['','Nothing applies, and no Wasl connector','']]],
+   ['Host',h.name,'sessions launched on this host','i-laptop',[['−','sentry turned off','dis'],['~','postgres-ledgerline → local dev DB','ovr']]],
+   ['Global','all hosts','every session Marsad launches','i-layers',[['+','linear MCP','add'],['+','AGENTS.md instructions','add']]]];
+  const rows=effRows(d); let n=0,act=0,uns=0; rows.forEach(g=>g.rows.forEach(r=>{n++; if(r.uns) uns++; else if(!r.off) act++;}));
+  return `<div class="ph"><div style="display:flex;flex-direction:column;gap:1px;margin-right:8px"><h1 class="h1">Agent config</h1><span class="faint" style="font-size:12px">Marsad mirrors what each agent CLI already has. Overrides apply only to sessions launched from Marsad.</span></div><span class="sp"></span><button class="btn sm">${I('i-refresh','xs')}Refresh from agents</button><button class="btn sm primary">${I('i-plus','xs')}Add override</button></div>
+  <div class="ac"><aside class="stack">
+   <div class="ctxsel"><div class="seg" role="tablist" aria-label="Agent">${Object.keys(DRV).map(k=>`<button data-cdrv="${k}" aria-pressed="${k===d}" title="${DRV[k]}">${drv(k,true)}<span>${DRV[k]}</span></button>`).join('')}</div></div>
+   <div class="eyebrow" style="margin-bottom:6px">Read from the bottom up · higher layers win</div>
+   ${lay.map((l)=>`<div class="layer ${l[0]==='Session'?'on':''}"><div class="lh">${I(l[3],'sm')}${l[0]}<span class="sp"></span><span class="lv">Marsad</span></div><div class="faint" style="font-size:11.5px">${l[1]}${l[2]?' · '+l[2]:''}</div>${l[4].map(x=>`<div class="dl"><span class="op ${opC[x[2]]||'faint'}">${x[0]||'·'}</span>${x[1]}</div>`).join('')}</div><div class="arrowup">${I('i-arrowdown','sm')}</div>`).join('')}
+   <div class="layer base"><div class="lh">${drv(d,true)}From the agent<span class="sp"></span><span class="ro">read-only</span></div>
+    <div class="faint" style="font-size:11.5px">${DRV[d]} ${B.ver} on ${h.name} · ~/src/${s.proj} · discovered live 14:31</div>
+    <div class="dl" style="color:var(--fg)">${B.counts}</div>
+    <div class="srcs">${B.src.filter((x,i,a)=>a.findIndex(y=>y[0]===x[0])===i).map(x=>`<span class="mono" title="${x[1]}">${x[0]}</span>`).join('')}</div></div>
+  </aside>
+  <section class="eff"><div class="eff-h"><span class="h3">Effective for</span><div class="selbox" style="white-space:nowrap">${drv(d,true)}<span>${s.name}</span><span class="faint">${h.name}</span>${s.ws?wsTag(s.ws):''}${I('i-chev','sm')}</div>
+    <div class="seg"><button aria-pressed="true">All</button><button>MCP</button><button>Skills</button><button>Plugins</button></div><span style="flex:1"></span><span class="faint" style="font-size:12px">${n} items · ${act} active · ${uns} not applied</span></div>
+   <div class="eff-b"><div class="note">${I('i-lock','sm')}<span>${DRV[d]}'s own config files are never modified, and sessions you start in a terminal keep their normal setup. Overrides apply only to sessions launched from Marsad. The one thing Marsad adds by itself is the Wasl connector, and only for sessions in a workstream.</span></div><table class="etab"><thead><tr><th>Item</th><th>Where it comes from</th><th>Source</th><th style="width:70px">On</th></tr></thead><tbody>
+   ${rows.map(g=>`<tr class="cat"><td colspan="4">${I(g.ic,'sm')} ${g.cat}</td></tr>`+g.rows.map(r=>`<tr class="${r.off?'off':''} ${r.uns?'uns':''} ${r.wasl?'wasl':''}"><td><div class="nm">${r.n}${r.lock?I('i-lock','xs faint'):''}</div><div class="ds">${r.d}</div>${r.uns?`<div class="reason keep" style="color:var(--fg-2)">${I('i-minus','xs')} ${r.uns}</div>`:''}</td><td class="keep"><div class="provs">${r.prov.map(p=>`<span class="prov ${p[0]}">${p[0]==='wasl'?I('i-handoff','xs'):''}${p[1]}</span>`).join('')}</div></td><td class="src">${r.src}</td><td class="keep">${r.lock?`<span class="lockcell">${I('i-lock','xs')}${r.uns?'off':'auto'}</span>`:r.uns?`<span class="lockcell">n/a</span>`:`<div class="tg ${r.off?'':'on'}" role="switch" aria-checked="${!r.off}" title="On for this session"></div>`}</td></tr>`).join('')).join('')}
+   </tbody></table></div></section></div>`;
+}
+
+/* ================= SCREEN: HOSTS ================= */
+const HL=[
+ {k:'x1',n:'thinkpad-x1',os:'Ubuntu 24.04 · x86_64',where:'Local',c:['ok','Connected'],sub:'helper v0.7.3 · 2ms',s:6,cli:[['CC','2.1.4'],['CX','0.58.0'],['OC','1.3.2']]},
+ {k:'hz',n:'hetzner-ax41',os:'Debian 12 · x86_64',where:'dev@95.217.40.12:22',c:['ok','Connected'],sub:'helper v0.7.3 · 38ms',s:6,cli:[['CC','2.1.4'],['CX','0.58.0'],['OC','1.3.2']]},
+ {k:'win',n:'win-build',os:'Windows 11 Pro · x64',where:'build@win-build.lan:22',c:['warn','Reconnecting in 4s'],sub:'lost 15:38 · attempt 3 of 10',s:4,cli:[['CC','2.1.2'],['KC','7.8.27']]},
+ {k:'gpu',n:'gpu-box',os:'Ubuntu 22.04 · x86_64',where:'ml@10.0.4.21:22',c:['bad','Auth needed'],sub:'key rejected at 09:14',s:0,cli:[['CC','2.0.9'],['CX','0.51.1']]},
+ {k:'pi',n:'pi-runner',os:'Raspberry Pi OS · arm64',where:'pi@pi-runner.lan:22',c:['info','Helper updating'],sub:'0.7.1 → 0.7.3 · 64%',s:0,cli:[['OC','1.3.0']]},
+];
+function hostsList(sel){
+  return `<div class="hlist">${HL.map(h=>`<div class="hrow ${h.k===sel?'on':''}">
+   <span>${I(h.k==='x1'?'i-laptop':h.k==='win'?'i-monitor':'i-server','lg')}</span>
+   <span class="hn">${h.n}<small>${h.os}</small></span>
+   <span style="display:flex;flex-direction:column;gap:2px">${conn(h.c[0],h.c[1])}<span class="faint" style="font-size:11px">${h.sub}</span></span>
+   <span style="font-size:12px"><b class="tnum">${h.s}</b> <span class="faint">sessions</span></span>
+   <span class="clis">${h.cli.map(c=>`<span class="tag"><b class="mono" style="font-size:10px">${c[0]}</b> ${c[1]}</span>`).join('')}</span></div>`).join('')}</div>`;
+}
+function hostsA(){
+  return `<div class="ph"><h1 class="h1">Hosts</h1><span class="muted" style="font-size:12.5px">5 machines · 3 connected</span><span class="sp"></span><button class="btn sm">${I('i-refresh','xs')}Check all</button><button class="btn sm primary" data-v-go="b">${I('i-plus','xs')}Add host</button></div>
+  <div class="hs">${hostsList('win')}
+   <aside class="hd"><div style="display:flex;align-items:center;gap:10px">${I('i-monitor','lg')}<div><div class="h2">win-build</div><div class="faint" style="font-size:12px">Windows 11 Pro 23H2 · OpenSSH 9.5</div></div></div>
+    <div class="gate" style="border-color:var(--needs-line)"><div class="gate-h">${I('i-refresh','sm')}Reconnecting in 4s</div><div style="font-size:12.5px">The SSH connection dropped at 15:38 (connection reset by peer). 4 sessions keep running on the machine; Marsad will catch up on their output when it reconnects.</div>
+     <div class="acts"><button class="btn sm">${I('i-refresh','xs')}Retry now</button><button class="btn sm ghost">View connection log</button></div></div>
+    <div><h4 class="eyebrow" style="margin:0 0 8px">Connection</h4><dl class="kvl"><dt>Address</dt><dd class="mono">build@win-build.lan:22</dd><dt>Key</dt><dd class="mono">~/.ssh/id_ed25519</dd><dt>Helper</dt><dd>marsad-helper 0.7.3</dd><dt>Last latency</dt><dd>54ms</dd><dt>Shell</dt><dd>PowerShell 7.4</dd></dl></div>
+    <div><h4 class="eyebrow" style="margin:0 0 8px">Agent CLIs</h4><table class="t"><tbody>
+     <tr><td>${drv('cc')}</td><td class="mono">2.1.2</td><td class="r"><button class="btn sm">${I('i-download','xs')}Update to 2.1.4</button></td></tr>
+     <tr><td>${drv('kc')}</td><td class="mono">7.8.27</td><td class="r faint">Latest</td></tr>
+     <tr><td>${drv('cx')}</td><td class="faint">Not installed</td><td class="r"><button class="btn sm ghost">Install</button></td></tr>
+     <tr><td>${drv('oc')}</td><td class="faint">Not installed</td><td class="r"><button class="btn sm ghost">Install</button></td></tr></tbody></table></div>
+    <div><h4 class="eyebrow" style="margin:0 0 8px">Sessions here</h4><div class="hist">${S.filter(s=>s.host==='win').map(s=>`<div class="h"><span class="c-${s.st}">${stIcon(s.st,'sm')}</span><span>${s.name}</span><span class="w c-${s.st}">${STL[s.st]}</span></div>`).join('')}<div class="h">${I('i-idle','sm c-idle')}<span>nightly-msi-smoke</span><span class="w">Idle</span></div></div></div>
+   </aside></div>`;
+}
+function hostsB(){
+  return hostsA()+`<div class="scrim"><div class="dlg" role="dialog" aria-label="Add host" style="width:min(640px,100%)">
+   <div class="dlg-h"><span class="h2">Add host</span><span class="sp"></span><button class="iconbtn" data-v-go="a" title="Close">${I('i-x','sm')}</button></div>
+   <div class="dlg-b" style="display:flex;flex-direction:column;gap:16px">
+    <div class="steps"><span class="s dn"><b>${I('i-check','xs')}</b>Connect</span>${I('i-chevr','xs')}<span class="s on"><b>2</b>Install helper</span>${I('i-chevr','xs')}<span class="s"><b>3</b>Detect agents</span>${I('i-chevr','xs')}<span class="s"><b>4</b>Name and defaults</span></div>
+    <div class="two"><div class="field"><label>SSH target</label><div class="input"><input value="ops@ci-runner-02.internal" aria-label="SSH target"></div></div><div class="field"><label>Port and key</label><div class="input"><input value="22 · ~/.ssh/id_ed25519" aria-label="Port and key"></div></div></div>
+    <div class="card" style="padding:12px 14px;display:flex;flex-direction:column;gap:10px"><div class="h3">Installing marsad-helper 0.7.3</div>
+     <div class="check"><div>${I('i-done','sm c-done')}Connected as ops · Ubuntu 24.04 · x86_64 · fingerprint SHA256:q3Ux…9dQ</div><div>${I('i-done','sm c-done')}Uploaded helper to ~/.local/share/marsad (4.1 MB)</div><div class="c-working">${I('i-working','sm spin')}Registering user service marsad-helper.service</div><div class="faint">${I('i-idle','sm')}Scan PATH for claude, codex, opencode, kilocode</div></div>
+     <div class="bar w"><i style="width:68%"></i></div></div>
+    <div class="faint" style="font-size:12px">The helper runs as your user, keeps sessions alive when Marsad disconnects, and never opens a port. Remove it any time from the host's menu.</div>
+   </div>
+   <div class="dlg-f"><button class="btn ghost">Back</button><span class="sp"></span><button class="btn" data-v-go="a">Cancel</button><button class="btn primary" disabled style="opacity:.6">Next: detect agents</button></div></div></div>`;
+}
+
+/* ================= SCREEN: GATES + NOTIFICATIONS ================= */
+function toasts(){
+  return `<div class="toasts" aria-live="polite">
+   <div class="toast err">${I('i-failed','c-failed')}<span class="t">ci-triage-lead failed</span><button class="iconbtn" style="width:20px;height:20px" title="Dismiss">${I('i-x','xs')}</button><span class="d">pnpm test exited 1: 3 failing in ssh-tunnel.spec.ts</span><span class="a"><button class="btn sm" data-go="session">Open log</button><button class="btn sm ghost">Ask agent to fix</button></span></div>
+   <div class="toast warn">${I('i-refresh','c-needs')}<span class="t">Lost connection to win-build</span><span></span><span class="d">Reconnecting in 4s (attempt 3 of 10). 4 sessions keep running on the machine.</span><span class="a"><button class="btn sm">Retry now</button><button class="btn sm ghost" data-go="hosts">Host details</button></span></div>
+   <div class="toast ok">${I('i-done','c-done')}<span class="t">tile-cache-eviction finished</span><span class="faint" style="font-size:11px">21m</span><span class="d">5 files changed · 48 tests pass</span></div></div>`;
+}
+function gateBody(t){
+  if(t==='perm'){ const d=state.gdrv; const who={cc:'Claude',cx:'Codex',oc:'OpenCode',kc:'Kilo Code'}[d];
+   return `<div style="display:flex;flex-direction:column;gap:14px">
+   <div class="drvswitch"><span>Preview this request as each agent asks it</span><div class="seg">${Object.keys(DRV).map(k=>`<button data-gdrv="${k}" aria-pressed="${k===d}">${DRV[k]}</button>`).join('')}</div><span class="faint">(review only)</span></div>
+   <div class="ctxline">${drv(d)}<b style="color:var(--fg)">pdf-renderer-worker</b>${hostEl('hz')}<span class="mono">~/src/ledgerline</span><span class="tag ws">${I('i-graph','xs')}Invoice export v2</span><span class="faint">asked 3m ago</span></div>
+   <div><div class="eyebrow" style="margin-bottom:6px">The agent wants to run</div><div class="cmd" style="font-family:var(--f-mono);font-size:13px;background:var(--sunken);border:1px solid var(--line);border-radius:6px;padding:10px 12px;white-space:pre;overflow:auto">pnpm add @react-pdf/renderer@4.1.0 --filter @ledgerline/export</div>
+    <div class="muted" style="font-size:12px;margin-top:6px">Agent's reason: “The PDF template needs a layout engine with page breaks; react-pdf is already used in apps/admin.”</div></div>
+   <div class="riskbox"><span class="lvl">${I('i-warn','sm')}Medium risk</span><ul><li>Downloads 15 packages from registry.npmjs.org (1 direct, 14 transitive, 3.2 MB).</li><li>Changes <span class="code-inline">packages/export/package.json</span> and <span class="code-inline">pnpm-lock.yaml</span>.</li><li>Install scripts: none declared. Licences: MIT, Apache-2.0.</li></ul></div>
+   ${d==='cc'?`<div class="field"><label for="dr">Tell Claude what to do differently <span class="faint" style="font-weight:400">sent with “No”</span></label><textarea id="dr" class="ta" style="min-height:44px;resize:none;font:inherit" placeholder="For example: use pdfkit, it's already a dependency"></textarea></div>`:`<div class="faint" style="font-size:12px">${DRV[d]} does not ask for a reason when you choose “${AG[d]()[2][0]}”, so Marsad does not either.</div>`}</div>`;}
+  if(t==='diff') return `<div style="display:flex;flex-direction:column;gap:12px">
+   <div class="ctxline">${drv('cc')}<b style="color:var(--fg)">upgrade-tauri-2-5</b>${hostEl('x1')}<span class="faint">wants to edit 1 file</span></div>
+   <div class="card" style="overflow:hidden"><div style="padding:8px 12px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center"><span class="mono" style="color:var(--fg)">src-tauri/capabilities/default.json</span><span class="mono"><span class="add">+5</span> <span class="del">−3</span></span></div>
+   <div class="diff"><div class="hunk">@@ -4,9 +4,11 @@</div>
+    <div class="ln"><span>4</span><span>4</span><span></span><span>  "windows": ["main"],</span></div>
+    <div class="ln"><span>5</span><span>5</span><span></span><span>  "permissions": [</span></div>
+    <div class="ln d"><span>6</span><span></span><span>-</span><span>    "shell:allow-open",</span></div>
+    <div class="ln d"><span>7</span><span></span><span>-</span><span>    "fs:default",</span></div>
+    <div class="ln d"><span>8</span><span></span><span>-</span><span>    "notification:default"</span></div>
+    <div class="ln a"><span></span><span>6</span><span>+</span><span>    "opener:default",</span></div>
+    <div class="ln a"><span></span><span>7</span><span>+</span><span>    { "identifier": "fs:allow-read", "allow": [{ "path": "$APPDATA/marsad/**" }] },</span></div>
+    <div class="ln a"><span></span><span>8</span><span>+</span><span>    "notification:default",</span></div>
+    <div class="ln a"><span></span><span>9</span><span>+</span><span>    "process:allow-restart",</span></div>
+    <div class="ln a"><span></span><span>10</span><span>+</span><span>    "updater:default"</span></div>
+    <div class="ln"><span>9</span><span>11</span><span></span><span>  ]</span></div></div></div>
+   <div class="riskbox" style="border-color:var(--working-line);background:var(--working-bg)"><span class="lvl" style="color:var(--working)">${I('i-shield','sm')}Low risk</span><ul><li>Narrows file access from all of fs to one app-data folder.</li><li>Adds process restart and updater permissions, needed by the 2.5 updater plugin.</li></ul></div>
+   <div class="field"><label for="de">Tell Claude what to do differently <span class="faint" style="font-weight:400">sent with “No”</span></label><textarea id="de" class="ta" style="min-height:40px;resize:none;font:inherit" placeholder="For example: keep shell:allow-open, the About dialog uses it"></textarea></div></div>`;
+  if(t==='plan') return `<div style="display:flex;flex-direction:column;gap:12px">
+   <div class="ctxline">${drv('cc')}<b style="color:var(--fg)">invoice-export-orchestrator</b>${hostEl('x1')}<span class="faint">finished planning · 7 steps · est. $4–6</span></div>
+   <div class="plan card" style="padding:14px 16px"><ol>
+    <li>Define the export contract in packages/export/types.ts<span>CSV and PDF share one InvoiceExport shape.</span></li>
+    <li>Delegate CSV schema + fixtures to csv-schema-worker (hetzner-ax41)<span>Edge policy: always allow.</span></li>
+    <li>Delegate the PDF template to pdf-renderer-worker (hetzner-ax41)<span>Edge policy: ask each time.</span></li>
+    <li>Delegate print verification to windows-print-check (win-build)<span>Needs Windows spooler; edge policy: ask.</span></li>
+    <li>Merge worker branches into feat/invoice-export-v2</li>
+    <li>Run the full export test suite and fix regressions</li>
+    <li>Open a PR with screenshots of both A4 and Letter output</li></ol></div>
+   <div class="field"><label for="pf">What to change <span class="faint" style="font-weight:400">sent with “No, keep planning”</span></label><textarea id="pf" class="ta" style="min-height:44px;resize:none;font:inherit">Skip step 7 screenshots for Letter, we only ship A4 in the EU.</textarea></div></div>`;
+  return `<div style="display:flex;flex-direction:column;gap:14px">
+   <div class="hop"><div class="end"><span class="eyebrow">From</span><b>invoice-export-orchestrator</b><span style="display:flex;gap:8px">${drv('cc',true)}${hostEl('x1')}</span></div>
+    <div style="display:grid;place-items:center;color:var(--needs)">${I('i-handoff','lg')}</div>
+    <div class="end"><span class="eyebrow">To</span><b>windows-print-check</b><span style="display:flex;gap:8px;flex-wrap:wrap">${drv('cc',true)}${hostEl('win')}${conn('warn','reconnecting')}</span></div></div>
+   <div class="payload"><div class="eyebrow">Task</div><div>Verify the generated invoice PDFs print correctly through the Windows print spooler at A4 and Letter. Report any clipping of the totals table or font substitution on the Arabic address lines.</div>
+    <div class="eyebrow" style="margin-top:4px">Attached</div><div class="mono">out/invoice-INV-2041.pdf · 84 KB<br>out/invoice-INV-2042.pdf · 91 KB</div>
+    <div class="eyebrow" style="margin-top:4px">Limits</div><div>Budget $1.50 · 20 minutes · may not push to the remote</div></div>
+   <div class="riskbox" style="grid-template-columns:auto 1fr"><span class="lvl">${I('i-warn','sm')}Note</span><ul><li>win-build is reconnecting. If you allow, the task is queued and delivered when it is back.</li><li>This connection has had 2 handoffs today: 1 allowed, 1 denied by you.</li></ul></div></div>`;
+}
+function gateFooter(t){
+  const kind=t==='diff'?'edit':t, d=t==='perm'?state.gdrv:'cc';
+  return `${srcCap(kind,d)}<span class="sp"></span><div class="choices">${choiceBtns(choiceSet(kind,d,'pnpm add'),{keys:true,size:'lg'})}</div>`;
+}
+function gateOverlay(t){
+  const tabs=[['perm','Permission','i-shield'],['diff','Edit approval','i-edit'],['plan','Plan approval','i-list'],['hand','Handoff','i-handoff']];
+  return `<div class="scrim" id="gate-scrim"><div class="dlg gov" role="dialog" aria-label="Review gate">
+   <div class="dlg-h">${I('i-needs','c-needs')}<span class="h2">Waiting for you</span><span class="faint" style="font-size:12px">1 of 4 · ${kbd('J')} ${kbd('K')} next / previous</span><span class="sp"></span><button class="iconbtn" data-close title="Close">${I('i-x','sm')}</button></div>
+   <div class="gtabs" role="tablist">${tabs.map(([k,l,ic])=>`<button role="tab" data-gt="${k}" aria-selected="${t===k}">${I(ic,'sm')}${l}</button>`).join('')}</div>
+   <div class="gcap">${I('i-shield','sm')}<span><span class="${t!=='hand'?'hl':''}"><b>Permission, edit and plan choices come from the agent</b>, shown exactly as it offered them.</span> <span class="${t==='hand'?'hl':''}"><b>Handoffs</b> pass work between agents through Marsad's Wasl connector, so they always offer Marsad's three choices: Allow once, Always allow on this connection, Deny.</span></span></div>
+   <div class="dlg-b">${gateBody(t)}</div>
+   <div class="dlg-f">${gateFooter(t)}</div></div></div>`;
+}
+function gatesA(){ return homeA()+gateOverlay(state.gtab).replace('class="scrim"','class="scrim left"')+toasts(); }
+function gatesB(){
+  const nav=[['General','i-gear'],['Appearance','i-eye'],['Notifications','i-bell'],['Keyboard','i-slash'],['Hosts','i-server'],['Agents','i-layers']];
+  const ev=[['Needs you: permission or question','i-needs','needs',[1,1,1,1]],['Handoff waiting','i-handoff','needs',[1,1,0,1]],['Failed','i-failed','failed',[1,1,1,1]],['Finished','i-done','done',[1,0,0,1]],['Host lost connection','i-refresh','needs',[1,1,0,0]],['Host back online','i-server','done',[1,0,0,0]],['Spend cap reached','i-coin','needs',[1,1,0,1]],['Working (progress)','i-working','working',[0,0,0,0]]];
+  return `<div class="set"><nav class="setnav"><div class="eyebrow" style="padding:0 8px 6px">Settings</div>${nav.map(([l,ic])=>`<div class="lr-item ${l==='Notifications'?'on':''}">${I(ic,'sm')}${l}</div>`).join('')}</nav>
+  <div class="setbody"><div><h1 class="h1">Notifications</h1><div class="muted" style="margin-top:4px">Choose which events reach you and how. Errors always show in the inbox, whatever you pick here.</div></div>
+   <div class="card" style="overflow:hidden"><table class="t nt"><thead><tr><th>Event</th><th class="c">In-app toast</th><th class="c">Desktop notification</th><th class="c">Sound</th><th class="c">Tray badge</th></tr></thead><tbody>
+    ${ev.map(e=>`<tr><td><span class="c-${e[2]}">${I(e[1],'sm '+(e[2]==='working'?'spin':''))}</span> ${e[0]}</td>${e[3].map(v=>`<td class="c"><span class="cb ${v?'on':''}">${v?I('i-check','xs'):''}</span></td>`).join('')}</tr>`).join('')}
+   </tbody></table></div>
+   <div class="two" style="gap:16px">
+    <div class="card" style="padding:14px 16px;display:flex;flex-direction:column;gap:12px">
+     <div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><div class="h3">Only when Marsad isn't focused</div><div class="faint" style="font-size:12px">Desktop notifications stay quiet while you're looking at the app.</div></div><span class="tg on"></span></div>
+     <div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><div class="h3">Quiet hours</div><div class="faint" style="font-size:12px">22:00 to 08:00. Failed and Needs you still show a tray badge.</div></div><span class="tg on"></span></div>
+     <div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><div class="h3">Group bursts</div><div class="faint" style="font-size:12px">Several finishes within 30s become one notification.</div></div><span class="tg on"></span></div></div>
+    <div class="card" style="padding:14px 16px;display:flex;flex-direction:column;gap:10px"><div class="h3">Preview</div><div class="faint" style="font-size:12px">This is how a desktop notification reads.</div>
+     <div class="toast warn" style="box-shadow:inset 3px 0 0 var(--needs)">${I('i-needs','c-needs')}<span class="t">pdf-renderer-worker needs you</span><span class="faint" style="font-size:11px">now</span><span class="d">Run: pnpm add @react-pdf/renderer@4.1.0 · hetzner-ax41</span><span class="a"><button class="btn sm allow">Yes</button><button class="btn sm ghost">Open to see all 3 choices</button></span></div>
+     <button class="btn sm" style="align-self:flex-start">Send a test notification</button></div></div>
+  </div></div>`;
+}
+
+/* ================= RENDER ================= */
+function render(){
+  const m=document.getElementById('main');
+  const sc=state.screen, v=state.vars[sc];
+  let html='';
+  if(sc==='home') html=v==='c'?homeC():homeA();
+  else if(sc==='session') html=sessionScreen();
+  else if(sc==='workstreams') html=v==='new'?newWsDialog():workstreamsList();
+  else if(sc==='graph') html=v==='design'?designScreen():graphScreen();
+  else if(sc==='new') html=newScreen();
+  else if(sc==='config') html=configScreen();
+  else if(sc==='hosts') html=v==='a'?hostsA():hostsB();
+  else if(sc==='gates') html=v==='a'?gatesA():gatesB();
+  m.innerHTML=html;
+  document.getElementById('overlay').innerHTML=state.gateOpen?`<div style="position:absolute;inset:40px 0 26px 78px;z-index:40">${gateOverlay(state.gateOpen)}</div>`:'';
+  const tr=m.querySelector('.transcript'); if(tr) tr.scrollTop=tr.scrollHeight;
+  renderReview(); writeHash();
+}
+function go(sc,v){ state.screen=sc; if(v) state.vars[sc]=v; state.gateOpen=null; render(); }
+function closeMenu(){ const m=document.getElementById('split-menu'); if(m&&!m.hidden){ m.hidden=true; document.getElementById('split-caret').setAttribute('aria-expanded','false'); } }
+
+document.addEventListener('click',e=>{
+  if(e.target.closest('input,textarea')) return;
+  const t=e.target.closest('[data-selrow],[data-sc],[data-v],[data-t],[data-go],[data-tab],[data-node],[data-edge],[data-gate],[data-gt],[data-close],[data-qo],[data-q],[data-v-go],#slash-btn,#split-caret,#strip-tg,#quiet-on,#quiet-off,[data-gdrv],[data-cdrv],[data-ws-start],[data-jump]');
+  if(!t||t.id!=='split-caret') closeMenu();
+  if(!t) return;
+  if(t.id==='split-caret'){ const m=document.getElementById('split-menu'); m.hidden=!m.hidden; t.setAttribute('aria-expanded',String(!m.hidden)); return; }
+  if(t.id==='strip-tg'){ state.strip=!state.strip; render(); return; }
+  if(t.id==='quiet-on'||t.id==='quiet-off'){ state.quiet=t.id==='quiet-on'; render(); return; }
+  if(t.dataset.gdrv){ state.gdrv=t.dataset.gdrv; render(); return; }
+  if(t.dataset.cdrv){ state.cdrv=t.dataset.cdrv; render(); return; }
+  if(t.dataset.wsStart){ state.wstart=t.dataset.wsStart; render(); return; }
+  if(t.dataset.selrow){ state.sel=t.dataset.selrow; render(); return; }
+  if(t.dataset.sc){ go(t.dataset.sc); return; }
+  if(t.dataset.v){ state.vars[state.screen]=t.dataset.v; render(); return; }
+  if(t.dataset.t){ document.documentElement.setAttribute('data-theme',t.dataset.t); try{localStorage.setItem('marsad-review-theme',t.dataset.t)}catch(_){} renderReview(); return; }
+  if(t.dataset.gate){ e.stopPropagation(); if(state.screen==='gates'){state.gtab=t.dataset.gate;render();} else {state.gateOpen=t.dataset.gate; render();} return; }
+  if(t.dataset.gt){ if(state.gateOpen){state.gateOpen=t.dataset.gt;} else state.gtab=t.dataset.gt; render(); return; }
+  if(t.hasAttribute('data-close')){ if(state.gateOpen){state.gateOpen=null;render();} else go('home','a'); return; }
+  if(t.dataset.vGo){ state.vars[state.screen]=t.dataset.vGo; render(); return; }
+  if(t.dataset.jump){ e.preventDefault(); const el=document.getElementById(t.dataset.jump); el&&el.scrollIntoView({behavior:'smooth',block:'center'}); return; }
+  if(t.dataset.qo!==undefined){ state.qopt=+t.dataset.qo; render(); return; }
+  if(t.dataset.q!==undefined){ e.stopPropagation(); state.ibxq.s7=+t.dataset.q; render(); return; }
+  if(t.id==='slash-btn'){ state.slash=!state.slash; render(); return; }
+  if(t.dataset.tab){ state.tab=t.dataset.tab; render(); return; }
+  if(t.dataset.node){ state.gsel=t.dataset.node; render(); return; }
+  if(t.dataset.edge){ state.gsel=null; state.edge=t.dataset.edge; render(); return; }
+  if(t.dataset.go){
+    if(e.target.closest('button')&&e.target.closest('button')!==t&&!e.target.closest('button').dataset.go) return;
+    const [g,gv]=t.dataset.go.split(':');
+    if(g==='notify') go('gates','b'); else go(g,gv);
+  }
+});
+document.addEventListener('input',e=>{ if(e.target.id==='composer-ta'){ const on=e.target.value.startsWith('/'); if(on!==state.slash){state.slash=on; const pos=e.target.value; render(); const ta=document.getElementById('composer-ta'); if(ta){ta.value=pos;ta.focus();}}}});
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ closeMenu(); if(state.gateOpen){state.gateOpen=null;render();} } });
+window.addEventListener('hashchange',()=>{readHash();render();});
+try{const th=localStorage.getItem('marsad-review-theme'); if(th) document.documentElement.setAttribute('data-theme',th);}catch(_){}
+readHash(); render();
+</script>

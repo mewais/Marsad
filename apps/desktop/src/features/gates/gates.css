@@ -1,0 +1,52 @@
+/* Gate family: inline (row), card (board), full (session). */
+.gate-inline{margin:0 20px 10px 150px;padding:10px 12px;border:1px solid var(--needs-line);border-radius:var(--r3);background:var(--needs-bg);display:flex;flex-direction:column;gap:8px}
+.gate-inline .gq{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;color:var(--fg)}
+.gate-inline .gq .i{color:var(--needs);margin-top:1px}
+.gate-inline code,.code-inline{font-family:var(--f-mono);font-size:12px;background:var(--sunken);border:1px solid var(--line);border-radius:4px;padding:1px 6px;color:var(--fg)}
+.gate-inline.compact{flex-direction:row;flex-wrap:wrap;align-items:center;gap:6px 8px;padding:6px 8px 6px 12px}
+.gate-inline .gs{flex:1 1 280px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--fg)}
+.gate-inline .acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.gate-inline .acts .sp{flex:1}
+.opts{display:flex;gap:6px;flex-wrap:wrap}
+.opt{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:var(--r2);border:1px solid var(--line-2);background:var(--surface);font-size:12px;cursor:pointer}
+.opt .k{font-family:var(--f-mono);font-size:10.5px;color:var(--fg-3)}
+.opt.on{border-color:var(--accent);background:var(--accent-bg);color:var(--fg)}
+.opt .rad{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--fg-3);flex:none}
+.opt.on .rad{border-color:var(--accent);background:radial-gradient(circle,var(--accent) 0 3px,transparent 3.5px)}
+.donebox{margin:0 20px 10px 150px;display:flex;gap:10px;align-items:center;font-size:12px;color:var(--fg-2)}
+.donebox .stat{font-family:var(--f-mono);font-size:11.5px}
+.add{color:var(--add)} .del{color:var(--del)}
+
+/* shared list items (settings nav) */
+.lr-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--r2);font-size:12.5px;color:var(--fg-2);cursor:pointer}
+.lr-item:hover{background:var(--surface-2);color:var(--fg)}
+.lr-item.on{background:var(--accent-bg);color:var(--fg)}
+
+/* ---------- Agent-offered choices ---------- */
+.srccap{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--fg-3);white-space:nowrap}
+.srccap .drv b{width:18px;height:16px;font-size:9px}
+.srccap.wasl{color:var(--accent)}
+.choices{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+.choices .btn{white-space:normal;height:auto;min-height:24px;padding-block:3px;text-align:left;line-height:1.3}
+.choices .btn.lg{min-height:28px;padding-block:5px}
+.choices .btn code{font-family:var(--f-mono);font-size:11px;padding:0 4px;border-radius:3px;background:var(--sunken);border:1px solid var(--line);color:var(--fg)}
+.tell{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.tell .input{flex:1 1 240px;height:28px}
+.optother{display:inline-flex;align-items:center;gap:6px}
+.optother input{border:0;border-bottom:1px solid var(--line-2);background:transparent;outline:0;font-size:12px;color:var(--fg);width:150px;padding:1px 2px}
+.optother input::placeholder{color:var(--fg-3)}
+.gate{border:1px solid var(--needs-line);background:var(--needs-bg);border-radius:var(--r3);padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.gate-h{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--needs);font-size:12.5px}
+.gate-h .sp{flex:1}
+.gate .cmd{font-family:var(--f-mono);font-size:12.5px;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r2);padding:8px 10px;color:var(--fg);overflow:auto;white-space:pre}
+.gate .risk{display:flex;gap:8px;font-size:12px;color:var(--fg)}
+.gate .acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.gate .acts .sp{flex:1}
+.gate .q{font-size:13.5px;color:var(--fg);font-weight:500}
+.qopts{display:flex;flex-direction:column;gap:6px}
+.qopt{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border:1px solid var(--line-2);border-radius:var(--r2);background:var(--surface);cursor:pointer}
+.qopt .rad{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--fg-3);flex:none;margin-top:2px}
+.qopt.on{border-color:var(--accent);background:var(--accent-bg)}
+.qopt.on .rad{border-color:var(--accent);background:radial-gradient(circle,var(--accent) 0 3.5px,transparent 4px)}
+.qopt .d{font-size:12px;color:var(--fg-2)}
+.qopt .k{margin-left:auto}

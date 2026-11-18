@@ -1,0 +1,26 @@
+/* Inbox (variant A). */
+.ibx{flex:1;min-height:0;overflow:auto}
+.ibx-head,.ibx-row{display:grid;grid-template-columns:118px minmax(200px,1.5fr) 118px 140px minmax(170px,1.3fr) 66px 58px;gap:12px;align-items:center;padding:0 20px}
+.ibx-head{position:sticky;top:0;z-index:2;height:30px;background:var(--win);border-bottom:1px solid var(--line);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3)}
+.ibx-head .r,.ibx-row .r{text-align:right}
+.grp{display:flex;align-items:center;gap:8px;padding:14px 20px 6px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.grp .cnt{font-family:var(--f-mono);font-weight:500;color:var(--fg-3)}
+.grp .gline{flex:1;height:1px;background:var(--line)}
+.grp .gact{font-size:11.5px;text-transform:none;letter-spacing:0;font-weight:500;color:var(--fg-2)}
+.ibx-item{border-bottom:1px solid var(--line);position:relative}
+.ibx-row{min-height:46px;padding-block:6px;cursor:pointer}
+.ibx-item:hover{background:color-mix(in srgb,var(--surface) 70%,transparent)}
+.ibx-item.sel{background:var(--surface);box-shadow:inset 2px 0 0 var(--accent)}
+.sn{display:flex;flex-direction:column;min-width:0;gap:1px}
+.sn .t{display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px;min-width:0}
+.sn .t .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sn .s{font-size:12px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sn .s.err{color:var(--failed);font-family:var(--f-mono);font-size:11.5px}
+.pb{display:flex;flex-direction:column;min-width:0;font-size:12px}
+.pb .p{color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pb .b{color:var(--fg-3);font-family:var(--f-mono);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cost{font-family:var(--f-mono);font-size:12px;color:var(--fg-2);font-variant-numeric:tabular-nums}
+.ago{font-size:12px;color:var(--fg-2);font-variant-numeric:tabular-nums}
+.donebox{margin:0 20px 10px 150px;display:flex;gap:10px;align-items:center;font-size:12px;color:var(--fg-2)}
+.donebox .stat{font-family:var(--f-mono);font-size:11.5px}
+.add{color:var(--add)} .del{color:var(--del)}

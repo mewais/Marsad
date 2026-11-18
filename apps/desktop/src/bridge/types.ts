@@ -1,55 +1,125 @@
 /**
- * TypeScript mirrors of marsad-viewmodel Rust structs.
- * Field names are snake_case to match serde JSON output exactly.
- * Phase serializes as the variant name string.
+ * PROVISIONAL wire types. TO BE REPLACED BY GENERATED TYPES (`src/bridge/generated/`).
+ *
+ * Transcribed by hand from the Rust crates (field names and serde renames exactly):
+ *   - wasit-runtime/src/wire.rs   (SessionSnapshot, Phase, PendingGate, TurnInfo, SessionEvent, ...)
+ *   - wasit-core/src/event.rs     (AgentEvent, GateRequest, GateDecision, QuestionAnswer, Usage, ...)
+ *   - wasit-core/src/protocol.rs  (Command)
+ *   - wasit-core/src/descriptor.rs (DriverId, DriverCapabilities)
+ *
+ * Anything marked PROVISIONAL below is NOT in the Rust types today: it is what the UI needs and
+ * must be settled with the backend (listed in the hand-off report).
  */
 
-import type { BoardView, Driver } from "./workstreamTypes";
+// ── ids ─────────────────────────────────────────────────────────────────────
 
-// ---------------------------------------------------------------------------
-// Phase (marsad-events)
-// ---------------------------------------------------------------------------
+/** 12 chars of lowercase base32 (`a-z2-7`). Serde-transparent string. */
+export type SessionId = string;
+/** Serde-transparent string: "claude", "codex", "opencode", "kilo", ... */
+export type DriverId = string;
+/** Frontend-only: which machine a session lives on. */
+export type HostId = string;
+/** Frontend-only: `${hostId}/${sessionId}`. */
+export type SessionKey = string;
 
-export type Phase =
-  | "Needs"
-  | "Working"
-  | "Error"
-  | "Done"
-  | "Starting"
-  | "Stale"
-  | "Detached";
-
-/** Why a turn ended, when worth surfacing (mirrors marsad_events::EndReason).
- *  `Cancelled` pairs with `state:"Done"` (calm); the others with `state:"Error"`. */
-export type EndReason = "Cancelled" | "MaxTurns" | "ExecutionError";
-
-/** Human-facing text for an EndReason (mirrors `EndReason::text` in Rust). */
-export function endReasonText(r: EndReason): string {
-  switch (r) {
-    case "Cancelled":
-      return "Cancelled by the user";
-    case "MaxTurns":
-      return "Reached the max turn limit";
-    case "ExecutionError":
-      return "Ended with an execution error";
-  }
+export const sessionKey = (host: HostId, id: SessionId): SessionKey => `${host}/${id}`;
+export function splitKey(key: SessionKey): { host: HostId; id: SessionId } {
+  const i = key.indexOf("/");
+  return { host: key.slice(0, i), id: key.slice(i + 1) };
 }
 
-// ---------------------------------------------------------------------------
-// Gate (marsad-gates)
-// ---------------------------------------------------------------------------
+// ── wasit-core: usage, catalogs ─────────────────────────────────────────────
 
-export type Sig = "Context" | "Add" | "Del";
-
-export interface DiffLine {
-  sig: Sig;
-  ln: string;
-  text: string;
+export interface Usage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  /** 0 when the CLI does not report cost. */
+  cost_usd: number;
 }
 
-export interface PlanStep {
-  title: string;
-  detail: string;
+export interface ModelUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  estimated: boolean;
+}
+
+export interface SessionMode {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export interface ModelInfo {
+  id: string;
+  display_name: string;
+  description: string;
+  is_default: boolean;
+}
+
+export interface McpServerInfo {
+  name: string;
+  status: string;
+}
+
+/** `name` has no leading slash. */
+export interface SlashCommandInfo {
+  name: string;
+  description: string;
+  argument_hint: string;
+}
+
+export interface PlanEntry {
+  content: string;
+  priority: string;
+  /** "pending" | "in_progress" | "completed" when the CLI reports it. */
+  status?: string;
+}
+
+export interface CompactionInfo {
+  trigger: string;
+  pre_tokens: number;
+  post_tokens: number;
+  cumulative_dropped_tokens: number;
+  duration_ms: number;
+}
+
+export interface RateLimitInfo {
+  status: string;
+  resets_at: number;
+  rate_limit_type: string;
+  overage_status: string;
+  is_using_overage: boolean;
+}
+
+export type EndReason = "cancelled" | "max_turns" | "execution_error" | "compaction_needed";
+
+export type BusyPrompt = "queued_by_cli" | "steered" | "queued_by_protocol";
+
+export interface DriverCapabilities {
+  interrupt: boolean;
+  set_model: boolean;
+  set_mode: boolean;
+  slash_commands: boolean;
+  permission_gates: boolean;
+  questions: boolean;
+  plan_gate: boolean;
+  usage: boolean;
+  cost: boolean;
+  resume: boolean;
+  continue_latest: boolean;
+  streaming_output: boolean;
+  prompt_while_busy: BusyPrompt;
+}
+
+// ── wasit-core: gates ───────────────────────────────────────────────────────
+
+export interface ElicitationChoice {
+  key: string;
+  value: string;
+  label: string;
 }
 
 export interface QuestionOption {
@@ -61,715 +131,375 @@ export interface QuestionPrompt {
   question: string;
   header: string;
   multi_select: boolean;
-  options: QuestionOption[];
+  options?: QuestionOption[];
 }
 
-/** One scope-of-allowance choice parsed from an MCP elicitation's schema enum. */
-export interface ElicitationChoice {
-  /** Schema property the value belongs under (e.g. "grant"). */
-  key: string;
-  /** Enum value sent back in the response content. */
-  value: string;
-  /** Human-facing label (enumNames when present, else the value). */
+/**
+ * PROVISIONAL: the agent's own wording for the buttons of a permission gate. Not in wire.rs today;
+ * the UI needs it to show "Yes / Yes, and don't ask again for ... / No, and tell Claude ..." (or
+ * Codex's "Approve / Approve for this session / Deny") verbatim. See gates/choices.ts for how the
+ * UI falls back when absent.
+ */
+export interface PermissionChoice {
+  id: string;
   label: string;
+  /** Which button style / decision this maps to. */
+  kind: "allow" | "always" | "deny";
+  /** `deny` choices that let the human add a reason ("tell the agent what to do differently"). */
+  asks_reason?: boolean;
 }
 
-/** claude's own `permission_suggestion` for a can_use_tool gate — a real
- *  "always allow …" option. Carried VERBATIM (we render a label from claude's
- *  own rule text and echo the whole object back unchanged). Fields mirror
- *  claude's shape; kept loose so we never reshape what claude sent. */
-export interface PermissionSuggestion {
-  /** e.g. "addRules". */
-  type?: string;
-  /** e.g. "allow" | "deny". */
-  behavior?: string;
-  /** e.g. "localSettings" | "session" | … */
-  destination?: string;
-  /** claude's rule rows, e.g. [{ toolName: "Bash", ruleContent: "git push *" }]. */
-  rules?: { toolName?: string; ruleContent?: string }[];
-  // Any other keys claude includes are preserved on the object at runtime.
-  [k: string]: unknown;
-}
-
-export type Gate =
+/** `gate_type`-tagged. */
+export type GateRequest =
   | {
-      Permission: {
-        request_id: string;
-        command: string;
-        cwd: string;
-        risk: string;
-        explanation: string;
-        is_elicitation: boolean;
-        /** Scope-of-allowance choices parsed from the elicitation's schema enum
-         *  (e.g. once/session/deny). Empty ⇒ render the binary Approve/Reject. */
-        elicitation_choices?: ElicitationChoice[];
-        /** claude's own `permission_suggestions` for a can_use_tool gate — the real
-         *  "always allow …" options, VERBATIM. Each is claude's raw suggestion
-         *  object ({type,rules,behavior,destination}); the UI renders one button per
-         *  entry and echoes the chosen one back unchanged. Empty ⇒ none offered. */
-        permission_suggestions?: PermissionSuggestion[];
-      };
+      gate_type: "permission";
+      request_id: string;
+      tool_name: string;
+      command: string;
+      cwd: string;
+      explanation?: string;
+      is_elicitation?: boolean;
+      elicitation_choices?: ElicitationChoice[];
+      permission_suggestions?: unknown[];
+      raw_input?: unknown;
+      /** PROVISIONAL, see PermissionChoice. */
+      choices?: PermissionChoice[];
     }
-  | { Plan: { request_id: string; summary: string; steps: PlanStep[] } }
-  | { Edit: { request_id: string; file: string; diff: DiffLine[] } }
+  | { gate_type: "plan"; request_id: string; summary: string; choices?: PermissionChoice[] }
+  | { gate_type: "question"; request_id: string; questions: QuestionPrompt[] }
+  /** PROVISIONAL: a workstream handoff (agent to agent) waiting for the human. Not a Wasit gate. */
   | {
-      Question: {
-        request_id: string;
-        questions: QuestionPrompt[];
-      };
-    }
-  | {
-      /** X1/X2: Wasl A2A send-gate — an agent-to-agent handoff awaiting human
-       *  approval. Distinguished from session permission gates by this variant
-       *  (carries `gate_id`, not `request_id`). Answered via `answerWaslGate`
-       *  (host-scoped), not the normal `answerGate` (session-scoped). */
-      Handoff: {
-        /** Wasl-scope gate id — THE identity (unique for the node's process
-         *  lifetime). Used as `decision_id` in GateVM so two concurrent handoff
-         *  gates on the same session don't collapse. */
-        gate_id: string;
-        /** "consult" | "command" | "message" | "transfer" */
-        kind: string;
-        /** Source agent name (the sender). */
-        from: string;
-        /** Short human-readable summary of the outbound send. */
-        summary: string;
-        /** Longer preview (the message body / content extract). */
-        preview: string;
-      };
+      gate_type: "handoff";
+      request_id: string;
+      from_name: string;
+      to_name: string;
+      task: string;
+      payload?: string;
     };
 
-// ---------------------------------------------------------------------------
-// Host (marsad-hosts)
-// ---------------------------------------------------------------------------
+export type GateDecision =
+  | {
+      action: "approve";
+      updated_input?: unknown;
+      permission_updates?: unknown;
+      elicitation_content?: unknown;
+    }
+  | { action: "deny"; reason?: string };
 
-export type HostStatus =
-  | "Connected"
-  | "Connecting"
-  | "Reconnecting"
-  | "Unreachable";
-
-export interface Host {
-  id: string;
-  label: string;
-  target: string;
-  status: HostStatus;
-  session_count: number;
-  is_local: boolean;
-  removable: boolean;
-  /** Per-host claude executable (wrapper / absolute path); null → default `claude`. */
-  claude_bin?: string | null;
-  /** Per-host setup shell command run before claude; null → none. */
-  setup?: string | null;
-  /** Per-host environment, as `[key, value]` pairs. */
-  env?: Array<[string, string]>;
-  /**
-   * Per-driver command overrides as `[driver, command]` pairs.
-   * E.g. `[["codex", "codex --sandbox"], ["opencode", "/opt/opencode/bin/opencode"]]`.
-   * When launching a session, the matching entry is used first; falls back to
-   * `claude_bin` for the "claude" driver, or the bare driver name otherwise.
-   */
-  agent_commands?: Array<[string, string]>;
+export interface QuestionAnswer {
+  /** question text -> selected label(s), comma-joined for multi-select. Empty = skip. */
+  answers: Record<string, string>;
 }
 
-// ---------------------------------------------------------------------------
-// Workspace
-// ---------------------------------------------------------------------------
+// ── wasit-core: AgentEvent (`type`-tagged) ──────────────────────────────────
 
-export interface Workspace {
-  id: string;
+export type AgentEvent =
+  | {
+      type: "session_init";
+      native_session_id?: string;
+      model?: string;
+      cwd?: string;
+      tools?: string[];
+      mcp_servers?: McpServerInfo[];
+      slash_commands?: SlashCommandInfo[];
+      available_modes?: SessionMode[];
+      current_mode?: string;
+      cli_version?: string;
+    }
+  | { type: "turn_started"; native_turn_id?: string }
+  | {
+      type: "turn_completed";
+      end_reason?: EndReason;
+      was_interrupted: boolean;
+      num_turns: number;
+      usage: Usage;
+      per_model?: Record<string, ModelUsage>;
+      reply?: string;
+    }
+  | { type: "assistant_delta"; text: string; message_id?: string }
+  | { type: "thinking_delta"; text: string; message_id?: string }
+  | {
+      type: "tool_call_started";
+      name: string;
+      call_id: string;
+      input: unknown;
+      is_subagent: boolean;
+      subagent_model?: string;
+    }
+  | {
+      type: "tool_call_updated";
+      call_id: string;
+      name: string;
+      content?: unknown[];
+      status?: string;
+    }
+  | { type: "tool_call_finished"; call_id: string; name: string; ok: boolean; result?: unknown }
+  | { type: "gate_requested"; gate: GateRequest }
+  | { type: "gate_resolved"; request_id: string }
+  | { type: "usage_update"; usage: Usage; context_pct?: number }
+  | { type: "plan_updated"; entries: PlanEntry[] }
+  | { type: "modes_updated"; available_modes?: SessionMode[]; current_mode?: string }
+  | { type: "models_updated"; models: ModelInfo[]; current?: string }
+  | { type: "model_changed"; model: string }
+  | { type: "slash_commands_updated"; commands: SlashCommandInfo[] }
+  | { type: "compaction"; info: CompactionInfo }
+  | { type: "rate_limit_notice"; info: RateLimitInfo }
+  | { type: "command_rejected"; command: string; message: string }
+  | { type: "notice"; message: string }
+  | { type: "process_exited"; code?: number }
+  | { type: "unknown"; raw: unknown };
+
+// ── wasit-core: Command (`command`-tagged) ──────────────────────────────────
+
+export type Command =
+  | { command: "prompt"; text: string }
+  | { command: "answer_gate"; request_id: string; decision: GateDecision }
+  | { command: "answer_question"; request_id: string; answer: QuestionAnswer }
+  | { command: "interrupt" }
+  | { command: "set_model"; model: string }
+  | { command: "set_mode"; mode: string }
+  | { command: "run_slash"; name: string; args: string }
+  | { command: "shutdown" };
+
+// ── wasit-runtime: phase, snapshot, events ──────────────────────────────────
+
+/** `state`-tagged. */
+export type Phase =
+  | { state: "starting" }
+  | { state: "idle" }
+  | { state: "working" }
+  | { state: "needs_you" }
+  | { state: "exited"; code?: number }
+  | { state: "failed"; reason: string; stderr_tail?: string[] }
+  | { state: "lost"; reason: string };
+
+export type PhaseKind = Phase["state"];
+
+export interface PendingGate {
+  gate: GateRequest;
+  raised_at_ms: number;
+  cursor: number;
+}
+
+export interface TurnInfo {
+  started_at_ms: number;
+  native_turn_id?: string;
+  prompt?: string;
+  tool_calls: number;
+  last_tool?: string;
+}
+
+export interface TurnOutcome {
+  ended_at_ms: number;
+  end_reason?: EndReason;
+  was_interrupted: boolean;
+  num_turns: number;
+  reply?: string;
+}
+
+export interface SubagentInfo {
+  call_id: string;
   name: string;
-  session_ids: string[];
-  saved_at: string;
-}
-
-// ---------------------------------------------------------------------------
-// Filter / Tab
-// ---------------------------------------------------------------------------
-
-export type Filter = "All" | "Needs" | "Working" | "Error";
-export type Tab = "Activity" | "Changes" | "Config" | "Usage" | "Terminal";
-
-// ---------------------------------------------------------------------------
-// McpServerInfo / SlashCommandInfo (from system/init)
-// ---------------------------------------------------------------------------
-
-export interface McpServerInfo {
-  name: string;
-  status: string;
-}
-
-export interface SlashCommandInfo {
-  name: string;
-  description: string;
-  argument_hint: string;
-}
-
-// ---------------------------------------------------------------------------
-// SessionView — raw from core
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// ModelUsageRow — one row in the per-model usage breakdown
-// ---------------------------------------------------------------------------
-
-export interface ModelUsageRow {
-  model: string;
-  input_tokens: number;
-  output_tokens: number;
-  cost_usd: number;
-  /**
-   * U4 cost truthfulness: `true` when this row's cost was recomputed from
-   * the local litellm/hand pricing table (transcript backfill / usage
-   * probe) rather than copied verbatim from a live, agent-reported
-   * `result.modelUsage` entry. Drives the "estimated"/"~" affordance in the
-   * Usage tab's per-model breakdown table.
-   */
-  estimated: boolean;
-}
-
-/** One subagent entry from the session's Task/Agent tool-use stream. */
-export interface SubagentView {
-  name: string;
-  model?: string | null;
-  /** "Running" or "Done" */
-  status: string;
-}
-
-export interface SessionView {
-  id: string;
-  name: string;
-  host_id: string;
-  project: string;
-  branch: string;
-  model: string;
-  state: Phase;
-  changed_files: number;
-  subagents: number;
-  /** Number of currently running (in-progress) subagents. */
-  running_subagents: number;
-  /** Per-subagent detail list (running first, then done). Empty before first Task tool-use. */
-  subagent_list: SubagentView[];
-  /** True while an async `!` shell command is running (show a working indicator). */
-  shell_running?: boolean;
-  cost_usd: number;
-  tokens: number;
-  context_pct: number;
-  gate: Gate | null;
-  transcript: TranscriptEntry[];
-  changes: FileChange[];
-  model_usage: ModelUsageRow[];
-  /**
-   * U4 cost truthfulness: `true` when `cost_usd` has never been set by a
-   * live agent-reported `result` event and is backed only by the
-   * litellm/hand pricing table (transcript backfill / usage probe) — i.e.
-   * every row in `model_usage` is `estimated`. `false` once any live
-   * `result` has landed (or before any cost data exists at all). Drives the
-   * Usage tab's "estimated"/"~" affordance on the top Cost tile.
-   */
-  cost_estimated: boolean;
-  /** Tools available in this session (from system/init). Empty before first init. */
-  tools: string[];
-  /** MCP servers connected in this session (from system/init). */
-  mcp_servers: McpServerInfo[];
-  /** Slash commands available in this session (from system/init). */
-  slash_commands: SlashCommandInfo[];
-  /** The agent driver running THIS session ("claude"/"codex"/…). The header
-   *  labels the session by this, not the host's first capability driver. */
-  driver?: string;
-  /** Count of context compactions this session (system/compact_boundary events). */
-  compactions: number;
-  /** Metadata of the most recent compaction, if any. */
-  last_compaction: CompactMetadata | null;
-  /** Most recent rate-limit info, if the session has hit one. */
-  rate_limit: RateLimitInfo | null;
-  /**
-   * Why the last turn ended, when noteworthy: a user Cancel (with `state:"Done"`)
-   * or a real failure (`state:"Error"`). Drives the card's reason text so an
-   * Error card is never blank and a cancel reads "Cancelled by the user".
-   * `null`/absent for a normal turn or while working.
-   */
-  end_reason?: EndReason | null;
-  /**
-   * Lifecycle liveness (two-axis model): `true` = Resumed (the process is alive
-   * on its host — survives UI close / connection drop / app restart), `false` =
-   * Paused (not running, for ANY reason: the user paused it, or the host killed
-   * it — reboot / OOM / scheduler / crash). Authoritative from the agent, NOT
-   * inferred from `state`: a finished-but-alive session is `state:"Done",
-   * live:true`. Drives the Pause↔Resume affordance, the Paused grouping, and
-   * spinner suppression. Optional for back-compat with older snapshots; treat
-   * a missing value as `true` (Resumed).
-   */
-  live?: boolean;
-  /**
-   * Per-session CONNECTION health, independent of `live`: "Connected",
-   * "Reconnecting" (stream dropped, auto-reattaching), or "Unstable" (flapping).
-   * Driven by the agent's real stream events, not the periodic host poll. The UI
-   * shows this and HARD-BLOCKS sending when it's not "Connected" (or when paused).
-   * Optional for back-compat; treat a missing value as "Connected".
-   */
-  conn_health?: "Connected" | "Reconnecting" | "Unstable" | "Disconnected";
-  /**
-   * ACP plan entries from `session/update{plan}` — the live plan/todo list.
-   * Each entry has a `content` string and a `priority` ("critical"|"high"|
-   * "medium"|"low"). Optional for back-compat; absent when no plan has been
-   * received yet (non-opencode sessions, or opencode sessions in build mode).
-   */
-  plan_entries?: { content: string; priority: string }[];
-  /**
-   * Current mode id from ACP `current_mode_update` (e.g. "plan"|"build").
-   * Optional for back-compat; absent before the first mode update.
-   */
-  current_mode?: string;
-  /**
-   * Available agent modes for this session, agent-reported (opencode's
-   * configOptions, claude's version-derived list). The Config panel renders
-   * these instead of a hardcoded mode list; `current_mode` marks the active
-   * one. Absent/empty before the first init/config.
-   */
-  available_modes?: SessionMode[];
-}
-
-/** One selectable agent mode, exactly as the agent reports it. */
-export interface SessionMode {
-  id: string;
-  label: string;
+  model?: string;
   description?: string;
+  started_at_ms: number;
+  running: boolean;
+  ok?: boolean;
 }
 
-/** Mirrors marsad_proto::CompactMetadata — one context-compaction event. */
-export interface CompactMetadata {
-  trigger: string;
-  pre_tokens: number;
-  post_tokens: number;
-  cumulative_dropped_tokens: number;
-  duration_ms: number;
+export interface ExitSummary {
+  code?: number;
+  signal?: number;
+  at_ms: number;
+  requested: boolean;
 }
 
-/** Mirrors marsad_proto::RateLimitInfo — a rate_limit_event's payload. */
-export interface RateLimitInfo {
-  status: string;
-  resets_at: number;
-  rate_limit_type: string;
-  overage_status: string;
-  is_using_overage: boolean;
+export interface SessionSnapshot {
+  id: SessionId;
+  driver: DriverId;
+  cwd?: string;
+  labels?: Record<string, string>;
+  created_at_ms: number;
+  capabilities: DriverCapabilities;
+  phase: Phase;
+  generation: number;
+  pid?: number;
+  native_session_id?: string;
+  /** The first prompt, truncated. */
+  title?: string;
+  cli_version?: string;
+  model?: string;
+  mode?: string;
+  available_models: ModelInfo[];
+  available_modes: SessionMode[];
+  slash_commands: SlashCommandInfo[];
+  pending_gates: PendingGate[];
+  turn?: TurnInfo;
+  last_turn?: TurnOutcome;
+  turns_completed: number;
+  usage: Usage;
+  live_usage?: Usage;
+  context_pct?: number;
+  subagents: SubagentInfo[];
+  plan: PlanEntry[];
+  last_activity_ms: number;
+  exit?: ExitSummary;
+  stderr_tail: string[];
+  cursor: number;
+  loaded: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// TranscriptEntry — one rendered conversation line (matches Rust, role-tagged)
-// ---------------------------------------------------------------------------
+export type CommandStatus =
+  | { status: "sent" }
+  | { status: "queued" }
+  | { status: "unsupported"; operation: string }
+  | { status: "rejected"; reason: string }
+  | { status: "not_running"; reason: string };
 
-// `at` is epoch milliseconds when known (live entries stamped on arrival;
-// resumed entries carry the JSONL time). Absent for entries with no known time.
-export type TranscriptEntry =
-  | { role: "assistant"; text: string; at?: number | null }
-  | { role: "user"; text: string; at?: number | null }
-  | { role: "tool"; name: string; input: string; at?: number | null }
-  | { role: "compaction"; trigger: string; dropped_tokens: number; at?: number | null };
+/** Flattened: `{cursor, t, kind, ...payload}`. */
+export type SessionEventKind =
+  | { kind: "spawned"; generation: number; pid?: number; argv?: string[] }
+  | { kind: "agent"; event: AgentEvent }
+  | { kind: "input"; command: Command; status: CommandStatus }
+  | { kind: "stderr"; text: string }
+  | { kind: "phase"; phase: Phase }
+  | { kind: "exited"; code?: number; signal?: number }
+  | { kind: "lost"; reason: string }
+  | { kind: "notice"; message: string };
 
-// ---------------------------------------------------------------------------
-// FileChange — one changed file from the git probe
-// ---------------------------------------------------------------------------
+export type SessionEvent = { cursor: number; t: number } & SessionEventKind;
 
-export interface FileChange {
-  path: string;
-  status: string;
-  added: number;
-  removed: number;
+// ── requests / replies ──────────────────────────────────────────────────────
+
+export interface SessionRef {
+  id: SessionId;
+}
+export interface SessionList {
+  sessions: SessionSnapshot[];
+}
+export interface HistoryRequest {
+  id: SessionId;
+  before?: number;
+  limit: number;
+}
+export interface HistoryPage {
+  /** Oldest first. */
+  events: SessionEvent[];
+  has_more: boolean;
+}
+export interface CommandRequest {
+  id: SessionId;
+  command: Command;
+}
+export type CommandOutcome = "sent" | "queued";
+export interface CommandReply {
+  outcome: CommandOutcome;
+}
+export type ResumeRequest = { kind: "new" } | { kind: "continue"; native_session_id: string };
+export interface CreateSession {
+  driver: DriverId;
+  cwd?: string;
+  model?: string;
+  mode?: string;
+  first_prompt?: string;
+  resume?: ResumeRequest;
+  config?: Record<string, unknown>;
+  labels?: Record<string, string>;
+}
+export interface CreateSessionReply {
+  id: SessionId;
+  unsupported: unknown[];
+}
+export type Ack = Record<string, never>;
+
+/** `kind`-tagged. */
+export type HostEvent =
+  | { kind: "reset"; sessions: SessionSnapshot[] }
+  | { kind: "upsert"; session: SessionSnapshot }
+  | { kind: "removed"; id: SessionId };
+
+export interface DriverSummary {
+  id: DriverId;
+  display_name: string;
+  capabilities: DriverCapabilities;
 }
 
-// ---------------------------------------------------------------------------
-// AppSnapshot
-// ---------------------------------------------------------------------------
-
-export interface AppSnapshot {
-  sessions: SessionView[];
-  hosts: Host[];
-  workspaces: Workspace[];
-  active_ws: string | null;
-  selected_id: string | null;
-  filter: Filter;
-  search: string;
-  tab: Tab;
+export interface HostInfo {
+  host_id: string;
+  build: string;
+  pid: number;
+  started_at_ms: number;
+  data_dir: string;
+  os: string;
+  arch: string;
+  drivers: DriverSummary[];
 }
 
-// ---------------------------------------------------------------------------
-// Counts (computed from snapshot on TS side for display)
-// ---------------------------------------------------------------------------
-
-export interface Counts {
-  total: number;
-  needs: number;
-  errors: number;
-  working: number;
-  cost: string;
-  /**
-   * U4 cost truthfulness: `true` when every session contributing to `cost`
-   * is backfill-only (`cost_estimated: true`) — i.e. no live agent-reported
-   * cost has landed for ANY of them yet. Drives the "~"/"estimated"
-   * affordance on the Overview "Cost today" tile.
-   */
-  cost_estimated: boolean;
-  tokens: string;
-  host_count: number;
-}
-
-// ---------------------------------------------------------------------------
-// SessionCard / SessionRow (display-ready)
-// ---------------------------------------------------------------------------
-
-export interface SessionCard {
+export interface ResumableSession {
   id: string;
-  name: string;
-  state: Phase;
-  host_label: string;
-  project: string;
-  branch: string;
-  gate_kind: string | null;
-  gate_summary: string | null;
-  last_action: string | null;
-  context_pct: number;
-  tokens_label: string;
-  elapsed_label: string;
-  /** Completed subagent count (mirrors SessionView.subagents). */
-  subagents: number;
-  /** Currently-running subagent count (mirrors SessionView.running_subagents). */
-  running_subagents: number;
-}
-
-export type SessionRow = SessionCard;
-
-// ---------------------------------------------------------------------------
-// OverviewGroups
-// ---------------------------------------------------------------------------
-
-export interface OverviewGroups {
-  attention: SessionCard[];
-  active: SessionCard[];
-  idle: SessionCard[];
-}
-
-// ---------------------------------------------------------------------------
-// SessionDetailVM
-// ---------------------------------------------------------------------------
-
-export interface SessionDetailVM {
-  name: string;
-  host_label: string;
-  branch: string;
-  model: string;
-  ctx_warn: boolean;
-  context_pct: number;
-  tokens_label: string;
-  cost_label: string;
-  elapsed_label: string;
-}
-
-// ---------------------------------------------------------------------------
-// CostRow / WorkstreamCostBreakdown — mirrors marsad-viewmodel's
-// `CostRow`/`WorkstreamCostBreakdown` (SLICE G, crates/marsad-viewmodel/src/lib.rs).
-// Powers the Usage tab's "Cost breakdown" — By host / By node.
-// ---------------------------------------------------------------------------
-
-/** One row of the workstream cost breakdown ("By host" / "By node"): a
- *  group's total cost, the distinct drivers contributing to it, its share of
- *  the workstream total, and whether it is backed only by estimated
- *  (litellm/hand-table backfill) cost rather than any live, agent-reported
- *  cost. */
-export interface CostRow {
-  /** Group identity: a host id (`by_host`) or a node/session id (`by_node`). */
-  key: string;
-  /** Display label: the host id (`by_host`) or the node's display name (`by_node`). */
-  label: string;
-  /** Distinct drivers contributing to this group, first-appearance order
-   *  (a `by_node` row is always a single-element array). */
-  driver_dots: Driver[];
-  /** Summed `cost_usd` of every contributing session. */
-  cost_usd: number;
-  /** This group's share of the workstream total, `0..=100`. */
-  pct: number;
-  /** `true` only when this group has at least one contributing session AND
-   *  every one of them is estimated-only (U4 cost truthfulness). */
-  estimated: boolean;
-}
-
-/** The full cost breakdown for one workstream's sessions, grouped by host and
- *  by node/session (Usage tab's "Cost breakdown" box). */
-export interface WorkstreamCostBreakdown {
-  /** Sum of `cost_usd` across every session in the workstream. */
-  total_cost_usd: number;
-  /** `true` only when every session in the workstream is estimated-only. */
-  total_estimated: boolean;
-  /** Grouped by host id, sorted by cost descending. */
-  by_host: CostRow[];
-  /** One row per node/session, sorted by cost descending. */
-  by_node: CostRow[];
-}
-
-// ---------------------------------------------------------------------------
-// GateVM
-// ---------------------------------------------------------------------------
-
-export interface SideCell {
-  ln: string;
-  sig: string;
-  sigColor: string;
-  text: string;
-  fg: string;
-  bg: string;
-}
-
-export interface SideRow {
-  l: SideCell;
-  r: SideCell;
-}
-
-export interface GateVM {
-  kind: string;
-  icon: string;
-  lead: string;
-  summary: string;
-  /** Unique id for THIS gate occurrence — the control-request id for a
-   *  permission gate. Used as the decision id so distinct gates in one session
-   *  aren't collapsed by idempotency dedup. */
-  decision_id: string;
-  /** Still read by Changes.tsx to fold an edit gate's diff into the Changes tab.
-   *  The other per-kind flags were dropped when GateOverlay stopped branching on
-   *  kind (normalizeGate keys off the raw Gate union instead). */
-  is_edit: boolean;
-  diff_rows: SideRow[];
-}
-
-// ---------------------------------------------------------------------------
-// Settings — mirrors PersistedSettings / NotifPref in marsad-store
-// ---------------------------------------------------------------------------
-
-export interface NotifPref {
-  enabled: boolean;
-  priority: "urgent" | "normal" | "low";
-  sound: boolean;
-  group: boolean;
-  dnd: boolean;
-}
-
-export interface Settings {
-  /** Per-event notification prefs, keyed by NotifEvent name. */
-  notif_prefs: Record<string, NotifPref>;
-  play_sound: boolean;
-  group_alerts: boolean;
-  do_not_disturb: boolean;
-  background: string;
-  restore_on_launch: boolean;
-  confirm_before_stop: boolean;
-  default_model: string;
-  /**
-   * Default agent driver for new sessions ("claude" | "codex" | "opencode").
-   * Absent in older persisted settings → defaults to "claude".
-   */
-  default_driver?: string;
-  /**
-   * Per-driver default model slugs, as `[driver, model_slug]` pairs.
-   * E.g. `[["codex", "codex-mini-latest"]]`.
-   * Falls back to `default_model` for the "claude" driver if absent.
-   */
-  default_models?: Array<[string, string]>;
-  /**
-   * Per-driver default mode ids, as `[driver, mode_id]` pairs.
-   * E.g. `[["claude", "plan"], ["opencode", "build"]]`.
-   * Empty list = no preference (backend default is used).
-   */
-  default_modes?: Array<[string, string]>;
-}
-
-// ---------------------------------------------------------------------------
-// SlashEntry
-// ---------------------------------------------------------------------------
-
-export interface SlashEntry {
-  name: string;
-  desc: string;
-}
-
-// ---------------------------------------------------------------------------
-// SessionSummary — returned by list_sessions command
-// ---------------------------------------------------------------------------
-
-export interface SessionSummary {
-  id: string;
-  snippet: string;
-  modified: number; // epoch ms
-}
-
-// ---------------------------------------------------------------------------
-// PersistedTemplate — named config template (model + mode)
-// ---------------------------------------------------------------------------
-
-export interface PersistedTemplate {
-  name: string;
-  model: string;
-  mode: string;
-}
-
-// ---------------------------------------------------------------------------
-// Workstream — mirrors marsad-workstream::Workstream (id/name/goal/profile)
-// ---------------------------------------------------------------------------
-
-export interface Workstream {
-  id: string;
-  name: string;
-  goal: string;
-  profile?: string | null;
-}
-
-// ---------------------------------------------------------------------------
-// Profile — mirrors marsad-workstream::Profile
-// ---------------------------------------------------------------------------
-
-export interface Profile {
-  id: string;
-  name: string;
-}
-
-// ---------------------------------------------------------------------------
-// Connection — mirrors marsad-workstream::Connection
-// ---------------------------------------------------------------------------
-
-export interface Connection {
-  id: string;
-  ws: string;
-  from: string;
-  to: string;
-  /** `bi=false` → Directed (from drives to), `bi=true` → Consult (mutual).
-   *  Direction is the only edge axis (post-#7 — no "kind"). */
-  bi: boolean;
-  has_gate?: boolean;
-}
-
-// ---------------------------------------------------------------------------
-// Capabilities — TS mirror of marsad-proto's Capabilities/ModelCatalog/
-// DiscoveredSession/SessionScope + marsad-viewmodel's CapabilitiesView
-// (U1/U2, docs/specs/dynamic-capabilities.md §1/§3.6). Field names/shapes are
-// verbatim mirrors of the Rust serde JSON — no renaming, no label synthesis.
-// ---------------------------------------------------------------------------
-
-/** Provenance of a model catalog — drives the UI's "unverified list" treatment. */
-export type ModelListSource = "Listed" | "Observed";
-
-/** One selectable model, exactly as the driver reports it. Ids are verbatim —
- *  never normalized (model names may contain spaces/parens). */
-export interface ModelInfo {
-  id: string;
-  annotation?: string | null;
-}
-
-export interface ModelCatalog {
-  models: ModelInfo[];
-  source: ModelListSource;
-  /** UI must additionally offer a free-text model field when true. */
-  free_text: boolean;
-}
-
-/** One resumable past session discovered on the host. */
-export interface DiscoveredSession {
-  id: string;
-  /** None where the store doesn't record it retrievably (e.g. codex). */
-  project?: string | null;
-  snippet: string;
+  project?: string;
+  title: string;
   modified_ms: number;
 }
 
-/** Serializes as the bare string `"AllKnown"` or `{"Projects": [...]}`. */
-export type SessionScope = "AllKnown" | { Projects: string[] };
-
-/** Display-ready mirror of `marsad_viewmodel::CapabilitiesView` — the unit of
- *  caching/wire-transfer/VmUpdate for one (driver, host) pair. */
-export interface CapabilitiesView {
-  driver: string;
-  host_id: string;
-  cli_available: boolean;
-  /** Whether `wasl-mcpd` was detected on this host (host-global; carried on
-   *  every driver's caps). A managed `wasl-*` driver is offered only when BOTH
-   *  its native CLI (`cli_available`) AND this are true. Defaults to false on
-   *  old snapshots without the field. */
-  wasl_available?: boolean;
-  /** Whether Marsad has a launch driver for this driver (claude/codex → true) —
-   *  carried verbatim from `marsad_proto::Capabilities`. A
-   *  driver that isn't launchable is never offered even if its CLI is present. */
-  launchable: boolean;
-  models: ModelCatalog;
-  session_scope: SessionScope | null;
-  sessions: DiscoveredSession[];
-  /** Unix epoch ms of the last successful probe; 0 = never (honest unknown). */
-  fetched_at_ms: number;
-  errors: string[];
-  /** Agent modes available for this driver, capability-reported. Empty when the driver exposes no modes. */
-  available_modes?: SessionMode[];
+export interface DriverInventory {
+  driver: DriverId;
+  display_name: string;
+  capabilities: DriverCapabilities;
+  installed: boolean;
+  binary_path?: string;
+  error?: string;
+  version?: string;
+  models: ModelInfo[];
+  modes: SessionMode[];
+  sessions: ResumableSession[];
+  project?: string;
+  refreshing: boolean;
+  probes: { kind: string; ok: boolean; error?: string; duration_ms: number }[];
+  refreshed_at_ms: number;
+}
+export interface InventoryReply {
+  drivers: DriverInventory[];
 }
 
-// ---------------------------------------------------------------------------
-// VmUpdate event from Tauri
-// ---------------------------------------------------------------------------
-
-export type VmUpdateEvent =
-  | { kind: "overview"; groups: OverviewGroups }
-  | { kind: "session"; session: SessionView }
-  | { kind: "session_removed"; id: string }
-  | { kind: "toast"; icon: string; text: string }
-  | { kind: "host_health"; host_id: string; status: string }
-  | { kind: "hosts"; hosts: Host[] }
-  | { kind: "workspaces"; workspaces: Workspace[] }
-  | { kind: "workstreams"; workstreams: Workstream[] }
-  | { kind: "board"; board: BoardView }
-  | { kind: "capabilities"; capabilities: CapabilitiesView }
-  | { kind: "wasl_gates"; gates: WaslGateView[] }
-  | {
-      kind: "wasl_gate_decided";
-      host_id: string;
-      gate_id: string;
-      outcome: string;
-      decided_by: string;
-      reason: string | null;
-    }
-  | { kind: "wasl_observation"; host_id: string; entry: WaslAuditEntry };
-
-// ---------------------------------------------------------------------------
-// Pty event from Tauri (WAVE 3b escape-hatch terminal) — a SEPARATE event
-// channel ("pty", not "vm-update"): raw terminal bytes have no business
-// meaning for the board/session/workstream VM the `VmUpdateEvent` union
-// above models, so they are not folded into it (see the Rust
-// `events::emit_pty_update` doc comment for the full rationale).
-// ---------------------------------------------------------------------------
-
-export type PtyEvent =
-  /** `data` is base64 of raw pty output bytes (arbitrary — control
-   *  sequences, mid-multibyte-UTF-8 reads) — decode and feed straight to
-   *  xterm.js's `Terminal.write` (which accepts a `Uint8Array`). */
-  | { kind: "pty_output"; session_id: string; terminal_id: string; data: string }
-  /** The pty's child process exited; `code` is `-1` if it could not even be
-   *  spawned. */
-  | { kind: "pty_exit"; session_id: string; terminal_id: string; code: number };
-
-/**
- * X5 — a pending Wasl handoff gate surfaced to the human (mirrors
- * marsad-core WaslGateView). Marsad displays it and RELAYS the human's
- * approve/deny; it never auto-answers.
- */
-export interface WaslGateView {
-  host_id: string;
-  gate_id: string;
-  kind: string;
-  from: string;
-  summary: string;
-  preview: string;
-  requested_at: string;
-  deadline: string;
+/** Error shape of `request` rejections. `code` is one of wire.rs `codes` / wasit_control codes. */
+export interface RpcError {
+  code: string;
+  message: string;
+  data?: unknown;
 }
 
-/** One Wasl observation-feed entry (mirrors marsad_wasl::AuditEntry). */
-export interface WaslAuditEntry {
-  seq: number;
-  kind: string;
-  actor: string;
-  targets: string[];
-  summary: string;
+export const methods = {
+  HOST_INFO: "host.info",
+  DRIVERS_INVENTORY: "drivers.inventory",
+  SESSIONS_LIST: "sessions.list",
+  SESSIONS_CREATE: "sessions.create",
+  SESSIONS_CONTINUE: "sessions.continue",
+  SESSIONS_STOP: "sessions.stop",
+  SESSION_SNAPSHOT: "session.snapshot",
+  SESSION_HISTORY: "session.history",
+  SESSION_COMMAND: "session.command",
+  /** PROVISIONAL: workstream handoff decision. */
+  HANDOFF_DECIDE: "handoff.decide",
+} as const;
+
+export const topics = {
+  HOST_SESSIONS: "host.sessions",
+  sessionEvents: (id: SessionId) => `session.events:${id}`,
+} as const;
+
+// ── frontend-only: connection state (not wire) ──────────────────────────────
+
+export type LinkState = "connected" | "connecting" | "reconnecting" | "offline";
+
+export interface HostLink {
+  id: HostId;
+  name: string;
+  /** "local" for the machine the app runs on, "ssh" for remote. */
+  where: "local" | "ssh";
+  os?: string;
+  link: LinkState;
+  /** ms until the next reconnect attempt, while `reconnecting`. */
+  retry_in_ms?: number;
+  error?: string;
 }
