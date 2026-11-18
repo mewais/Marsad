@@ -12,6 +12,7 @@
     "test": "node --disable-wasm-trap-handler node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "test:watch": "node --disable-wasm-trap-handler node_modules/vitest/vitest.mjs --config vitest.config.ts",
     "test:e2e": "playwright test --trace off",
+    "test:real": "xvfb-run -a -s '-screen 0 1600x1000x24' dbus-run-session node e2e-real/run.mjs",
     "tauri": "tauri",
     "stage-sidecars": "node scripts/stage-sidecars.mjs",
     "bundle": "node scripts/stage-sidecars.mjs && tauri build --config src-tauri/tauri.bundle.conf.json",

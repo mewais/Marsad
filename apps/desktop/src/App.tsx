@@ -50,6 +50,10 @@ export function App({ backend, history }: { backend?: Backend; history?: History
   const hist = useMemo(() => history ?? hashHistory(), [history]);
   useEffect(() => installShortcuts(), []);
   useEffect(() => app.dispose, [app]);
+  // Read-only view of the state for the end-to-end suite and for debugging in the webview.
+  useEffect(() => {
+    (window as unknown as { __marsad?: unknown }).__marsad = { state: () => app.store.get() };
+  }, [app]);
   return (
     <AppProvider value={app}>
       <RouterProvider history={hist}>

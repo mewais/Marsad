@@ -1,3 +1,4 @@
+import { toast } from "../../../ui/toast";
 import { useEffect, useRef, useState } from "react";
 import { errorMessage } from "../../../bridge/api";
 import { splitKey } from "../../../bridge/wire";
@@ -30,11 +31,29 @@ export function TerminalTab({ sessionKey }: { sessionKey: string }) {
         cleanup.push(() => term.dispose());
         setState({ kind: "open", pty: info.id });
         const off = api.pty.output(host, info.id, 0, (e) => {
-          if (e.kind === "output") term.write(e.data);
+          // `data` is the raw terminal bytes, base64 (marsad-proto `PtyEvent::Output`).
+          if (e.kind === "output") term.write(base64Bytes(e.data));
           else setState({ kind: "exited", code: e.code ?? null });
         });
         cleanup.push(off);
-        const sub = term.onData((d) => void api.pty.input(host, info.id, d).catch(() => undefined));
+        // Keystrokes go out strictly in order: one request at a time, typed-ahead input coalesced
+        // (concurrent requests may be served out of order).
+        let pending = "";
+        let sending = false;
+        const flush = async () => {
+          if (sending) return;
+          sending = true;
+          while (pending && !disposed) {
+            const chunk = pending;
+            pending = "";
+            await api.pty.input(host, info.id, chunk).catch((e) => toast({ tone: "err", title: "Could not send input to the terminal", detail: errorMessage(e) }));
+          }
+          sending = false;
+        };
+        const sub = term.onData((d) => {
+          pending += d;
+          void flush();
+        });
         cleanup.push(() => sub.dispose());
         const resize = () => {
           fit.fit();
@@ -70,4 +89,11 @@ export function TerminalTab({ sessionKey }: { sessionKey: string }) {
       <div ref={box} className="xterm-box" aria-label="Terminal" />
     </div>
   );
+}
+
+function base64Bytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
