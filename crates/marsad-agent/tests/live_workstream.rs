@@ -220,3 +220,142 @@ async fn live_claude_orchestrates_opencode_and_kilo() {
             .status();
     }
 }
+
+/// Live: a claude session (cheapest model) in no workstream spawns an opencode worker (free
+/// model) through `spawn_agent` and has it answer 6×7. Every spawn and handoff gate is allowed
+/// once, as a client would; claude's own permission prompts are allowed too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn live_claude_spawns_an_opencode_worker() {
+    if !enabled() {
+        eprintln!("skipped: set MARSAD_LIVE=1");
+        return;
+    }
+    let d = TempDir::new();
+    let mut cfg = marsad_client::ClientConfig::new(
+        d.path().join("l"),
+        wasit_control::Hello::new("test", "gui", "gui"),
+    );
+    cfg.agent_bin = Some(agent());
+    cfg.serve_args = vec!["--host-id".into(), "hub".into()];
+    let c = marsad_client::MarsadClient::connect(cfg);
+    let work = d.path().join("w");
+    std::fs::create_dir_all(&work).unwrap();
+    let mut req = marsad_proto::agentconfig::LaunchRequest::new("claude");
+    req.cwd = Some(work.to_string_lossy().into_owned());
+    req.model = Some("haiku".into());
+    req.first_prompt = Some(
+        "Use the wasl `spawn_agent` tool to spawn an opencode worker: name \"calc\", role \
+         \"answers arithmetic\", driver \"opencode\", model \"opencode/deepseek-v4.1-flash-free\", \
+         instruction \"What is 6*7? Reply with just the number.\". Then call `task_wait` on the \
+         returned task id (timeout_secs 300) and reply with only the number the worker answered."
+            .into(),
+    );
+    let solo = c.launch(req).await.unwrap();
+    let rt = c.runtime(None);
+    let mut sub = rt.subscribe_session(&solo.id, None);
+    let mut answered = std::collections::HashSet::new();
+    let (mut spawn_gates, mut handoffs) = (0, 0);
+    let reply = tokio::time::timeout(Duration::from_secs(900), async {
+        loop {
+            // The worker's own permission prompts are allowed too.
+            for w in rt
+                .list()
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|s| s.id != solo.id)
+            {
+                for g in &w.pending_gates {
+                    let rid = g.gate.request_id().to_string();
+                    if answered.insert(rid.clone()) {
+                        eprintln!("worker asks: {:?}", g.gate);
+                        if let Some(dec) =
+                            GateDecision::by_kind(&g.gate, &[GateChoiceKind::AllowOnce])
+                        {
+                            let _ = rt
+                                .command(
+                                    &w.id,
+                                    Command::AnswerGate {
+                                        request_id: rid,
+                                        decision: dec,
+                                    },
+                                )
+                                .await;
+                        }
+                    }
+                }
+            }
+            let snap = rt.snapshot(&solo.id).await.unwrap();
+            for g in &snap.pending_gates {
+                let rid = g.gate.request_id().to_string();
+                if !answered.insert(rid.clone()) {
+                    continue;
+                }
+                let kind = match &g.gate {
+                    GateRequest::Spawn {
+                        name,
+                        driver,
+                        model,
+                        ..
+                    } => {
+                        spawn_gates += 1;
+                        eprintln!("spawn gate: {name} ({driver}, {model:?})");
+                        GateChoiceKind::AllowOnce
+                    }
+                    GateRequest::Handoff { .. } => {
+                        handoffs += 1;
+                        GateChoiceKind::AllowOnce
+                    }
+                    other => {
+                        eprintln!("claude asks: {other:?}");
+                        GateChoiceKind::AllowOnce
+                    }
+                };
+                if let Some(dec) = GateDecision::by_kind(&g.gate, &[kind]) {
+                    rt.command(
+                        &solo.id,
+                        Command::AnswerGate {
+                            request_id: rid,
+                            decision: dec,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+            if snap.phase.name() == "idle" {
+                if let Some(r) = snap.last_turn.as_ref().and_then(|t| t.reply.clone()) {
+                    return r;
+                }
+            }
+            if matches!(snap.phase.name(), "failed" | "exited") {
+                panic!("orchestrator ended: {:?}", snap.phase);
+            }
+            // The orchestrator's events, or a worker's (bounded: workers are not subscribed).
+            let _ = tokio::time::timeout(Duration::from_secs(2), sub.next()).await;
+        }
+    })
+    .await
+    .expect("the live spawn finished in time");
+    eprintln!(
+        "orchestrator replied: {reply:?} (spawn gates {spawn_gates}, handoff gates {handoffs})"
+    );
+    let all = c.workstreams().await.unwrap();
+    eprintln!(
+        "workstreams: {:?}",
+        all.iter()
+            .map(|w| (&w.name, w.nodes.len()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(spawn_gates, 1);
+    assert!(reply.contains("42"), "{reply}");
+    assert!(all
+        .iter()
+        .any(|w| w.nodes.iter().any(|n| n.spawned_by.is_some()
+            && n.launch
+                .as_ref()
+                .is_some_and(|l| l.driver.as_str() == "opencode"))));
+    let pid = c.daemon_info(None).await.unwrap().pid;
+    stop_pid(pid);
+}
