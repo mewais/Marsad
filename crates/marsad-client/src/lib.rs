@@ -569,6 +569,42 @@ impl MarsadClient {
         Ok(())
     }
 
+    /// Answer a sign-in prompt (the answer goes to ssh only; never logged or stored).
+    pub async fn answer_auth(
+        &self,
+        host: &HostId,
+        id: u64,
+        answer: &str,
+    ) -> Result<(), ClientError> {
+        let _: Ack = self
+            .call(
+                None,
+                methods::HOSTS_AUTH_ANSWER,
+                marsad_proto::hosts::AuthAnswer {
+                    host: host.clone(),
+                    id,
+                    answer: answer.into(),
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Give up a sign-in prompt (the link goes `auth_needed`).
+    pub async fn cancel_auth(&self, host: &HostId, id: u64) -> Result<(), ClientError> {
+        let _: Ack = self
+            .call(
+                None,
+                methods::HOSTS_AUTH_CANCEL,
+                marsad_proto::hosts::AuthCancel {
+                    host: host.clone(),
+                    id,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn import_suggestions(&self) -> Result<ImportSuggestions, ClientError> {
         self.call(None, methods::HOSTS_IMPORT_SUGGESTIONS, ()).await
     }

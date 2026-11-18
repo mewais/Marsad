@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use futures::stream::StreamExt;
 use marsad_proto::fleet::{FleetEvent, FleetHost, FleetLink};
-use marsad_proto::hosts::HostEntry;
+use marsad_proto::hosts::{AuthPrompt, HostEntry};
 use marsad_proto::{HostId, LinkState};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use wasit_control::{CloseReason, Cursor, DurableOpts, EventStream, Hub, RpcError, Supervised};
@@ -33,6 +33,7 @@ enum Input {
     HostRemoved(HostId),
     Link(HostId, LinkState),
     Feed(HostId, HostEvent),
+    Prompt(HostId, Option<AuthPrompt>),
     Subscribe(Option<String>, oneshot::Sender<Subscribed>),
     Snapshot(oneshot::Sender<Vec<FleetHost>>),
 }
@@ -82,6 +83,7 @@ impl State {
                                 link,
                                 sessions_live: live,
                                 sessions: Vec::new(),
+                                auth_prompt: None,
                             },
                         );
                     }
@@ -127,6 +129,13 @@ impl State {
                         self.emit(FleetEvent::SessionRemoved { host: id, id: sid });
                     }
                 }
+            }
+            Input::Prompt(id, prompt) => {
+                let Some(h) = self.hosts.get_mut(&id) else {
+                    return;
+                };
+                h.auth_prompt = prompt.clone();
+                self.emit(FleetEvent::AuthPrompt { host: id, prompt });
             }
             Input::Subscribe(from, reply) => {
                 let first = self.ring.front().map(|(n, _)| *n).unwrap_or(self.next + 1);
@@ -186,6 +195,10 @@ impl Fleet {
 
     pub async fn host_upserted(&self, entry: HostEntry, link: FleetLink) {
         self.send(Input::HostUpserted(entry, link)).await
+    }
+
+    pub async fn auth_prompt(&self, id: HostId, prompt: Option<AuthPrompt>) {
+        self.send(Input::Prompt(id, prompt)).await
     }
 
     pub async fn host_removed(&self, id: HostId) {

@@ -181,14 +181,20 @@ fn keygen(path: &Path) {
 
 impl Sshd {
     pub fn start(dir: &Path) -> Sshd {
+        Self::start_custom(dir, "ssh", "", true)
+    }
+
+    /// `extra` sshd_config lines take precedence (sshd uses the first value of a keyword);
+    /// `env_home`: the authorized key logs in with the separate remote HOME and fake PATH.
+    pub fn start_custom(dir: &Path, name: &str, extra: &str, env_home: bool) -> Sshd {
         let sshd = ["/usr/sbin/sshd", "/usr/local/sbin/sshd"]
             .into_iter()
             .map(PathBuf::from)
             .find(|p| p.is_file())
             .expect("remote-host tests need sshd (apt-get install openssh-server)");
-        let dir = dir.join("ssh");
+        let dir = dir.join(name);
         std::fs::create_dir_all(&dir).unwrap();
-        let remote_home = dir.parent().unwrap().join("rh");
+        let remote_home = dir.parent().unwrap().join(format!("rh-{name}"));
         std::fs::create_dir_all(&remote_home).unwrap();
         let fakebin = dir.join("bin");
         std::fs::create_dir_all(&fakebin).unwrap();
@@ -199,14 +205,15 @@ impl Sshd {
         keygen(&wrong);
         let pubkey = std::fs::read_to_string(key.with_extension("pub")).unwrap();
         let path = format!("{}:/usr/local/bin:/usr/bin:/bin", fakebin.display());
-        std::fs::write(
-            dir.join("authorized_keys"),
+        let ak = if env_home {
             format!(
                 "environment=\"HOME={}\",environment=\"PATH={path}\" {pubkey}",
                 remote_home.display()
-            ),
-        )
-        .unwrap();
+            )
+        } else {
+            pubkey.clone()
+        };
+        std::fs::write(dir.join("authorized_keys"), ak).unwrap();
         let port = {
             let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             l.local_addr().unwrap().port()
@@ -214,7 +221,7 @@ impl Sshd {
         std::fs::write(
             dir.join("sshd_config"),
             format!(
-                "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nAuthorizedKeysFile {}\n\
+                "{extra}\nPort {port}\nListenAddress 127.0.0.1\nHostKey {}\nAuthorizedKeysFile {}\n\
                  PermitUserEnvironment yes\nStrictModes no\nPasswordAuthentication no\n\
                  KbdInteractiveAuthentication no\nUsePAM no\nPidFile {}\nLogLevel ERROR\n",
                 hostkey.display(),

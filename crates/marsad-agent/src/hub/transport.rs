@@ -1,15 +1,22 @@
-//! How the hub reaches a host: the command whose stdio is the link (`ssh …`, `wsl.exe …`),
-//! the remote install location, and remote scripts run over the same command.
+//! How the hub reaches a host: the command whose stdio is the link (`ssh …`, `wsl.exe …`)
+//! and the remote bootstrap that runs on it.
+//!
+//! One connection per connect attempt does everything, so a user who signs in interactively
+//! does so once: the bootstrap reports `MARSAD-BOOT <os> <arch> <installed --version|none>`,
+//! then reads one command line from stdin — `RUN`, `RESTART` (stop the running daemon) or
+//! `UPLOAD <n>` followed by exactly `n` bytes of binary (written to `marsad-agent.new`,
+//! renamed into place atomically, old daemon stopped) — answers `MARSAD-OK`, and finally
+//! `exec`s `marsad-agent bridge` on the same channel. The hub sends nothing after the command
+//! until it has read `MARSAD-OK`, so nothing the protocol needs is consumed early.
 
+use base64::Engine;
 use marsad_proto::hosts::{HostEntry, HostKind, HostPlatform};
 
-/// Install location on POSIX hosts (relative to `$HOME`).
-pub const POSIX_BIN: &str = ".marsad/bin/marsad-agent";
-
-/// ssh options always passed: never prompt, detect dead links, bounded connect.
+/// ssh options always passed: detect dead links, bounded TCP connect, no multiplexing (not
+/// available on Windows OpenSSH; never required). No `BatchMode`: prompts go to the
+/// `SSH_ASKPASS` helper instead.
 pub fn ssh_base_options() -> Vec<String> {
     [
-        "BatchMode=yes",
         "ServerAliveInterval=15",
         "ServerAliveCountMax=3",
         "ConnectTimeout=15",
@@ -20,8 +27,8 @@ pub fn ssh_base_options() -> Vec<String> {
     .collect()
 }
 
-/// The argv prefix that runs one remote command (the command follows as the last element,
-/// interpreted by the remote shell). `None` for the local host.
+/// The argv prefix that runs one remote command (appended as the last element). `None` for
+/// the local host.
 pub fn transport_prefix(kind: &HostKind) -> Option<Vec<String>> {
     match kind {
         HostKind::Local => None,
@@ -62,60 +69,78 @@ pub fn transport_prefix(kind: &HostKind) -> Option<Vec<String>> {
     }
 }
 
+/// The POSIX bootstrap (no single quotes inside: it is wrapped in `sh -c '…'`).
+pub const POSIX_BOOTSTRAP: &str = concat!(
+    "b=\"$HOME/.marsad/bin/marsad-agent\"; v=none; ",
+    "if [ -x \"$b\" ]; then v=$(\"$b\" --version 2>/dev/null | tr -d \" \"); [ -n \"$v\" ] || v=none; fi; ",
+    "echo \"MARSAD-BOOT $(uname -s) $(uname -m) $v\"; ",
+    "read c n || exit 65; ",
+    "case \"$c\" in ",
+    "UPLOAD) mkdir -p \"$HOME/.marsad/bin\" && head -c \"$n\" > \"$b.new\" && chmod 755 \"$b.new\" && mv -f \"$b.new\" \"$b\" || exit 70; ",
+    "\"$b\" stop >/dev/null 2>&1; echo MARSAD-OK;; ",
+    "RESTART) \"$b\" stop >/dev/null 2>&1; echo MARSAD-OK;; ",
+    "RUN) echo MARSAD-OK;; ",
+    "*) exit 64;; esac; ",
+    "exec \"$b\" bridge"
+);
+
+/// The PowerShell bootstrap for Windows OpenSSH hosts (same line protocol).
+pub const POWERSHELL_BOOTSTRAP: &str = r#"$ErrorActionPreference='Stop'
+$d=Join-Path $env:LOCALAPPDATA 'Marsad\bin'; $b=Join-Path $d 'marsad-agent.exe'; $v='none'
+if (Test-Path $b) { $v=((& $b --version) -join '') -replace ' ','' }
+$o=[Console]::OpenStandardOutput(); $i=[Console]::OpenStandardInput()
+function Say($t) { $x=[Text.Encoding]::ASCII.GetBytes("$t`n"); $o.Write($x,0,$x.Length); $o.Flush() }
+function ReadLine { $s=''; while ($true) { $c=$i.ReadByte(); if ($c -lt 0 -or $c -eq 10) { return $s }; $s+=[char]$c } }
+Say "MARSAD-BOOT Windows $env:PROCESSOR_ARCHITECTURE $v"
+$cmd=(ReadLine).Split(' ')
+if ($cmd[0] -eq 'UPLOAD') {
+  New-Item -ItemType Directory -Force $d | Out-Null
+  $n=[long]$cmd[1]; $f=[IO.File]::Create("$b.new"); $buf=New-Object byte[] 65536
+  while ($n -gt 0) { $r=$i.Read($buf,0,[Math]::Min($buf.Length,$n)); if ($r -le 0) { exit 70 }; $f.Write($buf,0,$r); $n-=$r }
+  $f.Close(); & $b stop | Out-Null
+  if (Test-Path $b) { Move-Item -Force $b "$b.old" }; Move-Item -Force "$b.new" $b
+} elseif ($cmd[0] -eq 'RESTART') { & $b stop | Out-Null } elseif ($cmd[0] -ne 'RUN') { exit 64 }
+Say 'MARSAD-OK'
+& $b bridge
+exit $LASTEXITCODE
+"#;
+
 fn is_windows(p: Option<&HostPlatform>) -> bool {
     p.is_some_and(|p| p.os == "windows")
 }
 
-/// The remote command that runs the installed agent with `args`.
-pub fn agent_command(entry: &HostEntry, args: &str) -> String {
-    if is_windows(entry.platform.as_ref()) {
-        format!(
-            "powershell -NoProfile -NonInteractive -Command \"& \\\"$env:LOCALAPPDATA\\Marsad\\bin\\marsad-agent.exe\\\" {args}\""
-        )
-    } else {
-        format!("exec \"$HOME/{POSIX_BIN}\" {args}")
+/// `powershell -EncodedCommand <base64 UTF-16LE>`: no quoting through ssh/cmd at all.
+pub fn powershell_command(script: &str) -> String {
+    let utf16: Vec<u8> = script
+        .encode_utf16()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
+    format!(
+        "powershell -NoProfile -NonInteractive -EncodedCommand {}",
+        base64::engine::general_purpose::STANDARD.encode(utf16)
+    )
+}
+
+/// Full argv of one connect attempt: transport + bootstrap.
+pub fn bootstrap_argv(entry: &HostEntry) -> Option<Vec<String>> {
+    let mut argv = transport_prefix(&entry.kind)?;
+    match (&entry.kind, is_windows(entry.platform.as_ref())) {
+        (HostKind::Wsl { .. }, _) => argv.push(POSIX_BOOTSTRAP.to_string()),
+        (_, true) => argv.push(powershell_command(POWERSHELL_BOOTSTRAP)),
+        (_, false) => argv.push(format!("sh -c '{POSIX_BOOTSTRAP}'")),
     }
-}
-
-/// Full argv of the hub link (`<transport> marsad-agent bridge`).
-pub fn connect_argv(entry: &HostEntry) -> Option<Vec<String>> {
-    let mut argv = transport_prefix(&entry.kind)?;
-    argv.push(agent_command(entry, "bridge"));
     Some(argv)
 }
-
-/// argv running a remote script.
-pub fn script_argv(entry: &HostEntry, script: &str) -> Option<Vec<String>> {
-    let mut argv = transport_prefix(&entry.kind)?;
-    argv.push(script.to_string());
-    Some(argv)
-}
-
-/// Probe (POSIX): OS, architecture and the installed agent's version line.
-pub const POSIX_PROBE: &str =
-    "uname -s; uname -m; \"$HOME/.marsad/bin/marsad-agent\" --version 2>/dev/null || echo none";
-
-/// Probe (Windows OpenSSH, whose default shell is cmd or PowerShell).
-pub const WINDOWS_PROBE: &str = "powershell -NoProfile -NonInteractive -Command \"Write-Output Windows; Write-Output $env:PROCESSOR_ARCHITECTURE; $a=\\\"$env:LOCALAPPDATA\\Marsad\\bin\\marsad-agent.exe\\\"; if (Test-Path $a) { & $a --version } else { Write-Output none }\"";
-
-/// Upload (POSIX): stdin becomes the new binary, renamed into place atomically.
-pub const POSIX_UPLOAD: &str = "set -e; d=\"$HOME/.marsad/bin\"; mkdir -p \"$d\"; cat > \"$d/marsad-agent.new\"; chmod 755 \"$d/marsad-agent.new\"; mv -f \"$d/marsad-agent.new\" \"$d/marsad-agent\"";
-
-/// Upload (Windows): a running .exe cannot be overwritten but can be renamed, so the old one
-/// is moved aside first.
-pub const WINDOWS_UPLOAD: &str = "powershell -NoProfile -NonInteractive -Command \"$d=\\\"$env:LOCALAPPDATA\\Marsad\\bin\\\"; New-Item -ItemType Directory -Force $d | Out-Null; $n=\\\"$d\\marsad-agent.exe.new\\\"; $s=[Console]::OpenStandardInput(); $f=[IO.File]::Create($n); $s.CopyTo($f); $f.Close(); $t=\\\"$d\\marsad-agent.exe\\\"; if (Test-Path $t) { Move-Item -Force $t \\\"$t.old\\\" }; Move-Item -Force $n $t\"";
 
 /// Map `uname -s` / `uname -m` (or Windows' `PROCESSOR_ARCHITECTURE`) to a platform.
 pub fn platform_from(os: &str, arch: &str) -> Option<HostPlatform> {
-    let os_l = os.trim().to_ascii_lowercase();
-    let arch_l = arch.trim().to_ascii_lowercase();
-    let (os, triple_os) = match os_l.as_str() {
+    let (os, triple_os) = match os.trim().to_ascii_lowercase().as_str() {
         "linux" => ("linux", "unknown-linux-gnu"),
         "darwin" => ("macos", "apple-darwin"),
         "windows" => ("windows", "pc-windows-msvc"),
         _ => return None,
     };
-    let arch = match arch_l.as_str() {
+    let arch = match arch.trim().to_ascii_lowercase().as_str() {
         "x86_64" | "amd64" => "x86_64",
         "aarch64" | "arm64" => "aarch64",
         _ => return None,
@@ -138,39 +163,45 @@ mod tests {
             kind,
             platform: None,
             created_at_ms: 0,
+            interactive_auth: false,
         }
     }
 
     #[test]
-    fn ssh_argv_has_batch_mode_keepalive_port_and_identity() {
+    fn ssh_argv_keepalive_port_identity_and_no_batch_mode() {
         let e = entry(HostKind::Ssh {
             target: "me@box".into(),
             port: Some(2222),
             identity_file: Some("/k".into()),
             options: vec!["UserKnownHostsFile=/kh".into()],
         });
-        let a = connect_argv(&e).unwrap();
+        let a = bootstrap_argv(&e).unwrap();
         assert_eq!(a[0], "ssh");
         for o in [
-            "BatchMode=yes",
             "ServerAliveInterval=15",
             "IdentitiesOnly=yes",
             "UserKnownHostsFile=/kh",
         ] {
             assert!(a.iter().any(|x| x == o), "{o} in {a:?}");
         }
-        let at = a.iter().position(|x| x == "-p").unwrap();
-        assert_eq!(a[at + 1], "2222");
+        assert!(!a.iter().any(|x| x.starts_with("BatchMode")));
         assert_eq!(a[a.len() - 2], "me@box");
-        assert_eq!(
-            a.last().unwrap(),
-            "exec \"$HOME/.marsad/bin/marsad-agent\" bridge"
-        );
+        assert!(a.last().unwrap().starts_with("sh -c 'b="));
+        assert!(!POSIX_BOOTSTRAP.contains('\''));
         let w = entry(HostKind::Wsl {
             distro: "Ubuntu".into(),
         });
-        assert_eq!(&connect_argv(&w).unwrap()[..3], ["wsl.exe", "-d", "Ubuntu"]);
-        assert!(connect_argv(&entry(HostKind::Local)).is_none());
+        let wa = bootstrap_argv(&w).unwrap();
+        assert_eq!(&wa[..3], ["wsl.exe", "-d", "Ubuntu"]);
+        assert_eq!(wa.last().unwrap(), POSIX_BOOTSTRAP);
+        let mut win = e.clone();
+        win.platform = platform_from("Windows", "AMD64");
+        assert!(bootstrap_argv(&win)
+            .unwrap()
+            .last()
+            .unwrap()
+            .contains("-EncodedCommand "));
+        assert!(bootstrap_argv(&entry(HostKind::Local)).is_none());
     }
 
     #[test]

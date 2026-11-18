@@ -11,7 +11,8 @@
 //!
 //! Options: `--driver-bin <driver>=<path>` and `--driver-env <driver>=<KEY>=<VALUE>`
 //! (repeatable) override a driver's binary / add environment; `--handshake-timeout-ms`,
-//! `--stop-grace-ms`, `--command-timeout-ms`.
+//! `--stop-grace-ms`, `--command-timeout-ms`, `--auth-prompt-timeout-ms` (hub: how long a
+//! sign-in prompt waits; default 120 s).
 //!
 //! Defaults: data `~/.marsad` (Windows: `%LOCALAPPDATA%\Marsad`), socket `<data>/marsad.sock`
 //! (Windows: a named pipe derived from it). Keep the data path short: session sockets live at
@@ -33,6 +34,8 @@ pub struct Options {
     pub handshake_timeout: Option<Duration>,
     pub stop_grace: Option<Duration>,
     pub command_timeout: Option<Duration>,
+    /// How long a sign-in prompt waits for the user (hub).
+    pub auth_prompt_timeout: Option<Duration>,
     /// The options exactly as given (passed on when `bridge` starts `serve`).
     pub raw: Vec<String>,
 }
@@ -86,6 +89,7 @@ impl Options {
                 "--handshake-timeout-ms" => o.handshake_timeout = Some(ms(val()?)?),
                 "--stop-grace-ms" => o.stop_grace = Some(ms(val()?)?),
                 "--command-timeout-ms" => o.command_timeout = Some(ms(val()?)?),
+                "--auth-prompt-timeout-ms" => o.auth_prompt_timeout = Some(ms(val()?)?),
                 other => return Err(format!("unknown option {other}")),
             }
         }

@@ -11,8 +11,8 @@ use marsad_proto::{methods, HostId, HOST_ROUTES, HUB_ROUTES};
 use marsad_store::Store;
 use tokio_util::sync::CancellationToken;
 use wasit_control::{
-    BindError, ClientOptions, CommandConnector, ConnConfig, ControlClient, ControlServer, Endpoint,
-    Hello, Hub, HubConfig, InstanceLock, LockError, RoutingService, Service, ServiceMux,
+    BindError, ClientOptions, ConnConfig, ControlClient, ControlServer, Endpoint, Hello, Hub,
+    HubConfig, InstanceLock, LockError, RoutingService, Service, ServiceMux,
 };
 use wasit_core::DriverId;
 use wasit_runtime::wire::ROUTES;
@@ -22,9 +22,10 @@ use wasit_runtime::{
 
 use crate::cli::{default_host_id, Options};
 use crate::host::{pty::Ptys, HostServices};
+use crate::hub::auth::Prompts;
 use crate::hub::fleet::Fleet;
 use crate::hub::hosts::Registry;
-use crate::hub::provision::{AgentProvisioner, BIN_DIR_ENV};
+use crate::hub::provision::{AgentProvisioner, BootstrapConnector, BIN_DIR_ENV};
 use crate::hub::HubServices;
 use crate::version;
 
@@ -202,18 +203,27 @@ async fn start_hub(
         .map_err(|e| e.to_string())?;
     let fleet = Fleet::spawn();
     let entries = Arc::new(RwLock::new(Default::default()));
-    let (ptx, prx) = tokio::sync::mpsc::channel(16);
-    let provisioner = AgentProvisioner {
+    let (ltx, lrx) = tokio::sync::mpsc::channel(16);
+    let prompt_timeout = o.auth_prompt_timeout.unwrap_or(Duration::from_secs(120));
+    let prompts = Prompts::new(fleet.clone(), prompt_timeout);
+    let restarts = Arc::new(std::sync::Mutex::new(Default::default()));
+    let connector = BootstrapConnector {
         entries: entries.clone(),
-        platforms: ptx,
+        learned: ltx,
+        prompts: prompts.clone(),
+        restarts: restarts.clone(),
         own: version::info(),
         bin_dir: std::env::var_os(BIN_DIR_ENV).map(PathBuf::from),
+        socket: o.socket_path(),
     };
-    let hub = Hub::new(
-        HubConfig::new(Hello::new(build, host_id, "hub")),
-        Arc::new(CommandConnector),
-        Some(Arc::new(provisioner)),
-    );
+    let provisioner = AgentProvisioner {
+        restarts,
+        prompts: prompts.clone(),
+    };
+    let mut hcfg = HubConfig::new(Hello::new(build, host_id, "hub"));
+    // One attempt includes the user answering sign-in prompts and an upload.
+    hcfg.supervise.connect_timeout = prompt_timeout * 3 + Duration::from_secs(120);
+    let hub = Hub::new(hcfg, Arc::new(connector), Some(Arc::new(provisioner)));
     let routing: Arc<dyn Service> = Arc::new(RoutingService::new(hub.clone(), local));
     hub.set_inbound_service(routing.clone());
     let local_id = HostId::new(host_id);
@@ -225,6 +235,7 @@ async fn start_hub(
         kind: HostKind::Local,
         platform: None,
         created_at_ms: 0,
+        interactive_auth: false,
     };
     let registry = Registry::start(
         store.clone(),
@@ -232,12 +243,14 @@ async fn start_hub(
         fleet.clone(),
         entries,
         local_entry,
-        prx,
+        prompts.clone(),
+        lrx,
     )
     .await
     .map_err(|e| e.to_string())?;
     let svc = HubServices {
         registry,
+        prompts,
         store,
         fleet,
         routing: routing.clone(),
@@ -375,4 +388,39 @@ pub async fn stop(o: Options) -> ExitCode {
         }
     }
     fail("the daemon did not exit", 1)
+}
+
+/// The `SSH_ASKPASS` helper: forward `prompt` to the hub (which shows it to the user) and
+/// print the answer. Exit 1 on cancel, timeout or any failure (ssh then gives up that prompt).
+pub async fn askpass(prompt: String) -> ExitCode {
+    use crate::hub::provision::{ASKPASS_HOST_ENV, ASKPASS_SOCKET_ENV};
+    let (Ok(host), Some(socket)) = (
+        std::env::var(ASKPASS_HOST_ENV),
+        std::env::var_os(ASKPASS_SOCKET_ENV),
+    ) else {
+        return fail("askpass: not started by a Marsad hub link", 1);
+    };
+    let ep = wasit_control::local_endpoint(std::path::Path::new(&socket));
+    let opts = ClientOptions::new(Hello::new(version::build_id(), "marsad-askpass", "askpass"));
+    let client = match ControlClient::connect_endpoint(&ep, opts).await {
+        Ok(c) => c,
+        Err(e) => return fail(format!("askpass: cannot reach the hub: {e}"), 1),
+    };
+    let r: Result<marsad_proto::hosts::AskpassReply, _> = client
+        .request(
+            methods::HOSTS_ASKPASS,
+            marsad_proto::hosts::AskpassRequest {
+                host: HostId::new(host),
+                prompt,
+            },
+            Duration::from_secs(24 * 3600),
+        )
+        .await;
+    match r {
+        Ok(a) => {
+            println!("{}", a.answer);
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(format!("askpass: {e}"), 1),
+    }
 }

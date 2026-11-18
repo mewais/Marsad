@@ -48,6 +48,98 @@ pub struct HostEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<HostPlatform>,
     pub created_at_ms: u64,
+    /// The host has needed an interactive answer (password, code, push, host key) to sign in.
+    /// Such a link never reconnects on its own: after a drop it waits in `auth_needed` for an
+    /// explicit `hosts.reconnect`.
+    #[serde(default)]
+    pub interactive_auth: bool,
+}
+
+/// What an authentication prompt asks for (a guess from its text, for presentation only;
+/// the prompt text itself is shown verbatim).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum PromptKind {
+    /// A password or key passphrase (mask the input).
+    Secret,
+    /// A one-time code.
+    Code,
+    /// A yes/no confirmation (e.g. an unknown host key).
+    Confirm,
+    Info,
+}
+
+impl PromptKind {
+    pub fn guess(prompt: &str) -> PromptKind {
+        let p = prompt.to_ascii_lowercase();
+        if p.contains("yes/no") || p.contains("(yes/no") || p.contains("continue connecting") {
+            PromptKind::Confirm
+        } else if [
+            "verification code",
+            "one-time",
+            "otp",
+            "token",
+            "passcode",
+            "code:",
+            "duo",
+        ]
+        .iter()
+        .any(|n| p.contains(n))
+        {
+            PromptKind::Code
+        } else if p.contains("password") || p.contains("passphrase") || p.trim_end().ends_with(':')
+        {
+            PromptKind::Secret
+        } else {
+            PromptKind::Info
+        }
+    }
+}
+
+/// A pending authentication prompt of a host's link (answer with `hosts.auth_answer`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AuthPrompt {
+    pub id: u64,
+    pub host: HostId,
+    /// The prompt exactly as ssh printed it.
+    pub prompt: String,
+    pub kind: PromptKind,
+    /// 1 for the first prompt of a connect attempt, 2 after a wrong answer, …
+    pub attempt: u32,
+    /// When the prompt gives up (ms since the Unix epoch); the link then goes `auth_needed`.
+    pub expires_at_ms: u64,
+}
+
+/// `hosts.auth_answer`. The answer is passed to ssh and never logged or stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AuthAnswer {
+    pub host: HostId,
+    pub id: u64,
+    pub answer: String,
+}
+
+/// `hosts.auth_cancel`: give up the prompt (the connect attempt fails as `auth_needed`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AuthCancel {
+    pub host: HostId,
+    pub id: u64,
+}
+
+/// `hosts.askpass` (internal: sent by `marsad-agent askpass`, the `SSH_ASKPASS` helper).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskpassRequest {
+    pub host: HostId,
+    pub prompt: String,
+}
+
+/// Result of `hosts.askpass`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskpassReply {
+    pub answer: String,
 }
 
 /// `hosts.add`.

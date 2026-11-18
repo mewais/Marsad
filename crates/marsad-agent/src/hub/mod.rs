@@ -1,6 +1,7 @@
 //! Hub services (the GUI machine's daemon, `serve --hub`): hosts and their links,
 //! provisioning, the fleet topic, the store, effective config and session launch.
 
+pub mod auth;
 pub mod fleet;
 pub mod hosts;
 pub mod provision;
@@ -14,7 +15,10 @@ use marsad_proto::agentconfig::{
     effective_config, AutomaticItem, BaseConfig, BaseRequest, EffectiveConfig, EffectiveRequest,
     LaunchReply, LaunchRequest, LayerScope, OverrideLayer, WorkstreamNodeRef,
 };
-use marsad_proto::hosts::{HostDraft, HostEntry, HostList, HostRef, LinkStates};
+use marsad_proto::hosts::{
+    AskpassReply, AskpassRequest, AuthAnswer, AuthCancel, HostDraft, HostEntry, HostList, HostRef,
+    LinkStates,
+};
 use marsad_proto::store::{
     LayerList, LayerSet, NotificationPrefs, RecentProject, RecentProjects, SeenMark, SeenMarkers,
     SettingSet, WorkstreamList, WorkstreamPut, WorkstreamRef,
@@ -51,6 +55,7 @@ pub trait AutomaticItems: Send + Sync {
 /// See the module docs.
 pub struct HubServices {
     pub registry: Registry,
+    pub prompts: auth::Prompts,
     pub store: Store,
     pub fleet: Fleet,
     /// Serves host services on any host (local or routed); used for base layers and creates.
@@ -274,6 +279,26 @@ impl HubServices {
                 let r: HostRef = params(p).map_err(dec)?;
                 self.registry.reconnect(&r.id)?;
                 enc(ok(Ack {}))
+            }
+            methods::HOSTS_AUTH_ANSWER => {
+                let r: AuthAnswer = params(p).map_err(dec)?;
+                self.prompts.answer(&r.host, r.id, r.answer)?;
+                enc(ok(Ack {}))
+            }
+            methods::HOSTS_AUTH_CANCEL => {
+                let r: AuthCancel = params(p).map_err(dec)?;
+                self.prompts.cancel(&r.host, r.id)?;
+                enc(ok(Ack {}))
+            }
+            methods::HOSTS_ASKPASS => {
+                let r: AskpassRequest = params(p).map_err(dec)?;
+                if self.registry.get(&r.host).is_none() {
+                    return Err(MarsadError::NotFound {
+                        what: format!("host {}", r.host),
+                    });
+                }
+                let answer = self.prompts.ask(r.host, r.prompt).await?;
+                enc(ok(AskpassReply { answer }))
             }
             methods::HOSTS_IMPORT_SUGGESTIONS => enc(ok(self.registry.import_suggestions().await)),
             methods::AGENTCONFIG_EFFECTIVE => {

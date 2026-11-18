@@ -13,9 +13,10 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use wasit_control::{HostSpec, Hub};
 
+use super::auth::Prompts;
 use super::fleet::Fleet;
-use super::provision::{Entries, PlatformFound};
-use super::transport::connect_argv;
+use super::provision::{Entries, Learned};
+use super::transport::bootstrap_argv;
 use crate::util::now_ms;
 
 /// See the module docs. Cheap to clone.
@@ -30,6 +31,7 @@ struct Inner {
     fleet: Fleet,
     entries: Entries,
     local: HostEntry,
+    prompts: Prompts,
     feeds: Mutex<HashMap<HostId, JoinHandle<()>>>,
 }
 
@@ -56,7 +58,8 @@ impl Registry {
         fleet: Fleet,
         entries: Entries,
         local: HostEntry,
-        mut platforms: mpsc::Receiver<PlatformFound>,
+        prompts: Prompts,
+        mut learned: mpsc::Receiver<Learned>,
     ) -> Result<Registry, MarsadError> {
         let r = Registry {
             inner: Arc::new(Inner {
@@ -65,6 +68,7 @@ impl Registry {
                 fleet,
                 entries,
                 local,
+                prompts,
                 feeds: Mutex::new(HashMap::new()),
             }),
         };
@@ -79,9 +83,9 @@ impl Registry {
         }
         let r2 = r.clone();
         tokio::spawn(async move {
-            while let Some(found) = platforms.recv().await {
-                if let Err(e) = r2.platform_found(found).await {
-                    tracing::error!(error = %e, "cannot record a host platform");
+            while let Some(l) = learned.recv().await {
+                if let Err(e) = r2.learned(l).await {
+                    tracing::error!(error = %e, "cannot record what a connect attempt learned");
                 }
             }
         });
@@ -124,7 +128,7 @@ impl Registry {
     }
 
     async fn link(&self, entry: HostEntry) -> Result<(), MarsadError> {
-        let argv = connect_argv(&entry)
+        let argv = bootstrap_argv(&entry)
             .ok_or_else(|| MarsadError::invalid("the local host has no link"))?;
         self.inner
             .entries
@@ -207,6 +211,7 @@ impl Registry {
             kind: draft.kind,
             platform: None,
             created_at_ms: now_ms(),
+            interactive_auth: false,
         };
         self.inner.store.put_host(entry.clone()).await?;
         self.link(entry.clone()).await?;
@@ -227,6 +232,10 @@ impl Registry {
         if entry.kind != old.kind {
             // A different machine (or route to it): what we knew about it no longer holds.
             entry.platform = None;
+            entry.interactive_auth = false;
+        } else {
+            entry.platform = old.platform.clone();
+            entry.interactive_auth = old.interactive_auth;
         }
         self.inner.store.put_host(entry.clone()).await?;
         if entry.kind != old.kind {
@@ -267,7 +276,10 @@ impl Registry {
         Ok(())
     }
 
+    /// Connect now; for a host that signs in interactively this is the user's explicit
+    /// "Connect" (one attempt is allowed).
     pub fn reconnect(&self, id: &HostId) -> Result<(), MarsadError> {
+        self.inner.prompts.arm(id);
         if self.inner.hub.reconnect_now(id) {
             Ok(())
         } else {
@@ -277,31 +289,33 @@ impl Registry {
         }
     }
 
-    async fn platform_found(&self, found: PlatformFound) -> Result<(), MarsadError> {
-        let Some(mut entry) = self.get(&found.host) else {
+    async fn learned(&self, l: Learned) -> Result<(), MarsadError> {
+        let id = match &l {
+            Learned::Platform { host, .. } | Learned::Interactive { host } => host.clone(),
+        };
+        let Some(mut entry) = self.get(&id) else {
             return Ok(());
         };
-        let os_changed =
-            entry.platform.as_ref().map(|p| p.os.clone()) != Some(found.platform.os.clone());
-        entry.platform = Some(found.platform);
+        match l {
+            Learned::Platform { platform, .. } => entry.platform = Some(platform),
+            Learned::Interactive { .. } => entry.interactive_auth = true,
+        }
         self.inner.store.put_host(entry.clone()).await?;
         self.inner
             .entries
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .insert(entry.id.clone(), entry.clone());
-        let needs_relink = os_changed
-            && connect_argv(&entry) != self.inner.hub.spec(&entry.id).map(|s| s.connect_argv);
-        if needs_relink {
-            // Off the supervisor's task (it is the one provisioning right now).
-            let r = self.clone();
-            tokio::spawn(async move {
-                r.unlink(&entry.id).await;
-                if let Err(e) = r.link(entry.clone()).await {
-                    tracing::error!(host = %entry.id, error = %e, "cannot re-create the link");
-                }
-            });
-        }
+        let state = self
+            .inner
+            .hub
+            .link(&entry.id)
+            .map(|s| s.current_state())
+            .unwrap_or(LinkState::Connecting);
+        self.inner
+            .fleet
+            .host_upserted(entry, FleetLink::Remote { state })
+            .await;
         Ok(())
     }
 

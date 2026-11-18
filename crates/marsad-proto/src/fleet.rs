@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use wasit_control::{HostId, LinkState};
 use wasit_runtime::wire::{SessionId, SessionSnapshot};
 
-use crate::hosts::HostEntry;
+use crate::hosts::{AuthPrompt, HostEntry};
 
 /// The link of a host as the fleet reports it (the local host is always `connected`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -25,6 +25,9 @@ pub struct FleetHost {
     /// (sessions are then the last known ones).
     pub sessions_live: bool,
     pub sessions: Vec<SessionSnapshot>,
+    /// A sign-in prompt waiting for the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_prompt: Option<AuthPrompt>,
 }
 
 /// Payload of the `fleet` topic. Apply in order; `reset` replaces everything.
@@ -62,5 +65,10 @@ pub enum FleetEvent {
     SessionRemoved {
         host: HostId,
         id: SessionId,
+    },
+    /// A sign-in prompt appeared (`Some`) or was answered / cancelled / timed out (`None`).
+    AuthPrompt {
+        host: HostId,
+        prompt: Option<AuthPrompt>,
     },
 }

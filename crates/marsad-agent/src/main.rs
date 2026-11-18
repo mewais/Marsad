@@ -13,6 +13,25 @@ fn usage() -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // ssh runs `$SSH_ASKPASS "<prompt>"`: this binary, recognised by the environment the hub
+    // sets for its links.
+    if std::env::var_os(marsad_agent::hub::provision::ASKPASS_HOST_ENV).is_some() {
+        let prompt: Vec<String> = std::env::args().skip(1).collect();
+        let prompt = match prompt.first().map(String::as_str) {
+            Some("askpass") => prompt[1..].join(" "),
+            _ => prompt.join(" "),
+        };
+        return match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt.block_on(serve::askpass(prompt)),
+            Err(e) => {
+                eprintln!("marsad-agent askpass: {e}");
+                ExitCode::from(1)
+            }
+        };
+    }
     let mut args = std::env::args_os().skip(1);
     let Some(cmd) = args.next() else {
         return usage();
