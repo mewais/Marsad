@@ -13,7 +13,7 @@ export function DriverPick({ drivers, value, onChange }: { drivers: DriverInvent
         <button key={d.driver} type="button" role="radio" aria-checked={d.driver === value} disabled={!d.installed} title={d.installed ? d.binary_path ?? undefined : d.error ?? "Not installed"}
           className={`dp${d.driver === value ? " on" : ""}`} onClick={() => onChange(d.driver)}>
           <DriverBadge driver={known[d.driver] ?? makeDriver(d.driver, d.display_name)} />
-          <span className="v">{d.installed ? `v${d.version ?? "?"}` : "not installed"}</span>
+          <span className="v">{d.installed ? `v${d.version ?? "?"}` : d.refreshing && !d.refreshed_at_ms ? "checking…" : "not installed"}</span>
         </button>
       ))}
       {drivers.length === 0 ? <span className="faint">No agent CLIs reported by this host yet.</span> : null}

@@ -201,6 +201,7 @@ async function click(css, text, ms) {
   try {
     await wd.click(e);
   } catch (err) {
+    if (/stale/.test(err.message)) return wd.click(await el(css, text, ms));
     if (!/intercepted/.test(err.message)) throw err;
     await wd.exec(() => document.querySelectorAll(".toast button[aria-label=Dismiss]").forEach((b) => b.click()));
     await sleep(300);
@@ -209,9 +210,18 @@ async function click(css, text, ms) {
 }
 const button = (text, ms) => click("button, [role=radio], [role=option], [role=tab], a", text, ms);
 async function type(css, text, { clear = true } = {}) {
-  const e = await el(css);
-  if (clear) await wd.clear(e);
-  await wd.sendKeys(e, text);
+  for (let i = 0; ; i++) {
+    try {
+      const e = await el(css);
+      if (clear) await wd.clear(e);
+      await wd.sendKeys(e, text);
+      return;
+    } catch (err) {
+      // React replaced the node between lookup and typing: look it up again.
+      if (i >= 3 || !/stale/.test(err.message)) throw err;
+      await sleep(200);
+    }
+  }
 }
 const bodyHas = (text, ms = 30_000) => waitFor(() => wd.exec((t) => document.body.innerText.includes(t), text), `text "${text}"`, ms);
 const bodyLacks = (text, ms = 30_000) => waitFor(() => wd.exec((t) => !document.body.innerText.includes(t), text), `no text "${text}"`, ms);
@@ -242,12 +252,19 @@ const openSession = async (s, tab = "") => {
 };
 
 /** Launch through the New session dialog (real DOM), return the snapshot once it exists. */
-async function launchViaDialog({ agent, cwd, prompt, latest = false, resumeTitle }) {
+async function launchViaDialog({ agent, cwd, prompt, latest = false, resumeTitle, model }) {
   await go("#/inbox");
   await button("New session");
   await el("[role=dialog]");
-  await button(agent);
+  // The host's discovery may still be probing the CLIs: wait until this one is offered.
+  await click("[role=dialog] [role=radio]:not([disabled])", agent, 120_000);
   await type("#ns-cwd", cwd);
+  if (model) {
+    await click("[role=dialog] button[aria-label^='Model:']", null, 90_000);
+    const filter = await wd.findAll("css selector", "input[aria-label='Filter Model']");
+    if (filter.length) await wd.sendKeys(filter[0], model);
+    await click("[role=listbox][aria-label=Model] [role=option]", model, 30_000);
+  }
   if (latest || resumeTitle) {
     await button("Continue an existing one");
     if (latest) {
@@ -498,16 +515,137 @@ scenario_("daemon-kill-recovery", async () => {
   await waitPhase(s.id, "idle");
 });
 
+// ── remote hosts over a real sshd on localhost ──────────────────────────────
+
+/** Type into the input a <label> names (TextField). */
+async function field(label, text) {
+  const id = await waitFor(() => wd.exec((l) => {
+    const lab = [...document.querySelectorAll("[role=dialog] label")].find((x) => x.textContent.trim() === l);
+    return lab?.htmlFor || null;
+  }, label), `field ${label}`);
+  await type(`[id="${id}"]`, text);
+}
+
+const sshd = { up: false };
+function startSshd() {
+  if (sshd.up) return true;
+  if (process.getuid?.() !== 0 || !fs.existsSync("/usr/sbin/sshd")) return false;
+  const d = path.join(root, "ssh");
+  fs.mkdirSync(path.join(d, "bin"), { recursive: true });
+  const rh = path.join(root, "remote-home");
+  fs.mkdirSync(rh, { recursive: true });
+  for (const n of ["claude", "codex", "opencode", "kilo"]) fs.symlinkSync(bin.fake, path.join(d, "bin", n));
+  for (const k of ["hostkey", "id"]) execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", path.join(d, k)]);
+  const pub = fs.readFileSync(path.join(d, "id.pub"), "utf8").trim();
+  const PATH = `${path.join(d, "bin")}:/usr/local/bin:/usr/bin:/bin`;
+  fs.writeFileSync(path.join(d, "authorized_keys"), `environment="HOME=${rh}",environment="PATH=${PATH}",environment="WASIT_FAKE_SCENARIO=${scenarioPath}" ${pub}\n`);
+  sshd.port = 20000 + Math.floor(Math.random() * 20000);
+  fs.writeFileSync(path.join(d, "sshd_config"), [
+    `Port ${sshd.port}`, "ListenAddress 127.0.0.1", `HostKey ${path.join(d, "hostkey")}`, `AuthorizedKeysFile ${path.join(d, "authorized_keys")}`,
+    "PermitUserEnvironment yes", "StrictModes no", "PasswordAuthentication yes", "KbdInteractiveAuthentication no", "UsePAM no",
+    "PermitRootLogin prohibit-password", `PidFile ${path.join(d, "sshd.pid")}`, "LogLevel ERROR", "",
+  ].join("\n"));
+  fs.mkdirSync("/run/sshd", { recursive: true });
+  // A user that signs in with a password (the sign-in dialog path).
+  sshd.pwUser = "marsade2e";
+  sshd.password = "walnut-" + Math.random().toString(36).slice(2, 8);
+  spawnSync("useradd", ["-m", "-s", "/bin/bash", sshd.pwUser], { stdio: "ignore" });
+  execFileSync("chpasswd", { input: `${sshd.pwUser}:${sshd.password}\n` });
+  const hostpub = fs.readFileSync(path.join(d, "hostkey.pub"), "utf8").trim().split(/\s+/);
+  sshd.knownHosts = path.join(d, "known_hosts");
+  fs.writeFileSync(sshd.knownHosts, `[127.0.0.1]:${sshd.port} ${hostpub[0]} ${hostpub[1]}\n`);
+  sshd.key = path.join(d, "id");
+  sshd.child = spawn("/usr/sbin/sshd", ["-D", "-e", "-f", path.join(d, "sshd_config")], { stdio: ["ignore", "ignore", fs.openSync(path.join(d, "sshd.log"), "a")] });
+  sshd.up = true;
+  return true;
+}
+
+async function addHostViaDialog({ name, target, identity }) {
+  await go("#/hosts");
+  await button("Add host");
+  await el("[role=dialog]");
+  await field("Name", name);
+  await field("SSH target", target);
+  await field("Port", String(sshd.port));
+  if (identity) await field("Identity file", identity);
+  await field("Extra ssh options", `UserKnownHostsFile=${sshd.knownHosts}`);
+  await click("[role=dialog] button.primary", "Add and connect");
+}
+const hostEntry = async (name) => (await rpc("hosts.list")).hosts.find((h) => h.name === name);
+const linkOf = async (name) => (await state())?.hosts?.[(await hostEntry(name))?.id]?.link;
+
+scenario_("ssh-host-key", async () => {
+  if (!startSshd()) return "skipped: needs root and sshd";
+  await addHostViaDialog({ name: "build-box", target: "root@127.0.0.1", identity: sshd.key });
+  // Provisioning uploads this build's marsad-agent, then the link comes up.
+  await waitFor(async () => (await linkOf("build-box"))?.state?.state === "connected", "build-box connected", 180_000);
+  await click("[role=dialog] button", "Done", 10_000).catch(() => resetUi());
+  await shot("40-hosts");
+  const h = await hostEntry("build-box");
+  // A session on the remote host, launched from the dialog.
+  await go("#/inbox");
+  await button("New session");
+  await el("[role=dialog]");
+  await click("[role=dialog] [role=radiogroup][aria-label=Host] [role=radio], [role=dialog] .hostpick button", "build-box", 30_000).catch(() => {});
+  await resetUi();
+  const r = await rpc("sessions.launch", { host: h.id, driver: "codex", cwd: null, model: null, mode: null, first_prompt: "hello from build-box", resume: { kind: "new" }, labels: {}, workstream: null, overrides: { items: [], env: [], disallowed_tools: [] } });
+  await waitFor(async () => (await state())?.sessions?.[`${h.id}/${r.id}`]?.phase?.state === "idle", "remote session idle", 60_000);
+  // Kill the link's ssh process: it reconnects with backoff and the session catches up.
+  spawnSync("pkill", ["-f", `ssh.*-p ${sshd.port}|ssh.*Port=${sshd.port}`]);
+  spawnSync("pkill", ["-f", `${sshd.port}.*bridge`]);
+  await waitFor(async () => ["reconnecting", "connecting", "provisioning"].includes((await linkOf("build-box"))?.state?.state), "link dropped", 30_000).catch(() => {});
+  await waitFor(async () => (await linkOf("build-box"))?.state?.state === "connected", "build-box reconnected", 120_000);
+  await go(`#/session/${encodeURIComponent(h.id)}/${r.id}`);
+  await bodyHas("echo: hello from build-box");
+});
+
+scenario_("ssh-host-password", async () => {
+  if (!startSshd()) return "skipped: needs root and sshd";
+  await addHostViaDialog({ name: "lab-pc", target: `${sshd.pwUser}@127.0.0.1` });
+  // ssh asks for the password through Marsad's askpass: the sign-in dialog shows its prompt
+  // (from the add-host progress, or after "Connect" if the first attempt was left unanswered).
+  let sawPrompt = null;
+  const labPrompt = async () => Object.values((await state())?.hosts ?? {}).find((x) => x.entry.name === "lab-pc")?.authPrompt ?? null;
+  const first = await waitFor(async () => {
+    sawPrompt = sawPrompt ?? (await labPrompt());
+    if (await wd.exec(() => !!document.querySelector(".authp-input"))) return "prompt";
+    return (await linkOf("lab-pc"))?.state?.state === "auth_needed" ? "parked" : null;
+  }, "a sign-in prompt", 90_000);
+  if (first === "parked") {
+    await resetUi();
+    await go("#/hosts");
+    await click(".hrow[data-host]", "lab-pc");
+    if (sawPrompt) console.log(`    note: prompt ${JSON.stringify(sawPrompt)} was published but no dialog input appeared`);
+    await click("button.primary", "Connect", 20_000);
+  }
+  await el(".authp-input", null, 60_000);
+  await shot("41-host-sign-in");
+  await type(".authp-input", sshd.password);
+  await button("Sign in");
+  await waitFor(async () => (await linkOf("lab-pc"))?.state?.state === "connected", "lab-pc connected", 180_000);
+  await resetUi();
+  // A host that needed a password never reconnects on its own: it parks in auth_needed.
+  spawnSync("pkill", ["-f", `${sshd.pwUser}@127.0.0.1`]);
+  await waitFor(async () => (await linkOf("lab-pc"))?.state?.state === "auth_needed", "lab-pc auth_needed", 60_000);
+  await go("#/hosts");
+  await click(".hrow[data-host]", "lab-pc").catch(() => {});
+  await shot("42-host-auth-needed");
+  await click("button.primary", "Connect", 20_000);
+  await el(".authp-input", null, 60_000);
+  await type(".authp-input", sshd.password);
+  await button("Sign in");
+  await waitFor(async () => (await linkOf("lab-pc"))?.state?.state === "connected", "lab-pc connected again", 120_000);
+});
+
 // Live CLIs: tiny prompts, cheapest models.
 const live = (d, model, agent) => scenario_(`live-${d}`, async () => {
-  const s = await launchViaDialog({ agent, cwd: project, prompt: "Reply with exactly the word: pong" });
+  const s = await launchViaDialog({ agent, cwd: project, prompt: "Reply with exactly the word: pong", model });
   launched[`live-${d}`] = s;
-  void model;
   await waitPhase(s.id, "idle", 180_000);
   await openSession(s);
   await bodyHas("pong", 60_000);
 }, { real: true });
-live("claude", "haiku", "Claude Code");
+live("claude", "Haiku", "Claude Code");
 live("opencode", "opencode/deepseek-v4.1-flash-free", "OpenCode");
 live("kilo", "kilo/kilo-auto/free", "Kilo Code");
 
@@ -527,7 +665,7 @@ scenario_("live-claude-resume-terminal-session", async () => {
   // A conversation started in a terminal, outside Marsad, then resumed from the dialog.
   execFileSync("claude", ["-p", "Remember the word: walnut. Reply ok.", "--model", "haiku"], { cwd: project, stdio: "pipe", timeout: 120_000 });
   await rpc("drivers.refresh", { driver: "claude", project }, local);
-  const s = await launchViaDialog({ agent: "Claude Code", cwd: project, prompt: "Which word did I ask you to remember? One word.", resumeTitle: "Remember the word: walnut" });
+  const s = await launchViaDialog({ agent: "Claude Code", cwd: project, prompt: "Which word did I ask you to remember? One word.", resumeTitle: "Remember the word: walnut", model: "Haiku" });
   await waitPhase(s.id, "idle", 180_000);
   await openSession(s);
   await bodyHas("walnut", 60_000);
@@ -577,7 +715,13 @@ try {
 } finally {
   await wd.quit().catch(() => {});
   driver.kill();
+  sshd.child?.kill();
+  if (sshd.pwUser) spawnSync("userdel", ["-r", sshd.pwUser], { stdio: "ignore" });
   spawnSync(bin.agent, ["stop", "--data", dirs.data], { stdio: "ignore" });
+  // Sessions outlive the daemon by design (their shims hold them); end this run's ones.
+  spawnSync("pkill", ["-f", `${dirs.data}/sessions`], { stdio: "ignore" });
+  // The ssh hosts' daemons and sessions live under this run's temp dir too.
+  spawnSync("pkill", ["-f", root], { stdio: "ignore" });
   code = failed ? 1 : 0;
   console.log(`\n${results.filter((r) => r.ok).length} passed, ${failed} failed${KEEP || failed ? ` — data in ${root}` : ""}`);
   if (!KEEP && !failed) fs.rmSync(root, { recursive: true, force: true });

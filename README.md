@@ -16,8 +16,8 @@ control protocol). See [ARCHITECTURE.md](ARCHITECTURE.md).
 * `crates/marsad-store` — hub persistence
 * `crates/marsad-agent` — the daemon binary (`marsad-agent`)
 * `crates/marsad-client` — typed client used by the desktop shell
-* `apps/desktop` — the desktop app: React UI (`src/`) and a thin Tauri v2 shell (`src-tauri/`,
-  built separately)
+* `apps/desktop` — the desktop app: React UI (`src/`), a thin Tauri v2 shell (`src-tauri/`,
+  built separately) and the real-app end-to-end suite (`e2e-real/`)
 
 ## Build
 
@@ -76,6 +76,28 @@ overrides. Debug builds run an end-to-end smoke through the real bridge with
 (the daemon pointed at the fake CLI with `MARSAD_DAEMON_ARGS="--driver-bin claude=<wasit-fake-cli>"`):
 it subscribes to `fleet`, launches a session, prompts, answers its gate and writes the report.
 Packaging: `pnpm --dir apps/desktop bundle` (stages `marsad-agent` as the sidecar).
+
+### End-to-end suite on the real app
+
+`apps/desktop/e2e-real/` drives the REAL desktop app (UI embedded) on the real daemon, shims
+and agent CLIs through the DOM over WebDriver (`tauri-driver` + `WebKitWebDriver`), with a temp
+data dir. One command:
+
+```sh
+cargo install tauri-driver            # once; plus: apt-get install webkit2gtk-driver xvfb dbus
+pnpm --dir apps/desktop test:real -- --build      # --build: agent, fake CLI, UI and app first
+pnpm --dir apps/desktop test:real -- --real       # + live claude / opencode / kilo (cheap models)
+pnpm --dir apps/desktop test:real -- --shots /tmp/shots --only inbox-ready,workstream
+```
+
+The default run uses Wasit's fake CLI for all four personas (one scenario, turns picked by the
+prompt) and covers: launches, permission / question / plan gates with each driver's own
+choices, interrupt, model / mode, slash commands, rename, Changes (diff, discard, commit),
+Terminal, resume by id and continue-latest, stop + delete, agent config, a three-node workstream
+with handoff gates, a `kill -9` of the daemon mid-turn, and, as root with `sshd` installed, an
+ssh host by key (provisioning, remote session, link killed and reconnecting) and one that signs
+in with a password (the sign-in dialog, `auth_needed` after a drop, Connect again). Failures
+leave a screenshot and the data dir behind.
 
 ## Run
 

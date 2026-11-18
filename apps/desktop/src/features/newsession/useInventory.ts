@@ -12,6 +12,10 @@ export function useInventory(host: HostId, project: string, enabled = true): { d
   const live = useAppState((s) => s.inventory[host]);
   const [r, setR] = useState<{ key: string; drivers: DriverInventory[]; error: string } | null>(null);
   const key = `${host}|${project}`;
+  // A project's probes run after the first reply (`refreshing`); ask again whenever the host's
+  // inventory feed moves until they have finished. (The feed bumps on every discovery change.)
+  const refreshing = r?.key === key && r.drivers.some((d) => d.refreshing);
+  const tick = refreshing ? live : undefined;
   useEffect(() => {
     if (!enabled || !host) return;
     let off = false;
@@ -20,12 +24,13 @@ export function useInventory(host: HostId, project: string, enabled = true): { d
         (x) => !off && setR({ key, drivers: x.drivers, error: "" }),
         (e) => !off && setR({ key, drivers: [], error: errorMessage(e) }),
       );
-    }, 200);
+    }, r?.key === key ? 0 : 500);
     return () => {
       off = true;
       clearTimeout(h);
     };
-  }, [api, host, project, key, enabled]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, host, project, key, enabled, tick]);
   const fresh = r?.key === key;
   return { drivers: fresh && r.drivers.length ? r.drivers : live ?? [], loading: !fresh, error: fresh ? r.error : "" };
 }
