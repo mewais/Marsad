@@ -117,6 +117,25 @@ const scenario = {
       ], needs_approval: true },
       { type: "say", text: "Plan approved; starting with the token store." },
     ] },
+    { when: "deploy", steps: [
+      { type: "say", text: "Deploying the billing service to staging." },
+      { type: "tool", name: "Bash", input: { command: "pnpm deploy --env staging" }, needs_permission: false, result_if_allowed: "error: STAGING_DB_URL is not set" },
+      { type: "say", text: "The deploy failed: STAGING_DB_URL is missing from the staging environment." },
+      { type: "exit", code: 1 },
+    ] },
+    { when: "migrate the session", steps: [
+      { type: "think", text: "The middleware reads the legacy cookie in two places." },
+      { type: "tool", name: "Read", input: { file_path: "src/auth.ts" }, needs_permission: false, result_if_allowed: "export const SESSION_COOKIE = 'sid';" },
+      { type: "tool", name: "Edit", input: { file_path: "src/auth.ts" }, needs_permission: false, result_if_allowed: "1 replacement" },
+      { type: "usage", input_tokens: 18400, output_tokens: 1260, cached_tokens: 12100, cost_usd: 0.094, context_window: 200000 },
+      { type: "say", text: "Migrated: the middleware now issues a signed token and accepts the legacy cookie for 30 days." },
+    ] },
+    { when: "render the", steps: [
+      { type: "say", text: "Rendering the export now; this takes a few minutes." },
+      { type: "tool", name: "Bash", input: { command: "node scripts/render-invoice.mjs INV-2041" }, needs_permission: false, result_if_allowed: "page 1/4" },
+      { type: "sleep_ms", ms: 1800000 },
+      { type: "say", text: "Rendered." },
+    ] },
     { when: "long task", steps: [
       { type: "say", text: "Starting the long refactor." },
       { type: "plan", entries: [{ content: "Refactor the session store", status: "in_progress", priority: "high" }], needs_approval: false },
@@ -291,7 +310,7 @@ async function launchViaDialog({ agent, cwd, prompt, latest = false, resumeTitle
   }
   if (prompt) await type("#ns-prompt", prompt);
   const before = new Set((await fleetSessions()).map((s) => s.id));
-  await click("[role=dialog] button.primary");
+  await click("[role=dialog] button.primary:not([disabled])", null, 60_000);
   return waitFor(async () => (await fleetSessions()).find((s) => !before.has(s.id)), "the launched session", 60_000);
 }
 
@@ -588,9 +607,19 @@ scenario_("app-kill-recovery", async () => {
   if ((await rpc("daemon.info")).pid !== daemon) throw new Error("the daemon was restarted with the app");
   await openSession(s);
   await el("[data-gate=permission]", null, 30_000);
-  // Earlier turns are still there, in order, before the pending one.
-  const order = await wd.exec(() => { const t = document.querySelector(".sd-body, main")?.innerText ?? document.body.innerText; return [t.indexOf("echo: hello from codex"), t.lastIndexOf("please run the tests")]; });
-  if (!(order[0] >= 0 && order[1] > order[0])) throw new Error(`transcript not continuous: ${order}`);
+  // The transcript is continuous: one ordered event sequence from the spawn and first prompt to the
+  // pending gate, and the UI shows the latest turn above the gate.
+  const all = [];
+  for (let before = null; ;) {
+    const page = await rpc("session.history", { id: s.id, limit: 500, ...(before ? { before } : {}) }, local);
+    all.unshift(...page.events);
+    if (!page.has_more) break;
+    before = page.events[0].cursor;
+  }
+  const unordered = all.filter((e, i) => i > 0 && e.cursor <= all[i - 1].cursor).length;
+  const text = JSON.stringify(all);
+  if (unordered || all[0].kind !== "spawned" || !text.includes("hello from codex") || !text.includes("gate_requested")) throw new Error(`history: ${all.length} events, ${unordered} out of order, first ${all[0]?.kind}`);
+  await bodyHas("please run the tests");
   await click("[data-gate=permission] .choices button", "Allow");
   await waitPhase(s.id, "idle");
   await bodyHas("All 12 auth tests pass.");
@@ -911,6 +940,38 @@ for (const [d, L] of Object.entries(LIVE)) {
   }, { real: true });
 }
 
+scenario_("live-claude-config-override", async () => {
+  // An MCP server claude inherits from its own config (local scope for this project) is
+  // disabled by an override and another one is added; the launched CLI's own report (its
+  // init message's server list) must agree.
+  const server = (name) => ({ command: bin.agent, args: ["mcp", "--socket", path.join(root, "none.sock"), "--session", "aaaaaaaaaaaa"] });
+  const claudeEnv = { ...process.env, ...userXdg, PWD: project };
+  execFileSync("claude", ["mcp", "add-json", "--scope", "local", "inherited-tools", JSON.stringify(server())], { cwd: project, stdio: "pipe", env: claudeEnv });
+  try {
+    await rpc("drivers.refresh", { driver: "claude", project }, local);
+    const base = await waitFor(async () => { const b = await rpc("agentconfig.base", { driver: "claude", project, refresh: false }, local); return !b.refreshing && b; }, "claude base layer", 120_000);
+    if (!base.items.some((i) => i.kind === "mcp_server" && i.name === "inherited-tools")) throw new Error("the inherited server is not in the base layer");
+    const t = server();
+    const r = await rpc("sessions.launch", {
+      host: local, driver: "claude", cwd: project, model: "haiku", mode: null, first_prompt: "Reply with exactly: ready", resume: { kind: "new" }, labels: {}, workstream: null,
+      overrides: { items: [
+        { kind: "mcp_server", name: "inherited-tools", driver: null, action: "disable" },
+        { kind: "mcp_server", name: "added-tools", driver: null, action: "set", value: { kind: "mcp_server", server: { transport: "stdio", command: t.command, args: t.args, env: {} } } },
+      ], env: [], disallowed_tools: [] },
+    });
+    await waitPhase(r.id, "idle", 180_000);
+    const page = await rpc("session.history", { id: r.id, limit: 500 }, local);
+    const init = page.events.find((e) => e.kind === "agent" && e.event.type === "session_init");
+    const names = (init?.event.mcp_servers ?? []).map((m) => m.name);
+    if (!names.includes("added-tools") || names.includes("inherited-tools") || !names.includes("wasl")) throw new Error(`claude reports MCP servers ${JSON.stringify(names)}`);
+    await openSession({ id: r.id }, "config");
+    await shot("18-session-config-overrides");
+    return `claude reports ${names.join(", ")}`;
+  } finally {
+    spawnSync("claude", ["mcp", "remove", "--scope", "local", "inherited-tools"], { cwd: project, stdio: "ignore", env: claudeEnv });
+  }
+}, { real: true });
+
 // OpenCode / Kilo cannot ask through their own question tool; Marsad injects `ask_user`.
 for (const d of ["opencode", "kilo"]) {
   scenario_(`live-${d}-ask-user`, async () => {
@@ -953,6 +1014,117 @@ scenario_("live-delegation", async () => {
   await bodyHas("kiwi", 60_000);
 }, { real: true });
 
+// ── screenshots for the owner (--shots): every screen on believable live data ─────────────
+
+const key = (k, mods = {}) => wd.exec((k, m) => document.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, ...m })), k, mods);
+const launchRpc = (host, driver, prompt, extra = {}) => rpc("sessions.launch", { host, driver, cwd: extra.cwd ?? null, model: null, mode: null, first_prompt: prompt, resume: { kind: "new" }, labels: {}, workstream: null, overrides: { items: [], env: [], disallowed_tools: [] } });
+const sessionPage = async (host, id, tab = "") => { await go(`#/session/${encodeURIComponent(host)}/${id}${tab ? `?tab=${tab}` : ""}`); await el(".sd-head"); };
+
+scenario_("showcase", async () => {
+  if (!dirs.shots) return "skipped: no --shots";
+  const drv = REAL ? "codex" : "claude"; // a fake persona on this host
+  // Local sessions: finished unseen, failed, working, gates.
+  const finished = await launchRpc(local, drv, "migrate the session cookies to signed tokens", { cwd: project });
+  const failed = await launchRpc(local, "codex", "deploy the billing service to staging", { cwd: project });
+  const working = await launchRpc(local, "codex", "start the long task: refactor the session store", { cwd: project });
+  const gated = await launchRpc(local, "codex", "please run the tests for the auth module", { cwd: project });
+  await waitPhase(failed.id, ["failed", "exited"], 60_000);
+  await waitPhase(gated.id, "needs_you", 60_000);
+  // Remote sessions on build-box (fake personas of every driver).
+  const box = await hostEntry("build-box");
+  const remote = [];
+  if (box) {
+    remote.push(await launchRpc(box.id, "claude", "please run the tests on the build box"));
+    remote.push(await launchRpc(box.id, "opencode", "which approach for the nightly build cache?"));
+    remote.push(await launchRpc(box.id, "kilo", "migrate the session cookies on the build box"));
+  }
+  // A running three-node workstream: one task in flight, one handoff waiting for you.
+  const wnode = (id, name, role, host) => ({ id, name, role, description: `the ${role}`, session: null, launch: { host, driver: "codex", cwd: host === local ? project : null, model: null, mode: null, first_prompt: null, labels: {}, overrides: { items: [], env: [], disallowed_tools: [] } } });
+  const ws = await rpc("workstreams.create", {
+    name: "Invoice export v3", description: "An orchestrator with a PDF and a CSV worker",
+    nodes: [wnode("orch", "orchestrator", "lead", local), wnode("pdf", "pdf-worker", "PDF rendering", local), wnode("csv", "csv-worker", "CSV export", box ? box.id : local)],
+    edges: [{ from: "orch", to: "pdf", policy: "ask" }, { from: "orch", to: "csv", policy: "ask" }], limits: {}, layout: {},
+  });
+  await rpc("workstreams.launch", { id: ws.id });
+  const v = await waitFor(async () => { const x = await rpc("workstreams.get", { id: ws.id }); return x.nodes.every((n) => n.session) && x; }, "showcase nodes launched", 120_000);
+  const orch = v.nodes.find((n) => n.id === "orch").session;
+  await sleep(1500);
+  await rpc("wasl.delegate", { from: orch.session, to: ["pdf-worker"], mode: "command", instruction: "render the PDF export for INV-2041" }, orch.host);
+  await click("[data-gate=handoff] .choices button", "Allow once", 30_000).catch(async () => {
+    await go(`#/session/${encodeURIComponent(orch.host)}/${orch.session}`);
+    await click("[data-gate=handoff] .choices button", "Allow once", 30_000);
+  });
+  await sleep(800);
+  await rpc("wasl.delegate", { from: orch.session, to: ["csv-worker"], mode: "command", instruction: "export the CSV for INV-2041" }, orch.host);
+  // A draft for design mode.
+  const draft = await rpc("workstreams.create", {
+    name: "Release notes pipeline", description: "Collect merged PRs, draft notes, review",
+    nodes: [wnode("collect", "collector", "collect merged PRs", local), wnode("write", "writer", "draft the notes", local), wnode("review", "reviewer", "review the draft", local)],
+    edges: [{ from: "collect", to: "write", policy: "always_allow" }, { from: "write", to: "review", policy: "ask" }], limits: {}, layout: {},
+  });
+  // Live gates: claude's own choices, and an ask_user question from OpenCode.
+  const lc = launched["live-claude"];
+  if (lc) { await openSession(lc); await sendPrompt(shell("claude", "mkdir -p build/reports")); await waitPhase(lc.id, "needs_you", 120_000).catch(() => {}); }
+  const lo = launched["live-opencode"];
+  if (lo) { await openSession(lo); await sendPrompt("Use the ask_user tool (marsad MCP server) to ask me which export format to ship first, as a single choice between PDF, CSV and XLSX, each with a one-line description. Then reply with my choice."); await waitFor(async () => (await pendingGate(lo.id))?.gate_type === "question", "ask_user question", 120_000).catch(() => {}); }
+  await sleep(1500);
+
+  await rpc("store.settings.set", { key: "theme", value: "dark" });
+  await go("#/inbox");
+  await sleep(1500);
+  await shot("dark-01-inbox");
+  // Session screens.
+  if (lc) { await openSession(lc); await el("[data-gate=permission]", null, 5000).catch(() => {}); await shot("dark-02-session-activity-permission-gate-claude-live"); }
+  if (lo) { await openSession(lo); await shot("dark-03-session-question-gate-ask-user-opencode-live"); }
+  const main = launched.claude ?? launched.codex ?? finished;
+  for (const [tab, name] of [["changes", "dark-04-session-changes"], ["config", "dark-05-session-config"], ["usage", "dark-06-session-usage"], ["terminal", "dark-07-session-terminal"]]) {
+    await openSession(finished, tab);
+    if (tab === "changes") { fs.appendFileSync(path.join(project, "src/auth.ts"), "export const TOKEN_TTL_DAYS = 30;\n"); await rpc("fleet.git_refresh", { host: local, cwd: project }); await click("[role=option]", "src/auth.ts", 20_000).catch(() => {}); }
+    if (tab === "terminal") { await click(".xterm-box .xterm").catch(() => {}); await wd.sendKeys(await el(".xterm-box textarea"), "git log --oneline | head -5" + Keys.ENTER).catch(() => {}); await sleep(1200); }
+    await shot(name);
+  }
+  void main;
+  await openSession(failed); await shot("dark-08-session-failed");
+  // New session dialog.
+  await go("#/inbox");
+  await button("New session");
+  await el("[role=dialog]");
+  await click("[role=dialog] [role=radio]:not([disabled])", "Claude Code", 60_000);
+  await waitFor(async () => (await wd.exec(() => document.querySelector("#ns-cwd")?.value)) === project || (await type("#ns-cwd", project), false), "folder", 20_000).catch(() => {});
+  await type("#ns-prompt", "Add rate limiting to the invoice API");
+  await sleep(800);
+  await shot("dark-09-new-session-new");
+  await button("Continue an existing one");
+  await sleep(1500);
+  await shot("dark-10-new-session-continue-resume-list");
+  await resetUi();
+  // Workstreams.
+  await go("#/workstreams"); await sleep(800); await shot("dark-11-workstreams-list");
+  await go(`#/workstreams/${ws.id}`); await el("[data-gate=handoff]", null, 20_000).catch(() => {}); await sleep(1200); await shot("dark-12-workstream-graph-running-handoff-pending");
+  await go(`#/workstreams/${draft.id}`); await sleep(1200); await shot("dark-13-workstream-design-mode");
+  // Hosts, config, settings.
+  await go("#/hosts"); await sleep(800); await click(".hrow[data-host]", "build-box").catch(() => {}); await sleep(600); await shot("dark-14-hosts");
+  await go("#/config"); await sleep(1500); await shot("dark-15-config-agent-configuration");
+  await go("#/settings"); await button("Notifications"); await sleep(600); await shot("dark-16-settings-notifications");
+  // Palette and shortcut sheet.
+  await go("#/inbox"); await sleep(500);
+  await key("k", { ctrlKey: true }); await sleep(700); await shot("dark-17-command-palette"); await key("Escape"); await resetUi();
+  await key("?"); await sleep(700); await shot("dark-18-shortcut-sheet"); await key("Escape"); await resetUi();
+  // Light.
+  await rpc("store.settings.set", { key: "theme", value: "light" });
+  await go("#/inbox"); await sleep(1200); await shot("light-01-inbox");
+  await go(`#/workstreams/${ws.id}`); await sleep(1200); await shot("light-02-workstream-graph-running");
+  await rpc("store.settings.set", { key: "theme", value: "dark" });
+  // Leave nothing waiting on a person.
+  for (const id of [lc?.id, lo?.id].filter(Boolean)) {
+    const g = await pendingGate(id);
+    if (g?.gate_type === "permission") await rpc("session.command", { id, command: { command: "answer_gate", request_id: g.request_id, decision: { choice: g.choices.find((c) => c.kind === "reject_once")?.id ?? g.choices[0].id } } }, local).catch(() => {});
+    if (g?.gate_type === "question") await rpc("session.command", { id, command: { command: "answer_question", request_id: g.request_id, answer: { answers: { [g.questions[0].id]: ["PDF"] } } } }, local).catch(() => {});
+  }
+  void working; void remote;
+  return `${(await fleetSessions()).length} sessions on this host`;
+});
+
 /** Close whatever a failed scenario left open (dialogs, menus) and go to the Inbox. */
 async function resetUi() {
   for (let i = 0; i < 3; i++) {
@@ -971,6 +1143,8 @@ let code = 0;
 try {
   await startApp();
   local = (await rpc("hosts.list")).hosts.find((h) => h.kind.kind === "local").id;
+  // Screenshots for the owner are taken in the dark theme (the showcase adds light ones).
+  if (dirs.shots) await rpc("store.settings.set", { key: "theme", value: "dark" });
   for (const sc of scenarios) {
     if (sc.real && !REAL) continue;
     if (ONLY && !ONLY.includes(sc.name)) continue;
