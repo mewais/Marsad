@@ -21,6 +21,10 @@ pub struct DaemonInfo {
     pub hub: bool,
     pub data_dir: String,
     pub pid: u32,
+    /// The daemon's own executable (also the `shim` and `mcp` entry).
+    pub exe: String,
+    /// The path of the endpoint it serves (on Windows the path its named pipe derives from).
+    pub socket: String,
 }
 
 /// The readiness line `marsad-agent serve` prints on stdout once it accepts connections.

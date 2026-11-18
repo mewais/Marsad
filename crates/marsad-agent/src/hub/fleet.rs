@@ -2,31 +2,22 @@
 //! `host.sessions` feed (over its supervised link, resubscribing from its cursor across
 //! reconnects) and the hub's link states into [`FleetEvent`]s.
 //!
-//! Replay: the actor keeps the last [`RING`] events. A subscriber resuming from a cursor still
-//! in the ring gets exactly the events after it; any other cursor (expired, another daemon
-//! run) starts with a `reset`. Subscribing is a message to the actor, so the replay/reset and
-//! the live receiver join with no gap. A subscriber that lags is closed with `Lagged` and
-//! resumes from its cursor.
+//! Replay and resume follow [`super::ring`].
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::time::Duration;
 
-use futures::stream::StreamExt;
 use marsad_proto::fleet::{FleetEvent, FleetHost, FleetLink};
 use marsad_proto::hosts::{AuthPrompt, HostEntry};
 use marsad_proto::{HostId, LinkState};
 use tokio::sync::{broadcast, mpsc, oneshot};
-use wasit_control::{CloseReason, Cursor, DurableOpts, EventStream, Hub, RpcError, Supervised};
+use wasit_control::{Cursor, DurableOpts, EventStream, Hub, RpcError, Supervised};
 use wasit_runtime::wire::{topics as rt_topics, HostEvent};
 use wasit_runtime::{SessionManager, StreamEnd};
 
-/// Events kept for replay.
-pub const RING: usize = 4096;
-const INPUT_QUEUE: usize = 1024;
-const LIVE_QUEUE: usize = 1024;
+use super::ring::{self, Joined, Ring};
 
-type Item = (u64, FleetEvent);
-type Subscribed = (Vec<(String, FleetEvent)>, broadcast::Receiver<Item>, String);
+const INPUT_QUEUE: usize = 1024;
 
 enum Input {
     HostUpserted(HostEntry, FleetLink),
@@ -34,7 +25,7 @@ enum Input {
     Link(HostId, LinkState),
     Feed(HostId, HostEvent),
     Prompt(HostId, Option<AuthPrompt>),
-    Subscribe(Option<String>, oneshot::Sender<Subscribed>),
+    Subscribe(Option<String>, oneshot::Sender<Joined<FleetEvent>>),
     Snapshot(oneshot::Sender<Vec<FleetHost>>),
 }
 
@@ -45,27 +36,13 @@ pub struct Fleet {
 }
 
 struct State {
-    epoch: String,
     hosts: BTreeMap<HostId, FleetHost>,
-    ring: VecDeque<Item>,
-    next: u64,
-    live: broadcast::Sender<Item>,
+    ring: Ring<FleetEvent>,
 }
 
 impl State {
     fn emit(&mut self, ev: FleetEvent) {
-        self.next += 1;
-        let item = (self.next, ev);
-        if self.ring.len() == RING {
-            self.ring.pop_front();
-        }
-        self.ring.push_back(item.clone());
-        // No subscribers is fine.
-        let _ = self.live.send(item);
-    }
-
-    fn cursor(&self, n: u64) -> String {
-        format!("{}.{n}", self.epoch)
+        self.ring.emit(ev);
     }
 
     fn apply(&mut self, input: Input) {
@@ -138,28 +115,12 @@ impl State {
                 self.emit(FleetEvent::AuthPrompt { host: id, prompt });
             }
             Input::Subscribe(from, reply) => {
-                let first = self.ring.front().map(|(n, _)| *n).unwrap_or(self.next + 1);
-                let resume = from.as_deref().and_then(|c| {
-                    let (e, n) = c.split_once('.')?;
-                    let n: u64 = n.parse().ok()?;
-                    (e == self.epoch && n + 1 >= first && n <= self.next).then_some(n)
+                let hosts = &self.hosts;
+                let joined = self.ring.join(from.as_deref(), || FleetEvent::Reset {
+                    hosts: hosts.values().cloned().collect(),
                 });
-                let initial = match resume {
-                    Some(n) => self
-                        .ring
-                        .iter()
-                        .filter(|(m, _)| *m > n)
-                        .map(|(m, e)| (self.cursor(*m), e.clone()))
-                        .collect(),
-                    None => vec![(
-                        self.cursor(self.next),
-                        FleetEvent::Reset {
-                            hosts: self.hosts.values().cloned().collect(),
-                        },
-                    )],
-                };
                 // The subscriber may have gone away.
-                let _ = reply.send((initial, self.live.subscribe(), self.epoch.clone()));
+                let _ = reply.send(joined);
             }
             Input::Snapshot(reply) => {
                 // The asker may have gone away.
@@ -173,11 +134,8 @@ impl Fleet {
     pub fn spawn() -> Fleet {
         let (tx, mut rx) = mpsc::channel(INPUT_QUEUE);
         let mut st = State {
-            epoch: format!("{:x}", fastrand::u64(..) >> 16),
             hosts: BTreeMap::new(),
-            ring: VecDeque::new(),
-            next: 0,
-            live: broadcast::channel(LIVE_QUEUE).0,
+            ring: Ring::new(),
         };
         tokio::spawn(async move {
             while let Some(i) = rx.recv().await {
@@ -215,38 +173,10 @@ impl Fleet {
     pub async fn subscribe(&self, from: Option<Cursor>) -> Result<EventStream, RpcError> {
         let (tx, rx) = oneshot::channel();
         self.send(Input::Subscribe(from.map(|c| c.0), tx)).await;
-        let (initial, live, epoch) = rx
+        let joined = rx
             .await
             .map_err(|_| RpcError::internal("the fleet aggregator is gone"))?;
-        let enc = |c: String, e: &FleetEvent| {
-            serde_json::to_value(e)
-                .map(|v| (Cursor::new(c), v))
-                .map_err(|e| CloseReason::Error {
-                    error: RpcError::internal(e.to_string()),
-                })
-        };
-        let head: Vec<_> = initial.iter().map(|(c, e)| enc(c.clone(), e)).collect();
-        let tail = futures::stream::unfold(live, move |mut rx| {
-            let epoch = epoch.clone();
-            async move {
-                match rx.recv().await {
-                    Ok((n, e)) => Some((enc(format!("{epoch}.{n}"), &e), rx)),
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        Some((Err(CloseReason::Lagged), rx))
-                    }
-                    Err(broadcast::error::RecvError::Closed) => None,
-                }
-            }
-        })
-        .scan(false, |ended, item| {
-            // Stop after the first error (a `Lagged` close ends the stream).
-            if *ended {
-                return futures::future::ready(None);
-            }
-            *ended = item.is_err();
-            futures::future::ready(Some(item))
-        });
-        Ok(futures::stream::iter(head).chain(tail).boxed())
+        Ok(ring::stream(joined))
     }
 
     /// Feed the local session manager's `host.sessions` into the fleet (forever; resumes from

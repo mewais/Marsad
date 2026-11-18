@@ -24,9 +24,8 @@ use std::time::Duration;
 
 use marsad_proto::agentconfig::{LayerScope, OverrideLayer};
 use marsad_proto::hosts::HostEntry;
-use marsad_proto::store::{
-    NotificationPrefs, RecentProject, SeenMark, Settings, StoredLayer, WorkstreamDoc, WorkstreamPut,
-};
+use marsad_proto::store::{NotificationPrefs, RecentProject, SeenMark, Settings, StoredLayer};
+use marsad_proto::workstream::{Workstream, WorkstreamTemplate};
 use marsad_proto::{HostId, MarsadError, SessionId};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -68,7 +67,8 @@ impl From<StoreError> for MarsadError {
     fn from(e: StoreError) -> Self {
         match e {
             StoreError::NotFound(what) => MarsadError::NotFound { what },
-            StoreError::Invalid(m) | StoreError::Conflict(m) => MarsadError::invalid(m),
+            StoreError::Invalid(m) => MarsadError::invalid(m),
+            StoreError::Conflict(message) => MarsadError::Conflict { message },
             other => MarsadError::Store {
                 message: other.to_string(),
             },
@@ -86,10 +86,11 @@ pub enum Doc {
     Seen,
     Recent,
     Workstreams,
+    Templates,
 }
 
 impl Doc {
-    pub const ALL: [Doc; 7] = [
+    pub const ALL: [Doc; 8] = [
         Doc::Hosts,
         Doc::Settings,
         Doc::Notifications,
@@ -97,6 +98,7 @@ impl Doc {
         Doc::Seen,
         Doc::Recent,
         Doc::Workstreams,
+        Doc::Templates,
     ];
 
     pub fn file_name(self) -> &'static str {
@@ -108,6 +110,7 @@ impl Doc {
             Doc::Seen => "seen.json",
             Doc::Recent => "recent.json",
             Doc::Workstreams => "workstreams.json",
+            Doc::Templates => "workstream-templates.json",
         }
     }
 }
@@ -121,7 +124,8 @@ pub struct State {
     pub layers: Vec<StoredLayer>,
     pub seen: BTreeMap<(HostId, SessionId), SeenMark>,
     pub recent: Vec<RecentProject>,
-    pub workstreams: BTreeMap<String, WorkstreamDoc>,
+    pub workstreams: BTreeMap<String, Workstream>,
+    pub templates: BTreeMap<String, WorkstreamTemplate>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -243,7 +247,11 @@ async fn persist(dir: &Path, doc: Doc, st: &State) -> Result<(), StoreError> {
         }
         Doc::Recent => save(&path, &st.recent).await,
         Doc::Workstreams => {
-            let v: Vec<&WorkstreamDoc> = st.workstreams.values().collect();
+            let v: Vec<&Workstream> = st.workstreams.values().collect();
+            save(&path, &v).await
+        }
+        Doc::Templates => {
+            let v: Vec<&WorkstreamTemplate> = st.templates.values().collect();
             save(&path, &v).await
         }
     }
@@ -265,7 +273,8 @@ impl Store {
             })?;
         let f = |d: Doc| dir.join(d.file_name());
         let seen: SeenDoc = load(&f(Doc::Seen)).await?;
-        let workstreams: Vec<WorkstreamDoc> = load(&f(Doc::Workstreams)).await?;
+        let workstreams: Vec<Workstream> = load(&f(Doc::Workstreams)).await?;
+        let templates: Vec<WorkstreamTemplate> = load(&f(Doc::Templates)).await?;
         let state = State {
             hosts: load(&f(Doc::Hosts)).await?,
             settings: load(&f(Doc::Settings)).await?,
@@ -278,6 +287,7 @@ impl Store {
                 .collect(),
             recent: load(&f(Doc::Recent)).await?,
             workstreams: workstreams.into_iter().map(|w| (w.id.clone(), w)).collect(),
+            templates: templates.into_iter().map(|t| (t.id.clone(), t)).collect(),
         };
         let (tx, rx) = mpsc::channel(MAILBOX);
         let changes = broadcast::channel(64).0;
@@ -544,34 +554,32 @@ impl Store {
 
     // ── workstreams ─────────────────────────────────────────────────────────
 
-    pub async fn workstreams(&self) -> Result<Vec<WorkstreamDoc>, StoreError> {
+    pub async fn workstreams(&self) -> Result<Vec<Workstream>, StoreError> {
         self.read(|s| s.workstreams.values().cloned().collect())
             .await
     }
 
-    pub async fn put_workstream(&self, put: WorkstreamPut) -> Result<WorkstreamDoc, StoreError> {
-        if put.id.is_empty() {
+    pub async fn workstream(&self, id: String) -> Result<Workstream, StoreError> {
+        self.read(move |s| s.workstreams.get(&id).cloned().ok_or(id))
+            .await?
+            .map_err(|id| StoreError::NotFound(format!("workstream {id}")))
+    }
+
+    /// Store `ws` as is (the hub owns revisions). Refuses another schema version.
+    pub async fn put_workstream(&self, ws: Workstream) -> Result<(), StoreError> {
+        if ws.id.is_empty() {
             return Err(StoreError::Invalid("empty workstream id".into()));
         }
+        if ws.schema != marsad_proto::workstream::SCHEMA {
+            return Err(StoreError::Invalid(format!(
+                "workstream schema {} (expected {})",
+                ws.schema,
+                marsad_proto::workstream::SCHEMA
+            )));
+        }
         self.write(Doc::Workstreams, move |s| {
-            let current = s.workstreams.get(&put.id).map(|w| w.revision).unwrap_or(0);
-            if let Some(expected) = put.expected_revision {
-                if expected != current {
-                    return Err(StoreError::Conflict(format!(
-                        "workstream {} is at revision {current}, not {expected}",
-                        put.id
-                    )));
-                }
-            }
-            let doc = WorkstreamDoc {
-                id: put.id.clone(),
-                schema: put.schema,
-                revision: current + 1,
-                updated_at_ms: now_ms(),
-                doc: put.doc,
-            };
-            s.workstreams.insert(put.id, doc.clone());
-            Ok(doc)
+            s.workstreams.insert(ws.id.clone(), ws);
+            Ok(())
         })
         .await
     }
@@ -582,6 +590,37 @@ impl Store {
                 .remove(&id)
                 .map(|_| ())
                 .ok_or(StoreError::NotFound(format!("workstream {id}")))
+        })
+        .await
+    }
+
+    pub async fn templates(&self) -> Result<Vec<WorkstreamTemplate>, StoreError> {
+        self.read(|s| s.templates.values().cloned().collect()).await
+    }
+
+    pub async fn template(&self, id: String) -> Result<WorkstreamTemplate, StoreError> {
+        self.read(move |s| s.templates.get(&id).cloned().ok_or(id))
+            .await?
+            .map_err(|id| StoreError::NotFound(format!("template {id}")))
+    }
+
+    pub async fn put_template(&self, t: WorkstreamTemplate) -> Result<(), StoreError> {
+        if t.id.is_empty() {
+            return Err(StoreError::Invalid("empty template id".into()));
+        }
+        self.write(Doc::Templates, move |s| {
+            s.templates.insert(t.id.clone(), t);
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn delete_template(&self, id: String) -> Result<(), StoreError> {
+        self.write(Doc::Templates, move |s| {
+            s.templates
+                .remove(&id)
+                .map(|_| ())
+                .ok_or(StoreError::NotFound(format!("template {id}")))
         })
         .await
     }

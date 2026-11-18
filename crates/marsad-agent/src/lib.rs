@@ -9,7 +9,11 @@
 //!   hub link (`ssh <host> marsad-agent bridge`).
 //! * `shim` is the per-session process holder (`wasit_shim::run`).
 //! * `stop` asks the local daemon to exit (sessions keep running in their shims).
-//! * `mcp` is reserved for the orchestration MCP server (not yet available).
+//! * `mcp` is the Wasl MCP server an agent CLI launches (`wasl_mcp::run`); the hub injects it
+//!   into every session it launches (locked, provenance `automatic`, pre-allowed).
+//! * Every daemon embeds a Wasl node (`wasl.*`, journal under `<data>/wasl/`); the hub also
+//!   owns the workstream documents and pushes their topologies to the nodes
+//!   ([`hub::workstreams`]).
 //! * `--version` prints [`marsad_proto::daemon::VersionInfo`] as one JSON line.
 
 #![forbid(unsafe_code)]

@@ -5,7 +5,10 @@ pub mod auth;
 pub mod fleet;
 pub mod hosts;
 pub mod provision;
+pub mod ring;
 pub mod transport;
+pub mod workstreams;
+mod ws_methods;
 
 use std::sync::Arc;
 
@@ -15,13 +18,19 @@ use marsad_proto::agentconfig::{
     effective_config, AutomaticItem, BaseConfig, BaseRequest, EffectiveConfig, EffectiveRequest,
     LaunchReply, LaunchRequest, LayerScope, OverrideLayer, WorkstreamNodeRef,
 };
+use marsad_proto::daemon::DaemonInfo;
 use marsad_proto::hosts::{
     AskpassReply, AskpassRequest, AuthAnswer, AuthCancel, HostDraft, HostEntry, HostList, HostRef,
     LinkStates,
 };
 use marsad_proto::store::{
     LayerList, LayerSet, NotificationPrefs, RecentProject, RecentProjects, SeenMark, SeenMarkers,
-    SettingSet, WorkstreamList, WorkstreamPut, WorkstreamRef,
+    SettingSet,
+};
+use marsad_proto::workstream::{
+    AddNode, Connect, EdgeHistoryRequest, EdgeRef, FromTemplate, NodeRef, SaveTemplate,
+    TemplateList, TemplateRef, WorkstreamDraft, WorkstreamList, WorkstreamRef, WorkstreamState,
+    WorkstreamUpdate,
 };
 use marsad_proto::{methods, topics, Ack, DriverId, HostId, MarsadError, SessionId};
 use marsad_store::Store;
@@ -44,12 +53,38 @@ pub struct LaunchContext {
     pub project: Option<String>,
     pub session: SessionId,
     pub workstream: Option<WorkstreamNodeRef>,
+    /// The daemon of the target host (its binary and socket, e.g. for an MCP server that
+    /// talks back to it).
+    pub daemon: DaemonInfo,
 }
 
 /// Supplies items Marsad injects into every launch (e.g. the orchestration MCP server). They
 /// are applied after all override layers, locked, with provenance `automatic`.
 pub trait AutomaticItems: Send + Sync {
     fn items(&self, ctx: &LaunchContext) -> Vec<AutomaticItem>;
+}
+
+/// The Wasl MCP server (`marsad-agent mcp`), injected into every session so its agent can
+/// delegate as soon as a workstream connects it; pre-allowed (`trusted`), since Wasl gates
+/// handoffs itself.
+pub struct WaslMcp;
+
+impl AutomaticItems for WaslMcp {
+    fn items(&self, ctx: &LaunchContext) -> Vec<AutomaticItem> {
+        let cfg = wasl_mcp::mcp_server_config(
+            std::path::Path::new(&ctx.daemon.exe),
+            &["mcp".to_string()],
+            std::path::Path::new(&ctx.daemon.socket),
+            ctx.session.as_str(),
+        );
+        vec![AutomaticItem {
+            provider: "wasl".into(),
+            name: cfg.name,
+            value: marsad_proto::agentconfig::ItemValue::McpServer {
+                server: cfg.transport,
+            },
+        }]
+    }
 }
 
 /// See the module docs.
@@ -62,6 +97,7 @@ pub struct HubServices {
     pub routing: Arc<dyn Service>,
     pub drivers: DriverRegistry,
     pub automatic: Vec<Arc<dyn AutomaticItems>>,
+    pub workstreams: workstreams::Workstreams,
 }
 
 impl HubServices {
@@ -148,12 +184,14 @@ impl HubServices {
         if let Some(o) = overrides.filter(|o| !o.is_empty()) {
             layers.push((session_scope, o));
         }
+        let daemon: DaemonInfo = self.on_host(ctx, host, methods::DAEMON_INFO, ()).await?;
         let lctx = LaunchContext {
             host: host.clone(),
             driver: driver.clone(),
             project,
             session: session.clone(),
             workstream,
+            daemon,
         };
         let automatic: Vec<AutomaticItem> =
             self.automatic.iter().flat_map(|p| p.items(&lctx)).collect();
@@ -366,17 +404,78 @@ impl HubServices {
                     projects: self.store.add_recent(r).await?,
                 }))
             }
-            methods::STORE_WORKSTREAMS_LIST => enc(ok(WorkstreamList {
-                workstreams: self.store.workstreams().await?,
+            methods::WS_LIST => enc(ok(WorkstreamList {
+                workstreams: self.workstreams.list().await?,
             })),
-            methods::STORE_WORKSTREAMS_PUT => {
-                let r: WorkstreamPut = params(p).map_err(dec)?;
-                enc(ok(self.store.put_workstream(r).await?))
-            }
-            methods::STORE_WORKSTREAMS_DELETE => {
+            methods::WS_GET => {
                 let r: WorkstreamRef = params(p).map_err(dec)?;
-                self.store.delete_workstream(r.id).await?;
+                enc(ok(self.workstreams.get(&r.id).await?))
+            }
+            methods::WS_CREATE => {
+                let d: WorkstreamDraft = params(p).map_err(dec)?;
+                enc(ok(self.ws_create(d).await?))
+            }
+            methods::WS_UPDATE => {
+                let u: WorkstreamUpdate = params(p).map_err(dec)?;
+                enc(ok(self.ws_update(u).await?))
+            }
+            methods::WS_DELETE => {
+                let r: WorkstreamRef = params(p).map_err(dec)?;
+                self.workstreams.delete(&r.id).await?;
                 enc(ok(Ack {}))
+            }
+            methods::WS_LAUNCH => {
+                let r: WorkstreamRef = params(p).map_err(dec)?;
+                enc(ok(self.ws_launch(ctx, &r.id).await?))
+            }
+            methods::WS_ADD_NODE => {
+                let a: AddNode = params(p).map_err(dec)?;
+                enc(ok(self.ws_add_node(ctx, a).await?))
+            }
+            methods::WS_REMOVE_NODE => {
+                let r: NodeRef = params(p).map_err(dec)?;
+                enc(ok(self.ws_remove_node(r).await?))
+            }
+            methods::WS_CONNECT => {
+                let c: Connect = params(p).map_err(dec)?;
+                enc(ok(self.ws_connect(c, true).await?))
+            }
+            methods::WS_SET_POLICY => {
+                let c: Connect = params(p).map_err(dec)?;
+                enc(ok(self.ws_connect(c, false).await?))
+            }
+            methods::WS_DISCONNECT => {
+                let r: EdgeRef = params(p).map_err(dec)?;
+                enc(ok(self.ws_disconnect(r).await?))
+            }
+            methods::WS_PAUSE | methods::WS_RESUME | methods::WS_ARCHIVE => {
+                let r: WorkstreamRef = params(p).map_err(dec)?;
+                let to = match method {
+                    methods::WS_PAUSE => WorkstreamState::Paused,
+                    methods::WS_RESUME => WorkstreamState::Running,
+                    _ => WorkstreamState::Archived,
+                };
+                enc(ok(self.ws_set_state(&r.id, to).await?))
+            }
+            methods::WS_SAVE_TEMPLATE => {
+                let s: SaveTemplate = params(p).map_err(dec)?;
+                enc(ok(self.ws_save_template(s).await?))
+            }
+            methods::WS_FROM_TEMPLATE => {
+                let f: FromTemplate = params(p).map_err(dec)?;
+                enc(ok(self.ws_from_template(f).await?))
+            }
+            methods::WS_TEMPLATES_LIST => enc(ok(TemplateList {
+                templates: self.store.templates().await?,
+            })),
+            methods::WS_TEMPLATES_DELETE => {
+                let r: TemplateRef = params(p).map_err(dec)?;
+                self.store.delete_template(r.id).await?;
+                enc(ok(Ack {}))
+            }
+            methods::WS_HISTORY => {
+                let r: EdgeHistoryRequest = params(p).map_err(dec)?;
+                enc(ok(self.ws_history(ctx, r).await?))
             }
             other => Err(MarsadError::NotFound {
                 what: format!("method {other}"),
@@ -431,6 +530,7 @@ impl Service for HubServices {
         match topic {
             topics::FLEET => self.fleet.subscribe(from).await,
             topics::HOSTS_LINKS => Ok(self.links(from)),
+            topics::WORKSTREAMS => self.workstreams.subscribe(from).await,
             _ => Err(RpcError::topic_not_found(topic)),
         }
     }

@@ -7,7 +7,7 @@ use marsad_agent::{cli::Options, serve, version};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: marsad-agent serve [--hub] [options] | bridge [options] | stop [options] | shim <args> | mcp | --version"
+        "usage: marsad-agent serve [--hub] [options] | bridge [options] | stop [options] | shim <args> | mcp --socket <path> --session <id> | --version"
     );
     ExitCode::from(2)
 }
@@ -57,10 +57,16 @@ fn main() -> ExitCode {
             }
         }
         Some("mcp") => {
-            eprintln!(
-                "marsad-agent mcp: the orchestration MCP server is not yet available (it arrives with the Wasl rebuild)"
-            );
-            return ExitCode::from(2);
+            // The Wasl MCP server an agent CLI launches (`--socket <daemon socket> --session
+            // <id>`, injected into every session by the hub); it builds its own runtime.
+            let rest: Result<Vec<String>, _> = args.map(|a| a.into_string()).collect();
+            return match rest {
+                Ok(rest) => wasl_mcp::run(&rest),
+                Err(bad) => {
+                    eprintln!("marsad-agent mcp: argument is not UTF-8: {bad:?}");
+                    ExitCode::from(2)
+                }
+            };
         }
         Some("serve" | "bridge" | "stop") => {}
         _ => return usage(),

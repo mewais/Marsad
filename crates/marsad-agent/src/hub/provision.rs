@@ -278,6 +278,22 @@ impl LinkConnector for BootstrapConnector {
             }
         }
         let client = ControlClient::connect(io, opts).await?;
+        let hello = client.connection().remote_hello().clone();
+        let theirs = hello.host_id;
+        // (Another build is restarted through the provisioner, which also fixes the id.)
+        if theirs != host && hello.build == self.own.build {
+            // A daemon started earlier under another id (e.g. by hand): the next attempt
+            // restarts it as this host.
+            tracing::info!(host = %host, theirs = %theirs, "the host's daemon runs under another id; restarting it");
+            self.restarts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(host.clone());
+            self.prompts.arm(&host);
+            return Err(ConnectError::Protocol(format!(
+                "the daemon on this host runs as {theirs:?}, not {host:?}; restarting it"
+            )));
+        }
         Ok(client
             .with_attachment(child.clone())
             .with_diagnostics(child))

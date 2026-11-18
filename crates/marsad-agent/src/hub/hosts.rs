@@ -128,8 +128,9 @@ impl Registry {
     }
 
     async fn link(&self, entry: HostEntry) -> Result<(), MarsadError> {
-        let argv = bootstrap_argv(&entry)
-            .ok_or_else(|| MarsadError::invalid("the local host has no link"))?;
+        let argv = bootstrap_argv(&entry).ok_or_else(|| {
+            MarsadError::invalid("no link for this host (the local host, or an unusable id)")
+        })?;
         self.inner
             .entries
             .write()
@@ -190,8 +191,10 @@ impl Registry {
             Some(id) if taken(&id) => {
                 return Err(MarsadError::invalid(format!("host id {id} is taken")))
             }
-            Some(id) if id.as_str().is_empty() => {
-                return Err(MarsadError::invalid("empty host id"))
+            Some(id) if !super::transport::safe_host_id(id.as_str()) => {
+                return Err(MarsadError::invalid(
+                    "a host id is letters, digits, '-', '_' and '.'",
+                ))
             }
             Some(id) => id,
             None => {

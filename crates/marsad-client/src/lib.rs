@@ -33,7 +33,13 @@ use marsad_proto::pty::{
 };
 use marsad_proto::store::{
     NotificationPrefs, RecentProject, RecentProjects, SeenMark, SeenMarkers, SettingSet, Settings,
-    StoredLayer, WorkstreamDoc, WorkstreamList, WorkstreamPut, WorkstreamRef,
+    StoredLayer,
+};
+use marsad_proto::workstream::{
+    AddNode, Connect, EdgeHistoryPage, EdgeHistoryRequest, EdgeRef, FromTemplate,
+    LaunchWorkstreamReply, NodeRef, SaveTemplate, TemplateList, TemplateRef, Workstream,
+    WorkstreamDraft, WorkstreamList, WorkstreamRef, WorkstreamTemplate, WorkstreamUpdate,
+    WorkstreamsEvent,
 };
 use marsad_proto::{methods, topics, Ack, DriverId, HostId, MarsadError};
 use serde::de::DeserializeOwned;
@@ -704,23 +710,128 @@ impl MarsadClient {
         Ok(r.projects)
     }
 
-    pub async fn workstreams(&self) -> Result<Vec<WorkstreamDoc>, ClientError> {
-        let l: WorkstreamList = self.call(None, methods::STORE_WORKSTREAMS_LIST, ()).await?;
+    // ── generic (for bridges such as the desktop shell) ─────────────────────
+
+    /// Any method, untyped (`host` routes it like the typed calls).
+    pub async fn call_raw(
+        &self,
+        host: Option<&HostId>,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.call(host, method, params).await
+    }
+
+    /// Any topic, untyped and durable.
+    pub fn subscribe_raw(
+        &self,
+        host: Option<&HostId>,
+        topic: impl Into<String>,
+        from: Option<Cursor>,
+    ) -> Subscription<serde_json::Value> {
+        self.subscribe(host, topic.into(), from)
+    }
+
+    // ── workstreams ─────────────────────────────────────────────────────────
+
+    /// The `workstreams` topic.
+    pub fn workstreams_topic(&self, from: Option<Cursor>) -> Subscription<WorkstreamsEvent> {
+        self.subscribe(None, topics::WORKSTREAMS.into(), from)
+    }
+
+    pub async fn workstreams(&self) -> Result<Vec<Workstream>, ClientError> {
+        let l: WorkstreamList = self.call(None, methods::WS_LIST, ()).await?;
         Ok(l.workstreams)
     }
 
-    pub async fn put_workstream(&self, put: WorkstreamPut) -> Result<WorkstreamDoc, ClientError> {
-        self.call(None, methods::STORE_WORKSTREAMS_PUT, put).await
+    pub async fn workstream(&self, id: &str) -> Result<Workstream, ClientError> {
+        self.call(None, methods::WS_GET, WorkstreamRef { id: id.into() })
+            .await
+    }
+
+    pub async fn create_workstream(&self, d: WorkstreamDraft) -> Result<Workstream, ClientError> {
+        self.call(None, methods::WS_CREATE, d).await
+    }
+
+    pub async fn update_workstream(&self, u: WorkstreamUpdate) -> Result<Workstream, ClientError> {
+        self.call(None, methods::WS_UPDATE, u).await
     }
 
     pub async fn delete_workstream(&self, id: &str) -> Result<(), ClientError> {
         let _: Ack = self
+            .call(None, methods::WS_DELETE, WorkstreamRef { id: id.into() })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn launch_workstream(&self, id: &str) -> Result<LaunchWorkstreamReply, ClientError> {
+        self.call(None, methods::WS_LAUNCH, WorkstreamRef { id: id.into() })
+            .await
+    }
+
+    pub async fn add_node(&self, a: AddNode) -> Result<Workstream, ClientError> {
+        self.call(None, methods::WS_ADD_NODE, a).await
+    }
+
+    pub async fn remove_node(&self, r: NodeRef) -> Result<Workstream, ClientError> {
+        self.call(None, methods::WS_REMOVE_NODE, r).await
+    }
+
+    pub async fn connect_nodes(&self, c: Connect) -> Result<Workstream, ClientError> {
+        self.call(None, methods::WS_CONNECT, c).await
+    }
+
+    pub async fn set_edge_policy(&self, c: Connect) -> Result<Workstream, ClientError> {
+        self.call(None, methods::WS_SET_POLICY, c).await
+    }
+
+    pub async fn disconnect_nodes(&self, r: EdgeRef) -> Result<Workstream, ClientError> {
+        self.call(None, methods::WS_DISCONNECT, r).await
+    }
+
+    pub async fn pause_workstream(&self, id: &str) -> Result<Workstream, ClientError> {
+        self.call(None, methods::WS_PAUSE, WorkstreamRef { id: id.into() })
+            .await
+    }
+
+    pub async fn resume_workstream(&self, id: &str) -> Result<Workstream, ClientError> {
+        self.call(None, methods::WS_RESUME, WorkstreamRef { id: id.into() })
+            .await
+    }
+
+    pub async fn archive_workstream(&self, id: &str) -> Result<Workstream, ClientError> {
+        self.call(None, methods::WS_ARCHIVE, WorkstreamRef { id: id.into() })
+            .await
+    }
+
+    pub async fn save_template(&self, s: SaveTemplate) -> Result<WorkstreamTemplate, ClientError> {
+        self.call(None, methods::WS_SAVE_TEMPLATE, s).await
+    }
+
+    pub async fn from_template(&self, f: FromTemplate) -> Result<Workstream, ClientError> {
+        self.call(None, methods::WS_FROM_TEMPLATE, f).await
+    }
+
+    pub async fn templates(&self) -> Result<Vec<WorkstreamTemplate>, ClientError> {
+        let l: TemplateList = self.call(None, methods::WS_TEMPLATES_LIST, ()).await?;
+        Ok(l.templates)
+    }
+
+    pub async fn delete_template(&self, id: &str) -> Result<(), ClientError> {
+        let _: Ack = self
             .call(
                 None,
-                methods::STORE_WORKSTREAMS_DELETE,
-                WorkstreamRef { id: id.into() },
+                methods::WS_TEMPLATES_DELETE,
+                TemplateRef { id: id.into() },
             )
             .await?;
         Ok(())
+    }
+
+    pub async fn edge_history(
+        &self,
+        r: EdgeHistoryRequest,
+    ) -> Result<EdgeHistoryPage, ClientError> {
+        self.call(None, methods::WS_HISTORY, r).await
     }
 }

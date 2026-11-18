@@ -56,9 +56,33 @@
 //! | [`methods::STORE_SEEN_MARK_ALL`] | — | [`store::SeenMarkers`] |
 //! | [`methods::STORE_RECENT_LIST`] | — | [`store::RecentProjects`] |
 //! | [`methods::STORE_RECENT_ADD`] | [`store::RecentProject`] | [`store::RecentProjects`] |
-//! | [`methods::STORE_WORKSTREAMS_LIST`] | — | [`store::WorkstreamList`] |
-//! | [`methods::STORE_WORKSTREAMS_PUT`] | [`store::WorkstreamPut`] | [`store::WorkstreamDoc`] |
-//! | [`methods::STORE_WORKSTREAMS_DELETE`] | [`store::WorkstreamRef`] | [`Ack`] |
+//!
+//! Workstreams (hub; see [`workstream`] for the model):
+//!
+//! | method | params | result |
+//! |---|---|---|
+//! | [`methods::WS_LIST`] | — | [`workstream::WorkstreamList`] |
+//! | [`methods::WS_GET`] | [`workstream::WorkstreamRef`] | [`workstream::Workstream`] |
+//! | [`methods::WS_CREATE`] | [`workstream::WorkstreamDraft`] | [`workstream::Workstream`] |
+//! | [`methods::WS_UPDATE`] | [`workstream::WorkstreamUpdate`] | [`workstream::Workstream`] |
+//! | [`methods::WS_DELETE`] | [`workstream::WorkstreamRef`] | [`Ack`] |
+//! | [`methods::WS_LAUNCH`] | [`workstream::WorkstreamRef`] | [`workstream::LaunchWorkstreamReply`] |
+//! | [`methods::WS_ADD_NODE`] | [`workstream::AddNode`] | [`workstream::Workstream`] |
+//! | [`methods::WS_REMOVE_NODE`] | [`workstream::NodeRef`] | [`workstream::Workstream`] |
+//! | [`methods::WS_CONNECT`] | [`workstream::Connect`] | [`workstream::Workstream`] |
+//! | [`methods::WS_DISCONNECT`] | [`workstream::EdgeRef`] | [`workstream::Workstream`] |
+//! | [`methods::WS_SET_POLICY`] | [`workstream::Connect`] | [`workstream::Workstream`] |
+//! | [`methods::WS_PAUSE`] / [`methods::WS_RESUME`] / [`methods::WS_ARCHIVE`] | [`workstream::WorkstreamRef`] | [`workstream::Workstream`] |
+//! | [`methods::WS_SAVE_TEMPLATE`] | [`workstream::SaveTemplate`] | [`workstream::WorkstreamTemplate`] |
+//! | [`methods::WS_FROM_TEMPLATE`] | [`workstream::FromTemplate`] | [`workstream::Workstream`] |
+//! | [`methods::WS_TEMPLATES_LIST`] | — | [`workstream::TemplateList`] |
+//! | [`methods::WS_TEMPLATES_DELETE`] | [`workstream::TemplateRef`] | [`Ack`] |
+//! | [`methods::WS_HISTORY`] | [`workstream::EdgeHistoryRequest`] | [`workstream::EdgeHistoryPage`] |
+//!
+//! Wasl (`wasl.*`, see [`wasl`]) is served by every daemon's embedded node and routed by
+//! `host` like the host services; clients normally need only `wasl.tasks.list` /
+//! `wasl.task.cancel`. Handoff gates are answered with the runtime's `session.command`
+//! (`answer_gate`) on the sending session, like any gate.
 //!
 //! # Topics (`Subscribe.topic` → payload, cursor)
 //!
@@ -68,6 +92,8 @@
 //! | `pty.output:<pty id>` ([`topics::pty_output`]) | [`pty::PtyEvent`] | byte offset after the event (decimal) |
 //! | [`topics::FLEET`] (hub) | [`fleet::FleetEvent`] | `"<epoch>.<n>"`; unknown/expired ⇒ starts with `Reset` |
 //! | [`topics::HOSTS_LINKS`] (hub) | [`hosts::LinkStates`] | `"<epoch>.<n>"`; every event is the full map |
+//! | [`topics::WORKSTREAMS`] (hub) | [`workstream::WorkstreamsEvent`] | `"<epoch>.<n>"`; unknown/expired ⇒ starts with `Reset` |
+//! | Wasl: `wasl.tasks`, `wasl.edges` (any host) | see [`wasl`] | journal sequence (decimal) |
 //!
 //! # Errors
 //!
@@ -84,6 +110,10 @@ pub mod git;
 pub mod hosts;
 pub mod pty;
 pub mod store;
+pub mod workstream;
+
+/// Wasl's wire types (tasks, topology, edge policies).
+pub use wasl_proto as wasl;
 
 use serde::{Deserialize, Serialize};
 
@@ -152,9 +182,26 @@ pub mod methods {
     pub const STORE_SEEN_MARK_ALL: &str = "store.seen.mark_all";
     pub const STORE_RECENT_LIST: &str = "store.recent.list";
     pub const STORE_RECENT_ADD: &str = "store.recent.add";
-    pub const STORE_WORKSTREAMS_LIST: &str = "store.workstreams.list";
-    pub const STORE_WORKSTREAMS_PUT: &str = "store.workstreams.put";
-    pub const STORE_WORKSTREAMS_DELETE: &str = "store.workstreams.delete";
+
+    pub const WS_LIST: &str = "workstreams.list";
+    pub const WS_GET: &str = "workstreams.get";
+    pub const WS_CREATE: &str = "workstreams.create";
+    pub const WS_UPDATE: &str = "workstreams.update";
+    pub const WS_DELETE: &str = "workstreams.delete";
+    pub const WS_LAUNCH: &str = "workstreams.launch";
+    pub const WS_ADD_NODE: &str = "workstreams.add_node";
+    pub const WS_REMOVE_NODE: &str = "workstreams.remove_node";
+    pub const WS_CONNECT: &str = "workstreams.connect";
+    pub const WS_DISCONNECT: &str = "workstreams.disconnect";
+    pub const WS_SET_POLICY: &str = "workstreams.set_policy";
+    pub const WS_PAUSE: &str = "workstreams.pause";
+    pub const WS_RESUME: &str = "workstreams.resume";
+    pub const WS_ARCHIVE: &str = "workstreams.archive";
+    pub const WS_SAVE_TEMPLATE: &str = "workstreams.save_template";
+    pub const WS_FROM_TEMPLATE: &str = "workstreams.from_template";
+    pub const WS_TEMPLATES_LIST: &str = "workstreams.templates.list";
+    pub const WS_TEMPLATES_DELETE: &str = "workstreams.templates.delete";
+    pub const WS_HISTORY: &str = "workstreams.history";
 }
 
 /// Topic names.
@@ -162,6 +209,7 @@ pub mod topics {
     pub const PTY_OUTPUT_PREFIX: &str = "pty.output:";
     pub const FLEET: &str = "fleet";
     pub const HOSTS_LINKS: &str = "hosts.links";
+    pub const WORKSTREAMS: &str = "workstreams";
 
     /// The output topic of one terminal.
     pub fn pty_output(id: &str) -> String {
@@ -179,6 +227,8 @@ pub const HUB_ROUTES: &[&str] = &[
     "fleet",
     "agentconfig.effective",
     "sessions.launch",
+    "workstreams",
+    "workstreams.",
 ];
 
 /// Error codes of [`MarsadError`].
@@ -194,6 +244,7 @@ pub mod codes {
     pub const NOT_HUB: &str = "not_hub";
     pub const UPSTREAM: &str = "upstream";
     pub const STORE: &str = "store";
+    pub const CONFLICT: &str = "conflict";
 }
 
 /// A failed Marsad operation (carried as `RpcError.data`).
@@ -229,6 +280,9 @@ pub enum MarsadError {
     },
     #[error("store error: {message}")]
     Store { message: String },
+    /// The object changed since the caller read it (`expected_revision` did not match).
+    #[error("conflict: {message}")]
+    Conflict { message: String },
 }
 
 impl MarsadError {
@@ -245,6 +299,7 @@ impl MarsadError {
             MarsadError::NotHub => codes::NOT_HUB,
             MarsadError::Upstream { .. } => codes::UPSTREAM,
             MarsadError::Store { .. } => codes::STORE,
+            MarsadError::Conflict { .. } => codes::CONFLICT,
         }
     }
 
@@ -303,7 +358,7 @@ mod tests {
                 assert!(!h.starts_with(u) && !u.starts_with(h), "{h} vs {u}");
             }
         }
-        for r in wasit_runtime::wire::ROUTES {
+        for r in wasit_runtime::wire::ROUTES.iter().chain(wasl_proto::ROUTES) {
             for m in HOST_ROUTES.iter().chain(HUB_ROUTES) {
                 assert!(
                     !r.starts_with(m) && !(m.starts_with(r) && *m != methods::SESSIONS_LAUNCH),

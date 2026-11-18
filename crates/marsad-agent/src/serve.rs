@@ -11,14 +11,16 @@ use marsad_proto::{methods, HostId, HOST_ROUTES, HUB_ROUTES};
 use marsad_store::Store;
 use tokio_util::sync::CancellationToken;
 use wasit_control::{
-    BindError, ClientOptions, ConnConfig, ControlClient, ControlServer, Endpoint, Hello, Hub,
-    HubConfig, InstanceLock, LockError, RoutingService, Service, ServiceMux,
+    connector, BindError, ClientOptions, ConnConfig, ControlClient, ControlServer, Endpoint, Hello,
+    Hub, HubConfig, InstanceLock, LockError, RoutingService, Service, ServiceMux, Supervised,
+    SupervisedOptions, Uplink,
 };
 use wasit_core::DriverId;
 use wasit_runtime::wire::ROUTES;
 use wasit_runtime::{
     Discovery, DiscoveryConfig, RuntimeConfig, RuntimeService, SessionManager, ShimLauncher,
 };
+use wasl_node::{Node, NodeConfig, NodeService};
 
 use crate::cli::{default_host_id, Options};
 use crate::host::{pty::Ptys, HostServices};
@@ -26,7 +28,8 @@ use crate::hub::auth::Prompts;
 use crate::hub::fleet::Fleet;
 use crate::hub::hosts::Registry;
 use crate::hub::provision::{AgentProvisioner, BootstrapConnector, BIN_DIR_ENV};
-use crate::hub::HubServices;
+use crate::hub::workstreams::Workstreams;
+use crate::hub::{HubServices, WaslMcp};
 use crate::version;
 
 /// Exit code when another daemon already serves the endpoint.
@@ -105,13 +108,28 @@ pub async fn serve(o: Options) -> ExitCode {
         }
         Err(e) => tracing::error!(error = %e, "cannot scan sessions"),
     }
+    let node = match Node::open(
+        NodeConfig::new(host_id.clone(), o.data.join("wasl")),
+        manager.clone(),
+    )
+    .await
+    {
+        Ok(n) => n,
+        Err(e) => return fail(format!("cannot open the Wasl node: {e}"), 1),
+    };
     let shutdown = CancellationToken::new();
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => return fail(format!("cannot locate the daemon executable: {e}"), 1),
+    };
     let info = DaemonInfo {
         version: version::info(),
         host_id: host_id.clone(),
         hub: o.hub,
         data_dir: o.data.display().to_string(),
         pid: std::process::id(),
+        exe: exe.display().to_string(),
+        socket: o.socket_path().display().to_string(),
     };
     let runtime = RuntimeService::new(
         manager.clone(),
@@ -130,6 +148,12 @@ pub async fn serve(o: Options) -> ExitCode {
     if let Err(e) = local
         .register(ROUTES.iter().copied(), Arc::new(runtime))
         .and_then(|_| local.register(HOST_ROUTES.iter().copied(), Arc::new(host)))
+        .and_then(|_| {
+            local.register(
+                wasl_proto::ROUTES.iter().copied(),
+                Arc::new(NodeService::new(node.clone())),
+            )
+        })
     {
         return fail(e, 1);
     }
@@ -148,6 +172,10 @@ pub async fn serve(o: Options) -> ExitCode {
         .await
         {
             Ok((svc, hub)) => {
+                // The hub is the supervisor: handoffs always raise gates here, and other
+                // hosts are reached over its own links.
+                node.attach_uplink(Uplink::via_hub(hub.clone()));
+                node.set_supervisor_probe(Arc::new(|| true));
                 hub_handle = Some(hub);
                 svc
             }
@@ -162,6 +190,10 @@ pub async fn serve(o: Options) -> ExitCode {
         Hello::new(build.clone(), host_id, role),
         ConnConfig::default(),
     );
+    if !o.hub {
+        // The hub's link into this daemon is the uplink and the supervisor.
+        node.attach_server(&server);
+    }
     let ready = Readiness {
         ready: true,
         pid: std::process::id(),
@@ -230,7 +262,7 @@ async fn start_hub(
     fleet.feed_local(local_id.clone(), manager);
     fleet.feed_links(hub.clone());
     let local_entry = HostEntry {
-        id: local_id,
+        id: local_id.clone(),
         name: host_id.to_string(),
         kind: HostKind::Local,
         platform: None,
@@ -248,6 +280,10 @@ async fn start_hub(
     )
     .await
     .map_err(|e| e.to_string())?;
+    let link = loopback(routing.clone(), build, host_id);
+    let workstreams = Workstreams::start(store.clone(), link, fleet.clone(), local_id.clone())
+        .await
+        .map_err(|e| e.to_string())?;
     let svc = HubServices {
         registry,
         prompts,
@@ -255,13 +291,46 @@ async fn start_hub(
         fleet,
         routing: routing.clone(),
         drivers,
-        automatic: Vec::new(),
+        automatic: vec![Arc::new(WaslMcp)],
+        workstreams,
     };
     let mut top = ServiceMux::new();
-    top.register(ROUTES.iter().chain(HOST_ROUTES).copied(), routing)
-        .and_then(|_| top.register(HUB_ROUTES.iter().copied(), Arc::new(svc)))
-        .map_err(|e| e.to_string())?;
+    top.register(
+        ROUTES
+            .iter()
+            .chain(HOST_ROUTES)
+            .chain(wasl_proto::ROUTES)
+            .copied(),
+        routing,
+    )
+    .and_then(|_| top.register(HUB_ROUTES.iter().copied(), Arc::new(svc)))
+    .map_err(|e| e.to_string())?;
     Ok((Arc::new(top), hub))
+}
+
+/// An in-process supervised connection to the hub's routing service: the workstream actor
+/// talks to every host's node (local or remote) through it, with `host` on each request.
+fn loopback(routing: Arc<dyn Service>, build: &str, host_id: &str) -> Supervised {
+    let server = ControlServer::new(
+        routing,
+        Hello::new(build, host_id, "hub"),
+        ConnConfig::default(),
+    );
+    let hello = Hello::new(build, host_id, "hub-internal");
+    let conn = connector(move || {
+        let server = server.clone();
+        let hello = hello.clone();
+        async move {
+            let (a, b) = tokio::io::duplex(1 << 16);
+            // The server side ends when the client side closes.
+            drop(server.serve_connection(Box::new(a)));
+            ControlClient::connect(Box::new(b), ClientOptions::new(hello)).await
+        }
+    });
+    let mut opts = SupervisedOptions::default();
+    opts.config.backoff.initial = Duration::from_millis(100);
+    opts.config.backoff.max = Duration::from_secs(2);
+    Supervised::spawn(conn, opts)
 }
 
 #[cfg(unix)]

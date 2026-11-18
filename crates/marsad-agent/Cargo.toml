@@ -19,6 +19,9 @@ wasit-core = { workspace = true }
 wasit-control = { workspace = true }
 wasit-runtime = { workspace = true }
 wasit-shim = { workspace = true }
+wasl-proto = { workspace = true }
+wasl-node = { workspace = true }
+wasl-mcp = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

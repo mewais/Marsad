@@ -4,4 +4,12 @@ import type { VersionInfo } from "./VersionInfo";
 /**
  * Result of `daemon.info`.
  */
-export type DaemonInfo = { version: VersionInfo, host_id: string, hub: boolean, data_dir: string, pid: number, };
+export type DaemonInfo = { version: VersionInfo, host_id: string, hub: boolean, data_dir: string, pid: number, 
+/**
+ * The daemon's own executable (also the `shim` and `mcp` entry).
+ */
+exe: string, 
+/**
+ * The path of the endpoint it serves (on Windows the path its named pipe derives from).
+ */
+socket: string, };

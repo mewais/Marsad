@@ -314,6 +314,11 @@ async fn build_mismatch_restarts_the_remote_daemon() {
         unreachable!()
     };
     assert_ne!(hello.build, "0.0.0+old");
+    assert_eq!(
+        hello.host_id.as_str(),
+        "box",
+        "the restarted daemon knows itself by the hub's id for it"
+    );
     let st = tokio::time::timeout(T, old.wait())
         .await
         .expect("the old daemon exited")

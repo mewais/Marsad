@@ -6,8 +6,10 @@
 //! then reads one command line from stdin — `RUN`, `RESTART` (stop the running daemon) or
 //! `UPLOAD <n>` followed by exactly `n` bytes of binary (written to `marsad-agent.new`,
 //! renamed into place atomically, old daemon stopped) — answers `MARSAD-OK`, and finally
-//! `exec`s `marsad-agent bridge` on the same channel. The hub sends nothing after the command
-//! until it has read `MARSAD-OK`, so nothing the protocol needs is consumed early.
+//! `exec`s `marsad-agent bridge --host-id <id>` on the same channel (so a daemon it starts
+//! knows itself by the id the hub routes by; its Wasl node addresses agents with it). The hub
+//! sends nothing after the command until it has read `MARSAD-OK`, so nothing the protocol
+//! needs is consumed early.
 
 use base64::Engine;
 use marsad_proto::hosts::{HostEntry, HostKind, HostPlatform};
@@ -81,7 +83,7 @@ pub const POSIX_BOOTSTRAP: &str = concat!(
     "RESTART) \"$b\" stop >/dev/null 2>&1; echo MARSAD-OK;; ",
     "RUN) echo MARSAD-OK;; ",
     "*) exit 64;; esac; ",
-    "exec \"$b\" bridge"
+    "exec \"$b\" bridge --host-id "
 );
 
 /// The PowerShell bootstrap for Windows OpenSSH hosts (same line protocol).
@@ -101,9 +103,23 @@ if ($cmd[0] -eq 'UPLOAD') {
   if (Test-Path $b) { Move-Item -Force $b "$b.old" }; Move-Item -Force "$b.new" $b
 } elseif ($cmd[0] -eq 'RESTART') { & $b stop | Out-Null } elseif ($cmd[0] -ne 'RUN') { exit 64 }
 Say 'MARSAD-OK'
-& $b bridge
+& $b bridge --host-id @HOST_ID@
 exit $LASTEXITCODE
 "#;
+
+/// Whether `id` can be passed to the remote shell unquoted (host ids are restricted to this
+/// at `hosts.add`).
+pub fn safe_host_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
+/// The POSIX bootstrap for host `id` (see [`safe_host_id`]).
+pub fn posix_bootstrap(id: &str) -> String {
+    format!("{POSIX_BOOTSTRAP}{id}")
+}
 
 fn is_windows(p: Option<&HostPlatform>) -> bool {
     p.is_some_and(|p| p.os == "windows")
@@ -122,12 +138,19 @@ pub fn powershell_command(script: &str) -> String {
 }
 
 /// Full argv of one connect attempt: transport + bootstrap.
+/// `None` for the local host, or a host id that is not [`safe_host_id`].
 pub fn bootstrap_argv(entry: &HostEntry) -> Option<Vec<String>> {
     let mut argv = transport_prefix(&entry.kind)?;
+    let id = entry.id.as_str();
+    if !safe_host_id(id) {
+        return None;
+    }
     match (&entry.kind, is_windows(entry.platform.as_ref())) {
-        (HostKind::Wsl { .. }, _) => argv.push(POSIX_BOOTSTRAP.to_string()),
-        (_, true) => argv.push(powershell_command(POWERSHELL_BOOTSTRAP)),
-        (_, false) => argv.push(format!("sh -c '{POSIX_BOOTSTRAP}'")),
+        (HostKind::Wsl { .. }, _) => argv.push(posix_bootstrap(id)),
+        (_, true) => argv.push(powershell_command(
+            &POWERSHELL_BOOTSTRAP.replace("@HOST_ID@", id),
+        )),
+        (_, false) => argv.push(format!("sh -c '{}'", posix_bootstrap(id))),
     }
     Some(argv)
 }
@@ -193,7 +216,11 @@ mod tests {
         });
         let wa = bootstrap_argv(&w).unwrap();
         assert_eq!(&wa[..3], ["wsl.exe", "-d", "Ubuntu"]);
-        assert_eq!(wa.last().unwrap(), POSIX_BOOTSTRAP);
+        assert_eq!(wa.last().unwrap(), &posix_bootstrap("h"));
+        assert!(wa.last().unwrap().ends_with("bridge --host-id h"));
+        let mut bad = e.clone();
+        bad.id = "a b;c".into();
+        assert!(bootstrap_argv(&bad).is_none());
         let mut win = e.clone();
         win.platform = platform_from("Windows", "AMD64");
         assert!(bootstrap_argv(&win)

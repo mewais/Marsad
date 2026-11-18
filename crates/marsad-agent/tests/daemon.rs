@@ -1,5 +1,5 @@
-//! The daemon through real processes: readiness and single instance, `--version`, the `mcp`
-//! stub, `stop`; and through `marsad-client`: launch → prompt → gate → answer, store access,
+//! The daemon through real processes: readiness and single instance, `--version`, the Wasl
+//! `mcp` server, `stop`; and through `marsad-client`: launch → prompt → gate → answer, store access,
 //! and a `kill -9` of the daemon mid-turn with the client restarting it on demand.
 #![cfg(unix)]
 
@@ -65,12 +65,84 @@ async fn readiness_single_instance_version_mcp_and_stop() {
     assert_eq!(info.build, ready.build);
     assert!(info.target.contains('-'));
 
-    let mcp = std::process::Command::new(agent())
+    // `mcp` is the Wasl MCP server: it speaks MCP on stdio and asks this daemon's node.
+    let bad = std::process::Command::new(agent())
         .arg("mcp")
         .output()
         .unwrap();
-    assert_eq!(mcp.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&mcp.stderr).contains("not yet available"));
+    assert_eq!(bad.status.code(), Some(2), "missing --socket/--session");
+    let mut mcp = tokio::process::Command::new(agent())
+        .arg("mcp")
+        .arg("--socket")
+        .arg(data.join("marsad.sock"))
+        .arg("--session")
+        .arg("aaaaaaaaaaaa")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut stdin = mcp.stdin.take().unwrap();
+    let mut out = BufReader::new(mcp.stdout.take().unwrap()).lines();
+    use tokio::io::AsyncWriteExt;
+    let rpc = |v: serde_json::Value| {
+        let mut l = v.to_string();
+        l.push('\n');
+        l
+    };
+    stdin
+        .write_all(
+            rpc(
+                json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-06-18","capabilities":{},
+            "clientInfo":{"name":"test","version":"0"}}}),
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let init = tokio::time::timeout(T, out.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(init.contains("\"wasl\""), "{init}");
+    stdin
+        .write_all(rpc(json!({"jsonrpc":"2.0","method":"notifications/initialized"})).as_bytes())
+        .await
+        .unwrap();
+    stdin
+        .write_all(rpc(json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})).as_bytes())
+        .await
+        .unwrap();
+    let tools = tokio::time::timeout(T, out.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    for t in ["list_peers", "delegate", "task_wait"] {
+        assert!(tools.contains(t), "{t} missing: {tools}");
+    }
+    stdin
+        .write_all(
+            rpc(json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
+            "params":{"name":"list_peers","arguments":{}}}))
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let call = tokio::time::timeout(T, out.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        call.contains("no session aaaaaaaaaaaa"),
+        "the node answered for the unknown session: {call}"
+    );
+    drop(stdin);
+    let _ = mcp.wait().await;
 
     // `stop` makes the daemon exit and frees its lock.
     let st = tokio::process::Command::new(agent())

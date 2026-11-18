@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use marsad_proto::agentconfig::{ItemOverride, LayerScope, OverrideAction, OverrideLayer};
-use marsad_proto::store::{RecentProject, SeenMark, WorkstreamPut};
+use marsad_proto::store::{RecentProject, SeenMark};
+use marsad_proto::workstream::{Workstream, WorkstreamTemplate};
 use marsad_proto::{ConfigItemKind, HostId, SessionId};
 use marsad_store::{Doc, Store, StoreError};
 
@@ -141,28 +142,38 @@ async fn second_open_is_refused_and_semantics_hold() {
         .unwrap();
     assert!(store.layers().await.unwrap().is_empty());
 
-    // Workstreams: revisions and optimistic concurrency.
-    let put = |rev| WorkstreamPut {
-        id: "ws".into(),
-        schema: 1,
-        doc: serde_json::json!({"nodes": []}),
-        expected_revision: rev,
-    };
-    assert_eq!(store.put_workstream(put(None)).await.unwrap().revision, 1);
-    assert_eq!(
-        store.put_workstream(put(Some(1))).await.unwrap().revision,
-        2
-    );
+    // Workstreams and templates: stored as given, survive a reopen.
+    let mut ws = Workstream::new("ws", "Review");
+    ws.revision = 3;
+    store.put_workstream(ws.clone()).await.unwrap();
+    let mut bad = ws.clone();
+    bad.schema = 99;
     assert!(matches!(
-        store.put_workstream(put(Some(1))).await,
-        Err(StoreError::Conflict(_))
+        store.put_workstream(bad).await,
+        Err(StoreError::Invalid(_))
     ));
     assert!(matches!(
         store.delete_workstream("nope".into()).await,
         Err(StoreError::NotFound(_))
     ));
-    // A failed write changes nothing on disk or in memory.
-    assert_eq!(store.workstreams().await.unwrap()[0].revision, 2);
+    let tpl = WorkstreamTemplate {
+        id: "t".into(),
+        schema: marsad_proto::workstream::SCHEMA,
+        name: "T".into(),
+        description: String::new(),
+        nodes: vec![],
+        edges: vec![],
+        limits: Default::default(),
+        layout: Default::default(),
+        created_at_ms: 1,
+    };
+    store.put_template(tpl.clone()).await.unwrap();
+    store.close().await.unwrap();
+    let store = Store::open(&dir).await.unwrap();
+    assert_eq!(store.workstream("ws".into()).await.unwrap(), ws);
+    assert_eq!(store.templates().await.unwrap(), vec![tpl]);
+    store.delete_template("t".into()).await.unwrap();
+    assert!(store.templates().await.unwrap().is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
