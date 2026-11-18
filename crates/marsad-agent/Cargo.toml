@@ -1,0 +1,37 @@
+[package]
+name = "marsad-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The Marsad host daemon: Wasit session runtime + git, terminal, file-browsing and agent-config services; on the GUI machine also the hub (hosts, provisioning, fleet, store)"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "marsad-agent"
+path = "src/main.rs"
+
+[dependencies]
+marsad-proto = { workspace = true }
+marsad-store = { workspace = true }
+wasit-core = { workspace = true }
+wasit-control = { workspace = true }
+wasit-runtime = { workspace = true }
+wasit-shim = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+fastrand = { workspace = true }
+portable-pty = "0.9"
+base64 = "0.22"
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+marsad-client = { workspace = true }
+wasit-fake-cli = { workspace = true }

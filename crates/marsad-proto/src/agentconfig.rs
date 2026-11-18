@@ -225,6 +225,8 @@ impl EffectiveConfig {
                     ItemValue::McpServer { server } => cfg.mcp_servers.push(McpServerConfig {
                         name: it.name.clone(),
                         transport: server.clone(),
+                        // Only Marsad's own automatic servers do their own gating.
+                        trusted: it.state == ItemState::Automatic,
                     }),
                     ItemValue::Skill { root } => cfg.skills.push(SkillRef {
                         name: it.name.clone(),
