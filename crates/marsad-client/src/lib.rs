@@ -87,6 +87,8 @@ pub struct ClientConfig {
     pub agent_bin: Option<PathBuf>,
     /// Extra arguments for `serve` (e.g. `--driver-bin`).
     pub serve_args: Vec<String>,
+    /// Environment set on a daemon this client starts (on top of its own environment).
+    pub daemon_env: Vec<(String, String)>,
     pub hello: Hello,
     /// Per-call deadline.
     pub deadline: Duration,
@@ -103,6 +105,7 @@ impl ClientConfig {
             start_daemon: true,
             agent_bin: None,
             serve_args: Vec::new(),
+            daemon_env: Vec::new(),
             hello,
             deadline: Duration::from_secs(120),
             wait_connected: Duration::from_secs(30),
@@ -157,6 +160,7 @@ async fn start_daemon(cfg: &ClientConfig) -> Result<(), ConnectError> {
         cmd.arg("--socket").arg(s);
     }
     cmd.args(&cfg.serve_args)
+        .envs(cfg.daemon_env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(log))

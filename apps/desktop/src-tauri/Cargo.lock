@@ -4656,6 +4656,7 @@ dependencies = [
 [[package]]
 name = "wasit-claude"
 version = "0.1.0"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4747a622b33962603a2c8d4cade6bb2e847991ea"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -4664,6 +4665,7 @@ dependencies = [
 [[package]]
 name = "wasit-codex"
 version = "0.1.0"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4747a622b33962603a2c8d4cade6bb2e847991ea"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -4672,6 +4674,7 @@ dependencies = [
 [[package]]
 name = "wasit-control"
 version = "0.1.0"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4747a622b33962603a2c8d4cade6bb2e847991ea"
 dependencies = [
  "async-trait",
  "fastrand",
@@ -4687,6 +4690,7 @@ dependencies = [
 [[package]]
 name = "wasit-core"
 version = "0.1.0"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4747a622b33962603a2c8d4cade6bb2e847991ea"
 dependencies = [
  "serde",
  "serde_json",
@@ -4696,6 +4700,7 @@ dependencies = [
 [[package]]
 name = "wasit-opencode"
 version = "0.1.0"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4747a622b33962603a2c8d4cade6bb2e847991ea"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -4704,6 +4709,7 @@ dependencies = [
 [[package]]
 name = "wasit-runtime"
 version = "0.1.0"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4747a622b33962603a2c8d4cade6bb2e847991ea"
 dependencies = [
  "async-trait",
  "fastrand",
@@ -4725,6 +4731,7 @@ dependencies = [
 [[package]]
 name = "wasit-shim"
 version = "0.1.0"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4747a622b33962603a2c8d4cade6bb2e847991ea"
 dependencies = [
  "futures-core",
  "libc",
@@ -4738,6 +4745,7 @@ dependencies = [
 [[package]]
 name = "wasl-proto"
 version = "0.1.0"
+source = "git+https://github.com/mewais/Wasl?branch=claude%2Fawesome-euler-r7x45r#84f820db4e6ef145b1675798edb7ae3343b8932e"
 dependencies = [
  "fastrand",
  "serde",
@@ -5617,15 +5625,3 @@ dependencies = [
  "syn 3.0.10",
  "winnow 1.0.5",
 ]
-
-[[patch.unused]]
-name = "wasl-mcp"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "wasl-node"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "wasit-fake-cli"
-version = "0.1.0"

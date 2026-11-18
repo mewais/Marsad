@@ -3,7 +3,9 @@
 //! * On start: connect to the local daemon with the supervised `marsad-client`, which
 //!   starts `marsad-agent serve --hub` on demand (readiness line). The daemon binary is the
 //!   bundled `marsad-agent` next to the app binary (`$MARSAD_AGENT_BIN` overrides it);
-//!   binaries for other targets come from `$MARSAD_AGENT_BIN_DIR`, which the daemon reads.
+//!   binaries for other targets come from `$MARSAD_AGENT_BIN_DIR`, which the daemon reads;
+//!   unset, the daemon the app starts gets `<resources>/agents` (where the release bundles
+//!   ship `agents/<target-triple>/marsad-agent[.exe]`).
 //!   `$MARSAD_DATA` overrides the data directory, `$MARSAD_DAEMON_ARGS` (whitespace-separated)
 //!   adds `serve` options — both for development and tests.
 //! * The webview gets exactly the generic bridges of [`bridge`]: `rpc`, `rpc_subscribe`,
@@ -27,7 +29,24 @@ use std::path::PathBuf;
 use marsad_client::{ClientConfig, MarsadClient};
 use tauri::{Manager, RunEvent, WindowEvent};
 
-fn client_config() -> ClientConfig {
+/// Where the daemon finds `marsad-agent` builds for other targets: `$MARSAD_AGENT_BIN_DIR`
+/// when set (the daemon reads it itself, so nothing is added), else the bundle's
+/// `<resources>/agents`.
+fn agent_bin_dir_env(
+    from_env: Option<std::ffi::OsString>,
+    resource_dir: Option<PathBuf>,
+) -> Option<(String, String)> {
+    if from_env.is_some_and(|v| !v.is_empty()) {
+        return None;
+    }
+    let dir = resource_dir?.join("agents");
+    Some((
+        "MARSAD_AGENT_BIN_DIR".into(),
+        dir.to_string_lossy().into_owned(),
+    ))
+}
+
+fn client_config(resource_dir: Option<PathBuf>) -> ClientConfig {
     let data = std::env::var_os("MARSAD_DATA")
         .map(PathBuf::from)
         .or_else(default_data_dir)
@@ -43,6 +62,10 @@ fn client_config() -> ClientConfig {
     if let Ok(args) = std::env::var("MARSAD_DAEMON_ARGS") {
         cfg.serve_args = args.split_whitespace().map(String::from).collect();
     }
+    cfg.daemon_env.extend(agent_bin_dir_env(
+        std::env::var_os("MARSAD_AGENT_BIN_DIR"),
+        resource_dir,
+    ));
     cfg
 }
 
@@ -78,8 +101,8 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             // `connect` returns at once; it needs the runtime to spawn its supervisor.
-            let client =
-                tauri::async_runtime::block_on(async { MarsadClient::connect(client_config()) });
+            let cfg = client_config(app.path().resource_dir().ok());
+            let client = tauri::async_runtime::block_on(async { MarsadClient::connect(cfg) });
             app.manage(bridge::Shell::new(client, handle.clone()));
             if let Err(e) = tray::create(&handle) {
                 tracing::warn!(error = %e, "no tray icon on this system");
@@ -115,5 +138,29 @@ pub fn run() {
             eprintln!("marsad-desktop: cannot start: {e}");
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_bin_dir_defaults_to_the_bundled_agents() {
+        let res = PathBuf::from("res");
+        assert_eq!(
+            agent_bin_dir_env(None, Some(res.clone())),
+            Some((
+                "MARSAD_AGENT_BIN_DIR".into(),
+                res.join("agents").to_string_lossy().into_owned()
+            ))
+        );
+        // An explicit setting wins (the daemon inherits it); an empty one does not count.
+        assert_eq!(
+            agent_bin_dir_env(Some("/opt/agents".into()), Some(res.clone())),
+            None
+        );
+        assert!(agent_bin_dir_env(Some("".into()), Some(res)).is_some());
+        assert_eq!(agent_bin_dir_env(None, None), None);
     }
 }
