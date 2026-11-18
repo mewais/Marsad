@@ -20,11 +20,13 @@ export interface NewSessionDialogProps {
   onAdd?: (form: NewSessionForm, inv: DriverInventory) => void;
   title?: string;
   subtitle?: string;
+  /** Only "New conversation" (a workstream node launch spec cannot resume). */
+  newOnly?: boolean;
 }
 
 const blank = (host: string): NewSessionForm => ({ host, driver: "", cwd: "", model: "", mode: "", start: "new", resumeId: "", prompt: "" });
 
-export function NewSessionDialog({ open, preset, onClose, onAdd, title = "New session", subtitle = "Starts on the host you pick and appears in your inbox" }: NewSessionDialogProps) {
+export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title = "New session", subtitle = "Starts on the host you pick and appears in your inbox" }: NewSessionDialogProps) {
   const hosts = useHosts();
   const api = useApi();
   const actions = useActions();
@@ -104,7 +106,7 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, title = "New se
     <Dialog open={open} onClose={onClose} title={title} subtitle={subtitle} width={960} className="nsdlg"
       footer={
         <>
-          <span className="faint ns-problem" role="status">{problem}</span>
+          <span className="faint ns-problem" role="status">{problem || (onAdd ? "The Wasl connector will be added automatically." : "")}</span>
           <span className="sp" />
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" icon={onAdd ? "plus" : f.start === "continue" ? "refresh" : "send"} disabled={!!problem} pending={pending} onClick={() => void submit()}>
@@ -139,10 +141,10 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, title = "New se
           ) : null}
         </div>
         <div className="col">
-          <div className="field"><span className="lbl">Start</span>
+          {newOnly ? null : <div className="field"><span className="lbl">Start</span>
             <Segmented label="Start" value={f.start} onChange={(start) => set({ start, resumeId: start === "continue" ? latest?.id ?? "" : "" })}
               options={[{ value: "new", label: "New conversation" }, { value: "continue", label: "Continue an existing one" }]} />
-          </div>
+          </div>}
           {f.start === "continue" ? (
             <>
               {latest ? (

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { lazy, Suspense, useEffect, useMemo } from "react";
 import { createBackend, type Backend } from "./bridge";
 import { Placeholder } from "./features/Placeholder";
 import { InboxPage } from "./features/inbox/InboxPage";
@@ -6,6 +6,10 @@ import { SessionPage } from "./features/session/SessionPage";
 import { HostsPage } from "./features/hosts/HostsPage";
 import { ConfigPage } from "./features/config/ConfigPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
+import { WorkstreamsPage } from "./features/workstreams/WorkstreamsPage";
+
+// The graph (and ELK) load only when a workstream opens.
+const GraphPage = lazy(() => import("./features/workstreams/GraphPage").then((m) => ({ default: m.GraphPage })));
 import { hashHistory, RouterProvider, useRoute, type History } from "./router";
 import { AppShell } from "./shell/AppShell";
 import { installShortcuts } from "./shortcuts/registry";
@@ -20,7 +24,9 @@ function Routes() {
     case "session":
       return <SessionPage key={`${r.host}/${r.id}`} host={r.host} id={r.id} tab={r.tab} />;
     case "workstreams":
-      return <Placeholder title="Workstreams" icon="graph" />;
+      return <WorkstreamsPage />;
+    case "workstream":
+      return <Suspense fallback={<div className="placeholder faint">Loading the graph…</div>}><GraphPage key={r.id} id={r.id} /></Suspense>;
     case "hosts":
       return <HostsPage q={r.q} />;
     case "config":
