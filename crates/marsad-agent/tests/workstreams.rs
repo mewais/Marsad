@@ -546,8 +546,19 @@ async fn live_join_blocked_pause_history_and_templates() {
         "standalone ok"
     );
 
+    // Each change reaches the node asynchronously: act once it is in force.
+    let in_force = |version: u64| {
+        move |v: &WorkstreamView| {
+            v.sync
+                .iter()
+                .any(|s| s.host == HostId::new("hub") && s.applied >= version)
+        }
+    };
     // Blocked connection.
-    c.set_edge_policy(conn(EdgePolicy::Deny)).await.unwrap();
+    let w = c.set_edge_policy(conn(EdgePolicy::Deny)).await.unwrap();
+    views
+        .until(&ws.id, "deny in force", in_force(w.topology_version))
+        .await;
     let r = delegate(&c, &orch, &["helper"], "again").await;
     assert_eq!(r.results[0].error.as_ref().unwrap().code, "denied");
 
@@ -557,9 +568,19 @@ async fn live_join_blocked_pause_history_and_templates() {
         .unwrap();
     let p = c.pause_workstream(&ws.id).await.unwrap();
     assert_eq!(p.state, WorkstreamState::Paused);
+    views
+        .until(&ws.id, "pause in force", in_force(p.topology_version))
+        .await;
     let r = delegate(&c, &orch, &["helper"], "while paused").await;
     assert_eq!(r.results[0].error.as_ref().unwrap().code, "paused");
-    c.resume_workstream(&ws.id).await.unwrap();
+    let resumed = c.resume_workstream(&ws.id).await.unwrap();
+    views
+        .until(
+            &ws.id,
+            "resume in force",
+            in_force(resumed.topology_version),
+        )
+        .await;
     let r = delegate(&c, &orch, &["helper"], "resumed").await;
     let second = task(&r, 0);
     assert_eq!(
