@@ -5,6 +5,7 @@ import { InboxPage } from "./features/inbox/InboxPage";
 import { SessionPage } from "./features/session/SessionPage";
 import { HostsPage } from "./features/hosts/HostsPage";
 import { ConfigPage } from "./features/config/ConfigPage";
+import { SettingsPage } from "./features/settings/SettingsPage";
 import { hashHistory, RouterProvider, useRoute, type History } from "./router";
 import { AppShell } from "./shell/AppShell";
 import { installShortcuts } from "./shortcuts/registry";
@@ -25,7 +26,7 @@ function Routes() {
     case "config":
       return <ConfigPage q={r.q} />;
     case "settings":
-      return <Placeholder title="Settings" icon="gear" settings />;
+      return <SettingsPage q={r.q} />;
     default:
       return <Placeholder title="Not found" icon="warn" />;
   }

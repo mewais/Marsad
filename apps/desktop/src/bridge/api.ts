@@ -24,6 +24,7 @@ export interface MethodMap {
   [M.FS_HOME]: [void, W.FsHome];
   [M.FS_EXISTS]: [W.FsPathRequest, W.FsExists];
   [M.AGENTCONFIG_BASE]: [W.BaseRequest, W.BaseConfig];
+  [M.DAEMON_INFO]: [void, W.DaemonInfo];
   [M.HOSTS_ADD]: [W.HostDraft, W.HostEntry];
   [M.HOSTS_UPDATE]: [W.HostEntry, W.HostEntry];
   [M.HOSTS_REMOVE]: [W.HostRef, W.Ack];
@@ -83,6 +84,7 @@ export function createApi(b: Backend) {
     continueSession: (host: W.HostId, id: W.SessionId) => call(b, M.SESSIONS_CONTINUE, { id }, { host }),
     stopSession: (host: W.HostId, id: W.SessionId) => call(b, M.SESSIONS_STOP, { id }, { host }),
     launch: (r: W.LaunchRequest) => call(b, M.SESSIONS_LAUNCH, r),
+    daemonInfo: (host?: W.HostId) => call(b, M.DAEMON_INFO, undefined, on(host)),
     git: {
       status: (host: W.HostId, target: W.GitTarget) => call(b, M.GIT_STATUS, { target }, { host }),
       diff: (host: W.HostId, r: W.GitDiffRequest) => call(b, M.GIT_DIFF, r, { host }),

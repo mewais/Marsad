@@ -73,6 +73,8 @@ export class FixtureHub {
             { alias: "mac-mini", hostname: "mac-mini.lan", user: "dev", port: null, identity_file: null, already_added: false },
           ],
         };
+      case M.DAEMON_INFO:
+        return { version: { build: "fixture-0.1.0", target: "x86_64-unknown-linux-gnu" }, host_id: "x1", hub: true, data_dir: "~/.local/share/marsad", pid: 4242 };
       case M.STORE_SETTINGS_GET:
         return { values: this.settings };
       case M.STORE_SETTINGS_SET: {

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { registerAction } from "../commands/registry";
 import { useNavigate } from "../router";
 import { useShortcut } from "../shortcuts/useShortcut";
-import { useActions } from "../state";
+import { useActions, useAppState } from "../state";
 import { ToastRegion } from "../ui";
 import { openNewSession, openNewWorkstream } from "./dialogs";
 import { GlobalDialogs } from "./GlobalDialogs";
@@ -19,6 +19,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const actions = useActions();
   const [palette, setPalette] = useState(false);
   const [help, setHelp] = useState(false);
+  // The theme lives in the hub's settings; this device applies it as soon as it arrives.
+  const theme = useAppState((s) => s.settings.theme);
+  useEffect(() => {
+    if (theme === "light" || theme === "dark" || theme === "system") applyTheme(theme);
+  }, [theme]);
 
   useShortcut({ id: "palette", keys: ["mod+k"], title: "Command palette", group: "Global", run: () => setPalette(true), allowInInput: true });
   useShortcut({ id: "help", keys: ["?"], title: "Show shortcuts", group: "Global", run: () => setHelp(true) });

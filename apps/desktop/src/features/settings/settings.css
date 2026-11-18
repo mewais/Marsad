@@ -1,0 +1,16 @@
+/* Settings (mockup: gatesB). */
+.set{display:grid;grid-template-columns:200px 1fr;flex:1;min-height:0}
+.set>*{min-height:0;min-width:0}
+.setnav{border-right:1px solid var(--line);padding:14px 8px;display:flex;flex-direction:column;gap:2px;background:var(--surface)}
+.setnav-h{padding:0 8px 6px}
+.setnav .lr-item{text-decoration:none}
+.setnav .lr-item:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.setbody{overflow:auto;padding:18px 24px;display:flex;flex-direction:column;gap:18px;max-width:880px}
+.setcard{padding:6px 16px;display:flex;flex-direction:column}
+.setcard>.eyebrow{padding:10px 0 2px}
+.setrow{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.setrow:last-child{border-bottom:0}
+.setrow-t{flex:1;min-width:0}
+.setrow .h3{display:flex;align-items:center;gap:6px}
+.setrow .combo,.setrow .sel{min-width:220px}
+.kvl.wide{padding:10px 0}
