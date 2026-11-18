@@ -126,7 +126,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     env:
-      MARSAD_E2E_WSL_DISTRO: Alpine
+      MARSAD_E2E_WSL_DISTRO: Ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -135,7 +135,7 @@ jobs:
           key: windows-e2e
       - uses: Vampire/setup-wsl@v5
         with:
-          distribution: Alpine
+          distribution: Ubuntu-24.04
       - uses: actions/download-artifact@v4
         with:
           name: linux-helper
@@ -145,7 +145,7 @@ jobs:
         run: |
           $p = (Resolve-Path linux-bin/wasit-fake-cli).Path -replace '\\','/'
           $p = '/mnt/' + $p.Substring(0,1).ToLower() + $p.Substring(2)
-          wsl.exe -d Alpine -u root --exec sh -c "install -m 755 '$p' /usr/local/bin/claude && claude --version && uname -a"
+          wsl.exe -d $env:MARSAD_E2E_WSL_DISTRO -u root --exec sh -c "install -m 755 '$p' /usr/local/bin/claude && claude --version && uname -a"
           if ($LASTEXITCODE -ne 0) { exit 1 }
           wsl.exe --list --verbose
       - run: cargo build -p marsad-agent --tests

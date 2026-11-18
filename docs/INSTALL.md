@@ -63,7 +63,17 @@ Nothing to install by hand. When you add an SSH/WSL host, Marsad connects, detec
 architecture and uploads the matching `marsad-agent` build over the same SSH connection to
 `~/.marsad/bin/` (and re-uploads when the version differs). The installer carries builds for
 Linux x86_64/aarch64 (static musl), Windows x86_64 and macOS arm64/x86_64 under its resources
-`agents/<target-triple>/` directory.
+`agents/<target-triple>/` directory. Any Linux host (glibc or musl, any distribution) gets the
+static musl build for its architecture; Windows on ARM gets the x64 build. Other platforms (for
+example 32-bit ARM or RISC-V) are refused with a clear message instead of retrying.
+
+**WSL** (Windows only): *Add host → WSL* lists the distributions installed on this PC (WSL's
+default preselected); the helper is installed in that distribution's default user's home
+(`~/.marsad/bin`). The WSL choice only appears when Marsad runs on Windows and `wsl.exe` exists.
+
+A host that cannot work as configured (unknown WSL distribution, no helper for its platform,
+a shell that prints something before the bootstrap, a helper the host refuses to execute)
+shows what is wrong and waits for *Try again*; only dropped connections retry on their own.
 
 ## Cutting a release
 
