@@ -121,12 +121,18 @@ impl Ptys {
         if cols == 0 || rows == 0 {
             return Err(MarsadError::invalid("cols and rows must be positive"));
         }
-        if !tokio::fs::metadata(cwd).await.map(|m| m.is_dir()).unwrap_or(false) {
+        if !tokio::fs::metadata(cwd)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+        {
             return Err(MarsadError::NotFound {
                 what: format!("directory {}", cwd.display()),
             });
         }
-        let shell = shell.filter(|s| !s.is_empty()).unwrap_or_else(default_shell);
+        let shell = shell
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(default_shell);
         let cwd_s = cwd.display().to_string();
         let cwd2 = cwd.to_path_buf();
         // Opening a pty and spawning are blocking syscalls.
@@ -327,7 +333,11 @@ fn spawn_writer(mut writer: Box<dyn Write + Send>, mut rx: mpsc::Receiver<Vec<u8
         .name("pty-write".into())
         .spawn(move || {
             while let Some(bytes) = rx.blocking_recv() {
-                if writer.write_all(&bytes).and_then(|_| writer.flush()).is_err() {
+                if writer
+                    .write_all(&bytes)
+                    .and_then(|_| writer.flush())
+                    .is_err()
+                {
                     break;
                 }
             }

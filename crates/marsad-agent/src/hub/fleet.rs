@@ -281,7 +281,9 @@ impl Fleet {
                 match item {
                     Ok((_, v)) => match serde_json::from_value::<HostEvent>(v) {
                         Ok(ev) => fleet.send(Input::Feed(host.clone(), ev)).await,
-                        Err(e) => tracing::warn!(host = %host, error = %e, "undecodable host event"),
+                        Err(e) => {
+                            tracing::warn!(host = %host, error = %e, "undecodable host event")
+                        }
                     },
                     Err(e) => {
                         tracing::warn!(host = %host, error = %e, "remote session feed failed");

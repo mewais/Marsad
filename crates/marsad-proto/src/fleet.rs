@@ -33,12 +33,21 @@ pub struct FleetHost {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FleetEvent {
     /// The whole fleet (first event of a fresh subscription or after an expired cursor).
-    Reset { hosts: Vec<FleetHost> },
+    Reset {
+        hosts: Vec<FleetHost>,
+    },
     /// A host was added or its entry changed.
-    HostUpserted { host: HostEntry },
-    HostRemoved { id: HostId },
+    HostUpserted {
+        host: HostEntry,
+    },
+    HostRemoved {
+        id: HostId,
+    },
     /// A remote host's link state changed.
-    Link { host: HostId, state: LinkState },
+    Link {
+        host: HostId,
+        state: LinkState,
+    },
     /// A host's daemon delivered its complete session list (after (re)connecting).
     Sessions {
         host: HostId,
@@ -50,5 +59,8 @@ pub enum FleetEvent {
         host: HostId,
         session: Box<SessionSnapshot>,
     },
-    SessionRemoved { host: HostId, id: SessionId },
+    SessionRemoved {
+        host: HostId,
+        id: SessionId,
+    },
 }

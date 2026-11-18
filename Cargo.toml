@@ -5,6 +5,7 @@ members = [
     "crates/marsad-store",
     "crates/marsad-agent",
     "crates/marsad-client",
+    "crates/marsad-fake-cli",
 ]
 # The Tauri shell builds on its own (and is rewritten next); it is not part of this workspace.
 exclude = ["apps/desktop/src-tauri"]

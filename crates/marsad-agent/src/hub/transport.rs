@@ -92,7 +92,8 @@ pub fn script_argv(entry: &HostEntry, script: &str) -> Option<Vec<String>> {
 }
 
 /// Probe (POSIX): OS, architecture and the installed agent's version line.
-pub const POSIX_PROBE: &str = "uname -s; uname -m; \"$HOME/.marsad/bin/marsad-agent\" --version 2>/dev/null || echo none";
+pub const POSIX_PROBE: &str =
+    "uname -s; uname -m; \"$HOME/.marsad/bin/marsad-agent\" --version 2>/dev/null || echo none";
 
 /// Probe (Windows OpenSSH, whose default shell is cmd or PowerShell).
 pub const WINDOWS_PROBE: &str = "powershell -NoProfile -NonInteractive -Command \"Write-Output Windows; Write-Output $env:PROCESSOR_ARCHITECTURE; $a=\\\"$env:LOCALAPPDATA\\Marsad\\bin\\marsad-agent.exe\\\"; if (Test-Path $a) { & $a --version } else { Write-Output none }\"";
@@ -150,23 +151,42 @@ mod tests {
         });
         let a = connect_argv(&e).unwrap();
         assert_eq!(a[0], "ssh");
-        for o in ["BatchMode=yes", "ServerAliveInterval=15", "IdentitiesOnly=yes", "UserKnownHostsFile=/kh"] {
+        for o in [
+            "BatchMode=yes",
+            "ServerAliveInterval=15",
+            "IdentitiesOnly=yes",
+            "UserKnownHostsFile=/kh",
+        ] {
             assert!(a.iter().any(|x| x == o), "{o} in {a:?}");
         }
         let at = a.iter().position(|x| x == "-p").unwrap();
         assert_eq!(a[at + 1], "2222");
         assert_eq!(a[a.len() - 2], "me@box");
-        assert_eq!(a.last().unwrap(), "exec \"$HOME/.marsad/bin/marsad-agent\" bridge");
-        let w = entry(HostKind::Wsl { distro: "Ubuntu".into() });
+        assert_eq!(
+            a.last().unwrap(),
+            "exec \"$HOME/.marsad/bin/marsad-agent\" bridge"
+        );
+        let w = entry(HostKind::Wsl {
+            distro: "Ubuntu".into(),
+        });
         assert_eq!(&connect_argv(&w).unwrap()[..3], ["wsl.exe", "-d", "Ubuntu"]);
         assert!(connect_argv(&entry(HostKind::Local)).is_none());
     }
 
     #[test]
     fn platforms() {
-        assert_eq!(platform_from("Linux", "x86_64").unwrap().target, "x86_64-unknown-linux-gnu");
-        assert_eq!(platform_from("Darwin", "arm64").unwrap().target, "aarch64-apple-darwin");
-        assert_eq!(platform_from("Windows", "AMD64").unwrap().target, "x86_64-pc-windows-msvc");
+        assert_eq!(
+            platform_from("Linux", "x86_64").unwrap().target,
+            "x86_64-unknown-linux-gnu"
+        );
+        assert_eq!(
+            platform_from("Darwin", "arm64").unwrap().target,
+            "aarch64-apple-darwin"
+        );
+        assert_eq!(
+            platform_from("Windows", "AMD64").unwrap().target,
+            "x86_64-pc-windows-msvc"
+        );
         assert!(platform_from("Plan9", "x86_64").is_none());
     }
 }

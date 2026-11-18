@@ -120,7 +120,10 @@ pub fn parse_ssh_config(text: &str) -> Vec<SshConfigHost> {
             continue;
         }
         let (kw, val) = match line.split_once(|c: char| c.is_whitespace() || c == '=') {
-            Some((k, v)) => (k.to_ascii_lowercase(), v.trim().trim_start_matches('=').trim()),
+            Some((k, v)) => (
+                k.to_ascii_lowercase(),
+                v.trim().trim_start_matches('=').trim(),
+            ),
             None => continue,
         };
         let val = val.trim_matches('"');
@@ -150,9 +153,7 @@ pub fn parse_ssh_config(text: &str) -> Vec<SshConfigHost> {
                         "hostname" => h.hostname = h.hostname.clone().or(Some(val.to_string())),
                         "user" => h.user = h.user.clone().or(Some(val.to_string())),
                         "port" => h.port = h.port.or(val.parse().ok()),
-                        _ => {
-                            h.identity_file = h.identity_file.clone().or(Some(val.to_string()))
-                        }
+                        _ => h.identity_file = h.identity_file.clone().or(Some(val.to_string())),
                     }
                 }
             }

@@ -12,8 +12,8 @@ fn git(args: &[&str]) -> Option<String> {
 fn main() {
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
     let commit = git(&["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown".into());
-    let dirty = git(&["status", "--porcelain", "--untracked-files=no"])
-        .is_some_and(|s| !s.is_empty());
+    let dirty =
+        git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
     let build = format!("{version}+{commit}{}", if dirty { ".dirty" } else { "" });
     println!("cargo:rustc-env=MARSAD_BUILD={build}");
     println!(

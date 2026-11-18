@@ -16,7 +16,9 @@ use wasit_control::{
 };
 use wasit_core::DriverId;
 use wasit_runtime::wire::ROUTES;
-use wasit_runtime::{Discovery, DiscoveryConfig, RuntimeConfig, RuntimeService, SessionManager, ShimLauncher};
+use wasit_runtime::{
+    Discovery, DiscoveryConfig, RuntimeConfig, RuntimeService, SessionManager, ShimLauncher,
+};
 
 use crate::cli::{default_host_id, Options};
 use crate::host::{pty::Ptys, HostServices};
@@ -91,7 +93,11 @@ pub async fn serve(o: Options) -> ExitCode {
     };
     match manager.adopt_all().await {
         Ok(r) => {
-            tracing::info!(running = r.running.len(), finished = r.finished.len(), "adopted sessions");
+            tracing::info!(
+                running = r.running.len(),
+                finished = r.finished.len(),
+                "adopted sessions"
+            );
             for (dir, e) in r.errors {
                 tracing::warn!(dir = %dir.display(), error = %e, "session not adopted");
             }
@@ -106,7 +112,12 @@ pub async fn serve(o: Options) -> ExitCode {
         data_dir: o.data.display().to_string(),
         pid: std::process::id(),
     };
-    let runtime = RuntimeService::new(manager.clone(), discovery.clone(), host_id.clone(), build.clone());
+    let runtime = RuntimeService::new(
+        manager.clone(),
+        discovery.clone(),
+        host_id.clone(),
+        build.clone(),
+    );
     let host = HostServices {
         manager: manager.clone(),
         discovery,
@@ -125,7 +136,16 @@ pub async fn serve(o: Options) -> ExitCode {
 
     let mut hub_handle: Option<Hub> = None;
     let top: Arc<dyn Service> = if o.hub {
-        match start_hub(&o, &host_id, &build, local.clone(), manager.clone(), drivers).await {
+        match start_hub(
+            &o,
+            &host_id,
+            &build,
+            local.clone(),
+            manager.clone(),
+            drivers,
+        )
+        .await
+        {
             Ok((svc, hub)) => {
                 hub_handle = Some(hub);
                 svc
@@ -136,7 +156,11 @@ pub async fn serve(o: Options) -> ExitCode {
         local
     };
     let role = if o.hub { "hub" } else { "daemon" };
-    let server = ControlServer::new(top, Hello::new(build.clone(), host_id, role), ConnConfig::default());
+    let server = ControlServer::new(
+        top,
+        Hello::new(build.clone(), host_id, role),
+        ConnConfig::default(),
+    );
     let ready = Readiness {
         ready: true,
         pid: std::process::id(),
@@ -173,7 +197,9 @@ async fn start_hub(
     manager: SessionManager,
     drivers: wasit_core::DriverRegistry,
 ) -> Result<(Arc<dyn Service>, Hub), String> {
-    let store = Store::open(o.data.join("store")).await.map_err(|e| e.to_string())?;
+    let store = Store::open(o.data.join("store"))
+        .await
+        .map_err(|e| e.to_string())?;
     let fleet = Fleet::spawn();
     let entries = Arc::new(RwLock::new(Default::default()));
     let (ptx, prx) = tokio::sync::mpsc::channel(16);
@@ -200,9 +226,16 @@ async fn start_hub(
         platform: None,
         created_at_ms: 0,
     };
-    let registry = Registry::start(store.clone(), hub.clone(), fleet.clone(), entries, local_entry, prx)
-        .await
-        .map_err(|e| e.to_string())?;
+    let registry = Registry::start(
+        store.clone(),
+        hub.clone(),
+        fleet.clone(),
+        entries,
+        local_entry,
+        prx,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let svc = HubServices {
         registry,
         store,
@@ -221,7 +254,10 @@ async fn start_hub(
 #[cfg(unix)]
 async fn termination() -> &'static str {
     use tokio::signal::unix::{signal, SignalKind};
-    match (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) {
+    match (
+        signal(SignalKind::terminate()),
+        signal(SignalKind::interrupt()),
+    ) {
         (Ok(mut t), Ok(mut i)) => tokio::select! {
             _ = t.recv() => "SIGTERM",
             _ = i.recv() => "SIGINT",
@@ -290,7 +326,9 @@ pub async fn start_detached(args: Vec<String>, data: PathBuf) -> std::io::Result
         .take()
         .ok_or_else(|| std::io::Error::other("no stdout"))?;
     let mut line = String::new();
-    tokio::io::BufReader::new(stdout).read_line(&mut line).await?;
+    tokio::io::BufReader::new(stdout)
+        .read_line(&mut line)
+        .await?;
     // EOF without a readiness line usually means another instance won the lock; the caller's
     // connect decides.
     drop(child);

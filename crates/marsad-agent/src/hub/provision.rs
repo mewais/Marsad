@@ -128,7 +128,11 @@ impl AgentProvisioner {
             .remote(entry, POSIX_PROBE, None, PROBE_TIMEOUT)
             .await
             .map_err(|e| merr("probe", e))?;
-        if let Some(p) = out.success().then(|| parse_probe(&out.stdout_str())).flatten() {
+        if let Some(p) = out
+            .success()
+            .then(|| parse_probe(&out.stdout_str()))
+            .flatten()
+        {
             return Ok(p);
         }
         let kind = classify_command_failure(out.code, &out.stderr);
@@ -139,7 +143,11 @@ impl AgentProvisioner {
             .remote(entry, WINDOWS_PROBE, None, PROBE_TIMEOUT)
             .await
             .map_err(|e| merr("probe", e))?;
-        if let Some(p) = win.success().then(|| parse_probe(&win.stdout_str())).flatten() {
+        if let Some(p) = win
+            .success()
+            .then(|| parse_probe(&win.stdout_str()))
+            .flatten()
+        {
             return Ok(p);
         }
         Err(perr(
@@ -175,19 +183,30 @@ impl AgentProvisioner {
         if p.is_file() {
             Ok(p)
         } else {
-            Err(perr(format!("no marsad-agent build for {target} at {}", p.display()), false))
+            Err(perr(
+                format!("no marsad-agent build for {target} at {}", p.display()),
+                false,
+            ))
         }
     }
 }
 
 #[async_trait]
 impl Provisioner for AgentProvisioner {
-    async fn ensure(&self, host: &HostSpec, problem: ProvisionReason) -> Result<(), ProvisionError> {
+    async fn ensure(
+        &self,
+        host: &HostSpec,
+        problem: ProvisionReason,
+    ) -> Result<(), ProvisionError> {
         let entry = self.entry(&host.id)?;
         tracing::info!(host = %host.id, ?problem, "provisioning");
         let probe = self.probe(&entry).await?;
         if entry.platform.as_ref() != Some(&probe.platform) {
-            let os_changed = entry.platform.as_ref().map(|p| p.os.as_str()).unwrap_or("linux")
+            let os_changed = entry
+                .platform
+                .as_ref()
+                .map(|p| p.os.as_str())
+                .unwrap_or("linux")
                 != probe.platform.os.as_str()
                 && (entry.platform.is_some() || probe.platform.os == "windows");
             if self
@@ -204,7 +223,10 @@ impl Provisioner for AgentProvisioner {
             if os_changed {
                 // The link command depends on the OS; the registry re-creates the link.
                 return Err(perr(
-                    format!("{} runs {}; reconnecting with its command line", host.id, probe.platform.os),
+                    format!(
+                        "{} runs {}; reconnecting with its command line",
+                        host.id, probe.platform.os
+                    ),
                     true,
                 ));
             }
@@ -218,7 +240,11 @@ impl Provisioner for AgentProvisioner {
             .is_some_and(|v| v.build == self.own.build);
         if !installed_ok {
             let file = self.artifact(&probe.platform.target)?;
-            let script = if windows { WINDOWS_UPLOAD } else { POSIX_UPLOAD };
+            let script = if windows {
+                WINDOWS_UPLOAD
+            } else {
+                POSIX_UPLOAD
+            };
             let out = self
                 .remote(&entry, script, Some(&file), UPLOAD_TIMEOUT)
                 .await
@@ -246,7 +272,10 @@ mod tests {
 
     #[test]
     fn probe_output() {
-        let p = parse_probe("Linux\nx86_64\n{\"build\":\"0.2.0+abc\",\"target\":\"x86_64-unknown-linux-gnu\"}\n").unwrap();
+        let p = parse_probe(
+            "Linux\nx86_64\n{\"build\":\"0.2.0+abc\",\"target\":\"x86_64-unknown-linux-gnu\"}\n",
+        )
+        .unwrap();
         assert_eq!(p.platform.target, "x86_64-unknown-linux-gnu");
         assert_eq!(p.installed.unwrap().build, "0.2.0+abc");
         let p = parse_probe("Darwin\narm64\nnone\n").unwrap();

@@ -4,9 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use marsad_proto::git::{
-    ChangeKind, DiffSide, GitCommitReply, GitDiff, GitFileChange, GitStatus,
-};
+use marsad_proto::git::{ChangeKind, DiffSide, GitCommitReply, GitDiff, GitFileChange, GitStatus};
 use marsad_proto::MarsadError;
 
 use crate::util::{run, Output};
@@ -45,7 +43,11 @@ fn failed(what: &str, out: &Output) -> MarsadError {
 
 /// The repository root containing `dir`.
 pub async fn repo_root(dir: &Path) -> Result<PathBuf, MarsadError> {
-    if !tokio::fs::metadata(dir).await.map(|m| m.is_dir()).unwrap_or(false) {
+    if !tokio::fs::metadata(dir)
+        .await
+        .map(|m| m.is_dir())
+        .unwrap_or(false)
+    {
         return Err(MarsadError::NotFound {
             what: format!("directory {}", dir.display()),
         });
@@ -84,7 +86,9 @@ pub fn parse_status(raw: &[u8]) -> (GitStatus, Vec<String>) {
         files: Vec::new(),
     };
     let mut untracked = Vec::new();
-    let mut recs = raw.split(|b| *b == 0).map(|r| String::from_utf8_lossy(r).into_owned());
+    let mut recs = raw
+        .split(|b| *b == 0)
+        .map(|r| String::from_utf8_lossy(r).into_owned());
     let blank = |path: String| GitFileChange {
         path,
         orig_path: None,
@@ -158,7 +162,9 @@ pub fn parse_status(raw: &[u8]) -> (GitStatus, Vec<String>) {
 /// Parse `git diff --numstat -z`: path → (added, removed, binary).
 pub fn parse_numstat(raw: &[u8]) -> HashMap<String, (u32, u32, bool)> {
     let mut out = HashMap::new();
-    let mut recs = raw.split(|b| *b == 0).map(|r| String::from_utf8_lossy(r).into_owned());
+    let mut recs = raw
+        .split(|b| *b == 0)
+        .map(|r| String::from_utf8_lossy(r).into_owned());
     while let Some(rec) = recs.next() {
         let mut it = rec.splitn(3, '\t');
         let (Some(a), Some(d), Some(p)) = (it.next(), it.next(), it.next()) else {
@@ -203,7 +209,13 @@ pub async fn status(dir: &Path) -> Result<GitStatus, MarsadError> {
     let root = repo_root(dir).await?;
     let out = git(
         &root,
-        &["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"],
+        &[
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--branch",
+            "--untracked-files=all",
+        ],
     )
     .await?;
     if !out.success() {
@@ -212,7 +224,10 @@ pub async fn status(dir: &Path) -> Result<GitStatus, MarsadError> {
     let (mut st, untracked) = parse_status(&out.stdout);
     st.repo_root = root.display().to_string();
     let (staged, unstaged) = tokio::join!(
-        git(&root, &["diff", "--cached", "--numstat", "-z", "--no-renames"]),
+        git(
+            &root,
+            &["diff", "--cached", "--numstat", "-z", "--no-renames"]
+        ),
         git(&root, &["diff", "--numstat", "-z", "--no-renames"]),
     );
     let staged = staged?;
@@ -326,7 +341,11 @@ pub async fn diff(
     })
 }
 
-pub async fn commit(dir: &Path, message: &str, files: &[String]) -> Result<GitCommitReply, MarsadError> {
+pub async fn commit(
+    dir: &Path,
+    message: &str,
+    files: &[String],
+) -> Result<GitCommitReply, MarsadError> {
     if message.trim().is_empty() {
         return Err(MarsadError::invalid("empty commit message"));
     }
@@ -450,7 +469,10 @@ mod tests {
 
     #[test]
     fn truncation_keeps_whole_lines() {
-        assert_eq!(truncate_lines("ab\ncd\nef\n", 7), ("ab\ncd\n".to_string(), true));
+        assert_eq!(
+            truncate_lines("ab\ncd\nef\n", 7),
+            ("ab\ncd\n".to_string(), true)
+        );
         assert_eq!(truncate_lines("ab\n", 7), ("ab\n".to_string(), false));
         assert!(check_rel("../x").is_err());
         assert!(check_rel("/x").is_err());

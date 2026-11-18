@@ -119,10 +119,7 @@ impl HubServices {
                 },
             )
             .await?;
-        let mut scopes = vec![
-            LayerScope::Global,
-            LayerScope::Host { host: host.clone() },
-        ];
+        let mut scopes = vec![LayerScope::Global, LayerScope::Host { host: host.clone() }];
         if let Some(w) = &workstream {
             scopes.push(LayerScope::WorkstreamNode {
                 workstream: w.workstream.clone(),
@@ -164,7 +161,11 @@ impl HubServices {
         ))
     }
 
-    async fn launch(&self, ctx: &CallContext, r: LaunchRequest) -> Result<LaunchReply, MarsadError> {
+    async fn launch(
+        &self,
+        ctx: &CallContext,
+        r: LaunchRequest,
+    ) -> Result<LaunchReply, MarsadError> {
         let host = self.host_of(r.host.clone())?;
         // The id is chosen here so the session layer can be stored under it.
         let id = SessionId::random();
@@ -242,9 +243,16 @@ impl HubServices {
         })
     }
 
-    async fn dispatch(&self, ctx: &CallContext, method: &str, p: Value) -> Result<Value, MarsadError> {
+    async fn dispatch(
+        &self,
+        ctx: &CallContext,
+        method: &str,
+        p: Value,
+    ) -> Result<Value, MarsadError> {
         let enc = |v: Result<Value, RpcError>| v.map_err(|e| MarsadError::io(e.message));
-        let dec = |e: RpcError| MarsadError::from_rpc(&e).unwrap_or_else(|| MarsadError::invalid(e.message));
+        let dec = |e: RpcError| {
+            MarsadError::from_rpc(&e).unwrap_or_else(|| MarsadError::invalid(e.message))
+        };
         match method {
             methods::HOSTS_LIST => enc(ok(HostList {
                 hosts: self.registry.list(),
@@ -276,7 +284,16 @@ impl HubServices {
                     None => (SessionId::random(), false),
                 };
                 enc(ok(self
-                    .effective(ctx, &host, &r.driver, r.project, r.workstream, &session, stored, r.overrides)
+                    .effective(
+                        ctx,
+                        &host,
+                        &r.driver,
+                        r.project,
+                        r.workstream,
+                        &session,
+                        stored,
+                        r.overrides,
+                    )
                     .await?))
             }
             methods::SESSIONS_LAUNCH => {
@@ -359,7 +376,10 @@ impl HubServices {
                 error: RpcError::internal(e.to_string()),
             });
             let n = n + 1;
-            Some((v.map(|v| (Cursor::new(format!("links.{n}")), v)), (rx, n, false)))
+            Some((
+                v.map(|v| (Cursor::new(format!("links.{n}")), v)),
+                (rx, n, false),
+            ))
         })
         .boxed()
     }

@@ -11,10 +11,16 @@ use crate::util::expand_tilde;
 const MAX_ENTRIES: usize = 5000;
 const DEADLINE: Duration = Duration::from_secs(15);
 
-pub async fn list(path: &str, show_hidden: bool, dirs_only: bool) -> Result<FsListing, MarsadError> {
+pub async fn list(
+    path: &str,
+    show_hidden: bool,
+    dirs_only: bool,
+) -> Result<FsListing, MarsadError> {
     let dir = expand_tilde(path)?;
     if !dir.is_absolute() {
-        return Err(MarsadError::invalid(format!("{path:?} is not an absolute path")));
+        return Err(MarsadError::invalid(format!(
+            "{path:?} is not an absolute path"
+        )));
     }
     let work = async {
         let mut rd = tokio::fs::read_dir(&dir)
@@ -37,9 +43,16 @@ pub async fn list(path: &str, show_hidden: bool, dirs_only: bool) -> Result<FsLi
                 continue;
             }
             let p = ent.path();
-            let is_symlink = ent.file_type().await.map(|t| t.is_symlink()).unwrap_or(false);
+            let is_symlink = ent
+                .file_type()
+                .await
+                .map(|t| t.is_symlink())
+                .unwrap_or(false);
             // Follow symlinks for the directory test (a linked project is still a project).
-            let is_dir = tokio::fs::metadata(&p).await.map(|m| m.is_dir()).unwrap_or(false);
+            let is_dir = tokio::fs::metadata(&p)
+                .await
+                .map(|m| m.is_dir())
+                .unwrap_or(false);
             if dirs_only && !is_dir {
                 continue;
             }
@@ -47,7 +60,8 @@ pub async fn list(path: &str, show_hidden: bool, dirs_only: bool) -> Result<FsLi
                 truncated = true;
                 break;
             }
-            let is_git_repo = is_dir && tokio::fs::try_exists(p.join(".git")).await.unwrap_or(false);
+            let is_git_repo =
+                is_dir && tokio::fs::try_exists(p.join(".git")).await.unwrap_or(false);
             entries.push(FsEntry {
                 name,
                 path: p.display().to_string(),

@@ -247,6 +247,23 @@ dependencies = [
 [[package]]
 name = "marsad-client"
 version = "0.2.0"
+dependencies = [
+ "marsad-proto",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "wasit-control",
+ "wasit-runtime",
+]
+
+[[package]]
+name = "marsad-fake-cli"
+version = "0.2.0"
+dependencies = [
+ "wasit-fake-cli",
+]
 
 [[package]]
 name = "marsad-proto"

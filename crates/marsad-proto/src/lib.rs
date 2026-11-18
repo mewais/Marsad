@@ -297,7 +297,10 @@ mod tests {
         }
         for r in wasit_runtime::wire::ROUTES {
             for m in HOST_ROUTES.iter().chain(HUB_ROUTES) {
-                assert!(!r.starts_with(m) && !(m.starts_with(r) && *m != methods::SESSIONS_LAUNCH), "{r} vs {m}");
+                assert!(
+                    !r.starts_with(m) && !(m.starts_with(r) && *m != methods::SESSIONS_LAUNCH),
+                    "{r} vs {m}"
+                );
             }
         }
     }

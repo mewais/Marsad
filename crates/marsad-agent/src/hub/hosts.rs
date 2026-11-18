@@ -11,7 +11,7 @@ use marsad_proto::{HostId, LinkState, MarsadError};
 use marsad_store::Store;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use wasit_control::{Hub, HostSpec};
+use wasit_control::{HostSpec, Hub};
 
 use super::fleet::Fleet;
 use super::provision::{Entries, PlatformFound};
@@ -186,7 +186,9 @@ impl Registry {
             Some(id) if taken(&id) => {
                 return Err(MarsadError::invalid(format!("host id {id} is taken")))
             }
-            Some(id) if id.as_str().is_empty() => return Err(MarsadError::invalid("empty host id")),
+            Some(id) if id.as_str().is_empty() => {
+                return Err(MarsadError::invalid("empty host id"))
+            }
             Some(id) => id,
             None => {
                 let base = slug(&draft.name);
@@ -279,8 +281,8 @@ impl Registry {
         let Some(mut entry) = self.get(&found.host) else {
             return Ok(());
         };
-        let os_changed = entry.platform.as_ref().map(|p| p.os.clone())
-            != Some(found.platform.os.clone());
+        let os_changed =
+            entry.platform.as_ref().map(|p| p.os.clone()) != Some(found.platform.os.clone());
         entry.platform = Some(found.platform);
         self.inner.store.put_host(entry.clone()).await?;
         self.inner

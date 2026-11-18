@@ -36,11 +36,17 @@ pub enum LayerScope {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ItemValue {
-    McpServer { server: McpTransport },
+    McpServer {
+        server: McpTransport,
+    },
     /// A skill directory `<root>/<name>/SKILL.md`.
-    Skill { root: String },
+    Skill {
+        root: String,
+    },
     /// A plugin the CLI can load from a local path.
-    Plugin { path: String },
+    Plugin {
+        path: String,
+    },
 }
 
 impl ItemValue {
@@ -220,23 +226,24 @@ impl EffectiveConfig {
         let mut cfg = AgentConfig::default();
         for it in &self.items {
             match (it.state, &it.value) {
-                (ItemState::Changed | ItemState::Added | ItemState::Automatic, Some(v)) => match v
-                {
-                    ItemValue::McpServer { server } => cfg.mcp_servers.push(McpServerConfig {
-                        name: it.name.clone(),
-                        transport: server.clone(),
-                        // Only Marsad's own automatic servers do their own gating.
-                        trusted: it.state == ItemState::Automatic,
-                    }),
-                    ItemValue::Skill { root } => cfg.skills.push(SkillRef {
-                        name: it.name.clone(),
-                        root: root.clone(),
-                    }),
-                    ItemValue::Plugin { path } => cfg.plugins.push(PluginRef {
-                        name: it.name.clone(),
-                        path: path.clone(),
-                    }),
-                },
+                (ItemState::Changed | ItemState::Added | ItemState::Automatic, Some(v)) => {
+                    match v {
+                        ItemValue::McpServer { server } => cfg.mcp_servers.push(McpServerConfig {
+                            name: it.name.clone(),
+                            transport: server.clone(),
+                            // Only Marsad's own automatic servers do their own gating.
+                            trusted: it.state == ItemState::Automatic,
+                        }),
+                        ItemValue::Skill { root } => cfg.skills.push(SkillRef {
+                            name: it.name.clone(),
+                            root: root.clone(),
+                        }),
+                        ItemValue::Plugin { path } => cfg.plugins.push(PluginRef {
+                            name: it.name.clone(),
+                            path: path.clone(),
+                        }),
+                    }
+                }
                 (ItemState::Disabled, _) if it.base.is_some() => cfg.disabled.push(DisabledItem {
                     kind: it.kind,
                     name: it.name.clone(),
@@ -363,7 +370,11 @@ pub fn effective_config(
                 }
             }
         }
-        if let Some(text) = layer.extra_instructions.as_deref().filter(|t| !t.is_empty()) {
+        if let Some(text) = layer
+            .extra_instructions
+            .as_deref()
+            .filter(|t| !t.is_empty())
+        {
             let c = instructions.get_or_insert_with(|| Contribution {
                 value: String::new(),
                 scopes: Vec::new(),

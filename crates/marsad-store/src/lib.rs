@@ -25,8 +25,7 @@ use std::time::Duration;
 use marsad_proto::agentconfig::{LayerScope, OverrideLayer};
 use marsad_proto::hosts::HostEntry;
 use marsad_proto::store::{
-    NotificationPrefs, RecentProject, SeenMark, Settings, StoredLayer, WorkstreamDoc,
-    WorkstreamPut,
+    NotificationPrefs, RecentProject, SeenMark, Settings, StoredLayer, WorkstreamDoc, WorkstreamPut,
 };
 use marsad_proto::{HostId, MarsadError, SessionId};
 use serde::de::DeserializeOwned;
@@ -278,10 +277,7 @@ impl Store {
                 .map(|m| ((m.host.clone(), m.session.clone()), m))
                 .collect(),
             recent: load(&f(Doc::Recent)).await?,
-            workstreams: workstreams
-                .into_iter()
-                .map(|w| (w.id.clone(), w))
-                .collect(),
+            workstreams: workstreams.into_iter().map(|w| (w.id.clone(), w)).collect(),
         };
         let (tx, rx) = mpsc::channel(MAILBOX);
         let changes = broadcast::channel(64).0;
@@ -472,7 +468,11 @@ impl Store {
     }
 
     /// Store a layer; an empty layer removes it.
-    pub async fn set_layer(&self, scope: LayerScope, layer: OverrideLayer) -> Result<(), StoreError> {
+    pub async fn set_layer(
+        &self,
+        scope: LayerScope,
+        layer: OverrideLayer,
+    ) -> Result<(), StoreError> {
         self.write(Doc::Layers, move |s| {
             s.layers.retain(|l| l.scope != scope);
             if !layer.is_empty() {
@@ -545,7 +545,8 @@ impl Store {
     // ── workstreams ─────────────────────────────────────────────────────────
 
     pub async fn workstreams(&self) -> Result<Vec<WorkstreamDoc>, StoreError> {
-        self.read(|s| s.workstreams.values().cloned().collect()).await
+        self.read(|s| s.workstreams.values().cloned().collect())
+            .await
     }
 
     pub async fn put_workstream(&self, put: WorkstreamPut) -> Result<WorkstreamDoc, StoreError> {

@@ -44,9 +44,12 @@ impl HostServices {
     fn resolve(&self, t: &GitTarget) -> Result<(PathBuf, Option<String>), MarsadError> {
         match (&t.session, &t.cwd) {
             (Some(id), None) => {
-                let snap = self.manager.snapshot(id).map_err(|_| MarsadError::NotFound {
-                    what: format!("session {id}"),
-                })?;
+                let snap = self
+                    .manager
+                    .snapshot(id)
+                    .map_err(|_| MarsadError::NotFound {
+                        what: format!("session {id}"),
+                    })?;
                 let cwd = snap.cwd.ok_or_else(|| {
                     MarsadError::invalid(format!("session {id} has no working directory"))
                 })?;
@@ -96,7 +99,10 @@ impl HostServices {
                 });
             }
             // Signalled by discovery on every inventory change; bounded by the deadline.
-            if tokio::time::timeout_at(deadline, changes.changed()).await.is_err() {
+            if tokio::time::timeout_at(deadline, changes.changed())
+                .await
+                .is_err()
+            {
                 continue;
             }
         }
@@ -136,8 +142,11 @@ impl Service for HostServices {
                 methods::PTY_START => {
                     let r: PtyStartRequest = params(p).map_err(rpc_to)?;
                     let (dir, session) = self.resolve(&r.target)?;
-                    ok(self.ptys.start(&dir, session, r.cols, r.rows, r.shell).await?)
-                        .map_err(rpc_to)?
+                    ok(self
+                        .ptys
+                        .start(&dir, session, r.cols, r.rows, r.shell)
+                        .await?)
+                    .map_err(rpc_to)?
                 }
                 methods::PTY_INPUT => {
                     let r: PtyInputRequest = params(p).map_err(rpc_to)?;
@@ -177,9 +186,11 @@ impl Service for HostServices {
                     self.shutdown.cancel();
                     ok(Ack {}).map_err(rpc_to)?
                 }
-                other => return Err(MarsadError::NotFound {
-                    what: format!("method {other}"),
-                }),
+                other => {
+                    return Err(MarsadError::NotFound {
+                        what: format!("method {other}"),
+                    })
+                }
             })
         }
         .await;
@@ -199,12 +210,13 @@ impl Service for HostServices {
         from: Option<Cursor>,
     ) -> Result<EventStream, RpcError> {
         if let Some(id) = topic.strip_prefix(topics::PTY_OUTPUT_PREFIX) {
-            let from = match &from {
-                None => None,
-                Some(c) => Some(c.as_u64().ok_or_else(|| {
-                    MarsadError::invalid(format!("bad cursor {c}")).into_rpc()
-                })?),
-            };
+            let from =
+                match &from {
+                    None => None,
+                    Some(c) => Some(c.as_u64().ok_or_else(|| {
+                        MarsadError::invalid(format!("bad cursor {c}")).into_rpc()
+                    })?),
+                };
             return self.ptys.subscribe(id, from).map_err(MarsadError::into_rpc);
         }
         Err(RpcError::topic_not_found(topic))

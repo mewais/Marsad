@@ -23,7 +23,11 @@ fn tmp() -> std::path::PathBuf {
 fn sid(n: usize) -> SessionId {
     // 12 chars of the session-id alphabet.
     let a = b"abcdefghijklmnopqrstuvwxyz234567";
-    SessionId((0..12).map(|i| a[(n >> (i % 4 * 5)) % 32] as char).collect())
+    SessionId(
+        (0..12)
+            .map(|i| a[(n >> (i % 4 * 5)) % 32] as char)
+            .collect(),
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -55,7 +59,9 @@ async fn concurrent_writers_lose_nothing_and_files_never_tear() {
         let s = store.clone();
         tasks.push(tokio::spawn(async move {
             for i in 0..25usize {
-                s.set_setting(format!("k{w}-{i}"), serde_json::json!(i)).await.unwrap();
+                s.set_setting(format!("k{w}-{i}"), serde_json::json!(i))
+                    .await
+                    .unwrap();
                 s.mark_seen(vec![SeenMark {
                     host: HostId::new("h"),
                     session: sid(w * 100 + i),
@@ -83,7 +89,10 @@ async fn concurrent_writers_lose_nothing_and_files_never_tear() {
 
     assert_eq!(store.settings().await.unwrap().values.len(), 16 * 25);
     assert_eq!(store.seen().await.unwrap().len(), 16 * 25);
-    assert_eq!(store.recent().await.unwrap().len(), marsad_store::MAX_RECENT);
+    assert_eq!(
+        store.recent().await.unwrap().len(),
+        marsad_store::MAX_RECENT
+    );
     store.close().await.unwrap();
     let store = Store::open(&dir).await.unwrap();
     assert_eq!(store.settings().await.unwrap().values.len(), 16 * 25);
@@ -95,7 +104,10 @@ async fn concurrent_writers_lose_nothing_and_files_never_tear() {
 async fn second_open_is_refused_and_semantics_hold() {
     let dir = tmp();
     let store = Store::open(&dir).await.unwrap();
-    assert!(matches!(Store::open(&dir).await, Err(StoreError::Locked(_))));
+    assert!(matches!(
+        Store::open(&dir).await,
+        Err(StoreError::Locked(_))
+    ));
 
     // Seen markers never move backwards.
     let m = |c| SeenMark {
@@ -123,7 +135,10 @@ async fn second_open_is_refused_and_semantics_hold() {
     };
     store.set_layer(scope.clone(), layer.clone()).await.unwrap();
     assert_eq!(store.layer(scope.clone()).await.unwrap(), layer);
-    store.set_layer(scope.clone(), OverrideLayer::default()).await.unwrap();
+    store
+        .set_layer(scope.clone(), OverrideLayer::default())
+        .await
+        .unwrap();
     assert!(store.layers().await.unwrap().is_empty());
 
     // Workstreams: revisions and optimistic concurrency.
@@ -134,7 +149,10 @@ async fn second_open_is_refused_and_semantics_hold() {
         expected_revision: rev,
     };
     assert_eq!(store.put_workstream(put(None)).await.unwrap().revision, 1);
-    assert_eq!(store.put_workstream(put(Some(1))).await.unwrap().revision, 2);
+    assert_eq!(
+        store.put_workstream(put(Some(1))).await.unwrap().revision,
+        2
+    );
     assert!(matches!(
         store.put_workstream(put(Some(1))).await,
         Err(StoreError::Conflict(_))

@@ -78,7 +78,13 @@ fn session() -> LayerScope {
 }
 
 fn eff(driver: &str, layers: &[(LayerScope, OverrideLayer)]) -> EffectiveConfig {
-    effective_config(&DriverId::new(driver), &base(), layers, &[], desc(driver).as_ref())
+    effective_config(
+        &DriverId::new(driver),
+        &base(),
+        layers,
+        &[],
+        desc(driver).as_ref(),
+    )
 }
 
 /// (case, layers, expected (kind, name, state, active) for the items under test)
@@ -103,8 +109,18 @@ fn merge_table() {
         (
             "global disables, host changes another",
             vec![
-                (LayerScope::Global, layer(vec![ov(K::Skill, "review", OverrideAction::Disable)])),
-                (host(), layer(vec![ov(K::McpServer, "github", OverrideAction::Set { value: mcp("new") })])),
+                (
+                    LayerScope::Global,
+                    layer(vec![ov(K::Skill, "review", OverrideAction::Disable)]),
+                ),
+                (
+                    host(),
+                    layer(vec![ov(
+                        K::McpServer,
+                        "github",
+                        OverrideAction::Set { value: mcp("new") },
+                    )]),
+                ),
             ],
             vec![
                 (K::Skill, "review", S::Disabled, false),
@@ -114,32 +130,68 @@ fn merge_table() {
         (
             "session resets what global disabled",
             vec![
-                (LayerScope::Global, layer(vec![ov(K::Skill, "review", OverrideAction::Disable)])),
-                (session(), layer(vec![ov(K::Skill, "review", OverrideAction::Reset)])),
+                (
+                    LayerScope::Global,
+                    layer(vec![ov(K::Skill, "review", OverrideAction::Disable)]),
+                ),
+                (
+                    session(),
+                    layer(vec![ov(K::Skill, "review", OverrideAction::Reset)]),
+                ),
             ],
             vec![(K::Skill, "review", S::Inherited, true)],
         ),
         (
             "add, then a narrower layer disables the added item",
             vec![
-                (host(), layer(vec![ov(K::McpServer, "extra", OverrideAction::Set { value: mcp("x") })])),
-                (session(), layer(vec![ov(K::McpServer, "extra", OverrideAction::Disable)])),
+                (
+                    host(),
+                    layer(vec![ov(
+                        K::McpServer,
+                        "extra",
+                        OverrideAction::Set { value: mcp("x") },
+                    )]),
+                ),
+                (
+                    session(),
+                    layer(vec![ov(K::McpServer, "extra", OverrideAction::Disable)]),
+                ),
             ],
             vec![(K::McpServer, "extra", S::Disabled, false)],
         ),
         (
             "re-enable a disabled inherited item by setting it",
             vec![
-                (LayerScope::Global, layer(vec![ov(K::McpServer, "github", OverrideAction::Disable)])),
-                (session(), layer(vec![ov(K::McpServer, "github", OverrideAction::Set { value: mcp("y") })])),
+                (
+                    LayerScope::Global,
+                    layer(vec![ov(K::McpServer, "github", OverrideAction::Disable)]),
+                ),
+                (
+                    session(),
+                    layer(vec![ov(
+                        K::McpServer,
+                        "github",
+                        OverrideAction::Set { value: mcp("y") },
+                    )]),
+                ),
             ],
             vec![(K::McpServer, "github", S::Changed, true)],
         ),
         (
             "reset of an added item removes it",
             vec![
-                (host(), layer(vec![ov(K::McpServer, "extra", OverrideAction::Set { value: mcp("x") })])),
-                (session(), layer(vec![ov(K::McpServer, "extra", OverrideAction::Reset)])),
+                (
+                    host(),
+                    layer(vec![ov(
+                        K::McpServer,
+                        "extra",
+                        OverrideAction::Set { value: mcp("x") },
+                    )]),
+                ),
+                (
+                    session(),
+                    layer(vec![ov(K::McpServer, "extra", OverrideAction::Reset)]),
+                ),
             ],
             vec![],
         ),
@@ -175,8 +227,16 @@ fn provenance_and_rendered_config() {
             host(),
             OverrideLayer {
                 items: vec![
-                    ov(K::McpServer, "github", OverrideAction::Set { value: mcp("new") }),
-                    ov(K::McpServer, "local", OverrideAction::Set { value: mcp("l") }),
+                    ov(
+                        K::McpServer,
+                        "github",
+                        OverrideAction::Set { value: mcp("new") },
+                    ),
+                    ov(
+                        K::McpServer,
+                        "local",
+                        OverrideAction::Set { value: mcp("l") },
+                    ),
                 ],
                 extra_instructions: Some("use tabs".into()),
                 env: vec![("A".into(), "2".into())],
@@ -194,15 +254,26 @@ fn provenance_and_rendered_config() {
         e.extra_instructions.as_ref().unwrap().value,
         "be brief\n\nuse tabs"
     );
-    let env: Vec<(&str, &str)> = e.env.iter().map(|(k, v, _)| (k.as_str(), v.as_str())).collect();
+    let env: Vec<(&str, &str)> = e
+        .env
+        .iter()
+        .map(|(k, v, _)| (k.as_str(), v.as_str()))
+        .collect();
     assert_eq!(env, [("B", "1"), ("A", "2")]);
     assert_eq!(e.disallowed_tools, ["WebFetch", "Bash"]);
 
     let cfg = e.agent_config();
     let names: Vec<&str> = cfg.mcp_servers.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["github", "local"], "inherited items are never re-rendered");
+    assert_eq!(
+        names,
+        ["github", "local"],
+        "inherited items are never re-rendered"
+    );
     assert_eq!(cfg.disabled.len(), 1);
-    assert_eq!(cfg.disabled[0].path.as_deref(), Some("/cfg/review/SKILL.md"));
+    assert_eq!(
+        cfg.disabled[0].path.as_deref(),
+        Some("/cfg/review/SKILL.md")
+    );
     // codex cannot deny tools: reported as a non-item unsupported setting.
     assert!(e.unsupported.iter().any(|u| u.item == "tool_policy"));
 }
@@ -247,7 +318,13 @@ fn driver_scoped_overrides_ignored_items_and_automatic_items() {
         layer(vec![
             only_codex,
             ov(K::Skill, "ghost", OverrideAction::Disable),
-            ov(K::Skill, "review2", OverrideAction::Set { value: mcp("wrong kind") }),
+            ov(
+                K::Skill,
+                "review2",
+                OverrideAction::Set {
+                    value: mcp("wrong kind"),
+                },
+            ),
             ov(K::McpServer, "wasl", OverrideAction::Disable),
         ]),
     )];
@@ -263,7 +340,10 @@ fn driver_scoped_overrides_ignored_items_and_automatic_items() {
         &automatic,
         desc("claude").as_ref(),
     );
-    assert_eq!(e.item(K::Skill, "review").unwrap().state, ItemState::Inherited);
+    assert_eq!(
+        e.item(K::Skill, "review").unwrap().state,
+        ItemState::Inherited
+    );
     let reasons: Vec<&str> = e.ignored.iter().map(|i| i.item.name.as_str()).collect();
     assert_eq!(reasons, ["ghost", "review2", "wasl"]);
     let w = e.item(K::McpServer, "wasl").unwrap();
@@ -275,5 +355,9 @@ fn driver_scoped_overrides_ignored_items_and_automatic_items() {
             provider: "orchestration".into()
         }
     );
-    assert!(e.agent_config().mcp_servers.iter().any(|s| s.name == "wasl"));
+    assert!(e
+        .agent_config()
+        .mcp_servers
+        .iter()
+        .any(|s| s.name == "wasl"));
 }
