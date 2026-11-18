@@ -51,7 +51,8 @@ struct Pty {
     scroll: Mutex<Scroll>,
     live: broadcast::Sender<Live>,
     input: mpsc::Sender<Vec<u8>>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
+    /// Taken (closed) once the shell has exited.
+    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
 }
 
@@ -186,24 +187,33 @@ impl Ptys {
             }),
             live: broadcast::channel(LIVE_QUEUE).0,
             input,
-            master: Mutex::new(master),
+            master: Mutex::new(Some(master)),
             killer: Mutex::new(child.clone_killer()),
         });
         lock(&self.map).insert(id.clone(), pty.clone());
         spawn_writer(writer, input_rx);
         let p = pty.clone();
-        std::thread::Builder::new()
+        let read = std::thread::Builder::new()
             .name(format!("pty-read-{id}"))
+            .spawn(move || pump(&p, reader))
+            .map_err(|e| MarsadError::io(format!("pty reader thread: {e}")))?;
+        // The exit is the shell's, not the reader's EOF: a ConPTY keeps its output pipe open
+        // until the pseudo console is closed. So wait for the shell, close the master (which
+        // ends the reader once it has drained everything), then report the exit last.
+        let p = pty.clone();
+        std::thread::Builder::new()
+            .name(format!("pty-wait-{id}"))
             .spawn(move || {
-                pump(&p, reader);
                 let code = child.wait().ok().map(|s| s.exit_code() as i32);
+                drop(lock(&p.master).take());
+                let _ = read.join();
                 let mut s = lock(&p.scroll);
                 s.exited = Some(code);
                 let end = s.end();
                 // No subscribers is fine.
                 let _ = p.live.send((end + 1, PtyEvent::Exited { code }));
             })
-            .map_err(|e| MarsadError::io(format!("pty reader thread: {e}")))?;
+            .map_err(|e| MarsadError::io(format!("pty wait thread: {e}")))?;
         let info = lock(&pty.info).clone();
         Ok(info)
     }
@@ -227,6 +237,8 @@ impl Ptys {
         let p2 = p.clone();
         tokio::task::spawn_blocking(move || {
             lock(&p2.master)
+                .as_ref()
+                .ok_or_else(|| MarsadError::invalid("the terminal has exited"))?
                 .resize(PtySize {
                     rows,
                     cols,
