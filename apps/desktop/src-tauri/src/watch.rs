@@ -190,6 +190,7 @@ fn apply(hosts: &mut Vec<FleetHost>, ev: &FleetEvent) {
                     sessions_live: false,
                     sessions: Vec::new(),
                     auth_prompt: None,
+                    git: Vec::new(),
                 }),
             }
         }

@@ -10,11 +10,18 @@ import { WorkstreamsPage } from "./features/workstreams/WorkstreamsPage";
 
 // The graph (and ELK) load only when a workstream opens.
 const GraphPage = lazy(() => import("./features/workstreams/GraphPage").then((m) => ({ default: m.GraphPage })));
-import { hashHistory, RouterProvider, useRoute, type History } from "./router";
+import { hashHistory, RouterProvider, sessionPath, useNavigate, useRoute, type History } from "./router";
 import { AppShell } from "./shell/AppShell";
 import { installShortcuts } from "./shortcuts/registry";
 import { AppProvider, createApp } from "./state";
 import { IconSprite } from "./ui";
+
+/** The desktop shell's `navigate` event (a notification brought the app forward). */
+function ShellNavigate({ backend }: { backend: Backend }) {
+  const nav = useNavigate();
+  useEffect(() => backend.onNavigate?.((t) => nav(sessionPath(t.host, t.session))), [backend, nav]);
+  return null;
+}
 
 function Routes() {
   const r = useRoute();
@@ -47,6 +54,7 @@ export function App({ backend, history }: { backend?: Backend; history?: History
     <AppProvider value={app}>
       <RouterProvider history={hist}>
         <IconSprite />
+        <ShellNavigate backend={app.backend} />
         <AppShell>
           <Routes />
         </AppShell>

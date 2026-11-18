@@ -178,7 +178,7 @@ impl Tracker {
                 self.sessions.remove(&key);
                 self.needs_you.remove(&key);
             }
-            FleetEvent::AuthPrompt { .. } => {}
+            FleetEvent::AuthPrompt { .. } | FleetEvent::Git { .. } => {}
         }
         out
     }
@@ -240,6 +240,7 @@ mod tests {
                 sessions_live: true,
                 sessions: vec![snap(Phase::Working)],
                 auth_prompt: None,
+                git: Vec::new(),
             }],
         });
         let up = |p| FleetEvent::SessionUpserted {

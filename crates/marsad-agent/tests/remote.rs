@@ -225,7 +225,7 @@ async fn ssh_host_provision_fleet_git_and_link_drop() {
         &id,
         Command::AnswerGate {
             request_id,
-            decision: GateDecision::approve(),
+            decision: GateDecision::choose("allow"),
         },
     )
     .await

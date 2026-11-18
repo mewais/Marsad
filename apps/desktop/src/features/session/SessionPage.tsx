@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { clockTime, compactNumber, money } from "../../lib/format";
 import { Link, sessionPath, useNavigate } from "../../router";
 import { useShortcut } from "../../shortcuts/useShortcut";
-import { selectView, useActions, useApp, useAppState, useDriver, useHost, useSessionView, useTranscriptOpen } from "../../state";
-import { Button, ConnState, DriverBadge, EmptyState, HostChip, Icon, Skeleton, StatusPill, Tabs } from "../../ui";
+import { selectView, useActions, useApi, useApp, useAppState, useDriver, useHost, useSessionView, useTranscriptOpen } from "../../state";
+import { Button, ConfirmDialog, ConnState, DriverBadge, EmptyState, HostChip, Icon, IconButton, Skeleton, StatusPill, Tabs } from "../../ui";
+import { toast } from "../../ui/toast";
 import { Gate } from "../gates/Gate";
 import { Composer } from "./Composer";
 import { TranscriptItem } from "./TranscriptView";
@@ -44,7 +45,23 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 
-  useEffect(() => actions.ensureGit(key), [actions, key]);
+  const api = useApi();
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const saveName = () => {
+    const name = renaming?.trim() ?? "";
+    setRenaming(null);
+    if (name === (snap?.display_name ?? "")) return;
+    void actions.run(`rename:${key}`, "Could not rename the session", () => api.renameSession(host, id, name || null));
+  };
+  const remove = async () => {
+    setConfirmDelete(false);
+    const r = await actions.run(`delete:${key}`, "Could not delete the session", () => api.deleteSession(host, id));
+    if (r) {
+      toast({ tone: "ok", title: "Session deleted", detail: v?.name });
+      nav("/inbox");
+    }
+  };
   // Looking at a finished session counts as seeing it.
   useEffect(() => {
     if (selectView(store.get(), key)?.status === "done") actions.markSeen([key]);
@@ -83,11 +100,21 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
           <span className="fg" aria-current="page">{v.name}</span>
         </nav>
         <div className="sd-title">
-          <h1 className="h1">{v.name}</h1>
+          {renaming != null ? (
+            <input className="h1 rename" aria-label="Session name" autoFocus value={renaming} placeholder={snap.title ?? id} onChange={(e) => setRenaming(e.target.value)} onBlur={saveName}
+              onKeyDown={(e) => { if (e.key === "Enter") saveName(); else if (e.key === "Escape") { e.stopPropagation(); setRenaming(null); } }} />
+          ) : (
+            <h1 className="h1" title={snap.display_name ? `First prompt: ${snap.title ?? ""}` : undefined}>{v.name}</h1>
+          )}
+          {renaming == null ? <IconButton icon="edit" label="Rename session" onClick={() => setRenaming(snap.display_name ?? "")} /> : null}
           <StatusPill status={v.status} label={pillLabel} />
           <span className="flex1" />
           <Button size="sm" icon="pause" disabled={!live || !snap.capabilities.interrupt} onClick={() => void actions.stop(key)}>Interrupt</Button>
-          <Button size="sm" icon="stop" disabled={snap.phase.state === "exited"} onClick={() => void actions.stopSession(key)}>Stop</Button>
+          {snap.phase.state === "exited" || snap.phase.state === "failed" || snap.phase.state === "lost" ? (
+            <Button size="sm" variant="ghost" icon="x" onClick={() => setConfirmDelete(true)}>Delete</Button>
+          ) : (
+            <Button size="sm" icon="stop" onClick={() => void actions.stopSession(key)}>Stop</Button>
+          )}
         </div>
         <div className="sd-meta">
           <span className="kv">{drv ? <DriverBadge driver={drv} /> : v.driver}{snap.cli_version ? <span className="faint mono">v{snap.cli_version}</span> : null}</span>
@@ -163,6 +190,9 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
           </aside>
         </div>
       )}
+      <ConfirmDialog open={confirmDelete} title={`Delete ${v.name}?`} confirmLabel="Delete session" danger onConfirm={() => void remove()} onClose={() => setConfirmDelete(false)}>
+        Removes the session and its transcript from {hostLink?.name ?? host}. The agent's own conversation files are kept, so it can still be resumed from the agent's history.
+      </ConfirmDialog>
     </>
   );
 }

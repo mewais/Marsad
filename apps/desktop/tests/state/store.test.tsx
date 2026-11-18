@@ -52,8 +52,9 @@ describe("session slices", () => {
         </RouterProvider>
       </AppProvider>,
     );
-    // Rows fetch their own git status once; let that settle first.
-    await waitFor(() => expect(app.store.get().git[a.key] !== undefined && app.store.get().git[b.key] !== undefined).toBe(true));
+    // Git summaries come with the fleet (no request per row).
+    await waitFor(() => expect(app.store.get().git[a.host]?.[a.snap.cwd!]).toBeDefined());
+    expect(backend.requests.some((r) => r.method === "git.status")).toBe(false);
     await act(async () => new Promise((r) => setTimeout(r, 10)));
     const ra = renderCounts.get(`row:${a.key}`)!;
     const rb = renderCounts.get(`row:${b.key}`)!;

@@ -4,4 +4,18 @@ import type { QuestionOption } from "./QuestionOption";
 /**
  * One question inside a [`GateRequest::Question`].
  */
-export type QuestionPrompt = { question: string, header: string, multi_select: boolean, options?: Array<QuestionOption>, };
+export type QuestionPrompt = { 
+/**
+ * Key of this question in [`QuestionAnswer::answers`] (codex question id; claude: the
+ * question text, which is how claude keys its answers).
+ */
+id: string, question: string, header: string, multi_select: boolean, options?: Array<QuestionOption>, 
+/**
+ * The agent accepts a free-text answer besides the options (claude always; codex
+ * `isOther`; a question without options is free text only).
+ */
+allow_other: boolean, 
+/**
+ * The answer is a secret (codex `isSecret`): mask it while typing, never echo it.
+ */
+secret?: boolean, };

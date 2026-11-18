@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use wasit_control::HostId;
 use wasit_core::{DriverId, GateRequest};
-use wasit_runtime::wire::{SessionId, SessionSnapshot};
+use wasit_runtime::wire::{ResumeRequest, SessionId, SessionSnapshot};
 use wasl_proto::{EdgePolicy, Limits, TaskView};
 
 use crate::agentconfig::OverrideLayer;
@@ -61,6 +61,10 @@ pub struct NodeLaunch {
     pub first_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
+    /// Start fresh (default), continue the CLI's most recent conversation in `cwd`, or resume
+    /// one conversation by its native id (as `sessions.launch`).
+    #[serde(default, skip_serializing_if = "is_new")]
+    pub resume: ResumeRequest,
     /// This node's config override layer (between the host and the session layer).
     #[serde(default, skip_serializing_if = "OverrideLayer::is_empty")]
     pub overrides: OverrideLayer,
@@ -76,9 +80,14 @@ impl NodeLaunch {
             mode: None,
             first_prompt: None,
             labels: BTreeMap::new(),
+            resume: ResumeRequest::New,
             overrides: OverrideLayer::default(),
         }
     }
+}
+
+fn is_new(r: &ResumeRequest) -> bool {
+    *r == ResumeRequest::New
 }
 
 /// A session a node is.

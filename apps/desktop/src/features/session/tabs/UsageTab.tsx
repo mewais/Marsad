@@ -15,6 +15,8 @@ export function UsageTab({ sessionKey, snap }: { sessionKey: string; snap: Sessi
   const prompt = u.input_tokens + u.cache_read_tokens + u.cache_creation_tokens;
   const cachePct = prompt ? Math.round((u.cache_read_tokens / prompt) * 100) : 0;
   const caps = snap.capabilities;
+  // The snapshot carries the latest per-model split (fall back to the events for older hosts).
+  const perModel = snap.usage_by_model && Object.keys(snap.usage_by_model).length ? snap.usage_by_model : facts.perModel;
   return (
     <div className="usage">
       <div className="tiles">
@@ -37,9 +39,9 @@ export function UsageTab({ sessionKey, snap }: { sessionKey: string; snap: Sessi
       ) : null}
       <Card className="pad">
         <div className="h3">Per model</div>
-        {facts.perModel ? (
+        {perModel ? (
           <table className="t"><thead><tr><th>Model</th><th className="r">Input</th><th className="r">Output</th><th className="r">Cost</th></tr></thead><tbody>
-            {Object.entries(facts.perModel).map(([m, x]) => <tr key={m}><td className="mono">{m}</td><td className="r">{compactNumber(x.input_tokens)}</td><td className="r">{compactNumber(x.output_tokens)}</td><td className="r">{money(x.cost_usd)}{x.estimated ? " (est.)" : ""}</td></tr>)}
+            {Object.entries(perModel).map(([m, x]) => <tr key={m}><td className="mono">{m}</td><td className="r">{compactNumber(x.input_tokens)}</td><td className="r">{compactNumber(x.output_tokens)}</td><td className="r">{money(x.cost_usd)}{x.estimated ? " (est.)" : ""}</td></tr>)}
           </tbody></table>
         ) : <div className="faint small">{name} has not reported a per-model split for this session.</div>}
       </Card>

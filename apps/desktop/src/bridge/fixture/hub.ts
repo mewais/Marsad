@@ -144,7 +144,7 @@ export class FixtureHub {
     const now = this.core.now();
     const snap: SessionSnapshot = {
       id, driver: r.driver, cwd: r.cwd, labels: r.labels, created_at_ms: now, capabilities: d.capabilities, phase: { state: "starting" }, generation: 1, pid: 5000 + this.n,
-      native_session_id: r.resume.kind === "continue" ? r.resume.native_session_id : null, title: (r.first_prompt ?? "").slice(0, 80) || null, cli_version: d.version,
+      native_session_id: r.resume.kind === "resume" ? r.resume.native_session_id : null, title: (r.first_prompt ?? "").slice(0, 80) || null, cli_version: d.version,
       model: r.model ?? d.models.find((m) => m.is_default)?.id ?? null, mode: r.mode ?? d.modes[0]?.id ?? null, available_models: d.models, available_modes: d.modes,
       slash_commands: d.slash, pending_gates: [], turn: null, last_turn: null, turns_completed: 0, usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: 0 },
       live_usage: null, context_pct: 4, subagents: [], plan: [], last_activity_ms: now, exit: null, stderr_tail: [], cursor: 0, loaded: true,

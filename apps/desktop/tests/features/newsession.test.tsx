@@ -6,7 +6,7 @@ import { inventoryFor, FIXTURE_HOSTS } from "../../src/bridge/fixture/catalog";
 import { renderApp } from "../helpers";
 
 const inv = () => inventoryFor(FIXTURE_HOSTS[0], "~/src/ledgerline", Date.now()).find((d) => d.driver === "claude")!;
-const form = (p: Partial<NewSessionForm> = {}): NewSessionForm => ({ host: "x1", driver: "claude", cwd: "~/src/ledgerline", model: "", mode: "", start: "new", resumeId: "", prompt: "", ...p });
+const form = (p: Partial<NewSessionForm> = {}): NewSessionForm => ({ host: "x1", driver: "claude", cwd: "~/src/ledgerline", model: "", mode: "", start: "new", resumeId: "", latest: false, prompt: "", ...p });
 
 describe("new session: logic", () => {
   it("lists the CLI's sessions newest first and tags where they were started", () => {
@@ -19,7 +19,8 @@ describe("new session: logic", () => {
   });
   it("builds the launch request for each start mode", () => {
     expect(launchRequest(form({ prompt: " hi " }))).toMatchObject({ host: "x1", driver: "claude", resume: { kind: "new" }, first_prompt: "hi", model: null });
-    expect(launchRequest(form({ start: "continue", resumeId: "c-term-1" })).resume).toEqual({ kind: "continue", native_session_id: "c-term-1" });
+    expect(launchRequest(form({ start: "continue", resumeId: "c-term-1" })).resume).toEqual({ kind: "resume", native_session_id: "c-term-1" });
+    expect(launchRequest(form({ start: "continue", latest: true })).resume).toEqual({ kind: "latest" });
   });
   it("explains what is missing", () => {
     expect(validate(form(), inv(), false)).toMatch(/not connected/);
@@ -58,6 +59,6 @@ describe("new session: dialog", () => {
     await waitFor(() => expect(within(list).getAllByRole("option").length).toBeGreaterThan(3));
     await user.click(within(list).getByRole("option", { name: /Fix Stripe webhook/ }));
     await user.click(within(dlg).getByRole("button", { name: /Continue session/ }));
-    await waitFor(() => expect(backend.requests.find((r) => r.method === "sessions.launch")?.params).toMatchObject({ resume: { kind: "continue", native_session_id: "c-term-1" } }));
+    await waitFor(() => expect(backend.requests.find((r) => r.method === "sessions.launch")?.params).toMatchObject({ resume: { kind: "resume", native_session_id: "c-term-1" } }));
   });
 });

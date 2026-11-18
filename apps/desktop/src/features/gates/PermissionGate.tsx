@@ -32,7 +32,8 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
   const focusReason = () => setTimeout(() => reasonRef.current?.focus(), 0);
   const gate = pg.gate;
   const isPlan = gate.gate_type === "plan";
-  const needsReason = g.set.choices.some((c) => c.asksReason);
+  const textChoice = g.set.choices.find((c) => c.text !== "none");
+  const needsReason = !!textChoice;
   const showReason = needsReason && (g.armed || g.reason !== "" || density === "full" || (density === "row" && expanded));
   const choose = (c: Parameters<typeof g.choose>[0]) => g.choose(c, focusReason);
   useEffect(() => {
@@ -79,7 +80,7 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
             </Button>
           </div>
           {detailBox}
-          {showReason ? <ReasonBox who={d?.displayName ?? "the agent"} value={g.reason} onChange={g.setReason} inputRef={reasonRef} onSubmit={() => g.choose(g.first("deny")!)} /> : null}
+          {showReason ? <ReasonBox who={d?.displayName ?? "the agent"} value={g.reason} onChange={g.setReason} inputRef={reasonRef} onSubmit={() => textChoice && g.choose(textChoice)} label={textChoice ? textChoice.label.map((p) => p.text).join("") : undefined} /> : null}
         </div>
       ) : (
         <div className="gate" data-gate="permission">
@@ -90,6 +91,13 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
             <span className="faint fw5">asked {agoLong(pg.raised_at_ms)}</span>
           </div>
           {isPlan ? <div className="q prewrap">{gate.summary}</div> : <div className="cmd">{gate.command}</div>}
+          {g.set.choices.some((c) => c.description) ? (
+            <ul className="choice-notes faint fs115">
+              {g.set.choices.filter((c) => c.description).map((c) => (
+                <li key={c.id}><b>{c.label.map((p) => p.text).join("")}</b>: {c.description}</li>
+              ))}
+            </ul>
+          ) : null}
           {!isPlan && gate.explanation ? (
             <div className="risk">
               <Icon name="warn" size="sm" className="c-needs" />
@@ -101,7 +109,7 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
             <span className="sp" />
             {src}
           </div>
-          {showReason ? <ReasonBox who={d?.displayName ?? "the agent"} value={g.reason} onChange={g.setReason} inputRef={reasonRef} onSubmit={() => g.choose(g.first("deny")!)} /> : null}
+          {showReason ? <ReasonBox who={d?.displayName ?? "the agent"} value={g.reason} onChange={g.setReason} inputRef={reasonRef} onSubmit={() => textChoice && g.choose(textChoice)} label={textChoice ? textChoice.label.map((p) => p.text).join("") : undefined} /> : null}
         </div>
       )}
     </>

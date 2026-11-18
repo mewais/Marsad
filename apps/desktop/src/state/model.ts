@@ -1,5 +1,5 @@
 import type { DriverDescriptor } from "../ui/DriverBadge";
-import type { DriverInventory, GitStatus, HostId, NotificationPrefs, SeenMark, SessionEvent, SessionKey, SessionSnapshot, WorkstreamView } from "../bridge/wire";
+import type { DriverInventory, GitSummary, HostId, NotificationPrefs, SeenMark, SessionEvent, SessionKey, SessionSnapshot, WorkstreamView } from "../bridge/wire";
 import { createStore } from "../lib/store";
 import type { HostState } from "./hosts";
 
@@ -33,8 +33,8 @@ export interface AppState {
   lookedAt: number;
   /** In-flight and just-sent actions, keyed by `kind:...`. */
   pending: Record<string, PendingState>;
-  /** `git.status` per session (branch, diffstat), fetched lazily. `null` = not a repo / failed. */
-  git: Record<SessionKey, GitStatus | null>;
+  /** The hub's background git summaries (fleet topic), per host and working directory. */
+  git: Record<HostId, Record<string, GitSummary>>;
   /** The hub's `workstreams` topic: every workstream with live nodes, edges and tasks. */
   workstreams: Record<string, WorkstreamView>;
   wsOrder: string[];

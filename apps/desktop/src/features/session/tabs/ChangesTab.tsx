@@ -38,7 +38,7 @@ export function ChangesTab({ sessionKey }: { sessionKey: string }) {
         setStatus(g);
         setPicked(new Set(g.files.map((f) => f.path)));
         setSel((cur) => (g.files.some((f) => f.path === cur) ? cur : g.files[0]?.path ?? ""));
-        actions.ensureGit(sessionKey, true);
+        actions.refreshGit(sessionKey);
       },
       (e) => setError(errorMessage(e)),
     );

@@ -2,11 +2,10 @@ import { useState } from "react";
 import type { GateRequest, PendingGate } from "../../bridge/wire";
 import { useShortcut } from "../../shortcuts/useShortcut";
 import type { SessionView } from "../../state";
-import { Button, Icon, Kbd } from "../../ui";
-import { HANDOFF_CHOICES } from "./choices";
+import { Button, Icon } from "../../ui";
 import type { GateDensity } from "./Gate";
-import { SourceCaption } from "./parts";
-import { useGateCommon } from "./useGate";
+import { ChoiceButtons, SourceCaption } from "./parts";
+import { usePermissionGate } from "./useGate";
 
 /** The handoff's structured context, shown as the agent sent it (keys and values, one per line). */
 export function detailsText(d: unknown): string {
@@ -17,36 +16,26 @@ export function detailsText(d: unknown): string {
 
 type P = PendingGate & { gate: Extract<GateRequest, { gate_type: "handoff" }> };
 
-function Keys({ pick }: { pick: (i: number) => void }) {
+function Keys({ g }: { g: ReturnType<typeof usePermissionGate> }) {
   for (let i = 0; i < 3; i++) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
-    useShortcut({ id: `gate-digit-${i + 1}`, keys: [String(i + 1)], title: `Pick handoff choice ${i + 1}`, group: "Answering a gate", priority: 10, run: () => pick(i) });
+    useShortcut({ id: `gate-digit-${i + 1}`, keys: [String(i + 1)], title: `Pick handoff choice ${i + 1}`, group: "Answering a gate", priority: 10, when: () => i < g.set.choices.length, run: () => g.choose(g.set.choices[i]) });
   }
-  useShortcut({ id: "gate-allow", keys: ["a"], title: "Allow handoff once", group: "Answering a gate", priority: 10, run: () => pick(0) });
-  useShortcut({ id: "gate-deny", keys: ["d"], title: "Deny handoff", group: "Answering a gate", priority: 10, run: () => pick(2) });
+  useShortcut({ id: "gate-allow", keys: ["a"], title: "Allow handoff once", group: "Answering a gate", priority: 10, when: () => !!g.first("allow"), run: () => g.choose(g.first("allow")!) });
+  useShortcut({ id: "gate-deny", keys: ["d"], title: "Deny handoff", group: "Answering a gate", priority: 10, when: () => !!g.first("deny"), run: () => g.choose(g.first("deny")!) });
   return null;
 }
 
-/** Handoffs are Marsad's own gate (agent to agent, via Wasl): always the same three choices. */
+/** Handoffs are Marsad's own gate (agent to agent, via Wasl), with the choices Wasl offers. */
 export function HandoffGate({ view, pg, density, active, expanded, onActivate }: { view: SessionView; pg: P; density: GateDensity; active: boolean; expanded: boolean; onActivate?: () => void }) {
-  const c = useGateCommon(view, pg);
+  const hg = usePermissionGate(view, pg);
   const [payload, setPayload] = useState(false);
   const g = pg.gate;
-  const pick = (i: number) => void c.actions.decideHandoff(view.key, g.request_id, HANDOFF_CHOICES[i].id);
-  const buttons = (keys: boolean) => (
-    <div className="choices" role="group" aria-label="Handoff choices" aria-busy={c.busy || undefined}>
-      {HANDOFF_CHOICES.map((o, i) => (
-        <Button key={o.id} size="sm" variant={o.kind} disabled={c.busy} icon={i === 0 ? "check" : undefined} onClick={() => pick(i)}>
-          {o.label}
-          {keys ? <Kbd>{String(i + 1)}</Kbd> : null}
-        </Button>
-      ))}
-    </div>
-  );
+  const buttons = (keys: boolean) => <ChoiceButtons choices={hg.set.choices} busy={hg.busy} onChoose={(c) => hg.choose(c)} keys={keys} />;
   const details = detailsText(g.details);
   const payloadBox = payload ? <div className="payload" data-testid="handoff-payload"><span><b>Mode</b> {g.mode} · task {g.task_id}</span>{details ? <span className="mono">{details}</span> : null}</div> : null;
   const keysOn = active;
-  const keys = active ? <Keys pick={pick} /> : null;
+  const keys = active ? <Keys g={hg} /> : null;
 
   if (density === "row" && !expanded)
     return (

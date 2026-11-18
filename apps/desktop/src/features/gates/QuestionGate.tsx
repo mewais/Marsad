@@ -14,6 +14,7 @@ type Q = ReturnType<typeof useQuestionGate>;
 function Keys({ q, focusOther }: { q: Q; focusOther: (qi: number) => void }) {
   const first = q.qs[0];
   const n = first?.options?.length ?? 0;
+  const other = !!first?.allow_other;
   for (let i = 0; i < 4; i++) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useShortcut({
@@ -21,7 +22,7 @@ function Keys({ q, focusOther }: { q: Q; focusOther: (qi: number) => void }) {
       keys: [String(i + 1)],
       title: `Pick option ${i + 1} (last number = Other)`,
       group: "Answering a gate", priority: 10,
-      when: () => i <= n,
+      when: () => i < n || (other && i === n),
       run: () => {
         if (i < n) q.toggle(0, first.options![i].label);
         else {
@@ -52,6 +53,7 @@ export function QuestionGate({ view, pg, density, active, expanded, onActivate }
 
   const otherInput = (qi: number, cls: string) => (
     <input
+      type={q.qs[qi]?.secret ? "password" : "text"}
       ref={(el) => (otherRefs.current[qi] = el)}
       className={cls}
       value={q.st.other[qi] ?? ""}
@@ -68,7 +70,7 @@ export function QuestionGate({ view, pg, density, active, expanded, onActivate }
       <div className="gate-inline compact" data-gate="question">
         <Icon name="needs" size="sm" className="c-needs" />
         <span className="gs">
-          {firstQ.question} <span className="faint">{firstQ.options?.length ?? 0} options + Other</span>
+          {firstQ.question} <span className="faint">{firstQ.options?.length ? `${firstQ.options.length} options${firstQ.allow_other ? " + Other" : ""}` : "free text"}</span>
         </span>
         {src}
         <Button size="sm" variant="warn" onClick={onActivate}>Answer</Button>
@@ -99,12 +101,14 @@ export function QuestionGate({ view, pg, density, active, expanded, onActivate }
                   </button>
                 );
               })}
-              <span className={`opt ${q.st.otherOn[qi] ? "on" : ""}`} onClick={() => otherRefs.current[qi]?.focus()}>
-                <span className="rad" />
-                Other
-                {otherInput(qi, "other")}
-                {qi === 0 ? <span className="k">{(qq.options?.length ?? 0) + 1}</span> : null}
-              </span>
+              {qq.allow_other ? (
+                <span className={`opt ${q.st.otherOn[qi] ? "on" : ""}`} onClick={() => otherRefs.current[qi]?.focus()}>
+                  <span className="rad" />
+                  {qq.options?.length ? "Other" : "Answer"}
+                  {otherInput(qi, "other")}
+                  {qi === 0 && qq.options?.length ? <span className="k">{qq.options.length + 1}</span> : null}
+                </span>
+              ) : null}
             </div>
           </div>
         ))}
@@ -142,14 +146,16 @@ export function QuestionGate({ view, pg, density, active, expanded, onActivate }
                 </div>
               );
             })}
-            <div className={`qopt ${q.st.otherOn[qi] ? "on" : ""}`} onClick={() => otherRefs.current[qi]?.focus()}>
-              <span className="rad" />
-              <div className="flex1">
-                <div>Other</div>
-                <div className="optother mt3">{otherInput(qi, "other")}</div>
+            {qq.allow_other ? (
+              <div className={`qopt ${q.st.otherOn[qi] ? "on" : ""}`} onClick={() => otherRefs.current[qi]?.focus()}>
+                <span className="rad" />
+                <div className="flex1">
+                  <div>{qq.options?.length ? "Other" : "Your answer"}</div>
+                  <div className="optother mt3">{otherInput(qi, "other")}</div>
+                </div>
+                {qi === 0 && qq.options?.length ? <span className="k"><Kbd>{String(qq.options.length + 1)}</Kbd></span> : null}
               </div>
-              {qi === 0 ? <span className="k"><Kbd>{String((qq.options?.length ?? 0) + 1)}</Kbd></span> : null}
-            </div>
+            ) : null}
           </div>
         </div>
       ))}

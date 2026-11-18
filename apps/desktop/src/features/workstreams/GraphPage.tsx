@@ -6,7 +6,7 @@ import { useShortcut } from "../../shortcuts/useShortcut";
 import { linkView, useActions, useApi, useAppState, useHosts, usePending } from "../../state";
 import { Button, EmptyState, Icon, toast } from "../../ui";
 import { NewSessionDialog } from "../newsession/NewSessionDialog";
-import type { NewSessionForm } from "../newsession/model";
+import { launchRequest, type NewSessionForm } from "../newsession/model";
 import { Canvas, type Sel } from "./Canvas";
 import { DesignPanel, EdgeInspector, NodeInspector } from "./Inspector";
 import { summary } from "./model";
@@ -47,7 +47,7 @@ export function GraphPage({ id }: { id: string }) {
     const taken = new Set(w.nodes.map((n) => n.id));
     const base = f.prompt.trim().split(/\s+/).slice(0, 3).join("-") || `${inv.driver}-agent`;
     const name = (() => { let n = base.toLowerCase().replace(/[^a-z0-9-]+/g, "-"); for (let i = 2; w.nodes.some((x) => x.name === n); i++) n = `${base}-${i}`; return n; })();
-    const node: WorkstreamNode = { id: nodeId(name, taken), name, role: "", description: "", session: null, launch: { host: f.host, driver: f.driver, cwd: f.cwd || null, model: f.model || null, mode: f.mode || null, first_prompt: f.prompt.trim() || null } };
+    const node: WorkstreamNode = { id: nodeId(name, taken), name, role: "", description: "", session: null, launch: { host: f.host, driver: f.driver, cwd: f.cwd || null, model: f.model || null, mode: f.mode || null, first_prompt: f.prompt.trim() || null, resume: launchRequest(f).resume } };
     void actions.run(`add:${id}`, "Could not add the agent", () => api.ws.addNode({ workstream: id, node, position: null })).then((r) => r && setSel({ kind: "node", id: node.id }));
   };
   const launch = async () => {
@@ -79,7 +79,7 @@ export function GraphPage({ id }: { id: string }) {
           : v.edges.find((e) => e.pending_gates.length) ? <EdgeInspector view={v} from={v.edges.find((e) => e.pending_gates.length)!.from} to={v.edges.find((e) => e.pending_gates.length)!.to} design={false} />
           : <aside className="insp"><div className="faint small">Select an agent or a connection.</div></aside>}
       </div>
-      <NewSessionDialog open={!!adding} preset={adding} onClose={() => setAdding(null)} onAdd={onAdd} newOnly title={`Add agent to ${w.name}`}
+      <NewSessionDialog open={!!adding} preset={adding} onClose={() => setAdding(null)} onAdd={onAdd} title={`Add agent to ${w.name}`}
         subtitle={design ? "Same form as New session. Nothing starts until you launch the workstream." : "The agent starts at once and joins this workstream."} />
     </>
   );

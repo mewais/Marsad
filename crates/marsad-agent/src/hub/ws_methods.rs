@@ -314,6 +314,7 @@ impl HubServices {
         req.model = spec.model.clone();
         req.mode = spec.mode.clone();
         req.labels = spec.labels.clone();
+        req.resume = spec.resume.clone();
         req.labels.insert(LABEL_WORKSTREAM.into(), ws.to_string());
         req.labels.insert(LABEL_NODE.into(), node.to_string());
         // The node's overrides are its stored `workstream_node` layer.
@@ -349,6 +350,11 @@ impl HubServices {
                 l.cwd = snap.cwd.clone();
                 l.model = snap.model.clone();
                 n.launch = Some(l);
+            }
+            // A template starts fresh conversations: continuing or resuming one belongs to
+            // the workstream it was taken from.
+            if let Some(l) = n.launch.as_mut() {
+                l.resume = marsad_proto::runtime::ResumeRequest::New;
             }
             n.session = None;
             nodes.push(n);

@@ -17,6 +17,10 @@ project: string | null,
  */
 title: string, 
 /**
- * Last modification, milliseconds since the Unix epoch (0 = unknown).
+ * Last activity (last modification), milliseconds since the Unix epoch (0 = unknown).
  */
-modified_ms: number, };
+modified_ms: number, 
+/**
+ * Messages in the conversation, when the CLI's own records say (`None` = unknown).
+ */
+message_count?: number | null, };

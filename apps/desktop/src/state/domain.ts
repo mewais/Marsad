@@ -1,4 +1,4 @@
-import type { GitStatus, HostId, PendingGate, SeenMark, SessionKey, SessionSnapshot } from "../bridge/wire";
+import type { GitSummary, HostId, PendingGate, SeenMark, SessionKey, SessionSnapshot } from "../bridge/wire";
 import { sessionKey } from "../bridge/wire";
 import { basename } from "../lib/format";
 import { phaseToStatus, type StatusKey } from "../ui/status";
@@ -13,7 +13,7 @@ export interface SessionView {
   phase: SessionSnapshot["phase"]["state"];
   driver: string;
   project: string;
-  /** From `git.status`, once fetched ("" until then). */
+  /** From the hub's background git summary ("" until known / not a repository). */
   branch: string;
   /** Name of the workstream the session is a node of ("" = standalone). */
   workstream: string;
@@ -56,35 +56,29 @@ export function sessionLine(s: SessionSnapshot): string {
       return s.phase.reason;
     case "working":
     case "starting":
-      return s.plan.find((p) => p.status === "in_progress")?.content ?? (s.turn?.last_tool ? `Running ${s.turn.last_tool}` : s.turn?.prompt ?? "Working");
+      return s.plan.find((p) => p.status === "in_progress")?.content ?? (s.turn?.current_tool ? `Running ${s.turn.current_tool}` : s.turn?.last_tool ? `Ran ${s.turn.last_tool}${s.turn.tool_calls > 1 ? ` · ${s.turn.tool_calls} steps` : ""}` : s.turn?.prompt ?? "Working");
     default:
       return s.last_turn?.reply ?? (s.phase.state === "exited" ? "Session ended" : "Idle");
   }
 }
 
-/** The wire has no user-given session name: the first prompt (`title`), else the id. */
+/** The name the user gave the session, else its first prompt (`title`), else the id. */
 export function sessionName(s: SessionSnapshot): string {
-  return s.title?.trim() || s.id;
+  return s.display_name?.trim() || s.title?.trim() || s.id;
 }
 
-const statCache = new WeakMap<GitStatus, SessionView["stat"]>();
-/** Files and lines changed, stable per `GitStatus` object (rows compare views shallowly). */
-export function diffStat(g: GitStatus | null | undefined): SessionView["stat"] {
-  if (!g || !g.files.length) return null;
+const statCache = new WeakMap<GitSummary, SessionView["stat"]>();
+/** Files and lines changed, stable per summary object (rows compare views shallowly). */
+export function diffStat(g: GitSummary | null | undefined): SessionView["stat"] {
+  if (!g || !g.files) return null;
   const hit = statCache.get(g);
   if (hit !== undefined) return hit;
-  let added = 0;
-  let removed = 0;
-  for (const f of g.files) {
-    added += f.staged_added + f.unstaged_added;
-    removed += f.staged_removed + f.unstaged_removed;
-  }
-  const st = { files: g.files.length, added, removed };
+  const st = { files: g.files, added: g.added, removed: g.removed };
   statCache.set(g, st);
   return st;
 }
 
-export function buildView(host: HostId, s: SessionSnapshot, mark: SeenMark | undefined, git: GitStatus | null | undefined, workstream: string): SessionView {
+export function buildView(host: HostId, s: SessionSnapshot, mark: SeenMark | undefined, git: GitSummary | null | undefined, workstream: string): SessionView {
   const unseen = isUnseenFinish(s, mark);
   return {
     key: keyOf(host, s),

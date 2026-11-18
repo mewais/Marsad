@@ -14,11 +14,13 @@ export function applyFleet(s: AppState, e: FleetEvent): AppState {
     case "reset": {
       const hosts: AppState["hosts"] = {};
       const sessions: AppState["sessions"] = {};
+      const git: AppState["git"] = {};
       for (const f of e.hosts) {
         hosts[f.host.id] = toHost(f);
+        git[f.host.id] = Object.fromEntries((f.git ?? []).map((g) => [g.cwd, g]));
         for (const snap of f.sessions) sessions[sessionKey(f.host.id, snap.id)] = snap;
       }
-      return withDrivers({ ...s, fleetReady: true, fleetError: undefined, hosts, hostOrder: e.hosts.map((f) => f.host.id), sessions, pending: prunePending(s.pending, sessions) });
+      return withDrivers({ ...s, fleetReady: true, fleetError: undefined, hosts, hostOrder: e.hosts.map((f) => f.host.id), sessions, git, pending: prunePending(s.pending, sessions) });
     }
     case "host_upserted": {
       const cur = s.hosts[e.host.id];
@@ -37,6 +39,8 @@ export function applyFleet(s: AppState, e: FleetEvent): AppState {
       if (!cur || cur.link.link === "local") return s;
       return { ...s, hosts: { ...s.hosts, [e.host]: { ...cur, link: { link: "remote", state: e.state } } } };
     }
+    case "git":
+      return { ...s, git: { ...s.git, [e.host]: { ...s.git[e.host], [e.summary.cwd]: e.summary } } };
     case "auth_prompt": {
       const cur = s.hosts[e.host];
       if (!cur) return s;

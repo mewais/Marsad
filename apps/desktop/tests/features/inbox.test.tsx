@@ -36,7 +36,7 @@ describe("Inbox", () => {
     await user.keyboard("1");
     await waitFor(() => expect(backend.requests.some((r) => r.method === "session.command")).toBe(true));
     const req = backend.requests.find((r) => r.method === "session.command")!;
-    expect(req.params).toMatchObject({ command: { command: "answer_gate", request_id: "p-pdf", decision: { action: "approve" } } });
+    expect(req.params).toMatchObject({ command: { command: "answer_gate", request_id: "p-pdf", decision: { choice: "allow" } } });
     // the answered session leaves "Needs you"
     await waitFor(() => expect(document.querySelector(`[data-session="${sessionByName(backend, "pdf-renderer-worker").key}"]`)?.getAttribute("data-status")).not.toBe("needs"));
   });

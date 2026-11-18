@@ -17,7 +17,7 @@ use marsad_proto::wasl::{EdgePolicy, TaskState};
 use marsad_proto::workstream::{
     NodeLaunch, WorkstreamDraft, WorkstreamEdge, WorkstreamNode, WorkstreamView, WorkstreamsEvent,
 };
-use marsad_proto::{Command, GateDecision, GateRequest};
+use marsad_proto::{Command, GateChoiceKind, GateDecision, GateRequest};
 
 fn enabled() -> bool {
     std::env::var("MARSAD_LIVE").is_ok_and(|v| v == "1")
@@ -147,7 +147,11 @@ async fn live_claude_orchestrates_opencode_and_kilo() {
                             &sess.session,
                             Command::AnswerGate {
                                 request_id: rid,
-                                decision: GateDecision::approve(),
+                                decision: GateDecision::by_kind(
+                                    &g.gate,
+                                    &[GateChoiceKind::AllowOnce],
+                                )
+                                .expect("an allow choice"),
                             },
                         )
                         .await

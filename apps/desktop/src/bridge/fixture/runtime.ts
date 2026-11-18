@@ -38,7 +38,9 @@ export class SessionSim {
       case "answer_question": {
         const g = e.snap.pending_gates.find((x) => x.gate.request_id === c.request_id);
         if (!g) throw err("rejected", `Gate ${c.request_id} is not pending.`, { error: "rejected", reason: "gate not pending" });
-        const denied = c.command === "answer_gate" && c.decision.action === "deny";
+        const picked = c.command === "answer_gate" ? g.gate.gate_type !== "question" && g.gate.choices.find((x) => x.id === c.decision.choice) : undefined;
+        if (c.command === "answer_gate" && !picked) throw err("rejected", `Gate ${c.request_id} offers no choice ${c.decision.choice}.`, { error: "rejected", reason: "no such choice" });
+        const denied = !!picked && !picked.kind.startsWith("allow");
         this.resolveGate(e, c.request_id, denied ? "Understood, I will not do that." : "Thanks, continuing.");
         return { outcome: "sent" };
       }

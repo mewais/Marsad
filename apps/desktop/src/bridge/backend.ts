@@ -21,4 +21,6 @@ export interface SubscribeOptions extends RequestOptions {
 export interface Backend {
   request<T = unknown>(method: string, params?: unknown, opts?: RequestOptions): Promise<T>;
   subscribe(topic: string, opts: SubscribeOptions, onEvent: (event: unknown) => void): Unsubscribe;
+  /** Desktop shell only: after a notification brings the app forward, the session it was about. */
+  onNavigate?(cb: (target: { host: HostId; session: string }) => void): Unsubscribe;
 }

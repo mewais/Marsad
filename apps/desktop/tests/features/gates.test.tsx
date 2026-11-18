@@ -3,8 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { Gate } from "../../src/features/gates/Gate";
 import type { GateDensity } from "../../src/features/gates/Gate";
-import { permissionChoices } from "../../src/features/gates/choices";
-import type { GateOf, GateRequest } from "../../src/bridge/wire";
+import { gateChoices } from "../../src/features/gates/choices";
+import type { GateRequest } from "../../src/bridge/wire";
+import { claudeChoices } from "../../src/bridge/fixture/sessions";
 import { memoryHistory, RouterProvider } from "../../src/router";
 import { AppProvider, createApp, selectView } from "../../src/state";
 import { quietBackend, sessionByName } from "../helpers";
@@ -34,50 +35,49 @@ async function setup(name: string, density: GateDensity = "full", gate?: GateReq
 }
 
 describe("gate components", () => {
-  it("permission (Claude): no wording on the wire, so Marsad's labels plus the agent's own rule text", async () => {
+  it("permission (Claude): the driver's choices with neutral labels, and the rules it would remember", async () => {
     const user = userEvent.setup();
     const { sent, s } = await setup("pdf-renderer-worker");
-    expect(screen.getByText("Marsad standard choices")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Always allow Bash\(pnpm add:\*\)/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Deny/ })).toBeInTheDocument();
+    expect(screen.getByText(/Claude Code's choices · neutral labels/)).toBeInTheDocument();
+    expect(screen.queryByText(/Marsad standard choices/)).toBeNull();
+    expect(screen.getByRole("button", { name: /^Allow and remember/ })).toHaveAttribute("title", "allow rule Bash(pnpm add:*) (localSettings)");
+    expect(screen.getByRole("button", { name: /^Deny\s*\d?$/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Deny and stop the turn/ })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^Allow\s*1?$/ }));
     await waitFor(() => expect(sent().length).toBe(1));
-    expect(sent()[0].params).toMatchObject({ id: s.id, command: { command: "answer_gate", request_id: "p-pdf", decision: { action: "approve" } } });
+    expect(sent()[0].params).toMatchObject({ id: s.id, command: { command: "answer_gate", request_id: "p-pdf", decision: { choice: "allow" } } });
   });
 
-  it("permission: deny with a reason needs a second click and carries the reason", async () => {
+  it("permission: a choice that takes optional text sends what was typed with it", async () => {
     const user = userEvent.setup();
     const { sent } = await setup("pdf-renderer-worker");
-    const deny = screen.getByRole("button", { name: /^Deny/ });
-    await user.click(deny);
-    expect(sent().length).toBe(0);
     await user.type(screen.getByLabelText(/Tell Claude Code what to do differently/), "use npm instead");
-    await user.click(deny);
+    await user.click(screen.getByRole("button", { name: /^Deny\s*\d?$/ }));
     await waitFor(() => expect(sent().length).toBe(1));
-    expect(sent()[0].params).toMatchObject({ command: { decision: { action: "deny", reason: "use npm instead" } } });
+    expect(sent()[0].params).toMatchObject({ command: { decision: { choice: "deny", text: "use npm instead" } } });
   });
 
-  it("permission (Claude): 'always allow' echoes the agent's suggestions verbatim", async () => {
+  it("permission (Claude): 'allow and remember' picks the driver's choice by id", async () => {
     const user = userEvent.setup();
-    const { sent, s } = await setup("pdf-renderer-worker");
-    await user.click(screen.getByRole("button", { name: /Always allow/ }));
-    await waitFor(() => expect(sent()[0].params).toMatchObject({ command: { decision: { action: "approve", permission_updates: (s.snap.pending_gates[0].gate as GateOf<"permission">).permission_suggestions } } }));
+    const { sent } = await setup("pdf-renderer-worker");
+    await user.click(screen.getByRole("button", { name: /Allow and remember/ }));
+    await waitFor(() => expect(sent()[0].params).toMatchObject({ command: { decision: { choice: "allow_always" } } }));
   });
 
-  it("permission (Codex): no suggestions, so only Allow and Deny", async () => {
+  it("permission (Codex): exactly the decisions codex offers", async () => {
     await setup("ws-reconnect-backoff");
     const labels = within(screen.getByRole("group", { name: /choices/i })).getAllByRole("button").map((b) => b.textContent?.replace(/\d$/, ""));
-    expect(labels.map((l) => l?.replace("…", ""))).toEqual(["Allow", "Deny"]);
+    expect(labels).toEqual(["Allow", "Allow and remember", "Deny and stop the turn"]);
   });
 
-  it("falls back to Marsad's standard choices and says so when the agent sent none", () => {
-    const base = { gate_type: "permission" as const, request_id: "r", tool_name: "Bash", command: "ls", cwd: ".", explanation: "", is_elicitation: false, raw_input: null };
-    const set = permissionChoices(base);
-    expect(set.source).toBe("marsad");
-    const acp = permissionChoices({ ...base, tool_name: "x", permission_suggestions: [{ optionId: "allow_once", name: "Allow once", kind: "allow_once" }, { optionId: "reject_once", name: "Reject", kind: "reject_once" }] });
+  it("uses the agent's own wording when its protocol has wording (ACP options)", () => {
+    const base = { gate_type: "permission" as const, request_id: "r", tool_name: "bash", command: "ls", cwd: ".", explanation: "", raw_input: null };
+    expect(gateChoices({ ...base, choices: claudeChoices() }).source).toBe("neutral");
+    const acp = gateChoices({ ...base, choices: [{ id: "once", label: "Allow once", kind: "allow_once" }, { id: "always", label: "Always allow", kind: "allow_always" }, { id: "reject", label: "Reject", kind: "reject_once" }] });
     expect(acp.source).toBe("agent");
-    expect(acp.choices.map((c) => c.kind)).toEqual(["allow", "deny"]);
-    expect(acp.choices[0].decision()).toEqual({ action: "approve", elicitation_content: { optionId: "allow_once" } });
+    expect(acp.choices.map((c) => c.kind)).toEqual(["allow", "always", "deny"]);
+    expect(acp.choices[0].decision()).toEqual({ choice: "once" });
+    expect(acp.choices[2].decision("ignored")).toEqual({ choice: "reject" });
   });
 
   it("single-choice question: pick an option and send the answer keyed by question text", async () => {
@@ -88,7 +88,7 @@ describe("gate components", () => {
     await user.click(screen.getByRole("radio", { name: /Migrate on first request/ }));
     await user.click(send);
     await waitFor(() => expect(sent().length).toBe(1));
-    expect(sent()[0].params).toMatchObject({ command: { command: "answer_question", request_id: "q-cookies", answer: { answers: { "How should legacy session cookies be handled during rollout?": "Migrate on first request" } } } });
+    expect(sent()[0].params).toMatchObject({ command: { command: "answer_question", request_id: "q-cookies", answer: { answers: { "How should legacy session cookies be handled during rollout?": ["Migrate on first request"] } } } });
   });
 
   it("question with free-text Other sends what was typed", async () => {
@@ -102,32 +102,33 @@ describe("gate components", () => {
 
   it("multi-choice question joins the selected labels", async () => {
     const user = userEvent.setup();
-    const gate: GateRequest = { gate_type: "question", request_id: "q-multi", questions: [{ question: "Which targets?", header: "Targets", multi_select: true, options: [{ label: "linux", description: "" }, { label: "macos", description: "" }, { label: "windows", description: "" }] }] };
+    const gate: GateRequest = { gate_type: "question", request_id: "q-multi", questions: [{ id: "targets", question: "Which targets?", header: "Targets", multi_select: true, allow_other: false, options: [{ label: "linux", description: "" }, { label: "macos", description: "" }, { label: "windows", description: "" }] }] };
     const { sent } = await setup("csv-schema-worker", "full", gate);
     await user.click(screen.getByRole("checkbox", { name: /linux/ }));
     await user.click(screen.getByRole("checkbox", { name: /windows/ }));
     await user.click(screen.getByRole("button", { name: /Send answer/ }));
     await waitFor(() => expect(sent().length).toBe(1));
-    expect(sent()[0].params).toMatchObject({ command: { answer: { answers: { "Which targets?": "linux, windows" } } } });
+    expect(sent()[0].params).toMatchObject({ command: { answer: { answers: { targets: ["linux", "windows"] } } } });
+    expect(screen.queryByLabelText("Other answer")).toBeNull();
   });
 
   it("plan approval: approve or keep planning", async () => {
     const user = userEvent.setup();
-    const gate: GateRequest = { gate_type: "plan", request_id: "pl1", summary: "1. Add shim\n2. Migrate routes" };
+    const gate: GateRequest = { gate_type: "plan", request_id: "pl1", summary: "1. Add shim\n2. Migrate routes", choices: claudeChoices().map((c) => (c.id === "allow" ? { ...c, label: "Approve plan" } : c.id === "deny" ? { ...c, label: "Keep planning" } : c)) };
     const { sent } = await setup("csv-schema-worker", "full", gate);
     expect(screen.getByText(/Add shim/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Approve plan/ }));
-    await waitFor(() => expect(sent()[0].params).toMatchObject({ command: { request_id: "pl1", decision: { action: "approve" } } }));
+    await waitFor(() => expect(sent()[0].params).toMatchObject({ command: { request_id: "pl1", decision: { choice: "allow" } } }));
   });
 
-  it("handoff: Marsad's three fixed choices, answered on the sending session like any gate", async () => {
+  it("handoff: Wasl's choices, answered on the sending session like any gate", async () => {
     const user = userEvent.setup();
     const { sent, s } = await setup("invoice-export-orchestrator");
     expect(screen.getByText("Marsad handoff choices")).toBeInTheDocument();
-    expect(within(screen.getByRole("group", { name: "Handoff choices" })).getAllByRole("button")).toHaveLength(3);
-    await user.click(screen.getByRole("button", { name: /Deny/ }));
+    expect(within(screen.getByRole("group", { name: /choices/i })).getAllByRole("button")).toHaveLength(3);
+    await user.click(screen.getByRole("button", { name: /^Deny/ }));
     await waitFor(() => expect(sent().length).toBe(1));
-    expect(sent()[0]).toMatchObject({ method: "session.command", host: "x1", params: { id: s.id, command: { command: "answer_gate", request_id: "wasl-handoff-t4print", decision: { action: "deny" } } } });
+    expect(sent()[0]).toMatchObject({ method: "session.command", host: "x1", params: { id: s.id, command: { command: "answer_gate", request_id: "wasl-handoff-t4print", decision: { choice: "deny" } } } });
   });
 
   it("shows a pending state while the request is in flight and a toast when the host is unreachable", async () => {
@@ -137,14 +138,14 @@ describe("gate components", () => {
     const app = createApp(backend);
     const s = sessionByName(backend, "windows-print-check");
     await waitFor(() => expect(app.store.get().sessions[s.key]).toBeDefined());
-    backend.raiseGate(s.host, s.id, { gate_type: "plan", request_id: "pl-win", summary: "Print both sizes" });
+    backend.raiseGate(s.host, s.id, { gate_type: "plan", request_id: "pl-win", summary: "Print both sizes", choices: claudeChoices() });
     await waitFor(() => expect(app.store.get().sessions[s.key].pending_gates.length).toBe(1));
     const view = selectView(app.store.get(), s.key)!;
     // Answer through the session's own host to hit the unreachable win host.
     const { ToastRegion } = await import("../../src/ui");
     render(<AppProvider value={app}><RouterProvider history={memoryHistory()}><Gate view={view} pg={view.gates[0]} density="full" active /><ToastRegion /></RouterProvider></AppProvider>);
     void user;
-    const ok = app.actions.answerGate(view.key, "pl-win", { action: "approve" });
+    const ok = app.actions.answerGate(view.key, "pl-win", { choice: "allow" });
     await waitFor(() => expect(Object.values(app.store.get().pending)).toContain("pending"));
     expect(await ok).toBe(false);
     expect(await screen.findByRole("alert")).toHaveTextContent(/win-build is not connected/);

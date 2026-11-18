@@ -23,7 +23,9 @@ use marsad_proto::workstream::{
     WorkstreamDraft, WorkstreamEdge, WorkstreamNode, WorkstreamState, WorkstreamView,
     WorkstreamsEvent,
 };
-use marsad_proto::{Command, ConfigItemKind, GateDecision, GateRequest, HostId, McpTransport};
+use marsad_proto::{
+    Command, ConfigItemKind, GateChoiceKind, GateDecision, GateRequest, HostId, McpTransport,
+};
 use serde_json::json;
 use wasit_fake_cli::scenario::{Scenario, Turn};
 
@@ -374,11 +376,11 @@ async fn three_nodes_across_local_and_ssh_host() {
         })
         .await;
     let native = v.nodes.iter().find(|n| n.node == "w1").unwrap();
-    let rid = native.session.as_ref().unwrap().pending_gates[0]
+    let gate = native.session.as_ref().unwrap().pending_gates[0]
         .gate
-        .request_id()
-        .to_string();
-    answer(&c, &w1, &rid, GateDecision::approve()).await;
+        .clone();
+    let decision = GateDecision::by_kind(&gate, &[GateChoiceKind::AllowOnce]).unwrap();
+    answer(&c, &w1, gate.request_id(), decision).await;
 
     // w2 is working when its link drops; the result arrives after the reconnect.
     views
@@ -525,9 +527,19 @@ async fn live_join_blocked_pause_history_and_templates() {
         to: "helper".into(),
         policy,
     };
-    c.connect_nodes(conn(EdgePolicy::AlwaysAllow))
+    let mut views = Views::new(&c);
+    let connected = c
+        .connect_nodes(conn(EdgePolicy::AlwaysAllow))
         .await
         .unwrap();
+    // The topology reaches the node asynchronously; delegate once it is in force.
+    views
+        .until(&ws.id, "connection in force", |v| {
+            v.sync
+                .iter()
+                .any(|s| s.host == hub && s.applied >= connected.topology_version)
+        })
+        .await;
     let r = delegate(&c, &orch, &["Helper"], "help me").await;
     assert_eq!(
         summary(&wait_done(&c, &hub, &task(&r, 0).id).await),

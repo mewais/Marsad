@@ -20,6 +20,21 @@ export class TauriBackend implements Backend {
     return invoke<T>("rpc", { method, params: params ?? null, host: opts.host ?? null });
   }
 
+  onNavigate(cb: (target: { host: string; session: string }) => void): Unsubscribe {
+    let stop: (() => void) | undefined;
+    let cancelled = false;
+    void import("@tauri-apps/api/event").then(({ listen }) =>
+      listen<{ host: string; session: string }>("navigate", (e) => cb(e.payload)).then((un) => {
+        stop = un;
+        if (cancelled) un();
+      }),
+    );
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }
+
   subscribe(topic: string, opts: SubscribeOptions, onEvent: (e: unknown) => void): Unsubscribe {
     let stop: (() => void) | undefined;
     let cancelled = false;

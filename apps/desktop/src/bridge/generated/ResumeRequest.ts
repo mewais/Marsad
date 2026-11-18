@@ -3,4 +3,4 @@
 /**
  * How a new session starts.
  */
-export type ResumeRequest = { "kind": "new" } | { "kind": "continue", native_session_id: string, };
+export type ResumeRequest = { "kind": "new" } | { "kind": "latest" } | { "kind": "resume", native_session_id: string, };

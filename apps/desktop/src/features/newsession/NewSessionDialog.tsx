@@ -24,7 +24,7 @@ export interface NewSessionDialogProps {
   newOnly?: boolean;
 }
 
-const blank = (host: string): NewSessionForm => ({ host, driver: "", cwd: "", model: "", mode: "", start: "new", resumeId: "", prompt: "" });
+const blank = (host: string): NewSessionForm => ({ host, driver: "", cwd: "", model: "", mode: "", start: "new", resumeId: "", latest: false, prompt: "" });
 
 export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title = "New session", subtitle = "Starts on the host you pick and appears in your inbox" }: NewSessionDialogProps) {
   const hosts = useHosts();
@@ -142,22 +142,25 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
         </div>
         <div className="col">
           {newOnly ? null : <div className="field"><span className="lbl">Start</span>
-            <Segmented label="Start" value={f.start} onChange={(start) => set({ start, resumeId: start === "continue" ? latest?.id ?? "" : "" })}
+            <Segmented label="Start" value={f.start} onChange={(start) => set({ start, latest: start === "continue" && !!inv?.capabilities.continue_latest, resumeId: start === "continue" && !inv?.capabilities.continue_latest ? latest?.id ?? "" : "" })}
               options={[{ value: "new", label: "New conversation" }, { value: "continue", label: "Continue an existing one" }]} />
           </div>}
           {f.start === "continue" ? (
             <>
-              {latest ? (
+              {inv?.capabilities.continue_latest ? (
                 <div className="recent">
                   <Icon name="clock" size="sm" />
-                  <div className="tx"><div><b>Continue most recent</b> <span className="faint">· {agoLong(latest.modified_ms)}</span></div><div className="faint">{latest.title || "(no title)"}</div></div>
-                  <Button size="sm" onClick={() => set({ resumeId: latest.id })} aria-pressed={f.resumeId === latest.id}>{f.resumeId === latest.id ? "Selected" : "Continue"}</Button>
+                  <div className="tx">
+                    <div><b>Continue most recent</b> <span className="faint">· {inv.display_name}'s own continue</span></div>
+                    <div className="faint">{latest ? <>{latest.title || "(no title)"} · {agoLong(latest.modified_ms)}</> : `whatever ${inv.display_name} last ran in this folder`}</div>
+                  </div>
+                  <Button size="sm" onClick={() => set({ latest: true, resumeId: "" })} aria-pressed={f.latest}>{f.latest ? "Selected" : "Continue"}</Button>
                 </div>
               ) : null}
               <div className="field">
                 <SearchField placeholder="Search title or first prompt" aria-label="Search sessions" value={q} onChange={(e) => setQ(e.target.value)} />
                 <span className="hint">{inv ? `${inv.sessions.length} ${inv.display_name} session${inv.sessions.length === 1 ? "" : "s"} in ${f.cwd || "this folder"} on ${host?.name}, including ones started in a terminal` : ""}</span>
-                {loading && !inv?.sessions.length ? <div className="faint">Looking for sessions…</div> : <ResumeList rows={rows} value={f.resumeId} onChange={(resumeId) => set({ resumeId })} />}
+                {loading && !inv?.sessions.length ? <div className="faint">Looking for sessions…</div> : <ResumeList rows={rows} value={f.latest ? "" : f.resumeId} onChange={(resumeId) => set({ resumeId, latest: false })} />}
               </div>
             </>
           ) : null}

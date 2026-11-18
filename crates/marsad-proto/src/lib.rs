@@ -42,6 +42,7 @@
 //! | [`methods::HOSTS_AUTH_ANSWER`] | [`hosts::AuthAnswer`] | [`Ack`] |
 //! | [`methods::HOSTS_AUTH_CANCEL`] | [`hosts::AuthCancel`] | [`Ack`] |
 //! | [`methods::HOSTS_ASKPASS`] (internal) | [`hosts::AskpassRequest`] | [`hosts::AskpassReply`] |
+//! | [`methods::FLEET_GIT_REFRESH`] | [`fleet::GitRefresh`] | [`Ack`] |
 //! | [`methods::AGENTCONFIG_EFFECTIVE`] | [`agentconfig::EffectiveRequest`] | [`agentconfig::EffectiveConfig`] |
 //! | [`methods::SESSIONS_LAUNCH`] | [`agentconfig::LaunchRequest`] | [`agentconfig::LaunchReply`] |
 //! | [`methods::STORE_SETTINGS_GET`] | — | [`store::Settings`] |
@@ -125,9 +126,9 @@ pub use wasit_control::{
     ProvisionReason, RpcError,
 };
 pub use wasit_core::{
-    AgentConfig, AgentEvent, Command, ConfigItem, ConfigItemKind, ConfigItemRef, ConfigSource,
-    DriverId, GateDecision, GateRequest, McpServerConfig, McpTransport, QuestionAnswer,
-    Unsupported,
+    AgentConfig, AgentEvent, ChoiceText, Command, ConfigItem, ConfigItemKind, ConfigItemRef,
+    ConfigSource, DriverId, GateChoice, GateChoiceKind, GateDecision, GateRequest, McpServerConfig,
+    McpTransport, QuestionAnswer, Unsupported,
 };
 pub use wasit_runtime::wire::{Ack, SessionId, SessionSnapshot};
 
@@ -154,6 +155,9 @@ pub mod methods {
     /// `sessions.create` on the target host. (An exact route next to the runtime's
     /// `sessions.` namespace.)
     pub const SESSIONS_LAUNCH: &str = "sessions.launch";
+
+    /// Refresh one directory's git summary in the `fleet` topic (hub).
+    pub const FLEET_GIT_REFRESH: &str = "fleet.git_refresh";
 
     pub const DAEMON_INFO: &str = "daemon.info";
     pub const DAEMON_SHUTDOWN: &str = "daemon.shutdown";
@@ -225,6 +229,7 @@ pub const HUB_ROUTES: &[&str] = &[
     "hosts.",
     "store.",
     "fleet",
+    methods::FLEET_GIT_REFRESH,
     "agentconfig.effective",
     "sessions.launch",
     "workstreams",

@@ -6,8 +6,6 @@ import { toast } from "../ui/toast";
 import { seenState } from "./controller";
 import type { AppStore } from "./model";
 
-export type HandoffChoice = "allow" | "always" | "deny";
-
 export interface Actions {
   /** Fire-and-track any request: pending flag under `pk`, toast with the backend's message on failure. */
   run<T>(pk: string, failTitle: string, fn: () => Promise<T>, opts?: { keepSent?: boolean }): Promise<T | undefined>;
@@ -15,8 +13,6 @@ export interface Actions {
   command(key: SessionKey, command: Command, opts?: { pendingKey?: string; failTitle?: string; keepSent?: boolean }): Promise<boolean>;
   answerGate(key: SessionKey, requestId: string, decision: GateDecision): Promise<boolean>;
   answerQuestion(key: SessionKey, requestId: string, answer: QuestionAnswer): Promise<boolean>;
-  /** Handoff gates are answered like any gate (wasl-proto `HandoffDecision::from_gate`). */
-  decideHandoff(key: SessionKey, requestId: string, choice: HandoffChoice): Promise<boolean>;
   sendPrompt(key: SessionKey, text: string): Promise<boolean>;
   stop(key: SessionKey): Promise<boolean>;
   /** End the session's process (sessions.stop). */
@@ -25,14 +21,11 @@ export interface Actions {
   askToFix(key: SessionKey, reason: string): Promise<boolean>;
   markSeen(keys: SessionKey[]): void;
   markAllSeen(): void;
-  /** Fetch `git.status` for a session once (branch, diffstat). */
-  ensureGit(key: SessionKey, force?: boolean): void;
+  /** Ask the hub to refresh the git summary of a session's folder now (e.g. after a commit). */
+  refreshGit(key: SessionKey): void;
 }
 
 export const gatePendingKey = (key: SessionKey, requestId: string) => `gate:${key}:${requestId}`;
-
-export const handoffDecision = (choice: HandoffChoice): GateDecision =>
-  choice === "deny" ? { action: "deny", reason: null } : choice === "always" ? { action: "approve", permission_updates: { always_allow: true } } : { action: "approve" };
 
 /**
  * Every action is fire, pending state, result: the UI is never blocked on the backend.
@@ -71,7 +64,6 @@ export function createActions(store: AppStore, api: Api): Actions {
     return ok(run(o.pendingKey ?? `cmd:${key}:${c.command}`, o.failTitle ?? "That did not go through", () => api.command(host, id, c), { keepSent: o.keepSent }));
   };
 
-  const gitInFlight = new Set<SessionKey>();
   const mark = (key: SessionKey, now: number) => {
     const snap = store.get().sessions[key];
     if (!snap) return null;
@@ -86,8 +78,6 @@ export function createActions(store: AppStore, api: Api): Actions {
       command(key, { command: "answer_gate", request_id: requestId, decision }, { pendingKey: gatePendingKey(key, requestId), failTitle: "Could not send your answer", keepSent: true }),
     answerQuestion: (key, requestId, answer) =>
       command(key, { command: "answer_question", request_id: requestId, answer }, { pendingKey: gatePendingKey(key, requestId), failTitle: "Could not send your answer", keepSent: true }),
-    decideHandoff: (key, requestId, choice) =>
-      command(key, { command: "answer_gate", request_id: requestId, decision: handoffDecision(choice) }, { pendingKey: gatePendingKey(key, requestId), failTitle: "Could not record the handoff decision", keepSent: true }),
     sendPrompt: (key, text) => command(key, { command: "prompt", text }, { failTitle: "Could not send your message" }),
     stop: (key) => command(key, { command: "interrupt" }, { failTitle: "Could not interrupt the session" }),
     stopSession: (key) => {
@@ -128,14 +118,10 @@ export function createActions(store: AppStore, api: Api): Actions {
         (e) => toast({ tone: "err", title: "Could not mark everything seen", detail: errorMessage(e) }),
       );
     },
-    ensureGit(key, force) {
-      if (gitInFlight.has(key) || (!force && key in store.get().git)) return;
-      const { host, id } = splitKey(key);
-      gitInFlight.add(key);
-      api.git.status(host, { session: id }).then(
-        (g) => store.set((s) => ({ ...s, git: { ...s.git, [key]: g } })),
-        () => store.set((s) => ({ ...s, git: { ...s.git, [key]: null } })),
-      ).finally(() => gitInFlight.delete(key));
+    refreshGit(key) {
+      const snap = store.get().sessions[key];
+      if (!snap?.cwd) return;
+      api.refreshGit(splitKey(key).host, snap.cwd).catch((e) => toast({ tone: "err", title: "Could not refresh git status", detail: errorMessage(e) }));
     },
   };
 }

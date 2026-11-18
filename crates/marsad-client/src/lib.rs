@@ -546,6 +546,25 @@ impl MarsadClient {
         self.call(None, methods::SESSIONS_LAUNCH, req).await
     }
 
+    /// Refresh one directory's git summary in the `fleet` topic now.
+    pub async fn git_refresh(
+        &self,
+        host: HostId,
+        cwd: impl Into<String>,
+    ) -> Result<(), ClientError> {
+        let _: Ack = self
+            .call(
+                None,
+                methods::FLEET_GIT_REFRESH,
+                marsad_proto::fleet::GitRefresh {
+                    host,
+                    cwd: cwd.into(),
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
     // ── hosts ───────────────────────────────────────────────────────────────
 
     pub async fn hosts(&self) -> Result<Vec<HostEntry>, ClientError> {

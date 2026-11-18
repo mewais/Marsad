@@ -2,6 +2,7 @@
 import type { DriverId } from "./DriverId";
 import type { HostId } from "./HostId";
 import type { OverrideLayer } from "./OverrideLayer";
+import type { ResumeRequest } from "./ResumeRequest";
 
 /**
  * How to launch a node that has no session yet.
@@ -15,6 +16,11 @@ host?: HostId | null, driver: DriverId, cwd?: string | null, model?: string | nu
  * Sent once the topology is in force (so the agent already sees its peers).
  */
 first_prompt?: string | null, labels?: { [key in string]: string }, 
+/**
+ * Start fresh (default), continue the CLI's most recent conversation in `cwd`, or resume
+ * one conversation by its native id (as `sessions.launch`).
+ */
+resume?: ResumeRequest, 
 /**
  * This node's config override layer (between the host and the session layer).
  */

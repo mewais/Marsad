@@ -3,6 +3,7 @@
 
 pub mod auth;
 pub mod fleet;
+pub mod gitwatch;
 pub mod hosts;
 pub mod provision;
 pub mod ring;
@@ -98,6 +99,7 @@ pub struct HubServices {
     pub drivers: DriverRegistry,
     pub automatic: Vec<Arc<dyn AutomaticItems>>,
     pub workstreams: workstreams::Workstreams,
+    pub git: gitwatch::GitWatch,
 }
 
 impl HubServices {
@@ -311,6 +313,12 @@ impl HubServices {
             methods::HOSTS_REMOVE => {
                 let r: HostRef = params(p).map_err(dec)?;
                 self.registry.remove(&r.id).await?;
+                enc(ok(Ack {}))
+            }
+            methods::FLEET_GIT_REFRESH => {
+                let r: marsad_proto::fleet::GitRefresh = params(p).map_err(dec)?;
+                let host = self.host_of(Some(r.host))?;
+                self.git.touch(host, r.cwd);
                 enc(ok(Ack {}))
             }
             methods::HOSTS_RECONNECT => {

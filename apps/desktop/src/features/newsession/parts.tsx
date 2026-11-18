@@ -64,7 +64,7 @@ export function ResumeList({ rows, value, onChange }: { rows: ResumeRow[]; value
           <span>{r.id === value ? <Icon name="check" size="xs" className="c-accent" /> : null}</span>
           <span className="tt"><b className={r.title ? undefined : "faint"}>{r.title || "(no title)"}</b><span className="mono">{r.project ? basename(r.project) : ""} · {r.id}</span></span>
           <span>{r.startedIn === "terminal" ? <span className="tag trm"><Icon name="term" size="xs" />Terminal</span> : <span className="tag"><Icon name="tower" size="xs" />Marsad</span>}</span>
-          <span className="r">{r.modified_ms ? agoLong(r.modified_ms) : "unknown"}</span>
+          <span className="r">{r.modified_ms ? agoLong(r.modified_ms) : "unknown"}{r.message_count != null ? <span className="faint mono"> · {r.message_count} msg</span> : null}</span>
         </div>
       ))}
       {rows.length === 0 ? <div className="faint sempty">No sessions match.</div> : null}

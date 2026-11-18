@@ -23,7 +23,8 @@ export function workstreamIndex(all: Record<string, WorkstreamView>): Map<Sessio
 
 export function selectView(s: AppState, key: SessionKey): SessionView | undefined {
   const snap = s.sessions[key];
-  return snap ? buildView(splitKey(key).host, snap, s.seen[key], s.git[key], workstreamIndex(s.workstreams).get(key) ?? "") : undefined;
+  const host = splitKey(key).host;
+  return snap ? buildView(host, snap, s.seen[key], snap.cwd ? s.git[host]?.[snap.cwd] : undefined, workstreamIndex(s.workstreams).get(key) ?? "") : undefined;
 }
 
 export interface Filters {

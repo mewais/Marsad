@@ -10,6 +10,8 @@ export interface MethodMap {
   [M.SESSIONS_CONTINUE]: [W.SessionRef, W.Ack];
   [M.SESSIONS_STOP]: [W.SessionRef, W.Ack];
   [M.SESSIONS_DELETE]: [W.SessionRef, W.Ack];
+  [M.SESSIONS_RENAME]: [W.RenameSession, W.Ack];
+  [M.FLEET_GIT_REFRESH]: [W.GitRefresh, W.Ack];
   [M.SESSION_HISTORY]: [W.HistoryRequest, W.HistoryPage];
   [M.SESSION_COMMAND]: [W.CommandRequest, W.CommandReply];
   [M.GIT_STATUS]: [W.GitStatusRequest, W.GitStatus];
@@ -40,7 +42,8 @@ export interface MethodMap {
   [M.STORE_NOTIFICATIONS_SET]: [W.NotificationPrefs, W.NotificationPrefs];
   [M.STORE_LAYERS_LIST]: [void, W.LayerList];
   [M.STORE_LAYERS_GET]: [W.LayerScope, W.OverrideLayer];
-  [M.STORE_LAYERS_SET]: [W.LayerSet, W.Ack];
+  /** marsad-proto `store::LayerSet` is `StoredLayer` (an empty layer removes it). */
+  [M.STORE_LAYERS_SET]: [W.StoredLayer, W.Ack];
   [M.STORE_SEEN_LIST]: [void, W.SeenMarkers];
   [M.STORE_SEEN_MARK]: [W.SeenMark, W.Ack];
   [M.STORE_SEEN_MARK_ALL]: [void, W.SeenMarkers];
@@ -83,6 +86,9 @@ export function createApi(b: Backend) {
     history: (host: W.HostId, r: W.HistoryRequest) => call(b, M.SESSION_HISTORY, r, { host }),
     continueSession: (host: W.HostId, id: W.SessionId) => call(b, M.SESSIONS_CONTINUE, { id }, { host }),
     stopSession: (host: W.HostId, id: W.SessionId) => call(b, M.SESSIONS_STOP, { id }, { host }),
+    deleteSession: (host: W.HostId, id: W.SessionId) => call(b, M.SESSIONS_DELETE, { id }, { host }),
+    renameSession: (host: W.HostId, id: W.SessionId, display_name: string | null) => call(b, M.SESSIONS_RENAME, { id, display_name }, { host }),
+    refreshGit: (host: W.HostId, cwd: string) => call(b, M.FLEET_GIT_REFRESH, { host, cwd }),
     launch: (r: W.LaunchRequest) => call(b, M.SESSIONS_LAUNCH, r),
     daemonInfo: (host?: W.HostId) => call(b, M.DAEMON_INFO, undefined, on(host)),
     git: {
@@ -124,7 +130,7 @@ export function createApi(b: Backend) {
       setNotifications: (p: W.NotificationPrefs) => call(b, M.STORE_NOTIFICATIONS_SET, p),
       layers: () => call(b, M.STORE_LAYERS_LIST, undefined),
       layer: (scope: W.LayerScope) => call(b, M.STORE_LAYERS_GET, scope),
-      setLayer: (l: W.LayerSet) => call(b, M.STORE_LAYERS_SET, l),
+      setLayer: (l: W.StoredLayer) => call(b, M.STORE_LAYERS_SET, l),
       seen: () => call(b, M.STORE_SEEN_LIST, undefined),
       markSeen: (m: W.SeenMark) => call(b, M.STORE_SEEN_MARK, m),
       markAllSeen: () => call(b, M.STORE_SEEN_MARK_ALL, undefined),

@@ -852,7 +852,7 @@ impl Actor {
                 self.refresh_session(&key);
                 return;
             }
-            FleetEvent::AuthPrompt { .. } => return,
+            FleetEvent::AuthPrompt { .. } | FleetEvent::Git { .. } => return,
         }
         for h in touched_hosts {
             let ids: Vec<String> = self

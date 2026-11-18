@@ -3,6 +3,7 @@ import type { DriverCapabilities } from "./DriverCapabilities";
 import type { DriverId } from "./DriverId";
 import type { ExitSummary } from "./ExitSummary";
 import type { ModelInfo } from "./ModelInfo";
+import type { ModelUsage } from "./ModelUsage";
 import type { PendingGate } from "./PendingGate";
 import type { Phase } from "./Phase";
 import type { PlanEntry } from "./PlanEntry";
@@ -25,11 +26,19 @@ generation: number, pid?: number | null, native_session_id?: string | null,
 /**
  * The first prompt, truncated.
  */
-title?: string | null, cli_version?: string | null, model?: string | null, mode?: string | null, available_models: Array<ModelInfo>, available_modes: Array<SessionMode>, slash_commands: Array<SlashCommandInfo>, pending_gates: Array<PendingGate>, turn?: TurnInfo | null, last_turn?: TurnOutcome | null, turns_completed: number, 
+title?: string | null, 
+/**
+ * The name the user gave the session (`sessions.rename`), stored with it.
+ */
+display_name?: string | null, cli_version?: string | null, model?: string | null, mode?: string | null, available_models: Array<ModelInfo>, available_modes: Array<SessionMode>, slash_commands: Array<SlashCommandInfo>, pending_gates: Array<PendingGate>, turn?: TurnInfo | null, last_turn?: TurnOutcome | null, turns_completed: number, 
 /**
  * Cumulative usage as of the last completed turn.
  */
 usage: Usage, 
+/**
+ * Per-model breakdown of `usage`, when the CLI reports one (claude `modelUsage`).
+ */
+usage_by_model?: { [key in string]: ModelUsage }, 
 /**
  * The latest live usage report (meaning per driver: see `AgentEvent::UsageUpdate`).
  */

@@ -11,8 +11,10 @@ export interface NewSessionForm {
   model: string;
   mode: string;
   start: StartMode;
-  /** Native id of the CLI session to continue (`start === "continue"`). */
+  /** Native id of the CLI session to continue (`start === "continue"`, `latest` false). */
   resumeId: string;
+  /** Continue the CLI's own most recent conversation in the folder (its native "continue"). */
+  latest: boolean;
   prompt: string;
 }
 
@@ -44,6 +46,7 @@ export function validate(f: NewSessionForm, inv: DriverInventory | undefined, ho
   if (!hostUp) return "That host is not connected.";
   if (!inv?.installed) return inv?.error ?? "Pick an agent installed on this host.";
   if (!f.cwd.trim()) return "Pick a project folder.";
+  if (f.start === "continue" && f.latest) return inv.capabilities.continue_latest ? "" : `${inv.display_name} cannot continue its most recent session.`;
   if (f.start === "continue" && !f.resumeId) return "Pick a session to continue.";
   if (f.start === "continue" && !inv.capabilities.resume) return `${inv.display_name} cannot resume sessions.`;
   return "";
@@ -57,7 +60,7 @@ export function launchRequest(f: NewSessionForm, workstream: LaunchRequest["work
     model: f.model || null,
     mode: f.mode || null,
     first_prompt: f.prompt.trim() || null,
-    resume: f.start === "continue" ? { kind: "continue", native_session_id: f.resumeId } : { kind: "new" },
+    resume: f.start !== "continue" ? { kind: "new" } : f.latest ? { kind: "latest" } : { kind: "resume", native_session_id: f.resumeId },
     labels: {},
     workstream,
     overrides: { items: [], env: [], disallowed_tools: [] },

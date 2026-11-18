@@ -1,4 +1,4 @@
-import type { GateRequest, PlanEntry, SessionEvent, SessionSnapshot, Usage } from "../wire";
+import type { GateChoice, GateRequest, PlanEntry, SessionEvent, SessionSnapshot, Usage } from "../wire";
 import { driverDef } from "./catalog";
 import { buildTranscript } from "./transcripts";
 
@@ -26,12 +26,40 @@ export interface Spec {
   longHistory?: boolean;
 }
 
+/** What wasit-claude offers for a `can_use_tool` request (neutral labels; see wasit-core `GateChoice`). */
+export function claudeChoices(remember?: string): GateChoice[] {
+  return [
+    { id: "allow", label: "Allow", kind: "allow_once", neutral_label: true },
+    ...(remember ? [{ id: "allow_always", label: "Allow and remember", kind: "allow_always" as const, neutral_label: true, description: remember }] : []),
+    { id: "deny", label: "Deny", kind: "reject_once", neutral_label: true, text: "optional" },
+    { id: "deny_stop", label: "Deny and stop the turn", kind: "cancel", neutral_label: true, text: "optional" },
+  ];
+}
+/** codex `availableDecisions` for a command (accept, remember the prefix, cancel). */
+export const CODEX_CHOICES: GateChoice[] = [
+  { id: "accept", label: "Allow", kind: "allow_once", neutral_label: true },
+  { id: "acceptWithExecpolicyAmendment", label: "Allow and remember", kind: "allow_always", neutral_label: true, description: "commands starting with `cargo test`" },
+  { id: "cancel", label: "Deny and stop the turn", kind: "cancel", neutral_label: true },
+];
+/** wasl-proto `handoff_choices()`. */
+export const HANDOFF_CHOICES: GateChoice[] = [
+  { id: "allow_once", label: "Allow once", kind: "allow_once" },
+  { id: "always_allow", label: "Always allow on this connection", kind: "allow_always", description: "sets the connection's policy to always allow" },
+  { id: "deny", label: "Deny", kind: "reject_once", text: "optional" },
+];
+
+/** The first session of a project on a host works in the checkout; later ones in worktrees (one branch per folder, as in git). */
+export function fixtureCwd(spec: Spec, specs: Spec[] = SPECS): string {
+  const first = specs.find((x) => x.host === spec.host && x.proj === spec.proj);
+  return !first || first === spec || first.n === spec.n ? `~/src/${spec.proj}` : `~/src/${spec.proj}-worktrees/${spec.branch.split("/").pop()}`;
+}
+
 export const SPECS: Spec[] = [
   { n: 7, name: "migrate-auth-middleware", driver: "claude", host: "x1", proj: "ledgerline", branch: "refactor/auth-mw", agoMin: 1, cost: 2.41, kind: "needs",
     line: "Asks: how should legacy session cookies be handled during rollout?",
     gates: [
       { gate_type: "question", request_id: "q-cookies", questions: [{
-        header: "Legacy cookies", multi_select: false,
+        id: "How should legacy session cookies be handled during rollout?", header: "Legacy cookies", multi_select: false, allow_other: true,
         question: "How should legacy session cookies be handled during rollout?",
         options: [
           { label: "Accept legacy cookie for 30 days", description: "No forced logouts; compat code is deleted after the window. (Recommended)" },
@@ -40,18 +68,16 @@ export const SPECS: Spec[] = [
         ] }] },
       { gate_type: "permission", request_id: "p-prisma", tool_name: "Bash", command: "pnpm prisma migrate dev --name session_tokens", cwd: "~/src/ledgerline",
         explanation: "Writes to a database. Creates prisma/migrations/20261117_session_tokens and applies it to postgres://localhost:5432/ledgerline_dev. Reversible with migrate reset; dev data would be lost.",
-        permission_suggestions: [{ type: "addRules", rules: [{ toolName: "Bash", ruleContent: "pnpm prisma migrate:*" }], behavior: "allow", destination: "localSettings" }],
-        is_elicitation: false, raw_input: { command: "pnpm prisma migrate dev --name session_tokens" } },
+        choices: claudeChoices("allow rule Bash(pnpm prisma migrate:*) (localSettings)"), raw_input: { command: "pnpm prisma migrate dev --name session_tokens" } },
     ] },
   { n: 2, name: "pdf-renderer-worker", driver: "claude", host: "hz", proj: "ledgerline", branch: "feat/invoice-pdf", ws: "Invoice export v2", agoMin: 3, cost: 1.12, kind: "needs",
     line: "Wants to run pnpm add @react-pdf/renderer@4.1.0",
     gates: [{ gate_type: "permission", request_id: "p-pdf", tool_name: "Bash", command: "pnpm add @react-pdf/renderer@4.1.0 --filter @ledgerline/export", cwd: "~/src/ledgerline", explanation: "",
-      permission_suggestions: [{ type: "addRules", rules: [{ toolName: "Bash", ruleContent: "pnpm add:*" }], behavior: "allow", destination: "localSettings" }],
-      is_elicitation: false, raw_input: { command: "pnpm add @react-pdf/renderer@4.1.0 --filter @ledgerline/export" } }] },
+      choices: claudeChoices("allow rule Bash(pnpm add:*) (localSettings)"), raw_input: { command: "pnpm add @react-pdf/renderer@4.1.0 --filter @ledgerline/export" } }] },
   { n: 15, name: "ws-reconnect-backoff", driver: "codex", host: "hz", proj: "marsad", branch: "fix/ws-backoff", agoMin: 4, cost: 0.58, kind: "needs",
     line: "Wants to run cargo test -p marsad-net --features e2e",
     gates: [{ gate_type: "permission", request_id: "p-cargo", tool_name: "shell", command: "cargo test -p marsad-net --features e2e", cwd: "~/src/marsad", explanation: "",
-      is_elicitation: false, raw_input: { command: ["cargo", "test", "-p", "marsad-net", "--features", "e2e"] } }] },
+      choices: CODEX_CHOICES, raw_input: { command: ["cargo", "test", "-p", "marsad-net", "--features", "e2e"] } }] },
   { n: 4, name: "windows-print-check", driver: "claude", host: "win", proj: "ledgerline", branch: "feat/invoice-export-v2", ws: "Invoice export v2", agoMin: 75, cost: 0.37, kind: "idle",
     line: "Not started · waiting for a handoff from invoice-export-orchestrator" },
   { n: 5, name: "ci-triage-lead", driver: "claude", host: "hz", proj: "marsad", branch: "fix/flaky-ssh-test", ws: "Flaky CI triage", agoMin: 12, cost: 1.96, kind: "failed",
@@ -68,7 +94,7 @@ export const SPECS: Spec[] = [
     line: "Handoff waiting: delegate print verification to windows-print-check",
     gates: [{ gate_type: "handoff", request_id: "wasl-handoff-t4print", task_id: "t4print", from: "thinkpad-x1/invoice-export-orchestrator", to: "win-build/windows-print-check", mode: "command",
       instruction: "Verify the generated invoice PDFs print correctly through the Windows print spooler at A4 and Letter. Report any clipping of the totals table.",
-      details: { attachments: ["out/invoice-INV-2041.pdf", "out/invoice-INV-2042.pdf"], hop: 1, budget_usd: 1.5 } }] },
+      details: { attachments: ["out/invoice-INV-2041.pdf", "out/invoice-INV-2042.pdf"], hop: 1, budget_usd: 1.5 }, choices: HANDOFF_CHOICES }] },
   { n: 3, name: "csv-schema-worker", driver: "opencode", host: "hz", proj: "ledgerline", branch: "feat/invoice-csv", ws: "Invoice export v2", agoMin: 0, cost: 0.95, kind: "working",
     line: "Running vitest on packages/export (34/52 passed so far)" },
   { n: 10, name: "upgrade-tauri-2-5", driver: "claude", host: "x1", proj: "marsad", branch: "chore/tauri-2.5", agoMin: 0, cost: 1.27, kind: "working",
@@ -118,7 +144,7 @@ export function buildSession(spec: Spec, now: number): Built {
   const snap: SessionSnapshot = {
     id,
     driver: spec.driver,
-    cwd: `~/src/${spec.proj}`,
+    cwd: fixtureCwd(spec),
     labels: {},
     created_at_ms: now - 3_600_000 * 2,
     capabilities: drv.capabilities,

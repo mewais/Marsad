@@ -7,14 +7,15 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use marsad_proto::fleet::{FleetEvent, FleetHost, FleetLink};
+use marsad_proto::fleet::{FleetEvent, FleetHost, FleetLink, GitSummary};
 use marsad_proto::hosts::{AuthPrompt, HostEntry};
 use marsad_proto::{HostId, LinkState};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use wasit_control::{Cursor, DurableOpts, EventStream, Hub, RpcError, Supervised};
-use wasit_runtime::wire::{topics as rt_topics, HostEvent};
+use wasit_runtime::wire::{topics as rt_topics, HostEvent, SessionSnapshot};
 use wasit_runtime::{SessionManager, StreamEnd};
 
+use super::gitwatch::GitWatch;
 use super::ring::{self, Joined, Ring};
 
 const INPUT_QUEUE: usize = 1024;
@@ -25,6 +26,8 @@ enum Input {
     Link(HostId, LinkState),
     Feed(HostId, HostEvent),
     Prompt(HostId, Option<AuthPrompt>),
+    Git(HostId, GitSummary),
+    SetGitWatch(GitWatch),
     Subscribe(Option<String>, oneshot::Sender<Joined<FleetEvent>>),
     Snapshot(oneshot::Sender<Vec<FleetHost>>),
 }
@@ -38,6 +41,23 @@ pub struct Fleet {
 struct State {
     hosts: BTreeMap<HostId, FleetHost>,
     ring: Ring<FleetEvent>,
+    git: Option<GitWatch>,
+}
+
+/// A snapshot change that can change the working tree: a new session, a finished tool call or
+/// turn, a phase change.
+fn may_change_tree(old: Option<&SessionSnapshot>, new: &SessionSnapshot) -> bool {
+    let Some(old) = old else { return true };
+    old.phase.name() != new.phase.name()
+        || old.turns_completed != new.turns_completed
+        || old
+            .turn
+            .as_ref()
+            .map(|t| (t.tool_calls, t.current_tool.is_some()))
+            != new
+                .turn
+                .as_ref()
+                .map(|t| (t.tool_calls, t.current_tool.is_some()))
 }
 
 impl State {
@@ -61,6 +81,7 @@ impl State {
                                 sessions_live: live,
                                 sessions: Vec::new(),
                                 auth_prompt: None,
+                                git: Vec::new(),
                             },
                         );
                     }
@@ -88,6 +109,26 @@ impl State {
                 let Some(h) = self.hosts.get_mut(&id) else {
                     return;
                 };
+                let mut touch: Vec<String> = Vec::new();
+                match &ev {
+                    HostEvent::Reset { sessions } => {
+                        touch.extend(sessions.iter().filter_map(|s| s.cwd.clone()));
+                    }
+                    HostEvent::Upsert { session } => {
+                        let old = h.sessions.iter().find(|s| s.id == session.id);
+                        if may_change_tree(old, session) {
+                            touch.extend(session.cwd.clone());
+                        }
+                    }
+                    HostEvent::Removed { .. } => {}
+                }
+                if let Some(g) = &self.git {
+                    touch.sort();
+                    touch.dedup();
+                    for cwd in touch {
+                        g.touch(id.clone(), cwd);
+                    }
+                }
                 match ev {
                     HostEvent::Reset { sessions } => {
                         h.sessions = sessions.clone();
@@ -114,6 +155,34 @@ impl State {
                 h.auth_prompt = prompt.clone();
                 self.emit(FleetEvent::AuthPrompt { host: id, prompt });
             }
+            Input::Git(id, summary) => {
+                let Some(h) = self.hosts.get_mut(&id) else {
+                    return;
+                };
+                // Summaries follow sessions: a folder no session uses is not published, and
+                // folders no session uses any more are dropped.
+                let used: std::collections::BTreeSet<String> =
+                    h.sessions.iter().filter_map(|s| s.cwd.clone()).collect();
+                h.git.retain(|g| used.contains(&g.cwd));
+                if !used.contains(&summary.cwd) {
+                    return;
+                }
+                let content = |g: &GitSummary| GitSummary {
+                    refreshed_at_ms: 0,
+                    ..g.clone()
+                };
+                match h.git.iter_mut().find(|g| g.cwd == summary.cwd) {
+                    // Same content refreshed again: keep the row, publish nothing new.
+                    Some(g) if content(g) == content(&summary) => {
+                        *g = summary;
+                        return;
+                    }
+                    Some(g) => *g = summary.clone(),
+                    None => h.git.push(summary.clone()),
+                }
+                self.emit(FleetEvent::Git { host: id, summary });
+            }
+            Input::SetGitWatch(g) => self.git = Some(g),
             Input::Subscribe(from, reply) => {
                 let hosts = &self.hosts;
                 let joined = self.ring.join(from.as_deref(), || FleetEvent::Reset {
@@ -136,6 +205,7 @@ impl Fleet {
         let mut st = State {
             hosts: BTreeMap::new(),
             ring: Ring::new(),
+            git: None,
         };
         tokio::spawn(async move {
             while let Some(i) = rx.recv().await {
@@ -157,6 +227,16 @@ impl Fleet {
 
     pub async fn auth_prompt(&self, id: HostId, prompt: Option<AuthPrompt>) {
         self.send(Input::Prompt(id, prompt)).await
+    }
+
+    /// Report a refreshed git summary.
+    pub async fn git_summary(&self, host: HostId, summary: GitSummary) {
+        self.send(Input::Git(host, summary)).await
+    }
+
+    /// Start touching `watch` on session changes.
+    pub async fn set_git_watch(&self, watch: GitWatch) {
+        self.send(Input::SetGitWatch(watch)).await
     }
 
     pub async fn host_removed(&self, id: HostId) {

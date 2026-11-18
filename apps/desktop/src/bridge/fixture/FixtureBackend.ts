@@ -1,7 +1,7 @@
 import type { Backend, RequestOptions, SubscribeOptions, Unsubscribe } from "../backend";
 import type {
   AuthAnswer, AuthCancel, AuthPrompt, BaseRequest, FleetEvent, FleetHost, FsListRequest, FsPathRequest, GateRequest, GitCommitRequest, GitDiffRequest,
-  GitDiscardRequest, GitStatusRequest, GitTarget, HistoryRequest, HostId, InventoryRequest, LinkState, SessionRef, SessionSnapshot, CommandRequest,
+  GitDiscardRequest, GitRefresh, GitStatus, GitStatusRequest, GitSummary, GitTarget, HistoryRequest, RenameSession, HostId, InventoryRequest, LinkState, SessionRef, SessionSnapshot, CommandRequest,
 } from "../wire";
 import { methods as M, topics as T } from "../wire";
 import { DRIVERS, FIXTURE_HOSTS, driverDef, inventoryFor, type FixtureHost } from "./catalog";
@@ -166,12 +166,27 @@ export class FixtureBackend implements Backend {
         const r = p as CommandRequest;
         const e = this.entry(host, r);
         const reply = this.sim.command(e, r.command);
-        if (r.command.command === "answer_gate") this.hub.ws.onHandoffAnswer(r.command.request_id, r.command.decision.action === "deny");
+        if (r.command.command === "answer_gate") this.hub.ws.onHandoffAnswer(r.command.request_id, r.command.decision.choice === "deny");
         return reply;
       }
       case M.SESSIONS_CONTINUE:
         this.sim.setPhase(this.entry(host, p as SessionRef), { state: "idle" });
         return {};
+      case M.SESSIONS_RENAME: {
+        const r = p as RenameSession;
+        const e = this.entry(host, r);
+        e.snap = { ...e.snap, display_name: r.display_name?.trim() || null };
+        this.publish(e);
+        return {};
+      }
+      case M.SESSIONS_DELETE: {
+        const r = p as SessionRef;
+        const e = this.entry(host, r);
+        if (e.snap.phase.state === "working" || e.snap.phase.state === "needs_you" || e.snap.phase.state === "starting") this.sim.setPhase(e, { state: "exited", code: 0 });
+        host.sessions.delete(r.id);
+        this.fleet({ kind: "session_removed", host: hostId, id: r.id });
+        return {};
+      }
       case M.SESSIONS_STOP:
         this.sim.setPhase(this.entry(host, p as SessionRef), { state: "exited", code: 0 });
         return {};
@@ -187,12 +202,14 @@ export class FixtureBackend implements Backend {
         if (!r.files.length) throw err("invalid_params", "Pick at least one file to commit.");
         const t = this.tree(hostId, r.target);
         t.status = { ...t.status, ahead: t.status.ahead + 1, files: t.status.files.filter((f) => !r.files.includes(f.path)) };
+        this.gitChanged(hostId, r.target);
         return { commit: (Math.floor(now / 1000) % 0xfffffff).toString(16).padStart(7, "0") };
       }
       case M.GIT_DISCARD: {
         const r = p as GitDiscardRequest;
         const t = this.tree(hostId, r.target);
         t.status = { ...t.status, files: t.status.files.filter((f) => !r.files.includes(f.path)) };
+        this.gitChanged(hostId, r.target);
         return {};
       }
       case M.FS_LIST:
@@ -215,6 +232,12 @@ export class FixtureBackend implements Backend {
   }
 
   private hubRequest(method: string, p: unknown): unknown {
+    if (method === M.FLEET_GIT_REFRESH) {
+      const r = p as GitRefresh;
+      const e = [...(this.hosts.get(r.host)?.sessions.values() ?? [])].find((x) => x.snap.cwd === r.cwd);
+      if (e) this.gitChanged(r.host, { session: e.snap.id, cwd: null });
+      return {};
+    }
     return this.hub.handle(method, p);
   }
 
@@ -240,7 +263,29 @@ export class FixtureBackend implements Backend {
   // ── fleet ─────────────────────────────────────────────────────────────────
 
   private fleetHost(h: HostRec): FleetHost {
-    return { host: h.def.entry, link: h.def.link ? { link: "remote", state: h.def.link } : { link: "local" }, sessions_live: this.isUp(h), sessions: [...h.sessions.values()].map((e) => e.snap), auth_prompt: h.prompt };
+    return { host: h.def.entry, link: h.def.link ? { link: "remote", state: h.def.link } : { link: "local" }, sessions_live: this.isUp(h), sessions: [...h.sessions.values()].map((e) => e.snap), auth_prompt: h.prompt, git: this.gitSummaries(h) };
+  }
+
+  /** What the hub's background git refresh would publish: one summary per session folder. */
+  private gitSummaries(h: HostRec): GitSummary[] {
+    const out = new Map<string, GitSummary>();
+    for (const e of h.sessions.values()) {
+      const cwd = e.snap.cwd;
+      const t = cwd ? this.trees.get(`${h.def.entry.id}/${e.snap.id}`) : undefined;
+      if (cwd && t && !out.has(cwd)) out.set(cwd, summaryOf(cwd, t.status, this.opts.now()));
+    }
+    return [...out.values()];
+  }
+
+  private gitChanged(host: HostId, t: GitTarget) {
+    const snap = t.session ? this.hosts.get(host)?.sessions.get(t.session)?.snap : undefined;
+    const cwd = snap?.cwd ?? t.cwd;
+    if (!cwd) return;
+    try {
+      this.fleet({ kind: "git", host, summary: summaryOf(cwd, this.tree(host, t).status, this.opts.now()) });
+    } catch {
+      // not a repository in the fixture: nothing to publish
+    }
   }
 
   private fleet(e: FleetEvent) {
@@ -381,4 +426,14 @@ export class FixtureBackend implements Backend {
   hostIds(): HostId[] {
     return [...this.hosts.keys()];
   }
+}
+
+function summaryOf(cwd: string, g: GitStatus, now: number): GitSummary {
+  let added = 0;
+  let removed = 0;
+  for (const f of g.files) {
+    added += f.staged_added + f.unstaged_added;
+    removed += f.staged_removed + f.unstaged_removed;
+  }
+  return { cwd, repo_root: g.repo_root, branch: g.branch, ahead: g.ahead, behind: g.behind, files: g.files.length, added, removed, refreshed_at_ms: now, error: null };
 }

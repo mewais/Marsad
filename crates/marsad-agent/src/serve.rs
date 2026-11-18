@@ -26,6 +26,7 @@ use crate::cli::{default_host_id, Options};
 use crate::host::{pty::Ptys, HostServices};
 use crate::hub::auth::Prompts;
 use crate::hub::fleet::Fleet;
+use crate::hub::gitwatch::GitWatch;
 use crate::hub::hosts::Registry;
 use crate::hub::provision::{AgentProvisioner, BootstrapConnector, BIN_DIR_ENV};
 use crate::hub::workstreams::Workstreams;
@@ -281,6 +282,8 @@ async fn start_hub(
     .await
     .map_err(|e| e.to_string())?;
     let link = loopback(routing.clone(), build, host_id);
+    let git = GitWatch::spawn(link.clone(), fleet.clone());
+    fleet.set_git_watch(git.clone()).await;
     let workstreams = Workstreams::start(store.clone(), link, fleet.clone(), local_id.clone())
         .await
         .map_err(|e| e.to_string())?;
@@ -293,6 +296,7 @@ async fn start_hub(
         drivers,
         automatic: vec![Arc::new(WaslMcp)],
         workstreams,
+        git,
     };
     let mut top = ServiceMux::new();
     top.register(

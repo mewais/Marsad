@@ -7,4 +7,16 @@ export type TurnInfo = { started_at_ms: number, native_turn_id?: string | null,
 /**
  * The prompt that started it, when known.
  */
-prompt?: string | null, tool_calls: number, last_tool?: string | null, };
+prompt?: string | null, 
+/**
+ * Tool calls started in this turn (the turn's steps as far as the runtime can see).
+ */
+tool_calls: number, last_tool?: string | null, 
+/**
+ * The tool running right now (started, not finished), when there is one.
+ */
+current_tool?: string | null, 
+/**
+ * Call id of `current_tool`.
+ */
+current_call?: string | null, };

@@ -302,7 +302,7 @@ async fn launch_prompt_gate_answer_and_kill9_restart() {
         &id,
         Command::AnswerGate {
             request_id,
-            decision: GateDecision::approve(),
+            decision: GateDecision::choose("allow"),
         },
     )
     .await

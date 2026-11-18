@@ -80,7 +80,7 @@ describe("workstream screens", () => {
     expect(screen.getAllByText("Handoff waiting").length).toBeGreaterThan(0);
     const gate = await screen.findByTestId("edge-gate");
     await user.click(within(gate).getByRole("button", { name: /Allow once/ }));
-    await waitFor(() => expect(r.backend.requests.find((x) => x.method === "session.command")?.params).toMatchObject({ command: { command: "answer_gate", request_id: "wasl-handoff-t4print", decision: { action: "approve" } } }));
+    await waitFor(() => expect(r.backend.requests.find((x) => x.method === "session.command")?.params).toMatchObject({ command: { command: "answer_gate", request_id: "wasl-handoff-t4print", decision: { choice: "allow_once" } } }));
   });
 
   it("an edge's policy is set from the inspector", async () => {
