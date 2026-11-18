@@ -24,6 +24,7 @@ export const methods = {
   FS_LIST: "fs.list",
   FS_HOME: "fs.home",
   FS_EXISTS: "fs.exists",
+  ASK_USER: "ask.user",
   AGENTCONFIG_BASE: "agentconfig.base",
   AGENTCONFIG_EFFECTIVE: "agentconfig.effective",
   SESSIONS_LAUNCH: "sessions.launch",

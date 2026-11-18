@@ -32,6 +32,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 fastrand = { workspace = true }
 portable-pty = "0.9"
+rmcp = { version = "0.9", features = ["server", "transport-io"] }
 base64 = "0.22"
 tokio-util = { version = "0.7", features = ["rt"] }
 

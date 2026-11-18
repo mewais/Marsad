@@ -57,6 +57,8 @@ pub struct LaunchContext {
     /// The daemon of the target host (its binary and socket, e.g. for an MCP server that
     /// talks back to it).
     pub daemon: DaemonInfo,
+    /// What the driver's CLI can do (its descriptor's capabilities).
+    pub capabilities: wasit_core::DriverCapabilities,
 }
 
 /// Supplies items Marsad injects into every launch (e.g. the orchestration MCP server). They
@@ -80,6 +82,31 @@ impl AutomaticItems for WaslMcp {
         );
         vec![AutomaticItem {
             provider: "wasl".into(),
+            name: cfg.name,
+            value: marsad_proto::agentconfig::ItemValue::McpServer {
+                server: cfg.transport,
+            },
+        }]
+    }
+}
+
+/// The `ask_user` MCP server (`marsad-agent ask-mcp`), injected into sessions whose CLI
+/// cannot raise questions Marsad sees (descriptor capability `questions: false`): the agent
+/// asks through it and the user answers a question gate like a native one.
+pub struct AskUserMcp;
+
+impl AutomaticItems for AskUserMcp {
+    fn items(&self, ctx: &LaunchContext) -> Vec<AutomaticItem> {
+        if ctx.capabilities.questions {
+            return Vec::new();
+        }
+        let cfg = crate::askmcp::mcp_server_config(
+            &ctx.daemon.exe,
+            &ctx.daemon.socket,
+            ctx.session.as_str(),
+        );
+        vec![AutomaticItem {
+            provider: "marsad".into(),
             name: cfg.name,
             value: marsad_proto::agentconfig::ItemValue::McpServer {
                 server: cfg.transport,
@@ -194,6 +221,7 @@ impl HubServices {
             session: session.clone(),
             workstream,
             daemon,
+            capabilities: desc.capabilities(),
         };
         let automatic: Vec<AutomaticItem> =
             self.automatic.iter().flat_map(|p| p.items(&lctx)).collect();

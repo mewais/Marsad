@@ -104,6 +104,7 @@
 #![forbid(unsafe_code)]
 
 pub mod agentconfig;
+pub mod ask;
 pub mod daemon;
 pub mod fleet;
 pub mod fs;
@@ -148,6 +149,9 @@ pub mod methods {
     pub const FS_LIST: &str = "fs.list";
     pub const FS_HOME: &str = "fs.home";
     pub const FS_EXISTS: &str = "fs.exists";
+
+    /// An agent asks the user a question (host; see [`crate::ask`]).
+    pub const ASK_USER: &str = "ask.user";
 
     pub const AGENTCONFIG_BASE: &str = "agentconfig.base";
     pub const AGENTCONFIG_EFFECTIVE: &str = "agentconfig.effective";
@@ -222,7 +226,7 @@ pub mod topics {
 }
 
 /// Routes of the services every daemon serves (and the hub routes by `host`).
-pub const HOST_ROUTES: &[&str] = &["git.", "pty.", "fs.", "daemon.", "agentconfig.base"];
+pub const HOST_ROUTES: &[&str] = &["git.", "pty.", "fs.", "ask.", "daemon.", "agentconfig.base"];
 
 /// Routes of the hub-only services.
 pub const HUB_ROUTES: &[&str] = &[

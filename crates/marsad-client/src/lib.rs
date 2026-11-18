@@ -505,6 +505,17 @@ impl MarsadClient {
         Ok(h.path)
     }
 
+    /// Ask the user a question on a session's behalf (what the `ask_user` MCP tool does);
+    /// returns once answered, withdrawn, or the turn ends. No deadline of its own beyond the
+    /// client's per-call one.
+    pub async fn ask_user(
+        &self,
+        host: Option<&HostId>,
+        req: marsad_proto::ask::AskUserRequest,
+    ) -> Result<marsad_proto::ask::AskUserReply, ClientError> {
+        self.call(host, methods::ASK_USER, req).await
+    }
+
     pub async fn fs_exists(
         &self,
         host: Option<&HostId>,

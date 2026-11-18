@@ -1,6 +1,7 @@
-//! Services every daemon serves for its own host: `git.*`, `pty.*`, `fs.*`,
+//! Services every daemon serves for its own host: `git.*`, `pty.*`, `fs.*`, `ask.user`,
 //! `agentconfig.base`, `daemon.*`.
 
+pub mod ask;
 pub mod fs;
 pub mod git;
 pub mod pty;
@@ -175,6 +176,10 @@ impl Service for HostServices {
                 methods::FS_EXISTS => {
                     let r: FsPathRequest = params(p).map_err(rpc_to)?;
                     ok(fs::exists(&r.path).await?).map_err(rpc_to)?
+                }
+                methods::ASK_USER => {
+                    let r: marsad_proto::ask::AskUserRequest = params(p).map_err(rpc_to)?;
+                    ok(ask::ask_user(&self.manager, r).await?).map_err(rpc_to)?
                 }
                 methods::AGENTCONFIG_BASE => {
                     let r: BaseRequest = params(p).map_err(rpc_to)?;

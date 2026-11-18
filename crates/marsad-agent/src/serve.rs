@@ -30,7 +30,7 @@ use crate::hub::gitwatch::GitWatch;
 use crate::hub::hosts::Registry;
 use crate::hub::provision::{AgentProvisioner, BootstrapConnector, BIN_DIR_ENV};
 use crate::hub::workstreams::Workstreams;
-use crate::hub::{HubServices, WaslMcp};
+use crate::hub::{AskUserMcp, HubServices, WaslMcp};
 use crate::version;
 
 /// Exit code when another daemon already serves the endpoint.
@@ -294,7 +294,7 @@ async fn start_hub(
         fleet,
         routing: routing.clone(),
         drivers,
-        automatic: vec![Arc::new(WaslMcp)],
+        automatic: vec![Arc::new(WaslMcp), Arc::new(AskUserMcp)],
         workstreams,
         git,
     };

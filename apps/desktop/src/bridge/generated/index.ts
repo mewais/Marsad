@@ -6,6 +6,8 @@ export type * from "./AgentEvent";
 export type * from "./AgentId";
 export type * from "./ApprovalVia";
 export type * from "./Artifact";
+export type * from "./AskUserReply";
+export type * from "./AskUserRequest";
 export type * from "./AuthAnswer";
 export type * from "./AuthCancel";
 export type * from "./AuthPrompt";

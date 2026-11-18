@@ -68,6 +68,18 @@ fn main() -> ExitCode {
                 }
             };
         }
+        Some("ask-mcp") => {
+            // The `ask_user` MCP server (`--socket <daemon socket> --session <id>`), injected
+            // by the hub into sessions whose CLI cannot ask the user itself.
+            let rest: Result<Vec<String>, _> = args.map(|a| a.into_string()).collect();
+            return match rest {
+                Ok(rest) => marsad_agent::askmcp::run(&rest),
+                Err(bad) => {
+                    eprintln!("marsad-agent ask-mcp: argument is not UTF-8: {bad:?}");
+                    ExitCode::from(2)
+                }
+            };
+        }
         Some("serve" | "bridge" | "stop") => {}
         _ => return usage(),
     }

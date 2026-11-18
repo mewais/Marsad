@@ -438,3 +438,109 @@ async fn fs_and_base_config() {
     let pid = c.daemon_info(None).await.unwrap().pid;
     stop_pid(pid);
 }
+
+/// `ask_user` (the MCP tool for CLIs that cannot ask themselves): injected only for drivers
+/// whose descriptor reports no native questions; the question gate it raises is answered like
+/// a native one and the answer comes back to the caller.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ask_user_injected_by_capability_and_round_trips() {
+    use marsad_proto::ask::AskUserRequest;
+    use marsad_proto::QuestionAnswer;
+    use wasit_core::{QuestionOption, QuestionPrompt};
+    let d = TempDir::new();
+    let work = d.path().join("w");
+    std::fs::create_dir_all(&work).unwrap();
+    let c = client(&d.path().join("d"));
+    let launch = |driver: &str| {
+        let mut req = LaunchRequest::new(driver);
+        req.cwd = Some(work.to_string_lossy().into_owned());
+        req
+    };
+    let claude = c.launch(launch("claude")).await.unwrap();
+    assert!(claude
+        .effective
+        .item(ConfigItemKind::McpServer, "marsad")
+        .is_none());
+    let oc = c.launch(launch("opencode")).await.unwrap();
+    let item = oc
+        .effective
+        .item(ConfigItemKind::McpServer, "marsad")
+        .expect("ask_user is injected for OpenCode");
+    assert!(item.locked);
+    let rt = c.runtime(None);
+    let id = oc.id.clone();
+    let idle = async {
+        loop {
+            if rt.snapshot(&id).await.unwrap().phase == Phase::Idle {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    };
+    tokio::time::timeout(T, idle).await.expect("session idle");
+
+    let question = QuestionPrompt {
+        id: String::new(),
+        question: "Which database should the service use?".into(),
+        header: "Database".into(),
+        multi_select: false,
+        options: vec![
+            QuestionOption {
+                label: "Postgres".into(),
+                description: String::new(),
+            },
+            QuestionOption {
+                label: "SQLite".into(),
+                description: String::new(),
+            },
+        ],
+        allow_other: false,
+        secret: false,
+    };
+    let asking = tokio::spawn({
+        let c = c.clone();
+        let req = AskUserRequest {
+            session: id.to_string(),
+            request_id: "ask-1".into(),
+            question,
+        };
+        async move { c.ask_user(None, req).await }
+    });
+    let gate = tokio::time::timeout(T, async {
+        loop {
+            let s = rt.snapshot(&id).await.unwrap();
+            if let Some(g) = s.pending_gates.first() {
+                break g.gate.clone();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("a question gate");
+    let marsad_proto::GateRequest::Question { questions, .. } = &gate else {
+        panic!("expected a question, got {gate:?}");
+    };
+    assert_eq!(rt.snapshot(&id).await.unwrap().phase, Phase::NeedsYou);
+    let qid = questions[0].id.clone();
+    rt.command(
+        &id,
+        Command::AnswerQuestion {
+            request_id: "ask-1".into(),
+            answer: QuestionAnswer {
+                answers: [(qid, vec!["Postgres".to_string()])].into(),
+            },
+        },
+    )
+    .await
+    .unwrap();
+    let reply = tokio::time::timeout(T, asking)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(reply.answers, ["Postgres"]);
+    assert_eq!(reply.cancelled, None);
+    assert!(rt.snapshot(&id).await.unwrap().pending_gates.is_empty());
+    let pid = c.daemon_info(None).await.unwrap().pid;
+    stop_pid(pid);
+}
