@@ -28,8 +28,8 @@ use std::time::Duration;
 use futures::StreamExt;
 use marsad_proto::fleet::FleetEvent;
 use marsad_proto::workstream::{
-    EdgeView, HandoffGateView, NodeLaunch, NodeSession, NodeView, TopologySync, Workstream,
-    WorkstreamCost, WorkstreamState, WorkstreamView, WorkstreamsEvent,
+    EdgeView, HandoffGateView, NodeLaunch, NodeSession, NodeView, SpawnGateView, TopologySync,
+    Workstream, WorkstreamCost, WorkstreamState, WorkstreamView, WorkstreamsEvent,
 };
 use marsad_proto::{HostId, MarsadError, SessionSnapshot};
 use marsad_store::Store;
@@ -1102,12 +1102,31 @@ impl Actor {
                     })
             })
             .collect();
+        let mut pending_spawns = Vec::new();
+        for n in &ws.nodes {
+            let Some(s) = &n.session else { continue };
+            let Some(snap) = self.sessions.get(s) else {
+                continue;
+            };
+            for g in &snap.pending_gates {
+                if matches!(g.gate, GateRequest::Spawn { .. }) {
+                    pending_spawns.push(SpawnGateView {
+                        node: n.id.clone(),
+                        host: s.host.clone(),
+                        session: s.session.clone(),
+                        raised_at_ms: g.raised_at_ms,
+                        gate: g.gate.clone(),
+                    });
+                }
+            }
+        }
         WorkstreamView {
             workstream: ws.clone(),
             nodes,
             edges,
             sync,
             cost,
+            pending_spawns,
         }
     }
 }
@@ -1151,6 +1170,8 @@ mod tests {
                 session: marsad_proto::SessionId::parse(s).unwrap(),
             }),
             launch: Some(NodeLaunch::new("claude")),
+            spawned_by: None,
+            spawn_request: None,
         }
     }
 

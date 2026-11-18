@@ -169,6 +169,7 @@ pub async fn serve(o: Options) -> ExitCode {
             local.clone(),
             manager.clone(),
             drivers,
+            &node,
         )
         .await
         {
@@ -230,6 +231,7 @@ async fn start_hub(
     local: Arc<dyn Service>,
     manager: SessionManager,
     drivers: wasit_core::DriverRegistry,
+    node: &Node,
 ) -> Result<(Arc<dyn Service>, Hub), String> {
     let store = Store::open(o.data.join("store"))
         .await
@@ -302,6 +304,7 @@ async fn start_hub(
         automatic: vec![Arc::new(WaslMcp), Arc::new(AskUserMcp)],
         workstreams,
         git,
+        spawn_lock: tokio::sync::Mutex::new(()),
     };
     let mut top = ServiceMux::new();
     top.register(
@@ -314,7 +317,15 @@ async fn start_hub(
     )
     .and_then(|_| top.register(HUB_ROUTES.iter().copied(), Arc::new(svc)))
     .map_err(|e| e.to_string())?;
-    Ok((Arc::new(top), hub))
+    let top: Arc<dyn Service> = Arc::new(top);
+    // The hub is the spawn authority: its node (and, through it, every other host's node)
+    // asks the hub's `workstreams.spawn.*` methods.
+    node.set_spawn_authority(Arc::new(crate::hub::spawn::HubSpawner::new(loopback(
+        top.clone(),
+        build,
+        host_id,
+    ))));
+    Ok((top, hub))
 }
 
 /// An in-process supervised connection to the hub's routing service: the workstream actor

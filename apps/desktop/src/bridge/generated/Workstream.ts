@@ -2,6 +2,7 @@
 import type { HostId } from "./HostId";
 import type { Limits } from "./Limits";
 import type { NodePosition } from "./NodePosition";
+import type { SpawnSettings } from "./SpawnSettings";
 import type { WorkstreamEdge } from "./WorkstreamEdge";
 import type { WorkstreamNode } from "./WorkstreamNode";
 import type { WorkstreamState } from "./WorkstreamState";
@@ -18,6 +19,10 @@ schema: number, name: string, description?: string, state: WorkstreamState, node
  * Max depth, default task deadline, optional budget.
  */
 limits: Limits, 
+/**
+ * Whether and how its agents may spawn workers.
+ */
+spawn: SpawnSettings, 
 /**
  * Graph positions by node id.
  */

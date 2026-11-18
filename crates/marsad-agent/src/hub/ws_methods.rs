@@ -36,6 +36,7 @@ impl HubServices {
         ws.nodes = d.nodes;
         ws.edges = d.edges;
         ws.limits = d.limits;
+        ws.spawn = d.spawn;
         ws.layout = d.layout;
         // Sessions are recorded by launch / add_node only.
         for n in &mut ws.nodes {
@@ -61,6 +62,7 @@ impl HubServices {
                     w.description = new.description;
                     w.edges = new.edges;
                     w.limits = new.limits;
+                    w.spawn = new.spawn;
                     w.layout = new.layout;
                     w.nodes = new.nodes;
                     for n in &mut w.nodes {
@@ -73,6 +75,20 @@ impl HubServices {
     }
 
     pub(super) async fn ws_set_state(
+        &self,
+        ctx: &CallContext,
+        id: &str,
+        to: WorkstreamState,
+    ) -> Result<Workstream, MarsadError> {
+        let ws = self.ws_set_state_doc(id, to).await?;
+        if to == WorkstreamState::Archived {
+            // Agents spawned in it are stopped (kept, not deleted).
+            self.stop_spawned(ctx, &ws).await;
+        }
+        Ok(ws)
+    }
+
+    async fn ws_set_state_doc(
         &self,
         id: &str,
         to: WorkstreamState,
@@ -335,6 +351,7 @@ impl HubServices {
         req.mode = spec.mode.clone();
         req.labels = spec.labels.clone();
         req.resume = spec.resume.clone();
+        req.id = spec.session_id.clone();
         req.labels.insert(LABEL_WORKSTREAM.into(), ws.to_string());
         req.labels.insert(LABEL_NODE.into(), node.to_string());
         // The node's overrides are its stored `workstream_node` layer.

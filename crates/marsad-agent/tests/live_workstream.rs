@@ -34,6 +34,8 @@ fn node(id: &str, driver: &str, model: &str, cwd: &std::path::Path) -> Workstrea
         description: format!("a {driver} agent"),
         session: None,
         launch: Some(l),
+        spawned_by: None,
+        spawn_request: None,
     }
 }
 

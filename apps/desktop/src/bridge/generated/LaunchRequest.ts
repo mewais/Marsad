@@ -3,6 +3,7 @@ import type { DriverId } from "./DriverId";
 import type { HostId } from "./HostId";
 import type { OverrideLayer } from "./OverrideLayer";
 import type { ResumeRequest } from "./ResumeRequest";
+import type { SessionId } from "./SessionId";
 import type { WorkstreamNodeRef } from "./WorkstreamNodeRef";
 
 /**
@@ -12,4 +13,9 @@ export type LaunchRequest = { host?: HostId | null, driver: DriverId, cwd?: stri
 /**
  * The session's own layer; stored under `LayerScope::Session` once created.
  */
-overrides: OverrideLayer, };
+overrides: OverrideLayer, 
+/**
+ * Launch under this session id; if a session with it already exists on the host, the
+ * launch returns it instead of starting another (idempotent launches).
+ */
+id?: SessionId | null, };

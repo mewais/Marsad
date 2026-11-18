@@ -58,4 +58,44 @@ instruction: string,
 /**
  * Extra structured context (peer names, hop count, …).
  */
+details?: JsonValue, choices: Array<GateChoice>, } | { "gate_type": "spawn", request_id: string, 
+/**
+ * The agent asking (display name).
+ */
+from: string, 
+/**
+ * Name of the new agent.
+ */
+name: string, 
+/**
+ * What the new agent is for, in the asking agent's words.
+ */
+role: string, 
+/**
+ * Where it would run (host display name).
+ */
+host: string, 
+/**
+ * Which agent CLI (display name).
+ */
+driver: string, model?: string | null, 
+/**
+ * Working directory on that host.
+ */
+cwd: string, mode?: string | null, 
+/**
+ * The first task it would be given, if any.
+ */
+instruction?: string | null, 
+/**
+ * The workstream it joins (display name).
+ */
+workstream: string, 
+/**
+ * The asking session is in no workstream: approving creates `workstream`.
+ */
+new_workstream: boolean, 
+/**
+ * Extra structured context (ids, limits, …).
+ */
 details?: JsonValue, choices: Array<GateChoice>, };

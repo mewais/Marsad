@@ -528,6 +528,10 @@ pub struct LaunchRequest {
     /// The session's own layer; stored under `LayerScope::Session` once created.
     #[serde(default)]
     pub overrides: OverrideLayer,
+    /// Launch under this session id; if a session with it already exists on the host, the
+    /// launch returns it instead of starting another (idempotent launches).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<SessionId>,
 }
 
 impl LaunchRequest {
@@ -543,6 +547,7 @@ impl LaunchRequest {
             labels: BTreeMap::new(),
             workstream: None,
             overrides: OverrideLayer::default(),
+            id: None,
         }
     }
 }

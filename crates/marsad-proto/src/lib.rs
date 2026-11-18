@@ -210,6 +210,12 @@ pub mod methods {
     pub const WS_TEMPLATES_LIST: &str = "workstreams.templates.list";
     pub const WS_TEMPLATES_DELETE: &str = "workstreams.templates.delete";
     pub const WS_HISTORY: &str = "workstreams.history";
+    /// The spawn authority (internal: the hub's Wasl node calls these; see
+    /// `wasl_proto::spawn`).
+    pub const WS_SPAWN_PLAN: &str = "workstreams.spawn.plan";
+    pub const WS_SPAWN_LAUNCH: &str = "workstreams.spawn.launch";
+    pub const WS_SPAWN_DISMISS: &str = "workstreams.spawn.dismiss";
+    pub const WS_SPAWNABLE: &str = "workstreams.spawn.spawnable";
 }
 
 /// Topic names.
@@ -292,6 +298,23 @@ pub enum MarsadError {
     /// The object changed since the caller read it (`expected_revision` did not match).
     #[error("conflict: {message}")]
     Conflict { message: String },
+    /// A spawn request the hub refuses (policy, limits, not the caller's worker); the
+    /// message is for the asking agent.
+    #[error("{message}")]
+    Spawn { code: SpawnError, message: String },
+}
+
+/// Why the hub refused a spawn request (as the Wasl error codes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum SpawnError {
+    /// The policy ("never"), the host, the driver or the request itself.
+    Refused,
+    /// A limit: count, depth, budget.
+    Limit,
+    /// The agent named was not spawned by the caller.
+    NotSpawnedByCaller,
 }
 
 impl MarsadError {
@@ -309,6 +332,11 @@ impl MarsadError {
             MarsadError::Upstream { .. } => codes::UPSTREAM,
             MarsadError::Store { .. } => codes::STORE,
             MarsadError::Conflict { .. } => codes::CONFLICT,
+            MarsadError::Spawn { code, .. } => match code {
+                SpawnError::Refused => wasl_proto::codes::SPAWN_REFUSED,
+                SpawnError::Limit => wasl_proto::codes::SPAWN_LIMIT,
+                SpawnError::NotSpawnedByCaller => wasl_proto::codes::NOT_SPAWNED_BY_CALLER,
+            },
         }
     }
 

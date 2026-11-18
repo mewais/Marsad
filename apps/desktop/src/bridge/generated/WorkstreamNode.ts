@@ -22,4 +22,12 @@ session?: NodeSession | null,
 /**
  * How to launch it (absent for a node added from an existing session).
  */
-launch?: NodeLaunch | null, };
+launch?: NodeLaunch | null, 
+/**
+ * The node whose agent spawned this one (`spawn_agent`).
+ */
+spawned_by?: string | null, 
+/**
+ * The spawn request that created it (idempotency key of the launch).
+ */
+spawn_request?: string | null, };

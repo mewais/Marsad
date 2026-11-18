@@ -84,6 +84,8 @@ fn node(dir: &Path, id: &str, host: Option<&HostId>, sc: &Scenario) -> Workstrea
         description: format!("the {id}"),
         session: None,
         launch: Some(l),
+        spawned_by: None,
+        spawn_request: None,
     }
 }
 
@@ -516,6 +518,8 @@ async fn live_join_blocked_pause_history_and_templates() {
             description: String::new(),
             session: Some(solo_ref.clone()),
             launch: None,
+            spawned_by: None,
+            spawn_request: None,
         },
         position: None,
     })

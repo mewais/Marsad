@@ -68,6 +68,10 @@ pub struct NodeLaunch {
     /// This node's config override layer (between the host and the session layer).
     #[serde(default, skip_serializing_if = "OverrideLayer::is_empty")]
     pub overrides: OverrideLayer,
+    /// The session id to launch it under (chosen in advance for spawned agents, so a launch
+    /// repeated after a hub restart finds the session instead of starting a second one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
 }
 
 impl NodeLaunch {
@@ -82,6 +86,7 @@ impl NodeLaunch {
             labels: BTreeMap::new(),
             resume: ResumeRequest::New,
             overrides: OverrideLayer::default(),
+            session_id: None,
         }
     }
 }
@@ -117,6 +122,87 @@ pub struct WorkstreamNode {
     /// How to launch it (absent for a node added from an existing session).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch: Option<NodeLaunch>,
+    /// The node whose agent spawned this one (`spawn_agent`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawned_by: Option<String>,
+    /// The spawn request that created it (idempotency key of the launch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawn_request: Option<String>,
+}
+
+impl WorkstreamNode {
+    /// A node launched from `launch`.
+    pub fn launched(id: impl Into<String>, name: impl Into<String>, launch: NodeLaunch) -> Self {
+        WorkstreamNode {
+            id: id.into(),
+            name: name.into(),
+            role: String::new(),
+            description: String::new(),
+            session: None,
+            launch: Some(launch),
+            spawned_by: None,
+            spawn_request: None,
+        }
+    }
+}
+
+/// Whether agents in a workstream may start workers (`spawn_agent`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum SpawnPolicy {
+    /// Every spawn raises a gate on the asking session.
+    #[default]
+    Ask,
+    /// Spawns within the limits go through without a gate.
+    AlwaysAllow,
+    /// Agents are told spawning is not allowed.
+    Never,
+}
+
+/// Spawning rules of a workstream (enforced by the hub).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SpawnSettings {
+    #[serde(default)]
+    pub policy: SpawnPolicy,
+    /// "Always allow" also covers handoffs to spawned agents: their connections are created
+    /// as `always_allow` instead of `ask`. Only with `policy: always_allow`.
+    #[serde(default)]
+    pub handoffs_always_allow: bool,
+    /// Most spawned agents the workstream may have (default 8).
+    #[serde(default = "default_max_spawned")]
+    pub max_agents: u32,
+    /// Most generations: an agent spawned by a spawned agent is depth 2 (default 2).
+    #[serde(default = "default_spawn_depth")]
+    pub max_depth: u32,
+    /// Hosts spawned agents may run on besides the asking agent's own host.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_hosts: Vec<HostId>,
+    /// Drivers that may be spawned (empty = any installed one).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_drivers: Vec<DriverId>,
+}
+
+fn default_max_spawned() -> u32 {
+    8
+}
+
+fn default_spawn_depth() -> u32 {
+    2
+}
+
+impl Default for SpawnSettings {
+    fn default() -> Self {
+        SpawnSettings {
+            policy: SpawnPolicy::Ask,
+            handoffs_always_allow: false,
+            max_agents: default_max_spawned(),
+            max_depth: default_spawn_depth(),
+            allowed_hosts: Vec::new(),
+            allowed_drivers: Vec::new(),
+        }
+    }
 }
 
 /// A directed connection: `from` may delegate to `to` (node ids).
@@ -153,6 +239,9 @@ pub struct Workstream {
     pub edges: Vec<WorkstreamEdge>,
     /// Max depth, default task deadline, optional budget.
     pub limits: Limits,
+    /// Whether and how its agents may spawn workers.
+    #[serde(default)]
+    pub spawn: SpawnSettings,
     /// Graph positions by node id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub layout: BTreeMap<String, NodePosition>,
@@ -183,6 +272,7 @@ impl Workstream {
             nodes: Vec::new(),
             edges: Vec::new(),
             limits: Limits::default(),
+            spawn: SpawnSettings::default(),
             layout: BTreeMap::new(),
             topology_version: 0,
             topology_hosts: Vec::new(),
@@ -199,6 +289,34 @@ impl Workstream {
 
     pub fn edge(&self, from: &str, to: &str) -> Option<&WorkstreamEdge> {
         self.edges.iter().find(|e| e.from == from && e.to == to)
+    }
+
+    /// The node that is session `s`.
+    pub fn node_of(&self, host: &HostId, session: &SessionId) -> Option<&WorkstreamNode> {
+        self.nodes.iter().find(|n| {
+            n.session
+                .as_ref()
+                .is_some_and(|x| x.host == *host && x.session == *session)
+        })
+    }
+
+    /// Generation of a node: 0 unless spawned, else its spawner's + 1.
+    pub fn spawn_depth(&self, node: &str) -> u32 {
+        let mut depth = 0;
+        let mut cur = self.node(node);
+        while let Some(parent) = cur.and_then(|n| n.spawned_by.as_deref()) {
+            depth += 1;
+            if depth > 64 {
+                break;
+            }
+            cur = self.node(parent);
+        }
+        depth
+    }
+
+    /// Number of spawned nodes.
+    pub fn spawned_count(&self) -> u32 {
+        self.nodes.iter().filter(|n| n.spawned_by.is_some()).count() as u32
     }
 }
 
@@ -239,11 +357,13 @@ pub struct WorkstreamDraft {
     #[serde(default)]
     pub limits: Limits,
     #[serde(default)]
+    pub spawn: SpawnSettings,
+    #[serde(default)]
     pub layout: BTreeMap<String, NodePosition>,
 }
 
 /// `workstreams.update`: replace the editable parts (name, description, nodes, edges,
-/// limits, layout). State, versions and node sessions already recorded by the hub are kept
+/// limits, spawn settings, layout). State, versions and node sessions already recorded by the hub are kept
 /// as the hub knows them (a node's `session` can only be set by launch / `add_node`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -425,6 +545,20 @@ pub struct HandoffGateView {
     pub gate: GateRequest,
 }
 
+/// A spawn gate waiting for the human on one of the workstream's sessions (answer it with
+/// `session.command` / `answer_gate`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SpawnGateView {
+    /// The asking node.
+    pub node: String,
+    pub host: HostId,
+    pub session: SessionId,
+    pub raised_at_ms: u64,
+    /// Always a `GateRequest::Spawn`.
+    pub gate: GateRequest,
+}
+
 /// One connection with what is moving over it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -474,6 +608,9 @@ pub struct WorkstreamView {
     pub edges: Vec<EdgeView>,
     pub sync: Vec<TopologySync>,
     pub cost: WorkstreamCost,
+    /// Spawn gates waiting on its sessions.
+    #[serde(default)]
+    pub pending_spawns: Vec<SpawnGateView>,
 }
 
 /// Payload of the `workstreams` topic. Apply in order; `reset` replaces everything.

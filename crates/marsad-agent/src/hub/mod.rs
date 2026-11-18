@@ -7,6 +7,7 @@ pub mod gitwatch;
 pub mod hosts;
 pub mod provision;
 pub mod ring;
+pub mod spawn;
 pub mod transport;
 pub mod workstreams;
 mod ws_methods;
@@ -127,6 +128,8 @@ pub struct HubServices {
     pub automatic: Vec<Arc<dyn AutomaticItems>>,
     pub workstreams: workstreams::Workstreams,
     pub git: gitwatch::GitWatch,
+    /// Serialises spawn launches (a retried launch must find the first one's node).
+    pub spawn_lock: tokio::sync::Mutex<()>,
 }
 
 impl HubServices {
@@ -240,8 +243,29 @@ impl HubServices {
         r: LaunchRequest,
     ) -> Result<LaunchReply, MarsadError> {
         let host = self.host_of(r.host.clone())?;
+        if let Some(snap) = self.existing_launch(ctx, &host, &r).await {
+            // Launched before under this id (a repeated launch after a hub restart).
+            let eff = self
+                .effective(
+                    ctx,
+                    &host,
+                    &r.driver,
+                    r.cwd.clone(),
+                    r.workstream.clone(),
+                    &snap.id,
+                    true,
+                    None,
+                )
+                .await?;
+            return Ok(LaunchReply {
+                host,
+                id: snap.id,
+                effective: eff,
+                unsupported: Vec::new(),
+            });
+        }
         // The id is chosen here so the session layer can be stored under it.
-        let id = SessionId::random();
+        let id = r.id.clone().unwrap_or_else(SessionId::random);
         let eff = self
             .effective(
                 ctx,
@@ -440,6 +464,22 @@ impl HubServices {
                     projects: self.store.add_recent(r).await?,
                 }))
             }
+            methods::WS_SPAWN_PLAN => {
+                let a: wasl_proto::SpawnAsk = params(p).map_err(dec)?;
+                enc(ok(self.spawn_plan(ctx, a).await?))
+            }
+            methods::WS_SPAWN_LAUNCH => {
+                let l: wasl_proto::SpawnLaunch = params(p).map_err(dec)?;
+                enc(ok(self.spawn_launch(ctx, l).await?))
+            }
+            methods::WS_SPAWN_DISMISS => {
+                let d: wasl_proto::DismissAsk = params(p).map_err(dec)?;
+                enc(ok(self.spawn_dismiss(ctx, d).await?))
+            }
+            methods::WS_SPAWNABLE => {
+                let a: wasl_proto::SpawnableAsk = params(p).map_err(dec)?;
+                enc(ok(self.spawnable(ctx, a).await?))
+            }
             methods::WS_LIST => enc(ok(WorkstreamList {
                 workstreams: self.workstreams.list().await?,
             })),
@@ -491,7 +531,7 @@ impl HubServices {
                     methods::WS_RESUME => WorkstreamState::Running,
                     _ => WorkstreamState::Archived,
                 };
-                enc(ok(self.ws_set_state(&r.id, to).await?))
+                enc(ok(self.ws_set_state(ctx, &r.id, to).await?))
             }
             methods::WS_SAVE_TEMPLATE => {
                 let s: SaveTemplate = params(p).map_err(dec)?;

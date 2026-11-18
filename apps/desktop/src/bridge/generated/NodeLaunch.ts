@@ -3,6 +3,7 @@ import type { DriverId } from "./DriverId";
 import type { HostId } from "./HostId";
 import type { OverrideLayer } from "./OverrideLayer";
 import type { ResumeRequest } from "./ResumeRequest";
+import type { SessionId } from "./SessionId";
 
 /**
  * How to launch a node that has no session yet.
@@ -24,4 +25,9 @@ resume?: ResumeRequest,
 /**
  * This node's config override layer (between the host and the session layer).
  */
-overrides?: OverrideLayer, };
+overrides?: OverrideLayer, 
+/**
+ * The session id to launch it under (chosen in advance for spawned agents, so a launch
+ * repeated after a hub restart finds the session instead of starting a second one).
+ */
+session_id?: SessionId | null, };
