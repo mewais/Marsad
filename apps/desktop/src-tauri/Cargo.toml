@@ -3,7 +3,7 @@ name = "marsad-desktop"
 version = "0.2.0"
 edition = "2021"
 authors = ["Mohammad Ewais <mohammad.a.ewais@gmail.com>"]
-license = "MIT"
+license = "Apache-2.0"
 repository = "https://github.com/mewais/Marsad"
 description = "Marsad desktop: a thin Tauri shell — generic rpc/subscribe bridges to the local Marsad daemon (the hub), notifications, tray, single instance"
 # Standalone package (built with Tauri's runner or plain cargo), not a workspace member. Local
