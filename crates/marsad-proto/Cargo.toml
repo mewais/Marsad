@@ -1,0 +1,24 @@
+[package]
+name = "marsad-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Marsad wire types: method/topic names and payloads of every Marsad daemon service, re-exported Wasit wire types, and the pure effective-config computation"
+
+[features]
+# TypeScript definitions for GUI clients (`cargo run -p marsad-proto --features ts --bin marsad-ts-export -- <dir>`).
+ts = ["dep:ts-rs", "wasit-core/ts", "wasit-control/ts", "wasit-runtime/ts"]
+
+[[bin]]
+name = "marsad-ts-export"
+path = "src/bin/marsad-ts-export.rs"
+required-features = ["ts"]
+
+[dependencies]
+wasit-core = { workspace = true }
+wasit-control = { workspace = true }
+wasit-runtime = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+ts-rs = { workspace = true, optional = true }

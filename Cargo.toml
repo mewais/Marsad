@@ -1,79 +1,44 @@
 [workspace]
 resolver = "2"
-# Nested independent projects (their own git repos + their own cargo workspaces);
-# excluded so this workspace never tries to absorb them. Marsad depends on their
-# crates by path (see [workspace.dependencies] / per-crate Cargo.toml).
-exclude = ["Wasl", "Wasit"]
 members = [
     "crates/marsad-proto",
-    "crates/marsad-events",
-    "crates/marsad-gates",
-    "crates/marsad-diff",
-    "crates/marsad-format",
     "crates/marsad-store",
-    "crates/marsad-hosts",
-    "crates/marsad-transport",
-    "crates/marsad-wasl",
-    "crates/marsad-wasl-session",
-    "crates/marsad-lifecycle",
-    "crates/marsad-notify",
-    "crates/marsad-workstream",
-    "crates/marsad-viewmodel",
-    "crates/marsad-core",
     "crates/marsad-agent",
-    "tests/integration/i01_stream_to_vm",
-    "tests/integration/i02_gate_roundtrip",
-    "tests/integration/i03_lifecycle_real",
-    "tests/integration/i04_persistence",
-    "tests/integration/i05_notify",
-    "tests/integration/i06_hosts_ssh",
-    "tests/integration/i07_core_facade",
-    "tests/integration/i08_workspace_export_import",
-    "tests/integration/i09_gui_agent_live",
-    "tests/integration/i10_core_e2e_live",
-    "crates/marsad-winshim",
-    "tests/integration/i11_windows_lifecycle",
-    "tests/integration/x6_wasl_live",
-    "tests/integration/i12_codex_live",
-    "tests/integration/i13_remote_codex_live",
-    "tests/integration/i14_opencode_live",
-    "tests/integration/i15_remote_wasl_live",
-    "tests/integration/i16_wasl_a2a_live",
-    "tests/integration/i17_wasl_managed_live",
+    "crates/marsad-client",
 ]
-# apps/desktop/src-tauri is intentionally NOT a workspace member: Tauri apps build
-# with their own profile/runner. It depends on marsad-core by path. See its own Cargo.toml.
+# The Tauri shell builds on its own (and is rewritten next); it is not part of this workspace.
+exclude = ["apps/desktop/src-tauri"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-rust-version = "1.78"
-authors = ["Mohammad Ewais <mohammad.a.ewais@gmail.com>"]
+rust-version = "1.85"
 license = "MIT"
 repository = "https://github.com/mewais/Marsad"
 
 [workspace.dependencies]
-# Shared third-party deps. Crate authors pull these via `dep.workspace = true`.
+# Wasit (driver + session-runtime library), pinned by branch. Local development overrides
+# these with the sibling checkout through an untracked `.cargo/config.toml` (see README).
+wasit-core = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
+wasit-control = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
+wasit-runtime = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
+wasit-shim = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
+wasit-fake-cli = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
+
+marsad-proto = { path = "crates/marsad-proto" }
+marsad-store = { path = "crates/marsad-store" }
+marsad-client = { path = "crates/marsad-client" }
+
+tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
-# Internal crates (path deps) — referenced the same way from any member.
-marsad-proto = { path = "crates/marsad-proto" }
-marsad-events = { path = "crates/marsad-events" }
-marsad-gates = { path = "crates/marsad-gates" }
-marsad-diff = { path = "crates/marsad-diff" }
-marsad-format = { path = "crates/marsad-format" }
-marsad-store = { path = "crates/marsad-store" }
-marsad-hosts = { path = "crates/marsad-hosts" }
-marsad-transport = { path = "crates/marsad-transport" }
-marsad-wasl = { path = "crates/marsad-wasl" }
-marsad-wasl-session = { path = "crates/marsad-wasl-session" }
-marsad-lifecycle = { path = "crates/marsad-lifecycle" }
-marsad-notify = { path = "crates/marsad-notify" }
-marsad-workstream = { path = "crates/marsad-workstream" }
-marsad-viewmodel = { path = "crates/marsad-viewmodel" }
-marsad-core = { path = "crates/marsad-core" }
-marsad-agent = { path = "crates/marsad-agent" }
+async-trait = "0.1"
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+fastrand = "2"
+ts-rs = { version = "12", features = ["serde-json-impl", "no-serde-warnings"] }
 
 [profile.release]
 lto = true

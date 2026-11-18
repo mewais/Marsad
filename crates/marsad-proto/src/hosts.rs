@@ -1,0 +1,195 @@
+//! `hosts.*` (hub): the machines sessions run on, and their link states.
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+use wasit_control::{HostId, LinkState};
+
+/// How the hub reaches a host: "a command whose stdio is the link".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HostKind {
+    /// The hub's own machine.
+    Local,
+    /// OpenSSH (`ssh` with `BatchMode=yes` and keepalives; Unix and Windows OpenSSH servers).
+    Ssh {
+        /// `~/.ssh/config` alias or `user@host`.
+        target: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        identity_file: Option<String>,
+        /// Extra `-o` options, e.g. `ProxyJump=bastion`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<String>,
+    },
+    /// A WSL distro (only from a Windows hub), via `wsl.exe -d <distro>`.
+    Wsl { distro: String },
+}
+
+/// What a host's daemon runs on, as found by the last provisioning probe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct HostPlatform {
+    /// `linux`, `macos`, `windows`.
+    pub os: String,
+    pub arch: String,
+    pub target: String,
+}
+
+/// A host the hub knows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct HostEntry {
+    pub id: HostId,
+    pub name: String,
+    pub kind: HostKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<HostPlatform>,
+    pub created_at_ms: u64,
+}
+
+/// `hosts.add`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct HostDraft {
+    pub name: String,
+    pub kind: HostKind,
+    /// Requested id (`None` = derived from the name). Must be unique.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<HostId>,
+}
+
+/// Names one host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct HostRef {
+    pub id: HostId,
+}
+
+/// Result of `hosts.list` (the local host first).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct HostList {
+    pub hosts: Vec<HostEntry>,
+}
+
+/// One `Host` block of `~/.ssh/config` that can become a host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SshConfigHost {
+    pub alias: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_file: Option<String>,
+    /// A host with this alias as its ssh target is already configured.
+    pub already_added: bool,
+}
+
+/// Result of `hosts.import_suggestions`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ImportSuggestions {
+    pub hosts: Vec<SshConfigHost>,
+    /// The file that was read (absent = none found).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// Payload of `hosts.links`: every remote host's link state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct LinkStates {
+    pub states: BTreeMap<HostId, LinkState>,
+}
+
+/// Parse `~/.ssh/config` text: `Host` blocks with `HostName`, `User`, `Port`, `IdentityFile`.
+/// Patterns (`*`, `?`, `!`) are not hosts and are skipped; `Match` blocks are skipped.
+pub fn parse_ssh_config(text: &str) -> Vec<SshConfigHost> {
+    let mut out: Vec<SshConfigHost> = Vec::new();
+    let mut current: Vec<usize> = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (kw, val) = match line.split_once(|c: char| c.is_whitespace() || c == '=') {
+            Some((k, v)) => (k.to_ascii_lowercase(), v.trim().trim_start_matches('=').trim()),
+            None => continue,
+        };
+        let val = val.trim_matches('"');
+        match kw.as_str() {
+            "host" => {
+                current.clear();
+                for alias in val.split_whitespace() {
+                    if alias.contains(['*', '?', '!']) {
+                        continue;
+                    }
+                    current.push(out.len());
+                    out.push(SshConfigHost {
+                        alias: alias.to_string(),
+                        hostname: None,
+                        user: None,
+                        port: None,
+                        identity_file: None,
+                        already_added: false,
+                    });
+                }
+            }
+            "match" => current.clear(),
+            "hostname" | "user" | "port" | "identityfile" => {
+                for &i in &current {
+                    let h = &mut out[i];
+                    match kw.as_str() {
+                        "hostname" => h.hostname = h.hostname.clone().or(Some(val.to_string())),
+                        "user" => h.user = h.user.clone().or(Some(val.to_string())),
+                        "port" => h.port = h.port.or(val.parse().ok()),
+                        _ => {
+                            h.identity_file = h.identity_file.clone().or(Some(val.to_string()))
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_config_blocks() {
+        let text = "\
+# comment
+Host *
+  ServerAliveInterval 30
+Host box dev-box
+  HostName 10.0.0.5
+  User me
+  Port 2222
+  IdentityFile ~/.ssh/id_box
+Host *.internal !x
+  User nobody
+Match host foo
+  User ignored
+Host=eqhost
+  HostName=eq.example
+";
+        let h = parse_ssh_config(text);
+        let aliases: Vec<&str> = h.iter().map(|h| h.alias.as_str()).collect();
+        assert_eq!(aliases, ["box", "dev-box", "eqhost"]);
+        assert_eq!(h[0].hostname.as_deref(), Some("10.0.0.5"));
+        assert_eq!(h[1].port, Some(2222));
+        assert_eq!(h[1].identity_file.as_deref(), Some("~/.ssh/id_box"));
+        assert_eq!(h[2].hostname.as_deref(), Some("eq.example"));
+    }
+}
