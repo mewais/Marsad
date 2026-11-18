@@ -34,11 +34,12 @@ describe("Session view", () => {
     expect(screen.getByText(/Plan · 3 of 6/i)).toBeInTheDocument();
   });
 
-  it("other tabs are honest placeholders", async () => {
+  it("terminal tab is honest when the backend has no terminals", async () => {
     const user = userEvent.setup();
     await open("docs-search-index");
-    await user.click(screen.getByRole("tab", { name: "Changes" }));
-    expect(await screen.findByText("Changes is not built yet")).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Terminal" }));
+    expect(await screen.findByText("Terminal not available")).toBeInTheDocument();
+    expect(screen.getByText(/demo backend has none/)).toBeInTheDocument();
   });
 
   it("composer: slash menu comes from the snapshot, mode and model pickers too, and sending fires a prompt", async () => {

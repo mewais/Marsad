@@ -52,6 +52,9 @@ describe("session slices", () => {
         </RouterProvider>
       </AppProvider>,
     );
+    // Rows fetch their own git status once; let that settle first.
+    await waitFor(() => expect(app.store.get().git[a.key] !== undefined && app.store.get().git[b.key] !== undefined).toBe(true));
+    await act(async () => new Promise((r) => setTimeout(r, 10)));
     const ra = renderCounts.get(`row:${a.key}`)!;
     const rb = renderCounts.get(`row:${b.key}`)!;
     // The host publishes a new snapshot for b only.

@@ -1,7 +1,7 @@
-import { memo } from "react";
+import { memo, useEffect } from "react";
 import { agoShort, money } from "../../lib/format";
 import { Button, DriverBadge, HostChip, ConnState, Icon, StatusPill } from "../../ui";
-import { linkView, useDriver, useHost, useRenderProbe, useSessionView } from "../../state";
+import { linkView, useActions, useDriver, useHost, useRenderProbe, useSessionView } from "../../state";
 import { Gate } from "../gates/Gate";
 import { DoneActions, FailedActions, NewDot, WorkstreamTag } from "../common/SessionBits";
 import type { SessionKey } from "../../bridge/wire";
@@ -19,6 +19,9 @@ export const InboxRow = memo(function InboxRow({ sessionKey, selected, onSelect,
   const v = useSessionView(sessionKey);
   const host = useHost(v?.host ?? "");
   const drv = useDriver(v?.driver ?? "");
+  const actions = useActions();
+  // Branch and diffstat are not in the snapshot: ask git once the row is on screen.
+  useEffect(() => actions.ensureGit(sessionKey), [actions, sessionKey]);
   if (!v) return null;
   const needs = v.status === "needs";
   const gate = needs ? v.gates[0] : undefined;

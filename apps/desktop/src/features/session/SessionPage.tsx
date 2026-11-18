@@ -8,7 +8,12 @@ import { Gate } from "../gates/Gate";
 import { Composer } from "./Composer";
 import { TranscriptItem } from "./TranscriptView";
 import { buildItems } from "./transcript";
+import { ChangesTab } from "./tabs/ChangesTab";
+import { ConfigTab } from "./tabs/ConfigTab";
+import { TerminalTab } from "./tabs/TerminalTab";
+import { UsageTab } from "./tabs/UsageTab";
 import "./session.css";
+import "./tabs/tabs.css";
 
 const TABS = [
   { id: "activity", label: "Activity" },
@@ -39,6 +44,7 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 
+  useEffect(() => actions.ensureGit(key), [actions, key]);
   // Looking at a finished session counts as seeing it.
   useEffect(() => {
     if (selectView(store.get(), key)?.status === "done") actions.markSeen([key]);
@@ -96,10 +102,8 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
         <Tabs tabs={TABS} value={tab} label="Session sections" onChange={(t) => nav(sessionPath(host, id, t))} />
       </div>
       {tab !== "activity" ? (
-        <div className="placeholder">
-          <EmptyState icon="layers" title={`${TABS.find((t) => t.id === tab)?.label ?? tab} is not built yet`}>
-            This tab arrives in a later round. The Activity tab shows the live transcript, gates and composer.
-          </EmptyState>
+        <div className="tabbody" role="tabpanel" aria-label={TABS.find((t) => t.id === tab)?.label}>
+          {tab === "changes" ? <ChangesTab sessionKey={key} /> : tab === "config" ? <ConfigTab sessionKey={key} snap={snap} /> : tab === "usage" ? <UsageTab sessionKey={key} snap={snap} /> : <TerminalTab key={key} sessionKey={key} />}
         </div>
       ) : (
         <div className="sd-body">

@@ -67,15 +67,21 @@ export function sessionName(s: SessionSnapshot): string {
   return s.title?.trim() || s.id;
 }
 
+const statCache = new WeakMap<GitStatus, SessionView["stat"]>();
+/** Files and lines changed, stable per `GitStatus` object (rows compare views shallowly). */
 export function diffStat(g: GitStatus | null | undefined): SessionView["stat"] {
   if (!g || !g.files.length) return null;
+  const hit = statCache.get(g);
+  if (hit !== undefined) return hit;
   let added = 0;
   let removed = 0;
   for (const f of g.files) {
     added += f.staged_added + f.unstaged_added;
     removed += f.staged_removed + f.unstaged_removed;
   }
-  return { files: g.files.length, added, removed };
+  const st = { files: g.files.length, added, removed };
+  statCache.set(g, st);
+  return st;
 }
 
 export function buildView(host: HostId, s: SessionSnapshot, mark: SeenMark | undefined, git: GitStatus | null | undefined, workstream: string): SessionView {
