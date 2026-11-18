@@ -78,5 +78,15 @@ export function toolArg(input: unknown): string {
 
 export function resultText(r: unknown): string {
   if (r == null) return "";
-  return typeof r === "string" ? r : JSON.stringify(r, null, 2);
+  if (typeof r === "string") return r;
+  // ACP tool content: [{type: "content", content: {type: "text", text}}, …] — show the text.
+  if (Array.isArray(r)) {
+    const texts = r.map((c) => {
+      const inner = (c as { content?: { text?: unknown }; text?: unknown })?.content ?? c;
+      const t = (inner as { text?: unknown })?.text;
+      return typeof t === "string" ? t : null;
+    });
+    if (texts.length && texts.every((t) => t !== null)) return texts.join("\n");
+  }
+  return JSON.stringify(r, null, 2);
 }

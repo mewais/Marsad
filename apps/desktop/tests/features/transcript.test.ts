@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildItems, toolArg } from "../../src/features/session/transcript";
+import { buildItems, resultText, toolArg } from "../../src/features/session/transcript";
 import type { SessionEvent } from "../../src/bridge/wire";
 
 const ev = (cursor: number, event: unknown): SessionEvent => ({ cursor, t: cursor, kind: "agent", event } as unknown as SessionEvent);
@@ -13,5 +13,10 @@ describe("transcript", () => {
     ]);
     const tool = items.find((i) => i.kind === "tool");
     expect(tool && tool.kind === "tool" && toolArg(tool.input)).toBe("ls -la");
+  });
+
+  it("shows the text of ACP tool content", () => {
+    expect(resultText([{ type: "content", content: { type: "text", text: "(no output)" } }])).toBe("(no output)");
+    expect(resultText({ a: 1 })).toContain('"a": 1');
   });
 });

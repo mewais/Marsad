@@ -266,7 +266,12 @@ async fn start_hub(
         id: local_id.clone(),
         name: host_id.to_string(),
         kind: HostKind::Local,
-        platform: None,
+        // This machine's platform is known without probing.
+        platform: Some(marsad_proto::hosts::HostPlatform {
+            os: std::env::consts::OS.to_string(),
+            arch: std::env::consts::ARCH.to_string(),
+            target: crate::version::target().to_string(),
+        }),
         created_at_ms: 0,
         interactive_auth: false,
     };

@@ -61,7 +61,7 @@ export function HostDetail({ host }: { host: HostView }) {
           {k?.kind === "ssh" ? <><dt>Key</dt><dd className="mono">{k.identity_file ?? "ssh default"}</dd>{k.options?.length ? <><dt>Options</dt><dd className="mono">{k.options.join(" ")}</dd></> : null}</> : null}
           <dt>Platform</dt><dd className="mono">{entry?.platform?.target ?? "not probed yet"}</dd>
           <dt>Status</dt><dd>{linkSub(host.link, now)}</dd>
-          <dt>Sign-in</dt><dd>{host.interactiveAuth ? "Interactive (asks each time)" : host.local ? "Not needed" : "Key or agent"}</dd>
+          <dt>Sign-in</dt><dd>{host.interactiveAuth || host.authPrompt ? "Interactive (asks each time)" : host.local ? "Not needed" : "Key or agent"}</dd>
         </dl>
       </div>
       <div>

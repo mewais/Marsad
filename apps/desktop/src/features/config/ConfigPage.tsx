@@ -157,7 +157,7 @@ export function ConfigPage({ q }: { q: Record<string, string> }) {
             <span className="faint small">{nItems} items · {nActive} active · {nUns} not applied</span>
           </div>
           <div className="eff-b">
-            <div className="note"><Icon name="lock" size="sm" /><span>{drvName}'s own config files are never modified, and sessions you start in a terminal keep their normal setup. Switches below edit the <b>{sel.label}</b> layer. The one thing Marsad adds by itself is the Wasl connector, and only for sessions in a workstream.</span></div>
+            <div className="note"><Icon name="lock" size="sm" /><span>{drvName}'s own config files are never modified, and sessions you start in a terminal keep their normal setup. Switches below edit the <b>{sel.label}</b> layer. Marsad adds two things by itself: the Wasl connector (so an agent can delegate once a workstream connects it) and, for agents that cannot ask you questions themselves, the ask_user tool.</span></div>
             {effErr ? <div className="c-failed small" role="alert">{effErr}</div> : !eff ? <div className="fl-pad"><Skeleton /><Skeleton width="80%" /><Skeleton width="60%" /></div> : <EffectiveTable eff={eff} driverName={drvName} filter={filter} onToggle={onToggle} busy={saving || !selLayer} />}
             {eff?.ignored.length ? <div className="note">{eff.ignored.map((i) => <span key={`${i.item.kind}${i.item.name}`}>{i.item.name}: {i.reason}</span>)}</div> : null}
             {eff?.unsupported.map((u) => <div key={u.item} className="note"><Icon name="minus" size="sm" /><span><b>{u.item}</b>: {u.reason}</span></div>)}

@@ -47,8 +47,8 @@ export const InboxRow = memo(function InboxRow({ sessionKey, selected, onSelect,
           ) : null}
         </div>
         <div className="pb">
-          <span className="p">{v.project}</span>
-          <span className="b"><Icon name="branch" size="xs" /> {v.branch}</span>
+          <span className="p">{v.project || <span className="faint">no folder</span>}</span>
+          {v.branch ? <span className="b"><Icon name="branch" size="xs" /> {v.branch}</span> : null}
         </div>
         <div className="ago r">{agoShort(v.lastMs)}</div>
         <div className="cost r">{money(v.cost)}</div>
