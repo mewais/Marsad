@@ -21,10 +21,14 @@ export interface SelectProps {
   /** Render the closed control compactly as a composer "pick" chip. */
   compact?: boolean;
   leading?: React.ReactNode;
+  /** Class of the closed button (e.g. "chip" for toolbar filters). */
+  buttonClass?: string;
+  /** Text shown in the closed button instead of the selected label. */
+  display?: string;
 }
 
 /** Select / combobox: button opens a listbox; typing filters; Up/Down/Enter/Esc. */
-export function Select({ label, value, options, onChange, placeholder = "Selectâ€¦", searchable, className = "", up, compact, leading }: SelectProps) {
+export function Select({ label, value, options, onChange, placeholder = "Selectâ€¦", searchable, className = "", up, compact, leading, buttonClass, display }: SelectProps) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -83,7 +87,7 @@ export function Select({ label, value, options, onChange, placeholder = "Selectâ
       <button
         ref={btn}
         type="button"
-        className={compact ? "pick" : "selbox"}
+        className={buttonClass ?? (compact ? "pick" : "selbox")}
         aria-label={`${label}: ${current?.label ?? placeholder}`}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -97,7 +101,7 @@ export function Select({ label, value, options, onChange, placeholder = "Selectâ
         }}
       >
         {leading}
-        <span>{current?.label ?? placeholder}</span>
+        <span>{display ?? current?.label ?? placeholder}</span>
         <Icon name="chev" size={compact ? "xs" : "sm"} />
       </button>
       {open ? (

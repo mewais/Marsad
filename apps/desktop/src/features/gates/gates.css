@@ -50,3 +50,14 @@
 .qopt.on .rad{border-color:var(--accent);background:radial-gradient(circle,var(--accent) 0 3.5px,transparent 4px)}
 .qopt .d{font-size:12px;color:var(--fg-2)}
 .qopt .k{margin-left:auto}
+.hop{display:grid;grid-template-columns:1fr 60px 1fr;align-items:center;gap:8px}
+.hop .end{border:1px solid var(--line-2);border-radius:var(--r3);padding:10px 12px;display:flex;flex-direction:column;gap:4px;background:var(--win)}
+.hop>.i{justify-self:center}
+.payload{border:1px solid var(--line);border-radius:var(--r3);background:var(--sunken);padding:10px 12px;font-size:12.5px;display:flex;flex-direction:column;gap:6px}
+.gate-inline .opt,.opts .opt{cursor:pointer}
+.opt input.other{border:0;border-bottom:1px solid var(--line-2);background:transparent;outline:0;font-size:12px;color:var(--fg);width:150px;padding:1px 2px}
+.opt input.other::placeholder{color:var(--fg-3)}
+.opt input.other:focus-visible{outline:none;border-bottom-color:var(--accent)}
+.qopt .optother input{width:100%;min-width:260px}
+.qopt input.other{border:0;border-bottom:1px solid var(--line-2);background:transparent;outline:0;font-size:12px;color:var(--fg);width:100%;padding:1px 2px}
+.gate .acts .btn.lg{min-height:28px}
