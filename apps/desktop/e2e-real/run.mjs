@@ -1271,7 +1271,11 @@ try {
     spawnSync("pkill", ["-f", `/home/${otp.user}/`], { stdio: "ignore" });
     spawnSync("userdel", ["-r", otp.user], { stdio: "ignore" });
   }
-  if (sshd.pwUser) spawnSync("userdel", ["-r", sshd.pwUser], { stdio: "ignore" });
+  if (sshd.pwUser) {
+    // Its remote daemon runs as that user (under its home): stop it, or userdel refuses.
+    spawnSync("pkill", ["-f", `/home/${sshd.pwUser}/`], { stdio: "ignore" });
+    spawnSync("userdel", ["-r", sshd.pwUser], { stdio: "ignore" });
+  }
   spawnSync(bin.agent, ["stop", "--data", dirs.data], { stdio: "ignore" });
   // Sessions outlive the daemon by design (their shims hold them); end this run's ones.
   spawnSync("pkill", ["-f", `${dirs.data}/sessions`], { stdio: "ignore" });
