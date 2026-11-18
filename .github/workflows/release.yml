@@ -176,6 +176,11 @@ jobs:
             done
           fi
           ls -l dist-installers
+      - name: Installed layout has every helper where the app looks for it
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in Linux) os=linux;; Windows) os=windows;; macOS) os=macos;; esac
+          scripts/check-bundle-layout.sh dist-installers "$os"
       - uses: actions/upload-artifact@v4
         with:
           name: bundle-${{ matrix.target }}
