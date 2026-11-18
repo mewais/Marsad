@@ -29,8 +29,10 @@ struct Pending {
 struct State {
     next_id: u64,
     pending: HashMap<HostId, Pending>,
-    /// Prompts asked in the current connect attempt of each host.
-    attempts: HashMap<HostId, u32>,
+    /// Prompts asked in the current connect attempt of each host, in order (a repeated
+    /// prompt means the previous answer was wrong; a different one is the next step, e.g. a
+    /// one-time code after the password).
+    attempts: HashMap<HostId, Vec<String>>,
     /// Hosts whose current attempt was cancelled (further prompts fail at once).
     cancelled: HashSet<HostId>,
     armed: HashSet<HostId>,
@@ -66,7 +68,10 @@ impl Prompts {
 
     /// Prompts asked in the current attempt.
     pub fn asked(&self, host: &HostId) -> u32 {
-        lock(&self.state).attempts.get(host).copied().unwrap_or(0)
+        lock(&self.state)
+            .attempts
+            .get(host)
+            .map_or(0, |v| v.len() as u32)
     }
 
     /// Allow one connect attempt of an interactive host.
@@ -96,9 +101,9 @@ impl Prompts {
             }
             s.next_id += 1;
             let attempt = {
-                let a = s.attempts.entry(host.clone()).or_insert(0);
-                *a += 1;
-                *a
+                let asked = s.attempts.entry(host.clone()).or_default();
+                asked.push(text.clone());
+                asked.iter().filter(|t| **t == text).count() as u32
             };
             let prompt = AuthPrompt {
                 id: s.next_id,

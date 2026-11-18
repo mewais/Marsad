@@ -70,7 +70,7 @@ export function buildItems(events: SessionEvent[]): Item[] {
 export function toolArg(input: unknown): string {
   if (!input || typeof input !== "object") return input == null ? "" : String(input);
   const o = input as Record<string, unknown>;
-  for (const k of ["command", "file_path", "path", "pattern", "description", "url", "query"]) {
+  for (const k of ["command", "file_path", "path", "pattern", "question", "instruction", "description", "url", "query"]) {
     if (typeof o[k] === "string") return k === "pattern" && typeof o.path === "string" ? `"${o[k]}" in ${o.path}` : (o[k] as string);
   }
   return JSON.stringify(input).slice(0, 120);

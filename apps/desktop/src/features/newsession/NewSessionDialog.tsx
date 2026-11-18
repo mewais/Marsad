@@ -33,7 +33,9 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
   const nav = useNavigate();
   const settings = useAppState((s) => s.settings);
   const allSessions = useAppState((s) => s.sessions);
-  const firstUp = hosts.find((h) => linkView(h.link, h.authPrompt).connected)?.id ?? "";
+  // This machine first, else the first connected host.
+  const up = (h: (typeof hosts)[number]) => linkView(h.link, h.authPrompt).connected;
+  const firstUp = (hosts.find((h) => h.local && up(h)) ?? hosts.find(up))?.id ?? "";
   const [f, setF] = useState<NewSessionForm>(() => blank(firstUp));
   const [recent, setRecent] = useState<RecentProject[]>([]);
   const [q, setQ] = useState("");

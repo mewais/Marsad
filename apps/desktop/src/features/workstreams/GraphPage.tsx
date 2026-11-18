@@ -28,7 +28,9 @@ export function GraphPage({ id }: { id: string }) {
   const lanesFor = useMemo(() => {
     if (!v) return [];
     const used = new Set(v.nodes.map((n) => n.host));
-    return hosts.filter((h) => used.has(h.id) || (design && h.link.link === "local") || (design && linkView(h.link, h.authPrompt).connected) || (design && h.link.link === "remote" && h.link.state.state === "reconnecting")).map((h) => h.id);
+    return hosts.filter((h) => used.has(h.id) || (design && h.link.link === "local") || (design && linkView(h.link, h.authPrompt).connected) || (design && h.link.link === "remote" && h.link.state.state === "reconnecting")).map((h) => h.id)
+      // Lanes with agents first; empty ones (somewhere to add an agent) below them.
+      .sort((a, b) => Number(used.has(b)) - Number(used.has(a)));
   }, [v, hosts, design]);
 
   useShortcut({ id: "ws-review", keys: ["r"], title: "Review the waiting handoff", group: "Workstream", when: () => !!v?.edges.some((e) => e.pending_gates.length), run: () => { const e = v!.edges.find((x) => x.pending_gates.length)!; setSel({ kind: "edge", from: e.from, to: e.to }); } });

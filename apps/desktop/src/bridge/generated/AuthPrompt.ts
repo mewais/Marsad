@@ -11,7 +11,8 @@ export type AuthPrompt = { id: number, host: HostId,
  */
 prompt: string, kind: PromptKind, 
 /**
- * 1 for the first prompt of a connect attempt, 2 after a wrong answer, …
+ * 1 the first time this prompt is asked in a connect attempt, 2 when it comes again
+ * (the answer was wrong), … A different prompt (a second factor) starts at 1.
  */
 attempt: number, 
 /**

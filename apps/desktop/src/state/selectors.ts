@@ -93,6 +93,10 @@ export function selectCounts(s: AppState): Counts {
   return c;
 }
 
-export const selectHosts = (s: AppState): HostView[] => s.hostOrder.filter((id) => s.hosts[id]).map((id) => hostView(s.hosts[id]));
+/** Hosts in fleet order, this machine first. */
+export const selectHosts = (s: AppState): HostView[] => {
+  const v = s.hostOrder.filter((id) => s.hosts[id]).map((id) => hostView(s.hosts[id]));
+  return [...v.filter((h) => h.local), ...v.filter((h) => !h.local)];
+};
 export const selectHost = (s: AppState, id: HostId): HostView | undefined => (s.hosts[id] ? hostView(s.hosts[id]) : undefined);
 export const sessionsOnHost = (s: AppState, id: HostId): SessionKey[] => Object.keys(s.sessions).filter((k) => k.startsWith(id + "/"));

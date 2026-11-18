@@ -106,7 +106,8 @@ pub struct AuthPrompt {
     /// The prompt exactly as ssh printed it.
     pub prompt: String,
     pub kind: PromptKind,
-    /// 1 for the first prompt of a connect attempt, 2 after a wrong answer, …
+    /// 1 the first time this prompt is asked in a connect attempt, 2 when it comes again
+    /// (the answer was wrong), … A different prompt (a second factor) starts at 1.
     pub attempt: u32,
     /// When the prompt gives up (ms since the Unix epoch); the link then goes `auth_needed`.
     pub expires_at_ms: u64,
