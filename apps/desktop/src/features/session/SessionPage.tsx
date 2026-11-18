@@ -59,7 +59,7 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
     return (
       <div className="placeholder">
         {loaded ? <EmptyState icon="inbox" title="Session not found" action={<Button size="sm" onClick={() => nav("/inbox")}>Back to the Inbox</Button>}>It may have been deleted, or it lives on a host that has not reported yet.</EmptyState>
-          : <div style={{ width: 320, display: "grid", gap: 10 }}><Skeleton width="60%" height={18} /><Skeleton /><Skeleton width="80%" /></div>}
+          : <div className="skelbox"><Skeleton width="60%" height={18} /><Skeleton /><Skeleton width="80%" /></div>}
       </div>
     );
   }
@@ -80,12 +80,12 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
           <Icon name="chevr" size="xs" />
           <span>{v.project}</span>
           <Icon name="chevr" size="xs" />
-          <span style={{ color: "var(--fg)" }} aria-current="page">{v.name}</span>
+          <span className="fg" aria-current="page">{v.name}</span>
         </nav>
         <div className="sd-title">
           <h1 className="h1">{v.name}</h1>
           <StatusPill status={v.status} label={pillLabel} />
-          <span style={{ flex: 1 }} />
+          <span className="flex1" />
           <Button size="sm" icon="pause" disabled={!live || !snap.capabilities.interrupt} onClick={() => void actions.stop(key)}>Interrupt</Button>
           <Button size="sm" icon="stop" disabled={snap.phase.state === "exited"} onClick={() => void actions.stopSession(key)}>Stop</Button>
         </div>

@@ -26,7 +26,7 @@ function Tool({ item }: { item: Extract<Item, { kind: "tool" }> }) {
   const first = resultText(item.result).split("\n")[0].slice(0, 60);
   return (
     <div className="tool">
-      <button type="button" className="tool-h" style={{ width: "100%", background: "none", border: 0, textAlign: "left" }} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button type="button" className="tool-h plainbtn wfull" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         <Icon name={icon} size="sm" className={tone} spin={!item.done} />
         <span className="nm">{item.name}</span>
         <span className="arg">{toolArg(item.input)}</span>
@@ -46,7 +46,7 @@ function Subagent({ item }: { item: Extract<Item, { kind: "tool" }> }) {
         <Icon name="sub" size="sm" />
         <b>Subagent · {i.subagent_type ?? item.name}</b>
         <span className="muted">“{i.description ?? toolArg(item.input)}”</span>
-        <span style={{ flex: 1 }} />
+        <span className="flex1" />
         <StatusPill status={item.done ? (item.ok === false ? "failed" : "done") : "working"} label={item.done ? (item.ok === false ? "Failed" : "Finished") : "Running"} />
       </div>
       {item.done && typeof item.result === "string" ? <Markdown text={item.result} /> : null}
@@ -58,12 +58,12 @@ function Thinking({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   return (
     <div>
-      <button type="button" className="think" aria-expanded={open} onClick={() => setOpen((o) => !o)} style={{ background: "none", border: 0, padding: 0 }}>
+      <button type="button" className="think plainbtn" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         <Icon name={open ? "chev" : "chevr"} size="xs" />
         <Icon name="sparkle" size="xs" />
         Thinking
       </button>
-      {open ? <div className="faint" style={{ margin: "6px 0 0 18px", fontSize: 12.5, whiteSpace: "pre-wrap" }}>{text}</div> : null}
+      {open ? <div className="faint subopen">{text}</div> : null}
     </div>
   );
 }
@@ -84,6 +84,6 @@ export const TranscriptItem = memo(function TranscriptItem({ item, driver }: { i
     case "tool":
       return item.subagent ? <Subagent item={item} /> : <Tool item={item} />;
     case "notice":
-      return <div className={item.tone === "err" ? "c-failed" : "faint"} style={{ fontSize: 12 }} role={item.tone === "err" ? "alert" : undefined}>{item.text}</div>;
+      return <div className={`fs12 ${item.tone === "err" ? "c-failed" : "faint"}`} role={item.tone === "err" ? "alert" : undefined}>{item.text}</div>;
   }
 });

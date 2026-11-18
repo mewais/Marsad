@@ -68,7 +68,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   let last = "";
   return (
     <Dialog open={open} onClose={onClose} title="Command palette" bare className="palette" initialFocus={input}>
-      <div className="input" style={{ marginBottom: 6 }}>
+      <div className="input mb6">
         <Icon name="search" size="sm" />
         <input
           ref={input}
@@ -88,12 +88,12 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         <Kbd>Esc</Kbd>
       </div>
       <div id="pal-list" className="pal-list" role="listbox" aria-label="Results">
-        {items.length === 0 ? <div className="faint" style={{ padding: 10 }}>No matches</div> : null}
+        {items.length === 0 ? <div className="faint pad10">No matches</div> : null}
         {items.map((it, i) => {
           const head = it.section !== last ? <div key={`h-${it.section}`} className="pal-sec" role="presentation">{it.section}</div> : null;
           last = it.section;
           return (
-            <div key={it.id} style={{ display: "contents" }}>
+            <div key={it.id} className="contents">
               {head}
               <div id={`pal-${it.id}`} role="option" aria-selected={i === active} className="pal-it" onMouseEnter={() => setActive(i)} onClick={() => choose(it)}>
                 <Icon name={it.icon} size="sm" />

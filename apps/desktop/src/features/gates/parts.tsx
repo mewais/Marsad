@@ -54,7 +54,7 @@ export function ChoiceButtons({ choices, busy, onChoose, keys, size = "sm" }: Ch
         </Button>
       ))}
       {busy ? (
-        <span className="faint" role="status" style={{ fontSize: 11.5 }}>
+        <span className="faint fs115" role="status">
           <Icon name="working" size="xs" spin /> Sending…
         </span>
       ) : null}

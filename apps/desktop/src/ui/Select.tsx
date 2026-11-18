@@ -114,8 +114,8 @@ export function Select({ label, value, options, onChange, placeholder = "Selectâ
               aria-expanded="true"
               aria-controls={id}
               aria-activedescendant={shown[active] ? `${id}-${active}` : undefined}
-              className="input"
-              style={{ width: "100%", marginBottom: 4, padding: "0 10px", background: "var(--sunken)", border: "1px solid var(--line-2)", borderRadius: 6 }}
+              className="input combo-filter"
+             
               value={q}
               placeholder="Filterâ€¦"
               onChange={(e) => {
@@ -125,7 +125,7 @@ export function Select({ label, value, options, onChange, placeholder = "Selectâ
             />
           ) : null}
           <div id={id} role="listbox" aria-label={label} tabIndex={canSearch ? -1 : 0} ref={(el) => (!canSearch && el ? el.focus() : undefined)}>
-            {shown.length === 0 ? <div className="faint" style={{ padding: 8 }}>No matches</div> : null}
+            {shown.length === 0 ? <div className="faint pad8">No matches</div> : null}
             {shown.map((o, i) => (
               <div
                 key={o.value}
@@ -136,7 +136,7 @@ export function Select({ label, value, options, onChange, placeholder = "Selectâ
                 onMouseEnter={() => setActive(i)}
                 onClick={() => choose(o)}
               >
-                {o.value === value ? <Icon name="check" size="xs" /> : <span style={{ width: 12 }} />}
+                {o.value === value ? <Icon name="check" size="xs" /> : <span className="w12" />}
                 <span>{o.label}</span>
                 {o.description ? <span className="d">{o.description}</span> : null}
               </div>

@@ -52,7 +52,7 @@ export function Tabs({ tabs, value, onChange, label, children, className = "" }:
         ))}
       </div>
       {children !== undefined ? (
-        <div id={`${base}-p`} role="tabpanel" aria-labelledby={`${base}-t-${value}`} style={{ display: "contents" }}>
+        <div id={`${base}-p`} role="tabpanel" aria-labelledby={`${base}-t-${value}`} className="contents">
           {children}
         </div>
       ) : null}

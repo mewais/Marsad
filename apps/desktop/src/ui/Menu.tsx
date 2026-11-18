@@ -50,7 +50,7 @@ function MenuList({ label, items, close }: { label: string; items: MenuItem[]; c
     }
   };
   return (
-    <div ref={ref} role="menu" aria-label={label} style={{ display: "contents" }} onKeyDown={onKeyDown}>
+    <div ref={ref} role="menu" aria-label={label} className="contents" onKeyDown={onKeyDown}>
       {items.map((it) => (
         <button
           key={it.id}

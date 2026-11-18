@@ -23,7 +23,7 @@ export function Icon({ name, size = "md", spin, className, title }: IconProps) {
 /** Render once near the root; every <Icon> references its symbols. */
 export function IconSprite() {
   return (
-    <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true" focusable="false">
+    <svg width="0" height="0" className="abs0" aria-hidden="true" focusable="false">
       <defs>
         {(Object.keys(ICON_PATHS) as IconName[]).map((n) => (
           <symbol key={n} id={`i-${n}`} viewBox="0 0 24 24" dangerouslySetInnerHTML={{ __html: ICON_PATHS[n] }} />

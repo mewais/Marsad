@@ -41,7 +41,7 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
   const keys = active;
   const src = <SourceCaption source={g.set.source} driver={view.driver} />;
   const detailBox = details && gate.gate_type === "permission" ? (
-    <div className="code-inline" style={{ whiteSpace: "pre-wrap", display: "block", padding: "6px 8px" }} data-testid="gate-details">
+    <div className="code-inline code-block" data-testid="gate-details">
       {gate.cwd ? `in ${gate.cwd}\n` : ""}{gate.explanation ?? ""}
       {gate.raw_input ? `\n${JSON.stringify(gate.raw_input)}` : ""}
     </div>
@@ -87,9 +87,9 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
             <Icon name={isPlan ? "list" : "shield"} size="sm" />
             {isPlan ? "Plan waiting for approval" : `Permission needed · ${gate.tool_name}`}
             <span className="sp" />
-            <span className="faint" style={{ fontWeight: 500 }}>asked {agoLong(pg.raised_at_ms)}</span>
+            <span className="faint fw5">asked {agoLong(pg.raised_at_ms)}</span>
           </div>
-          {isPlan ? <div className="q" style={{ whiteSpace: "pre-wrap" }}>{gate.summary}</div> : <div className="cmd">{gate.command}</div>}
+          {isPlan ? <div className="q prewrap">{gate.summary}</div> : <div className="cmd">{gate.command}</div>}
           {!isPlan && gate.explanation ? (
             <div className="risk">
               <Icon name="warn" size="sm" className="c-needs" />

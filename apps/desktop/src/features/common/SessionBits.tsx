@@ -15,7 +15,7 @@ export const NewDot = () => <span className="newdot" title="Not seen yet" role="
 
 export function DiffStat({ stat }: { stat: NonNullable<SessionView["stat"]> }) {
   return (
-    <span className="stat mono" style={{ fontSize: 11.5 }}>
+    <span className="stat mono fs115">
       {stat.files} files <span className="add">+{stat.added}</span> <span className="del">−{stat.removed}</span>
     </span>
   );

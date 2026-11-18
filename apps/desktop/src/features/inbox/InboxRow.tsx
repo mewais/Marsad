@@ -33,7 +33,7 @@ export const InboxRow = memo(function InboxRow({ sessionKey, selected, onSelect,
         <div className="sn">
           <div className="t">
             {v.unseen ? <NewDot /> : null}
-            <button type="button" className="nm" style={{ all: "unset", cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} onClick={(e) => { e.stopPropagation(); onOpen(v.key); }}>
+            <button type="button" className="nm unsetbtn" onClick={(e) => { e.stopPropagation(); onOpen(v.key); }}>
               {v.name}
             </button>
             {v.workstream ? <WorkstreamTag name={v.workstream} /> : null}
@@ -41,7 +41,7 @@ export const InboxRow = memo(function InboxRow({ sessionKey, selected, onSelect,
           {needs ? null : <div className={`s${v.status === "failed" ? " err" : ""}`}>{v.line}</div>}
         </div>
         <div>{drv ? <DriverBadge driver={drv} /> : v.driver}</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+        <div className="col1">
           {host ? (
             <>
               <HostChip host={host} />

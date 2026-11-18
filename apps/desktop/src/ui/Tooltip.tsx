@@ -11,7 +11,7 @@ export function Tooltip({ text, children }: TooltipProps) {
   const [open, setOpen] = useState(false);
   return (
     <span
-      style={{ position: "relative", display: "inline-flex" }}
+      className="relwrap"
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
       onFocus={() => setOpen(true)}

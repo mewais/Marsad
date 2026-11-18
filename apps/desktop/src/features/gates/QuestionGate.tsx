@@ -80,12 +80,12 @@ export function QuestionGate({ view, pg, density, active, expanded, onActivate }
       <div className="gate-inline" data-gate="question">
         {keys}
         {q.qs.map((qq, qi) => (
-          <div key={qi} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div key={qi} className="col8">
             <div className="gq">
               <Icon name="needs" />
               <div>
                 <b>{qq.question}</b>
-                {qq.header ? <div className="faint" style={{ fontSize: 11.5 }}>{qq.header}{qq.multi_select ? " · choose any" : ""}</div> : null}
+                {qq.header ? <div className="faint fs115">{qq.header}{qq.multi_select ? " · choose any" : ""}</div> : null}
               </div>
             </div>
             <div className="opts" role={qq.multi_select ? "group" : "radiogroup"} aria-label={qq.question}>
@@ -123,10 +123,10 @@ export function QuestionGate({ view, pg, density, active, expanded, onActivate }
         <Icon name="needs" size="sm" />
         Question from {d?.displayName ?? "the agent"}
         <span className="sp" />
-        <span className="faint" style={{ fontWeight: 500 }}>asked {agoLong(pg.raised_at_ms)}</span>
+        <span className="faint fw5">asked {agoLong(pg.raised_at_ms)}</span>
       </div>
       {q.qs.map((qq, qi) => (
-        <div key={qi} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div key={qi} className="col10">
           <div className="q">{qq.question}</div>
           <div className="qopts" role={qq.multi_select ? "group" : "radiogroup"} aria-label={qq.question}>
             {(qq.options ?? []).map((o, i) => {
@@ -144,9 +144,9 @@ export function QuestionGate({ view, pg, density, active, expanded, onActivate }
             })}
             <div className={`qopt ${q.st.otherOn[qi] ? "on" : ""}`} onClick={() => otherRefs.current[qi]?.focus()}>
               <span className="rad" />
-              <div style={{ flex: 1 }}>
+              <div className="flex1">
                 <div>Other</div>
-                <div className="optother" style={{ marginTop: 3 }}>{otherInput(qi, "other")}</div>
+                <div className="optother mt3">{otherInput(qi, "other")}</div>
               </div>
               {qi === 0 ? <span className="k"><Kbd>{String((qq.options?.length ?? 0) + 1)}</Kbd></span> : null}
             </div>

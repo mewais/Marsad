@@ -73,15 +73,21 @@ export function arrange(input: LayoutInput, placed: Record<string, Pt>): Laid {
   }
   const rects = Object.values(nodes);
   const edges: Laid["edges"] = {};
-  const pairCount = new Map<string, number>();
+  // Spread the ports of a node's edges along its side so parallel edges do not share a line.
+  const outs = new Map<string, string[]>(), ins = new Map<string, string[]>();
+  for (const e of input.edges) {
+    outs.set(e.from, [...(outs.get(e.from) ?? []), e.id]);
+    ins.set(e.to, [...(ins.get(e.to) ?? []), e.id]);
+  }
+  const frac = (list: string[] | undefined, id: string) => (list && list.length > 1 ? 0.25 + (0.5 * list.indexOf(id)) / (list.length - 1) : 0.5);
+  const labels: Pt[] = [];
   for (const e of input.edges) {
     const a = nodes[e.from], b = nodes[e.to];
     if (!a || !b) continue;
-    const pair = [e.from, e.to].sort().join("|");
-    const k = pairCount.get(pair) ?? 0;
-    pairCount.set(pair, k + 1);
-    const points = route(a, b, rects, k ? 0.3 : 0.5);
-    edges[e.id] = { points, label: labelAt(points) };
+    const points = route(a, b, rects, frac(outs.get(e.from), e.id), frac(ins.get(e.to), e.id));
+    const label = labelAt(points, labels);
+    labels.push(label);
+    edges[e.id] = { points, label };
   }
   const width = Math.max(980, ...rects.map((r) => r.x + r.w + 60));
   return { width, height: Math.max(y, 300), lanes, nodes, edges };

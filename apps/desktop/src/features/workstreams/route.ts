@@ -44,9 +44,9 @@ function sides(a: Rect, b: Rect): [Side, Side] {
   return b.x >= a.x ? ["right", "left"] : ["left", "right"];
 }
 
-export function route(src: Rect, dst: Rect, obstacles: Rect[], frac = 0.5): Pt[] {
+export function route(src: Rect, dst: Rect, obstacles: Rect[], frac = 0.5, dstFrac = 0.5): Pt[] {
   const [s1, s2] = sides(src, dst);
-  const a = port(src, s1, frac), b = port(dst, s2, 1 - frac);
+  const a = port(src, s1, frac), b = port(dst, s2, dstFrac);
   const blocks = obstacles.map((r) => inflate(r, M - 2));
   const xs = new Set<number>([a.out.x, b.out.x]);
   const ys = new Set<number>([a.out.y, b.out.y]);
@@ -109,11 +109,13 @@ function simplify(p: Pt[]): Pt[] {
 export const pathD = (p: Pt[]) => p.map((q, i) => `${i ? "L" : "M"}${Math.round(q.x)} ${Math.round(q.y)}`).join(" ");
 
 /** Where to put an edge's label: the middle of its longest horizontal run (they lie in the gaps between rows), else its longest segment. */
-export function labelAt(p: Pt[]): Pt {
+export function labelAt(p: Pt[], taken: Pt[] = []): Pt {
   let best = 0, at = { x: p[0].x, y: p[0].y };
+  const clash = (q: Pt) => taken.some((t) => Math.abs(t.x - q.x) < 140 && Math.abs(t.y - q.y) < 24);
   for (const horizontalOnly of [true, false]) {
     for (let i = 1; i < p.length; i++) {
       if (horizontalOnly && p[i].y !== p[i - 1].y) continue;
+      if (clash({ x: (p[i].x + p[i - 1].x) / 2, y: (p[i].y + p[i - 1].y) / 2 })) continue;
       const l = Math.abs(p[i].x - p[i - 1].x) + Math.abs(p[i].y - p[i - 1].y);
       if (l > best) { best = l; at = { x: (p[i].x + p[i - 1].x) / 2, y: (p[i].y + p[i - 1].y) / 2 }; }
     }

@@ -57,7 +57,7 @@ export function Popover({ trigger, children, haspopup = "dialog", className = ""
   }, [open, close, set]);
 
   return (
-    <div ref={wrap} style={{ position: "relative", display: "inline-flex" }}>
+    <div ref={wrap} className="relwrap">
       {trigger({
         open,
         props: {

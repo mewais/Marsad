@@ -33,7 +33,7 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
       <div className="composer">
         {slash && snap.slash_commands.length ? (
           <div className="slash" role="listbox" aria-label="Slash commands">
-            {items.length === 0 ? <div className="faint" style={{ padding: 8 }}>No command starts with “{text}”</div> : null}
+            {items.length === 0 ? <div className="faint pad8">No command starts with “{text}”</div> : null}
             {items.map((c, i) => (
               <div key={c.name} role="option" aria-selected={i === active} className={`it ${i === active ? "on" : ""}`} onMouseDown={(e) => { e.preventDefault(); pick(c.name); }}>
                 <b>/{c.name}</b>
@@ -70,7 +70,7 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
               onChange={(v) => void actions.command(sessionKey, { command: "set_model", model: v }, { failTitle: "Could not change the model" })} />
           ) : null}
           <span className="sp" />
-          <span className="faint" style={{ fontSize: 11.5 }}><Kbd>Enter</Kbd> send · <Kbd>⇧ Enter</Kbd> new line</span>
+          <span className="faint fs115"><Kbd>Enter</Kbd> send · <Kbd>⇧ Enter</Kbd> new line</span>
           <Button variant="primary" size="sm" icon="send" pending={sending} disabled={!text.trim()} onClick={() => void submit()}>Send</Button>
         </div>
       </div>
