@@ -82,7 +82,12 @@ reply?: string | null, } | { "type": "assistant_delta", text: string, message_id
 /**
  * The call starts a subagent (claude `Task`/`Agent`, ACP `task`).
  */
-is_subagent: boolean, subagent_model?: string | null, } | { "type": "tool_call_updated", call_id: string, name: string, content?: Array<JsonValue>, status?: string | null, } | { "type": "tool_call_finished", call_id: string, name: string, ok: boolean, result?: JsonValue | null, } | { "type": "gate_requested", gate: GateRequest, } | { "type": "gate_resolved", request_id: string, } | { "type": "usage_update", usage: Usage, 
+is_subagent: boolean, subagent_model?: string | null, } | { "type": "tool_call_updated", call_id: string, name: string, content?: Array<JsonValue>, status?: string | null, 
+/**
+ * The call's complete input when it arrives after the start (ACP agents announce a
+ * call first and send its arguments in an update); replaces the started input.
+ */
+input?: JsonValue | null, } | { "type": "tool_call_finished", call_id: string, name: string, ok: boolean, result?: JsonValue | null, } | { "type": "gate_requested", gate: GateRequest, } | { "type": "gate_resolved", request_id: string, } | { "type": "usage_update", usage: Usage, 
 /**
  * Context window fill in percent, when derivable.
  */

@@ -38,7 +38,11 @@ export function buildItems(events: SessionEvent[]): Item[] {
           break;
         case "tool_call_updated": {
           const t = out[tools.get(a.call_id) ?? -1];
-          if (t?.kind === "tool") t.status = a.status ?? undefined;
+          if (t?.kind === "tool") {
+            t.status = a.status ?? undefined;
+            // ACP agents send the arguments after announcing the call.
+            if (a.input != null) t.input = a.input;
+          }
           break;
         }
         case "tool_call_finished": {

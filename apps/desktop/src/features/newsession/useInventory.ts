@@ -32,5 +32,13 @@ export function useInventory(host: HostId, project: string, enabled = true): { d
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, host, project, key, enabled, tick]);
   const fresh = r?.key === key;
-  return { drivers: fresh && r.drivers.length ? r.drivers : live ?? [], loading: !fresh, error: fresh ? r.error : "" };
+  // A folder's entry starts out unresolved (`installed: false` while its probes run): until
+  // then the host-wide entry answers whether the CLI is installed and what it offers.
+  const drivers = fresh && r.drivers.length
+    ? r.drivers.map((d) => {
+        const host = d.refreshing && !d.installed ? live?.find((l) => l.driver === d.driver) : undefined;
+        return host ? { ...host, sessions: d.sessions, refreshing: true } : d;
+      })
+    : live ?? [];
+  return { drivers, loading: !fresh, error: fresh ? r.error : "" };
 }
