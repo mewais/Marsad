@@ -16,7 +16,8 @@ control protocol). See [ARCHITECTURE.md](ARCHITECTURE.md).
 * `crates/marsad-store` — hub persistence
 * `crates/marsad-agent` — the daemon binary (`marsad-agent`)
 * `crates/marsad-client` — typed client used by the desktop shell
-* `apps/desktop` — Tauri + React desktop app (built separately; being rebuilt)
+* `apps/desktop` — the desktop app: React UI (`src/`) and a thin Tauri v2 shell (`src-tauri/`,
+  built separately)
 
 ## Build
 
@@ -50,6 +51,31 @@ TypeScript definitions for the GUI (every Marsad, Wasl and Wasit wire type):
 ```sh
 cargo run -p marsad-proto --features ts --bin marsad-ts-export -- apps/desktop/src/bridge/generated
 ```
+
+## Desktop app
+
+`apps/desktop/src-tauri` is a thin shell: it starts/connects to the local hub daemon through
+`marsad-client` and gives the webview exactly four commands — `rpc(method, params, host?)`,
+`rpc_subscribe(topic, host?, from?, channel)` (events with cursors plus daemon link state;
+durable resubscription is native), `rpc_unsubscribe(id)`, `connection_state()` (also the
+`connection` event). `rpc` methods under `desktop.` are native: `desktop.open {target}`,
+`desktop.reveal {target}`, `desktop.pick_folder {title?, default_path?}`. Natively it raises OS
+notifications (needs-you / failed / finished / host lost, per the stored preferences; bringing
+the app forward afterwards sends the webview `navigate {host, session}`), shows a tray item
+with the attention count, keeps one instance and the window state.
+
+```sh
+pnpm --dir apps/desktop install && pnpm --dir apps/desktop build
+cd apps/desktop/src-tauri && cargo build --features custom-protocol   # serves ../dist
+MARSAD_AGENT_BIN=<path to marsad-agent> target/debug/marsad-desktop
+```
+
+`MARSAD_DATA` (data dir) and `MARSAD_DAEMON_ARGS` (extra `serve` options) are development
+overrides. Debug builds run an end-to-end smoke through the real bridge with
+`MARSAD_SMOKE=<report.json> MARSAD_SMOKE_SCENARIO=<fake CLI scenario> MARSAD_SMOKE_CWD=<dir>`
+(the daemon pointed at the fake CLI with `MARSAD_DAEMON_ARGS="--driver-bin claude=<wasit-fake-cli>"`):
+it subscribes to `fleet`, launches a session, prompts, answers its gate and writes the report.
+Packaging: `pnpm --dir apps/desktop bundle` (stages `marsad-agent` as the sidecar).
 
 ## Run
 

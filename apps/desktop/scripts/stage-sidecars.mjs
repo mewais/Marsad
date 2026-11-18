@@ -1,6 +1,7 @@
-// Build the agent + shim and stage them as Tauri "externalBin" sidecars so
-// `tauri build` bundles them INSIDE the installer (next to the app exe at runtime,
-// where find_agent_bin / shim_binary discover them — no separate install, no env vars).
+// Build marsad-agent (daemon + shim + mcp entry in one binary) and stage it as a Tauri
+// "externalBin" sidecar (src-tauri/tauri.bundle.conf.json) so `tauri build` bundles it next to
+// the app binary, where marsad-client finds it. Binaries for other host targets (remote hosts)
+// come from $MARSAD_AGENT_BIN_DIR/<triple>/ at runtime.
 //
 // Usage:
 //   node scripts/stage-sidecars.mjs                              # host target
@@ -27,13 +28,13 @@ const targetFlag = tIdx !== -1 ? `--target ${triple}` : "";
 const outDir = tIdx !== -1 ? join("target", triple, "release") : join("target", "release");
 
 console.log(`[stage-sidecars] target=${triple} cargo="${cargo}"`);
-execSync(`${cargo} --release ${targetFlag} -p marsad-agent -p marsad-winshim`, {
+execSync(`${cargo} --release ${targetFlag} -p marsad-agent`, {
   cwd: repoRoot,
   stdio: "inherit",
 });
 
 mkdirSync(binDir, { recursive: true });
-for (const name of ["marsad-agent", "marsad-winshim"]) {
+for (const name of ["marsad-agent"]) {
   const from = join(repoRoot, outDir, `${name}${exe}`);
   if (!existsSync(from)) throw new Error(`missing built binary: ${from}`);
   const to = join(binDir, `${name}-${triple}${exe}`);

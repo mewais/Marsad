@@ -1,41 +1,49 @@
 [package]
 name = "marsad-desktop"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Mohammad Ewais <mohammad.a.ewais@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/mewais/Marsad"
-description = "Marsad desktop (Tauri) — Rust bridge over marsad-core"
-# Standalone package: builds with Tauri's own runner, not part of the cargo workspace.
+description = "Marsad desktop: a thin Tauri shell — generic rpc/subscribe bridges to the local Marsad daemon (the hub), notifications, tray, single instance"
+# Standalone package (built with Tauri's runner or plain cargo), not a workspace member. Local
+# development picks up the repository's `.cargo/config.toml` patches for Wasit and Wasl.
 
 [lib]
 name = "marsad_desktop_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
+
+[[bin]]
+name = "marsad-desktop"
+path = "src/main.rs"
+
+[features]
+# Serve the built frontend (`../dist`) instead of the dev server; the Tauri CLI enables it
+# for `tauri build`, pass it to plain `cargo build` for a runnable app.
+custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-autostart = "2"
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+marsad-client = { path = "../../../crates/marsad-client" }
+marsad-proto = { path = "../../../crates/marsad-proto" }
+wasit-control = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
+tokio = { version = "1", features = ["sync", "time", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-marsad-core = { path = "../../../crates/marsad-core" }
-# The agent lib is the single source of truth for remote execution (exec prefix,
-# plink discovery); the bridge reuses it to list remote resumable sessions.
-marsad-agent = { path = "../../../crates/marsad-agent" }
-marsad-viewmodel = { path = "../../../crates/marsad-viewmodel" }
-marsad-workstream = { path = "../../../crates/marsad-workstream" }
-marsad-gates = { path = "../../../crates/marsad-gates" }
-marsad-events = { path = "../../../crates/marsad-events" }
-# Needed to name `marsad_wasl::AuditEntry` in the Wasl observation envelope arm.
-marsad-wasl = { path = "../../../crates/marsad-wasl" }
-marsad-hosts = { path = "../../../crates/marsad-hosts" }
-marsad-diff = { path = "../../../crates/marsad-diff" }
-marsad-transport = { path = "../../../crates/marsad-transport" }
-marsad-proto = { path = "../../../crates/marsad-proto" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
 
 [workspace]
-# Empty table: detaches this package from the parent workspace so `cargo tauri`
-# builds it independently with the Tauri profile.
+# Empty table: detaches this package from the parent workspace.
+
+[profile.release]
+lto = true
+strip = true

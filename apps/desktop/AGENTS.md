@@ -2,8 +2,12 @@
 
 Two blocks live here:
 
-- **D01 `src-tauri/`** (Rust, Tier L1): the Tauri bridge over `marsad-core`. Tauri commands + an
-  event bridge forwarding `marsad_core::VmUpdate`s to the UI; window/tray/notification wiring.
+- **D01 `src-tauri/`** (Rust): a thin Tauri v2 shell over `marsad-client` — exactly the generic
+  bridges `rpc`, `rpc_subscribe` (channel of `{type:"event",cursor,payload}` / `{type:"link"}` /
+  `{type:"end"}`), `rpc_unsubscribe`, `connection_state` (+ `connection` event); native extras
+  as `rpc` methods `desktop.open|reveal|pick_folder`; notifications, tray, single instance,
+  window state; the `navigate {host, session}` event after a notification brings the app
+  forward. See the Marsad README ("Desktop app").
 - **D02 `src/`** (React/TypeScript, UI tier): the desktop UI, faithful to the design.
 
 **Design source of truth:** `_extracted/design_handoff_marsad/Marsad.dc.html` — recreate the look,

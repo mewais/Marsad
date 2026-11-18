@@ -1,17 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for the main window",
+  "description": "The main window: core APIs (events, channels, window). The app's own commands (rpc, rpc_subscribe, rpc_unsubscribe, connection_state) need no permission; plugins are used from Rust only.",
   "windows": ["main"],
-  "permissions": [
-    "core:default",
-    "core:window:allow-hide",
-    "core:window:allow-show",
-    "core:window:allow-set-focus",
-    "core:window:allow-close",
-    "autostart:allow-enable",
-    "autostart:allow-disable",
-    "autostart:allow-is-enabled",
-    "notification:default"
-  ]
+  "permissions": ["core:default"]
 }
