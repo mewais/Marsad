@@ -26,7 +26,7 @@ function Row({ id }: { id: string }) {
     <div className="wsrow" role="link" tabIndex={0} data-ws={w.id} onClick={go} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), go())} aria-label={`${w.name}: ${s.parts.map((p) => p.text).join(", ")}`}>
       <span className="nm"><b><Icon name="graph" size="sm" className={w.state === "draft" ? "c-accent" : ""} />{w.name}</b><span>{w.description}</span></span>
       <span className="hm">{s.hosts.map((h) => <HostCell key={h} id={h} />)}</span>
-      <span className="tnum">{w.state === "draft" ? `${w.nodes.length} planned` : s.sessions}</span>
+      <span className="tnum">{w.state === "draft" ? `${w.nodes.length} planned` : s.sessions}{s.spawned ? <span className="faint small spawnedn" title={`${s.spawned} started by other agents`}> · {s.spawned} spawned</span> : null}</span>
       <span className="sw">{s.parts.map((p) => <span key={p.text} className={`c-${p.cls} swp`}><Icon name={p.icon} size="sm" spin={p.icon === "working"} />{p.text}</span>)}</span>
       <span className="cost r tnum">{money(s.cost)}</span>
       <span className="ago">{w.state === "draft" ? "edited " : "updated "}{agoLong(w.updated_at_ms)}</span>

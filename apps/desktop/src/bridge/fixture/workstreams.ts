@@ -1,4 +1,5 @@
 import type {
+  SpawnGateView, SpawnSettings,
   AddNode, Connect, EdgeHistoryRequest, EdgeRef, EdgeView, FromTemplate, HandoffGateView, LaunchReply, LaunchRequest, NodeRef, SaveTemplate, SessionSnapshot,
   TaskView, TemplateRef, Workstream, WorkstreamDraft, WorkstreamNode, WorkstreamRef, WorkstreamTemplate, WorkstreamUpdate, WorkstreamView, WorkstreamsEvent,
 } from "../wire";
@@ -19,16 +20,20 @@ const TERMINAL = new Set(["completed", "failed", "cancelled", "denied", "expired
 const limits = { max_depth: 4, default_deadline_secs: 1800, budget_usd: null };
 const node = (id: string, name: string, host: string, n: number | null, launch?: WorkstreamNode["launch"]): WorkstreamNode =>
   ({ id, name, role: "", description: "", session: n == null ? null : { host, session: fixtureId(n) }, launch: launch ?? null });
+export const SPAWN_DEFAULT: SpawnSettings = { policy: "ask", handoffs_always_allow: false, max_agents: 8, max_depth: 2, allowed_hosts: [], allowed_drivers: [] };
+/** The fixture's spawn scenario: the invoice orchestrator asks to start a worker. */
+export const SPAWN_REQUEST = "wasl-spawn-fx-fonts";
 
 function seedDocs(now: number): Workstream[] {
-  const base = { schema: 1, limits, topology_hosts: [], template: null, created_at_ms: now - 4 * 3_600_000 };
+  const base = { schema: 1, limits, spawn: SPAWN_DEFAULT, topology_hosts: [], template: null, created_at_ms: now - 4 * 3_600_000 };
   return [
     { ...base, id: "ws-invoice", name: "Invoice export v2", description: "CSV and PDF invoice export, checked on the Windows print spooler", state: "running", topology_version: 3, revision: 7, updated_at_ms: now - 50 * 60_000,
       nodes: [node("orchestrator", "invoice-export-orchestrator", "x1", 1), node("pdf", "pdf-renderer-worker", "hz", 2), node("csv", "csv-schema-worker", "hz", 3), node("print", "windows-print-check", "win", 4)],
       edges: [{ from: "orchestrator", to: "pdf", policy: "ask" }, { from: "orchestrator", to: "csv", policy: "always_allow" }, { from: "orchestrator", to: "print", policy: "ask" },
         { from: "csv", to: "pdf", policy: "always_allow" }, { from: "print", to: "pdf", policy: "deny" }], layout: {} },
     { ...base, id: "ws-ci", name: "Flaky CI triage", description: "Find why ssh-tunnel.spec.ts times out on CI", state: "running", topology_version: 1, revision: 3, updated_at_ms: now - 170 * 60_000,
-      nodes: [node("lead", "ci-triage-lead", "hz", 5), node("repro", "ci-repro-windows", "win", 6)], edges: [{ from: "lead", to: "repro", policy: "always_allow" }], layout: {} },
+      spawn: { ...SPAWN_DEFAULT, allowed_hosts: ["win"] },
+      nodes: [node("lead", "ci-triage-lead", "hz", 5), { ...node("repro", "ci-repro-windows", "win", 6), role: "Reproduces the timeout on Windows", spawned_by: "lead", spawn_request: "fx-repro" }], edges: [{ from: "lead", to: "repro", policy: "always_allow" }], layout: {} },
     { ...base, id: "ws-docs", name: "Docs search revamp", description: "Rebuild the docs search index and wire it into the site header", state: "draft", topology_version: 0, revision: 2, updated_at_ms: now - 330 * 60_000,
       nodes: [node("index", "docs-search-index", "x1", 9), node("lead", "search-lead", "hz", null, { host: "hz", driver: "claude", cwd: "~/src/docs-site", model: "claude-sonnet-4.5", mode: null, first_prompt: "Plan the search revamp, hand indexing to docs-search-index." })],
       edges: [{ from: "lead", to: "index", policy: "ask" }], layout: {} },
@@ -107,8 +112,13 @@ export class FixtureWorkstreams {
     });
     const by_node: Record<string, number> = {};
     for (const n of nodes) by_node[n.node] = n.session?.usage.cost_usd ?? 0;
+    const pending_spawns: SpawnGateView[] = [];
+    for (const n of w.nodes) {
+      const snap = n.session ? this.core.session(n.session.host, n.session.session) : undefined;
+      for (const g of snap?.pending_gates ?? []) if (g.gate.gate_type === "spawn") pending_spawns.push({ node: n.id, host: n.session!.host, session: n.session!.session, raised_at_ms: g.raised_at_ms, gate: g.gate });
+    }
     return {
-      workstream: w, nodes, edges,
+      workstream: w, nodes, edges, pending_spawns,
       sync: [...new Set(nodes.map((n) => n.host))].map((host) => ({ host, applied: w.state === "draft" ? 0 : w.topology_version, error: null })),
       cost: { sessions_usd: Object.values(by_node).reduce((a, b) => a + b, 0), tasks_usd: edges.reduce((a, e) => a + e.cost_usd, 0), by_node },
     };
@@ -146,6 +156,31 @@ export class FixtureWorkstreams {
     if (w) this.core.emit({ kind: "upserted", workstream: this.view(w) });
   }
 
+  /** A spawn gate was answered: allow adds the worker (connected from the asker), "always" updates the policy. */
+  onSpawnAnswer(requestId: string, choice: string) {
+    for (const w of this.docs.values()) {
+      const asker = w.nodes.find((n) => {
+        const snap = n.session ? this.core.session(n.session.host, n.session.session) : undefined;
+        return (snap?.pending_gates ?? []).some((g) => g.gate.request_id === requestId);
+      });
+      if (!asker) continue;
+      const snap = this.core.session(asker.session!.host, asker.session!.session)!;
+      const g = snap.pending_gates.find((x) => x.gate.request_id === requestId)?.gate;
+      if (!g || g.gate_type !== "spawn" || choice === "deny") return;
+      const spawn = choice === "always_allow_spawning" ? { ...w.spawn, policy: "always_allow" as const }
+        : choice === "always_allow_spawning_and_handoffs" ? { ...w.spawn, policy: "always_allow" as const, handoffs_always_allow: true } : w.spawn;
+      let id = g.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      while (w.nodes.some((n) => n.id === id)) id += "-2";
+      const host = (g.details as { host_id?: string } | null)?.host_id ?? asker.session!.host;
+      const fresh: WorkstreamNode = { id, name: g.name, role: g.role, description: g.role, session: null, spawned_by: asker.id, spawn_request: requestId,
+        launch: { host, driver: (g.details as { driver_id?: string } | null)?.driver_id ?? "claude", cwd: g.cwd, model: g.model ?? null, mode: g.mode ?? null, first_prompt: null } };
+      const launched = this.launchNode(w, fresh);
+      const policy = spawn.policy === "always_allow" && spawn.handoffs_always_allow ? "always_allow" as const : "ask" as const;
+      this.put({ ...w, spawn, nodes: [...w.nodes, launched], edges: [...w.edges, { from: asker.id, to: id, policy }], topology_version: w.topology_version + 1 });
+      return;
+    }
+  }
+
   private launchNode(w: Workstream, n: WorkstreamNode): WorkstreamNode {
     if (n.session || !n.launch) return n;
     const l = n.launch;
@@ -165,7 +200,7 @@ export class FixtureWorkstreams {
         if (!d.name.trim()) throw err("invalid_params", "A workstream needs a name.");
         let id = d.id ?? `ws-${d.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
         while (this.docs.has(id)) id += "-2";
-        const w: Workstream = { id, schema: 1, name: d.name, description: d.description, state: "draft", nodes: d.nodes, edges: d.edges, limits: d.limits, layout: d.layout, topology_version: 0, topology_hosts: [], template: null, revision: 0, created_at_ms: now, updated_at_ms: now };
+        const w: Workstream = { id, schema: 1, name: d.name, description: d.description, state: "draft", nodes: d.nodes, edges: d.edges, limits: d.limits, spawn: d.spawn ?? SPAWN_DEFAULT, layout: d.layout, topology_version: 0, topology_hosts: [], template: null, revision: 0, created_at_ms: now, updated_at_ms: now };
         return this.put(w);
       }
       case M.WS_UPDATE: {
@@ -173,7 +208,7 @@ export class FixtureWorkstreams {
         const cur = this.get(u.workstream.id);
         if (u.expected_revision != null && u.expected_revision !== cur.revision) throw err("store", "Someone else changed this workstream. Reload and try again.");
         const sessions = new Map(cur.nodes.map((n) => [n.id, n.session]));
-        return this.put({ ...cur, name: u.workstream.name, description: u.workstream.description, limits: u.workstream.limits, layout: u.workstream.layout, edges: u.workstream.edges, nodes: u.workstream.nodes.map((n) => ({ ...n, session: sessions.get(n.id) ?? n.session ?? null })) });
+        return this.put({ ...cur, name: u.workstream.name, description: u.workstream.description, limits: u.workstream.limits, spawn: u.workstream.spawn ?? cur.spawn, layout: u.workstream.layout, edges: u.workstream.edges, nodes: u.workstream.nodes.map((n) => ({ ...n, session: sessions.get(n.id) ?? n.session ?? null })) });
       }
       case M.WS_DELETE:
         this.get((p as WorkstreamRef).id);
@@ -235,7 +270,7 @@ export class FixtureWorkstreams {
         const t = this.templates.find((x) => x.id === r.template);
         if (!t) throw err("not_found", `No template ${r.template}`);
         const nodes = t.nodes.map((n) => ({ ...n, launch: n.launch ? { ...n.launch, host: r.hosts?.[n.launch.host ?? ""] ?? n.launch.host } : null }));
-        return this.handle(M.WS_CREATE, { name: r.name ?? t.name, description: t.description ?? "", nodes, edges: t.edges, limits: t.limits, layout: t.layout ?? {} } satisfies WorkstreamDraft);
+        return this.handle(M.WS_CREATE, { name: r.name ?? t.name, description: t.description ?? "", nodes, edges: t.edges, limits: t.limits, spawn: SPAWN_DEFAULT, layout: t.layout ?? {} } satisfies WorkstreamDraft);
       }
       case M.WS_TEMPLATES_LIST:
         return { templates: this.templates };

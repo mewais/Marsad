@@ -19,6 +19,7 @@ export function nodeStatus(nv: NodeView | undefined, s: SessionSnapshot | null |
   if (!s) return { status: "planned", word: "Not launched" };
   const st = phaseToStatus(s.phase.state, false);
   if (st === "needs" && s.pending_gates.some((g) => g.gate.gate_type === "handoff")) return { status: st, word: "Handoff waiting" };
+  if (st === "needs" && s.pending_gates.some((g) => g.gate.gate_type === "spawn")) return { status: st, word: "Spawn waiting" };
   return { status: st, word: st === "needs" ? "Needs you" : st === "failed" ? "Failed" : st === "working" ? "Working" : s.phase.state === "exited" ? "Ended" : "Idle" };
 }
 
@@ -29,6 +30,8 @@ export interface WsSummary {
   parts: { cls: string; text: string; icon: IconName }[];
   cost: number;
   pending: number;
+  /** Agents spawned by other agents. */
+  spawned: number;
 }
 
 export function summary(v: WorkstreamView): WsSummary {
@@ -39,7 +42,7 @@ export function summary(v: WorkstreamView): WsSummary {
     const st = nodeStatus(n, n.session).status;
     c[st] = (c[st] ?? 0) + 1;
   }
-  const pending = v.edges.reduce((a, e) => a + e.pending_gates.length, 0);
+  const pending = v.edges.reduce((a, e) => a + e.pending_gates.length, 0) + (v.pending_spawns?.length ?? 0);
   const parts: WsSummary["parts"] = [];
   const st = v.workstream.state;
   if (st === "draft") parts.push({ cls: "accent", text: "Draft, not launched", icon: "edit" });
@@ -51,7 +54,8 @@ export function summary(v: WorkstreamView): WsSummary {
     if (c.working) parts.push({ cls: "working", text: `${c.working} working`, icon: "working" });
     if (!parts.length) parts.push({ cls: "idle", text: "All idle", icon: "idle" });
   }
-  return { hosts, sessions: live.length, planned: v.nodes.length - live.length, parts, cost: v.cost.sessions_usd, pending };
+  const spawned = v.workstream.nodes.filter((n) => n.spawned_by).length;
+  return { hosts, sessions: live.length, planned: v.nodes.length - live.length, parts, cost: v.cost.sessions_usd, pending, spawned };
 }
 
 /** What moves over an edge, in words. */

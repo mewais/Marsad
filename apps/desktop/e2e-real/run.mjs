@@ -137,6 +137,15 @@ const scenario = {
       { type: "sleep_ms", ms: 1800000 },
       { type: "say", text: "Rendered." },
     ] },
+    // The fake agent spawns a worker through its injected Wasl MCP tool, waits for its first
+    // task and reports the answer (the spawned worker plays this same scenario).
+    { when: "spawn a worker", steps: [
+      { type: "say", text: "I'll start a worker for the arithmetic." },
+      { type: "mcp_call", server: "wasl", tool: "spawn_agent", arguments: { name: "calc", role: "Does the arithmetic", instruction: "what is 6*7?" }, save_as: "s" },
+      { type: "mcp_call", server: "wasl", tool: "task_wait", arguments: { ids: ["{{s.task.id}}"], timeout_secs: 120 }, save_as: "w" },
+      { type: "say", text: "calc answered: {{w.tasks.0.result}}" },
+    ] },
+    { when: "what is 6\\*7", steps: [{ type: "say", text: "42" }] },
     { when: "long task", steps: [
       { type: "say", text: "Starting the long refactor." },
       { type: "plan", entries: [{ content: "Refactor the session store", status: "in_progress", priority: "high" }], needs_approval: false },
@@ -542,6 +551,50 @@ scenario_("workstream", async () => {
   await waitFor(async () => (await rpc("workstreams.get", { id: ws.id })).edges.find((e) => e.to === "csv")?.policy === "always_allow", "edge policy written");
   await go(`#/workstreams/${ws.id}`);
   await shot("32-workstream-graph-running");
+});
+
+scenario_("spawn", async () => {
+  // A fake claude session asks to spawn a worker (spawn_agent through its Wasl MCP server); the
+  // spawn gate and the first handoff are answered in the UI; the worker joins a new workstream
+  // graph marked "spawned by"; the agent reports the worker's answer.
+  if (REAL) return "fake claude only";
+  const s = await launchViaDialog({ agent: "Claude Code", cwd: project });
+  await rpc("sessions.rename", { id: s.id, display_name: "Planner" }, local);
+  await waitPhase(s.id, "idle");
+  await openSession(s);
+  await sendPrompt("spawn a worker for 6*7");
+  const gate = await el("[data-gate=spawn]", null, 60_000);
+  const text = (await wd.text(gate)).replace(/\s+/g, " ");
+  for (const want of ["Planner wants to start a new agent, calc", "Does the arithmetic", "what is 6*7?", "approving creates the workstream “Planner + workers”", "Marsad spawn choices"])
+    if (!text.includes(want)) throw new Error(`spawn gate lacks "${want}": ${text}`);
+  await shot("spawn-gate-session");
+  await click("[data-gate=spawn] .choices button", "Allow once");
+  // The first task goes over an "ask" connection: its handoff gate shows on the same session.
+  await click("[data-gate=handoff] .choices button", "Allow once", 60_000);
+  await waitFor(async () => (await snapOf(s.id))?.last_turn?.reply === "calc answered: 42", "the agent reports the worker's answer", 90_000);
+  await bodyHas("calc answered: 42");
+  const ws = await waitFor(async () => (await rpc("workstreams.list")).workstreams.find((w) => w.name === "Planner + workers"), "the new workstream");
+  const calc = ws.nodes.find((n) => n.name === "calc");
+  if (!calc?.spawned_by || !calc.session) throw new Error(`calc is not a spawned, launched node: ${JSON.stringify(calc)}`);
+  await go(`#/workstreams/${ws.id}`);
+  const marker = await el("[data-testid=spawned-by]", "by Planner", 30_000);
+  void marker;
+  await el("[data-testid=spawn-settings]", null, 20_000);
+  await sleep(1200);
+  await shot("spawn-graph");
+  // The Spawning section: always allow, extended to handoffs (written into the document).
+  await click("[data-testid=spawn-settings] [role=radio]", "Always allow");
+  await waitFor(async () => (await rpc("workstreams.get", { id: ws.id })).spawn.policy === "always_allow", "spawn policy saved");
+  await click("[data-testid=spawn-settings] label.chkl", "covers handoffs");
+  await waitFor(async () => (await rpc("workstreams.get", { id: ws.id })).spawn.handoffs_always_allow === true, "handoff extension saved");
+  await sleep(600);
+  const sec = await el("[data-testid=spawn-settings]");
+  await wd.exec((e) => e.scrollIntoView({ block: "start" }), sec).catch(() => {});
+  await shot("spawn-inspector");
+  // The list shows the spawned count.
+  await go("#/workstreams");
+  await bodyHas("1 spawned");
+  return `${ws.name}: ${ws.nodes.length} agents`;
 });
 
 scenario_("daemon-kill-recovery", async () => {
@@ -1156,6 +1209,7 @@ scenario_("showcase", async () => {
   await go("#/inbox");
   await sleep(1500);
   await shot("dark-01-inbox");
+  await shot("fix-inbox-question");
   // Session screens.
   if (lc) { await openSession(lc); await el("[data-gate=permission]", null, 5000).catch(() => {}); await shot("dark-02-session-activity-permission-gate-claude-live"); }
   if (lo) { await openSession(lo); await shot("dark-03-session-question-gate-ask-user-opencode-live"); }
@@ -1183,7 +1237,7 @@ scenario_("showcase", async () => {
   await resetUi();
   // Workstreams.
   await go("#/workstreams"); await sleep(800); await shot("dark-11-workstreams-list");
-  await go(`#/workstreams/${ws.id}`); await el("[data-gate=handoff]", null, 20_000).catch(() => {}); await sleep(1200); await shot("dark-12-workstream-graph-running-handoff-pending");
+  await go(`#/workstreams/${ws.id}`); await el("[data-gate=handoff]", null, 20_000).catch(() => {}); await sleep(1200); await shot("dark-12-workstream-graph-running-handoff-pending"); await shot("fix-graph-labels");
   await go(`#/workstreams/${draft.id}`); await sleep(1200); await shot("dark-13-workstream-design-mode");
   // Hosts, config, settings.
   await go("#/hosts"); await sleep(800); await click(".hrow[data-host]", "build-box").catch(() => {}); await sleep(600); await shot("dark-14-hosts");
@@ -1198,6 +1252,9 @@ scenario_("showcase", async () => {
   await click("button", "Claude Code").catch(() => {});
   await click("button[aria-label^='Effective for'], [aria-label^='Host']", null, 5000).then(() => click("[role=option]", "vm", 5000)).catch(() => {});
   await sleep(1500); await shot("dark-15-config-agent-configuration");
+  // The Global layer selected: its added MCP server offers "remove", the skill it turned off "reset".
+  await click("button[title='Edit the Global layer']", null, 5000).catch(() => {});
+  await sleep(800); await shot("fix-config-chips");
   await go("#/settings"); await button("Notifications"); await sleep(600); await shot("dark-16-settings-notifications");
   // Palette and shortcut sheet.
   await go("#/inbox"); await sleep(500);

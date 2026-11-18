@@ -48,6 +48,14 @@ export const HANDOFF_CHOICES: GateChoice[] = [
   { id: "deny", label: "Deny", kind: "reject_once", text: "optional" },
 ];
 
+/** wasl-proto `spawn_choices()`. */
+export const SPAWN_CHOICES: GateChoice[] = [
+  { id: "allow_once", label: "Allow once", kind: "allow_once" },
+  { id: "always_allow_spawning", label: "Always allow spawning in this workstream", kind: "allow_always", description: "sets the workstream's spawn policy to always allow; handoffs to spawned agents still ask" },
+  { id: "always_allow_spawning_and_handoffs", label: "Always allow spawning and handoffs to spawned agents", kind: "allow_always", description: "also lets this workstream's agents hand work to the agents they spawn without asking" },
+  { id: "deny", label: "Deny", kind: "reject_once", text: "optional" },
+];
+
 /** The first session of a project on a host works in the checkout; later ones in worktrees (one branch per folder, as in git). */
 export function fixtureCwd(spec: Spec, specs: Spec[] = SPECS): string {
   const first = specs.find((x) => x.host === spec.host && x.proj === spec.proj);

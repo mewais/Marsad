@@ -3,6 +3,7 @@ import type { SessionView } from "../../state";
 import { HandoffGate } from "./HandoffGate";
 import { PermissionGate } from "./PermissionGate";
 import { QuestionGate } from "./QuestionGate";
+import { SpawnGate } from "./SpawnGate";
 import "./gates.css";
 
 /** Where the gate is drawn: Inbox row or the session view. */
@@ -28,6 +29,8 @@ export function Gate({ view, pg, density, active = false, expanded = false, onAc
       return <QuestionGate {...common} pg={pg as Parameters<typeof QuestionGate>[0]["pg"]} />;
     case "handoff":
       return <HandoffGate {...common} pg={pg as Parameters<typeof HandoffGate>[0]["pg"]} />;
+    case "spawn":
+      return <SpawnGate {...common} pg={pg as Parameters<typeof SpawnGate>[0]["pg"]} />;
     default:
       return <PermissionGate {...common} pg={pg as Parameters<typeof PermissionGate>[0]["pg"]} />;
   }

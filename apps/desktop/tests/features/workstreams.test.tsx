@@ -167,3 +167,58 @@ describe("workstream screens", () => {
     await waitFor(() => expect(r.history.store.get()).toMatch(/^\/workstreams\/ws-release-prep/));
   });
 });
+
+const lastUpdate = (b: FixtureBackend) => b.requests.filter((x) => x.method === "workstreams.update").slice(-1)[0]?.params;
+
+describe("spawning workers", () => {
+  it("a spawn request shows on the graph and in the inspector; allow once adds the worker marked 'spawned by'", async () => {
+    const user = userEvent.setup();
+    const backend = quietBackend();
+    const r = await renderApp("/inbox", backend);
+    act(() => backend.startSpawnScenario());
+    act(() => r.history.push("/workstreams/ws-invoice"));
+    await screen.findByTestId("graph-canvas", {}, { timeout: 4000 });
+    const banner = await screen.findByTestId("spawn-banner");
+    expect(banner).toHaveTextContent("invoice-export-orchestrator wants to start pdf-font-checker on hetzner-ax41");
+    const gate = await screen.findByTestId("spawn-gate");
+    const facts = within(gate).getByTestId("spawn-facts");
+    expect(facts).toHaveTextContent("OpenCode · deepseek-v4.1-flash");
+    expect(facts).toHaveTextContent("Checks the Arabic font fallback");
+    expect(facts).toHaveTextContent("Render INV-2041");
+    expect(within(gate).getByText("Marsad spawn choices")).toBeInTheDocument();
+    expect(within(gate).getByText(/Joins workstream Invoice export v2/)).toBeInTheDocument();
+    expect(within(gate).getAllByRole("button").map((b) => b.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("Allow once"), expect.stringContaining("Always allow spawning in this workstream"), expect.stringContaining("Always allow spawning and handoffs"), expect.stringContaining("Deny")]));
+    await user.click(within(gate).getByRole("button", { name: /Allow once/ }));
+    await waitFor(() => expect(r.backend.requests.find((x) => x.method === "session.command")?.params).toMatchObject({ command: { command: "answer_gate", request_id: "wasl-spawn-fx-fonts", decision: { choice: "allow_once" } } }));
+    const marker = await screen.findByTestId("spawned-by", {}, { timeout: 4000 });
+    expect(marker).toHaveTextContent("by invoice-export-orchestrator");
+    expect(document.querySelector('[data-node="pdf-font-checker"]')).not.toBeNull();
+    expect(document.querySelector('[data-edge="orchestrator>pdf-font-checker"]')).not.toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("spawn-banner")).toBeNull());
+  });
+
+  it("the Spawning section edits the policy, the handoff extension and the limits; the list shows spawned counts", async () => {
+    const user = userEvent.setup();
+    const r = await renderApp("/inbox", quietBackend());
+    act(() => r.history.push("/workstreams"));
+    const list = await screen.findByRole("list", { name: "Workstreams" });
+    expect(within(list).getByRole("link", { name: /Flaky CI triage/ })).toHaveTextContent("1 spawned");
+    act(() => r.history.push("/workstreams/ws-ci"));
+    await screen.findByTestId("graph-canvas", {}, { timeout: 4000 });
+    expect(await screen.findByTestId("spawned-by")).toHaveTextContent("by ci-triage-lead");
+    const sec = await screen.findByTestId("spawn-settings");
+    expect(within(sec).getByText(/1 spawned agent/)).toBeInTheDocument();
+    const ext = within(sec).getByRole("checkbox");
+    expect(ext).toBeDisabled();
+    await user.click(within(within(sec).getByRole("radiogroup", { name: "Spawn policy" })).getByRole("radio", { name: /Always allow/ }));
+    await waitFor(() => expect(lastUpdate(r.backend)).toMatchObject({ workstream: { spawn: { policy: "always_allow", handoffs_always_allow: false } } }));
+    await waitFor(() => expect(within(screen.getByTestId("spawn-settings")).getByRole("checkbox")).toBeEnabled());
+    await user.click(within(screen.getByTestId("spawn-settings")).getByRole("checkbox"));
+    await waitFor(() => expect(lastUpdate(r.backend)).toMatchObject({ workstream: { spawn: { policy: "always_allow", handoffs_always_allow: true } } }));
+    const max = within(screen.getByTestId("spawn-settings")).getByLabelText("Max spawned agents");
+    await user.clear(max);
+    await user.type(max, "3");
+    await user.tab();
+    await waitFor(() => expect(lastUpdate(r.backend)).toMatchObject({ workstream: { spawn: { max_agents: 3 } } }));
+  });
+});

@@ -8,7 +8,7 @@ import { Button, EmptyState, Icon, toast } from "../../ui";
 import { NewSessionDialog } from "../newsession/NewSessionDialog";
 import { launchRequest, type NewSessionForm } from "../newsession/model";
 import { Canvas, type Sel } from "./Canvas";
-import { DesignPanel, EdgeInspector, NodeInspector } from "./Inspector";
+import { DesignPanel, EdgeInspector, NodeInspector, WorkstreamPanel } from "./Inspector";
 import { summary } from "./model";
 import { nodeId } from "./NewWorkstreamDialog";
 import "./workstreams.css";
@@ -78,8 +78,9 @@ export function GraphPage({ id }: { id: string }) {
         {sel?.kind === "node" ? <NodeInspector view={v} nodeId={sel.id} design={design} />
           : sel?.kind === "edge" ? <EdgeInspector view={v} from={sel.from} to={sel.to} design={design} />
           : design ? <DesignPanel view={v} onLaunch={() => void launch()} onSave={saveDraft} launching={launching} />
+          : v.pending_spawns?.length ? <WorkstreamPanel view={v} />
           : v.edges.find((e) => e.pending_gates.length) ? <EdgeInspector view={v} from={v.edges.find((e) => e.pending_gates.length)!.from} to={v.edges.find((e) => e.pending_gates.length)!.to} design={false} />
-          : <aside className="insp"><div className="faint small">Select an agent or a connection.</div></aside>}
+          : <WorkstreamPanel view={v} />}
       </div>
       <NewSessionDialog open={!!adding} preset={adding} onClose={() => setAdding(null)} onAdd={onAdd} title={`Add agent to ${w.name}`}
         subtitle={design ? "Same form as New session. Nothing starts until you launch the workstream." : "The agent starts at once and joins this workstream."} />

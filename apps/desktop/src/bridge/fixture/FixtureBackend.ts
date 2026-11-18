@@ -9,7 +9,8 @@ import { fsExists, fsHome, fsList } from "./fs";
 import { buildTree, diffOf, type Tree } from "./git";
 import { FixtureHub } from "./hub";
 import { err, SessionSim, type Entry } from "./runtime";
-import { buildSession, SPECS, type Spec } from "./sessions";
+import { buildSession, fixtureId, SPAWN_CHOICES, SPECS, type Spec } from "./sessions";
+import { SPAWN_REQUEST } from "./workstreams";
 
 export interface FixtureOptions {
   /** Background chatter (timers): live tool calls, reconnect countdown, a session finishing. Default true. */
@@ -165,6 +166,8 @@ export class FixtureBackend implements Backend {
       case M.SESSION_COMMAND: {
         const r = p as CommandRequest;
         const e = this.entry(host, r);
+        // Spawn answers are applied while the gate is still pending (the hub launches, then the agent hears back).
+        if (r.command.command === "answer_gate" && e.snap.pending_gates.some((g) => g.gate.request_id === (r.command as { request_id: string }).request_id && g.gate.gate_type === "spawn")) this.hub.ws.onSpawnAnswer(r.command.request_id, r.command.decision.choice);
         const reply = this.sim.command(e, r.command);
         if (r.command.command === "answer_gate") this.hub.ws.onHandoffAnswer(r.command.request_id, r.command.decision.choice === "deny");
         return reply;
@@ -409,6 +412,20 @@ export class FixtureBackend implements Backend {
   }
 
   // ── test helpers ──────────────────────────────────────────────────────────
+
+  /**
+   * The spawn scenario: the invoice orchestrator asks to start a worker on another host (a
+   * `spawn` gate in its session, the Inbox and the workstream). Allow adds the node, connected
+   * from the orchestrator and marked "spawned by"; "always" choices update the workstream's
+   * spawn policy.
+   */
+  startSpawnScenario() {
+    this.raiseGate("x1", fixtureId(1), {
+      gate_type: "spawn", request_id: SPAWN_REQUEST, from: "invoice-export-orchestrator", name: "pdf-font-checker", role: "Checks the Arabic font fallback in rendered invoice PDFs",
+      host: "hetzner-ax41", driver: "OpenCode", model: "deepseek-v4.1-flash", cwd: "~/src/ledgerline", mode: null, instruction: "Render INV-2041 and confirm every Arabic line uses a fallback font.",
+      workstream: "Invoice export v2", new_workstream: false, details: { host_id: "hz", driver_id: "opencode", workstream_id: "ws-invoice", depth: 1, max_depth: 2, spawned: 0, max_agents: 8 }, choices: SPAWN_CHOICES,
+    });
+  }
 
   /** Add a pending gate to a session, as if the agent just asked. */
   raiseGate(hostId: HostId, sessionId: string, gate: GateRequest) {

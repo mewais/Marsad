@@ -150,6 +150,17 @@ fn session_name(s: &SessionSnapshot) -> String {
     s.display_name
         .clone()
         .filter(|n| !n.trim().is_empty())
+        // The first prompt, shortened.
+        .or_else(|| {
+            s.title
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(|t| match t.char_indices().nth(40) {
+                    Some((i, _)) => format!("{}…", &t[..i]),
+                    None => t.to_string(),
+                })
+        })
         .or_else(|| {
             s.cwd
                 .as_deref()

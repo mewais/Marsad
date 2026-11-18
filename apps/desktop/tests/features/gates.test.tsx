@@ -7,7 +7,7 @@ import { Gate } from "../../src/features/gates/Gate";
 import type { GateDensity } from "../../src/features/gates/Gate";
 import { gateChoices } from "../../src/features/gates/choices";
 import type { GateRequest } from "../../src/bridge/wire";
-import { claudeChoices } from "../../src/bridge/fixture/sessions";
+import { claudeChoices, SPAWN_CHOICES } from "../../src/bridge/fixture/sessions";
 import { memoryHistory, RouterProvider } from "../../src/router";
 import { AppProvider, createApp, selectView } from "../../src/state";
 import { quietBackend, sessionByName } from "../helpers";
@@ -171,5 +171,24 @@ describe("permission gate wording", () => {
   it("a session without a name is never shown by its id", () => {
     const s = { id: "4f1c9a2e-77", display_name: null, title: null, cwd: "/w/auth-service", turn: null } as unknown as Parameters<typeof sessionName>[0];
     expect(sessionName(s)).toBe("New session in auth-service");
+  });
+});
+
+describe("spawn gates", () => {
+  it("says who wants to start whom, where, with what and why; a standalone asker sees the new workstream; deny carries a reason", async () => {
+    const user = userEvent.setup();
+    const gate: GateRequest = {
+      gate_type: "spawn", request_id: "wasl-spawn-t1", from: "planner", name: "scout", role: "Looks around the repo", host: "hetzner-ax41", driver: "Claude Code", model: "haiku", cwd: "~/src/x", mode: null, instruction: null,
+      workstream: "planner + workers", new_workstream: true, details: null, choices: SPAWN_CHOICES,
+    };
+    const { sent } = await setup("tile-cache-eviction", "row", gate);
+    const row = document.querySelector('[data-gate="spawn"]') as HTMLElement;
+    expect(row).toHaveTextContent("Spawn a worker · planner wants to start scout on hetzner-ax41");
+    expect(within(row).getByTestId("spawn-facts")).toHaveTextContent("Claude Code · haiku");
+    expect(row).toHaveTextContent("approving creates the workstream “planner + workers”");
+    expect(within(row).getByText("Marsad spawn choices")).toBeInTheDocument();
+    await user.type(within(row).getByRole("textbox"), "not now");
+    await user.click(within(row).getByRole("button", { name: /^Deny/ }));
+    await waitFor(() => expect(sent().slice(-1)[0]?.params).toMatchObject({ command: { command: "answer_gate", request_id: "wasl-spawn-t1", decision: { choice: "deny", text: "not now" } } }));
   });
 });

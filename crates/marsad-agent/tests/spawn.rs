@@ -752,3 +752,103 @@ async fn spawn_from_a_standalone_session() {
     let _ = SessionId::random();
     stop_hub(&c).await;
 }
+
+/// The fake claude agent spawns a worker through its injected Wasl MCP tool (`spawn_agent` with a
+/// first task), waits for the task (`task_wait`) and reports the worker's answer; the human
+/// answers the spawn gate and the first handoff on the agent's session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fake_agent_spawns_through_its_mcp_tools() {
+    let d = TempDir::new();
+    let c = hub_client(&d.path().join("l"));
+    let hub = HostId::new("hub");
+    let work = d.path().join("w");
+    std::fs::create_dir_all(&work).unwrap();
+    set_host_layers(&c, d.path(), &[&hub]).await;
+    let orchestrator = Scenario::builder()
+        .turn(
+            Turn::builder()
+                .say("I'll get a worker for that.")
+                .mcp_call(
+                    "wasl",
+                    "spawn_agent",
+                    json!({"name": "calc", "role": "does arithmetic", "instruction": "what is 6*7?"}),
+                    Some("s"),
+                )
+                .mcp_call(
+                    "wasl",
+                    "task_wait",
+                    json!({"ids": ["{{s.task.id}}"], "timeout_secs": 60}),
+                    Some("w"),
+                )
+                .say("calc said: {{w.tasks.0.result}}"),
+        )
+        .build();
+    let mut req = LaunchRequest::new("claude");
+    req.cwd = Some(work.to_string_lossy().into_owned());
+    req.overrides = OverrideLayer {
+        env: scenario_env(d.path(), &orchestrator),
+        ..OverrideLayer::default()
+    };
+    let solo = c.launch(req).await.unwrap();
+    let me = NodeSession {
+        host: hub.clone(),
+        session: solo.id.clone(),
+    };
+    wait_snap(&c, &me, "idle", |s| s.phase.name() == "idle").await;
+    c.runtime(None)
+        .command(
+            &solo.id,
+            Command::Prompt {
+                text: "work out 6*7 with a helper".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let snap = wait_snap(&c, &me, "spawn gate from the agent's tool", |s| {
+        spawn_gate_of(s).is_some()
+    })
+    .await;
+    let gate = spawn_gate_of(&snap).unwrap();
+    answer(
+        &c,
+        &me,
+        gate.request_id(),
+        SpawnDecision::AllowOnce.to_gate(),
+    )
+    .await;
+    let snap = wait_snap(&c, &me, "the first task's handoff gate", |s| {
+        s.pending_gates
+            .iter()
+            .any(|g| matches!(g.gate, GateRequest::Handoff { .. }))
+    })
+    .await;
+    let hg = snap
+        .pending_gates
+        .iter()
+        .find(|g| matches!(g.gate, GateRequest::Handoff { .. }))
+        .unwrap()
+        .gate
+        .clone();
+    answer(
+        &c,
+        &me,
+        hg.request_id(),
+        HandoffDecision::AllowOnce.to_gate(),
+    )
+    .await;
+    let snap = wait_snap(&c, &me, "the agent reports the worker's answer", |s| {
+        s.last_turn
+            .as_ref()
+            .and_then(|t| t.reply.as_deref())
+            .is_some_and(|r| r.starts_with("calc said"))
+    })
+    .await;
+    assert_eq!(
+        snap.last_turn.unwrap().reply.as_deref(),
+        Some("calc said: The answer is 42.")
+    );
+    let all = c.workstreams().await.unwrap();
+    assert_eq!(all.len(), 1);
+    assert!(all[0].node("calc").unwrap().spawned_by.is_some());
+    stop_hub(&c).await;
+}

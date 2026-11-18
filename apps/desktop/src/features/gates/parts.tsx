@@ -11,9 +11,16 @@ export function Label({ parts }: { parts: LabelPart[] }) {
 }
 
 /** Whose wording the buttons use: the agent's own, Marsad's handoff wording, or neutral labels for an agent whose protocol sends none. */
-export function SourceCaption({ source, driver }: { source: "agent" | "neutral" | "handoff"; driver?: string }) {
+export function SourceCaption({ source, driver }: { source: "agent" | "neutral" | "handoff" | "spawn"; driver?: string }) {
   const d = useDriver(driver ?? "");
   const name = d?.displayName ?? "The agent";
+  if (source === "spawn")
+    return (
+      <span className="srccap wasl" title="An agent starting another agent: Marsad's own gate">
+        <Icon name="sparkle" size="xs" />
+        Marsad spawn choices
+      </span>
+    );
   if (source === "handoff")
     return (
       <span className="srccap wasl" title="Handoffs between agents: Marsad's own gate">

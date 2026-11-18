@@ -110,10 +110,18 @@ export function Canvas({ view, design, lanesFor, sel, onSelect, onConnect, onMov
     setZoom(Math.max(0.5, Math.min(1.25, (wrap.current.clientWidth - 24) / laid.width)));
   };
   const pending = view.edges.find((e) => e.pending_gates.length);
+  const spawnWait = view.pending_spawns?.[0];
+  const spawnGate = spawnWait?.gate.gate_type === "spawn" ? spawnWait.gate : null;
 
   return (
     <div className="canvas-wrap" ref={wrap}>
-      {pending && !design ? (
+      {spawnWait && spawnGate && !design ? (
+        <div className="gbanner" role="status" data-testid="spawn-banner">
+          <Icon name="sparkle" size="sm" className="c-needs" />
+          <span><b>Spawn waiting</b> · {spawnGate.from} wants to start {spawnGate.name} on {spawnGate.host}</span>
+          <Button size="sm" variant="warn" onClick={() => onSelect({ kind: "node", id: spawnWait.node })}>Review</Button>
+        </div>
+      ) : pending && !design ? (
         <div className="gbanner" role="status">
           <Icon name="handoff" size="sm" className="c-needs" />
           <span><b>Handoff waiting</b> · {w.nodes.find((n) => n.id === pending.from)?.name} → {w.nodes.find((n) => n.id === pending.to)?.name}</span>

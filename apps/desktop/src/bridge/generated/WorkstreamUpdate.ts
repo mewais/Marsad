@@ -3,7 +3,7 @@ import type { Workstream } from "./Workstream";
 
 /**
  * `workstreams.update`: replace the editable parts (name, description, nodes, edges,
- * limits, layout). State, versions and node sessions already recorded by the hub are kept
+ * limits, spawn settings, layout). State, versions and node sessions already recorded by the hub are kept
  * as the hub knows them (a node's `session` can only be set by launch / `add_node`).
  */
 export type WorkstreamUpdate = { workstream: Workstream, 

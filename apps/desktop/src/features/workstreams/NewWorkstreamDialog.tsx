@@ -1,3 +1,4 @@
+import { DEFAULT_SPAWN } from "./Spawning";
 import { useEffect, useMemo, useState } from "react";
 import type { WorkstreamNode, WorkstreamTemplate } from "../../bridge/wire";
 import { sessionKey, splitKey } from "../../bridge/wire";
@@ -63,7 +64,7 @@ export function NewWorkstreamDialog({ open, onClose }: { open: boolean; onClose:
         const nm = selectView(store.get(), k)?.name ?? id;
         return { id: nodeId(nm, taken), name: nm, role: "", description: "", session: { host, session: id }, launch: null };
       }) : [];
-      return api.ws.create({ name: name.trim(), description: desc.trim(), id: null, nodes, edges: [], limits: { max_depth: 4, default_deadline_secs: 1800, budget_usd: null }, layout: {} });
+      return api.ws.create({ name: name.trim(), description: desc.trim(), id: null, nodes, edges: [], limits: { max_depth: 4, default_deadline_secs: 1800, budget_usd: null }, layout: {}, spawn: DEFAULT_SPAWN });
     });
     if (!w) return;
     onClose();

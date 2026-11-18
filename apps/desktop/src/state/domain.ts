@@ -50,6 +50,7 @@ export function sessionLine(s: SessionSnapshot): string {
       if (g.gate_type === "question") return `Asks: ${g.questions[0]?.question ?? "a question"}`;
       if (g.gate_type === "permission") return permissionKind(g) === "question" ? `Asks: ${g.command}` : permissionKind(g) === "command" ? `Wants to run ${g.command}` : `Wants to use ${g.tool_name}: ${g.command}`;
       if (g.gate_type === "plan") return "Plan waiting for approval";
+      if (g.gate_type === "spawn") return `Wants to start ${g.name} on ${g.host}: ${g.role}`;
       return `Handoff waiting: ${g.from} wants to delegate “${g.instruction}”`;
     }
     case "failed":

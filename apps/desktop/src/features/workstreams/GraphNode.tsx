@@ -4,7 +4,7 @@ import { basename, money } from "../../lib/format";
 import { useAppState } from "../../state";
 import { DriverBadge, Icon, STATUS, makeDriver } from "../../ui";
 import type { Rect } from "./route";
-import { nodeStatus, taskWords } from "./model";
+import { nodeName, nodeStatus, taskWords } from "./model";
 
 export const NODE_W = 230;
 export const NODE_H = 112;
@@ -32,12 +32,12 @@ export const GraphNode = memo(function GraphNode({ view, node, rect, design, sel
   const outgoing = view.edges.filter((e) => e.from === node.id).flatMap((e) => e.in_flight);
   const task = incoming[0];
   const meta = STATUS[st.status as keyof typeof STATUS];
-  const cls = `gn${design ? " design" : ""}${selected ? " sel" : ""}${outgoing.length && !incoming.length ? " orch" : ""}${connecting ? " target" : ""}`;
+  const cls = `gn${node.spawned_by ? " spawned" : ""}${design ? " design" : ""}${selected ? " sel" : ""}${outgoing.length && !incoming.length ? " orch" : ""}${connecting ? " target" : ""}`;
   return (
     <div className={cls} style={{ left: rect.x, top: rect.y, width: rect.w }} data-node={node.id} role="button" tabIndex={0} aria-pressed={selected}
-      aria-label={`${node.name}: ${st.word}`} onClick={onSelect} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onSelect())}
+      aria-label={`${node.name}${node.spawned_by ? ` (spawned by ${nodeName(view, node.spawned_by)})` : ""}: ${st.word}`} onClick={onSelect} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onSelect())}
       onPointerDown={(e) => { if (e.button === 0 && onBodyDown && !(e.target as HTMLElement).closest(".port")) onBodyDown(e); }}>
-      <div className="t"><DriverBadge driver={drv} compact /><span>{node.name}</span></div>
+      <div className="t"><DriverBadge driver={drv} compact /><span>{node.name}</span>{node.spawned_by ? <span className="spawnedby" data-testid="spawned-by" title={`Spawned by ${nodeName(view, node.spawned_by)}${node.role ? `: ${node.role}` : ""}`}><Icon name="sparkle" size="xs" />by {nodeName(view, node.spawned_by)}</span> : null}</div>
       {design ? (
         <>
           <div className="row">
@@ -61,6 +61,8 @@ export const GraphNode = memo(function GraphNode({ view, node, rect, design, sel
             <div className="task"><span className="fg ell">{task.task.instruction}</span><span className="ell">{taskWords(task)}</span></div>
           ) : outgoing.length ? (
             <div className="task"><span className="ell"><Icon name="handoff" size="xs" /> Delegating {outgoing.length} task{outgoing.length === 1 ? "" : "s"}</span></div>
+          ) : node.spawned_by && node.role ? (
+            <div className="task"><span className="ell">{node.role}</span></div>
           ) : null}
         </>
       )}

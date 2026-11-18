@@ -7,7 +7,7 @@ import type { ChoiceText, GateChoice as WireChoice, GateDecision, GateRequest } 
  * wording (claude `can_use_tool`, codex approvals) the driver supplies documented neutral labels and
  * marks them `neutral_label`; the UI says so instead of pretending they are the agent's words.
  */
-export type GateKind = "permission" | "plan" | "question" | "handoff";
+export type GateKind = "permission" | "plan" | "question" | "handoff" | "spawn";
 
 export interface LabelPart {
   text: string;
@@ -29,7 +29,7 @@ export interface GateChoice {
 export interface ChoiceSet {
   choices: GateChoice[];
   /** `agent`: the labels are the agent's (or the orchestration layer's) own words; `neutral`: the protocol has no wording. */
-  source: "agent" | "neutral" | "handoff";
+  source: "agent" | "neutral" | "handoff" | "spawn";
 }
 
 export function labelParts(label: string): LabelPart[] {
@@ -51,9 +51,10 @@ export function toChoice(c: WireChoice): GateChoice {
   };
 }
 
-export function gateChoices(g: Extract<GateRequest, { gate_type: "permission" | "plan" | "handoff" }>): ChoiceSet {
+export function gateChoices(g: Extract<GateRequest, { gate_type: "permission" | "plan" | "handoff" | "spawn" }>): ChoiceSet {
   const choices = g.choices.map(toChoice);
   if (g.gate_type === "handoff") return { choices, source: "handoff" };
+  if (g.gate_type === "spawn") return { choices, source: "spawn" };
   return { choices, source: g.choices.length && g.choices.every((c) => c.neutral_label) ? "neutral" : "agent" };
 }
 

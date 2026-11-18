@@ -9,8 +9,8 @@ export function useGateCommon(view: SessionView, pg: PendingGate) {
   return { actions, pending, busy: !!pending };
 }
 
-/** Permission / plan / handoff gates: the gate's own choices, with the text flow for choices that take text. */
-export function usePermissionGate(view: SessionView, pg: PendingGate & { gate: Extract<GateRequest, { gate_type: "permission" | "plan" | "handoff" }> }) {
+/** Permission / plan / handoff / spawn gates: the gate's own choices, with the text flow for choices that take text. */
+export function usePermissionGate(view: SessionView, pg: PendingGate & { gate: Extract<GateRequest, { gate_type: "permission" | "plan" | "handoff" | "spawn" }> }) {
   const c = useGateCommon(view, pg);
   const set = useMemo(() => gateChoices(pg.gate), [pg.gate]);
   const [reason, setReason] = useState("");

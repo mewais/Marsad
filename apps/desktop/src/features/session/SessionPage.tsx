@@ -27,7 +27,7 @@ const TABS = [
 
 function gateSummary(kinds: string[]): string {
   const c = (k: string, w: string) => (kinds.filter((x) => x === k).length ? `${kinds.filter((x) => x === k).length} ${w}${kinds.filter((x) => x === k).length > 1 ? "s" : ""}` : "");
-  return [c("permission", "permission"), c("question", "question"), c("plan", "plan"), c("handoff", "handoff")].filter(Boolean).join(", ");
+  return [c("permission", "permission"), c("question", "question"), c("plan", "plan"), c("handoff", "handoff"), c("spawn", "spawn request")].filter(Boolean).join(", ");
 }
 
 export function SessionPage({ host, id, tab }: { host: string; id: string; tab: string }) {
@@ -158,8 +158,8 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
                 <div className="jump">
                   {gates.map((pg) => (
                     <a key={pg.gate.request_id} href={`#gate-${pg.gate.request_id}`} onClick={(e) => { e.preventDefault(); document.getElementById(`gate-${pg.gate.request_id}`)?.scrollIntoView({ block: "center" }); }}>
-                      <Icon name={pg.gate.gate_type === "permission" ? "shield" : pg.gate.gate_type === "handoff" ? "handoff" : "needs"} size="sm" className="c-needs" />
-                      {pg.gate.gate_type === "permission" ? permissionShort(pg.gate) : pg.gate.gate_type === "question" ? pg.gate.questions[0]?.header || "Question" : pg.gate.gate_type === "handoff" ? "Handoff" : "Plan"}
+                      <Icon name={pg.gate.gate_type === "permission" ? "shield" : pg.gate.gate_type === "handoff" ? "handoff" : pg.gate.gate_type === "spawn" ? "sparkle" : "needs"} size="sm" className="c-needs" />
+                      {pg.gate.gate_type === "permission" ? permissionShort(pg.gate) : pg.gate.gate_type === "question" ? pg.gate.questions[0]?.header || "Question" : pg.gate.gate_type === "handoff" ? "Handoff" : pg.gate.gate_type === "spawn" ? `Start ${pg.gate.name}` : "Plan"}
                     </a>
                   ))}
                 </div>

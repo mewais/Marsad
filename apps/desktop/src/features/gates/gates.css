@@ -63,3 +63,8 @@
 .gate .acts .btn.lg{min-height:28px}
 .payload .mono{white-space:pre-line;font-size:11.5px}
 .choice-notes{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:2px}
+.spawnfacts{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;margin:8px 0;font-size:12.5px}
+.spawnfacts dt{color:var(--fg-2);font-weight:500}
+.spawnfacts dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.spawnnote{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg-2);margin:4px 0 8px}
+.spawnnote.new{color:var(--needs)}

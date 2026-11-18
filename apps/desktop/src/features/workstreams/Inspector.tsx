@@ -8,6 +8,7 @@ import { linkView, useActions, useApi, useAppState, useHost, useSessionView } fr
 import { Button, ConnState, DriverBadge, HostChip, Icon, Select, makeDriver } from "../../ui";
 import { Gate } from "../gates/Gate";
 import { checklist, nodeName, nodeStatus, POLICY, taskWords } from "./model";
+import { PendingSpawn, SpawnSection } from "./Spawning";
 
 function PolicyPick({ value, onChange, busy }: { value: EdgePolicy; onChange: (p: EdgePolicy) => void; busy: boolean }) {
   return (
@@ -109,6 +110,8 @@ export function NodeInspector({ view, nodeId, design }: { view: WorkstreamView; 
         {host ? <div className="hostline"><HostChip host={host} /><ConnState host={host} /></div> : null}
         <div className="mono faint small">{snap?.cwd ?? node.launch?.cwd ?? ""}</div>
       </div>
+      {node.spawned_by ? <div className="sec"><div className="eyebrow">Spawned</div><div className="small"><Icon name="sparkle" size="xs" className="c-accent" /> Started by <b>{nodeName(view, node.spawned_by)}</b>{node.role ? <> to {node.role.charAt(0).toLowerCase() + node.role.slice(1)}</> : null}</div></div> : null}
+      <PendingSpawn view={view} node={nodeId} />
       <div className="sec"><div className="eyebrow">Now</div><div className="small">{snap ? snap.turn?.prompt ?? snap.last_turn?.reply ?? st.word : node.launch?.first_prompt ? `Will start with: “${node.launch.first_prompt}”` : "Waits for a handoff once launched."}</div></div>
       <div className="sec"><div className="eyebrow">Connections</div>
         {conns.length ? <div className="hist">{conns.map((e) => <div key={`${e.from}>${e.to}`} className="h"><Icon name={POLICY[e.policy].icon} size="sm" className={`c-${e.policy === "ask" ? "needs" : e.policy === "always_allow" ? "done" : "failed"}`} /><span>{nodeName(view, e.from)} → {nodeName(view, e.to)}</span><span className="w">{POLICY[e.policy].word}</span></div>)}</div> : <span className="faint small">Not connected yet.</span>}
@@ -128,6 +131,17 @@ export function NodeInspector({ view, nodeId, design }: { view: WorkstreamView; 
   );
 }
 
+/** Nothing selected in a running workstream: a waiting spawn request, and the spawning rules. */
+export function WorkstreamPanel({ view }: { view: WorkstreamView }) {
+  return (
+    <aside className="insp" aria-label="Workstream">
+      <PendingSpawn view={view} />
+      <SpawnSection view={view} />
+      <div className="faint small">Select an agent or a connection.</div>
+    </aside>
+  );
+}
+
 export function DesignPanel({ view, onLaunch, onSave, launching }: { view: WorkstreamView; onLaunch: () => void; onSave: () => void; launching: boolean }) {
   const hosts = useAppState((s) => s.hosts);
   const items = checklist(view, (h) => !!hosts[h] && linkView(hosts[h].link, hosts[h].authPrompt).connected, (h) => hosts[h]?.entry.name ?? h);
@@ -139,6 +153,7 @@ export function DesignPanel({ view, onLaunch, onSave, launching }: { view: Works
       <div className="sec"><div className="eyebrow">Before you launch</div>
         <div className="cl">{items.map((c, i) => <div key={i} className="ci"><Icon name={c.ok === "done" ? "done" : c.ok === "info" ? "lock" : c.ok === "bad" ? "failed" : "warn"} size="sm" className={c.ok === "done" ? "c-done" : c.ok === "info" ? "c-accent" : c.ok === "bad" ? "c-failed" : "c-needs"} /><div>{c.text}<div className="d">{c.detail}</div></div></div>)}</div>
       </div>
+      <SpawnSection view={view} />
       <div className="faint small">Select an agent or a connection to edit it. Drag agents to move them; drag from an agent's dot to connect.</div>
       <div className="insp-foot"><Button size="sm" onClick={onSave}>Save as draft</Button><span className="sp" /><Button size="sm" variant="primary" icon="send" disabled={!n} pending={launching} onClick={onLaunch}>Launch {toLaunch || n} agent{(toLaunch || n) === 1 ? "" : "s"}</Button></div>
     </aside>
