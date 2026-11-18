@@ -51,10 +51,10 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Build (zigbuild)
         if: matrix.zig
-        run: cargo zigbuild --release --locked -p marsad-agent --target ${{ matrix.target }}
+        run: cargo zigbuild --release -p marsad-agent --target ${{ matrix.target }}
       - name: Build
         if: ${{ !matrix.zig }}
-        run: cargo build --release --locked -p marsad-agent --target ${{ matrix.target }}
+        run: cargo build --release -p marsad-agent --target ${{ matrix.target }}
       - name: Collect
         shell: bash
         run: |
