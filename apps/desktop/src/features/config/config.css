@@ -1,0 +1,52 @@
+/* Agent config (mockup: configScreen). */
+.ac{display:grid;grid-template-columns:372px 1fr;flex:1;min-height:0}
+.ac>*{min-height:0;min-width:0}
+.stack{border-right:1px solid var(--line);overflow:auto;padding:12px 14px;display:flex;flex-direction:column;background:var(--surface)}
+.stack-cap{margin-bottom:6px}
+.layer{border:1px solid var(--line-2);border-radius:var(--r3);padding:8px 11px;display:flex;flex-direction:column;gap:4px;background:var(--win);cursor:pointer;width:100%;text-align:left;color:inherit;font:inherit}
+.layer.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
+.layer.na{opacity:.6;cursor:not-allowed}
+.layer:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.layer .lh{display:flex;align-items:center;gap:8px;font-weight:600;font-size:12.5px}
+.layer .lh .lv{font-family:var(--f-mono);font-size:10.5px;color:var(--fg-3);font-weight:500}
+.layer .lh .sp{flex:1}
+.layer .dl{font-size:11.5px;display:flex;gap:6px;align-items:center;color:var(--fg-2);min-width:0}
+.layer .dl.fg{color:var(--fg)}
+.layer .dl .op{font-family:var(--f-mono);width:12px;text-align:center;font-weight:700;flex:none}
+.layer.base{background:var(--sunken);border-style:dashed;cursor:default}
+.layer .ro{font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--fg-3);border:1px solid var(--line-2);border-radius:4px;padding:0 5px}
+.layer .srcs{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
+.layer .srcs .mono{font-size:10.5px;color:var(--fg);padding:0 5px;border:1px solid var(--line-2);border-radius:4px;background:var(--surface);white-space:nowrap}
+.arrowup{display:flex;justify-content:center;color:var(--fg-3);padding:1px 0}
+.arrowup .i{transform:rotate(180deg);width:12px;height:12px}
+.ctxsel{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.ctxsel .seg.drvseg{display:grid;grid-template-columns:1fr 1fr}
+.drvseg button{display:inline-flex;align-items:center;gap:6px;justify-content:flex-start;min-width:0}
+.drvseg button>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.eff{display:flex;flex-direction:column;min-height:0}
+.eff-h{padding:12px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.eff-h .sp{flex:1}
+.eff-b{overflow:auto;flex:1;padding:12px 20px 16px;display:flex;flex-direction:column;gap:8px}
+.etab{width:100%;border-collapse:collapse;font-size:12px}
+.etab th{position:sticky;top:0;background:var(--win);text-align:left;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--fg-3);padding:10px 8px 8px;border-bottom:1px solid var(--line);z-index:1}
+.etab td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}
+.etab .cat td{padding:14px 8px 6px;font-size:12px;font-weight:700;border-bottom:1px solid var(--line-2);color:var(--fg)}
+.etab .nm{font-weight:600;display:flex;align-items:center;gap:8px}
+.etab .ds{font-size:11.5px;color:var(--fg-3);overflow-wrap:anywhere}
+.etab tr.off td:not(.keep){opacity:.55}
+.etab tr.uns .nm,.etab tr.uns .ds,.etab tr.uns td.src{opacity:.5}
+.etab .src{font-family:var(--f-mono);font-size:11px;color:var(--fg-3);white-space:nowrap}
+.etab tr.wasl td{background:var(--accent-bg)}
+.etab .onc{width:60px;text-align:center}
+.lockcell{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--fg-3);white-space:nowrap}
+.led{display:flex;flex-direction:column;gap:14px}
+.led-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--r2)}
+.led-list li{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line);font-size:12px;min-width:0}
+.led-list li:last-child{border-bottom:0}
+.led-list li .faint{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.led-list .sp,.row-gap .sp{flex:1}
+.led-add{display:grid;grid-template-columns:150px 110px 1fr;gap:8px}
+.led-env{display:flex;align-items:center;gap:6px;font-size:12px}
+.chkl{display:inline-flex;gap:6px;align-items:center;color:var(--fg-2)}
+@media (max-width:1240px){.ac{grid-template-columns:330px 1fr}}
+@media (max-width:1100px){.ac{grid-template-columns:290px 1fr}.etab .src{display:none}}
