@@ -73,9 +73,13 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
   useEffect(() => {
     if (!open || !inv?.installed) return setEff(null);
     let off = false;
-    api.config.effective({ host: f.host, driver: f.driver, project: f.cwd || null }).then((e) => !off && setEff(e), () => !off && setEff(null));
+    // Asked once typing in the folder field settles: every folder asked about is discovered.
+    const h = setTimeout(() => {
+      api.config.effective({ host: f.host, driver: f.driver, project: f.cwd || null }).then((e) => !off && setEff(e), () => !off && setEff(null));
+    }, 500);
     return () => {
       off = true;
+      clearTimeout(h);
     };
   }, [api, open, f.host, f.driver, f.cwd, inv?.installed]);
 

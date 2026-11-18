@@ -130,6 +130,11 @@ fs.writeFileSync(scenarioPath, JSON.stringify(scenario, null, 2));
 const FAKE = REAL ? ["codex"] : ["claude", "codex", "opencode", "kilo"];
 const daemonArgs = ["--stop-grace-ms", "1500"];
 for (const d of FAKE) daemonArgs.push("--driver-bin", `${d}=${bin.fake}`, "--driver-env", `${d}=WASIT_FAKE_PERSONA=${d}`, "--driver-env", `${d}=WASIT_FAKE_SCENARIO=${scenarioPath}`);
+// The app's own XDG dirs are this run's temp dirs (window state etc.); the real CLIs keep the
+// user's: their logins, providers and settings live there.
+const home = os.homedir();
+const userXdg = { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? path.join(home, ".local/share") };
+if (REAL) for (const d of ["claude", "opencode", "kilo"]) for (const [k, v] of Object.entries(userXdg)) daemonArgs.push("--driver-env", `${d}=${k}=${v}`);
 
 // ── the app under WebDriver ──────────────────────────────────────────────────
 
