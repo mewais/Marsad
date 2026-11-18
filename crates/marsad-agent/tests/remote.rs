@@ -86,9 +86,7 @@ async fn session_event(sub: &mut wasit_runtime::TypedSubscription<SessionEvent>)
 
 async fn stop_hub(c: &MarsadClient) {
     if let Ok(i) = c.daemon_info(None).await {
-        let _ = std::process::Command::new("kill")
-            .arg(i.pid.to_string())
-            .status();
+        stop_pid(i.pid);
     }
 }
 

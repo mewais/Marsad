@@ -268,8 +268,15 @@ fn check_rel(path: &str) -> Result<(), MarsadError> {
     let p = Path::new(path);
     if path.is_empty()
         || p.is_absolute()
-        || p.components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
+        // `/x` and `C:x` are not absolute on Windows, but they are not relative either.
+        || p.components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
     {
         return Err(MarsadError::invalid(format!(
             "{path:?} must be a path relative to the repository root"
@@ -476,6 +483,12 @@ mod tests {
         assert_eq!(truncate_lines("ab\n", 7), ("ab\n".to_string(), false));
         assert!(check_rel("../x").is_err());
         assert!(check_rel("/x").is_err());
+        #[cfg(windows)]
+        {
+            assert!(check_rel("C:\\x").is_err());
+            assert!(check_rel("C:x").is_err());
+            assert!(check_rel("a\\..\\..\\x").is_err());
+        }
         assert!(check_rel("a/b").is_ok());
     }
 }

@@ -33,12 +33,55 @@ impl TempDir {
     }
 }
 
-/// Kill every process whose command line mentions `needle` (test cleanup).
+/// Kill every process whose command line mentions `needle` (test cleanup). On Windows the
+/// needle is matched as a plain substring (PowerShell `-like`), not a regex.
 pub fn pkill(needle: &str) {
+    #[cfg(unix)]
     let _ = std::process::Command::new("pkill")
         .args(["-9", "-f", needle])
         .stderr(Stdio::null())
         .status();
+    #[cfg(windows)]
+    {
+        let needle = needle.replace('\'', "''");
+        let script = format!(
+            "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{needle}*' -and $_.ProcessId -ne $PID }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+        );
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+/// Kill a process outright (`kill -9` / `taskkill /F`); a missing process is fine.
+pub fn kill_pid(pid: u32) {
+    #[cfg(unix)]
+    let mut cmd = {
+        let mut c = std::process::Command::new("kill");
+        c.args(["-9", &pid.to_string()]);
+        c
+    };
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = std::process::Command::new("taskkill");
+        c.args(["/F", "/PID", &pid.to_string()]);
+        c
+    };
+    let _ = cmd.stdout(Stdio::null()).stderr(Stdio::null()).status();
+}
+
+/// Ask a daemon to stop (`SIGTERM`; Windows has no polite signal for a detached process, so
+/// it is killed there). A missing process is fine.
+pub fn stop_pid(pid: u32) {
+    #[cfg(unix)]
+    let _ = std::process::Command::new("kill")
+        .arg(pid.to_string())
+        .stderr(Stdio::null())
+        .status();
+    #[cfg(windows)]
+    kill_pid(pid);
 }
 
 impl Drop for TempDir {
@@ -142,6 +185,8 @@ pub fn git_repo(dir: &Path) {
     sh(dir, &["git", "init", "-q", "-b", "main"]);
     sh(dir, &["git", "config", "user.email", "t@example.com"]);
     sh(dir, &["git", "config", "user.name", "T"]);
+    // Byte-exact contents on every platform (Git for Windows defaults to autocrlf).
+    sh(dir, &["git", "config", "core.autocrlf", "false"]);
     std::fs::write(dir.join("a.txt"), "one\ntwo\nthree\n").unwrap();
     std::fs::write(dir.join("b.txt"), "keep\n").unwrap();
     sh(dir, &["git", "add", "."]);

@@ -1,5 +1,4 @@
 //! `git.*` on a temp repository and `pty.*` (echo + scrollback replay), through the client.
-#![cfg(unix)]
 
 mod common;
 
@@ -123,7 +122,31 @@ async fn git_on_a_local_repo() {
     let c = client(&d.path().join("d"));
     git_roundtrip(&c, None, &repo).await;
     let pid = c.daemon_info(None).await.unwrap().pid;
-    sh(d.path(), &["kill", &pid.to_string()]);
+    stop_pid(pid);
+}
+
+// Commands whose typed text does not contain what they print, so the echo of the input is
+// never mistaken for the output.
+#[cfg(unix)]
+const SHELL: &str = "/bin/sh";
+#[cfg(unix)]
+const ECHO_42: &str = "echo marsad-$((40+2))";
+#[cfg(unix)]
+const ECHO_2: &str = "echo after-$((1+1))";
+#[cfg(windows)]
+const SHELL: &str = "cmd.exe";
+#[cfg(windows)]
+const ECHO_42: &str = "echo marsad-4^2";
+#[cfg(windows)]
+const ECHO_2: &str = "echo after-^2";
+
+/// A typed line, ended the way the platform's terminal ends one (Enter).
+fn line(cmd: &str) -> String {
+    if cfg!(windows) {
+        format!("{cmd}\r")
+    } else {
+        format!("{cmd}\n")
+    }
 }
 
 fn decode(e: &PtyEvent) -> (u64, String) {
@@ -152,15 +175,13 @@ async fn pty_echo_and_scrollback_replay() {
                 target: GitTarget::cwd(d.path().to_string_lossy()),
                 cols: 80,
                 rows: 24,
-                shell: Some("/bin/sh".into()),
+                shell: Some(SHELL.into()),
             },
         )
         .await
         .unwrap();
     let mut out = c.pty_output(None, &info.id, None);
-    c.pty_input(None, &info.id, "echo marsad-$((40+2))\n")
-        .await
-        .unwrap();
+    c.pty_input(None, &info.id, &line(ECHO_42)).await.unwrap();
     let mut text = String::new();
     let mut last = 0u64;
     while !text.contains("marsad-42") {
@@ -170,7 +191,6 @@ async fn pty_echo_and_scrollback_replay() {
         last = cur.as_u64().unwrap();
         text.push_str(&chunk);
     }
-    c.pty_resize(None, &info.id, 100, 30).await.unwrap();
     drop(out);
 
     // "Reopening the tab": a fresh subscription replays the scrollback from the start…
@@ -180,9 +200,7 @@ async fn pty_echo_and_scrollback_replay() {
     assert_eq!(off, 0);
     assert!(replay.contains("marsad-42"));
     // …and one resuming from a cursor gets only what came after it.
-    c.pty_input(None, &info.id, "echo after-$((1+1))\n")
-        .await
-        .unwrap();
+    c.pty_input(None, &info.id, &line(ECHO_2)).await.unwrap();
     let mut resumed = c.pty_output(None, &info.id, Some(last));
     let mut text = String::new();
     while !text.contains("after-2") {
@@ -192,10 +210,12 @@ async fn pty_echo_and_scrollback_replay() {
         text.push_str(&chunk);
     }
     assert!(!text.contains("marsad-42"));
+    // Resized after the cursor checks: ConPTY repaints the whole screen on a resize.
+    c.pty_resize(None, &info.id, 100, 30).await.unwrap();
     let listed = c.pty_list(None).await.unwrap();
     assert_eq!((listed[0].cols, listed[0].rows), (100, 30));
 
-    c.pty_input(None, &info.id, "exit 3\n").await.unwrap();
+    c.pty_input(None, &info.id, &line("exit 3")).await.unwrap();
     loop {
         match next(&mut again).await.1 {
             PtyEvent::Exited { code } => {
@@ -208,5 +228,5 @@ async fn pty_echo_and_scrollback_replay() {
     c.pty_close(None, &info.id).await.unwrap();
     assert!(c.pty_list(None).await.unwrap().is_empty());
     let pid = c.daemon_info(None).await.unwrap().pid;
-    sh(d.path(), &["kill", &pid.to_string()]);
+    stop_pid(pid);
 }

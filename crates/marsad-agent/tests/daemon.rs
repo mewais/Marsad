@@ -1,7 +1,6 @@
 //! The daemon through real processes: readiness and single instance, `--version`, the Wasl
 //! `mcp` server, `stop`; and through `marsad-client`: launch → prompt → gate → answer, store access,
 //! and a `kill -9` of the daemon mid-turn with the client restarting it on demand.
-#![cfg(unix)]
 
 mod common;
 
@@ -288,7 +287,7 @@ async fn launch_prompt_gate_answer_and_kill9_restart() {
     // and the client starts a new daemon on demand.
     let pid = c.daemon_info(None).await.unwrap().pid;
     let mut state = c.link().state();
-    sh(d.path(), &["kill", "-9", &pid.to_string()]);
+    kill_pid(pid);
     // The link notices (signalled), then reconnects to a daemon the client started.
     tokio::time::timeout(T, state.wait_for(|s| !s.is_connected()))
         .await
@@ -378,7 +377,7 @@ async fn launch_prompt_gate_answer_and_kill9_restart() {
     );
     rt.delete(&id).await.unwrap();
     let pid = c.daemon_info(None).await.unwrap().pid;
-    sh(d.path(), &["kill", &pid.to_string()]);
+    stop_pid(pid);
 }
 
 #[tokio::test]
@@ -433,5 +432,5 @@ async fn fs_and_base_config() {
     assert!(!base.refreshing);
     assert!(!base.errors.is_empty(), "{base:?}");
     let pid = c.daemon_info(None).await.unwrap().pid;
-    sh(d.path(), &["kill", &pid.to_string()]);
+    stop_pid(pid);
 }

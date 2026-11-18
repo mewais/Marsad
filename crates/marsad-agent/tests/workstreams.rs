@@ -2,7 +2,8 @@
 //! sshd on localhost, the embedded Wasl nodes and the fake agent CLI. Delegations are made the
 //! way the Wasl MCP server makes them (`wasl.delegate` on the sending session's host); every
 //! gate is answered through `session.command`, as a client would.
-#![cfg(target_os = "linux")]
+//! The ssh-host scenario needs a local sshd (Linux CI); the rest runs on every platform.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code, unused_imports))]
 
 mod common;
 
@@ -229,15 +230,14 @@ fn kill_ssh(port: u16) {
 
 async fn stop_hub(c: &MarsadClient) {
     let pid = c.daemon_info(None).await.unwrap().pid;
-    let _ = std::process::Command::new("kill")
-        .arg(pid.to_string())
-        .status();
+    stop_pid(pid);
 }
 
 /// orchestrator (hub) → w1 (hub) and w2 (ssh host): launch, parallel delegation, handoff
 /// gates in the fleet and workstreams topics answered via `session.command` (allow once,
 /// always allow — persisted into the document and surviving a hub restart), the worker's
 /// native gate, a link drop mid-task, and a hub restart mid-task with the topology re-pushed.
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_nodes_across_local_and_ssh_host() {
     let d = TempDir::new();
