@@ -1,0 +1,72 @@
+import { act, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it } from "vitest";
+import { hostKindOf } from "../../src/features/hosts/AddHostDialog";
+import { quietBackend, renderApp } from "../helpers";
+
+async function hostsPage(path = "/hosts") {
+  const backend = quietBackend();
+  const r = await renderApp("/inbox", backend);
+  act(() => r.history.push(path));
+  await screen.findByRole("listbox", { name: "Hosts" });
+  return r;
+}
+
+describe("hosts", () => {
+  it("lists every host with its link in words and installed CLIs", async () => {
+    await hostsPage();
+    const list = screen.getByRole("listbox", { name: "Hosts" });
+    const row = (id: string) => list.querySelector(`[data-host="${id}"]`) as HTMLElement;
+    expect(within(row("win")).getByText(/Reconnecting/)).toBeInTheDocument();
+    expect(within(row("gpu")).getByText("Sign-in needed")).toBeInTheDocument();
+    expect(within(row("pi")).getByText(/Updating helper/)).toBeInTheDocument();
+    await waitFor(() => expect(within(row("x1")).getByText("2.1.4")).toBeInTheDocument());
+  });
+
+  it("auth_needed waits for an explicit Connect, then walks secret, one-time code and push prompts", async () => {
+    const user = userEvent.setup();
+    const { backend } = await hostsPage("/hosts?h=gpu");
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    const dlg = await screen.findByRole("dialog", { name: "Sign in to gpu-box" });
+    expect(within(dlg).getByTestId("auth-prompt-text")).toHaveTextContent("ml@10.0.4.21's password:");
+    const pw = within(dlg).getByLabelText("Password or passphrase");
+    expect(pw).toHaveAttribute("type", "password");
+    await user.type(pw, "wrong");
+    await user.click(within(dlg).getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByText(/That did not work. Try again \(attempt 2\)/)).toBeInTheDocument();
+    expect((screen.getByLabelText("Password or passphrase") as HTMLInputElement).value).toBe("");
+    await user.type(screen.getByLabelText("Password or passphrase"), "hunter2");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    const code = await screen.findByLabelText("One-time code");
+    expect(code).toHaveAttribute("autocomplete", "one-time-code");
+    await user.type(code, "123456");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByText(/Waiting for approval on your device/)).toBeInTheDocument();
+    expect(screen.getByTestId("auth-prompt-text")).toHaveTextContent(/Duo Push/);
+    const answers = backend.requests.filter((r) => r.method === "hosts.auth_answer").map((r) => (r.params as { answer: string }).answer);
+    expect(answers).toEqual(["wrong", "hunter2", "123456"]);
+  });
+
+  it("yes/no prompts answer yes or no; cancel gives up", async () => {
+    const user = userEvent.setup();
+    const { backend } = await hostsPage("/hosts?h=gpu");
+    act(() => backend.setAuthPrompt("gpu", { prompt: "The authenticity of host 'gpu-box' can't be established.\nAre you sure you want to continue connecting (yes/no)?", kind: "confirm", attempt: 1 }));
+    const dlg = await screen.findByRole("dialog", { name: "Sign in to gpu-box" });
+    expect(within(dlg).getByTestId("auth-prompt-text").textContent).toContain("can't be established.\nAre you sure");
+    await user.click(within(dlg).getByRole("button", { name: "Cancel sign-in" }));
+    await waitFor(() => expect(backend.requests.some((r) => r.method === "hosts.auth_cancel")).toBe(true));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sign in to gpu-box" })).toBeNull());
+  });
+
+  it("add host: builds the host kind and shows live progress", async () => {
+    expect(hostKindOf({ kind: "ssh", name: "x", target: "ops@ci", port: "2222", identity: "", options: "ProxyJump=b", distro: "" })).toEqual({ kind: "ssh", target: "ops@ci", port: 2222, identity_file: null, options: ["ProxyJump=b"] });
+    const user = userEvent.setup();
+    const { backend } = await hostsPage("/hosts?add=1");
+    const dlg = await screen.findByRole("dialog", { name: "Add host" });
+    await user.click(await within(dlg).findByRole("button", { name: /ci-runner-02/ }));
+    expect(within(dlg).getByLabelText("SSH target")).toHaveValue("ci-runner-02");
+    await user.click(within(dlg).getByRole("button", { name: "Add and connect" }));
+    await waitFor(() => expect(backend.requests.find((r) => r.method === "hosts.add")?.params).toMatchObject({ name: "ci-runner-02", kind: { kind: "ssh", target: "ci-runner-02", port: 22 } }));
+    expect(await within(dlg).findByText(/Found Claude Code 2.1.4/, {}, { timeout: 3000 })).toBeInTheDocument();
+  });
+});

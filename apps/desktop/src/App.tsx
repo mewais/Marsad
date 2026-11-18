@@ -3,6 +3,7 @@ import { createBackend, type Backend } from "./bridge";
 import { Placeholder } from "./features/Placeholder";
 import { InboxPage } from "./features/inbox/InboxPage";
 import { SessionPage } from "./features/session/SessionPage";
+import { HostsPage } from "./features/hosts/HostsPage";
 import { hashHistory, RouterProvider, useRoute, type History } from "./router";
 import { AppShell } from "./shell/AppShell";
 import { installShortcuts } from "./shortcuts/registry";
@@ -19,7 +20,7 @@ function Routes() {
     case "workstreams":
       return <Placeholder title="Workstreams" icon="graph" />;
     case "hosts":
-      return <Placeholder title="Hosts" icon="server" />;
+      return <HostsPage q={r.q} />;
     case "config":
       return <Placeholder title="Config" icon="layers" />;
     case "settings":

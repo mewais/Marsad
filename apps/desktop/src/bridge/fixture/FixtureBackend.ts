@@ -306,7 +306,7 @@ export class FixtureBackend implements Backend {
     }
     if (p.kind === "code") {
       this.setAuthPrompt(a.host, { prompt: "Duo Push sent to “iPhone 15”. Approve the request on your device to continue.", kind: "info", attempt: 1 });
-      this.later(2500 * this.opts.speed, () => this.finishAuth(a.host, p.id + 1));
+      this.later(2500 * (this.opts.speed || 1), () => this.finishAuth(a.host, p.id + 1));
       return;
     }
     this.finishAuth(a.host, a.id);
