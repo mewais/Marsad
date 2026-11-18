@@ -1,3 +1,4 @@
+import { permissionKind } from "../lib/gatewords";
 import type { GitSummary, HostId, PendingGate, SeenMark, SessionKey, SessionSnapshot } from "../bridge/wire";
 import { sessionKey } from "../bridge/wire";
 import { basename } from "../lib/format";
@@ -47,7 +48,7 @@ export function sessionLine(s: SessionSnapshot): string {
       const g = s.pending_gates[0]?.gate;
       if (!g) return "Waiting for you";
       if (g.gate_type === "question") return `Asks: ${g.questions[0]?.question ?? "a question"}`;
-      if (g.gate_type === "permission") return `Wants to run ${g.command}`;
+      if (g.gate_type === "permission") return permissionKind(g) === "question" ? `Asks: ${g.command}` : permissionKind(g) === "command" ? `Wants to run ${g.command}` : `Wants to use ${g.tool_name}: ${g.command}`;
       if (g.gate_type === "plan") return "Plan waiting for approval";
       return `Handoff waiting: ${g.from} wants to delegate “${g.instruction}”`;
     }
@@ -62,9 +63,13 @@ export function sessionLine(s: SessionSnapshot): string {
   }
 }
 
-/** The name the user gave the session, else its first prompt (`title`), else the id. */
+/**
+ * The name the user gave the session, else its first prompt (`title`), else the prompt it is
+ * working on, else its folder. Never the raw session id.
+ */
 export function sessionName(s: SessionSnapshot): string {
-  return s.display_name?.trim() || s.title?.trim() || s.id;
+  const prompt = s.turn?.prompt?.trim().split("\n")[0];
+  return s.display_name?.trim() || s.title?.trim() || (prompt ? (prompt.length > 60 ? `${prompt.slice(0, 59)}…` : prompt) : "") || (s.cwd ? `New session in ${basename(s.cwd)}` : "New session");
 }
 
 const statCache = new WeakMap<GitSummary, SessionView["stat"]>();

@@ -1,3 +1,4 @@
+import { permissionShort } from "../../lib/gatewords";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { clockTime, compactNumber, money } from "../../lib/format";
 import { Link, sessionPath, useNavigate } from "../../router";
@@ -158,7 +159,7 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
                   {gates.map((pg) => (
                     <a key={pg.gate.request_id} href={`#gate-${pg.gate.request_id}`} onClick={(e) => { e.preventDefault(); document.getElementById(`gate-${pg.gate.request_id}`)?.scrollIntoView({ block: "center" }); }}>
                       <Icon name={pg.gate.gate_type === "permission" ? "shield" : pg.gate.gate_type === "handoff" ? "handoff" : "needs"} size="sm" className="c-needs" />
-                      {pg.gate.gate_type === "permission" ? `Run ${pg.gate.command.slice(0, 28)}` : pg.gate.gate_type === "question" ? pg.gate.questions[0]?.header || "Question" : pg.gate.gate_type === "handoff" ? "Handoff" : "Plan"}
+                      {pg.gate.gate_type === "permission" ? permissionShort(pg.gate) : pg.gate.gate_type === "question" ? pg.gate.questions[0]?.header || "Question" : pg.gate.gate_type === "handoff" ? "Handoff" : "Plan"}
                     </a>
                   ))}
                 </div>

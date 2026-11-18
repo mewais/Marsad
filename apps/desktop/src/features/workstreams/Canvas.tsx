@@ -3,7 +3,7 @@ import type { NodePosition, WorkstreamView } from "../../bridge/wire";
 import { linkView, osWord, useAppState, useHost } from "../../state";
 import { Button, ConnState, Icon, hostIcon } from "../../ui";
 import { GraphNode, NODE_H, NODE_W } from "./GraphNode";
-import { arrange, layoutGraph, type Laid, type LayoutInput } from "./layout";
+import { arrange, labelSize, layoutGraph, type Laid, type LayoutInput } from "./layout";
 import { edgeLabel, POLICY } from "./model";
 import { pathD } from "./route";
 
@@ -49,12 +49,17 @@ export function Canvas({ view, design, lanesFor, sel, onSelect, onConnect, onMov
   const [drag, setDrag] = useState<{ from: string; x: number; y: number } | null>(null);
   const [move, setMove] = useState<{ id: string; dx: number; dy: number; sx: number; sy: number } | null>(null);
   const nodeHost = useMemo(() => new Map(view.nodes.map((n) => [n.node, n.host])), [view.nodes]);
+  const edgeViews = useMemo(() => new Map(view.edges.map((e) => [edgeKey(e.from, e.to), e])), [view.edges]);
 
   const input: LayoutInput = useMemo(() => ({
     lanes: lanesFor.map((host) => ({ host })),
     nodes: w.nodes.map((n) => ({ id: n.id, host: nodeHost.get(n.id) ?? n.launch?.host ?? lanesFor[0], w: design ? NODE_W + 26 : NODE_W, h: NODE_H, pos: w.layout?.[n.id] ?? null })),
-    edges: w.edges.map((e) => ({ id: edgeKey(e.from, e.to), from: e.from, to: e.to })),
-  }), [w.nodes, w.edges, w.layout, lanesFor, nodeHost, design]);
+    edges: w.edges.map((e) => {
+      const ev = edgeViews.get(edgeKey(e.from, e.to));
+      const lab = ev ? edgeLabel(ev) : null;
+      return { id: edgeKey(e.from, e.to), from: e.from, to: e.to, label: labelSize(lab ? `${lab.text}${lab.tasks ? ` · ${lab.tasks} tasks` : ""}` : POLICY[e.policy].word) };
+    }),
+  }), [w.nodes, w.edges, w.layout, lanesFor, nodeHost, design, edgeViews]);
   const shape = JSON.stringify(input);
   useEffect(() => {
     let off = false;
@@ -104,7 +109,6 @@ export function Canvas({ view, design, lanesFor, sel, onSelect, onConnect, onMov
     if (!laid || !wrap.current) return;
     setZoom(Math.max(0.5, Math.min(1.25, (wrap.current.clientWidth - 24) / laid.width)));
   };
-  const edges = new Map(view.edges.map((e) => [edgeKey(e.from, e.to), e]));
   const pending = view.edges.find((e) => e.pending_gates.length);
 
   return (
@@ -156,7 +160,7 @@ export function Canvas({ view, design, lanesFor, sel, onSelect, onConnect, onMov
           {w.edges.map((e) => {
             const k = edgeKey(e.from, e.to);
             const g = laid.edges[k];
-            const ev = edges.get(k);
+            const ev = edgeViews.get(k);
             if (!g || !ev) return null;
             const lab = edgeLabel(ev);
             const on = sel?.kind === "edge" && edgeKey(sel.from, sel.to) === k;

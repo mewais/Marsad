@@ -108,20 +108,72 @@ function simplify(p: Pt[]): Pt[] {
 
 export const pathD = (p: Pt[]) => p.map((q, i) => `${i ? "L" : "M"}${Math.round(q.x)} ${Math.round(q.y)}`).join(" ");
 
-/** Where to put an edge's label: the middle of its longest horizontal run (they lie in the gaps between rows), else its longest segment. */
-export function labelAt(p: Pt[], taken: Pt[] = []): Pt {
-  let best = 0, at = { x: p[0].x, y: p[0].y };
-  const clash = (q: Pt) => taken.some((t) => Math.abs(t.x - q.x) < 140 && Math.abs(t.y - q.y) < 24);
-  for (const horizontalOnly of [true, false]) {
-    for (let i = 1; i < p.length; i++) {
-      if (horizontalOnly && p[i].y !== p[i - 1].y) continue;
-      if (clash({ x: (p[i].x + p[i - 1].x) / 2, y: (p[i].y + p[i - 1].y) / 2 })) continue;
-      const l = Math.abs(p[i].x - p[i - 1].x) + Math.abs(p[i].y - p[i - 1].y);
-      if (l > best) { best = l; at = { x: (p[i].x + p[i - 1].x) / 2, y: (p[i].y + p[i - 1].y) / 2 }; }
+export interface Size {
+  w: number;
+  h: number;
+}
+const GAP = 4;
+const overlaps = (a: Rect, b: Rect, m = GAP) => a.x < b.x + b.w + m && b.x < a.x + a.w + m && a.y < b.y + b.h + m && b.y < a.y + a.h + m;
+export const rectAt = (c: Pt, s: Size): Rect => ({ x: c.x - s.w / 2, y: c.y - s.h / 2, w: s.w, h: s.h });
+
+/**
+ * Where to put an edge's label (its centre): on a free stretch of the edge itself, where the label
+ * box overlaps no node and no label already placed. Candidates slide along every segment from its
+ * middle outwards; horizontal runs (the gaps between rows) and longer segments are preferred. When
+ * the edge has no free stretch long enough (nodes packed tight), the nearest free spot beside the
+ * edge is used; the least-overlapping candidate only if even that fails.
+ */
+export function labelAt(p: Pt[], size: Size, nodes: Rect[], taken: Rect[] = []): Pt {
+  let best: { at: Pt; score: number } | null = null;
+  let fallback: { at: Pt; hits: number } | null = null;
+  const samples: Pt[] = [];
+  for (let i = 1; i < p.length; i++) {
+    const a = p[i - 1], b = p[i];
+    const len = Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
+    const horiz = a.y === b.y;
+    const steps = Math.max(1, Math.floor(len / 6));
+    for (let k = 0; k <= steps; k++) {
+      // from the middle outwards: 0, +1, -1, +2, -2 …
+      const off = (k % 2 ? 1 : -1) * Math.ceil(k / 2) / steps;
+      const t = 0.5 + off;
+      if (t < 0 || t > 1) continue;
+      const at = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      const hits = hitsAt(at);
+      samples.push(at);
+      if (hits) {
+        if (!fallback || hits < fallback.hits) fallback = { at, hits };
+        continue;
+      }
+      const score = (horiz ? 1000 : 0) + Math.min(len, 400) - Math.abs(off) * len * 0.8;
+      if (!best || score > best.score) best = { at, score };
     }
-    if (best >= 90) break;
   }
-  return at;
+  if (best) return best.at;
+  // Beside the edge: rings of growing radius around the samples, nearest free spot wins.
+  for (let rad = 8; rad <= 240; rad += 8) {
+    for (const s of samples) {
+      for (const [dx, dy] of [[0, -1], [0, 1], [1, 0], [-1, 0], [1, -1], [-1, -1], [1, 1], [-1, 1]]) {
+        const at = { x: s.x + dx * rad, y: s.y + dy * rad };
+        if (!hitsAt(at)) return at;
+      }
+    }
+  }
+  return fallback?.at ?? { x: p[0].x, y: p[0].y };
+
+  function hitsAt(at: Pt): number {
+    const r = rectAt(at, size);
+    return nodes.filter((n) => overlaps(r, n)).length + taken.filter((n) => overlaps(r, n)).length;
+  }
+}
+
+/** Number of (label, node) and (label, label) overlaps among placed label boxes (should be none). */
+export function labelOverlaps(labels: Rect[], nodes: Rect[]): number {
+  let n = 0;
+  labels.forEach((l, i) => {
+    n += nodes.filter((r) => overlaps(l, r, 0)).length;
+    n += labels.slice(i + 1).filter((r) => overlaps(l, r, 0)).length;
+  });
+  return n;
 }
 
 /** Every segment of `path` that enters a node it does not start or end at (should be none). */

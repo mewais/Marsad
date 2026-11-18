@@ -1,3 +1,5 @@
+import { permissionKind, permissionLine, permissionTitle } from "../../src/lib/gatewords";
+import { sessionName } from "../../src/state/domain";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
@@ -150,5 +152,24 @@ describe("gate components", () => {
     expect(await ok).toBe(false);
     expect(await screen.findByRole("alert")).toHaveTextContent(/win-build is not connected/);
     expect(Object.keys(app.store.get().pending)).toHaveLength(0);
+  });
+});
+
+describe("permission gate wording", () => {
+  const perm = (over: Record<string, unknown>) => ({ gate_type: "permission", request_id: "r", tool_name: "question", command: "Which cookie migration should I implement?", cwd: "", explanation: "", choices: [], raw_input: null, ...over }) as Parameters<typeof permissionKind>[0];
+  it("an ACP permission-with-options that is a question reads as a question, never 'Run'", () => {
+    const q = perm({ tool_name: "question", raw_input: { questions: [{ question: "Which cookie migration should I implement?" }] } });
+    expect(permissionKind(q)).toBe("question");
+    expect(permissionLine(q)).toEqual({ prefix: "", text: "Which cookie migration should I implement?", code: false });
+    expect(permissionTitle(q)).toBe("Question");
+  });
+  it("only command executions say Run; other tools name the tool", () => {
+    expect(permissionLine(perm({ tool_name: "Bash", command: "pnpm test", raw_input: { command: "pnpm test" } })).prefix).toBe("Run ");
+    expect(permissionLine(perm({ tool_name: "execute", command: "ls", raw_input: null })).prefix).toBe("Run ");
+    expect(permissionLine(perm({ tool_name: "Edit", command: "src/a.ts", raw_input: { file_path: "src/a.ts" } })).prefix).toBe("Edit: ");
+  });
+  it("a session without a name is never shown by its id", () => {
+    const s = { id: "4f1c9a2e-77", display_name: null, title: null, cwd: "/w/auth-service", turn: null } as unknown as Parameters<typeof sessionName>[0];
+    expect(sessionName(s)).toBe("New session in auth-service");
   });
 });

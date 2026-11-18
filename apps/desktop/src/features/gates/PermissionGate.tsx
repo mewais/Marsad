@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import type { GateRequest, PendingGate } from "../../bridge/wire";
 import { agoLong } from "../../lib/format";
 import { useShortcut } from "../../shortcuts/useShortcut";
-import { useDriver, type SessionView } from "../../state";
+import { useDriver, useHost, type SessionView } from "../../state";
 import { Button, Icon } from "../../ui";
 import { ChoiceButtons, ReasonBox, SourceCaption } from "./parts";
 import type { GateDensity } from "./Gate";
 import { usePermissionGate } from "./useGate";
+import { permissionKind, permissionLine, permissionTitle } from "../../lib/gatewords";
 
 type P = PendingGate & { gate: Extract<GateRequest, { gate_type: "permission" | "plan" }> };
 
@@ -21,17 +22,24 @@ function PermissionKeys({ g }: { g: ReturnType<typeof usePermissionGate> }) {
   return null;
 }
 
-const title = (g: P["gate"]) => (g.gate_type === "plan" ? "Plan waiting for approval" : `Run ${g.tool_name === "Bash" || g.tool_name === "shell" ? "a shell command" : `${g.tool_name}`}`);
-const summary = (g: P["gate"]) => (g.gate_type === "plan" ? g.summary : g.command);
+const title = (g: P["gate"]) => (g.gate_type === "plan" ? "Plan waiting for approval" : permissionTitle(g));
+/** The gate's one line: a plan's summary, "Run <command>", a question as plain text, "<tool>: <what>". */
+function Line({ g }: { g: P["gate"] }) {
+  if (g.gate_type === "plan") return <>Plan: <code>{g.summary}</code></>;
+  const l = permissionLine(g);
+  return <>{l.prefix}{l.code ? <code>{l.text}</code> : <span className="gq-text">{l.text}</span>}</>;
+}
 
 export function PermissionGate({ view, pg, density, active, expanded, onActivate }: { view: SessionView; pg: P; density: GateDensity; active: boolean; expanded: boolean; onActivate?: () => void }) {
   const g = usePermissionGate(view, pg);
   const d = useDriver(view.driver);
+  const host = useHost(view.host);
   const [details, setDetails] = useState(false);
   const reasonRef = useRef<HTMLInputElement>(null);
   const focusReason = () => setTimeout(() => reasonRef.current?.focus(), 0);
   const gate = pg.gate;
   const isPlan = gate.gate_type === "plan";
+  const isQuestion = gate.gate_type === "permission" && permissionKind(gate) === "question";
   const textChoice = g.set.choices.find((c) => c.text !== "none");
   const needsReason = !!textChoice;
   const showReason = needsReason && (g.armed || g.reason !== "" || density === "full" || (density === "row" && expanded));
@@ -53,8 +61,8 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
       {active ? <PermissionKeys g={g} /> : null}
       {density === "row" && !expanded ? (
         <div className="gate-inline compact" data-gate="permission">
-          <Icon name={isPlan ? "list" : "shield"} size="sm" className="c-needs" />
-          <span className="gs">{isPlan ? "Plan: " : "Run "}<code>{summary(gate)}</code></span>
+          <Icon name={isPlan ? "list" : isQuestion ? "needs" : "shield"} size="sm" className="c-needs" />
+          <span className="gs"><Line g={gate} /></span>
           {src}
           <ChoiceButtons choices={g.set.choices} busy={g.busy} onChoose={choose} />
           <button type="button" className="iconbtn" aria-label="Review details" title="Review details" onClick={onActivate}>
@@ -64,11 +72,11 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
       ) : density === "row" ? (
         <div className="gate-inline" data-gate="permission">
           <div className="gq">
-            <Icon name={isPlan ? "list" : "shield"} />
+            <Icon name={isPlan ? "list" : isQuestion ? "needs" : "shield"} />
             <div>
-              <b>{title(gate)}</b> on {view.host}
+              <b>{title(gate)}</b> on {host?.name ?? view.host}
               <br />
-              <code>{summary(gate)}</code>
+              {gate.gate_type === "plan" ? <code>{gate.summary}</code> : isQuestion ? <span className="gq-text">{gate.command}</span> : <code>{gate.command}</code>}
             </div>
           </div>
           <div className="acts">
@@ -85,12 +93,12 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
       ) : (
         <div className="gate" data-gate="permission">
           <div className="gate-h">
-            <Icon name={isPlan ? "list" : "shield"} size="sm" />
-            {isPlan ? "Plan waiting for approval" : `Permission needed · ${gate.tool_name}`}
+            <Icon name={isPlan ? "list" : isQuestion ? "needs" : "shield"} size="sm" />
+            {isPlan ? "Plan waiting for approval" : isQuestion ? "Question" : `Permission needed · ${gate.tool_name}`}
             <span className="sp" />
             <span className="faint fw5">asked {agoLong(pg.raised_at_ms)}</span>
           </div>
-          {isPlan ? <div className="q prewrap">{gate.summary}</div> : <div className="cmd">{gate.command}</div>}
+          {isPlan ? <div className="q prewrap">{gate.summary}</div> : isQuestion ? <div className="q prewrap">{gate.command}</div> : <div className="cmd">{gate.command}</div>}
           {g.set.choices.some((c) => c.description) ? (
             <ul className="choice-notes faint fs115">
               {g.set.choices.filter((c) => c.description).map((c) => (
@@ -98,7 +106,7 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
               ))}
             </ul>
           ) : null}
-          {!isPlan && gate.explanation ? (
+          {!isPlan && !isQuestion && gate.explanation ? (
             <div className="risk">
               <Icon name="warn" size="sm" className="c-needs" />
               <span>{gate.explanation}</span>

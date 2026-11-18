@@ -1,7 +1,8 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { summarize, toggled } from "../../src/features/config/layers";
+import { rowAction, summarize, toggled } from "../../src/features/config/layers";
+import { provenance } from "../../src/features/config/provenance";
 import { mergeEffective } from "../../src/bridge/fixture/config";
 import { driverDef } from "../../src/bridge/fixture/catalog";
 import type { EffectiveItem } from "../../src/bridge/wire";
@@ -19,6 +20,21 @@ describe("config: override layers", () => {
     expect(toggled({ ...empty, items: [{ kind: "mcp_server", name: "github", action: "disable" }] }, offHere, h).items).toEqual([]);
     const offGlobal = { ...active, active: false, changed_by: { from: "layer", scope: g } } as EffectiveItem;
     expect(toggled(empty, offGlobal, h).items).toEqual([{ kind: "mcp_server", name: "github", action: "reset" }]);
+  });
+
+  it("an item a layer added offers remove (no reset badge); one it changed or switched off offers reset", () => {
+    const g = { scope: "global" as const };
+    const h = { scope: "host" as const, host: "x1" };
+    const added = { kind: "mcp_server", name: "docs", active: true, state: "added", origin: { from: "layer", scope: g }, changed_by: { from: "layer", scope: g } } as EffectiveItem;
+    expect(provenance(added, "Claude Code").map((b) => b.text)).toEqual(["added at Global"]);
+    expect(rowAction(added, g)).toBe("remove");
+    expect(rowAction(added, h)).toBeNull();
+    const changed = { ...added, state: "changed", origin: { from: "agent", source: { scope: "user" } } } as EffectiveItem;
+    expect(rowAction(changed, g)).toBe("reset");
+    const off = { ...changed, state: "disabled", active: false } as EffectiveItem;
+    expect(rowAction(off, g)).toBe("reset");
+    expect(rowAction(off, h)).toBeNull();
+    expect(provenance(off, "Claude Code").map((b) => b.text)).toEqual(["from Claude Code config", "turned off at Global"]);
   });
 
   it("layer summary marks added, changed and disabled items", () => {

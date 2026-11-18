@@ -19,7 +19,10 @@ export function provenance(it: EffectiveItem, driverName: string): Badge[] {
   else out.push({ cls: scopeCls(o.scope), text: `added at ${scopeWord(o.scope)}` });
   const c = it.changed_by;
   if (c && c.from === "layer") {
-    if (it.state === "disabled") out.push({ cls: "x", text: `turned off at ${scopeWord(c.scope)}` });
+    // An item added by a layer carries that same layer as `changed_by`: nothing more to say.
+    if (it.state === "added") {
+      if (o.from === "layer" && JSON.stringify(o.scope) !== JSON.stringify(c.scope)) out.push({ cls: scopeCls(c.scope), text: `changed at ${scopeWord(c.scope)}` });
+    } else if (it.state === "disabled") out.push({ cls: "x", text: `turned off at ${scopeWord(c.scope)}` });
     else if (it.state === "changed") out.push({ cls: scopeCls(c.scope), text: `changed at ${scopeWord(c.scope)}` });
     else out.push({ cls: "g", text: `reset at ${scopeWord(c.scope)}` });
   }

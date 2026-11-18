@@ -8,7 +8,7 @@ import { linkView, sessionName, useActions, useApi, useAppState, useHosts, usePe
 import { Button, DriverBadge, EmptyState, Icon, Segmented, Select, Skeleton, makeDriver, toast } from "../../ui";
 import { EffectiveTable } from "./EffectiveTable";
 import { LayerEditor } from "./LayerEditor";
-import { counts, layerOf, sources, summarize, toggled } from "./layers";
+import { counts, layerOf, sources, summarize, toggled, withoutOverride } from "./layers";
 import { KIND } from "./provenance";
 import "./config.css";
 
@@ -100,6 +100,7 @@ export function ConfigPage({ q }: { q: Record<string, string> }) {
     loadEff();
   };
   const onToggle = (it: EffectiveItem) => selLayer && sel.scope && void save(toggled(selLayer, it, sel.scope));
+  const onUndo = (it: EffectiveItem) => selLayer && void save(withoutOverride(selLayer, it.kind, it.name));
 
   const nItems = eff?.items.length ?? 0;
   const nActive = eff?.items.filter((i) => i.active && !i.unsupported).length ?? 0;
@@ -158,7 +159,7 @@ export function ConfigPage({ q }: { q: Record<string, string> }) {
           </div>
           <div className="eff-b">
             <div className="note"><Icon name="lock" size="sm" /><span>{drvName}'s own config files are never modified, and sessions you start in a terminal keep their normal setup. Switches below edit the <b>{sel.label}</b> layer. Marsad adds two things by itself: the Wasl connector (so an agent can delegate once a workstream connects it) and, for agents that cannot ask you questions themselves, the ask_user tool.</span></div>
-            {effErr ? <div className="c-failed small" role="alert">{effErr}</div> : !eff ? <div className="fl-pad"><Skeleton /><Skeleton width="80%" /><Skeleton width="60%" /></div> : <EffectiveTable eff={eff} driverName={drvName} filter={filter} onToggle={onToggle} busy={saving || !selLayer} />}
+            {effErr ? <div className="c-failed small" role="alert">{effErr}</div> : !eff ? <div className="fl-pad"><Skeleton /><Skeleton width="80%" /><Skeleton width="60%" /></div> : <EffectiveTable eff={eff} driverName={drvName} filter={filter} onToggle={onToggle} busy={saving || !selLayer} scope={sel.scope ?? null} onUndo={onUndo} />}
             {eff?.ignored.length ? <div className="note">{eff.ignored.map((i) => <span key={`${i.item.kind}${i.item.name}`}>{i.item.name}: {i.reason}</span>)}</div> : null}
             {eff?.unsupported.map((u) => <div key={u.item} className="note"><Icon name="minus" size="sm" /><span><b>{u.item}</b>: {u.reason}</span></div>)}
           </div>

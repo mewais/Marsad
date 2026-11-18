@@ -2,7 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { FixtureBackend } from "../../src/bridge/fixture/FixtureBackend";
-import { arrange, layoutGraph, totalCrossings, type LayoutInput } from "../../src/features/workstreams/layout";
+import { arrange, labelSize, layoutGraph, totalCrossings, totalLabelOverlaps, type LayoutInput } from "../../src/features/workstreams/layout";
 import { crossings, route } from "../../src/features/workstreams/route";
 import { checklist, edgeLabel, summary } from "../../src/features/workstreams/model";
 import type { WorkstreamView } from "../../src/bridge/wire";
@@ -25,6 +25,7 @@ describe("graph layout and routing", () => {
     for (const v of views()) {
       const l = await layoutGraph(inputOf(v));
       expect(totalCrossings(l)).toBe(0);
+      expect(totalLabelOverlaps(l)).toBe(0);
       expect(Object.keys(l.edges)).toHaveLength(v.workstream.edges.length);
       // lanes do not overlap and every node sits inside its host's lane
       for (const n of v.nodes) {
@@ -40,6 +41,34 @@ describe("graph layout and routing", () => {
     for (const v of views()) {
       const l = arrange(inputOf(v, true), {});
       expect(totalCrossings(l)).toBe(0);
+      expect(totalLabelOverlaps(l)).toBe(0);
+    }
+  });
+
+  it("puts edge labels on a free stretch of their edge: never on a node or another label", () => {
+    // The screenshot case: an edge runs down beside a node card to a node in the next lane.
+    const input: LayoutInput = {
+      lanes: [{ host: "vm" }, { host: "build" }],
+      nodes: [
+        { id: "orch", host: "vm", w: 230, h: 112, pos: { x: 340, y: 26 } },
+        { id: "pdf", host: "vm", w: 230, h: 112, pos: { x: 300, y: 228 } },
+        { id: "csv", host: "build", w: 230, h: 112, pos: { x: 430, y: 26 } },
+        { id: "other", host: "build", w: 230, h: 112, pos: { x: 700, y: 26 } },
+      ],
+      edges: [
+        { id: "orch>pdf", from: "orch", to: "pdf", label: labelSize("Ask each time · 1 task") },
+        { id: "orch>csv", from: "orch", to: "csv", label: labelSize("Handoff waiting") },
+        { id: "orch>other", from: "orch", to: "other", label: labelSize("Always allow · 2 tasks") },
+        { id: "pdf>csv", from: "pdf", to: "csv", label: labelSize("Ask each time") },
+      ],
+    };
+    const l = arrange(input, {});
+    expect(totalCrossings(l)).toBe(0);
+    expect(totalLabelOverlaps(l)).toBe(0);
+    // each label's centre lies on its own edge
+    for (const e of Object.values(l.edges)) {
+      const on = e.points.some((p, i) => i > 0 && Math.min(p.x, e.points[i - 1].x) <= e.label.x && e.label.x <= Math.max(p.x, e.points[i - 1].x) && Math.min(p.y, e.points[i - 1].y) <= e.label.y && e.label.y <= Math.max(p.y, e.points[i - 1].y));
+      expect(on).toBe(true);
     }
   });
 

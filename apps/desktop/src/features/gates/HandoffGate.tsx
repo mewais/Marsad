@@ -46,7 +46,7 @@ export function HandoffGate({ view, pg, density, active, expanded, onActivate }:
   const g = pg.gate;
   const buttons = (keys: boolean) => <ChoiceButtons choices={hg.set.choices} busy={hg.busy} onChoose={(c) => hg.choose(c)} keys={keys} />;
   const details = detailsText(g.details);
-  const payloadBox = payload ? <div className="payload" data-testid="handoff-payload"><span><b>Mode</b> {g.mode} · task {g.task_id}</span>{details ? <span className="mono">{details}</span> : null}</div> : null;
+  const payloadBox = payload ? <div className="payload" data-testid="handoff-payload"><span><b>Mode</b> {g.mode}</span>{details ? <span className="mono">{details}</span> : null}</div> : null;
   const keysOn = active;
   const keys = active ? <Keys g={hg} /> : null;
 

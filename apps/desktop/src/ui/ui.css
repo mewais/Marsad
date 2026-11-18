@@ -163,6 +163,7 @@ table.t td.r,table.t th.r{text-align:right;font-variant-numeric:tabular-nums}
 .prov.w{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,transparent)} .prov.s{color:var(--drv-2);border-color:color-mix(in srgb,var(--drv-2) 45%,transparent)}
 .prov.x{color:var(--failed);border-color:var(--failed-line)}
 .prov.wasl{color:var(--accent-fg);background:var(--accent);border-color:var(--accent)}
+.prov.chipbtn{cursor:pointer;color:var(--fg);background:var(--raised)} .prov.chipbtn:hover{border-color:var(--accent);color:var(--accent)} .prov.chipbtn:disabled{opacity:.5;cursor:default}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
 .tile{padding:12px 14px;display:flex;flex-direction:column;gap:2px}
 .tile .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}

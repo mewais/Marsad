@@ -28,6 +28,17 @@ export function toggled(layer: OverrideLayer, it: EffectiveItem, scope: LayerSco
   return byOther ? withOverride(layer, { kind: it.kind, name: it.name, action: "reset" }) : layer;
 }
 
+/**
+ * The chip a row offers for the selected layer: `remove` for an item this layer added (it goes
+ * away), `reset` for an inherited item this layer changed or switched off (back to what the
+ * broader layers say). Nothing otherwise.
+ */
+export function rowAction(it: EffectiveItem, scope: LayerScope | null): "remove" | "reset" | null {
+  if (!scope || it.changed_by?.from !== "layer" || !sameScope(it.changed_by.scope, scope)) return null;
+  if (it.state === "added" && it.origin.from === "layer" && sameScope(it.origin.scope, scope)) return "remove";
+  return it.state === "changed" || it.state === "disabled" ? "reset" : null;
+}
+
 export interface LayerLine {
   op: "+" | "~" | "−" | "↺" | "·";
   cls: string;
