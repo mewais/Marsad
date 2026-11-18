@@ -1,0 +1,17 @@
+[package]
+name = "marsad-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Persistence of Marsad-level data (hosts, settings, notification prefs, config layers, seen-markers, workstreams, recent projects), owned by the hub daemon"
+
+[dependencies]
+marsad-proto = { workspace = true }
+wasit-control = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]

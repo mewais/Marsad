@@ -195,6 +195,15 @@ dependencies = [
 [[package]]
 name = "marsad-store"
 version = "0.2.0"
+dependencies = [
+ "marsad-proto",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "wasit-control",
+]
 
 [[package]]
 name = "matchers"
