@@ -9,6 +9,9 @@ those. Re-pin after pushing Wasit with: move `.cargo/config.toml` aside, `cargo 
 for the wasit/wasl crates in `.` and `apps/desktop/src-tauri`, move it back. Release builds use
 `--locked`.
 
+CI (`ci.yml`, Linux/Windows/macOS): green at e60f4f5 —
+https://github.com/mewais/Marsad/actions/runs/44284211699
+
 ### This round
 - **CI** (Windows): `git` paths `/x` and `C:x` were accepted as repository-relative (fixed);
   daemon / git+pty / local workstream tests now run on Windows and macOS too (portable
