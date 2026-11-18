@@ -5,6 +5,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    branches: ["claude/awesome-euler-r7x45r"] # TEMP: lets the workflow register/run off main
   workflow_dispatch:
     inputs:
       draft_release:
