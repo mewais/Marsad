@@ -3,6 +3,9 @@
   "bundle": {
     "externalBin": [
       "binaries/marsad-agent"
-    ]
+    ],
+    "resources": {
+      "binaries/agents/": "agents/"
+    }
   }
 }

@@ -1,0 +1,213 @@
+name: Release
+
+# Tag `v*` -> build installers + helper binaries and publish a DRAFT GitHub Release.
+# Manual run -> build everything and upload workflow artifacts (optionally a draft prerelease).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      draft_release:
+        description: "Also create a draft PRERELEASE (v<version>-dev.<run>) from the build"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  # marsad-agent for the hosts Marsad provisions over SSH (and, for the app's own platform,
+  # the bundled sidecar). Static musl on Linux; pure-Rust deps, so no C toolchain issues.
+  agents:
+    name: agent ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-22.04, zig: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-22.04, zig: true }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-apple-darwin, os: macos-14 }
+          - { target: x86_64-apple-darwin, os: macos-14 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: agent-${{ matrix.target }}
+      - name: Zig + cargo-zigbuild
+        if: matrix.zig
+        run: |
+          pip install --user ziglang cargo-zigbuild
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build (zigbuild)
+        if: matrix.zig
+        run: cargo zigbuild --release --locked -p marsad-agent --target ${{ matrix.target }}
+      - name: Build
+        if: ${{ !matrix.zig }}
+        run: cargo build --release --locked -p marsad-agent --target ${{ matrix.target }}
+      - name: Collect
+        shell: bash
+        run: |
+          mkdir -p out
+          cp target/${{ matrix.target }}/release/marsad-agent* out/ 2>/dev/null || true
+          rm -f out/*.d out/*.pdb
+          ls -l out
+          file out/* || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ matrix.target }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 14
+
+  app:
+    name: app ${{ matrix.target }}
+    needs: agents
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            sidecar: x86_64-unknown-linux-musl
+            bundles: deb,rpm,appimage
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            sidecar: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - os: macos-14
+            target: aarch64-apple-darwin
+            sidecar: aarch64-apple-darwin
+            bundles: dmg
+          - os: macos-14
+            target: x86_64-apple-darwin
+            sidecar: x86_64-apple-darwin
+            bundles: dmg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+          key: app-${{ matrix.target }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - name: Linux packaging libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev build-essential patchelf rpm file
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agent-*
+          path: agents-dl
+      - name: Stage sidecar + remote-host helper resources
+        shell: bash
+        run: |
+          # agents-dl/agent-<triple>/ -> helpers/<triple>/
+          mkdir helpers
+          for d in agents-dl/agent-*; do mv "$d" "helpers/${d#agents-dl/agent-}"; done
+          scripts/stage-bundle.sh helpers "${{ matrix.target }}" "${{ matrix.sidecar }}"
+      - name: Optional macOS signing + notarization
+        # Active only when the secrets exist; Tauri reads these variables itself.
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "Signing enabled"
+            for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do
+              echo "$v<<EOF_$v" >> "$GITHUB_ENV"; echo "${!v}" >> "$GITHUB_ENV"; echo "EOF_$v" >> "$GITHUB_ENV"
+            done
+            if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+              echo "Notarization enabled"
+              for v in APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do echo "$v=${!v}" >> "$GITHUB_ENV"; done
+            fi
+          else
+            echo "No Apple signing secrets: building unsigned"
+          fi
+      # Windows signing hook: add a step here that signs the staged binaries / installers
+      # (for example Azure Trusted Signing or signtool with a certificate from a secret) and
+      # gate it with `if: env.WINDOWS_SIGN == 'true'`; or set `bundle.windows.signCommand` in
+      # a CI-only tauri config. Unsigned builds work without any of that (see docs/INSTALL.md).
+      - run: pnpm install --frozen-lockfile
+        working-directory: apps/desktop
+      - name: Build installers
+        working-directory: apps/desktop
+        run: pnpm tauri build --config src-tauri/tauri.bundle.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+        env:
+          NO_STRIP: "true"
+      - name: Collect installers
+        shell: bash
+        run: |
+          b=apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle
+          find "$b" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*-setup.exe' -o -name '*.msi' -o -name '*.dmg' \) -print
+          mkdir -p dist-installers
+          find "$b" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*-setup.exe' -o -name '*.msi' -o -name '*.dmg' \) -exec cp {} dist-installers/ \;
+          # macOS: both arches share the DMG name; tag it with the target.
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            for f in dist-installers/*.dmg; do
+              case "$f" in *aarch64*|*x64*|*x86_64*) ;; *) mv "$f" "${f%.dmg}_${{ matrix.target }}.dmg";; esac
+            done
+          fi
+          ls -l dist-installers
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.target }}
+          path: dist-installers/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: draft release
+    needs: [agents, app]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.draft_release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+      - name: Collect + checksums
+        run: scripts/collect-release.sh dl release-files
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag="${{ github.ref_name }}"; extra=""
+            case "$tag" in *-*) extra="--prerelease";; esac
+          else
+            ver="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+            tag="v${ver}-dev.${{ github.run_number }}"; extra="--prerelease --target ${{ github.sha }}"
+          fi
+          gh release create "$tag" release-files/* --draft $extra --title "Marsad $tag" --generate-notes \
+            || gh release upload "$tag" release-files/* --clobber
