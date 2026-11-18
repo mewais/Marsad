@@ -99,3 +99,17 @@ export function buildView(host: HostId, s: SessionSnapshot, mark: SeenMark | und
     gates: s.pending_gates,
   };
 }
+
+/**
+ * The model picker's options and value for a session. CLIs may list aliases ("haiku") and
+ * report the resolved model ("claude-haiku-5-5"): the alias it resolves to is selected, and a
+ * reported model that matches nothing is still offered rather than shown as unselected.
+ */
+export function modelChoice(s: SessionSnapshot): { value: string | undefined; options: { value: string; label: string; description?: string }[] } {
+  const options = s.available_models.map((m) => ({ value: m.id, label: m.display_name || m.id, description: m.description }));
+  const cur = s.model ?? undefined;
+  if (!cur || options.some((o) => o.value === cur)) return { value: cur, options };
+  const alias = options.filter((o) => o.value !== "default" && cur.toLowerCase().includes(o.value.toLowerCase())).sort((a, b) => b.value.length - a.value.length)[0];
+  if (alias) return { value: alias.value, options };
+  return { value: cur, options: [{ value: cur, label: cur }, ...options] };
+}

@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import type { SessionSnapshot } from "../../bridge/wire";
 import { useActions, usePending } from "../../state";
+import { modelChoice } from "../../state/domain";
 import { Button, Icon, IconButton, Kbd, Select } from "../../ui";
 
 /** Message box: slash menu, mode and model pickers all come from the session snapshot. */
@@ -66,7 +67,7 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
               onChange={(v) => void actions.command(sessionKey, { command: "set_mode", mode: v }, { failTitle: "Could not change the mode" })} />
           ) : null}
           {snap.available_models.length ? (
-            <Select compact up label="Model" leading={<Icon name="sparkle" size="xs" />} value={snap.model ?? undefined} options={snap.available_models.map((m) => ({ value: m.id, label: m.display_name || m.id, description: m.description }))}
+            <Select compact up label="Model" leading={<Icon name="sparkle" size="xs" />} value={modelChoice(snap).value} options={modelChoice(snap).options}
               onChange={(v) => void actions.command(sessionKey, { command: "set_model", model: v }, { failTitle: "Could not change the model" })} />
           ) : null}
           <span className="sp" />

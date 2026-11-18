@@ -6,6 +6,7 @@ import { useNavigate } from "../../../router";
 import { useActions, useApi, useDriver, useHost } from "../../../state";
 import { Button, Card, Icon, Select, Skeleton } from "../../../ui";
 import { KIND, provenance } from "../../config/provenance";
+import { modelChoice } from "../../../state/domain";
 
 /** Config tab: model and mode as the CLI reports them, and the effective config of this session with provenance. */
 export function ConfigTab({ sessionKey, snap }: { sessionKey: string; snap: SessionSnapshot }) {
@@ -17,7 +18,9 @@ export function ConfigTab({ sessionKey, snap }: { sessionKey: string; snap: Sess
   const hv = useHost(host);
   const [eff, setEff] = useState<EffectiveConfig | null>(null);
   const [error, setError] = useState("");
-  const [model, setModel] = useState(snap.model ?? "");
+  const choice = modelChoice(snap);
+  const current = choice.value ?? "";
+  const [model, setModel] = useState(current);
   const [mode, setMode] = useState(snap.mode ?? "");
   useEffect(() => {
     let off = false;
@@ -26,12 +29,12 @@ export function ConfigTab({ sessionKey, snap }: { sessionKey: string; snap: Sess
       off = true;
     };
   }, [api, host, id, snap.driver, snap.cwd]);
-  useEffect(() => setModel(snap.model ?? ""), [snap.model]);
+  useEffect(() => setModel(current), [current]);
   useEffect(() => setMode(snap.mode ?? ""), [snap.mode]);
   const name = drv?.displayName ?? snap.driver;
   const live = ["idle", "working", "needs_you", "starting"].includes(snap.phase.state);
   const apply = () => {
-    if (model && model !== snap.model) void actions.command(sessionKey, { command: "set_model", model }, { failTitle: "Could not change the model" });
+    if (model && model !== current) void actions.command(sessionKey, { command: "set_model", model }, { failTitle: "Could not change the model" });
     if (mode && mode !== snap.mode) void actions.command(sessionKey, { command: "set_mode", mode }, { failTitle: "Could not change the mode" });
   };
   return (
@@ -39,7 +42,7 @@ export function ConfigTab({ sessionKey, snap }: { sessionKey: string; snap: Sess
       <Card>
         <div className="h3">Model and mode</div>
         <div className="field"><span className="lbl">Model</span>
-          <Select label="Model" value={model || undefined} placeholder="Not reported" options={snap.available_models.map((m) => ({ value: m.id, label: m.display_name || m.id, description: m.description }))} onChange={setModel} />
+          <Select label="Model" value={model || undefined} placeholder="Not reported" options={choice.options} onChange={setModel} />
           <span className="hint">{snap.available_models.length ? `Reported by ${name}${snap.cli_version ? ` ${snap.cli_version}` : ""} on ${hv?.name ?? host}: ${snap.available_models.map((m) => m.id).join(", ")}` : `${name} has not reported its models.`}</span>
         </div>
         <div className="field"><span className="lbl">Mode</span>
@@ -47,7 +50,7 @@ export function ConfigTab({ sessionKey, snap }: { sessionKey: string; snap: Sess
           <span className="hint">{snap.available_modes.length ? `Modes offered by ${name}` : `${name} reports no modes.`}</span>
         </div>
         <div className="row-gap">
-          <Button variant="primary" size="sm" disabled={!live || ((model === (snap.model ?? "") || !snap.capabilities.set_model) && (mode === (snap.mode ?? "") || !snap.capabilities.set_mode))} onClick={apply}>Apply to running session</Button>
+          <Button variant="primary" size="sm" disabled={!live || ((model === current || !snap.capabilities.set_model) && (mode === (snap.mode ?? "") || !snap.capabilities.set_mode))} onClick={apply}>Apply to running session</Button>
           {!snap.capabilities.set_model || !snap.capabilities.set_mode ? <span className="faint small">{name} cannot change {!snap.capabilities.set_model ? "the model" : "the mode"} without a restart.</span> : null}
         </div>
       </Card>

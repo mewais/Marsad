@@ -223,14 +223,34 @@ impl HubServices {
         ctx: &CallContext,
         id: &str,
     ) -> Result<LaunchWorkstreamReply, MarsadError> {
-        let (_, todo) = self.workstreams.begin_launch(id).await?;
+        let (doc, todo) = self.workstreams.begin_launch(id).await?;
         let launches = todo.iter().map(|(node, spec)| {
             let req = self.node_launch_request(id, node, spec);
+            let name = doc
+                .nodes
+                .iter()
+                .find(|n| n.id == *node)
+                .map(|n| n.name.trim().to_string())
+                .filter(|n| !n.is_empty());
             async move {
                 let r = match self.host_of(spec.host.clone()) {
                     Ok(_) => self.launch(ctx, req).await,
                     Err(e) => Err(e),
                 };
+                // A node's session is called what the node is called (a node often has no
+                // first prompt, which would otherwise name it).
+                if let (Ok(reply), Some(name)) = (&r, name) {
+                    let rename = wasit_runtime::wire::RenameSession {
+                        id: reply.id.clone(),
+                        display_name: Some(name),
+                    };
+                    let done: Result<marsad_proto::Ack, _> = self
+                        .on_host(ctx, &reply.host, rt_methods::SESSIONS_RENAME, rename)
+                        .await;
+                    if let Err(e) = done {
+                        tracing::warn!(node, error = %e, "cannot name the node's session");
+                    }
+                }
                 (node.clone(), r)
             }
         });

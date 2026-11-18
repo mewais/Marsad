@@ -29,6 +29,8 @@
 .slist .tt{display:flex;flex-direction:column;min-width:0}
 .slist .tt b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .slist .tt span{font-size:11px;color:var(--fg-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slist .sr .r{white-space:nowrap}
+.slist .sr .msgs{display:block;font-size:11px}
 .slist .r{text-align:right;font-variant-numeric:tabular-nums;color:var(--fg-2)}
 .slist .sempty{padding:10px}
 .tag.trm{color:var(--fg-2)}

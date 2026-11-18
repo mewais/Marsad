@@ -14,6 +14,19 @@ export function detailsText(d: unknown): string {
   return Object.entries(d as Record<string, unknown>).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v)}`).join("\n");
 }
 
+/**
+ * The parts of a handoff's context a person reads: the hop count and the deadline as a time;
+ * the agents' ids and the workstream id (shown elsewhere by name) stay in the raw payload.
+ */
+export function detailsForPeople(d: unknown): string {
+  if (d == null || typeof d !== "object") return "";
+  const o = d as Record<string, unknown>;
+  const out: string[] = [];
+  if (typeof o.hop === "number") out.push(`Hop ${o.hop}`);
+  if (typeof o.deadline_ms === "number" && o.deadline_ms > 0) out.push(`Deadline ${new Date(o.deadline_ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
+  return out.join(" · ");
+}
+
 type P = PendingGate & { gate: Extract<GateRequest, { gate_type: "handoff" }> };
 
 function Keys({ g }: { g: ReturnType<typeof usePermissionGate> }) {
@@ -74,7 +87,7 @@ export function HandoffGate({ view, pg, density, active, expanded, onActivate }:
         <Icon name="chevr" size="lg" className="faint" />
         <div className="end"><span className="eyebrow">To</span><b>{g.to}</b></div>
       </div>
-      <div className="payload"><b>Task</b>{g.instruction}<span className="muted">Mode: {g.mode}</span>{details ? <span className="muted mono">{details}</span> : null}</div>
+      <div className="payload"><b>Task</b>{g.instruction}<span className="muted">Mode: {g.mode}{detailsForPeople(g.details) ? ` · ${detailsForPeople(g.details)}` : ""}</span></div>
       <div className="acts">{buttons(keysOn)}<span className="sp" /><SourceCaption source="handoff" /></div>
     </div>
   );
