@@ -1,12 +1,12 @@
 import type {
   AuthAnswer, AuthCancel, EffectiveRequest, HostDraft, HostEntry, HostRef, LaunchReply, LaunchRequest, LayerScope, NotificationPrefs, RecentProject, SeenMark, SessionSnapshot,
-  SettingSet, StoredLayer, WorkstreamDoc, WorkstreamPut, WorkstreamRef,
+  SettingSet, StoredLayer, WorkstreamsEvent,
 } from "../wire";
 import { methods as M } from "../wire";
 import { layerAt, mergeEffective, sameScope, seedLayers } from "./config";
 import { driverDef, type FixtureHost } from "./catalog";
 import { err } from "./runtime";
-import { seedWorkstreams } from "./workstreams";
+import { FixtureWorkstreams } from "./workstreams";
 
 /** What the hub needs from the fixture core. */
 export interface HubCore {
@@ -18,7 +18,8 @@ export interface HubCore {
   answerAuth(a: AuthAnswer): void;
   cancelAuth(a: AuthCancel): void;
   createSession(host: string, snap: SessionSnapshot, firstPrompt: string | null): void;
-  sessionCwd(host: string, id: string): string | null;
+  session(host: string, id: string): SessionSnapshot | undefined;
+  emitWorkstreams(e: WorkstreamsEvent): void;
 }
 
 /** Fixture-only: the hub's services (hosts, store documents, effective config, launch). */
@@ -28,13 +29,13 @@ export class FixtureHub {
   layers: StoredLayer[] = seedLayers();
   seen: SeenMark[] = [];
   recent: RecentProject[];
-  workstreams: WorkstreamDoc[];
+  readonly ws: FixtureWorkstreams;
   private n = 100;
 
   constructor(private core: HubCore) {
     const now = core.now();
     this.recent = ["ledgerline", "marsad", "docs-site", "tilemap-renderer"].map((p, i) => ({ host: "x1", path: `~/src/${p}`, last_used_ms: now - i * 3_600_000 }));
-    this.workstreams = seedWorkstreams(now);
+    this.ws = new FixtureWorkstreams({ now: core.now, session: core.session, launch: (r) => this.launch(r), emit: core.emitWorkstreams });
   }
 
   handle(method: string, p: unknown): unknown {
@@ -110,24 +111,12 @@ export class FixtureHub {
         this.recent = [{ ...r, last_used_ms: r.last_used_ms || c.now() }, ...this.recent.filter((x) => !(x.host === r.host && x.path === r.path))].slice(0, 50);
         return { projects: this.recent };
       }
-      case M.STORE_WORKSTREAMS_LIST:
-        return { workstreams: this.workstreams };
-      case M.STORE_WORKSTREAMS_PUT: {
-        const w = p as WorkstreamPut;
-        const cur = this.workstreams.find((x) => x.id === w.id);
-        if (w.expected_revision != null && cur && cur.revision !== w.expected_revision) throw err("store", "Someone else changed this workstream. Reload and try again.");
-        const doc: WorkstreamDoc = { id: w.id, schema: w.schema, doc: w.doc, revision: (cur?.revision ?? 0) + 1, updated_at_ms: c.now() };
-        this.workstreams = [...this.workstreams.filter((x) => x.id !== w.id), doc];
-        return doc;
-      }
-      case M.STORE_WORKSTREAMS_DELETE:
-        this.workstreams = this.workstreams.filter((x) => x.id !== (p as WorkstreamRef).id);
-        return {};
       case M.AGENTCONFIG_EFFECTIVE:
         return this.effective(p as EffectiveRequest);
       case M.SESSIONS_LAUNCH:
         return this.launch(p as LaunchRequest);
       default:
+        if (method.startsWith("workstreams.")) return this.ws.handle(method, p);
         throw err("method_not_found", `Fixture does not implement ${method}`);
     }
   }
@@ -141,7 +130,7 @@ export class FixtureHub {
     if (r.session) scopes.push({ scope: "session", host, session: r.session });
     const layers = scopes.map((scope) => ({ scope, layer: layerAt(this.layers, scope) }));
     if (r.overrides) layers.push({ scope: { scope: "session", host, session: r.session ?? "(new)" }, layer: r.overrides });
-    const inWs = !!r.workstream || (!!r.session && this.workstreams.some((w) => JSON.stringify(w.doc).includes(`"session":"${r.session}"`)));
+    const inWs = !!r.workstream || (!!r.session && [...this.ws.docs.values()].some((w) => w.state !== "archived" && w.nodes.some((n) => n.session?.session === r.session)));
     return mergeEffective({ driver: r.driver, base: driverDef(r.driver).config, layers, workstream: inWs });
   }
 

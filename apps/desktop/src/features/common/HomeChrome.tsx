@@ -50,7 +50,8 @@ export function HomeToolbar() {
     window.addEventListener("marsad:focus-filter", focus);
     return () => window.removeEventListener("marsad:focus-filter", focus);
   }, []);
-  const ws = useAppState((s) => s.workstreams).map((w) => w.name);
+  const wsAll = useAppState((s) => s.workstreams);
+  const ws = Object.values(wsAll).filter((w) => w.workstream.state !== "archived").map((w) => w.workstream.name);
   void sessions;
   const opt = (value: string, label: string): SelectOption => ({ value, label });
   return (

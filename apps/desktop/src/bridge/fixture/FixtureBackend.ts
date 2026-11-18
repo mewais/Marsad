@@ -4,14 +4,12 @@ import type {
   GitDiscardRequest, GitStatusRequest, GitTarget, HistoryRequest, HostId, InventoryRequest, LinkState, SessionRef, SessionSnapshot, CommandRequest,
 } from "../wire";
 import { methods as M, topics as T } from "../wire";
-import { waslTopics, type TaskView } from "../provisional/workstreams";
 import { DRIVERS, FIXTURE_HOSTS, driverDef, inventoryFor, type FixtureHost } from "./catalog";
 import { fsExists, fsHome, fsList } from "./fs";
 import { buildTree, diffOf, type Tree } from "./git";
 import { FixtureHub } from "./hub";
 import { err, SessionSim, type Entry } from "./runtime";
 import { buildSession, SPECS, type Spec } from "./sessions";
-import { seedTasks } from "./workstreams";
 
 export interface FixtureOptions {
   /** Background chatter (timers): live tool calls, reconnect countdown, a session finishing. Default true. */
@@ -43,9 +41,8 @@ export class FixtureBackend implements Backend {
   readonly hub: FixtureHub;
   private hosts = new Map<HostId, HostRec>();
   private fleetSubs = new Set<(e: unknown) => void>();
-  private taskSubs = new Map<HostId, Set<(e: unknown) => void>>();
+  private wsSubs = new Set<(e: unknown) => void>();
   private trees = new Map<string, Tree>();
-  private tasks: TaskView[];
   private timers = new Set<ReturnType<typeof setTimeout>>();
   private interval: ReturnType<typeof setInterval> | undefined;
   private tickN = 0;
@@ -67,7 +64,6 @@ export class FixtureBackend implements Backend {
       this.hosts.get(spec.host)!.sessions.set(snap.id, { snap, events, subs: new Set(), host: spec.host });
       this.trees.set(`${spec.host}/${snap.id}`, buildTree(spec));
     }
-    this.tasks = seedTasks(now);
     this.hub = new FixtureHub({
       now: this.opts.now,
       hostDefs: () => [...this.hosts.values()].map((h) => h.def),
@@ -77,7 +73,8 @@ export class FixtureBackend implements Backend {
       answerAuth: (a) => this.answerAuth(a),
       cancelAuth: (a) => this.cancelAuth(a),
       createSession: (host, snap, first) => this.createSession(host, snap, first),
-      sessionCwd: (host, id) => this.hosts.get(host)?.sessions.get(id)?.snap.cwd ?? null,
+      session: (host, id) => this.hosts.get(host)?.sessions.get(id)?.snap,
+      emitWorkstreams: (e) => this.wsSubs.forEach((s) => s(e)),
     });
     // A returning user has seen the old idle sessions.
     for (const [hid, h] of this.hosts) for (const [id, e] of h.sessions) if (e.snap.phase.state === "idle" && e.snap.last_activity_ms < now - 60 * 60_000) this.hub.seen.push({ host: hid, session: id, cursor: e.snap.cursor, at_ms: now - 45 * 60_000 });
@@ -116,19 +113,16 @@ export class FixtureBackend implements Backend {
       this.later(0, () => onEvent({ kind: "reset", hosts: [...this.hosts.values()].map((h) => this.fleetHost(h)) } satisfies FleetEvent));
       return () => this.fleetSubs.delete(onEvent);
     }
+    if (topic === T.WORKSTREAMS) {
+      this.wsSubs.add(onEvent);
+      this.later(0, () => onEvent(this.hub.ws.reset()));
+      return () => this.wsSubs.delete(onEvent);
+    }
     const host = this.hosts.get(opts.host ?? "x1");
     if (!host) return () => undefined;
     if (topic === T.DRIVERS_INVENTORY) {
       this.later(0, () => this.isUp(host) && onEvent({ drivers: inventoryFor(host.def, null, this.opts.now()) }));
       return () => undefined;
-    }
-    if (topic === waslTopics.TASKS) {
-      const set = this.taskSubs.get(host.def.entry.id) ?? new Set();
-      this.taskSubs.set(host.def.entry.id, set);
-      set.add(onEvent);
-      const id = host.def.entry.id;
-      this.later(0, () => this.tasks.filter((t) => t.task.from.startsWith(id + "/") || t.task.to.startsWith(id + "/")).forEach((t) => onEvent({ ...t, side: t.task.from.startsWith(id + "/") ? "outbound" : "inbound" })));
-      return () => set.delete(onEvent);
     }
     const m = /^session\.events:(.+)$/.exec(topic);
     const entry = m ? host.sessions.get(m[1]) : undefined;
@@ -171,8 +165,9 @@ export class FixtureBackend implements Backend {
       case M.SESSION_COMMAND: {
         const r = p as CommandRequest;
         const e = this.entry(host, r);
-        if (r.command.command === "answer_gate") this.onHandoffAnswer(r.command.request_id, r.command.decision.action === "deny");
-        return this.sim.command(e, r.command);
+        const reply = this.sim.command(e, r.command);
+        if (r.command.command === "answer_gate") this.hub.ws.onHandoffAnswer(r.command.request_id, r.command.decision.action === "deny");
+        return reply;
       }
       case M.SESSIONS_CONTINUE:
         this.sim.setPhase(this.entry(host, p as SessionRef), { state: "idle" });
@@ -254,6 +249,7 @@ export class FixtureBackend implements Backend {
 
   private publish(e: Entry) {
     this.fleet({ kind: "session_upserted", host: e.host, session: e.snap });
+    this.hub?.ws.onSession(e.host, e.snap.id);
   }
 
   /** Force a link state (tests, demos). */
@@ -336,14 +332,6 @@ export class FixtureBackend implements Backend {
     this.sim.emit(e, { kind: "spawned", generation: 1, pid: snap.pid ?? null, argv: [driverDef(snap.driver).binary] });
     this.publish(e);
     this.later(300 * this.opts.speed, () => (first ? this.sim.startTurn(e, first) : this.sim.setPhase(e, { state: "idle" })));
-  }
-
-  private onHandoffAnswer(requestId: string, denied: boolean) {
-    const t = this.tasks.find((x) => `wasl-handoff-${x.task.id}` === requestId);
-    if (!t) return;
-    t.state = denied ? { state: "denied", reason: "denied by you" } : { state: "queued" };
-    t.updated_ms = this.opts.now();
-    for (const [hid, subs] of this.taskSubs) if (t.task.from.startsWith(hid + "/") || t.task.to.startsWith(hid + "/")) subs.forEach((s) => s({ ...t, side: t.task.from.startsWith(hid + "/") ? "outbound" : "inbound" }));
   }
 
   private later(ms: number, fn: () => void) {

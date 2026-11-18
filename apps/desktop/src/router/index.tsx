@@ -31,10 +31,11 @@ export function memoryHistory(initial = "/inbox"): History {
 export type Route =
   | { name: "inbox" }
   | { name: "session"; host: string; id: string; tab: string }
-  | { name: "workstreams" }
-  | { name: "hosts" }
-  | { name: "config" }
-  | { name: "settings" }
+  | { name: "workstreams"; q: Record<string, string> }
+  | { name: "workstream"; id: string; q: Record<string, string> }
+  | { name: "hosts"; q: Record<string, string> }
+  | { name: "config"; q: Record<string, string> }
+  | { name: "settings"; q: Record<string, string> }
   | { name: "notfound"; path: string };
 
 export function parseRoute(path: string): Route {
@@ -48,14 +49,18 @@ export function parseRoute(path: string): Route {
       if (seg[1] && seg[2]) return { name: "session", host: decodeURIComponent(seg[1]), id: decodeURIComponent(seg[2]), tab: new URLSearchParams(qs).get("tab") ?? "activity" };
       return { name: "notfound", path };
     case "workstreams":
+      if (seg[1]) return { name: "workstream", id: decodeURIComponent(seg[1]), q: Object.fromEntries(new URLSearchParams(qs)) };
+      return { name: "workstreams", q: Object.fromEntries(new URLSearchParams(qs)) };
     case "hosts":
     case "config":
     case "settings":
-      return { name: seg[0] };
+      return { name: seg[0], q: Object.fromEntries(new URLSearchParams(qs)) };
     default:
       return { name: "notfound", path };
   }
 }
+
+export const workstreamPath = (id: string, q?: Record<string, string>) => `/workstreams/${encodeURIComponent(id)}${q ? `?${new URLSearchParams(q)}` : ""}`;
 
 export const sessionPath = (host: string, id: string, tab?: string) =>
   `/session/${encodeURIComponent(host)}/${encodeURIComponent(id)}${tab && tab !== "activity" ? `?tab=${tab}` : ""}`;

@@ -1,8 +1,7 @@
 import type { Api } from "../bridge/api";
 import { errorMessage } from "../bridge/api";
-import type { FleetEvent, FleetHost, HostId, InventoryReply, SessionSnapshot } from "../bridge/wire";
+import type { FleetEvent, FleetHost, HostId, InventoryReply, SessionSnapshot, WorkstreamsEvent } from "../bridge/wire";
 import { sessionKey } from "../bridge/wire";
-import { readWorkstream } from "../bridge/provisional/workstreams";
 import { makeDriver } from "../ui/DriverBadge";
 import { linkView, type HostState } from "./hosts";
 import type { AppState, AppStore } from "./model";
@@ -63,6 +62,22 @@ export function applyFleet(s: AppState, e: FleetEvent): AppState {
   }
 }
 
+/** Pure: apply one `workstreams` event. */
+export function applyWorkstreams(s: AppState, e: WorkstreamsEvent): AppState {
+  if (e.kind === "reset") {
+    const workstreams: AppState["workstreams"] = {};
+    for (const v of e.workstreams) workstreams[v.workstream.id] = v;
+    return { ...s, workstreams, wsOrder: e.workstreams.map((v) => v.workstream.id), workstreamsLoaded: true };
+  }
+  if (e.kind === "upserted") {
+    const id = e.workstream.workstream.id;
+    return { ...s, workstreams: { ...s.workstreams, [id]: e.workstream }, wsOrder: s.wsOrder.includes(id) ? s.wsOrder : [...s.wsOrder, id] };
+  }
+  const workstreams = { ...s.workstreams };
+  delete workstreams[e.id];
+  return { ...s, workstreams, wsOrder: s.wsOrder.filter((x) => x !== e.id) };
+}
+
 /** Learn driver presentation from inventories and session snapshots (never hardcoded). */
 function withDrivers(s: AppState): AppState {
   let drivers: AppState["drivers"] | null = null;
@@ -111,18 +126,13 @@ export function connectStore(store: AppStore, api: Api): () => void {
 
   const fail = (what: string) => (e: unknown) => console.warn(`${what}: ${errorMessage(e)}`);
   api.store.seen().then((m) => store.set((s) => ({ ...s, ...seenState(m.markers) })), fail("seen markers"));
-  api.store.workstreams().then(
-    (l) => store.set((s) => ({ ...s, workstreams: l.workstreams.map(readWorkstream).filter((w) => !!w), workstreamsLoaded: true })),
-    (e) => {
-      store.set((s) => ({ ...s, workstreamsLoaded: true }));
-      fail("workstreams")(e);
-    },
-  );
+  const offWs = api.subscribe.workstreams((e) => store.set((s) => applyWorkstreams(s, e)));
   api.store.notifications().then((n) => store.set((s) => ({ ...s, notifications: n })), fail("notification prefs"));
   api.store.settings().then((st) => store.set((s) => ({ ...s, settings: st.values as Record<string, unknown> })), fail("settings"));
 
   return () => {
     offFleet();
+    offWs();
     inv.forEach((u) => u());
     inv.clear();
   };

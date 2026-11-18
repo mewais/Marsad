@@ -1,19 +1,22 @@
 import type { HostId, SessionKey } from "../bridge/wire";
 import { sessionKey, splitKey } from "../bridge/wire";
-import type { Workstream } from "../bridge/provisional/workstreams";
+import type { WorkstreamView } from "../bridge/wire";
 import { STATUS_ORDER, type StatusKey } from "../ui/status";
 import { buildView, type SessionView } from "./domain";
 import { hostView, type HostView } from "./hosts";
 import type { AppState } from "./model";
 
-const wsIndex = new WeakMap<Workstream[], Map<SessionKey, string>>();
-/** Session key → workstream name, from the stored workstream documents. */
-export function workstreamIndex(list: Workstream[]): Map<SessionKey, string> {
-  let m = wsIndex.get(list);
+const wsIndex = new WeakMap<Record<string, WorkstreamView>, Map<SessionKey, string>>();
+/** Session key → workstream name, from the hub's workstream documents. */
+export function workstreamIndex(all: Record<string, WorkstreamView>): Map<SessionKey, string> {
+  let m = wsIndex.get(all);
   if (!m) {
     m = new Map();
-    for (const w of list) for (const n of w.nodes) if (n.session) m.set(sessionKey(n.host, n.session), w.name);
-    wsIndex.set(list, m);
+    for (const v of Object.values(all)) {
+      if (v.workstream.state === "archived") continue;
+      for (const n of v.workstream.nodes) if (n.session) m.set(sessionKey(n.session.host, n.session.session), v.workstream.name);
+    }
+    wsIndex.set(all, m);
   }
   return m;
 }

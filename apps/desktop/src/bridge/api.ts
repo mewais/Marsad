@@ -45,9 +45,25 @@ export interface MethodMap {
   [M.STORE_SEEN_MARK_ALL]: [void, W.SeenMarkers];
   [M.STORE_RECENT_LIST]: [void, W.RecentProjects];
   [M.STORE_RECENT_ADD]: [W.RecentProject, W.RecentProjects];
-  [M.STORE_WORKSTREAMS_LIST]: [void, W.WorkstreamList];
-  [M.STORE_WORKSTREAMS_PUT]: [W.WorkstreamPut, W.WorkstreamDoc];
-  [M.STORE_WORKSTREAMS_DELETE]: [W.WorkstreamRef, W.Ack];
+  [M.WS_LIST]: [void, W.WorkstreamList];
+  [M.WS_GET]: [W.WorkstreamRef, W.Workstream];
+  [M.WS_CREATE]: [W.WorkstreamDraft, W.Workstream];
+  [M.WS_UPDATE]: [W.WorkstreamUpdate, W.Workstream];
+  [M.WS_DELETE]: [W.WorkstreamRef, W.Ack];
+  [M.WS_LAUNCH]: [W.WorkstreamRef, W.LaunchWorkstreamReply];
+  [M.WS_ADD_NODE]: [W.AddNode, W.Workstream];
+  [M.WS_REMOVE_NODE]: [W.NodeRef, W.Workstream];
+  [M.WS_CONNECT]: [W.Connect, W.Workstream];
+  [M.WS_DISCONNECT]: [W.EdgeRef, W.Workstream];
+  [M.WS_SET_POLICY]: [W.Connect, W.Workstream];
+  [M.WS_PAUSE]: [W.WorkstreamRef, W.Workstream];
+  [M.WS_RESUME]: [W.WorkstreamRef, W.Workstream];
+  [M.WS_ARCHIVE]: [W.WorkstreamRef, W.Workstream];
+  [M.WS_SAVE_TEMPLATE]: [W.SaveTemplate, W.WorkstreamTemplate];
+  [M.WS_FROM_TEMPLATE]: [W.FromTemplate, W.Workstream];
+  [M.WS_TEMPLATES_LIST]: [void, W.TemplateList];
+  [M.WS_TEMPLATES_DELETE]: [W.TemplateRef, W.Ack];
+  [M.WS_HISTORY]: [W.EdgeHistoryRequest, W.EdgeHistoryPage];
 }
 export type Method = keyof MethodMap;
 
@@ -112,12 +128,31 @@ export function createApi(b: Backend) {
       markAllSeen: () => call(b, M.STORE_SEEN_MARK_ALL, undefined),
       recent: () => call(b, M.STORE_RECENT_LIST, undefined),
       addRecent: (p: W.RecentProject) => call(b, M.STORE_RECENT_ADD, p),
-      workstreams: () => call(b, M.STORE_WORKSTREAMS_LIST, undefined),
-      putWorkstream: (p: W.WorkstreamPut) => call(b, M.STORE_WORKSTREAMS_PUT, p),
-      deleteWorkstream: (id: string) => call(b, M.STORE_WORKSTREAMS_DELETE, { id }),
+    },
+    ws: {
+      list: () => call(b, M.WS_LIST, undefined),
+      get: (id: string) => call(b, M.WS_GET, { id }),
+      create: (d: W.WorkstreamDraft) => call(b, M.WS_CREATE, d),
+      update: (workstream: W.Workstream, expected_revision?: number) => call(b, M.WS_UPDATE, { workstream, expected_revision: expected_revision ?? null }),
+      remove: (id: string) => call(b, M.WS_DELETE, { id }),
+      launch: (id: string) => call(b, M.WS_LAUNCH, { id }),
+      addNode: (r: W.AddNode) => call(b, M.WS_ADD_NODE, r),
+      removeNode: (workstream: string, node: string) => call(b, M.WS_REMOVE_NODE, { workstream, node }),
+      connect: (r: W.Connect) => call(b, M.WS_CONNECT, r),
+      disconnect: (r: W.EdgeRef) => call(b, M.WS_DISCONNECT, r),
+      setPolicy: (r: W.Connect) => call(b, M.WS_SET_POLICY, r),
+      pause: (id: string) => call(b, M.WS_PAUSE, { id }),
+      resume: (id: string) => call(b, M.WS_RESUME, { id }),
+      archive: (id: string) => call(b, M.WS_ARCHIVE, { id }),
+      saveTemplate: (r: W.SaveTemplate) => call(b, M.WS_SAVE_TEMPLATE, r),
+      fromTemplate: (r: W.FromTemplate) => call(b, M.WS_FROM_TEMPLATE, r),
+      templates: () => call(b, M.WS_TEMPLATES_LIST, undefined),
+      deleteTemplate: (id: string) => call(b, M.WS_TEMPLATES_DELETE, { id }),
+      history: (r: W.EdgeHistoryRequest) => call(b, M.WS_HISTORY, r),
     },
     subscribe: {
       fleet: (cb: (e: W.FleetEvent) => void, from?: string): Unsubscribe => b.subscribe(T.FLEET, { from }, (e) => cb(e as W.FleetEvent)),
+      workstreams: (cb: (e: W.WorkstreamsEvent) => void, from?: string): Unsubscribe => b.subscribe(T.WORKSTREAMS, { from }, (e) => cb(e as W.WorkstreamsEvent)),
       inventory: (host: W.HostId, cb: (e: W.InventoryReply) => void): Unsubscribe => b.subscribe(T.DRIVERS_INVENTORY, { host }, (e) => cb(e as W.InventoryReply)),
       sessionEvents: (host: W.HostId, id: W.SessionId, from: number, cb: (e: W.SessionEvent) => void): Unsubscribe =>
         b.subscribe(T.sessionEvents(id), { host, from }, (e) => cb(e as W.SessionEvent)),

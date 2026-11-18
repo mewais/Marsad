@@ -1,6 +1,5 @@
 import type { DriverDescriptor } from "../ui/DriverBadge";
-import type { DriverInventory, GitStatus, HostId, NotificationPrefs, SeenMark, SessionEvent, SessionKey, SessionSnapshot } from "../bridge/wire";
-import type { Workstream } from "../bridge/provisional/workstreams";
+import type { DriverInventory, GitStatus, HostId, NotificationPrefs, SeenMark, SessionEvent, SessionKey, SessionSnapshot, WorkstreamView } from "../bridge/wire";
 import { createStore } from "../lib/store";
 import type { HostState } from "./hosts";
 
@@ -36,7 +35,9 @@ export interface AppState {
   pending: Record<string, PendingState>;
   /** `git.status` per session (branch, diffstat), fetched lazily. `null` = not a repo / failed. */
   git: Record<SessionKey, GitStatus | null>;
-  workstreams: Workstream[];
+  /** The hub's `workstreams` topic: every workstream with live nodes, edges and tasks. */
+  workstreams: Record<string, WorkstreamView>;
+  wsOrder: string[];
   workstreamsLoaded: boolean;
   notifications: NotificationPrefs | null;
   settings: Record<string, unknown>;
@@ -56,7 +57,8 @@ export function initialState(partial: Partial<AppState> = {}): AppState {
     lookedAt: 0,
     pending: {},
     git: {},
-    workstreams: [],
+    workstreams: {},
+    wsOrder: [],
     workstreamsLoaded: false,
     notifications: null,
     settings: {},

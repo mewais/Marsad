@@ -4,7 +4,7 @@ import { Icon, type IconName } from "../ui";
 
 const ITEMS: { to: string; label: string; icon: IconName; match: string[] }[] = [
   { to: "/inbox", label: "Inbox", icon: "inbox", match: ["inbox", "session"] },
-  { to: "/workstreams", label: "Workstreams", icon: "graph", match: ["workstreams"] },
+  { to: "/workstreams", label: "Workstreams", icon: "graph", match: ["workstreams", "workstream"] },
   { to: "/hosts", label: "Hosts", icon: "server", match: ["hosts"] },
   { to: "/config", label: "Config", icon: "layers", match: ["config"] },
 ];

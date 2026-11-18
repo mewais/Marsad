@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
-import { IconButton } from "./Button";
+import { Button, IconButton } from "./Button";
 
 const FOCUSABLE =
   'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
@@ -16,6 +16,12 @@ export interface DialogProps {
   className?: string;
   /** Element to focus on open; defaults to the first focusable inside. */
   initialFocus?: React.RefObject<HTMLElement>;
+  /** Shown next to the title (muted). */
+  subtitle?: React.ReactNode;
+  /** Extra header content before the close button (e.g. step indicator). */
+  headerExtra?: React.ReactNode;
+  /** Dialog width in px (max; shrinks with the window). */
+  width?: number;
 }
 
 /**
@@ -23,7 +29,7 @@ export interface DialogProps {
  * focus returns to the opener. The body scrolls inside the dialog (max-height 100%), so short
  * windows never push the footer off-screen.
  */
-export function Dialog({ open, onClose, title, children, footer, bare, className = "", initialFocus }: DialogProps) {
+export function Dialog({ open, onClose, title, children, footer, bare, className = "", initialFocus, subtitle, headerExtra, width }: DialogProps) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const closeRef = useRef(onClose);
@@ -72,7 +78,7 @@ export function Dialog({ open, onClose, title, children, footer, bare, className
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div ref={ref} className={`dlg ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
+      <div ref={ref} className={`dlg ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} style={width ? { width: `min(${width}px, 100%)` } : undefined}>
         {bare ? (
           <h2 id={titleId} className="sr-only">
             {title}
@@ -80,6 +86,8 @@ export function Dialog({ open, onClose, title, children, footer, bare, className
         ) : (
           <div className="dlg-h">
             <h2 id={titleId}>{title}</h2>
+            {subtitle ? <span className="faint dlg-sub">{subtitle}</span> : null}
+            {headerExtra}
             <span className="sp" />
             <IconButton icon="x" label="Close" onClick={onClose} />
           </div>
@@ -89,5 +97,28 @@ export function Dialog({ open, onClose, title, children, footer, bare, className
       </div>
     </div>,
     document.body,
+  );
+}
+
+export interface ConfirmDialogProps {
+  open: boolean;
+  title: string;
+  children: React.ReactNode;
+  confirmLabel: string;
+  /** Destructive actions get the "deny" (red) style. */
+  danger?: boolean;
+  pending?: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}
+
+/** In-app confirmation (never `window.confirm`): focus starts on Cancel. */
+export function ConfirmDialog({ open, title, children, confirmLabel, danger, pending, onConfirm, onClose }: ConfirmDialogProps) {
+  const cancel = useRef<HTMLButtonElement>(null);
+  return (
+    <Dialog open={open} onClose={onClose} title={title} width={460} initialFocus={cancel}
+      footer={<><span className="sp" /><Button ref={cancel} onClick={onClose}>Cancel</Button><Button variant={danger ? "deny" : "primary"} pending={pending} onClick={onConfirm}>{confirmLabel}</Button></>}>
+      <div className="confirm-body">{children}</div>
+    </Dialog>
   );
 }

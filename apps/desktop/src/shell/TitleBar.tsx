@@ -1,9 +1,11 @@
 import { useCounts } from "../state";
-import { IconButton, SplitButton, Icon, Kbd, toast } from "../ui";
+import { useNavigate } from "../router";
+import { IconButton, SplitButton, Icon, Kbd } from "../ui";
+import { openNewSession, openNewWorkstream } from "./dialogs";
 
 export function TitleBar({ onPalette }: { onPalette: () => void }) {
   const counts = useCounts();
-  const soon = (what: string) => toast({ tone: "info", title: `${what} is not built yet`, detail: "This foundation round covers the Inbox and Session views." });
+  const nav = useNavigate();
   return (
     <header className="titlebar">
       <div className="brand">
@@ -16,16 +18,16 @@ export function TitleBar({ onPalette }: { onPalette: () => void }) {
         <Kbd>Ctrl K</Kbd>
       </button>
       <div className="tb-right">
-        <IconButton icon="bell" label="Notifications" badge={counts.needs || undefined} onClick={() => soon("Notifications")} />
+        <IconButton icon="bell" label="Notifications" badge={counts.needs || undefined} onClick={() => nav(counts.needs ? "/inbox" : "/settings?s=notifications")} />
         <SplitButton
           label="New session"
           icon="plus"
           kbd="N"
-          onClick={() => soon("New session")}
+          onClick={() => openNewSession()}
           menuLabel="More ways to start"
           items={[
-            { id: "s", label: "New session", description: "One agent on one host", icon: "plus", kbd: "N", onSelect: () => soon("New session") },
-            { id: "w", label: "New workstream", description: "Several agents that hand work to each other", icon: "graph", kbd: "⇧N", onSelect: () => soon("New workstream") },
+            { id: "s", label: "New session", description: "One agent on one host", icon: "plus", kbd: "N", onSelect: () => openNewSession() },
+            { id: "w", label: "New workstream", description: "Several agents that hand work to each other", icon: "graph", kbd: "⇧N", onSelect: () => openNewWorkstream() },
           ]}
         />
       </div>
