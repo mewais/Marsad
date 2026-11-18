@@ -151,6 +151,8 @@ const env = {
   MARSAD_LOG: process.env.MARSAD_LOG ?? "info",
   XDG_CONFIG_HOME: dirs.cfg,
   XDG_DATA_HOME: path.join(dirs.cfg, "share"),
+  // The shell's notification decisions (test hook), one JSON line each.
+  MARSAD_NOTIFY_LOG: path.join(root, "notifications.ndjson"),
 };
 const driverLog = fs.openSync(path.join(root, "tauri-driver.log"), "a");
 const driver = spawn("tauri-driver", ["--port", String(port), "--native-port", String(nativePort)], { env, stdio: ["ignore", driverLog, driverLog] });
@@ -257,26 +259,34 @@ const openSession = async (s, tab = "") => {
 };
 
 /** Launch through the New session dialog (real DOM), return the snapshot once it exists. */
-async function launchViaDialog({ agent, cwd, prompt, latest = false, resumeTitle, model }) {
+async function launchViaDialog({ agent, cwd, prompt, latest = false, resumeTitle, resumeId, model }) {
   await go("#/inbox");
   await button("New session");
   await el("[role=dialog]");
   // The host's discovery may still be probing the CLIs: wait until this one is offered.
   await click("[role=dialog] [role=radio]:not([disabled])", agent, 120_000);
-  await type("#ns-cwd", cwd);
+  // The dialog pre-fills the most recent folder when its list arrives; type until it holds ours.
+  await waitFor(async () => {
+    if (await wd.exec(() => document.querySelector("#ns-cwd")?.value) === cwd) return true;
+    await wd.exec(() => { const i = document.querySelector("#ns-cwd"); i.select(); });
+    await wd.sendKeys(await el("#ns-cwd"), Keys.BACKSPACE + cwd);
+    await sleep(300);
+    return (await wd.exec(() => document.querySelector("#ns-cwd")?.value)) === cwd;
+  }, "the project folder typed");
   if (model) {
     await click("[role=dialog] button[aria-label^='Model:']", null, 90_000);
     const filter = await wd.findAll("css selector", "input[aria-label='Filter Model']");
     if (filter.length) await wd.sendKeys(filter[0], model);
     await click("[role=listbox][aria-label=Model] [role=option]", model, 30_000);
   }
-  if (latest || resumeTitle) {
+  if (latest || resumeTitle || resumeId) {
     await button("Continue an existing one");
     if (latest) {
       // "Continue most recent" (the CLI's own continue) is the default when the CLI has it.
       const b = await el("[role=dialog] .recent button");
       if ((await wd.text(b)).trim() !== "Selected") await wd.click(b);
     }
+    else if (resumeId) await click(`[role=option][data-id="${resumeId}"]`, null, 60_000);
     else await click("[role=option]", resumeTitle, 60_000);
   }
   if (prompt) await type("#ns-prompt", prompt);
@@ -446,7 +456,7 @@ scenario_("terminal-tab", async () => {
 scenario_("continue-latest-and-resume", async () => {
   // The fake opencode lists its sessions like the real one (`session list`); --real covers
   // claude with a conversation started in a terminal.
-  if (REAL) return "covered by live-claude-resume-terminal-session";
+  if (REAL) return "covered by live-*-continue-and-resume";
   const d = "opencode";
   const s = await launchViaDialog({ agent: DRIVER_NAMES[d], cwd: project, prompt: "pick up the README work", resumeTitle: "Earlier: tidy the README" });
   await waitPhase(s.id, ["idle", "working"]);
@@ -518,6 +528,72 @@ scenario_("daemon-kill-recovery", async () => {
   await waitPhase(s.id, "needs_you");
   await click("[data-gate=permission] .choices button", "Allow", 30_000);
   await waitPhase(s.id, "idle");
+});
+
+scenario_("notifications-follow-prefs", async () => {
+  // Set through the Settings page, checked through the shell's notification log.
+  const s = launched.codex;
+  if (!s) return "no session";
+  const log = env.MARSAD_NOTIFY_LOG;
+  const entries = () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const setPrefs = async (want) => {
+    await go("#/settings");
+    await button("Notifications");
+    for (const [label, on] of Object.entries(want)) {
+      const sw = await el(`button[role=switch][aria-label^='${label}']`);
+      if ((await wd.attr(sw, "aria-checked")) !== String(on)) await wd.click(sw);
+      await waitFor(async () => (await wd.attr(await el(`button[role=switch][aria-label^='${label}']`), "aria-checked")) === String(on), `${label} ${on}`);
+    }
+    await shot("60-settings-notifications");
+  };
+  // The app is focused under the test display: let notifications through while focused.
+  await rpc("store.settings.set", { key: "notify.only_unfocused", value: false });
+  const round = async (prefs, expect) => {
+    await setPrefs({ "Needs you": prefs.needs, "A session finished": prefs.finished });
+    const n0 = entries().length;
+    await openSession(s);
+    await sendPrompt("please run the tests");
+    await waitPhase(s.id, "needs_you");
+    await waitFor(() => entries().slice(n0).some((e) => e.kind === "NeedsYou"), "a needs-you decision", 20_000);
+    await click("[data-gate=permission] .choices button", "Allow");
+    await waitPhase(s.id, "idle");
+    await go("#/inbox"); // looking away: the finished turn is unseen
+    await waitFor(() => entries().slice(n0).some((e) => e.kind === "Finished"), "a finished decision", 20_000).catch(() => {});
+    const got = entries().slice(n0);
+    for (const [kind, shown] of Object.entries(expect)) {
+      const e = got.find((x) => x.kind === kind);
+      if (!e) throw new Error(`no ${kind} decision (${JSON.stringify(got)})`);
+      if ((e.suppressed === null) !== shown) throw new Error(`${kind}: expected ${shown ? "shown" : "suppressed"}, got ${JSON.stringify(e)}`);
+      if (!shown && e.suppressed !== "prefs") throw new Error(`${kind} suppressed by ${e.suppressed}, not the prefs`);
+    }
+  };
+  await round({ needs: true, finished: false }, { NeedsYou: true, Finished: false });
+  await round({ needs: false, finished: true }, { NeedsYou: false, Finished: true });
+  await setPrefs({ "Needs you": true, "A session finished": true });
+});
+
+scenario_("app-kill-recovery", async () => {
+  // kill -9 the desktop app mid-turn (a gate pending), start it again: the session still
+  // runs, its transcript is continuous and the gate is answerable.
+  const s = launched.codex;
+  if (!s) return "no session";
+  await openSession(s);
+  await sendPrompt("please run the tests");
+  await waitPhase(s.id, "needs_you");
+  const daemon = (await rpc("daemon.info")).pid;
+  const pids = execFileSync("pgrep", ["-f", bin.app]).toString().trim().split(/\s+/).map(Number);
+  for (const p of pids) process.kill(p, "SIGKILL");
+  await wd.quit().catch(() => {});
+  await startApp();
+  if ((await rpc("daemon.info")).pid !== daemon) throw new Error("the daemon was restarted with the app");
+  await openSession(s);
+  await el("[data-gate=permission]", null, 30_000);
+  // Earlier turns are still there, in order, before the pending one.
+  const order = await wd.exec(() => { const t = document.querySelector(".sd-body, main")?.innerText ?? document.body.innerText; return [t.indexOf("echo: hello from codex"), t.lastIndexOf("please run the tests")]; });
+  if (!(order[0] >= 0 && order[1] > order[0])) throw new Error(`transcript not continuous: ${order}`);
+  await click("[data-gate=permission] .choices button", "Allow");
+  await waitPhase(s.id, "idle");
+  await bodyHas("All 12 auth tests pass.");
 });
 
 // ── remote hosts over a real sshd on localhost ──────────────────────────────
@@ -642,38 +718,239 @@ scenario_("ssh-host-password", async () => {
   await waitFor(async () => (await linkOf("lab-pc"))?.state?.state === "connected", "lab-pc connected again", 120_000);
 });
 
-// Live CLIs: tiny prompts, cheapest models.
-const live = (d, model, agent) => scenario_(`live-${d}`, async () => {
-  const s = await launchViaDialog({ agent, cwd: project, prompt: "Reply with exactly the word: pong", model });
-  launched[`live-${d}`] = s;
-  await waitPhase(s.id, "idle", 180_000);
-  await openSession(s);
-  await bodyHas("pong", 60_000);
-}, { real: true });
-live("claude", "Haiku", "Claude Code");
-live("opencode", "opencode/deepseek-v4.1-flash-free", "OpenCode");
-live("kilo", "kilo/kilo-auto/free", "Kilo Code");
+// Live CLIs: tiny prompts, cheapest models. Each driver: launch, every one of its own gate
+// choices, interrupt, model + mode switch, a slash command, and continue-latest / resume-by-id
+// of conversations started in a terminal, outside Marsad.
+const LIVE = {
+  claude: { agent: "Claude Code", model: "Haiku", cliModel: "haiku" },
+  opencode: { agent: "OpenCode", model: "opencode/deepseek-v4.1-flash-free", cliModel: "opencode/deepseek-v4.1-flash-free" },
+  kilo: { agent: "Kilo Code", model: "kilo/kilo-auto/free", cliModel: "kilo/kilo-auto/free" },
+};
+const pendingGate = async (id) => (await snapOf(id))?.pending_gates?.[0]?.gate ?? null;
+/** Wait until the turn ends; answer any further gate with `kind` (a model may ask again). */
+async function settle(id, { answer = null, ms = 180_000 } = {}) {
+  const seen = [];
+  await waitFor(async () => {
+    const s = await snapOf(id);
+    if (!s) return false;
+    if (s.phase.state === "needs_you") {
+      const g = s.pending_gates?.[0]?.gate;
+      if (g && !seen.includes(g.request_id)) {
+        seen.push(g.request_id);
+        if (!answer) throw new Error(`unexpected gate ${g.gate_type}`);
+        const c = g.choices.find((x) => x.kind === answer) ?? g.choices.find((x) => x.kind.startsWith(answer.split("_")[0]));
+        await openSession({ id });
+        await click(`[data-gate] .choices button[data-choice="${c.id}"]`);
+      }
+      return false;
+    }
+    return ["idle", "exited", "failed"].includes(s.phase.state);
+  }, `session ${id} settled`, ms);
+  return seen.length;
+}
+const shell = (d, cmd) => (d === "claude" ? `Use the Bash tool to run exactly this command and nothing else, then reply done: ${cmd}` : `Use the bash tool to run exactly this command and nothing else, then reply done: ${cmd}`);
 
-scenario_("live-claude-gate", async () => {
-  const s = launched["live-claude"];
-  if (!s) return "no session";
-  await openSession(s);
-  await sendPrompt("Use the Bash tool to run exactly: touch live_gate.txt");
-  await waitPhase(s.id, "needs_you", 120_000);
-  await shot("16-session-live-claude-gate");
-  await click("[data-gate=permission] .choices button", "Allow");
-  await waitPhase(s.id, "idle", 120_000);
-  if (!fs.existsSync(path.join(project, "live_gate.txt"))) throw new Error("the allowed command did not run");
-}, { real: true });
+for (const [d, L] of Object.entries(LIVE)) {
+  scenario_(`live-${d}`, async () => {
+    // OpenCode and Kilo run shell commands without asking by default; the project's own
+    // config makes them ask (removed again after the interrupt scenario: a session keeps
+    // the config it started with, and terminal runs must not wait for an answer).
+    if (d !== "claude") fs.writeFileSync(path.join(project, "opencode.json"), JSON.stringify({ permission: { bash: "ask" } }));
+    const s = await launchViaDialog({ agent: L.agent, cwd: project, prompt: "Reply with exactly the word: pong", model: L.model });
+    launched[`live-${d}`] = s;
+    await waitPhase(s.id, "idle", 180_000);
+    await openSession(s);
+    await bodyHas("pong", 60_000);
+  }, { real: true });
 
-scenario_("live-claude-resume-terminal-session", async () => {
-  // A conversation started in a terminal, outside Marsad, then resumed from the dialog.
-  execFileSync("claude", ["-p", "Remember the word: walnut. Reply ok.", "--model", "haiku"], { cwd: project, stdio: "pipe", timeout: 120_000 });
-  await rpc("drivers.refresh", { driver: "claude", project }, local);
-  const s = await launchViaDialog({ agent: "Claude Code", cwd: project, prompt: "Which word did I ask you to remember? One word.", resumeTitle: "Remember the word: walnut", model: "Haiku" });
-  await waitPhase(s.id, "idle", 180_000);
-  await openSession(s);
-  await bodyHas("walnut", 60_000);
+  scenario_(`live-${d}-gate-choices`, async () => {
+    const s = launched[`live-${d}`];
+    if (!s) return "no session";
+    await openSession(s);
+    // The choices are the CLI's own; answer each in turn (refusals first, "always" last).
+    await sendPrompt(shell(d, `touch gate_${d}_0.txt`));
+    await waitPhase(s.id, "needs_you", 120_000);
+    const first = await pendingGate(s.id);
+    if (first?.gate_type !== "permission") throw new Error(`expected a permission gate, got ${first?.gate_type}`);
+    const order = ["reject_once", "cancel", "allow_once", "allow_always"];
+    const choices = [...first.choices].filter((c) => c.kind !== "reject_always").sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
+    if (d === "claude") await shot("16-session-live-claude-gate");
+    const done = [];
+    for (const [i, c] of choices.entries()) {
+      const f = `gate_${d}_${i}.txt`;
+      if (i > 0) {
+        await sendPrompt(shell(d, `touch ${f}`));
+        await waitPhase(s.id, "needs_you", 120_000);
+      }
+      const g = await pendingGate(s.id);
+      const mine = g.choices.find((x) => x.kind === c.kind) ?? c;
+      await click(`[data-gate=permission] .choices button[data-choice="${mine.id}"]`);
+      // A refused model may try again: refuse that too.
+      await settle(s.id, { answer: c.kind.startsWith("allow") ? "allow_once" : "reject_once" });
+      const ran = fs.existsSync(path.join(project, f));
+      if (ran !== c.kind.startsWith("allow")) throw new Error(`${c.kind} (${mine.label}): command ${ran ? "ran" : "did not run"}`);
+      done.push(`${mine.label} [${c.kind}]`);
+    }
+    // After "always", the same command runs without asking.
+    if (choices.some((c) => c.kind === "allow_always")) {
+      const f = `gate_${d}_${choices.length - 1}.txt`;
+      fs.rmSync(path.join(project, f), { force: true });
+      await sendPrompt(shell(d, `touch ${f}`));
+      const asked = await settle(s.id, { answer: "allow_once" });
+      if (asked) throw new Error("asked again after an always-allow choice");
+      if (!fs.existsSync(path.join(project, f))) throw new Error("always-allowed command did not run");
+    }
+    const skipped = first.choices.filter((c) => c.kind === "reject_always").map((c) => c.label);
+    return `answered ${done.join(", ")}${skipped.length ? `; not exercised: ${skipped}` : ""}`;
+  }, { real: true });
+
+  scenario_(`live-${d}-interrupt`, async () => {
+    const s = launched[`live-${d}`];
+    if (!s) return "no session";
+    await openSession(s);
+    await sendPrompt(shell(d, `python3 -c "import time; time.sleep(120)"`));
+    await waitFor(async () => {
+      const x = await snapOf(s.id);
+      if (x.phase.state === "needs_you") {
+        const g = x.pending_gates[0].gate;
+        await click(`[data-gate=permission] .choices button[data-choice="${g.choices.find((c) => c.kind === "allow_once").id}"]`);
+        return false;
+      }
+      return x.phase.state === "working" && x.turn?.current_tool;
+    }, "the sleep running", 120_000).catch(async (e) => {
+      // A model that started a second tool call next to the sleep leaves no "current" tool.
+      if ((await snapOf(s.id)).phase.state !== "working") throw e;
+    });
+    await sleep(2000);
+    await button("Interrupt");
+    await waitPhase(s.id, "idle", 60_000);
+    fs.rmSync(path.join(project, "opencode.json"), { force: true });
+  }, { real: true });
+
+  scenario_(`live-${d}-model-mode`, async () => {
+    const s = launched[`live-${d}`];
+    if (!s) return "no session";
+    const x = await snapOf(s.id);
+    // claude lists aliases ("sonnet") and reports the resolved name ("claude-sonnet-…").
+    const same = (cur, id) => cur === id || (cur ?? "").includes(id);
+    const model = x.available_models.find((m) => !same(x.model, m.id) && m.id !== "default" && !/opus/i.test(m.id) && (d === "claude" || /free/.test(m.id)));
+    const mode = x.available_modes.find((m) => m.id !== x.mode);
+    if (!model || !mode) throw new Error(`nothing to switch to (${x.available_models.length} models, ${x.available_modes.length} modes)`);
+    const pick = async (what, label) => {
+      await click(`button[aria-label^='${what}:']`);
+      const filter = await wd.findAll("css selector", `input[aria-label='Filter ${what}']`);
+      if (filter.length) await wd.sendKeys(filter[0], label);
+      await click("[role=option]", label);
+    };
+    await openSession(s, "config");
+    await pick("Model", model.display_name);
+    await pick("Mode", mode.label);
+    await button("Apply to running session");
+    await waitFor(async () => { const y = await snapOf(s.id); return same(y.model, model.id) && y.mode === mode.id; }, `model ${model.id} and mode ${mode.id} applied`, 60_000);
+    // And back, so the next scenarios run as before.
+    await openSession(s, "config");
+    await pick("Model", x.available_models.find((m) => same(x.model, m.id) && m.id !== "default")?.display_name ?? x.model);
+    // claude reports "default" for the mode its --help calls "manual".
+    const back = x.available_modes.find((m) => m.id === x.mode) ?? x.available_modes.find((m) => m.id === "manual");
+    if (back) await pick("Mode", back.label);
+    await button("Apply to running session");
+    await waitFor(async () => { const y = await snapOf(s.id); return same(y.model, x.model) && (!back || y.mode === back.id || (back.id === "manual" && y.mode === "default")); }, "switched back", 60_000);
+    return `${model.id} / ${mode.id} and back`;
+  }, { real: true });
+
+  scenario_(`live-${d}-slash`, async () => {
+    const s = launched[`live-${d}`];
+    if (!s) return "no session";
+    const x = await snapOf(s.id);
+    const names = x.slash_commands.map((c) => c.name);
+    const name = ["context", "cost", "status", "review", "init"].find((n) => names.includes(n)) ?? names[0];
+    if (!name) throw new Error("the CLI reported no slash commands");
+    const before = x.turns_completed;
+    await openSession(s);
+    await type("textarea[aria-label=Message]", `/${name}`);
+    await el("[role=listbox][aria-label='Slash commands']");
+    await wd.sendKeys(await el("textarea[aria-label=Message]"), Keys.ENTER);
+    await settle(s.id, { answer: "reject_once" });
+    await waitFor(async () => (await snapOf(s.id)).turns_completed > before, `/${name} completed a turn`, 120_000);
+    return `/${name} of ${names.length}`;
+  }, { real: true });
+
+  scenario_(`live-${d}-continue-and-resume`, async () => {
+    // Two conversations started in a terminal, outside Marsad: continue the latest (B), then
+    // resume the older one (A) by its id.
+    // OpenCode / Kilo take the project from $PWD. A free model sometimes stalls a run: retry.
+    const cliEnv = { ...process.env, ...userXdg, PWD: project };
+    const cli = (word) => {
+      const prompt = `Remember the word ${word}. Reply with just: ok`;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          if (d === "claude") return JSON.parse(execFileSync("claude", ["-p", prompt, "--model", L.cliModel, "--output-format", "json"], { cwd: project, stdio: "pipe", timeout: 180_000, env: cliEnv }).toString()).session_id;
+          const out = execFileSync(d, ["run", "--format", "json", "-m", L.cliModel, prompt], { cwd: project, stdio: "pipe", timeout: 90_000, env: cliEnv }).toString();
+          return JSON.parse(out.split("\n").find((l) => l.includes("sessionID"))).sessionID;
+        } catch (e) {
+          if (attempt >= 3) throw e;
+          console.log(`    note: ${d} run attempt ${attempt} failed (${e.message.split("\n")[0]}); retrying`);
+        }
+      }
+    };
+    const a = cli("walnut");
+    await sleep(1500);
+    const b = cli("saffron");
+    await rpc("drivers.refresh", { driver: d, project }, local);
+    await waitFor(async () => (await rpc("drivers.inventory", { project }, local)).drivers.find((x) => x.driver === d && !x.refreshing)?.sessions.some((x) => x.id === b), "the terminal sessions listed", 120_000);
+    const ask = "Which word did I ask you to remember? Reply with that one word.";
+    const l = await launchViaDialog({ agent: L.agent, cwd: project, prompt: ask, latest: true, model: L.model });
+    await waitPhase(l.id, "idle", 180_000);
+    await openSession(l);
+    await bodyHas("saffron", 60_000);
+    const r = await launchViaDialog({ agent: L.agent, cwd: project, prompt: ask, resumeId: a, model: L.model });
+    await waitPhase(r.id, "idle", 180_000);
+    if ((await snapOf(r.id)).native_session_id !== a && d !== "claude") throw new Error(`resumed ${await snapOf(r.id).native_session_id}, not ${a}`);
+    await openSession(r);
+    await bodyHas("walnut", 60_000);
+  }, { real: true });
+}
+
+// OpenCode / Kilo cannot ask through their own question tool; Marsad injects `ask_user`.
+for (const d of ["opencode", "kilo"]) {
+  scenario_(`live-${d}-ask-user`, async () => {
+    const s = launched[`live-${d}`];
+    if (!s) return "no session";
+    const x = await snapOf(s.id);
+    await openSession(s);
+    await sendPrompt("Use the ask_user tool (from the marsad MCP server) to ask me which color I prefer, as a single choice between the options Red and Blue. After I answer, reply with only the color I picked, in capital letters.");
+    await waitFor(async () => (await pendingGate(s.id))?.gate_type === "question", "an ask_user question", 180_000);
+    await el("[data-gate=question]");
+    if (d === "opencode") await shot("17-session-ask-user-question-opencode");
+    await click("[data-gate=question] [role=radio]", "Blue");
+    await button("Send answer");
+    await waitFor(async () => { const y = await snapOf(s.id); return y.phase.state === "idle" && y.turns_completed > x.turns_completed; }, "the turn after the answer", 180_000);
+    await bodyHas("BLUE", 30_000);
+  }, { real: true });
+}
+
+scenario_("live-delegation", async () => {
+  // A claude orchestrator delegates to an opencode worker through the injected Wasl MCP tools;
+  // the handoff gate is answered in the UI.
+  const node = (id, name, driver, model, prompt) => ({ id, name, role: id, description: `the ${name}`, session: null, launch: { host: null, driver, cwd: project, model, mode: null, first_prompt: prompt, labels: {}, overrides: { items: [], env: [], disallowed_tools: [] } } });
+  const ws = await rpc("workstreams.create", {
+    name: "Live delegation", description: "claude orchestrator, opencode worker",
+    nodes: [node("orch", "orchestrator", "claude", "haiku", null), node("worker", "worker", "opencode", LIVE.opencode.model, null)],
+    edges: [{ from: "orch", to: "worker", policy: "ask" }], limits: {}, layout: {},
+  });
+  await go(`#/workstreams/${ws.id}`);
+  await button("Launch");
+  const v = await waitFor(async () => { const x = await rpc("workstreams.get", { id: ws.id }); return x.nodes.every((n) => n.session) && x; }, "nodes launched", 120_000);
+  const orch = v.nodes.find((n) => n.id === "orch").session;
+  await waitPhase(orch.session, ["idle"], 120_000);
+  await go(`#/session/${encodeURIComponent(orch.host)}/${orch.session}`);
+  await el(".sd-head");
+  await sendPrompt("Use your wasl delegate tool to send the node named worker this instruction: 'Reply with exactly the word kiwi.' Wait for its result, then tell me the word it answered.");
+  await el("[data-gate=handoff]", null, 180_000);
+  await shot("33-workstream-live-handoff-gate");
+  await click("[data-gate=handoff] .choices button", "Allow once");
+  await waitFor(async () => { const s = await snapOf(orch.session); return s?.phase.state === "idle" && s.turns_completed >= 1; }, "the orchestrator finished", 300_000);
+  await bodyHas("kiwi", 60_000);
 }, { real: true });
 
 /** Close whatever a failed scenario left open (dialogs, menus) and go to the Inbox. */

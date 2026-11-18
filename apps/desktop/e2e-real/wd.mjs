@@ -84,6 +84,9 @@ export class WebDriver {
     return this.cmd("POST", `/session/:sid/element/${el}/value`, { text });
   }
 
+  async attr(el, name) {
+    return this.cmd("GET", `/session/:sid/element/${el}/attribute/${name}`);
+  }
   async text(el) {
     return this.cmd("GET", `/session/:sid/element/${el}/text`);
   }
