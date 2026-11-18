@@ -7,7 +7,7 @@ export function TitleBar({ onPalette }: { onPalette: () => void }) {
   return (
     <header className="titlebar">
       <div className="brand">
-        <Icon name="dome" size="lg" className="c-accent" />
+        <Icon name="tower" size="lg" className="c-accent" />
         Marsad <span className="ar" lang="ar">مرصد</span>
       </div>
       <button type="button" className="cmdk" onClick={onPalette} aria-label="Search sessions, hosts, commands" aria-keyshortcuts="Control+K Meta+K">

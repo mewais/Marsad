@@ -53,7 +53,7 @@ export const ICON_PATHS = {
   board: '<rect x="3" y="4" width="5" height="16" rx="1.2"/><rect x="10" y="4" width="5" height="11" rx="1.2"/><rect x="17" y="4" width="4" height="7" rx="1.2"/>',
   panes: '<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M8 4v16M14 4v16"/>',
   arrowdown: '<path d="M12 5v14M7 14l5 5 5-5"/>',
-  dome: '<path d="M3.5 18.5h17"/><path d="M5.5 18.5V14a6.5 6.5 0 0 1 13 0v4.5"/><path d="M12 7.5 15.5 3"/><path d="M10.5 18.5v-3h3v3"/>',
+  tower: '<path d="M6.5 9V4.5h2.6v2h1.8v-2h2.2v2h1.8v-2h2.6V9z"/><path d="M8 9l-.8 12M16 9l.8 12"/><path d="M5.5 21h13"/><path d="M10.6 21v-3.2a1.4 1.4 0 0 1 2.8 0V21"/><path d="M12 11.5v2"/>',
   warn: '<path d="M12 4 21.5 20h-19Z"/><path d="M12 10v4M12 17v.1"/>',
 } as const;
 
