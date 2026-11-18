@@ -61,10 +61,16 @@ fn label(s: &SessionSnapshot) -> String {
         .clone()
         .filter(|t| !t.is_empty())
         .or_else(|| s.title.clone().filter(|t| !t.is_empty()))
-        .unwrap_or_else(|| match s.cwd.as_deref().and_then(|c| std::path::Path::new(c).file_name()) {
-            // Never the raw session id: the folder the session works in, or the agent.
-            Some(dir) => format!("{} session in {}", s.driver, dir.to_string_lossy()),
-            None => format!("{} session", s.driver),
+        .unwrap_or_else(|| {
+            match s
+                .cwd
+                .as_deref()
+                .and_then(|c| std::path::Path::new(c).file_name())
+            {
+                // Never the raw session id: the folder the session works in, or the agent.
+                Some(dir) => format!("{} session in {}", s.driver, dir.to_string_lossy()),
+                None => format!("{} session", s.driver),
+            }
         })
 }
 
