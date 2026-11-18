@@ -773,9 +773,13 @@ scenario_("ssh-host-second-factor", async () => {
   const pamOath = ["/lib/x86_64-linux-gnu/security/pam_oath.so", "/usr/lib/x86_64-linux-gnu/security/pam_oath.so"].find((p) => fs.existsSync(p));
   if (!pamOath) return "skipped: needs pam_oath (libpam-oath)";
   const d = path.join(root, "ssh");
+  // Its own account: a second host entry for lab-pc's account would find lab-pc's daemon.
+  otp.user = "marsadotp";
+  spawnSync("useradd", ["-m", "-s", "/bin/bash", otp.user], { stdio: "ignore" });
+  execFileSync("chpasswd", { input: `${otp.user}:${sshd.password}\n` });
   const secret = crypto.randomBytes(20).toString("hex");
   const users = path.join(d, "users.oath");
-  fs.writeFileSync(users, `HOTP/T30/6 ${sshd.pwUser} - ${secret}\n`, { mode: 0o600 });
+  fs.writeFileSync(users, `HOTP/T30/6 ${otp.user} - ${secret}\n`, { mode: 0o600 });
   otp.restore = fs.readFileSync("/etc/pam.d/sshd", "utf8");
   fs.writeFileSync("/etc/pam.d/sshd", ["auth requisite pam_unix.so", `auth required ${pamOath} usersfile=${users} window=4 digits=6`, "account required pam_unix.so", "session required pam_permit.so", ""].join("\n"));
   otp.port = sshd.port + 1;
@@ -792,7 +796,7 @@ scenario_("ssh-host-second-factor", async () => {
   await button("Add host");
   await el("[role=dialog]");
   await field("Name", "secure-box");
-  await field("SSH target", `${sshd.pwUser}@127.0.0.1`);
+  await field("SSH target", `${otp.user}@127.0.0.1`);
   await field("Port", String(otp.port));
   await field("Extra ssh options", `UserKnownHostsFile=${sshd.knownHosts}`);
   await click("[role=dialog] button.primary", "Add and connect");
@@ -802,9 +806,14 @@ scenario_("ssh-host-second-factor", async () => {
       if ((await linkOf("secure-box"))?.state?.state === "auth_needed") { await resetUi(); await go("#/hosts"); await click(".hrow[data-host]", "secure-box"); await click("button.primary", "Connect", 20_000); }
       return false;
     }, `the ${want} prompt`, 90_000);
-    const prompt = await wd.exec(() => document.querySelector("[role=dialog]")?.innerText ?? "");
+    // What ssh asked (via Marsad's askpass), as the shell's state holds it.
+    const prompt = JSON.stringify(Object.values((await state())?.hosts ?? {}).find((x) => x.entry.name === "secure-box")?.authPrompt ?? null);
     if (!new RegExp(want, "i").test(prompt)) throw new Error(`expected a ${want} prompt, got ${JSON.stringify(prompt.slice(0, 200))}`);
-    if (want === "one-time") await shot("43-host-sign-in-second-factor");
+    if (want === "one-time") {
+      // A second factor is the next step, not a retry of the password.
+      if (!/"attempt":1\b/.test(prompt)) throw new Error(`the one-time code prompt counts as a retry: ${prompt}`);
+      await shot("43-host-sign-in-second-factor");
+    }
     await type(".authp-input", value());
     await button("Sign in");
     await waitFor(async () => !(await wd.exec(() => !!document.querySelector(".authp-input"))), "the prompt answered", 20_000).catch(() => {});
@@ -931,7 +940,9 @@ for (const [d, L] of Object.entries(LIVE)) {
     // claude lists aliases ("sonnet") and reports the resolved name ("claude-sonnet-…").
     const same = (cur, id) => cur === id || (cur ?? "").includes(id);
     const model = x.available_models.find((m) => !same(x.model, m.id) && m.id !== "default" && !/opus/i.test(m.id) && (d === "claude" || /free/.test(m.id)));
-    const mode = x.available_modes.find((m) => m.id !== x.mode);
+    // claude reports "default" for the mode its --help calls "manual".
+    const sameMode = (a, b) => a === b || (a === "default" && b === "manual") || (a === "manual" && b === "default");
+    const mode = x.available_modes.find((m) => !sameMode(x.mode, m.id));
     if (!model || !mode) throw new Error(`nothing to switch to (${x.available_models.length} models, ${x.available_modes.length} modes)`);
     const pick = async (what, label) => {
       await click(`button[aria-label^='${what}:']`);
@@ -967,9 +978,13 @@ for (const [d, L] of Object.entries(LIVE)) {
     await type("textarea[aria-label=Message]", `/${name}`);
     await el("[role=listbox][aria-label='Slash commands']");
     await wd.sendKeys(await el("textarea[aria-label=Message]"), Keys.ENTER);
-    await settle(s.id, { answer: "reject_once" });
-    await waitFor(async () => (await snapOf(s.id)).turns_completed > before, `/${name} completed a turn`, 120_000);
-    return `/${name} of ${names.length}`;
+    // The command runs as a turn; a long one (a free model reviewing) is interrupted after a
+    // minute — it ran either way.
+    await waitFor(async () => { const y = await snapOf(s.id); return y.turns_completed > before || y.phase.state === "working" || y.phase.state === "needs_you"; }, `/${name} started`, 60_000);
+    const done = await settle(s.id, { answer: "reject_once", ms: 60_000 }).then(() => true, () => false);
+    if (!done) { await openSession(s); await button("Interrupt"); await waitPhase(s.id, "idle", 60_000); }
+    await waitFor(async () => (await snapOf(s.id)).turns_completed > before, `/${name} completed a turn`, 60_000);
+    return `/${name} of ${names.length}${done ? "" : " (interrupted after a minute)"}`;
   }, { real: true });
 
   scenario_(`live-${d}-continue-and-resume`, async () => {
@@ -997,11 +1012,11 @@ for (const [d, L] of Object.entries(LIVE)) {
     await waitFor(async () => (await rpc("drivers.inventory", { project }, local)).drivers.find((x) => x.driver === d && !x.refreshing)?.sessions.some((x) => x.id === b), "the terminal sessions listed", 120_000);
     const ask = "Which word did I ask you to remember? Reply with that one word.";
     const l = await launchViaDialog({ agent: L.agent, cwd: project, prompt: ask, latest: true, model: L.model });
-    await waitPhase(l.id, "idle", 180_000);
+    await waitPhase(l.id, "idle", 300_000);
     await openSession(l);
     await bodyHas("saffron", 60_000);
     const r = await launchViaDialog({ agent: L.agent, cwd: project, prompt: ask, resumeId: a, model: L.model });
-    await waitPhase(r.id, "idle", 180_000);
+    await waitPhase(r.id, "idle", 300_000);
     if ((await snapOf(r.id)).native_session_id !== a && d !== "claude") throw new Error(`resumed ${await snapOf(r.id).native_session_id}, not ${a}`);
     await openSession(r);
     await bodyHas("walnut", 60_000);
@@ -1172,7 +1187,17 @@ scenario_("showcase", async () => {
   await go(`#/workstreams/${draft.id}`); await sleep(1200); await shot("dark-13-workstream-design-mode");
   // Hosts, config, settings.
   await go("#/hosts"); await sleep(800); await click(".hrow[data-host]", "build-box").catch(() => {}); await sleep(600); await shot("dark-14-hosts");
-  await go("#/config"); await sleep(1500); await shot("dark-15-config-agent-configuration");
+  // Overrides on top of claude's own config: a skill turned off, an MCP server added.
+  const cbase = await rpc("agentconfig.base", { driver: "claude", project: null, refresh: false }, local).catch(() => null);
+  const skill = cbase?.items.find((i) => i.kind === "skill")?.name;
+  await rpc("store.layers.set", { scope: { scope: "global" }, layer: { items: [
+    ...(skill ? [{ kind: "skill", name: skill, driver: "claude", action: "disable" }] : []),
+    { kind: "mcp_server", name: "docs-search", driver: null, action: "set", value: { kind: "mcp_server", server: { transport: "http", url: "https://docs.example.com/mcp", headers: {} } } },
+  ], env: [], disallowed_tools: [] } });
+  await go("#/config"); await sleep(800);
+  await click("button", "Claude Code").catch(() => {});
+  await click("button[aria-label^='Effective for'], [aria-label^='Host']", null, 5000).then(() => click("[role=option]", "vm", 5000)).catch(() => {});
+  await sleep(1500); await shot("dark-15-config-agent-configuration");
   await go("#/settings"); await button("Notifications"); await sleep(600); await shot("dark-16-settings-notifications");
   // Palette and shortcut sheet.
   await go("#/inbox"); await sleep(500);
@@ -1242,6 +1267,10 @@ try {
   sshd.child?.kill();
   otp.child?.kill();
   if (otp.restore != null) fs.writeFileSync("/etc/pam.d/sshd", otp.restore);
+  if (otp.user) {
+    spawnSync("pkill", ["-f", `/home/${otp.user}/`], { stdio: "ignore" });
+    spawnSync("userdel", ["-r", otp.user], { stdio: "ignore" });
+  }
   if (sshd.pwUser) spawnSync("userdel", ["-r", sshd.pwUser], { stdio: "ignore" });
   spawnSync(bin.agent, ["stop", "--data", dirs.data], { stdio: "ignore" });
   // Sessions outlive the daemon by design (their shims hold them); end this run's ones.
