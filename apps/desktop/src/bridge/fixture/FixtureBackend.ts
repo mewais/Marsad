@@ -88,7 +88,8 @@ export class FixtureBackend implements Backend {
       this.later(this.opts.latencyMs, () => {
         const host = this.hosts.get(hostId);
         if (!host) return reject(err("unknown_host", `No host ${hostId}`));
-        if (host.link.link !== "connected") {
+        // host.info is served from the daemon's cache, so drivers are known even while a link is down.
+        if (host.link.link !== "connected" && method !== methods.HOST_INFO) {
           return reject(err("host_unreachable", `${host.def.name} is ${host.link.link === "offline" ? "offline" : "reconnecting"}; try again once it is connected.`));
         }
         try {

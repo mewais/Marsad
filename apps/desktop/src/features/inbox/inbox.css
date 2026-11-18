@@ -24,3 +24,9 @@
 .donebox{margin:0 20px 10px 150px;display:flex;gap:10px;align-items:center;font-size:12px;color:var(--fg-2)}
 .donebox .stat{font-family:var(--f-mono);font-size:11.5px}
 .add{color:var(--add)} .del{color:var(--del)}
+@media (max-width:1100px){
+  .ibx-head,.ibx-row{grid-template-columns:108px minmax(190px,1.5fr) 44px 128px minmax(150px,1.2fr) 56px 54px;gap:10px}
+  .ibx-row .drv span,.ibx-head .drvh{font-size:0}
+  .gate-inline,.donebox{margin-left:128px}
+  .toolbar .chip.hide-n{display:none}
+}

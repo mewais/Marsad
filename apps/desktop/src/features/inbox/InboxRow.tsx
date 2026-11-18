@@ -38,11 +38,11 @@ export const InboxRow = memo(function InboxRow({ sessionKey, selected, onSelect,
           {needs ? null : <div className={`s${v.status === "failed" ? " err" : ""}`}>{v.line}</div>}
         </div>
         <div>{drv ? <DriverBadge driver={drv} /> : v.driver}</div>
-        <div className="host">
+        <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
           {host ? (
             <>
               <HostChip host={host} />
-              {host.link !== "connected" ? <span style={{ display: "contents" }}><br /><ConnState host={host} short /></span> : null}
+              {host.link !== "connected" ? <ConnState host={host} short /> : null}
             </>
           ) : null}
         </div>
