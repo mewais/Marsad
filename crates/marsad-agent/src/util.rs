@@ -87,7 +87,7 @@ pub async fn run(
     let (prog, args) = argv
         .split_first()
         .ok_or_else(|| MarsadError::invalid("empty command"))?;
-    let mut cmd = tokio::process::Command::new(prog);
+    let mut cmd = wasit_process::command(prog);
     cmd.args(args)
         .envs(env.iter().map(|(k, v)| (k, v)))
         .stdout(Stdio::piped())
@@ -149,7 +149,8 @@ pub async fn run(
                 // stderr is diagnostics; a read error just ends it.
                 let _ = e.take(64 * 1024).read_to_end(&mut buf).await;
             }
-            String::from_utf8_lossy(&buf).into_owned()
+            // UTF-16LE from Windows tools such as wsl.exe reads as text too.
+            wasit_process::decode_console_output(&buf)
         };
         let ((), stdout, stderr) = tokio::join!(feed, read_out, read_err);
         let status = child.wait().await;

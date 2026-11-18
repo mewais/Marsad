@@ -3,4 +3,4 @@
 /**
  * What went wrong with a transport command, as far as the UI needs to explain it.
  */
-export type CommandFailureKind = "auth_needed" | "host_key_unknown" | "host_key_changed" | "unreachable" | "command_not_found" | "other";
+export type CommandFailureKind = "auth_needed" | "host_key_unknown" | "host_key_changed" | "unreachable" | "command_not_found" | "unknown_distro" | "wsl_unavailable" | "permission_denied" | "unsupported_platform" | "helper_missing" | "unexpected_output" | "other";

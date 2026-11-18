@@ -23,6 +23,7 @@ wasit-control = { git = "https://github.com/mewais/Wasit", branch = "claude/awes
 wasit-runtime = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
 wasit-shim = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
 wasit-fake-cli = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
+wasit-process = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
 # Wasl (agent-to-agent layer), pinned by branch; it depends on the same Wasit git source, so one
 # copy of Wasit is resolved. Local development patches it to `../Wasl` the same way.
 wasl-proto = { git = "https://github.com/mewais/Wasl", branch = "claude/awesome-euler-r7x45r" }

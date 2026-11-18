@@ -248,7 +248,9 @@ async fn start_hub(
         prompts: prompts.clone(),
         restarts: restarts.clone(),
         own: version::info(),
-        bin_dir: std::env::var_os(BIN_DIR_ENV).map(PathBuf::from),
+        bin_dir: std::env::var_os(BIN_DIR_ENV)
+            .filter(|v| !v.is_empty())
+            .map(|v| wasit_process::plain_path(&PathBuf::from(v))),
         socket: o.socket_path(),
     };
     let provisioner = AgentProvisioner {
@@ -407,22 +409,13 @@ pub async fn start_detached(args: Vec<String>, data: PathBuf) -> std::io::Result
         .append(true)
         .open(data.join("marsad-agent.log"))?;
     let exe = std::env::current_exe()?;
-    let mut cmd = tokio::process::Command::new(exe);
+    let mut cmd = wasit_process::detached_command(exe);
     cmd.arg("serve")
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::from(log))
-        .kill_on_drop(false);
-    #[cfg(unix)]
-    cmd.process_group(0);
-    #[cfg(windows)]
-    {
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
-    }
-    let mut child = cmd.spawn()?;
+        .stderr(Stdio::from(log));
+    let mut child = wasit_process::spawn_detached(&mut cmd)?;
     let stdout = child
         .stdout
         .take()

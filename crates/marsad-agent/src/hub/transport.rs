@@ -60,13 +60,21 @@ pub fn transport_prefix(kind: &HostKind) -> Option<Vec<String>> {
             argv.push(target.clone());
             Some(argv)
         }
+        // `--exec`: wsl.exe runs `sh` itself with exactly these arguments. (After a plain `--`
+        // it would hand the rest of its command line to the user's login shell as one string,
+        // which expands the bootstrap's `$…` before `sh` sees it.) `--cd ~`: the default
+        // user's home, not the Windows directory the hub runs in; `-l`: their login PATH.
         HostKind::Wsl { distro } => Some(vec![
-            "wsl.exe".to_string(),
-            "-d".to_string(),
+            super::wsl::wsl_exe()
+                .map(|p| wasit_process::plain_path(&p).to_string_lossy().into_owned())
+                .unwrap_or_else(|| "wsl.exe".to_string()),
+            "--distribution".to_string(),
             distro.clone(),
-            "--".to_string(),
+            "--cd".to_string(),
+            "~".to_string(),
+            "--exec".to_string(),
             "sh".to_string(),
-            "-c".to_string(),
+            "-lc".to_string(),
         ]),
     }
 }
@@ -163,16 +171,63 @@ pub fn platform_from(os: &str, arch: &str) -> Option<HostPlatform> {
         "windows" => ("windows", "pc-windows-msvc"),
         _ => return None,
     };
-    let arch = match arch.trim().to_ascii_lowercase().as_str() {
-        "x86_64" | "amd64" => "x86_64",
-        "aarch64" | "arm64" => "aarch64",
-        _ => return None,
-    };
+    let arch = normalize_arch(arch);
+    if arch.is_empty() {
+        return None;
+    }
     Some(HostPlatform {
         os: os.into(),
-        arch: arch.into(),
         target: format!("{arch}-{triple_os}"),
+        arch,
     })
+}
+
+/// `uname -m` / `PROCESSOR_ARCHITECTURE` spellings → Rust's (`amd64` → `x86_64`, `arm64` →
+/// `aarch64`); anything else lowercased as is (`armv7l`, `riscv64`, `i686`).
+pub fn normalize_arch(arch: &str) -> String {
+    match arch.trim().to_ascii_lowercase().as_str() {
+        "x86_64" | "amd64" | "x64" => "x86_64".into(),
+        "aarch64" | "arm64" | "aarch64_be" | "armv8" | "armv8l" => "aarch64".into(),
+        other => other.into(),
+    }
+}
+
+/// The helper build Marsad ships for a host's (os, arch): any Linux libc → the static musl
+/// build; Windows on ARM → the x64 build (Windows 11 runs it emulated). `None`: no build exists
+/// for that platform.
+pub fn helper_target(os: &str, arch: &str) -> Option<&'static str> {
+    Some(match (os, normalize_arch(arch).as_str()) {
+        ("linux", "x86_64") => "x86_64-unknown-linux-musl",
+        ("linux", "aarch64") => "aarch64-unknown-linux-musl",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("windows", "x86_64") | ("windows", "aarch64") => "x86_64-pc-windows-msvc",
+        _ => return None,
+    })
+}
+
+/// Every helper triple [`helper_target`] can name (what a release bundle must carry).
+pub const HELPER_TARGETS: &[&str] = &[
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+];
+
+/// The (os, arch) a Rust target triple runs on (`x86_64-unknown-linux-gnu` → linux, x86_64).
+pub fn triple_platform(triple: &str) -> (&'static str, String) {
+    let arch = normalize_arch(triple.split('-').next().unwrap_or(""));
+    let os = if triple.contains("linux") {
+        "linux"
+    } else if triple.contains("darwin") {
+        "macos"
+    } else if triple.contains("windows") {
+        "windows"
+    } else {
+        ""
+    };
+    (os, arch)
 }
 
 #[cfg(test)]
@@ -215,7 +270,20 @@ mod tests {
             distro: "Ubuntu".into(),
         });
         let wa = bootstrap_argv(&w).unwrap();
-        assert_eq!(&wa[..3], ["wsl.exe", "-d", "Ubuntu"]);
+        assert!(wa[0].ends_with("wsl.exe"));
+        assert_eq!(
+            &wa[1..],
+            [
+                "--distribution",
+                "Ubuntu",
+                "--cd",
+                "~",
+                "--exec",
+                "sh",
+                "-lc",
+                &posix_bootstrap("h")
+            ]
+        );
         assert_eq!(wa.last().unwrap(), &posix_bootstrap("h"));
         assert!(wa.last().unwrap().ends_with("bridge --host-id h"));
         let mut bad = e.clone();
@@ -246,5 +314,44 @@ mod tests {
             "x86_64-pc-windows-msvc"
         );
         assert!(platform_from("Plan9", "x86_64").is_none());
+        let arm = platform_from("Linux", "armv7l").unwrap();
+        assert_eq!((arm.os.as_str(), arm.arch.as_str()), ("linux", "armv7l"));
+    }
+
+    #[test]
+    fn helper_targets_by_os_and_arch() {
+        // Remote Linux hosts report a gnu (or musl, or other libc) platform; the bundle ships
+        // static musl builds.
+        let cases = [
+            (("Linux", "x86_64"), Some("x86_64-unknown-linux-musl")),
+            (("Linux", "amd64"), Some("x86_64-unknown-linux-musl")),
+            (("Linux", "aarch64"), Some("aarch64-unknown-linux-musl")),
+            (("Linux", "arm64"), Some("aarch64-unknown-linux-musl")),
+            (("Darwin", "arm64"), Some("aarch64-apple-darwin")),
+            (("Darwin", "x86_64"), Some("x86_64-apple-darwin")),
+            (("Windows", "AMD64"), Some("x86_64-pc-windows-msvc")),
+            (("Windows", "ARM64"), Some("x86_64-pc-windows-msvc")),
+            (("Linux", "armv7l"), None),
+            (("Linux", "riscv64"), None),
+            (("Linux", "i686"), None),
+        ];
+        for ((os, arch), want) in cases {
+            let p = platform_from(os, arch).unwrap();
+            assert_eq!(helper_target(&p.os, &p.arch), want, "{os} {arch}");
+            if let Some(t) = want {
+                assert!(HELPER_TARGETS.contains(&t));
+            }
+        }
+        assert_eq!(
+            helper_target("linux", "x86_64"),
+            helper_target(
+                triple_platform("x86_64-unknown-linux-gnu").0,
+                &triple_platform("x86_64-unknown-linux-gnu").1
+            )
+        );
+        assert_eq!(
+            triple_platform("aarch64-apple-darwin"),
+            ("macos", "aarch64".into())
+        );
     }
 }

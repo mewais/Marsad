@@ -226,3 +226,5 @@ export type * from "./WorkstreamTemplate";
 export type * from "./WorkstreamUpdate";
 export type * from "./WorkstreamView";
 export type * from "./WorkstreamsEvent";
+export type * from "./WslDistro";
+export type * from "./WslDistros";

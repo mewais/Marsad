@@ -1,0 +1,361 @@
+//! Windows only.
+//!
+//! * No console windows: a hub daemon with NO console of its own (as when the GUI starts it)
+//!   runs discovery probes, a shim-launched session, a `git` call, an ssh transport command and
+//!   a ConPTY terminal; every process involved is the fake CLI (copied as `git.exe` / `ssh.exe`
+//!   onto the daemon's PATH, or as the terminal's shell), which reports from inside whether it
+//!   got a visible console window (`WASIT_FAKE_CONSOLE_REPORT`).
+//! * WSL end to end (opt-in, `--ignored`; CI's windows-e2e job): `MARSAD_E2E_WSL_DISTRO` names
+//!   an installed distro whose `/usr/local/bin/claude` is the Linux fake CLI, and
+//!   `MARSAD_E2E_LINUX_BIN_DIR` holds `x86_64-unknown-linux-musl/marsad-agent`. The hub lists
+//!   the distro, adds it as a host (provisioning the Linux helper into it), launches a session
+//!   there, answers its gate, and the link comes back by itself after `wsl --terminate`.
+#![cfg(windows)]
+
+mod common;
+
+use std::os::windows::process::CommandExt;
+use std::path::Path;
+use std::process::Stdio;
+use std::time::Duration;
+
+use common::*;
+use marsad_client::{MarsadClient, Subscription};
+use marsad_proto::agentconfig::{LaunchRequest, OverrideLayer};
+use marsad_proto::fleet::FleetEvent;
+use marsad_proto::git::GitTarget;
+use marsad_proto::hosts::{HostDraft, HostKind};
+use marsad_proto::pty::PtyStartRequest;
+use marsad_proto::runtime::{SessionEvent, SessionEventKind};
+use marsad_proto::{AgentEvent, Command, GateDecision, HostId, LinkState};
+use serde_json::json;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use wasit_fake_cli::scenario::{Scenario, Turn};
+
+fn report_lines(p: &Path) -> Vec<String> {
+    std::fs::read_to_string(p)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Wait until the report has more than `before` lines.
+async fn more_reports(p: &Path, before: usize, what: &str) -> Vec<String> {
+    let r = tokio::time::timeout(T, async {
+        loop {
+            let l = report_lines(p);
+            if l.len() > before {
+                return l;
+            }
+            // Test-only polling of a file other processes append to.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await;
+    r.unwrap_or_else(|_| panic!("no console report for {what}: {:?}", report_lines(p)))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn nothing_opens_a_console_window_from_a_consoleless_hub() {
+    let d = TempDir::new();
+    let data = d.path().join("l");
+    let report = d.path().join("console.txt");
+    let bin = d.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for name in ["git.exe", "ssh.exe"] {
+        std::fs::copy(fake(), bin.join(name)).unwrap();
+    }
+    let path = format!(
+        "{};{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    // The hub daemon gets NO console at all (DETACHED_PROCESS), like one started by a GUI app
+    // with plain flags: every console program it starts would get a new, visible window unless
+    // it is created without one.
+    let mut daemon = std::process::Command::new(agent())
+        .args(["serve", "--hub", "--data"])
+        .arg(&data)
+        .args(serve_args())
+        .env("WASIT_FAKE_CONSOLE_REPORT", &report)
+        .env("PATH", &path)
+        .creation_flags(wasit_process::flags::DETACHED_PROCESS)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    let out = tokio::process::ChildStdout::from_std(daemon.stdout.take().unwrap()).unwrap();
+    tokio::time::timeout(T, BufReader::new(out).read_line(&mut line))
+        .await
+        .expect("daemon readiness")
+        .unwrap();
+    assert!(line.contains("ready"), "{line:?}");
+    let c = client(&data);
+
+    // 1. Discovery probes.
+    let before = report_lines(&report).len();
+    c.runtime(None).inventory(None).await.unwrap();
+    more_reports(&report, before, "discovery probes").await;
+
+    // 2. A shim-launched fake CLI session.
+    let before = report_lines(&report).len();
+    let sc = Scenario::builder().turn(Turn::builder().say("hi")).build();
+    let mut req = LaunchRequest::new("claude");
+    req.cwd = Some(d.path().to_string_lossy().into_owned());
+    req.overrides = OverrideLayer {
+        env: scenario_env(d.path(), &sc),
+        ..OverrideLayer::default()
+    };
+    let launched = c.launch(req).await.unwrap();
+    more_reports(&report, before, "the session").await;
+
+    // 3. A git call (`git.exe` is the fake: the call itself fails, which is fine).
+    let before = report_lines(&report).len();
+    let _ = c
+        .git_status(None, GitTarget::cwd(d.path().to_string_lossy()))
+        .await;
+    more_reports(&report, before, "git").await;
+
+    // 4. The transport command of an ssh host (`ssh.exe` is the fake).
+    let before = report_lines(&report).len();
+    c.add_host(HostDraft {
+        name: "S".into(),
+        kind: HostKind::Ssh {
+            target: "nobody@127.0.0.1".into(),
+            port: None,
+            identity_file: None,
+            options: vec![],
+        },
+        id: Some(HostId::new("s")),
+    })
+    .await
+    .unwrap();
+    more_reports(&report, before, "the ssh transport").await;
+
+    // 5. A ConPTY terminal whose shell is the fake.
+    let before = report_lines(&report).len();
+    let pty = c
+        .pty_start(
+            None,
+            PtyStartRequest {
+                target: GitTarget::cwd(d.path().to_string_lossy()),
+                cols: 80,
+                rows: 24,
+                shell: Some(fake().to_string_lossy().into_owned()),
+            },
+        )
+        .await
+        .unwrap();
+    more_reports(&report, before, "the terminal").await;
+    let _ = c.pty_close(None, &pty.id).await;
+
+    // Control: a console program started by a console-less parent without wasit-process
+    // (cmd.exe with DETACHED_PROCESS starting the fake): what the check sees on this machine.
+    let control = d.path().join("control.txt");
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", &format!("\"{}\" --version", fake().display())])
+        .env("WASIT_FAKE_CONSOLE_REPORT", &control)
+        .creation_flags(wasit_process::flags::DETACHED_PROCESS)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    let lines = report_lines(&report);
+    eprintln!("control (no wasit-process): {:?}", report_lines(&control));
+    eprintln!("reports: {lines:#?}");
+    let visible: Vec<_> = lines.iter().filter(|l| l.contains(" visible ")).collect();
+    assert!(
+        visible.is_empty(),
+        "processes that got a visible console window: {visible:?}"
+    );
+    let _ = c.runtime(None).delete(&launched.id).await;
+    let _ = daemon.kill();
+}
+
+// ── WSL end to end ──────────────────────────────────────────────────────────
+
+fn link_is(e: &FleetEvent, host: &str, p: impl Fn(&LinkState) -> bool) -> bool {
+    matches!(e, FleetEvent::Link { host: h, state } if h.as_str() == host && p(state))
+}
+
+async fn until(
+    f: &mut Subscription<FleetEvent>,
+    what: &str,
+    pred: impl Fn(&FleetEvent) -> bool,
+) -> FleetEvent {
+    let fut = async {
+        loop {
+            let (_, e) = next(f).await;
+            if let FleetEvent::Link { host, state } = &e {
+                eprintln!("link {host}: {state:?}");
+            }
+            if pred(&e) {
+                return e;
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(240), fut)
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+}
+
+async fn session_event(sub: &mut wasit_runtime::TypedSubscription<SessionEvent>) -> SessionEvent {
+    match tokio::time::timeout(T, sub.next()).await {
+        Ok(Some(Ok((_, e)))) => e,
+        other => panic!(
+            "no session event: {:?}",
+            other.map(|o| o.map(|r| r.map(|(c, _)| c)))
+        ),
+    }
+}
+
+/// Launch the fake claude on `host` (inside WSL), prompt it and allow its gate.
+async fn gate_round_trip(c: &MarsadClient, host: &HostId) {
+    let sc = Scenario::builder()
+        .turn(
+            Turn::builder()
+                .tool("Bash", json!({"command": "ls"}))
+                .needs_permission()
+                .result_if_allowed("listed")
+                .done()
+                .say("done in wsl"),
+        )
+        .build();
+    let mut req = LaunchRequest::new("claude");
+    req.host = Some(host.clone());
+    req.cwd = Some("/tmp".into());
+    req.overrides = OverrideLayer {
+        env: vec![("WASIT_FAKE_SCENARIO_JSON".into(), sc.to_json())],
+        ..OverrideLayer::default()
+    };
+    let id = c.launch(req).await.unwrap().id;
+    let rt = c.runtime(Some(host.clone()));
+    let mut sub = rt.subscribe_session(&id, None);
+    loop {
+        let e = session_event(&mut sub).await;
+        if matches!(&e.kind, SessionEventKind::Phase { phase } if phase.name() == "idle") {
+            break;
+        }
+    }
+    rt.command(&id, Command::Prompt { text: "go".into() })
+        .await
+        .unwrap();
+    let request_id = loop {
+        if let SessionEventKind::Agent {
+            event: AgentEvent::GateRequested { gate },
+        } = session_event(&mut sub).await.kind
+        {
+            break gate.request_id().to_string();
+        }
+    };
+    rt.command(
+        &id,
+        Command::AnswerGate {
+            request_id,
+            decision: GateDecision::choose("allow"),
+        },
+    )
+    .await
+    .unwrap();
+    loop {
+        if let SessionEventKind::Agent {
+            event: AgentEvent::TurnCompleted { .. },
+        } = session_event(&mut sub).await.kind
+        {
+            break;
+        }
+    }
+    rt.delete(&id).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs a WSL distro prepared by CI (MARSAD_E2E_WSL_DISTRO, MARSAD_E2E_LINUX_BIN_DIR)"]
+async fn wsl_host_end_to_end() {
+    let distro = std::env::var("MARSAD_E2E_WSL_DISTRO").expect("MARSAD_E2E_WSL_DISTRO");
+    let bin_dir = std::env::var("MARSAD_E2E_LINUX_BIN_DIR").expect("MARSAD_E2E_LINUX_BIN_DIR");
+    let d = TempDir::new();
+    let mut cfg = marsad_client::ClientConfig::new(
+        d.path().join("l"),
+        wasit_control::Hello::new("test", "gui", "gui"),
+    );
+    cfg.agent_bin = Some(agent());
+    cfg.serve_args = serve_args();
+    cfg.supervise.backoff.initial = Duration::from_millis(50);
+    // The Linux helper was built separately; both claim one build id (WSLENV carries it into
+    // the distro, where the bootstrap's `--version` and the daemon read it).
+    cfg.daemon_env = vec![
+        ("MARSAD_AGENT_BIN_DIR".into(), bin_dir),
+        ("MARSAD_BUILD_ID".into(), "e2e-wsl".into()),
+        ("WSLENV".into(), "MARSAD_BUILD_ID/u".into()),
+    ];
+    let c = MarsadClient::connect(cfg);
+
+    let list = c.wsl_distros().await.unwrap();
+    eprintln!("distros: {list:?}");
+    assert!(list.available, "{list:?}");
+    assert!(list.distros.iter().any(|x| x.name == distro), "{list:?}");
+
+    // An unknown distro is refused up front, with the installed ones named.
+    let err = c
+        .add_host(HostDraft {
+            name: "Nope".into(),
+            kind: HostKind::Wsl {
+                distro: "NoSuchDistro".into(),
+            },
+            id: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains(&distro), "{err}");
+
+    let mut fleet = c.fleet(None);
+    next(&mut fleet).await;
+    let host = HostId::new("wsl");
+    c.add_host(HostDraft {
+        name: distro.clone(),
+        kind: HostKind::Wsl {
+            distro: distro.clone(),
+        },
+        id: Some(host.clone()),
+    })
+    .await
+    .unwrap();
+    until(&mut fleet, "the WSL host connected", |e| {
+        link_is(e, "wsl", LinkState::is_connected)
+    })
+    .await;
+    let entry = c
+        .hosts()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|h| h.id == host)
+        .unwrap();
+    assert_eq!(entry.platform.as_ref().unwrap().os, "linux");
+
+    gate_round_trip(&c, &host).await;
+
+    // Terminate the distro under the link: it reconnects by itself (a transport drop).
+    let st = std::process::Command::new("wsl.exe")
+        .args(["--terminate", &distro])
+        .status()
+        .unwrap();
+    assert!(st.success());
+    until(&mut fleet, "the link dropped", |e| {
+        link_is(e, "wsl", |s| !s.is_connected())
+    })
+    .await;
+    until(&mut fleet, "the link back", |e| {
+        link_is(e, "wsl", LinkState::is_connected)
+    })
+    .await;
+    gate_round_trip(&c, &host).await;
+    if let Ok(i) = c.daemon_info(None).await {
+        stop_pid(i.pid);
+    }
+}

@@ -64,7 +64,7 @@ pub fn host_link(h: &FleetHost) -> HostLink {
                     Some(last_error.clone()),
                 ),
                 LinkState::AuthNeeded { detail, .. } => (None, Some(detail.clone())),
-                LinkState::Failed { reason } => (None, Some(reason.clone())),
+                LinkState::Failed { reason, .. } => (None, Some(reason.clone())),
                 LinkState::Incompatible { ours, theirs } => (
                     None,
                     Some(format!("incompatible: ours {ours}, theirs {theirs}")),

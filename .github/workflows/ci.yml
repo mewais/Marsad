@@ -91,3 +91,66 @@ jobs:
           cargo fmt --check
           cargo clippy --features custom-protocol --all-targets -- -D warnings
           cargo test --features custom-protocol
+
+  linux-helper:
+    # The static Linux helper and fake CLI the Windows end-to-end job installs into WSL.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-helper
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build -p marsad-agent -p marsad-fake-cli --target x86_64-unknown-linux-musl
+      - name: Collect
+        run: |
+          mkdir -p out/x86_64-unknown-linux-musl
+          cp target/x86_64-unknown-linux-musl/debug/marsad-agent out/x86_64-unknown-linux-musl/
+          cp target/x86_64-unknown-linux-musl/debug/wasit-fake-cli out/
+          strip out/x86_64-unknown-linux-musl/marsad-agent out/wasit-fake-cli
+          file out/x86_64-unknown-linux-musl/marsad-agent out/wasit-fake-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-helper
+          path: out/
+          retention-days: 3
+
+  windows-e2e:
+    # Real Windows: a WSL host end to end (hub lists distros, provisions the Linux helper into
+    # the distro, a fake-CLI session's gate round-trips, the link survives `wsl --terminate`)
+    # and the no-console-window checks.
+    needs: linux-helper
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      MARSAD_E2E_WSL_DISTRO: Alpine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-e2e
+      - uses: Vampire/setup-wsl@v5
+        with:
+          distribution: Alpine
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-helper
+          path: linux-bin
+      - name: Linux fake CLI as `claude` inside the distro
+        shell: pwsh
+        run: |
+          $p = (Resolve-Path linux-bin/wasit-fake-cli).Path -replace '\\','/'
+          $p = '/mnt/' + $p.Substring(0,1).ToLower() + $p.Substring(2)
+          wsl.exe -d Alpine -u root --exec sh -c "install -m 755 '$p' /usr/local/bin/claude && claude --version && uname -a"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          wsl.exe --list --verbose
+      - run: cargo build -p marsad-agent --tests
+      - name: WSL end to end + no console windows
+        shell: pwsh
+        run: |
+          $env:MARSAD_E2E_LINUX_BIN_DIR = (Resolve-Path linux-bin).Path
+          cargo test -p marsad-agent --test windows -- --include-ignored --nocapture --test-threads 1

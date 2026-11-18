@@ -38,6 +38,7 @@
 //! | [`methods::HOSTS_UPDATE`] | [`hosts::HostEntry`] | [`hosts::HostEntry`] |
 //! | [`methods::HOSTS_REMOVE`] | [`hosts::HostRef`] | [`Ack`] |
 //! | [`methods::HOSTS_IMPORT_SUGGESTIONS`] | — | [`hosts::ImportSuggestions`] |
+//! | [`methods::HOSTS_WSL_DISTROS`] | — | [`hosts::WslDistros`] |
 //! | [`methods::HOSTS_RECONNECT`] | [`hosts::HostRef`] | [`Ack`] |
 //! | [`methods::HOSTS_AUTH_ANSWER`] | [`hosts::AuthAnswer`] | [`Ack`] |
 //! | [`methods::HOSTS_AUTH_CANCEL`] | [`hosts::AuthCancel`] | [`Ack`] |
@@ -171,6 +172,7 @@ pub mod methods {
     pub const HOSTS_UPDATE: &str = "hosts.update";
     pub const HOSTS_REMOVE: &str = "hosts.remove";
     pub const HOSTS_IMPORT_SUGGESTIONS: &str = "hosts.import_suggestions";
+    pub const HOSTS_WSL_DISTROS: &str = "hosts.wsl_distros";
     /// Connect now (also the explicit "Connect" for a host that signs in interactively).
     pub const HOSTS_RECONNECT: &str = "hosts.reconnect";
     pub const HOSTS_AUTH_ANSWER: &str = "hosts.auth_answer";

@@ -30,6 +30,12 @@ const PROBLEM: Record<string, string> = {
   host_key_changed: "Host key changed",
   unreachable: "Unreachable",
   command_not_found: "Helper not found",
+  unknown_distro: "WSL distribution not found",
+  wsl_unavailable: "WSL not available",
+  permission_denied: "Helper not allowed to run",
+  unsupported_platform: "Platform not supported",
+  helper_missing: "Helper missing from this install",
+  unexpected_output: "Unexpected answer from host",
   other: "Cannot connect",
 };
 
@@ -55,7 +61,7 @@ export function linkView(link: FleetLink, prompt: AuthPrompt | null = null, now 
     case "incompatible":
       return { key: l.state, tone: "bad", word: "Incompatible version", detail: `Helper speaks ${l.theirs.major}.${l.theirs.minor}, Marsad ${l.ours.major}.${l.ours.minor}`, connected: false };
     case "failed":
-      return { key: l.state, tone: "bad", word: "Failed", detail: l.reason, connected: false };
+      return { key: l.state, tone: "bad", word: (l.problem && PROBLEM[l.problem]) || "Failed", detail: l.reason, connected: false };
     case "stopped":
       return { key: l.state, tone: "info", word: "Stopped", detail: "Not connecting", connected: false };
   }

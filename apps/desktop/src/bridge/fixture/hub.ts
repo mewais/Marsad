@@ -14,6 +14,7 @@ export interface HubCore {
   hostDefs(): FixtureHost[];
   addHost(def: FixtureHost): void;
   removeHost(id: string): void;
+  updateHost(entry: HostEntry): HostEntry;
   reconnect(id: string): void;
   answerAuth(a: AuthAnswer): void;
   cancelAuth(a: AuthCancel): void;
@@ -52,6 +53,8 @@ export class FixtureHub {
         c.addHost({ entry, link: { state: "connecting" }, drivers: { claude: "2.1.4", codex: "0.58.0" } });
         return entry;
       }
+      case M.HOSTS_UPDATE:
+        return c.updateHost(p as HostEntry);
       case M.HOSTS_REMOVE:
         c.removeHost((p as HostRef).id);
         return {};
@@ -64,6 +67,14 @@ export class FixtureHub {
       case M.HOSTS_AUTH_CANCEL:
         c.cancelAuth(p as AuthCancel);
         return {};
+      case M.HOSTS_WSL_DISTROS:
+        return {
+          available: true,
+          distros: [
+            { name: "Ubuntu-24.04", default: true, running: true, version: 2 },
+            { name: "Debian", default: false, running: false, version: 2 },
+          ],
+        };
       case M.HOSTS_IMPORT_SUGGESTIONS:
         return {
           source: "~/.ssh/config",

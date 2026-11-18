@@ -1,6 +1,6 @@
 import type { Backend, RequestOptions, SubscribeOptions, Unsubscribe } from "../backend";
 import type {
-  AuthAnswer, AuthCancel, AuthPrompt, BaseRequest, FleetEvent, FleetHost, FsListRequest, FsPathRequest, GateRequest, GitCommitRequest, GitDiffRequest,
+  AuthAnswer, AuthCancel, AuthPrompt, BaseRequest, HostEntry, FleetEvent, FleetHost, FsListRequest, FsPathRequest, GateRequest, GitCommitRequest, GitDiffRequest,
   GitDiscardRequest, GitRefresh, GitStatus, GitStatusRequest, GitSummary, GitTarget, HistoryRequest, RenameSession, HostId, InventoryRequest, LinkState, SessionRef, SessionSnapshot, CommandRequest,
 } from "../wire";
 import { methods as M, topics as T } from "../wire";
@@ -70,6 +70,7 @@ export class FixtureBackend implements Backend {
       hostDefs: () => [...this.hosts.values()].map((h) => h.def),
       addHost: (def) => this.addHost(def),
       removeHost: (id) => this.removeHost(id),
+      updateHost: (e) => this.updateHost(e),
       reconnect: (id) => this.reconnect(id),
       answerAuth: (a) => this.answerAuth(a),
       cancelAuth: (a) => this.cancelAuth(a),
@@ -324,6 +325,14 @@ export class FixtureBackend implements Backend {
       this.fleet({ kind: "host_upserted", host: def.entry });
       this.setLink(def.entry.id, connected(def.entry.id));
     });
+  }
+
+  private updateHost(entry: HostEntry): HostEntry {
+    const h = this.hosts.get(entry.id);
+    if (!h) throw err("not_found", `No host ${entry.id}`);
+    h.def.entry = { ...entry, created_at_ms: h.def.entry.created_at_ms };
+    this.fleet({ kind: "host_upserted", host: h.def.entry });
+    return h.def.entry;
   }
 
   private removeHost(id: HostId) {

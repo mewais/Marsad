@@ -31,6 +31,7 @@ export interface MethodMap {
   [M.HOSTS_UPDATE]: [W.HostEntry, W.HostEntry];
   [M.HOSTS_REMOVE]: [W.HostRef, W.Ack];
   [M.HOSTS_IMPORT_SUGGESTIONS]: [void, W.ImportSuggestions];
+  [M.HOSTS_WSL_DISTROS]: [void, W.WslDistros];
   [M.HOSTS_RECONNECT]: [W.HostRef, W.Ack];
   [M.HOSTS_AUTH_ANSWER]: [W.AuthAnswer, W.Ack];
   [M.HOSTS_AUTH_CANCEL]: [W.AuthCancel, W.Ack];
@@ -119,6 +120,7 @@ export function createApi(b: Backend) {
       update: (e: W.HostEntry) => call(b, M.HOSTS_UPDATE, e),
       remove: (id: W.HostId) => call(b, M.HOSTS_REMOVE, { id }),
       importSuggestions: () => call(b, M.HOSTS_IMPORT_SUGGESTIONS, undefined),
+      wslDistros: () => call(b, M.HOSTS_WSL_DISTROS, undefined),
       reconnect: (id: W.HostId) => call(b, M.HOSTS_RECONNECT, { id }),
       authAnswer: (a: W.AuthAnswer) => call(b, M.HOSTS_AUTH_ANSWER, a),
       authCancel: (a: W.AuthCancel) => call(b, M.HOSTS_AUTH_CANCEL, a),

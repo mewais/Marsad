@@ -69,4 +69,43 @@ describe("hosts", () => {
     await waitFor(() => expect(backend.requests.find((r) => r.method === "hosts.add")?.params).toMatchObject({ name: "ci-runner-02", kind: { kind: "ssh", target: "ci-runner-02", port: 22 } }));
     expect(await within(dlg).findByText(/Found Claude Code 2.1.4/, {}, { timeout: 3000 })).toBeInTheDocument();
   });
+
+  it("add host: WSL offers the detected distributions with the default preselected, typing as fallback", async () => {
+    const user = userEvent.setup();
+    const { backend } = await hostsPage("/hosts?add=1");
+    const dlg = await screen.findByRole("dialog", { name: "Add host" });
+    await user.click(await within(dlg).findByRole("button", { name: "WSL" }));
+    const group = await within(dlg).findByRole("radiogroup", { name: "WSL distribution" });
+    expect(within(group).getByRole("radio", { name: /Ubuntu-24.04/ })).toHaveAttribute("aria-checked", "true");
+    expect(within(group).getByRole("radio", { name: /Ubuntu-24.04/ })).toHaveTextContent(/default/);
+    await user.click(within(group).getByRole("radio", { name: /Debian/ }));
+    await user.click(within(group).getByRole("radio", { name: "Other…" }));
+    await user.type(within(dlg).getByLabelText("Distribution name"), "Alpine");
+    await user.click(within(group).getByRole("radio", { name: /Debian/ }));
+    expect(within(dlg).queryByLabelText("Distribution name")).toBeNull();
+    await user.click(within(dlg).getByRole("button", { name: "Add and connect" }));
+    await waitFor(() => expect(backend.requests.find((r) => r.method === "hosts.add")?.params).toMatchObject({ name: "Ubuntu-24.04", kind: { kind: "wsl", distro: "Debian" } }));
+  });
+
+  it("a configuration failure says what is wrong, does not count attempts, and an unknown distro can be fixed in place", async () => {
+    const user = userEvent.setup();
+    const { backend, history } = await hostsPage("/hosts?add=1");
+    const dlg = await screen.findByRole("dialog", { name: "Add host" });
+    await user.click(await within(dlg).findByRole("button", { name: "WSL" }));
+    await within(dlg).findByRole("radiogroup", { name: "WSL distribution" });
+    await user.click(within(dlg).getByRole("button", { name: "Add and connect" }));
+    await waitFor(() => expect(backend.requests.some((r) => r.method === "hosts.add")).toBe(true));
+    await user.click(within(dlg).getByRole("button", { name: /Close and keep going|Done/ }));
+    act(() => backend.setLink("ubuntu-24-04", { state: "failed", problem: "unknown_distro", reason: 'WSL has no distribution named "Ubuntu". Installed: Ubuntu-24.04, Debian. Pick an installed distribution for this host.' }));
+    act(() => history.push("/hosts?h=ubuntu-24-04"));
+    const panel = await screen.findByRole("complementary", { name: "Ubuntu-24.04 details" });
+    expect((await within(panel).findAllByText("WSL distribution not found")).length).toBeGreaterThan(0);
+    expect(within(panel).getAllByText(/Installed: Ubuntu-24.04, Debian/).length).toBeGreaterThan(0);
+    expect(within(panel).queryByText(/The connection dropped/)).toBeNull();
+    expect(within(panel).queryByText(/Attempt/)).toBeNull();
+    await user.click(await within(panel).findByRole("radio", { name: /Debian/ }));
+    await user.click(within(panel).getByRole("button", { name: "Use this distribution" }));
+    await waitFor(() => expect(backend.requests.find((x) => x.method === "hosts.update")?.params).toMatchObject({ kind: { kind: "wsl", distro: "Debian" } }));
+    await waitFor(() => expect(backend.requests.some((x) => x.method === "hosts.reconnect")).toBe(true));
+  });
 });

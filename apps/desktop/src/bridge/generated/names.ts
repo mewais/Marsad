@@ -35,6 +35,7 @@ export const methods = {
   HOSTS_UPDATE: "hosts.update",
   HOSTS_REMOVE: "hosts.remove",
   HOSTS_IMPORT_SUGGESTIONS: "hosts.import_suggestions",
+  HOSTS_WSL_DISTROS: "hosts.wsl_distros",
   HOSTS_RECONNECT: "hosts.reconnect",
   HOSTS_AUTH_ANSWER: "hosts.auth_answer",
   HOSTS_AUTH_CANCEL: "hosts.auth_cancel",

@@ -289,6 +289,7 @@ mod tests {
             host: h.clone(),
             state: LinkState::Failed {
                 reason: "gone".into(),
+                problem: None,
             },
         });
         assert_eq!(lost[0].kind, Kind::HostLost);

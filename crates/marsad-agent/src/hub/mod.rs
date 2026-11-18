@@ -11,6 +11,7 @@ pub mod spawn;
 pub mod transport;
 pub mod workstreams;
 mod ws_methods;
+pub mod wsl;
 
 use std::sync::Arc;
 
@@ -399,6 +400,7 @@ impl HubServices {
                 enc(ok(AskpassReply { answer }))
             }
             methods::HOSTS_IMPORT_SUGGESTIONS => enc(ok(self.registry.import_suggestions().await)),
+            methods::HOSTS_WSL_DISTROS => enc(ok(wsl::distros().await)),
             methods::AGENTCONFIG_EFFECTIVE => {
                 let r: EffectiveRequest = params(p).map_err(dec)?;
                 let host = self.host_of(r.host)?;

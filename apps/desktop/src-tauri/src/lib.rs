@@ -39,7 +39,8 @@ fn agent_bin_dir_env(
     if from_env.is_some_and(|v| !v.is_empty()) {
         return None;
     }
-    let dir = resource_dir?.join("agents");
+    // Tauri's resource dir is a `\\?\` verbatim path on Windows; pass the plain spelling on.
+    let dir = wasit_process::plain_path(&resource_dir?.join("agents"));
     Some((
         "MARSAD_AGENT_BIN_DIR".into(),
         dir.to_string_lossy().into_owned(),

@@ -7,4 +7,8 @@ import type { ProvisionReason } from "./ProvisionReason";
 /**
  * State of a supervised link (§4.1).
  */
-export type LinkState = { "state": "connecting" } | { "state": "provisioning", reason: ProvisionReason, } | { "state": "connected", hello: Hello, } | { "state": "reconnecting", attempt: number, next_at: { secs_since_epoch: number, nanos_since_epoch: number }, last_error: string, } | { "state": "auth_needed", problem: CommandFailureKind, detail: string, } | { "state": "incompatible", ours: ProtocolVersion, theirs: ProtocolVersion, } | { "state": "failed", reason: string, } | { "state": "stopped" };
+export type LinkState = { "state": "connecting" } | { "state": "provisioning", reason: ProvisionReason, } | { "state": "connected", hello: Hello, } | { "state": "reconnecting", attempt: number, next_at: { secs_since_epoch: number, nanos_since_epoch: number }, last_error: string, } | { "state": "auth_needed", problem: CommandFailureKind, detail: string, } | { "state": "incompatible", ours: ProtocolVersion, theirs: ProtocolVersion, } | { "state": "failed", reason: string, 
+/**
+ * What kind of problem, when known (lets a UI word it and say what to do).
+ */
+problem?: CommandFailureKind, } | { "state": "stopped" };

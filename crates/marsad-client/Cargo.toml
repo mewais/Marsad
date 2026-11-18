@@ -8,6 +8,7 @@ description = "Typed async client of the local Marsad daemon over a supervised w
 [dependencies]
 marsad-proto = { workspace = true }
 wasit-control = { workspace = true }
+wasit-process = { workspace = true }
 wasit-runtime = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

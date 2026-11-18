@@ -195,6 +195,33 @@ pub struct ImportSuggestions {
     pub source: Option<String>,
 }
 
+/// One installed WSL distribution (from `wsl.exe -l -v`, or `-l -q` on WSL versions without
+/// `-v`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct WslDistro {
+    pub name: String,
+    /// WSL's default distribution (`wsl.exe` without `-d`).
+    pub default: bool,
+    /// Running right now (`false` also when unknown).
+    pub running: bool,
+    /// WSL version (1 or 2) when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u8>,
+}
+
+/// Result of `hosts.wsl_distros`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct WslDistros {
+    /// WSL hosts can be added: the hub runs on Windows and `wsl.exe` exists.
+    pub available: bool,
+    pub distros: Vec<WslDistro>,
+    /// Why the list is empty or WSL is unavailable, in plain words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
+}
+
 /// Payload of `hosts.links`: every remote host's link state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

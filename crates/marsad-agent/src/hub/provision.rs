@@ -15,8 +15,13 @@
 //! [`AgentProvisioner`] handles what only the hello reveals (a daemon of another build still
 //! running): it marks the host so the next attempt sends `RESTART`.
 //!
-//! Binaries: the running executable for its own target triple, else
-//! `MARSAD_AGENT_BIN_DIR/<triple>/marsad-agent[.exe]` (assumed to be the hub's build).
+//! Binaries: the host's (os, arch) picks the shipped helper triple
+//! ([`super::transport::helper_target`]: any Linux → the static musl build); that is the
+//! running executable when it was built for that triple, else
+//! `MARSAD_AGENT_BIN_DIR/<triple>/marsad-agent[.exe]` (assumed to be the hub's build), else —
+//! development builds — the running executable when it runs on the same (os, arch).
+//! No build for the platform, or a missing file, fails the link (no retry loop) with a message
+//! saying what to do.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -36,7 +41,7 @@ use wasit_control::{
 };
 
 use super::auth::Prompts;
-use super::transport::{bootstrap_argv, platform_from};
+use super::transport::{bootstrap_argv, helper_target, platform_from, triple_platform};
 
 /// Environment variable naming the directory with binaries for other target triples.
 pub const BIN_DIR_ENV: &str = "MARSAD_AGENT_BIN_DIR";
@@ -107,6 +112,94 @@ async fn read_line<R: tokio::io::AsyncRead + Unpin>(r: &mut R) -> std::io::Resul
     }
 }
 
+/// Which binary to upload (see the module docs).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Helper {
+    /// The running executable.
+    Running,
+    File(PathBuf),
+}
+
+/// Pick the helper for `platform`, given the hub's own target triple and bin dir.
+pub fn pick_helper(
+    own_target: &str,
+    bin_dir: Option<&std::path::Path>,
+    platform: &HostPlatform,
+) -> Result<Helper, ConnectError> {
+    let Some(triple) = helper_target(&platform.os, &platform.arch) else {
+        return Err(cmd_err(
+            CommandFailureKind::UnsupportedPlatform,
+            None,
+            format!(
+                "Marsad has no helper for {} on {} (it ships helpers for Linux, macOS and Windows on x86_64 and ARM64). This host cannot run Marsad sessions; remove it.",
+                os_word(&platform.os),
+                platform.arch
+            ),
+        ));
+    };
+    let exe_name = if triple.contains("windows") {
+        "marsad-agent.exe"
+    } else {
+        "marsad-agent"
+    };
+    if triple == own_target {
+        return Ok(Helper::Running);
+    }
+    let looked = bin_dir.map(|d| d.join(triple).join(exe_name));
+    if let Some(p) = looked.as_ref().filter(|p| p.is_file()) {
+        return Ok(Helper::File(p.clone()));
+    }
+    // A development build for another libc of the same OS and architecture.
+    let (own_os, own_arch) = triple_platform(own_target);
+    if own_os == platform.os && own_arch == platform.arch {
+        return Ok(Helper::Running);
+    }
+    Err(cmd_err(
+        CommandFailureKind::HelperMissing,
+        None,
+        match looked {
+            Some(p) => format!(
+                "This Marsad installation is missing its helper for {} {} (expected at {}). Reinstall Marsad, then try again.",
+                os_word(&platform.os),
+                platform.arch,
+                wasit_process::plain_path(&p).display()
+            ),
+            None => format!(
+                "This Marsad build has no helpers for other machines ({triple} needed): set {BIN_DIR_ENV} to a directory with {triple}/{exe_name}, or use an installed Marsad."
+            ),
+        },
+    ))
+}
+
+fn os_word(os: &str) -> &str {
+    match os {
+        "linux" => "Linux",
+        "macos" => "macOS",
+        "windows" => "Windows",
+        o => o,
+    }
+}
+
+/// Lines a host may print before the bootstrap's report (a `.profile` or login banner).
+const MAX_PREAMBLE_LINES: usize = 32;
+
+/// Read until the `MARSAD-BOOT …` line. `Err(raw)`: the stream ended (or too much came) before
+/// it; `raw` is everything read (possibly UTF-16LE from wsl.exe).
+async fn read_boot_line<R: tokio::io::AsyncRead + Unpin>(r: &mut R) -> Result<String, Vec<u8>> {
+    let mut raw = Vec::new();
+    for _ in 0..MAX_PREAMBLE_LINES {
+        match read_line(r).await {
+            Ok(Some(l)) if l.starts_with("MARSAD-BOOT ") => return Ok(l),
+            Ok(Some(l)) => {
+                raw.extend_from_slice(l.as_bytes());
+                raw.push(b'\n');
+            }
+            Ok(None) | Err(_) => return Err(raw),
+        }
+    }
+    Err(raw)
+}
+
 impl BootstrapConnector {
     fn entry(&self, id: &HostId) -> Result<HostEntry, ConnectError> {
         self.entries
@@ -117,29 +210,12 @@ impl BootstrapConnector {
             .ok_or_else(|| ConnectError::Spawn(format!("unknown host {id}")))
     }
 
-    /// The binary to install for `target`.
-    pub fn artifact(&self, target: &str) -> Result<PathBuf, String> {
-        if target == self.own.target {
-            return std::env::current_exe()
-                .map_err(|e| format!("cannot locate the running binary: {e}"));
-        }
-        let exe = if target.contains("windows") {
-            "marsad-agent.exe"
-        } else {
-            "marsad-agent"
-        };
-        let dir = self
-            .bin_dir
-            .as_ref()
-            .ok_or_else(|| format!("no marsad-agent build for {target}: set {BIN_DIR_ENV} to a directory with <triple>/{exe}"))?;
-        let p = dir.join(target).join(exe);
-        if p.is_file() {
-            Ok(p)
-        } else {
-            Err(format!(
-                "no marsad-agent build for {target} at {}",
-                p.display()
-            ))
+    /// The binary to install on a host running `platform`.
+    pub fn artifact(&self, platform: &HostPlatform) -> Result<PathBuf, ConnectError> {
+        match pick_helper(&self.own.target, self.bin_dir.as_deref(), platform)? {
+            Helper::File(p) => Ok(p),
+            Helper::Running => std::env::current_exe()
+                .map_err(|e| ConnectError::Spawn(format!("cannot locate the running binary: {e}"))),
         }
     }
 
@@ -171,6 +247,70 @@ impl BootstrapConnector {
         };
         cmd_err(kind, code, detail)
     }
+    /// The host never printed the bootstrap's report: classify what it printed instead
+    /// (stdout and stderr; wsl.exe prints its errors to stdout, in UTF-16LE).
+    async fn no_bootstrap(
+        &self,
+        entry: &HostEntry,
+        child: &wasit_control::ChildHandle,
+        stdout: &str,
+    ) -> ConnectError {
+        let host = &entry.id;
+        let exit = child.wait_exit(Duration::from_secs(5)).await;
+        let stderr = child.stderr_tail();
+        let code = exit.and_then(|e| e.code);
+        let both = match (stdout.is_empty(), stderr.is_empty()) {
+            (true, _) => stderr.clone(),
+            (false, true) => stdout.to_string(),
+            (false, false) => format!("{stdout}\n{stderr}"),
+        };
+        let mut kind = classify_command_failure(code, &both);
+        if self.prompts.asked(host) > 0 && kind == CommandFailureKind::Other {
+            // A cancelled or timed-out prompt makes ssh give up without a recognisable message.
+            kind = CommandFailureKind::AuthNeeded;
+        }
+        if kind == CommandFailureKind::Other && !stdout.is_empty() {
+            kind = CommandFailureKind::UnexpectedOutput;
+        }
+        let detail = match kind {
+            CommandFailureKind::UnknownDistro => {
+                let distro = match &entry.kind {
+                    marsad_proto::hosts::HostKind::Wsl { distro } => distro.as_str(),
+                    _ => "",
+                };
+                let list = super::wsl::distros().await;
+                let names: Vec<&str> = list.distros.iter().map(|d| d.name.as_str()).collect();
+                if names.is_empty() {
+                    format!("WSL has no distribution named \"{distro}\", and none is installed. Install one (wsl --install), then edit this host.")
+                } else {
+                    format!(
+                        "WSL has no distribution named \"{distro}\". Installed: {}. Edit this host and pick one of them.",
+                        names.join(", ")
+                    )
+                }
+            }
+            CommandFailureKind::WslUnavailable => format!("WSL is not ready on this PC: {both}"),
+            CommandFailureKind::PermissionDenied => format!(
+                "The host refused to run the Marsad helper (permission denied). Check that your home directory allows running programs (for example a noexec mount), then try again. ({both})"
+            ),
+            CommandFailureKind::UnexpectedOutput => format!(
+                "The host printed something other than the Marsad bootstrap: {}. Make sure your shell startup files print nothing for non-interactive shells, then try again.",
+                truncate(&both, 300)
+            ),
+            _ if both.is_empty() => format!("the connection closed before the bootstrap ran (exit {code:?})"),
+            _ => both,
+        };
+        cmd_err(kind, code, detail)
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    let t: String = s.chars().take(max).collect();
+    if t.len() < s.len() {
+        format!("{t}…")
+    } else {
+        t
+    }
 }
 
 #[async_trait]
@@ -194,7 +334,10 @@ impl LinkConnector for BootstrapConnector {
         let exe = std::env::current_exe().map_err(|e| ConnectError::Spawn(e.to_string()))?;
         let mut cmd = CommandSpec::new(argv);
         cmd.env = vec![
-            ("SSH_ASKPASS".into(), exe.display().to_string()),
+            (
+                "SSH_ASKPASS".into(),
+                wasit_process::plain_path(&exe).display().to_string(),
+            ),
             ("SSH_ASKPASS_REQUIRE".into(), "force".into()),
             ("DISPLAY".into(), ":0".into()),
             (ASKPASS_HOST_ENV.into(), host.to_string()),
@@ -203,16 +346,11 @@ impl LinkConnector for BootstrapConnector {
         self.prompts.begin_attempt(&host);
         let (mut io, child) = CommandTransport::spawn(&cmd)?;
         let child = Arc::new(child);
-        let boot = match read_line(&mut io).await {
-            Ok(Some(l)) => l,
-            Ok(None) | Err(_) => {
-                return Err(self
-                    .failed(
-                        &host,
-                        &child,
-                        "the connection closed before the bootstrap ran",
-                    )
-                    .await)
+        let boot = match read_boot_line(&mut io).await {
+            Ok(l) => l,
+            Err(raw) => {
+                let out = wasit_process::decode_console_output(&raw);
+                return Err(self.no_bootstrap(&entry, &child, out.trim()).await);
             }
         };
         if self.prompts.asked(&host) > 0 && !entry.interactive_auth {
@@ -220,17 +358,17 @@ impl LinkConnector for BootstrapConnector {
                 .await;
         }
         let mut parts = boot.split_whitespace();
-        if parts.next() != Some("MARSAD-BOOT") {
-            return Err(ConnectError::Protocol(format!(
-                "unexpected bootstrap output {boot:?}"
-            )));
-        }
+        parts.next(); // MARSAD-BOOT
         let (os, arch) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
         let installed = parts
             .next()
             .and_then(|v| serde_json::from_str::<VersionInfo>(v).ok());
         let platform = platform_from(os, arch).ok_or_else(|| {
-            ConnectError::Protocol(format!("unsupported host platform {os} {arch}"))
+            cmd_err(
+                CommandFailureKind::UnsupportedPlatform,
+                None,
+                format!("Marsad has no helper for {os} on {arch} (it ships helpers for Linux, macOS and Windows on x86_64 and ARM64). This host cannot run Marsad sessions; remove it."),
+            )
         })?;
         if entry.platform.as_ref() != Some(&platform) {
             self.learn(Learned::Platform {
@@ -252,9 +390,7 @@ impl LinkConnector for BootstrapConnector {
             let c: &[u8] = if restart { b"RESTART\n" } else { b"RUN\n" };
             io.write_all(c).await.map_err(io_err)?;
         } else {
-            let file = self
-                .artifact(&platform.target)
-                .map_err(ConnectError::Spawn)?;
+            let file = self.artifact(&platform)?;
             let mut f = tokio::fs::File::open(&file).await.map_err(io_err)?;
             let len = f.metadata().await.map_err(io_err)?.len();
             tracing::info!(host = %host, target = %platform.target, bytes = len, "installing marsad-agent");
@@ -321,5 +457,83 @@ impl Provisioner for AgentProvisioner {
         // The user just signed in for this link; the restart attempt is part of that.
         self.prompts.arm(&host.id);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kind(e: &ConnectError) -> CommandFailureKind {
+        match e {
+            ConnectError::Command { kind, .. } => *kind,
+            other => panic!("not a command failure: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn helper_for_a_gnu_linux_host_is_the_bundled_musl_build() {
+        // The owner's report: a Linux server reports x86_64-unknown-linux-gnu; the Windows
+        // installer ships agents\x86_64-unknown-linux-musl\marsad-agent.
+        let dir = std::env::temp_dir().join(format!("marsad-pick-{}", std::process::id()));
+        let musl = dir.join("x86_64-unknown-linux-musl");
+        std::fs::create_dir_all(&musl).unwrap();
+        std::fs::write(musl.join("marsad-agent"), b"x").unwrap();
+        let linux = platform_from("Linux", "x86_64").unwrap();
+        assert_eq!(linux.target, "x86_64-unknown-linux-gnu");
+        assert_eq!(
+            pick_helper("x86_64-pc-windows-msvc", Some(&dir), &linux).unwrap(),
+            Helper::File(musl.join("marsad-agent"))
+        );
+        // The released Linux app's own sidecar is the musl build.
+        assert_eq!(
+            pick_helper("x86_64-unknown-linux-musl", Some(&dir), &linux).unwrap(),
+            Helper::Running
+        );
+        // A gnu development build serves a same-arch Linux host itself when no musl build is
+        // around.
+        assert_eq!(
+            pick_helper("x86_64-unknown-linux-gnu", None, &linux).unwrap(),
+            Helper::Running
+        );
+        // ARM64 Linux, not in the bin dir: the installation is broken, not the host.
+        let arm = platform_from("Linux", "aarch64").unwrap();
+        let e = pick_helper("x86_64-pc-windows-msvc", Some(&dir), &arm).unwrap_err();
+        assert_eq!(kind(&e), CommandFailureKind::HelperMissing);
+        assert!(e.to_string().contains("Reinstall Marsad"), "{e}");
+        assert!(!e.to_string().contains(r"\\?\"), "{e}");
+        // No build exists for armv7 / riscv64: a configuration error naming os and arch.
+        for arch in ["armv7l", "riscv64"] {
+            let p = platform_from("Linux", arch).unwrap();
+            let e = pick_helper("x86_64-pc-windows-msvc", Some(&dir), &p).unwrap_err();
+            assert_eq!(kind(&e), CommandFailureKind::UnsupportedPlatform);
+            assert!(e.to_string().contains(&format!("Linux on {arch}")), "{e}");
+            assert!(kind(&e).is_configuration());
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn bootstrap_report_after_a_banner_and_foreign_output() {
+        let mut ok: &[u8] = b"Welcome!\nlast login: never\nMARSAD-BOOT Linux x86_64 none\nrest";
+        assert_eq!(
+            read_boot_line(&mut ok).await.unwrap(),
+            "MARSAD-BOOT Linux x86_64 none"
+        );
+        // The owner's report: wsl.exe's UTF-16LE error instead of the bootstrap.
+        let utf16: Vec<u8> = "There is no distribution with the supplied name.\r\n"
+            .encode_utf16()
+            .flat_map(|u| u.to_le_bytes())
+            .collect();
+        let raw = read_boot_line(&mut utf16.as_slice()).await.unwrap_err();
+        let text = wasit_process::decode_console_output(&raw);
+        assert_eq!(
+            text.trim(),
+            "There is no distribution with the supplied name."
+        );
+        assert_eq!(
+            classify_command_failure(Some(1), &text),
+            CommandFailureKind::UnknownDistro
+        );
     }
 }

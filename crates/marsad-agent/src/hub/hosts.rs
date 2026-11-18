@@ -186,6 +186,9 @@ impl Registry {
         if draft.name.trim().is_empty() {
             return Err(MarsadError::invalid("a host needs a name"));
         }
+        if let HostKind::Wsl { distro } = &draft.kind {
+            check_wsl_distro(distro).await?;
+        }
         let taken = |id: &HostId| self.get(id).is_some();
         let id = match draft.id {
             Some(id) if taken(&id) => {
@@ -222,6 +225,9 @@ impl Registry {
     }
 
     pub async fn update(&self, entry: HostEntry) -> Result<HostEntry, MarsadError> {
+        if let HostKind::Wsl { distro } = &entry.kind {
+            check_wsl_distro(distro).await?;
+        }
         let Some(old) = self.get(&entry.id) else {
             return Err(MarsadError::NotFound {
                 what: format!("host {}", entry.id),
@@ -356,4 +362,27 @@ impl Registry {
             source: Some(path.display().to_string()),
         }
     }
+}
+
+/// A WSL host needs a Windows hub with WSL and a distribution of that name (when the list can
+/// be read; a list that cannot be read leaves the check to the connection).
+async fn check_wsl_distro(distro: &str) -> Result<(), MarsadError> {
+    if distro.trim().is_empty() {
+        return Err(MarsadError::invalid("pick a WSL distribution"));
+    }
+    let list = super::wsl::distros().await;
+    if !list.available {
+        return Err(MarsadError::invalid(
+            list.problem
+                .unwrap_or_else(|| "WSL is not available here".into()),
+        ));
+    }
+    if !list.distros.is_empty() && !list.distros.iter().any(|d| d.name == distro) {
+        let names: Vec<&str> = list.distros.iter().map(|d| d.name.as_str()).collect();
+        return Err(MarsadError::invalid(format!(
+            "WSL has no distribution named {distro:?}; installed: {}",
+            names.join(", ")
+        )));
+    }
+    Ok(())
 }

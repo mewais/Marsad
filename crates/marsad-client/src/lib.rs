@@ -151,7 +151,7 @@ async fn start_daemon(cfg: &ClientConfig) -> Result<(), ConnectError> {
         .open(cfg.data_dir.join("marsad-agent.log"))
         .map_err(|e| ConnectError::Spawn(format!("daemon log: {e}")))?;
     let bin = cfg.agent();
-    let mut cmd = tokio::process::Command::new(&bin);
+    let mut cmd = wasit_process::detached_command(&bin);
     cmd.arg("serve")
         .arg("--hub")
         .arg("--data")
@@ -163,18 +163,8 @@ async fn start_daemon(cfg: &ClientConfig) -> Result<(), ConnectError> {
         .envs(cfg.daemon_env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::from(log))
-        .kill_on_drop(false);
-    #[cfg(unix)]
-    cmd.process_group(0);
-    #[cfg(windows)]
-    {
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
-    }
-    let mut child = cmd
-        .spawn()
+        .stderr(Stdio::from(log));
+    let mut child = wasit_process::spawn_detached(&mut cmd)
         .map_err(|e| ConnectError::Spawn(format!("{}: {e}", bin.display())))?;
     let stdout = child
         .stdout
@@ -647,6 +637,11 @@ impl MarsadClient {
 
     pub async fn import_suggestions(&self) -> Result<ImportSuggestions, ClientError> {
         self.call(None, methods::HOSTS_IMPORT_SUGGESTIONS, ()).await
+    }
+
+    /// The WSL distributions installed on the hub's machine (Windows hubs only).
+    pub async fn wsl_distros(&self) -> Result<marsad_proto::hosts::WslDistros, ClientError> {
+        self.call(None, methods::HOSTS_WSL_DISTROS, ()).await
     }
 
     pub fn link_states(&self) -> Subscription<LinkStates> {

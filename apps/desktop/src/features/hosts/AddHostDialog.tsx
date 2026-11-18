@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import type { HostKind, ImportSuggestions, SshConfigHost } from "../../bridge/wire";
+import type { HostKind, ImportSuggestions, SshConfigHost, WslDistros } from "../../bridge/wire";
 import { linkView, useActions, useApi, useAppState, usePending } from "../../state";
 import { Button, Dialog, Icon, Segmented, TextField } from "../../ui";
+import { WslDistroPicker, defaultDistro } from "./WslDistroPicker";
 
 interface Draft {
   kind: "ssh" | "wsl";
@@ -25,6 +26,7 @@ export function AddHostDialog({ open, onClose }: { open: boolean; onClose: () =>
   const actions = useActions();
   const [d, setD] = useState<Draft>(empty);
   const [sugg, setSugg] = useState<ImportSuggestions | null>(null);
+  const [wsl, setWsl] = useState<WslDistros | null>(null);
   const [added, setAdded] = useState<string | null>(null);
   const pending = !!usePending("hosts.add");
   const set = (p: Partial<Draft>) => setD((x) => ({ ...x, ...p }));
@@ -33,12 +35,18 @@ export function AddHostDialog({ open, onClose }: { open: boolean; onClose: () =>
     setD(empty);
     setAdded(null);
     api.hosts.importSuggestions().then(setSugg, () => setSugg(null));
+    setWsl(null);
+    api.hosts.wslDistros().then(setWsl, () => setWsl({ available: false, distros: [] }));
   }, [open, api]);
+  // WSL's default distribution is preselected once the list arrives.
+  useEffect(() => {
+    if (wsl) setD((x) => (x.distro ? x : { ...x, distro: defaultDistro(wsl) }));
+  }, [wsl]);
   const host = useAppState((s) => (added ? s.hosts[added] : undefined));
   const inv = useAppState((s) => (added ? s.inventory[added] : undefined));
 
   const useSugg = (h: SshConfigHost) => set({ kind: "ssh", name: h.alias, target: h.alias, port: h.port ? String(h.port) : "", identity: h.identity_file ?? "" });
-  const problem = !d.name.trim() ? "Give the host a name." : d.kind === "ssh" && !d.target.trim() ? "Enter an ssh alias or user@host." : d.kind === "wsl" && !d.distro.trim() ? "Enter the WSL distribution." : d.port && !/^\d+$/.test(d.port) ? "The port is a number." : "";
+  const problem = !d.name.trim() ? "Give the host a name." : d.kind === "ssh" && !d.target.trim() ? "Enter an ssh alias or user@host." : d.kind === "wsl" && !d.distro.trim() ? "Pick the WSL distribution." : d.port && !/^\d+$/.test(d.port) ? "The port is a number." : "";
   const submit = async () => {
     if (problem) return;
     const e = await actions.run("hosts.add", "Could not add the host", () => api.hosts.add({ name: d.name.trim(), kind: hostKindOf(d), id: null }));
@@ -61,7 +69,7 @@ export function AddHostDialog({ open, onClose }: { open: boolean; onClose: () =>
         <div className="steps">{step(1, "Connect", cur)}<Icon name="chevr" size="xs" />{step(2, "Install helper", cur)}<Icon name="chevr" size="xs" />{step(3, "Detect agents", cur)}</div>
         {!added ? (
           <>
-            <Segmented label="Connection" value={d.kind} onChange={(kind) => set({ kind })} options={[{ value: "ssh", label: "SSH" }, { value: "wsl", label: "WSL" }]} />
+            {wsl?.available ? <Segmented label="Connection" value={d.kind} onChange={(kind) => set({ kind, ...(kind === "wsl" && !d.name.trim() && d.distro ? { name: d.distro } : {}) })} options={[{ value: "ssh", label: "SSH" }, { value: "wsl", label: "WSL" }]} /> : null}
             <TextField label="Name" value={d.name} onChange={(e) => set({ name: e.target.value })} placeholder="build-box" />
             {d.kind === "ssh" ? (
               <>
@@ -86,7 +94,7 @@ export function AddHostDialog({ open, onClose }: { open: boolean; onClose: () =>
                   </div>
                 ) : null}
               </>
-            ) : <TextField label="WSL distribution" value={d.distro} onChange={(e) => set({ distro: e.target.value })} placeholder="Ubuntu-24.04" />}
+            ) : <WslDistroPicker list={wsl} value={d.distro} onChange={(distro) => set({ distro })} />}
             <p className="faint small">Marsad installs a small helper as your user on the host. It keeps sessions alive when Marsad disconnects and never opens a port.</p>
           </>
         ) : (

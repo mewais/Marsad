@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { WslDistros } from "../../bridge/wire";
 import { useNavigate, sessionPath } from "../../router";
 import { linkView, osWord, useActions, useSessionView, useApi, useAppState, usePending, type HostView } from "../../state";
 import { Button, ConfirmDialog, ConnState, DriverBadge, Icon, STATUS, hostIcon, makeDriver, useNow } from "../../ui";
 import { address, linkSub } from "./linkText";
+import { WslDistroPicker, defaultDistro } from "./WslDistroPicker";
 
 /** Right panel of the Hosts screen: link state with the action it calls for, connection, CLIs, sessions. */
 export function HostDetail({ host }: { host: HostView }) {
@@ -46,8 +48,10 @@ export function HostDetail({ host }: { host: HostView }) {
         <div className="small">{st.state === "provisioning" ? (st.reason.kind === "build_mismatch" ? `Updating the Marsad helper from ${st.reason.found} to ${st.reason.expected}.` : st.reason.kind === "command_not_found" ? "Installing the Marsad helper on this host for the first time." : "Updating the helper to a compatible protocol.") : "Opening the connection."}</div>
         <div className="bar w indet" aria-hidden="true"><i /></div></div>
     );
+  } else if (st?.state === "failed" && st.problem === "unknown_distro" && entry?.kind.kind === "wsl") {
+    card = <div className="gate bad"><div className="gate-h"><Icon name="failed" size="sm" />{lv.word}</div><div className="small">{lv.detail}</div><FixDistro hostId={host.id} hostName={host.name} /></div>;
   } else if (st && (st.state === "failed" || st.state === "incompatible" || st.state === "stopped")) {
-    card = <div className="gate bad"><div className="gate-h"><Icon name="failed" size="sm" />{lv.word}</div><div className="small">{lv.detail}</div><div className="acts"><Button size="sm" icon="refresh" pending={busy} onClick={reconnect}>Connect again</Button></div></div>;
+    card = <div className="gate bad"><div className="gate-h"><Icon name="failed" size="sm" />{lv.word}</div><div className="small">{lv.detail}</div><div className="acts"><Button size="sm" icon="refresh" pending={busy} onClick={reconnect}>Try again</Button>{st.state === "failed" ? <span className="faint small">Marsad does not retry this on its own.</span> : null}</div></div>;
   }
 
   return (
@@ -97,5 +101,30 @@ function SessionLine({ sessionKey }: { sessionKey: string }) {
     <button type="button" className="h hbtn" onClick={() => nav(sessionPath(v.host, v.id))}>
       <span className={`c-${v.status}`}><Icon name={STATUS[v.status].icon} size="sm" spin={v.status === "working"} /></span><span className="ell">{v.name}</span><span className={`w c-${v.status}`}>{STATUS[v.status].label}</span>
     </button>
+  );
+}
+
+/** A WSL host whose distribution is gone: pick an installed one and reconnect. */
+function FixDistro({ hostId, hostName }: { hostId: string; hostName: string }) {
+  const api = useApi();
+  const actions = useActions();
+  const entry = useAppState((s) => s.hosts[hostId]?.entry);
+  const [list, setList] = useState<WslDistros | null>(null);
+  const [distro, setDistro] = useState("");
+  const pk = `fixdistro:${hostId}`;
+  const busy = !!usePending(pk);
+  useEffect(() => {
+    api.hosts.wslDistros().then((l) => { setList(l); setDistro(defaultDistro(l)); }, () => setList({ available: false, distros: [] }));
+  }, [api]);
+  if (!entry || entry.kind.kind !== "wsl") return null;
+  const save = () => void actions.run(pk, `Could not change ${hostName}`, async () => {
+    await api.hosts.update({ ...entry, kind: { kind: "wsl", distro: distro.trim() } });
+    return api.hosts.reconnect(hostId);
+  });
+  return (
+    <>
+      <WslDistroPicker list={list} value={distro} onChange={setDistro} />
+      <div className="acts"><Button size="sm" variant="primary" icon="refresh" pending={busy} disabled={!distro.trim()} onClick={save}>Use this distribution</Button></div>
+    </>
   );
 }
