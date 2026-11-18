@@ -1147,7 +1147,7 @@ scenario_("showcase", async () => {
   });
   // Live gates: claude's own choices, and an ask_user question from OpenCode.
   const lc = launched["live-claude"];
-  if (lc) { await openSession(lc); await sendPrompt(shell("claude", "mkdir -p build/reports")); await waitPhase(lc.id, "needs_you", 120_000).catch(() => {}); }
+  if (lc) { await openSession(lc); await sendPrompt(shell("claude", "rm -rf build/cache")); await waitPhase(lc.id, "needs_you", 120_000).catch(() => {}); }
   const lo = launched["live-opencode"];
   if (lo) { await openSession(lo); await sendPrompt("Use the ask_user tool (marsad MCP server) to ask me which export format to ship first, as a single choice between PDF, CSV and XLSX, each with a one-line description. Then reply with my choice."); await waitFor(async () => (await pendingGate(lo.id))?.gate_type === "question", "ask_user question", 120_000).catch(() => {}); }
   await sleep(1500);
