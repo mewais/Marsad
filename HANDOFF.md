@@ -12,7 +12,33 @@ for the wasit/wasl crates in `.` and `apps/desktop/src-tauri`, move it back. Rel
 CI (`ci.yml`, Linux/Windows/macOS): green at e60f4f5 —
 https://github.com/mewais/Marsad/actions/runs/44284211699
 
-### This round (spawning workers + UI defects)
+### Hardening round (flaky tests, stale gates, spawn deadlines)
+- **Flaky tests, root causes**: Wasit `create_id` (Windows CI) — `rename` answered before
+  `session.json` was written (coalescing writer); it now answers once the file holds the name.
+  Wasl `ask_edge_gate_allow_once_then_result_returns` — `AuditLog::record` resolved before tokio's
+  `File` reached the OS; entries are now flushed+synced before `record` returns and the node records
+  every entry *before* the state change it describes (durability first; a gate decision is refused
+  if the trail cannot be written). Found by stress runs: the runtime offered a record's events
+  before publishing its snapshot (clients reading the snapshot on an event saw the old state) —
+  snapshot first now; Wasl withdrawals run to the end even when the RPC caller disconnects; a
+  spawn/handoff gate raised just before a daemon kill is adopted after restart.
+- **Gate lifecycle** (Wasit runtime + Wasl node): a gate lives as long as the request that raised
+  it. Withdrawal = `gate_resolved { reason: "withdrawn" }`, gone from the snapshot, late answer →
+  `CommandError::GateWithdrawn` (`gate_withdrawn`), id never re-raisable; process exit withdraws
+  external gates. Handoff: task cancelled/expired, sending process ended, delegating turn
+  interrupted (a normal turn end keeps it). Spawn: asking turn ended or interrupted, MCP call
+  cancelled (`wasl.spawn.cancel`), client disconnected (no `wasl.spawn` caller for
+  `spawn_reattach_grace`, 30 s), process ended, deadline passed → `spawn_withdrawn` / `spawn_expired`.
+- **Spawn deadlines**: `SpawnSpec.deadline_secs` (MCP `spawn_agent.deadline_secs`); refused at once
+  if the first task's or the caller's own task's deadline passed; refused at approval if it passed
+  or the caller's task ended; the first task gets the remainder.
+- **UI**: an open gate (Inbox row, session/inspector card) that disappears without our answer shows
+  a "No longer needed" toast; a late answer's `gate_withdrawn` is that toast, not an error.
+- Tests: Wasit `external_gate` (withdraw + exit, typed late answer), Wasl `handoff`
+  (interrupt/cancel/expiry/exit) and `spawn` (interrupt, MCP cancel + disconnect, deadlines), Marsad
+  `spawn_gate_is_withdrawn_when_the_asking_turn_is_interrupted`, vitest "a gate that goes away".
+
+### Previous round (spawning workers + UI defects)
 - **UI defects**: edge labels are placed on a free stretch of their own edge, never on a node
   or another label (beside the edge only when it has no room; `totalLabelOverlaps` tested);
   agent config: an item added by the selected layer offers "remove", "reset" only for inherited
@@ -103,7 +129,11 @@ Screenshots: `--real --shots DIR` (dark set via the UI's localStorage preference
 - Free models are slow/flaky: `opencode run` occasionally stalls (retried); a /review on the
   free model can run for minutes (the slash scenario interrupts after a minute). A failing live
   scenario can cascade into the next ones on the same session — rerun with `--only`.
-- Spawning: no per-task deadline check at spawn time (the first task gets the workstream's
-  default deadline from Wasl); a spawn gate stays up if the asking turn is interrupted
-  (answering it later still starts the worker); templates saved from a workstream keep
-  spawned nodes as ordinary nodes; `--real` e2e has no live spawn scenario (Rust live test only).
+- Spawning: templates saved from a workstream keep spawned nodes as ordinary nodes; `--real` e2e
+  has no live spawn scenario (Rust live test only); the hub view does not say *why* a spawn gate
+  went away (the asking agent gets the reason). A delegated task does not inherit its parent
+  task's deadline (only spawns cap the first task by it).
+- `ask_user` (Marsad) treats any turn end after its cursor as the end of the question, including a
+  turn that ended before the question was raised (same pattern Wasl now guards against).
+- The fake CLI's `mcp_call` step is synchronous, so the interrupt-while-a-tool-blocks tests drive
+  `wasl.spawn` over RPC during a `wait_for_interrupt` turn instead of through the fake agent.
