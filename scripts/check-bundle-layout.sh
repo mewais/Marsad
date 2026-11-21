@@ -32,7 +32,11 @@ case "$os" in
       check "$d/usr/lib/Marsad" "$d/usr/bin" "deb $(basename "$f")"
     done
     for f in "$dir"/*.rpm; do
-      d="$work/rpm"; mkdir -p "$d"; (cd "$d" && rpm2cpio "$f" | cpio -idm --quiet)
+      d="$work/rpm"; mkdir -p "$d"
+      # rpm2cpio on older distros cannot read zstd payloads and cpio may be absent: prefer bsdtar.
+      if ! command -v bsdtar >/dev/null; then sudo apt-get install -y -qq libarchive-tools >/dev/null 2>&1 || true; fi
+      if command -v bsdtar >/dev/null; then bsdtar -xf "$f" -C "$d"
+      else (cd "$d" && rpm2cpio "$f" | cpio -idm --quiet); fi
       check "$d/usr/lib/Marsad" "$d/usr/bin" "rpm $(basename "$f")"
     done
     for f in "$dir"/*.AppImage; do
