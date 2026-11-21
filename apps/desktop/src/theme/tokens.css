@@ -58,3 +58,30 @@
   --shadow:0 18px 50px rgba(20,30,50,.18); --shadow-sm:0 2px 10px rgba(20,30,50,.08);
   --grid:rgba(40,60,100,.05);
 }
+
+/* Translucent window (Settings → General → Window background), independent of the theme.
+   Alpha variants of the surface tokens; `--glass` (0..1, the strength slider) scales them.
+   `.app` paints --win over the whole window, so that layer carries the see-through; panes and
+   cards sit on it and add their own (compounding) tint. Floors keep text readable over any
+   desktop, even where the OS adds no blur (Linux): at full strength the window layer is .45
+   opaque, a card on it .73, popovers .9. */
+@supports (background: color-mix(in srgb, red 50%, transparent)){
+:root[data-surface="translucent"]{
+  --a-bg:calc(1 - var(--glass, .5) * .55); --a-win:calc(1 - var(--glass, .5) * .55);
+  --a-sf:calc(1 - var(--glass, .5) * .5); --a-raised:calc(1 - var(--glass, .5) * .1);
+}
+:root[data-surface="translucent"]{
+  --bg:color-mix(in srgb, #0c0f14 calc(var(--a-bg) * 100%), transparent); --win:color-mix(in srgb, #10141a calc(var(--a-win) * 100%), transparent);
+  --surface:color-mix(in srgb, #141920 calc(var(--a-sf) * 100%), transparent); --surface-2:color-mix(in srgb, #191f28 calc(var(--a-sf) * 100%), transparent); --sunken:color-mix(in srgb, #0b0e12 calc(var(--a-sf) * 100%), transparent); --raised:color-mix(in srgb, #1f2632 calc(var(--a-raised) * 100%), transparent);
+}
+@media (prefers-color-scheme: light){ :root[data-surface="translucent"]:not([data-theme="dark"]){
+  --bg:color-mix(in srgb, #e7eaf0 calc(var(--a-bg) * 100%), transparent); --win:color-mix(in srgb, #f6f7fa calc(var(--a-win) * 100%), transparent);
+  --surface:color-mix(in srgb, #ffffff calc(var(--a-sf) * 100%), transparent); --surface-2:color-mix(in srgb, #f4f6f9 calc(var(--a-sf) * 100%), transparent); --sunken:color-mix(in srgb, #eef1f5 calc(var(--a-sf) * 100%), transparent); --raised:color-mix(in srgb, #ffffff calc(var(--a-raised) * 100%), transparent);
+}
+}
+:root[data-surface="translucent"][data-theme="light"]{
+  --bg:color-mix(in srgb, #e7eaf0 calc(var(--a-bg) * 100%), transparent); --win:color-mix(in srgb, #f6f7fa calc(var(--a-win) * 100%), transparent);
+  --surface:color-mix(in srgb, #ffffff calc(var(--a-sf) * 100%), transparent); --surface-2:color-mix(in srgb, #f4f6f9 calc(var(--a-sf) * 100%), transparent); --sunken:color-mix(in srgb, #eef1f5 calc(var(--a-sf) * 100%), transparent); --raised:color-mix(in srgb, #ffffff calc(var(--a-raised) * 100%), transparent);
+}
+:root[data-surface="translucent"],:root[data-surface="translucent"] body{background:transparent}
+}

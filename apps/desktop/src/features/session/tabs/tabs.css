@@ -31,7 +31,7 @@
 .diff-note.warn{color:var(--needs);background:var(--needs-bg);border-top:1px solid var(--needs-line)}
 .diff-note.err{color:var(--failed)}
 .confirm-list{margin:0;padding-left:18px;font-size:11.5px;color:var(--fg)}
-.cfgcols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;padding:16px 20px;overflow:auto;align-content:start;flex:1;min-height:0}
+.cfgcols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:16px;padding:16px 20px;overflow:hidden auto;overflow-wrap:anywhere;align-content:start;flex:1;min-height:0}
 .cfgcols .card{padding:14px 16px;display:flex;flex-direction:column;gap:12px}
 .card-h{display:flex;align-items:center;gap:8px}
 .card-h .sp{flex:1}

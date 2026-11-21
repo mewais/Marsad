@@ -21,6 +21,36 @@ describe("settings", () => {
     expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
   });
 
+  it("general: translucent window background applies at once, asks the shell, and is saved", async () => {
+    const user = userEvent.setup();
+    const { backend } = await settings("general");
+    expect(document.documentElement.hasAttribute("data-surface")).toBe(false);
+    await user.click(await screen.findByRole("button", { name: "Translucent" }));
+    await waitFor(() => expect(document.documentElement.getAttribute("data-surface")).toBe("translucent"));
+    await waitFor(() => expect(backend.requests.some((r) => r.method === "desktop.window_surface" && (r.params as { translucent: boolean }).translucent)).toBe(true));
+    await waitFor(() => expect(backend.requests.some((r) => r.method === "store.settings.set" && (r.params as { key: string; value: unknown }).value === "translucent")).toBe(true));
+    expect(localStorage.getItem("marsad.surface")).toBe("translucent");
+    const slider = screen.getByRole("slider", { name: "Translucency" });
+    expect(slider).toHaveValue("50");
+    expect(document.documentElement.style.getPropertyValue("--glass")).toBe("0.5");
+    await user.click(screen.getByRole("button", { name: "Solid" }));
+    await waitFor(() => expect(document.documentElement.hasAttribute("data-surface")).toBe(false));
+    expect(screen.queryByRole("slider", { name: "Translucency" })).toBeNull();
+  });
+
+  it("general: a window that cannot be transparent stays solid and says why", async () => {
+    const user = userEvent.setup();
+    const backend = quietBackend();
+    const request = backend.request.bind(backend);
+    backend.request = (<T,>(method: string, params?: unknown, opts?: object) =>
+      method === "desktop.window_surface" ? Promise.resolve({ transparent: false, effect: null } as T) : request<T>(method, params, opts)) as typeof backend.request;
+    const r = await renderApp("/inbox", backend);
+    act(() => r.history.push("/settings?s=general"));
+    await user.click(await screen.findByRole("button", { name: "Translucent" }));
+    await waitFor(() => expect(screen.getByTestId("surface-hint")).toHaveTextContent(/cannot show transparent windows/));
+    expect(document.documentElement.hasAttribute("data-surface")).toBe(false);
+  });
+
   it("notifications: the four event switches write store.notifications.set; sound and do-not-disturb are settings", async () => {
     const user = userEvent.setup();
     const { backend } = await settings("notifications");

@@ -21,6 +21,7 @@ pub mod connection;
 pub mod native;
 pub mod notify;
 pub mod smoke;
+pub mod surface;
 pub mod tray;
 pub mod watch;
 

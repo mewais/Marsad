@@ -52,7 +52,7 @@
 .slash .it b{font-family:var(--f-mono);font-weight:500;color:var(--fg);white-space:nowrap}
 .slash .it span{color:var(--fg-2)}
 .slash .src{font-size:10.5px;color:var(--fg-3)}
-.side{border-left:1px solid var(--line);overflow:auto;padding:14px;display:flex;flex-direction:column;gap:16px;background:var(--surface)}
+.side{border-left:1px solid var(--line);overflow:hidden auto;overflow-wrap:anywhere;min-width:0;padding:14px;display:flex;flex-direction:column;gap:16px;background:var(--surface)}
 .side h4{margin:0 0 8px;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-3)}
 .todo{display:flex;flex-direction:column;gap:6px;font-size:12px}
 .todo div{display:flex;gap:8px;align-items:flex-start}

@@ -1,5 +1,6 @@
 import type { Backend } from "./backend";
 import { FixtureBackend } from "./fixture/FixtureBackend";
+import { applyLongStrings } from "./fixture/long";
 import { TauriBackend } from "./tauri";
 
 export * from "./backend";
@@ -11,6 +12,8 @@ export function createBackend(search = typeof location !== "undefined" ? locatio
   if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) return new TauriBackend();
   const q = new URLSearchParams(search);
   // ?live=0 freezes background chatter for screenshots and e2e; ?latency=ms and ?speed=n tune the script.
+  // ?long=1 swaps in long paths, names and messages (overflow checks).
+  if (q.get("long") === "1") applyLongStrings();
   return new FixtureBackend({
     live: q.get("live") !== "0",
     latencyMs: q.has("latency") ? Number(q.get("latency")) : undefined,

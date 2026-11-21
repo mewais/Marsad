@@ -2165,6 +2165,7 @@ dependencies = [
 name = "marsad-desktop"
 version = "0.2.0"
 dependencies = [
+ "gtk",
  "marsad-client",
  "marsad-proto",
  "serde",
@@ -2181,6 +2182,7 @@ dependencies = [
  "tracing-subscriber",
  "wasit-control",
  "wasit-process",
+ "window-vibrancy",
 ]
 
 [[package]]

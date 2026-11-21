@@ -1,7 +1,7 @@
 /* Agent config (mockup: configScreen). */
 .ac{display:grid;grid-template-columns:372px 1fr;flex:1;min-height:0}
 .ac>*{min-height:0;min-width:0}
-.stack{border-right:1px solid var(--line);overflow:auto;padding:12px 14px;display:flex;flex-direction:column;background:var(--surface)}
+.stack{border-right:1px solid var(--line);overflow:hidden auto;overflow-wrap:anywhere;padding:12px 14px;display:flex;flex-direction:column;background:var(--surface)}
 .stack-cap{margin-bottom:6px}
 .layer{border:1px solid var(--line-2);border-radius:var(--r3);padding:8px 11px;display:flex;flex-direction:column;gap:4px;background:var(--win);cursor:pointer;width:100%;text-align:left;color:inherit;font:inherit}
 .layer.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
@@ -16,7 +16,7 @@
 .layer.base{background:var(--sunken);border-style:dashed;cursor:default}
 .layer .ro{font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--fg-3);border:1px solid var(--line-2);border-radius:4px;padding:0 5px}
 .layer .srcs{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
-.layer .srcs .mono{font-size:10.5px;color:var(--fg);padding:0 5px;border:1px solid var(--line-2);border-radius:4px;background:var(--surface);white-space:nowrap}
+.layer .srcs .mono{font-size:10.5px;color:var(--fg);padding:0 5px;border:1px solid var(--line-2);border-radius:4px;background:var(--surface);max-width:100%}
 .arrowup{display:flex;justify-content:center;color:var(--fg-3);padding:1px 0}
 .arrowup .i{transform:rotate(180deg);width:12px;height:12px}
 .ctxsel{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
@@ -26,16 +26,16 @@
 .eff{display:flex;flex-direction:column;min-height:0}
 .eff-h{padding:12px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .eff-h .sp{flex:1}
-.eff-b{overflow:auto;flex:1;padding:12px 20px 16px;display:flex;flex-direction:column;gap:8px}
+.eff-b{overflow:hidden auto;overflow-wrap:anywhere;flex:1;padding:12px 20px 16px;display:flex;flex-direction:column;gap:8px}
 .etab{width:100%;border-collapse:collapse;font-size:12px}
-.etab th{position:sticky;top:0;background:var(--win);text-align:left;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--fg-3);padding:10px 8px 8px;border-bottom:1px solid var(--line);z-index:1}
+.etab th{white-space:nowrap;overflow-wrap:normal;position:sticky;top:0;background:var(--win);text-align:left;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--fg-3);padding:10px 8px 8px;border-bottom:1px solid var(--line);z-index:1}
 .etab td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}
 .etab .cat td{padding:14px 8px 6px;font-size:12px;font-weight:700;border-bottom:1px solid var(--line-2);color:var(--fg)}
 .etab .nm{font-weight:600;display:flex;align-items:center;gap:8px}
 .etab .ds{font-size:11.5px;color:var(--fg-3);overflow-wrap:anywhere}
 .etab tr.off td:not(.keep){opacity:.55}
 .etab tr.uns .nm,.etab tr.uns .ds,.etab tr.uns td.src{opacity:.5}
-.etab .src{font-family:var(--f-mono);font-size:11px;color:var(--fg-3);white-space:nowrap}
+.etab td.src{font-family:var(--f-mono);font-size:11px;color:var(--fg-3);max-width:28ch}
 .etab tr.wasl td{background:var(--accent-bg)}
 .etab .onc{width:60px;text-align:center}
 .lockcell{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--fg-3);white-space:nowrap}

@@ -236,6 +236,8 @@ export class FixtureBackend implements Backend {
   }
 
   private hubRequest(method: string, p: unknown): unknown {
+    // The desktop shell's window background: a browser tab can always show alpha (CSS only).
+    if (method === "desktop.window_surface") return { transparent: (p as { translucent: boolean }).translucent, effect: null };
     if (method === M.FLEET_GIT_REFRESH) {
       const r = p as GitRefresh;
       const e = [...(this.hosts.get(r.host)?.sessions.values() ?? [])].find((x) => x.snap.cwd === r.cwd);

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { errorMessage } from "../../bridge/api";
 import type { DaemonInfo, JsonValue, NotificationPrefs } from "../../bridge/wire";
 import { applyTheme, loadTheme, type ThemeChoice } from "../../lib/theme";
+import { clampStrength, loadSurface, surfaceSupport, type SurfaceChoice } from "../../lib/surface";
 import { useStore } from "../../lib/store";
 import { useNavigate } from "../../router";
 import { allShortcuts } from "../../shortcuts/catalog";
@@ -50,12 +51,28 @@ function General() {
     applyTheme(t);
     setThemeSetting(t);
   };
+  const local = loadSurface();
+  const [surface, setSurface] = useSetting<string>("surface", local.surface);
+  const [strength, setStrength] = useSetting<number>("surface.strength", local.strength);
+  const support = useStore(surfaceSupport, (s) => s);
+  const translucent = surface === "translucent";
+  const surfaceHint = !translucent
+    ? "Translucent lets your desktop show through the window, in either theme."
+    : support && !support.transparent
+      ? "Your desktop cannot show transparent windows (no compositor), so Marsad stays solid."
+      : support?.effect
+        ? `Blurred backdrop (${support.effect === "vibrancy" ? "macOS vibrancy" : support.effect === "mica" ? "Mica" : support.effect === "acrylic" ? "Acrylic" : "blur"}).`
+        : "Blurred where the system offers it (Windows 11, macOS). On Linux the window is see-through without blur, if your desktop has a compositor.";
   return (
     <>
       <div><h1 className="h1">General</h1><div className="muted">How Marsad looks and what a new session starts with.</div></div>
       <Card className="setcard">
         <div className="setrow"><div className="setrow-t"><div className="h3">Theme</div><div className="faint small">System follows your OS setting.</div></div>
           <Segmented<ThemeChoice> label="Theme" value={(theme as ThemeChoice) || "system"} onChange={setTheme} options={[{ value: "system", label: "System" }, { value: "light", label: "Light" }, { value: "dark", label: "Dark" }]} /></div>
+        <div className="setrow"><div className="setrow-t"><div className="h3">Window background</div><div className="faint small" data-testid="surface-hint">{surfaceHint}</div></div>
+          <Segmented<SurfaceChoice> label="Window background" value={translucent ? "translucent" : "solid"} onChange={setSurface} options={[{ value: "solid", label: "Solid" }, { value: "translucent", label: "Translucent" }]} /></div>
+        {translucent ? <div className="setrow"><div className="setrow-t"><div className="h3">Translucency</div><div className="faint small">How much shows through. Text keeps its contrast at every step.</div></div>
+          <input type="range" className="range" min={0} max={100} step={5} value={clampStrength(strength)} aria-label="Translucency" onChange={(e) => setStrength(Number(e.target.value))} /></div> : null}
         <div className="setrow"><div className="setrow-t"><div className="h3">Default agent</div><div className="faint small">Preselected in New session when it is installed on the host.</div></div>
           <Select label="Default agent" value={driver || "-"} options={[{ value: "-", label: "First installed" }, ...order.map((d) => ({ value: d, label: drivers[d]?.displayName ?? d }))]} onChange={(v) => setDriver(v === "-" ? "" : v)} /></div>
         <div className="setrow"><div className="setrow-t"><div className="h3">Default host</div><div className="faint small">Preselected in New session when it is connected.</div></div>

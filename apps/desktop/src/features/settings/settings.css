@@ -14,3 +14,4 @@
 .setrow .h3{display:flex;align-items:center;gap:6px}
 .setrow .combo,.setrow .sel{min-width:220px}
 .kvl.wide{padding:10px 0}
+.setrow .range{width:220px;accent-color:var(--accent)}

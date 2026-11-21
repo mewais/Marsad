@@ -18,19 +18,14 @@
         "minWidth": 960,
         "minHeight": 640,
         "label": "main",
-        "transparent": true,
-        "windowEffects": {
-          "effects": [
-            "acrylic",
-            "blur"
-          ]
-        }
+        "transparent": true
       }
     ],
     "security": {
       "csp": null
     },
-    "withGlobalTauri": true
+    "withGlobalTauri": true,
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,

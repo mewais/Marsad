@@ -1,5 +1,5 @@
 //! Native-only `desktop.*` methods of the `rpc` bridge: open a link or path with the OS,
-//! reveal a path in the file manager, pick a folder.
+//! reveal a path in the file manager, pick a folder, set the window background (`surface`).
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -65,6 +65,7 @@ pub async fn call(app: &AppHandle, method: &str, p: Value) -> Result<Value, Brid
                 .map_err(|_| BridgeError::new("io", "the folder picker went away"))?;
             Ok(picked(path))
         }
+        "window_surface" => crate::surface::window_surface(app, args(p)?).await,
         other => Err(BridgeError::new(
             "method_not_found",
             format!("unknown method `desktop.{other}`"),

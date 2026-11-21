@@ -1,5 +1,5 @@
 import type { ConfigItemKind, EffectiveConfig, EffectiveItem, LayerScope } from "../../bridge/wire";
-import { Icon } from "../../ui";
+import { Icon, Wrap } from "../../ui";
 import { rowAction } from "./layers";
 import { describeItem, KIND, KIND_ORDER, provenance, sourceOf } from "./provenance";
 
@@ -12,7 +12,7 @@ export function EffectiveTable({ eff, driverName, filter, onToggle, busy, scope 
   const groups = KIND_ORDER.filter((k) => filter === "all" || k === filter).map((k) => ({ k, items: eff.items.filter((i) => i.kind === k) })).filter((g) => g.items.length);
   return (
     <table className="etab">
-      <thead><tr><th>Item</th><th>Where it comes from</th><th>Source</th><th className="onc">On</th></tr></thead>
+      <thead><tr><th>Item</th><th>Where it comes from</th><th className="src">Source</th><th className="onc">On</th></tr></thead>
       <tbody>
         {groups.map((g) => [
           <tr key={g.k} className="cat"><td colSpan={4}><Icon name={KIND[g.k].icon} size="sm" /> {KIND[g.k].label}</td></tr>,
@@ -25,7 +25,7 @@ export function EffectiveTable({ eff, driverName, filter, onToggle, busy, scope 
               </td>
               <td className="keep"><div className="provs">{provenance(it, driverName).map((b) => <span key={b.text} className={`prov ${b.cls}`}>{b.cls === "wasl" ? <Icon name="handoff" size="xs" /> : null}{b.text}</span>)}
                 {act && onUndo ? <button type="button" className={`prov chipbtn ${act}`} disabled={busy} onClick={() => onUndo(it)} aria-label={act === "remove" ? `Remove ${it.name} from this layer` : `Reset ${it.name} in this layer`}><Icon name={act === "remove" ? "x" : "refresh"} size="xs" />{act}</button> : null}</div></td>
-              <td className="src">{sourceOf(it)}</td>
+              <td className="src"><Wrap text={sourceOf(it)} /></td>
               <td className="keep onc">
                 {it.locked ? <span className="lockcell"><Icon name="lock" size="xs" />auto</span>
                   : act === "remove" ? null

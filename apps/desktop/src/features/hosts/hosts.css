@@ -12,7 +12,7 @@
 .hrow .sub{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .clis{display:flex;gap:4px;flex-wrap:wrap}
 .clis .tag b{font-size:10px}
-.hd{border-left:1px solid var(--line);overflow:auto;padding:16px;background:var(--surface);display:flex;flex-direction:column;gap:16px}
+.hd{border-left:1px solid var(--line);overflow:hidden auto;overflow-wrap:anywhere;min-width:0;padding:16px;background:var(--surface);display:flex;flex-direction:column;gap:16px}
 .hd h4.eyebrow{margin:0 0 8px}
 .hd-title{display:flex;align-items:center;gap:10px}
 .hd-title .sp{flex:1}

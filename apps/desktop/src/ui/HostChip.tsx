@@ -45,7 +45,7 @@ export function HostChip({ host, showLink = false, shortLink }: HostChipProps) {
   return (
     <span className="host">
       <Icon name={hostIcon(host)} size="sm" />
-      <span>{host.name}</span>
+      <span className="hn" title={host.name}>{host.name}</span>
       {link ? <ConnState host={host} short={shortLink} /> : null}
     </span>
   );

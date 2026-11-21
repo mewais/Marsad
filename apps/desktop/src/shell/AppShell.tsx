@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { registerAction } from "../commands/registry";
 import { useNavigate } from "../router";
 import { useShortcut } from "../shortcuts/useShortcut";
-import { useActions, useAppState } from "../state";
+import { useActions, useApi, useAppState } from "../state";
 import { ToastRegion } from "../ui";
 import { openNewSession, openNewWorkstream } from "./dialogs";
 import { GlobalDialogs } from "./GlobalDialogs";
 import { applyTheme, loadTheme } from "../lib/theme";
+import { applySurface, clampStrength, loadSurface, surfaceSupport } from "../lib/surface";
+import { useStore } from "../lib/store";
 import { CommandPalette } from "./CommandPalette";
 import { Rail } from "./Rail";
 import { ShortcutHelp } from "./ShortcutHelp";
@@ -24,6 +26,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (theme === "light" || theme === "dark" || theme === "system") applyTheme(theme);
   }, [theme]);
+  // The window background, likewise: the native backdrop follows the choice, the CSS also the
+  // strength and what the window turned out to support.
+  const api = useApi();
+  const surfaceSetting = useAppState((s) => s.settings.surface);
+  const strengthSetting = useAppState((s) => s.settings["surface.strength"]);
+  const local = loadSurface();
+  const surface = surfaceSetting === "translucent" || surfaceSetting === "solid" ? surfaceSetting : local.surface;
+  const strength = typeof strengthSetting === "number" ? clampStrength(strengthSetting) : local.strength;
+  const support = useStore(surfaceSupport, (s) => s);
+  useEffect(() => {
+    let live = true;
+    void actions.run("surface", "Could not change the window background", async () => {
+      const sup = await api.windowSurface(surface === "translucent");
+      // Only a translucent answer says anything about what the window can show.
+      if (live) surfaceSupport.set(surface === "translucent" ? sup : null);
+      return sup;
+    });
+    return () => {
+      live = false;
+    };
+  }, [surface, api, actions]);
+  useEffect(() => applySurface(surface, strength, support), [surface, strength, support]);
 
   useShortcut({ id: "palette", keys: ["mod+k"], title: "Command palette", group: "Global", run: () => setPalette(true), allowInInput: true });
   useShortcut({ id: "help", keys: ["?"], title: "Show shortcuts", group: "Global", run: () => setHelp(true) });

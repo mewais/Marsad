@@ -1150,6 +1150,65 @@ scenario_("live-delegation", async () => {
   await bodyHas("kiwi", 60_000);
 }, { real: true });
 
+scenario_("translucent-window", async () => {
+  // Settings → General → Window background. Without a compositor the shell answers that the
+  // window cannot be transparent and the UI stays solid; with one (xcompmgr) the alpha surface
+  // tokens apply from the first paint after a restart, and the screen shows a checkerboard
+  // window through the app (captured with ImageMagick's `import`, not WebDriver).
+  const have = (b) => spawnSync("sh", ["-c", `command -v ${b}`]).status === 0;
+  const surface = () => wd.exec(() => document.documentElement.getAttribute("data-surface"));
+  const pick = async (label) => {
+    await go("#/settings?s=general");
+    await click("button", label);
+  };
+  await rpc("store.settings.set", { key: "surface", value: "solid" });
+  await pick("Translucent");
+  await bodyHas("cannot show transparent windows");
+  if ((await surface()) !== null) throw new Error("translucent without a compositor");
+  await waitFor(async () => (await rpc("store.settings.get")).values.surface === "translucent", "the choice saved in the hub");
+  if (!["xcompmgr", "display", "convert"].every(have)) {
+    await pick("Solid");
+    return "skipped the composited half: install xcompmgr and imagemagick";
+  }
+  // A checkerboard window behind the app and a compositor; the app is started again so its
+  // window is created on a composited screen, above the checkerboard.
+  const png = path.join(root, "backdrop.png");
+  spawnSync("convert", ["-size", "400x250", "pattern:checkerboard", "-scale", "400%", "-fill", "#d9822b", "-opaque", "#999999", "-fill", "#2b7bd9", "-opaque", "#666666", png]);
+  const backdrop = spawn("display", ["-geometry", "+0+0", png], { stdio: "ignore" });
+  const comp = spawn("xcompmgr", [], { stdio: "ignore" });
+  const restart = async () => {
+    await wd.quit().catch(() => {});
+    await startApp();
+  };
+  try {
+    await sleep(800); // display and xcompmgr map/claim asynchronously; nothing to wait on.
+    await restart();
+    // Startup: the saved choice applies by itself (first paint from this device's cache).
+    await waitFor(async () => (await surface()) === "translucent", "translucent at startup");
+    if (await wd.exec(() => getComputedStyle(document.querySelector(".app")).backgroundColor).then((c) => !/(\/\s*0?\.\d+\)|,\s*0?\.\d+\))$/.test(c))) {
+      throw new Error("the window layer is not translucent");
+    }
+    for (const theme of ["dark", "light"]) {
+      await setTheme(theme);
+      await waitFor(async () => (await surface()) === "translucent", `translucent in ${theme}`);
+      if (launched.claude) await openSession(launched.claude);
+      else await go("#/inbox");
+      await sleep(600);
+      if (dirs.shots) spawnSync("import", ["-window", "root", path.join(dirs.shots, `nit-translucent-${theme}.png`)]);
+    }
+    await setTheme("dark");
+    await go("#/settings?s=general");
+    await bodyHas("Translucency");
+    if (dirs.shots) spawnSync("import", ["-window", "root", path.join(dirs.shots, "nit-translucent-settings.png")]);
+    await pick("Solid");
+    await waitFor(async () => (await surface()) === null, "solid again");
+  } finally {
+    comp.kill();
+    backdrop.kill();
+    await restart();
+  }
+});
+
 // ── screenshots for the owner (--shots): every screen on believable live data ─────────────
 
 const key = (k, mods = {}) => wd.exec((k, m) => document.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, ...m })), k, mods);

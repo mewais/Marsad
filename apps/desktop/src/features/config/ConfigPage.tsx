@@ -5,7 +5,7 @@ import { sessionKey } from "../../bridge/wire";
 import { useNavigate } from "../../router";
 import { PageHeader } from "../../shell/PageHeader";
 import { linkView, sessionName, useActions, useApi, useAppState, useHosts, usePending } from "../../state";
-import { Button, DriverBadge, EmptyState, Icon, Segmented, Select, Skeleton, makeDriver, toast } from "../../ui";
+import { Button, DriverBadge, EmptyState, Icon, Segmented, Select, Skeleton, Wrap, makeDriver, toast } from "../../ui";
 import { EffectiveTable } from "./EffectiveTable";
 import { LayerEditor } from "./LayerEditor";
 import { counts, layerOf, sources, summarize, toggled, withoutOverride } from "./layers";
@@ -143,7 +143,7 @@ export function ConfigPage({ q }: { q: Record<string, string> }) {
                 <span className="faint small">{drvName} on {hostName}{project ? ` · ${project}` : ""} · discovered {new Date(base.refreshed_at_ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{base.refreshing ? " · still probing" : ""}</span>
                 <span className="dl fg">{counts(base.items) || "Nothing configured"}</span>
                 {base.errors.map((e) => <span key={e} className="dl c-failed">{e}</span>)}
-                <span className="srcs">{sources(base.items).map((s) => <span key={s.path} className="mono" title={s.what}>{s.path}</span>)}</span>
+                <span className="srcs">{sources(base.items).map((s) => <Wrap key={s.path} className="mono" text={s.path} title={`${s.what}: ${s.path}`} />)}</span>
               </>
             )}
           </div>

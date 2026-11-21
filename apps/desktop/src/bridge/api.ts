@@ -1,4 +1,5 @@
 import type { Backend, RequestOptions, Unsubscribe } from "./backend";
+import type { SurfaceSupport } from "../lib/surface";
 import type * as W from "./wire";
 import { methods as M, topics as T } from "./wire";
 
@@ -92,6 +93,8 @@ export function createApi(b: Backend) {
     refreshGit: (host: W.HostId, cwd: string) => call(b, M.FLEET_GIT_REFRESH, { host, cwd }),
     launch: (r: W.LaunchRequest) => call(b, M.SESSIONS_LAUNCH, r),
     daemonInfo: (host?: W.HostId) => call(b, M.DAEMON_INFO, undefined, on(host)),
+    /** Desktop shell: solid or translucent window background (native backdrop where the OS has one). */
+    windowSurface: (translucent: boolean) => b.request<SurfaceSupport>("desktop.window_surface", { translucent }),
     git: {
       status: (host: W.HostId, target: W.GitTarget) => call(b, M.GIT_STATUS, { target }, { host }),
       diff: (host: W.HostId, r: W.GitDiffRequest) => call(b, M.GIT_DIFF, r, { host }),

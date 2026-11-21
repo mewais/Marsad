@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { WslDistros } from "../../bridge/wire";
 import { useNavigate, sessionPath } from "../../router";
 import { linkView, osWord, useActions, useSessionView, useApi, useAppState, usePending, type HostView } from "../../state";
-import { Button, ConfirmDialog, ConnState, DriverBadge, Icon, STATUS, hostIcon, makeDriver, useNow } from "../../ui";
+import { Button, ConfirmDialog, ConnState, DriverBadge, Icon, STATUS, Wrap, hostIcon, makeDriver, useNow } from "../../ui";
 import { address, linkSub } from "./linkText";
 import { WslDistroPicker, defaultDistro } from "./WslDistroPicker";
 
@@ -61,8 +61,8 @@ export function HostDetail({ host }: { host: HostView }) {
       <div>
         <h4 className="eyebrow">Connection</h4>
         <dl className="kvl">
-          <dt>Address</dt><dd className="mono">{entry ? address(entry) : ""}</dd>
-          {k?.kind === "ssh" ? <><dt>Key</dt><dd className="mono">{k.identity_file ?? "ssh default"}</dd>{k.options?.length ? <><dt>Options</dt><dd className="mono">{k.options.join(" ")}</dd></> : null}</> : null}
+          <dt>Address</dt><dd className="mono"><Wrap text={entry ? address(entry) : ""} /></dd>
+          {k?.kind === "ssh" ? <><dt>Key</dt><dd className="mono"><Wrap text={k.identity_file ?? "ssh default"} /></dd>{k.options?.length ? <><dt>Options</dt><dd className="mono"><Wrap text={k.options.join(" ")} /></dd></> : null}</> : null}
           <dt>Platform</dt><dd className="mono">{entry?.platform?.target ?? "not probed yet"}</dd>
           <dt>Status</dt><dd>{linkSub(host.link, now)}</dd>
           <dt>Sign-in</dt><dd>{host.interactiveAuth || host.authPrompt ? "Interactive (asks each time)" : host.local ? "Not needed" : "Key or agent"}</dd>
@@ -73,7 +73,7 @@ export function HostDetail({ host }: { host: HostView }) {
         {!inv ? <div className="faint small">{lv.connected ? "Asking the host…" : "Known once the host is connected."}</div> : (
           <table className="t"><tbody>
             {inv.map((d) => (
-              <tr key={d.driver}><td><DriverBadge driver={drivers[d.driver] ?? makeDriver(d.driver, d.display_name)} /></td><td className={d.installed ? "mono" : "faint"}>{d.installed ? d.version ?? "installed" : "Not installed"}</td><td className="r faint small" title={d.binary_path ?? d.error ?? ""}>{d.installed ? d.binary_path : d.error}</td></tr>
+              <tr key={d.driver}><td><DriverBadge driver={drivers[d.driver] ?? makeDriver(d.driver, d.display_name)} /></td><td><div className={d.installed ? "mono" : "faint"}><Wrap text={d.installed ? d.version ?? "installed" : "Not installed"} /></div><div className="faint small"><Wrap text={(d.installed ? d.binary_path : d.error) ?? ""} /></div></td></tr>
             ))}
           </tbody></table>
         )}
