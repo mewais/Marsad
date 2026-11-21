@@ -38,7 +38,7 @@ export const STAT_DEBOUNCE_MS = 120;
 export const STAT_BATCH = 50;
 
 /** Ask the host about `paths` not yet known: debounced, batched, cached; resolves when answered. */
-function statAll(api: Api, host: HostId, session: SessionId, paths: string[]): Promise<void> {
+export function statAll(api: Api, host: HostId, session: SessionId, paths: string[]): Promise<void> {
   const k = `${host}/${session}`;
   const m = known.get(k) ?? new Map<string, FileStat | null>();
   known.set(k, m);
@@ -57,11 +57,12 @@ async function flush(k: string) {
   const w = waiting.get(k);
   if (!w) return;
   waiting.delete(k);
-  const m = known.get(k)!;
+  const m = known.get(k) ?? new Map<string, FileStat | null>();
+  known.set(k, m);
   const all = [...w.paths].filter((p) => !m.has(p));
   for (let i = 0; i < all.length; i += STAT_BATCH) {
     const batch = all.slice(i, i + STAT_BATCH);
-    await w.api.media.stat(w.host, w.session, batch, true).then(
+    await w.api.media.stat(w.host, w.session, batch).then(
       (r) => {
         for (const p of batch) m.set(p, null);
         for (const f of r.files) m.set(f.path, f);
@@ -76,7 +77,7 @@ async function flush(k: string) {
 /** Number of stat requests waiting for their debounce (tests). */
 export const pendingStats = () => waiting.size;
 
-/** The subset of `paths` that exist on the session's host (files and folders), as stats. */
+/** The subset of `paths` that exist on the session's host (files), as stats. */
 export function useExistingFiles(paths: string[]): FileStat[] {
   const api = useApi();
   const scope = useMediaScope();
@@ -87,7 +88,7 @@ export function useExistingFiles(paths: string[]): FileStat[] {
     let live = true;
     void statAll(api, scope.host, scope.session, paths).then(() => {
       const m = known.get(`${scope.host}/${scope.session}`);
-      if (live && m) setStats(paths.map((p) => m.get(p)).filter((x): x is FileStat => !!x));
+      if (live && m) setStats(paths.map((p) => m.get(p)).filter((x): x is FileStat => !!x && !x.is_dir));
     });
     return () => {
       live = false;
@@ -100,6 +101,8 @@ export function useExistingFiles(paths: string[]): FileStat[] {
 /** Test hook. */
 export function clearFileRefs() {
   known.clear();
+  for (const w of waiting.values()) clearTimeout(w.timer);
+  waiting.clear();
 }
 
 /** Chips for the paths that exist on the session's host; `lines` maps a path to the line a mention names. */

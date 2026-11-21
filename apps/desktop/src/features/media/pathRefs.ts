@@ -44,6 +44,7 @@ export function parsePathToken(token: string, windows = false): PathRef | null {
     return { path: t, line, col };
   }
   if (rel) return parts.length > 1 ? { path: t, line, col } : null;
+  if (parts.length === 1 && t.endsWith("/") && parts[0].length >= 3) return { path: t, line, col };
   if (parts.length > 1) {
     // `and/or`, `w/o`: a relative path needs an extension, a trailing slash or some depth.
     const last = parts[parts.length - 1];
@@ -64,21 +65,4 @@ export function parsePathRefs(text: string, windows = false, max = 30): PathRef[
     if (out.size >= max) break;
   }
   return [...out.values()];
-}
-
-// ── secrets ─────────────────────────────────────────────────────────────────
-
-const SECRET_DIRS = new Set([".ssh", ".aws", ".gnupg", ".gpg", ".kube", ".azure", ".config/gcloud", ".docker", ".password-store", ".pki"]);
-const SECRET_FILES = /^(\.env(\..*)?|\.netrc|\.npmrc|\.pypirc|\.pgpass|\.git-credentials|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|credentials(\.json)?|secrets?\.(json|ya?ml|toml)|shadow|master\.key|\.htpasswd)$/i;
-const SECRET_EXT = /\.(pem|key|p12|pfx|jks|keystore|kdbx|gpg|asc|ppk|crt|cer)$/i;
-
-/** Well-known places for secrets: asked about once before a preview opens them. */
-export function isSecretPath(p: string): boolean {
-  const norm = p.replace(/\\/g, "/").toLowerCase();
-  const segs = norm.split("/").filter(Boolean);
-  const base = segs[segs.length - 1] ?? "";
-  if (SECRET_FILES.test(base) || SECRET_EXT.test(base)) return true;
-  if (segs.slice(0, -1).some((s) => SECRET_DIRS.has(s))) return true;
-  if (norm.includes("/.config/gcloud/") || norm.startsWith("/etc/shadow") || norm.startsWith("/etc/sudoers") || norm.startsWith("/etc/ssh/")) return true;
-  return false;
 }

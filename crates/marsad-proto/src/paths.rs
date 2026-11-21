@@ -54,14 +54,19 @@ impl std::error::Error for PathError {}
 fn valid_distro(d: &str) -> bool {
     !d.is_empty()
         && d.trim() == d
-        && !d.chars().any(|c| c.is_control() || r#"\/:*?"<>|"#.contains(c))
+        && !d
+            .chars()
+            .any(|c| c.is_control() || r#"\/:*?"<>|"#.contains(c))
 }
 
 /// A path that is already in Windows form: a drive (`C:\x`, `c:/x`) or UNC (`\\server\share`).
 pub fn is_windows_path(p: &str) -> bool {
     let b = p.as_bytes();
     p.starts_with("\\\\")
-        || (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
+        || (b.len() >= 3
+            && b[0].is_ascii_alphabetic()
+            && b[1] == b':'
+            && (b[2] == b'\\' || b[2] == b'/'))
 }
 
 /// Split an absolute Linux path into its segments, resolving `.`, empty segments and `..`
@@ -121,7 +126,10 @@ pub fn windows_to_wsl(distro: &str, path: &str) -> Result<String, PathError> {
         return Err(PathError::NotAbsolute(path.to_string()));
     }
     let parts = |s: &str| -> Vec<String> {
-        s.split(['\\', '/']).filter(|p| !p.is_empty() && *p != ".").map(str::to_string).collect()
+        s.split(['\\', '/'])
+            .filter(|p| !p.is_empty() && *p != ".")
+            .map(str::to_string)
+            .collect()
     };
     if let Some(unc) = path.strip_prefix("\\\\") {
         let mut it = parts(unc).into_iter();
@@ -172,7 +180,13 @@ pub fn resolve_wsl(distro: &str, linux_path: &str) -> Result<PathBuf, PathError>
             let on_distro = win.starts_with("\\\\");
             let root = format!("\\\\{WSL_SERVER}\\{distro}\\");
             let root_visible = !on_distro || std::fs::metadata(&root).is_ok();
-            Err(classify_failure(distro, &win, on_distro, root_visible, &e.to_string()))
+            Err(classify_failure(
+                distro,
+                &win,
+                on_distro,
+                root_visible,
+                &e.to_string(),
+            ))
         }
     }
 }
@@ -185,9 +199,18 @@ mod tests {
 
     #[test]
     fn distro_paths_become_unc() {
-        assert_eq!(wsl_to_windows(D, "/home/me/a.txt").unwrap(), r"\\wsl.localhost\Ubuntu-24.04\home\me\a.txt");
-        assert_eq!(wsl_to_windows(D, "/").unwrap(), r"\\wsl.localhost\Ubuntu-24.04\");
-        assert_eq!(wsl_to_windows("my.distro_x", "/etc").unwrap(), r"\\wsl.localhost\my.distro_x\etc");
+        assert_eq!(
+            wsl_to_windows(D, "/home/me/a.txt").unwrap(),
+            r"\\wsl.localhost\Ubuntu-24.04\home\me\a.txt"
+        );
+        assert_eq!(
+            wsl_to_windows(D, "/").unwrap(),
+            r"\\wsl.localhost\Ubuntu-24.04\"
+        );
+        assert_eq!(
+            wsl_to_windows("my.distro_x", "/etc").unwrap(),
+            r"\\wsl.localhost\my.distro_x\etc"
+        );
     }
 
     #[test]
@@ -196,25 +219,51 @@ mod tests {
             wsl_to_windows(D, "/home/me/My Docs/résumé ✓.pdf").unwrap(),
             r"\\wsl.localhost\Ubuntu-24.04\home\me\My Docs\résumé ✓.pdf"
         );
-        assert_eq!(wsl_to_windows(D, "/home/me/dir///").unwrap(), r"\\wsl.localhost\Ubuntu-24.04\home\me\dir");
-        assert_eq!(wsl_to_windows(D, "/home//me/./x/../y").unwrap(), r"\\wsl.localhost\Ubuntu-24.04\home\me\y");
-        assert_eq!(wsl_to_windows(D, "/../../etc").unwrap(), r"\\wsl.localhost\Ubuntu-24.04\etc");
+        assert_eq!(
+            wsl_to_windows(D, "/home/me/dir///").unwrap(),
+            r"\\wsl.localhost\Ubuntu-24.04\home\me\dir"
+        );
+        assert_eq!(
+            wsl_to_windows(D, "/home//me/./x/../y").unwrap(),
+            r"\\wsl.localhost\Ubuntu-24.04\home\me\y"
+        );
+        assert_eq!(
+            wsl_to_windows(D, "/../../etc").unwrap(),
+            r"\\wsl.localhost\Ubuntu-24.04\etc"
+        );
     }
 
     #[test]
     fn mnt_drives_map_to_drive_letters() {
-        assert_eq!(wsl_to_windows(D, "/mnt/c/Users/me/x y.txt").unwrap(), r"C:\Users\me\x y.txt");
+        assert_eq!(
+            wsl_to_windows(D, "/mnt/c/Users/me/x y.txt").unwrap(),
+            r"C:\Users\me\x y.txt"
+        );
         assert_eq!(wsl_to_windows(D, "/mnt/d").unwrap(), r"D:\");
         assert_eq!(wsl_to_windows(D, "/mnt/d/").unwrap(), r"D:\");
         // Not a drive: more than one letter, or not a letter.
-        assert_eq!(wsl_to_windows(D, "/mnt/wsl/x").unwrap(), r"\\wsl.localhost\Ubuntu-24.04\mnt\wsl\x");
-        assert_eq!(wsl_to_windows(D, "/mnt/1/x").unwrap(), r"\\wsl.localhost\Ubuntu-24.04\mnt\1\x");
-        assert_eq!(wsl_to_windows(D, "/mnt").unwrap(), r"\\wsl.localhost\Ubuntu-24.04\mnt");
+        assert_eq!(
+            wsl_to_windows(D, "/mnt/wsl/x").unwrap(),
+            r"\\wsl.localhost\Ubuntu-24.04\mnt\wsl\x"
+        );
+        assert_eq!(
+            wsl_to_windows(D, "/mnt/1/x").unwrap(),
+            r"\\wsl.localhost\Ubuntu-24.04\mnt\1\x"
+        );
+        assert_eq!(
+            wsl_to_windows(D, "/mnt").unwrap(),
+            r"\\wsl.localhost\Ubuntu-24.04\mnt"
+        );
     }
 
     #[test]
     fn windows_paths_pass_through() {
-        for p in [r"C:\Users\me", "c:/x/y", r"\\server\share\f", r"\\wsl.localhost\Debian\etc"] {
+        for p in [
+            r"C:\Users\me",
+            "c:/x/y",
+            r"\\server\share\f",
+            r"\\wsl.localhost\Debian\etc",
+        ] {
             assert_eq!(wsl_to_windows(D, p).unwrap(), p);
         }
     }
@@ -222,12 +271,24 @@ mod tests {
     #[test]
     fn rejects_what_is_not_absolute_or_representable() {
         for p in ["", "relative/x", "./x", "~/x", "x"] {
-            assert!(matches!(wsl_to_windows(D, p), Err(PathError::NotAbsolute(_))), "{p}");
+            assert!(
+                matches!(wsl_to_windows(D, p), Err(PathError::NotAbsolute(_))),
+                "{p}"
+            );
         }
-        assert!(matches!(wsl_to_windows(D, "/a\\b"), Err(PathError::BadSegment(_))));
-        assert!(matches!(wsl_to_windows(D, "/a\0b"), Err(PathError::BadSegment(_))));
+        assert!(matches!(
+            wsl_to_windows(D, "/a\\b"),
+            Err(PathError::BadSegment(_))
+        ));
+        assert!(matches!(
+            wsl_to_windows(D, "/a\0b"),
+            Err(PathError::BadSegment(_))
+        ));
         for d in ["", " ", "a/b", r"a\b", "a:b", "a\nb", "x "] {
-            assert!(matches!(wsl_to_windows(d, "/etc"), Err(PathError::BadDistro(_))), "{d:?}");
+            assert!(
+                matches!(wsl_to_windows(d, "/etc"), Err(PathError::BadDistro(_))),
+                "{d:?}"
+            );
         }
         // A drive path needs no distro.
         assert_eq!(wsl_to_windows("", "/mnt/c/x").unwrap(), r"C:\x");
@@ -235,16 +296,43 @@ mod tests {
 
     #[test]
     fn inverse_maps_back() {
-        assert_eq!(windows_to_wsl(D, r"\\wsl.localhost\Ubuntu-24.04\home\me").unwrap(), "/home/me");
-        assert_eq!(windows_to_wsl(D, r"\\wsl$\ubuntu-24.04\home\me\").unwrap(), "/home/me");
-        assert_eq!(windows_to_wsl(D, r"\\wsl.localhost\Ubuntu-24.04\").unwrap(), "/");
-        assert_eq!(windows_to_wsl(D, r"\\wsl.localhost\Ubuntu-24.04").unwrap(), "/");
-        assert_eq!(windows_to_wsl(D, r"C:\Users\me\My Docs").unwrap(), "/mnt/c/Users/me/My Docs");
+        assert_eq!(
+            windows_to_wsl(D, r"\\wsl.localhost\Ubuntu-24.04\home\me").unwrap(),
+            "/home/me"
+        );
+        assert_eq!(
+            windows_to_wsl(D, r"\\wsl$\ubuntu-24.04\home\me\").unwrap(),
+            "/home/me"
+        );
+        assert_eq!(
+            windows_to_wsl(D, r"\\wsl.localhost\Ubuntu-24.04\").unwrap(),
+            "/"
+        );
+        assert_eq!(
+            windows_to_wsl(D, r"\\wsl.localhost\Ubuntu-24.04").unwrap(),
+            "/"
+        );
+        assert_eq!(
+            windows_to_wsl(D, r"C:\Users\me\My Docs").unwrap(),
+            "/mnt/c/Users/me/My Docs"
+        );
         assert_eq!(windows_to_wsl(D, r"d:\").unwrap(), "/mnt/d");
-        assert_eq!(windows_to_wsl(D, "/already/linux").unwrap(), "/already/linux");
-        assert!(matches!(windows_to_wsl(D, r"\\wsl.localhost\Debian\etc"), Err(PathError::OutsideDistro(_))));
-        assert!(matches!(windows_to_wsl(D, r"\\fileserver\share\x"), Err(PathError::OutsideDistro(_))));
-        assert!(matches!(windows_to_wsl(D, "rel"), Err(PathError::NotAbsolute(_))));
+        assert_eq!(
+            windows_to_wsl(D, "/already/linux").unwrap(),
+            "/already/linux"
+        );
+        assert!(matches!(
+            windows_to_wsl(D, r"\\wsl.localhost\Debian\etc"),
+            Err(PathError::OutsideDistro(_))
+        ));
+        assert!(matches!(
+            windows_to_wsl(D, r"\\fileserver\share\x"),
+            Err(PathError::OutsideDistro(_))
+        ));
+        assert!(matches!(
+            windows_to_wsl(D, "rel"),
+            Err(PathError::NotAbsolute(_))
+        ));
     }
 
     #[test]
@@ -258,9 +346,19 @@ mod tests {
     #[test]
     fn failures_are_told_apart() {
         let w = r"\\wsl.localhost\X\a";
-        assert!(matches!(classify_failure("X", w, true, false, "gone"), PathError::DistroNotRunning(d) if d == "X"));
-        assert!(matches!(classify_failure("X", w, true, true, "denied"), PathError::NotReadable { .. }));
-        assert!(matches!(classify_failure("X", r"C:\a", false, false, "denied"), PathError::NotReadable { .. }));
-        assert!(PathError::DistroNotRunning("X".into()).to_string().contains("not running"));
+        assert!(
+            matches!(classify_failure("X", w, true, false, "gone"), PathError::DistroNotRunning(d) if d == "X")
+        );
+        assert!(matches!(
+            classify_failure("X", w, true, true, "denied"),
+            PathError::NotReadable { .. }
+        ));
+        assert!(matches!(
+            classify_failure("X", r"C:\a", false, false, "denied"),
+            PathError::NotReadable { .. }
+        ));
+        assert!(PathError::DistroNotRunning("X".into())
+            .to_string()
+            .contains("not running"));
     }
 }

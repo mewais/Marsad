@@ -25,7 +25,6 @@ export interface MethodMap {
   [M.SESSION_ATTACHMENT_PUT]: [W.AttachmentPut, W.AttachmentPutReply];
   [M.SESSION_FILE_READ]: [W.FileReadRequest, W.FileChunk];
   [M.SESSION_FILES_STAT]: [W.FilesStatRequest, W.FilesStatReply];
-  [M.SESSION_FILE_GRANT]: [W.FileGrantRequest, W.FileGrant];
   [M.GIT_STATUS]: [W.GitStatusRequest, W.GitStatus];
   [M.GIT_DIFF]: [W.GitDiffRequest, W.GitDiff];
   [M.GIT_COMMIT]: [W.GitCommitRequest, W.GitCommitReply];
@@ -107,10 +106,7 @@ export function createApi(b: Backend) {
     media: {
       put: (host: W.HostId, r: W.AttachmentPut) => call(b, M.SESSION_ATTACHMENT_PUT, r, { host }),
       read: (host: W.HostId, r: W.FileReadRequest) => call(b, M.SESSION_FILE_READ, r, { host }),
-      /** `outside`: also report paths outside the session's folder (metadata only; reading needs a grant). */
-      stat: (host: W.HostId, id: W.SessionId, paths: string[], outside = false) => call(b, M.SESSION_FILES_STAT, { id, paths, outside }, { host }),
-      /** The user opened this one file: a short-lived token to read exactly it (see `session.file.grant`). */
-      grant: (host: W.HostId, r: W.FileGrantRequest) => call(b, M.SESSION_FILE_GRANT, r, { host }),
+      stat: (host: W.HostId, id: W.SessionId, paths: string[]) => call(b, M.SESSION_FILES_STAT, { id, paths }, { host }),
     },
     /** Desktop shell (absent in a browser: these reject with `method_not_found`). */
     desktop: {

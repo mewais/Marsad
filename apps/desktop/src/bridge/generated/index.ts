@@ -67,8 +67,6 @@ export type * from "./EffectiveRequest";
 export type * from "./EndReason";
 export type * from "./ExitSummary";
 export type * from "./FileChunk";
-export type * from "./FileGrant";
-export type * from "./FileGrantRequest";
 export type * from "./FileInput";
 export type * from "./FileReadRequest";
 export type * from "./FileStat";

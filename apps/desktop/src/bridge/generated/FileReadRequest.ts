@@ -18,11 +18,6 @@ path?: string | null, offset: number,
  */
 length?: number | null, 
 /**
- * The user explicitly opened a path outside the session's roots; honoured only together
- * with a valid `grant` for exactly that file (see [`FileGrantRequest`]).
+ * The user explicitly opened a path outside the session's roots.
  */
-outside: boolean, 
-/**
- * A token from `session.file.grant`.
- */
-grant?: string | null, };
+outside: boolean, };

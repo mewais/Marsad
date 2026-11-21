@@ -5,10 +5,9 @@ import { useApi } from "../../state";
 import { Button, Dialog, Icon, Skeleton } from "../../ui";
 import { toast } from "../../ui/toast";
 import { b64ToBytes, bytesToB64, formatBytes, kindOf, readTarget, type Kind, type Loaded } from "./fetch";
-import { closePreview, usePendingSecret, usePreview, type PreviewRequest } from "./preview";
+import { closePreview, usePreview, type PreviewRequest } from "./preview";
 import { dirnameOf, resolveHtmlResources, type Resource } from "./htmlResources";
 import { htmlPreviewDoc, previewCsp } from "./sanitize";
-import { DirListing } from "./DirListing";
 import "./media.css";
 
 const PdfView = lazy(() => import("./PdfView"));
@@ -21,25 +20,6 @@ const LIMIT: Record<Kind, number> = {
 interface HtmlResolver {
   baseDir: string;
   read: (abs: string, max: number) => Promise<Resource | null>;
-}
-
-/** Confirms, once per path, that a well-known secret location may be opened. */
-export function SecretConfirm() {
-  const p = usePendingSecret();
-  if (!p) return null;
-  return (
-    <Dialog
-      open
-      onClose={() => p.done(false)}
-      title="Open a file that may hold secrets?"
-      width={520}
-      footer={<><span className="sp" /><Button size="sm" onClick={() => p.done(false)}>Cancel</Button><Button size="sm" variant="primary" onClick={() => p.done(true)}>Open it</Button></>}
-    >
-      <p className="fs13">This looks like a place for keys or credentials:</p>
-      <p className="mono fs12" data-testid="secret-path">{p.path}</p>
-      <p className="faint fs12">It is shown only here, on your screen. Nothing is sent anywhere.</p>
-    </Dialog>
-  );
 }
 
 const decode = (b: Uint8Array) => new TextDecoder("utf-8", { fatal: false }).decode(b);
@@ -209,7 +189,7 @@ export function PreviewHost() {
   const kind = req ? kindOf(state.meta?.mime ?? req.mime, name) : "other";
   useEffect(() => {
     setState({});
-    if (!req || req.dir) return;
+    if (!req) return;
     let live = true;
     // The first range tells the host-sniffed type and size; then load what the kind needs.
     (async () => {
@@ -229,16 +209,13 @@ export function PreviewHost() {
   const resolver = useMemo<HtmlResolver | null>(() => {
     const path = state.meta?.path;
     if (!req || !path) return null;
-    const t = req.target;
     return {
       baseDir: dirnameOf(path),
-      // Each resource is read through the same restricted method; a file the user opened from
-      // outside the session's folder may load only what lies in its own directory (the host
-      // checks the grant against the canonical path).
+      // Each resource is read through the same restricted method (the host enforces the session's
+      // folder, symlinks and size caps).
       read: async (abs, max) => {
         try {
-          const target = "path" in t && t.outside ? { path: abs, outside: true, grant: (await api.media.grant(req.host, { id: req.session, path: abs, parent_grant: t.grant ?? null })).token } : { path: abs };
-          const r = await readTarget(api, req.host, req.session, target, max);
+          const r = await readTarget(api, req.host, req.session, { path: abs }, max);
           return r.truncated ? null : { bytes: r.bytes, mime: r.mime };
         } catch {
           return null;
@@ -247,8 +224,7 @@ export function PreviewHost() {
     };
   }, [req, api, state.meta?.path]);
 
-  if (!req) return <SecretConfirm />;
-  if (req.dir) return <><Dialog open onClose={closePreview} title={name} subtitle="Folder" className="preview-dlg" width={720}><DirListing req={req} /></Dialog><SecretConfirm /></>;
+  if (!req) return null;
   const meta = state.meta;
   const download = async (open: boolean) => {
     setBusy(true);
@@ -256,7 +232,7 @@ export function PreviewHost() {
       const { path } = await api.desktop.downloadBegin(name);
       let offset = 0;
       for (;;) {
-        const c = await api.media.read(req.host, { id: req.session, blob: "blob" in req.target ? req.target.blob : null, path: "path" in req.target ? req.target.path : null, offset, length: 2 << 20, outside: "path" in req.target ? !!req.target.outside : false, grant: "path" in req.target ? req.target.grant ?? null : null });
+        const c = await api.media.read(req.host, { id: req.session, blob: "blob" in req.target ? req.target.blob : null, path: "path" in req.target ? req.target.path : null, offset, length: 2 << 20, outside: false });
         await api.desktop.downloadChunk(path, c.data);
         offset = c.offset + b64ToBytes(c.data).length;
         if (c.eof) break;
@@ -305,7 +281,6 @@ export function PreviewHost() {
         {state.data ? <Body req={req} kind={kind} data={state.data} resolver={resolver} /> : null}
       </div>
     </Dialog>
-    <SecretConfirm />
     </>
   );
 }

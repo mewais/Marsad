@@ -5,9 +5,4 @@ import type { SessionId } from "./SessionId";
  * `session.files.stat`: which of these paths exist (for linking paths mentioned in a
  * transcript). Paths outside the session's roots are reported as missing.
  */
-export type FilesStatRequest = { id: SessionId, paths: Array<string>, 
-/**
- * Report existence (and kind, size) of paths outside the roots too. Metadata only: reading
- * such a file still needs a grant.
- */
-outside: boolean, };
+export type FilesStatRequest = { id: SessionId, paths: Array<string>, };

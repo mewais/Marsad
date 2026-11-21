@@ -344,7 +344,12 @@ mod local_files_tests {
     #[test]
     fn only_local_and_wsl_on_windows_reach_files() {
         let wsl = HostKind::Wsl { distro: "U".into() };
-        let ssh = HostKind::Ssh { target: "a".into(), port: None, identity_file: None, options: vec![] };
+        let ssh = HostKind::Ssh {
+            target: "a".into(),
+            port: None,
+            identity_file: None,
+            options: vec![],
+        };
         assert!(HostEntry::files_reachable(&HostKind::Local, false));
         assert!(HostEntry::files_reachable(&wsl, true));
         assert!(!HostEntry::files_reachable(&wsl, false));

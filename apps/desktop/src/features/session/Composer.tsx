@@ -6,11 +6,12 @@ import { modelChoice } from "../../state/domain";
 import { Button, Icon, IconButton, Kbd, Select } from "../../ui";
 import { formatBytes } from "../media/fetch";
 import { batchProblem, fromFile, fromPicked, handling, upload, type PendingFile } from "./attachments";
+import { clearDraft, peekDraft } from "./draft";
 
 const inShell = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 /** Pending attachments: thumbnails or chips, each with its tooltip and a remove button. */
-function PendingList({ files, input, onRemove }: { files: PendingFile[]; input: SessionSnapshot["prompt_input"]; onRemove: (k: string) => void }) {
+export function PendingList({ files, input, onRemove }: { files: PendingFile[]; input: SessionSnapshot["prompt_input"]; onRemove: (k: string) => void }) {
   if (!files.length) return null;
   return (
     <div className="comp-atts" aria-label="Attachments">
@@ -33,8 +34,11 @@ function PendingList({ files, input, onRemove }: { files: PendingFile[]; input: 
 export function Composer({ sessionKey, snap }: { sessionKey: string; snap: SessionSnapshot }) {
   const actions = useActions();
   const api = useApi();
-  const [text, setText] = useState("");
-  const [files, setFiles] = useState<PendingFile[]>([]);
+  // A launch that created this session but could not send the first message leaves it as a draft.
+  const draft = useRef(peekDraft(sessionKey));
+  useEffect(() => clearDraft(sessionKey), [sessionKey]);
+  const [text, setText] = useState(draft.current?.text ?? "");
+  const [files, setFiles] = useState<PendingFile[]>(draft.current?.files ?? []);
   const [drag, setDrag] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const input = snap.prompt_input;

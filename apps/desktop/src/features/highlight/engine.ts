@@ -42,7 +42,7 @@ for (const [name, def] of Object.entries(LANGS)) hljs.registerLanguage(name, def
 const AUTO = ["bash", "css", "diff", "go", "java", "javascript", "json", "python", "rust", "sql", "typescript", "xml", "yaml", "c", "cpp"];
 
 /** Minimum relevance for an auto-detected language to be used (below it the block stays plain). */
-const AUTO_MIN = 7;
+const AUTO_MIN = 4;
 
 export interface Highlighted {
   lang: string | null;

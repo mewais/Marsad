@@ -382,7 +382,10 @@ fn wsl_files_are_reachable(distro: &str) {
         .unwrap();
     assert!(st.success());
     let win = wsl_to_windows(distro, &file).unwrap();
-    assert!(win.starts_with(&format!("\\\\wsl.localhost\\{distro}\\tmp\\")), "{win}");
+    assert!(
+        win.starts_with(&format!("\\\\wsl.localhost\\{distro}\\tmp\\")),
+        "{win}"
+    );
     assert_eq!(std::fs::read_to_string(&win).unwrap(), "from-wsl");
     let resolved = resolve_wsl(distro, &file).expect("desktop.open/reveal accept the path");
     assert_eq!(resolved.to_string_lossy(), win);
@@ -392,7 +395,10 @@ fn wsl_files_are_reachable(distro: &str) {
         resolve_wsl(distro, "/tmp/marsad-e2e-missing"),
         Err(PathError::NotReadable { .. })
     ));
-    assert!(matches!(resolve_wsl(distro, "tmp/x"), Err(PathError::NotAbsolute(_))));
+    assert!(matches!(
+        resolve_wsl(distro, "tmp/x"),
+        Err(PathError::NotAbsolute(_))
+    ));
 }
 
 // ── SSH from Windows to Linux ───────────────────────────────────────────────

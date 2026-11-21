@@ -1,5 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
-import type { DriverInventory, EffectiveConfig, RecentProject } from "../../bridge/wire";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { DriverInventory, EffectiveConfig, PromptInput, RecentProject } from "../../bridge/wire";
+import { errorMessage } from "../../bridge/api";
+import { batchProblem, fromFile, fromPicked, revalidate, type PendingFile } from "../session/attachments";
+import { PendingList } from "../session/Composer";
+import { setDraft } from "../session/draft";
+import { launchWithAttachments, type Step } from "./launch";
 import { agoLong } from "../../lib/format";
 import { useNavigate, sessionPath } from "../../router";
 import { useShortcut } from "../../shortcuts/useShortcut";
@@ -41,12 +46,65 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
   const [q, setQ] = useState("");
   const [eff, setEff] = useState<EffectiveConfig | null>(null);
   const set = (p: Partial<NewSessionForm>) => setF((x) => ({ ...x, ...p }));
+  // Attachments of the first message: limits come from the chosen driver's descriptor on the chosen host.
+  const [files, setFiles] = useState<PendingFile[]>([]);
+  const [dropped, setDropped] = useState<string[]>([]);
+  const [step, setStep] = useState<Step | null>(null);
+  const [drag, setDrag] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [infos, setInfos] = useState<Record<string, PromptInput | undefined>>({});
+  useEffect(() => {
+    if (!open || !f.host || !f.driver || onAdd) return;
+    const k = `${f.host}/${f.driver}`;
+    if (k in infos) return;
+    let off = false;
+    api.hostInfo(f.host).then(
+      (i) => !off && setInfos((m) => ({ ...m, [k]: i.drivers.find((d) => d.id === f.driver)?.prompt_input })),
+      () => !off && setInfos((m) => ({ ...m, [k]: undefined })),
+    );
+    return () => {
+      off = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, f.host, f.driver, onAdd]);
+  const promptInput: PromptInput | undefined = infos[`${f.host}/${f.driver}`];
+  const canAttach = !onAdd && !!promptInput && promptInput.max_attachments > 0;
+  // Switching driver or host re-validates what is attached; what the new agent cannot take is removed and said.
+  useEffect(() => {
+    if (!promptInput) return;
+    setFiles((cur) => {
+      const { keep, dropped: gone } = revalidate(cur, promptInput);
+      if (!gone.length) return cur;
+      cur.filter((x) => !keep.includes(x)).forEach((x) => x.thumb && URL.revokeObjectURL(x.thumb));
+      setDropped(gone);
+      return keep;
+    });
+  }, [promptInput]);
+  const problemFiles = useMemo(() => (files.length && promptInput ? batchProblem(files, promptInput) : null), [files, promptInput]);
+  const addFiles = (list: PendingFile[]) => {
+    if (!list.length) return;
+    setDropped([]);
+    setFiles((fs) => [...fs, ...list]);
+  };
+  const removeFile = (k: string) =>
+    setFiles((fs) => {
+      fs.find((x) => x.key === k)?.thumb && URL.revokeObjectURL(fs.find((x) => x.key === k)!.thumb!);
+      return fs.filter((x) => x.key !== k);
+    });
+  const attach = async () => {
+    if (!("__TAURI_INTERNALS__" in window)) return fileInput.current?.click();
+    const r = await actions.run("ns-pick", "Could not open the file picker", () => api.desktop.pickFiles("Attach files"));
+    if (r) addFiles(r.files.map((x) => fromPicked(api, x)));
+  };
 
   useEffect(() => {
     if (!open) return;
     const host = preset?.host ?? (typeof settings["defaults.host"] === "string" ? (settings["defaults.host"] as string) : firstUp);
     setF({ ...blank(host), driver: preset?.driver ?? "", cwd: preset?.cwd ?? "" });
     setQ("");
+    setFiles([]);
+    setDropped([]);
+    setStep(null);
     api.store.recent().then((r) => {
       setRecent(r.projects);
       if (!preset?.cwd) setF((x) => (x.cwd ? x : { ...x, cwd: r.projects.find((p) => p.host === x.host)?.path ?? "" }));
@@ -89,7 +147,7 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
     };
   }, [api, open, f.host, f.driver, f.cwd, inv?.installed]);
 
-  const problem = validate(f, inv, hostUp);
+  const problem = validate(f, inv, hostUp) || problemFiles || "";
   const pk = "launch";
   const submit = async () => {
     if (problem || !inv) return;
@@ -97,6 +155,24 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
       onAdd(f, inv);
       onClose();
       return;
+    }
+    if (files.length && canAttach) {
+      const text = f.prompt.trim();
+      const out = await launchWithAttachments(api, launchRequest(f), text, files, setStep);
+      setStep(null);
+      if (!out.ok && out.stage === "create") return toast({ tone: "err", title: "Could not start the session", detail: errorMessage(out.error) });
+      onClose();
+      const r = out.reply;
+      if (!out.ok) {
+        // The session exists: open it with the message and files waiting in its composer.
+        setDraft(`${r.host}/${r.id}`, { text, files });
+        toast({ tone: "err", title: out.stage === "upload" ? "The session started, but an attachment could not be uploaded" : "The session started, but the first message was not sent", detail: `${errorMessage(out.error)} Your message and attachments are in the composer.` });
+      } else {
+        files.forEach((x) => x.thumb && URL.revokeObjectURL(x.thumb));
+        toast({ tone: "ok", title: "Session started", detail: `${inv.display_name} on ${host?.name ?? f.host}` });
+      }
+      for (const u of r.unsupported) toast({ tone: "warn", title: "Started without one setting", detail: `${u.item}: ${u.reason}` });
+      return nav(sessionPath(r.host, r.id));
     }
     const r = await actions.run(pk, "Could not start the session", () => api.launch(launchRequest(f)));
     if (!r) return;
@@ -106,7 +182,8 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
     nav(sessionPath(r.host, r.id));
   };
   useShortcut({ id: "ns-submit", keys: ["mod+enter"], title: "Start the session", group: "New session", allowInInput: true, priority: 20, when: () => open, run: () => void submit() });
-  const pending = useAppState((s) => !!s.pending[pk]);
+  const pending = useAppState((s) => !!s.pending[pk]) || !!step;
+  const stepText = !step ? "" : step.step === "creating" ? "Starting the session…" : step.step === "sending" ? "Sending your message…" : `Uploading ${step.name} (${step.index} of ${step.total}) · ${Math.round((step.done / Math.max(1, step.size)) * 100)}%`;
 
   const changed = eff?.items.filter((i) => i.state !== "inherited").length ?? 0;
   const auto = eff?.items.filter((i) => i.state === "automatic").length ?? 0;
@@ -116,7 +193,7 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
     <Dialog open={open} onClose={onClose} title={title} subtitle={subtitle} width={960} className="nsdlg"
       footer={
         <>
-          <span className="faint ns-problem" role="status">{problem || (onAdd ? "The Wasl connector will be added automatically." : "")}</span>
+          <span className="faint ns-problem" role="status">{stepText || problem || (onAdd ? "The Wasl connector will be added automatically." : "")}</span>
           <span className="sp" />
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" icon={onAdd ? "plus" : f.start === "continue" ? "refresh" : "send"} disabled={!!problem} pending={pending} onClick={() => void submit()}>
@@ -176,8 +253,39 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
           ) : null}
           <div className="field">
             <label htmlFor="ns-prompt">{f.start === "continue" ? "Message to send on resume" : "First message"} <span className="faint optl">optional</span></label>
-            <textarea id="ns-prompt" className="ta" rows={f.start === "continue" ? 2 : 6} value={f.prompt} onChange={(e) => set({ prompt: e.target.value })}
-              placeholder={f.start === "continue" ? "Pick up where you left off…" : "What should the agent do?"} />
+            <div
+              className={`ns-prompt${drag ? " drop" : ""}`}
+              onDragOver={(e) => {
+                if (!canAttach || !e.dataTransfer?.types.includes("Files")) return;
+                e.preventDefault();
+                setDrag(true);
+              }}
+              onDragLeave={() => setDrag(false)}
+              onDrop={(e) => {
+                setDrag(false);
+                if (!canAttach || !e.dataTransfer?.files.length) return;
+                e.preventDefault();
+                addFiles(Array.from(e.dataTransfer.files).map(fromFile));
+              }}
+            >
+              {promptInput ? <PendingList files={files} input={promptInput} onRemove={removeFile} /> : null}
+              <textarea id="ns-prompt" className="ta" rows={f.start === "continue" ? 2 : 6} value={f.prompt} onChange={(e) => set({ prompt: e.target.value })}
+                onPaste={(e) => {
+                  const pasted = Array.from(e.clipboardData?.files ?? []);
+                  if (!pasted.length || !canAttach) return;
+                  e.preventDefault();
+                  addFiles(pasted.map(fromFile));
+                }}
+                placeholder={f.start === "continue" ? "Pick up where you left off…" : "What should the agent do?"} />
+              {onAdd ? null : (
+                <div className="ns-attach">
+                  <input ref={fileInput} type="file" multiple hidden data-testid="ns-attach-input" onChange={(e) => { addFiles(Array.from(e.target.files ?? []).map(fromFile)); e.target.value = ""; }} />
+                  <Button size="sm" icon="clip" disabled={!canAttach || !!step} onClick={() => void attach()} aria-label="Attach files">Attach</Button>
+                  <span className="faint fs12">{!promptInput ? "" : !canAttach ? "This agent takes no attachments." : "Paste, drop or attach images or files."}</span>
+                </div>
+              )}
+              {dropped.length ? <div className="comp-msg" role="status" data-testid="ns-dropped">Removed because the selected agent cannot take {dropped.length === 1 ? "it" : "them"}: {dropped.join(" · ")}</div> : null}
+            </div>
           </div>
         </div>
       </div>

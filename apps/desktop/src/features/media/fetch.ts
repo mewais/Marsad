@@ -2,7 +2,7 @@ import type { Api } from "../../bridge/api";
 import type { HostId, MediaSource, SessionId } from "../../bridge/wire";
 
 /** What to read on the session's host: a blob of its store, or a path (relative to its cwd). */
-export type Target = { blob: string } | { path: string; outside?: boolean; grant?: string | null };
+export type Target = { blob: string } | { path: string; outside?: boolean };
 
 export interface Loaded {
   bytes: Uint8Array;
@@ -59,7 +59,6 @@ export async function readTarget(api: Api, host: HostId, session: SessionId, t: 
       offset,
       length: Math.min(CHUNK, Math.max(1, max - offset)),
       outside: "path" in t ? !!t.outside : false,
-      grant: "path" in t ? t.grant ?? null : null,
     });
     const b = b64ToBytes(c.data);
     parts.push(b);

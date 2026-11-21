@@ -65,6 +65,22 @@ export function handling(f: { name: string; size: number; mime: string }, input:
   return { ok: true, how: "path", note: "Uploaded to the session's folder on its host; your message names its path and the agent reads it with its own tools." };
 }
 
+/**
+ * Re-validate what is attached against another driver's limits: the files it can take (in
+ * order, up to its maximum) and an explanation for each one dropped.
+ */
+export function revalidate<T extends { name: string; size: number; mime: string }>(files: T[], input: PromptInput): { keep: T[]; dropped: string[] } {
+  const keep: T[] = [];
+  const dropped: string[] = [];
+  for (const f of files) {
+    const h = handling(f, input);
+    if (!h.ok) dropped.push(`${f.name}: ${h.note}`);
+    else if (keep.length >= input.max_attachments) dropped.push(`${f.name}: this agent takes at most ${input.max_attachments} attachments.`);
+    else keep.push(f);
+  }
+  return { keep, dropped };
+}
+
 /** Why `files` cannot all be sent, or null. */
 export function batchProblem(files: PendingFile[], input: PromptInput): string | null {
   if (files.length > input.max_attachments) return `At most ${input.max_attachments} attachments per message.`;
