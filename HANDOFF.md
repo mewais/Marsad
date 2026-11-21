@@ -9,8 +9,36 @@ those. Re-pin after pushing Wasit with: move `.cargo/config.toml` aside, `cargo 
 for the wasit/wasl crates in `.` and `apps/desktop/src-tauri`, move it back. Release builds use
 `--locked`.
 
-CI (`ci.yml`, Linux/Windows/macOS): green at e60f4f5 —
-https://github.com/mewais/Marsad/actions/runs/44284211699
+CI (`ci.yml`, Linux/Windows/macOS + `linux-helper` + `windows-e2e`): green at 43e90ba —
+https://github.com/mewais/Marsad/actions/runs/44859855066 (later commits: see the branch).
+
+### Windows first-run round (verified on a real Windows runner) + UI requests
+- **Windows fixes** (Marsad 9500fdc..4ba256d, Wasit daba94c/6fd7b4d, Wasl bf7c305): every process
+  via `wasit-process` (CREATE_NO_WINDOW; daemon detached with an invisible console; source scan
+  forbids raw `Command::new`), helper per (os, arch) with any Linux libc → bundled musl build,
+  WSL distro listing/picker (UTF-16LE decoded), configuration failures park a link as `Failed`.
+- **Verification fixed**: the no-console tests' control (`cmd /C "<quoted path>"`) never ran the
+  fake (std quoting), so "no visible window" proved nothing. Control is now the fake with
+  CREATE_NEW_CONSOLE and must be reported `visible` (Wasit 4e53f0d, Marsad 72d8825).
+- **CI `windows-e2e`** (windows-latest + Ubuntu-24.04 WSL distro): (a) console-less hub → probes,
+  shim session, `git`, ssh transport, ConPTY all report no console window, control visible;
+  (b) hub lists distros, connects the WSL host (musl helper provisioned), fake-CLI gate
+  round-trip, link survives `wsl --terminate`; (c) **ssh from Windows** (Windows `ssh.exe`) to
+  sshd inside the distro (key auth, `SetEnv MARSAD_BUILD_ID`): musl helper uploaded, gate
+  round-trip. Green: https://github.com/mewais/Marsad/actions/runs/44859855066
+- **Translucent window** (Settings → General → Window background + strength): tokens
+  `[data-surface="translucent"]` in `theme/tokens.css` (alpha via `color-mix`, `--glass`),
+  `lib/surface.ts` (hub setting `surface`/`surface.strength`, localStorage cache applied in
+  `main.tsx` before render), shell `desktop.window_surface` (`src-tauri/src/surface.rs`: Windows
+  Mica→Acrylic→Blur, macOS vibrancy, Linux alpha only if composited — else stays solid with a
+  hint). `tauri.conf.json` no longer applies static effects; `macOSPrivateApi` on.
+  Real-app scenario `translucent-window` (no compositor → solid; xcompmgr → see-through,
+  `import` screenshots over a checkerboard window). **Native Windows/macOS effects untested on
+  real machines.**
+- **Overflow**: fixture `?long=1` (`bridge/fixture/long.ts`), Playwright `tests/e2e/overflow.spec.ts`
+  (no element wider than its box / sticking out, 1024 + 1440) over agent config panel + table,
+  session rail + Config tab, host details, workstream inspector, New session dialog. Panels
+  use `overflow-wrap:anywhere`; `ui/Wrap` breaks paths after separators; HostChip ellipsizes.
 
 ### Hardening round (flaky tests, stale gates, spawn deadlines)
 - **Flaky tests, root causes**: Wasit shim `echo_roundtrip_and_clean_exit` (Windows CI) — the endpoint now closes before the connections end; fake-cli `stderr_step` — read stderr to its end. Wasit `create_id` (Windows CI) — `rename` answered before
@@ -101,7 +129,7 @@ https://github.com/mewais/Marsad/actions/runs/44284211699
   this machine first in host lists and as the dialog default; graph lanes with agents first.
 
 ### Real-app suite `apps/desktop/e2e-real/` (`pnpm --dir apps/desktop test:real [-- --real] [--shots DIR]`)
-Default (fake CLIs): 31 scenarios (incl. `spawn`), last run 31/31 — incl. notifications per prefs (Settings
+Default (fake CLIs): 32 scenarios (incl. `spawn`, `translucent-window`), last run 32/32 — incl. notifications per prefs (Settings
 page → shell log), kill -9 of the app mid-turn + relaunch, daemon kill -9, ssh key / password
 hosts, and a **real second factor**: sshd keyboard-interactive through PAM (pam_unix +
 pam_oath TOTP; needs `libpam-oath`, the run swaps `/etc/pam.d/sshd` and restores it).
@@ -120,7 +148,8 @@ pnpm --dir apps/desktop install && pnpm --dir apps/desktop build
 (cd apps/desktop/src-tauri && cargo build --features custom-protocol)
 pnpm --dir apps/desktop test:real [-- --build] [--real] [--shots DIR] [--only a,b] [--keep]
 ```
-Needs `tauri-driver`, `webkit2gtk-driver`, xvfb, dbus; ssh scenarios need root + openssh-server.
+Needs `tauri-driver`, `webkit2gtk-driver`, xvfb, dbus; ssh scenarios need root + openssh-server;
+`translucent-window`'s composited half needs `xcompmgr` + imagemagick (skipped otherwise).
 Rebuild the app after `pnpm build` (the UI is embedded).
 
 Screenshots: `--real --shots DIR` (dark set via the UI's localStorage preference).
