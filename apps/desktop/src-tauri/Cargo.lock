@@ -4658,7 +4658,7 @@ dependencies = [
 [[package]]
 name = "wasit-claude"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6fd7b4d2983680b152a4c787b719daec57b44284"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4e53f0db83f5da5902f9e91acaf5eaaf976d8b22"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -4667,7 +4667,7 @@ dependencies = [
 [[package]]
 name = "wasit-codex"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6fd7b4d2983680b152a4c787b719daec57b44284"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4e53f0db83f5da5902f9e91acaf5eaaf976d8b22"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -4676,7 +4676,7 @@ dependencies = [
 [[package]]
 name = "wasit-control"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6fd7b4d2983680b152a4c787b719daec57b44284"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4e53f0db83f5da5902f9e91acaf5eaaf976d8b22"
 dependencies = [
  "async-trait",
  "fastrand",
@@ -4693,7 +4693,7 @@ dependencies = [
 [[package]]
 name = "wasit-core"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6fd7b4d2983680b152a4c787b719daec57b44284"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4e53f0db83f5da5902f9e91acaf5eaaf976d8b22"
 dependencies = [
  "serde",
  "serde_json",
@@ -4703,7 +4703,7 @@ dependencies = [
 [[package]]
 name = "wasit-opencode"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6fd7b4d2983680b152a4c787b719daec57b44284"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4e53f0db83f5da5902f9e91acaf5eaaf976d8b22"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -4712,7 +4712,7 @@ dependencies = [
 [[package]]
 name = "wasit-process"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6fd7b4d2983680b152a4c787b719daec57b44284"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4e53f0db83f5da5902f9e91acaf5eaaf976d8b22"
 dependencies = [
  "tokio",
  "windows-sys 0.59.0",
@@ -4721,7 +4721,7 @@ dependencies = [
 [[package]]
 name = "wasit-runtime"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6fd7b4d2983680b152a4c787b719daec57b44284"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4e53f0db83f5da5902f9e91acaf5eaaf976d8b22"
 dependencies = [
  "async-trait",
  "fastrand",
@@ -4744,7 +4744,7 @@ dependencies = [
 [[package]]
 name = "wasit-shim"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6fd7b4d2983680b152a4c787b719daec57b44284"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#4e53f0db83f5da5902f9e91acaf5eaaf976d8b22"
 dependencies = [
  "futures-core",
  "libc",
@@ -4759,7 +4759,7 @@ dependencies = [
 [[package]]
 name = "wasl-proto"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasl?branch=claude%2Fawesome-euler-r7x45r#5beab2b847b90dc879cbd12946c5caf0b76372d3"
+source = "git+https://github.com/mewais/Wasl?branch=claude%2Fawesome-euler-r7x45r#bf7c3055a48ea004c8f17e58f322cc6e1c9b7b11"
 dependencies = [
  "fastrand",
  "serde",

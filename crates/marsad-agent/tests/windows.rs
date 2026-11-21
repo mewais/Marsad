@@ -153,21 +153,28 @@ async fn nothing_opens_a_console_window_from_a_consoleless_hub() {
     more_reports(&report, before, "the terminal").await;
     let _ = c.pty_close(None, &pty.id).await;
 
-    // Control: a console program started by a console-less parent without wasit-process
-    // (cmd.exe with DETACHED_PROCESS starting the fake): what the check sees on this machine.
+    // Control: the fake started WITHOUT wasit-process, in a console of its own
+    // (CREATE_NEW_CONSOLE, what a console-less parent's plain spawn amounts to). The check must
+    // see that window, or a clean result above would prove nothing.
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
     let control = d.path().join("control.txt");
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", &format!("\"{}\" --version", fake().display())])
+    let st = std::process::Command::new(fake())
+        .arg("--version")
         .env("WASIT_FAKE_CONSOLE_REPORT", &control)
-        .creation_flags(wasit_process::flags::DETACHED_PROCESS)
+        .creation_flags(CREATE_NEW_CONSOLE)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status();
-
+        .status()
+        .unwrap();
+    let control_lines = report_lines(&control);
     let lines = report_lines(&report);
-    eprintln!("control (no wasit-process): {:?}", report_lines(&control));
+    eprintln!("control (no wasit-process, exit {st}): {control_lines:?}");
     eprintln!("reports: {lines:#?}");
+    assert!(
+        control_lines.iter().any(|l| l.contains(" visible ")),
+        "the check did not see the control's console window: {control_lines:?}"
+    );
     let visible: Vec<_> = lines.iter().filter(|l| l.contains(" visible ")).collect();
     assert!(
         visible.is_empty(),
