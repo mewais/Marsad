@@ -72,6 +72,10 @@ export interface HostView {
   id: HostId;
   name: string;
   local: boolean;
+  /** Files of this host are directly reachable from this machine (decided by the hub). */
+  localFiles: boolean;
+  /** WSL distro name, for path translation. */
+  distro: string | null;
   kind: HostEntry["kind"];
   os?: string;
   where: string;
@@ -89,6 +93,8 @@ export function hostView(h: HostState): HostView {
       id: h.entry.id,
       name: h.entry.name,
       local: k.kind === "local",
+      localFiles: h.entry.local_files,
+      distro: k.kind === "wsl" ? k.distro : null,
       kind: k,
       os: h.entry.platform?.os,
       where: k.kind === "local" ? "Local" : k.kind === "ssh" ? `${k.target}${k.port ? `:${k.port}` : ""}` : `WSL · ${k.distro}`,

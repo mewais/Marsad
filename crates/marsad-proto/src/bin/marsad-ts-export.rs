@@ -174,6 +174,8 @@ fn run(dir: &Path) -> Result<usize, String> {
         p::media::FileReadRequest,
         p::media::FileChunk,
         p::media::FilesStatRequest,
+        p::media::FileGrantRequest,
+        p::media::FileGrant,
         p::media::FilesStatReply,
         p::media::FileStat,
         // Wasit core
@@ -245,6 +247,7 @@ fn write_names(dir: &Path) -> Result<(), String> {
         ("SESSION_ATTACHMENT_PUT", rm::SESSION_ATTACHMENT_PUT),
         ("SESSION_FILE_READ", rm::SESSION_FILE_READ),
         ("SESSION_FILES_STAT", rm::SESSION_FILES_STAT),
+        ("SESSION_FILE_GRANT", rm::SESSION_FILE_GRANT),
         ("GIT_STATUS", m::GIT_STATUS),
         ("GIT_DIFF", m::GIT_DIFF),
         ("GIT_COMMIT", m::GIT_COMMIT),

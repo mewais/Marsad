@@ -248,6 +248,9 @@ pub async fn connection_state(shell: State<'_, Shell>) -> Result<ConnectionState
 #[derive(Debug, Deserialize)]
 pub struct OpenArgs {
     pub target: String,
+    /// The target is a path on this WSL distro (translated to its Windows form first).
+    #[serde(default)]
+    pub distro: Option<String>,
 }
 
 /// Arguments of `desktop.pick_folder`.
@@ -257,6 +260,10 @@ pub struct PickArgs {
     pub title: Option<String>,
     #[serde(default)]
     pub default_path: Option<String>,
+    /// Browse a WSL distro: start in `\\wsl.localhost\<distro>\` (or the translated
+    /// `default_path`) and answer with the Linux path.
+    #[serde(default)]
+    pub distro: Option<String>,
 }
 
 /// The result of `desktop.pick_folder`.

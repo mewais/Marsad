@@ -1,4 +1,4 @@
-import type { Attachment, AttachmentPut, AttachmentPutReply, FileChunk, FileReadRequest, FilesStatReply } from "../wire";
+import type { Attachment, AttachmentPut, AttachmentPutReply, FileChunk, FileGrant, FileGrantRequest, FileReadRequest, FilesStatReply } from "../wire";
 import { SPECS, type Spec } from "./sessions";
 
 /**
@@ -131,6 +131,14 @@ export class FixtureFiles {
   /** `<session id>` → absolute path → file. */
   private files = new Map<string, Map<string, FileRec>>();
   private blobs = new Map<string, FileRec>([[BLOB_CHART, { bytes: chartPng(), mime: "image/png" }]]);
+  /** token → the one canonical file it covers. */
+  private grants = new Map<string, { session: string; path: string; expires: number }>();
+  /** Test hook: put a file anywhere (outside the session's roots too). */
+  putFile(session: string, absPath: string, bytes: Uint8Array) {
+    this.of(session).set(absPath, { bytes, mime: sniff(bytes, absPath) });
+  }
+  /** Directories that exist in the fixture (besides those implied by files). */
+  readonly dirs = new Set<string>();
   private uploads = new Map<string, { name: string; size: number; parts: Uint8Array[]; got: number }>();
 
   /** Seed the media session's folder. */
@@ -185,6 +193,10 @@ export class FixtureFiles {
       path = `${ATTACH_DIR}/${r.id}/blobs/${r.blob}`;
     } else {
       path = this.resolve(r.id, cwd, r.path ?? "", r.outside);
+      if (r.outside && !this.insideRoots(r.id, cwd, path)) {
+        const g = r.grant ? this.grants.get(r.grant) : undefined;
+        if (!g || g.session !== r.id || g.path !== path || g.expires <= Date.now()) throw Object.assign(new Error(`${r.path} is outside the session's folder and not opened by the user (or the grant expired)`), { code: "invalid_params" });
+      }
       rec = this.lookup(r.id, path);
     }
     if (!rec) throw Object.assign(new Error(`no such file: ${r.blob ?? r.path}`), { code: "invalid_params" });
@@ -193,17 +205,37 @@ export class FixtureFiles {
     return { path, mime: rec.mime, size: rec.bytes.length, offset, data: b64(rec.bytes.subarray(offset, offset + len)), eof: offset + len >= rec.bytes.length };
   }
 
-  stat(session: string, cwd: string | null, paths: string[]): FilesStatReply {
+  private insideRoots(session: string, cwd: string | null, norm: string): boolean {
+    const root = (cwd ?? "").replace(/^~/, "/home/you");
+    return [root, `${ATTACH_DIR}/${session}/attachments`].some((r) => r && (norm === r || norm.startsWith(`${r}/`)));
+  }
+
+  grant(r: FileGrantRequest, cwd: string | null): FileGrant {
+    const path = this.resolve(r.id, cwd, r.path, true);
+    if (!this.lookup(r.id, path)) throw Object.assign(new Error(`no such file: ${r.path}`), { code: "invalid_params" });
+    if (r.parent_grant) {
+      const g = this.grants.get(r.parent_grant);
+      const dir = g ? g.path.slice(0, g.path.lastIndexOf("/")) : "";
+      if (!g || g.session !== r.id || g.expires <= Date.now() || !path.startsWith(`${dir}/`)) throw Object.assign(new Error("not inside the folder of the file that was opened (or its grant expired)"), { code: "invalid_params" });
+    }
+    const token = `g${this.grants.size}-${Math.random().toString(16).slice(2)}`;
+    const expires = Date.now() + 600_000;
+    this.grants.set(token, { session: r.id, path, expires });
+    return { token, path, expires_ms: expires };
+  }
+
+  stat(session: string, cwd: string | null, paths: string[], outside = false): FilesStatReply {
     const files = [];
     for (const p of paths) {
       let abs: string;
       try {
-        abs = this.resolve(session, cwd, p, false);
+        abs = this.resolve(session, cwd, p, outside);
       } catch {
         continue;
       }
       const rec = this.lookup(session, abs);
-      if (rec) files.push({ path: p, resolved: abs, size: rec.bytes.length, mime: rec.mime, is_dir: false, modified_ms: null });
+      if (rec) files.push({ path: p, resolved: abs, size: rec.bytes.length, mime: rec.mime, is_dir: false, outside: !this.insideRoots(session, cwd, abs), modified_ms: null });
+      else if (this.dirs.has(abs)) files.push({ path: p, resolved: abs, size: 0, mime: "inode/directory", is_dir: true, outside: !this.insideRoots(session, cwd, abs), modified_ms: null });
     }
     return { files };
   }

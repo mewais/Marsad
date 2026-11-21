@@ -12,4 +12,10 @@ export type HostEntry = { id: HostId, name: string, kind: HostKind, platform?: H
  * Such a link never reconnects on its own: after a drop it waits in `auth_needed` for an
  * explicit `hosts.reconnect`.
  */
-interactive_auth: boolean, };
+interactive_auth: boolean, 
+/**
+ * The host's files are directly reachable from the hub's machine (the GUI machine): true
+ * for the local host, and for a WSL host when the hub runs on Windows. Derived by the hub
+ * ([`HostEntry::derive_local_files`]); the UI decides open / reveal / download from it.
+ */
+local_files: boolean, };

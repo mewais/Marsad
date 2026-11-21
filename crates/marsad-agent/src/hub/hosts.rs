@@ -128,6 +128,8 @@ impl Registry {
     }
 
     async fn link(&self, entry: HostEntry) -> Result<(), MarsadError> {
+        let mut entry = entry;
+        entry.derive_local_files();
         let argv = bootstrap_argv(&entry).ok_or_else(|| {
             MarsadError::invalid("no link for this host (the local host, or an unusable id)")
         })?;
@@ -218,7 +220,10 @@ impl Registry {
             platform: None,
             created_at_ms: now_ms(),
             interactive_auth: false,
+            local_files: false,
         };
+        let mut entry = entry;
+        entry.derive_local_files();
         self.inner.store.put_host(entry.clone()).await?;
         self.link(entry.clone()).await?;
         Ok(entry)
@@ -237,6 +242,7 @@ impl Registry {
             return Err(MarsadError::invalid("the local host cannot be changed"));
         }
         let mut entry = entry;
+        entry.derive_local_files();
         entry.created_at_ms = old.created_at_ms;
         if entry.kind != old.kind {
             // A different machine (or route to it): what we knew about it no longer holds.

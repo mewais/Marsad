@@ -278,6 +278,7 @@ async fn start_hub(
         }),
         created_at_ms: 0,
         interactive_auth: false,
+        local_files: true,
     };
     let registry = Registry::start(
         store.clone(),

@@ -1,6 +1,7 @@
 import type { Backend, RequestOptions, SubscribeOptions, Unsubscribe } from "../backend";
 import type {
   AttachmentPut,
+  FileGrantRequest,
   FileReadRequest,
   FilesStatRequest,
   AuthAnswer, AuthCancel, AuthPrompt, BaseRequest, HostEntry, FleetEvent, FleetHost, FsListRequest, FsPathRequest, GateRequest, GitCommitRequest, GitDiffRequest,
@@ -180,9 +181,13 @@ export class FixtureBackend implements Backend {
         const r = p as FileReadRequest;
         return this.files.read(r, this.entry(host, r).snap.cwd ?? null);
       }
+      case M.SESSION_FILE_GRANT: {
+        const r = p as FileGrantRequest;
+        return this.files.grant(r, this.entry(host, r).snap.cwd ?? null);
+      }
       case M.SESSION_FILES_STAT: {
         const r = p as FilesStatRequest;
-        return this.files.stat(r.id, this.entry(host, r).snap.cwd ?? null, r.paths);
+        return this.files.stat(r.id, this.entry(host, r).snap.cwd ?? null, r.paths, r.outside);
       }
       case M.SESSION_COMMAND: {
         const r = p as CommandRequest;

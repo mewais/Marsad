@@ -182,7 +182,7 @@ describe("session view with media", () => {
     await expect(api.media.read("x1", { id: MEDIA, blob: null, path: "../../etc/passwd", offset: 0, length: null, outside: false })).rejects.toThrow(/outside/);
     const { openPreview } = await import("../../src/features/media/preview");
     for (const [path, testId] of [["data.csv", "preview-table"], ["config.json", "preview-text"], ["notes.bin", "preview-other"]] as const) {
-      openPreview({ host: "x1", session: MEDIA, target: { path }, name: path, local: false });
+      openPreview({ host: "x1", session: MEDIA, target: { path }, name: path, localFiles: false });
       expect(await screen.findByTestId(testId)).toBeInTheDocument();
       if (testId === "preview-table") expect(within(screen.getByTestId(testId)).getByText("Q3, est")).toBeInTheDocument();
       if (testId === "preview-text") expect(screen.getByTestId(testId)).toHaveTextContent('"type": "bar"');

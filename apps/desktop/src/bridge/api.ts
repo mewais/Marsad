@@ -25,6 +25,7 @@ export interface MethodMap {
   [M.SESSION_ATTACHMENT_PUT]: [W.AttachmentPut, W.AttachmentPutReply];
   [M.SESSION_FILE_READ]: [W.FileReadRequest, W.FileChunk];
   [M.SESSION_FILES_STAT]: [W.FilesStatRequest, W.FilesStatReply];
+  [M.SESSION_FILE_GRANT]: [W.FileGrantRequest, W.FileGrant];
   [M.GIT_STATUS]: [W.GitStatusRequest, W.GitStatus];
   [M.GIT_DIFF]: [W.GitDiffRequest, W.GitDiff];
   [M.GIT_COMMIT]: [W.GitCommitRequest, W.GitCommitReply];
@@ -106,12 +107,19 @@ export function createApi(b: Backend) {
     media: {
       put: (host: W.HostId, r: W.AttachmentPut) => call(b, M.SESSION_ATTACHMENT_PUT, r, { host }),
       read: (host: W.HostId, r: W.FileReadRequest) => call(b, M.SESSION_FILE_READ, r, { host }),
-      stat: (host: W.HostId, id: W.SessionId, paths: string[]) => call(b, M.SESSION_FILES_STAT, { id, paths }, { host }),
+      /** `outside`: also report paths outside the session's folder (metadata only; reading needs a grant). */
+      stat: (host: W.HostId, id: W.SessionId, paths: string[], outside = false) => call(b, M.SESSION_FILES_STAT, { id, paths, outside }, { host }),
+      /** The user opened this one file: a short-lived token to read exactly it (see `session.file.grant`). */
+      grant: (host: W.HostId, r: W.FileGrantRequest) => call(b, M.SESSION_FILE_GRANT, r, { host }),
     },
     /** Desktop shell (absent in a browser: these reject with `method_not_found`). */
     desktop: {
-      open: (target: string) => b.request<null>("desktop.open", { target }),
-      reveal: (target: string) => b.request<null>("desktop.reveal", { target }),
+      /** `distro`: the target is a path inside that WSL distro (the shell translates it). */
+      open: (target: string, distro?: string | null) => b.request<null>("desktop.open", { target, distro: distro ?? null }),
+      reveal: (target: string, distro?: string | null) => b.request<null>("desktop.reveal", { target, distro: distro ?? null }),
+      /** Native folder picker; with `distro` it starts in the distro and answers a Linux path. */
+      pickFolder: (r: { title?: string; defaultPath?: string; distro?: string | null } = {}) =>
+        b.request<{ path: string | null }>("desktop.pick_folder", { title: r.title ?? null, default_path: r.defaultPath ?? null, distro: r.distro ?? null }),
       pickFiles: (title?: string) => b.request<{ files: PickedFile[] }>("desktop.pick_files", { title: title ?? null }),
       readPicked: (path: string, offset: number, length: number) => b.request<{ data: string; eof: boolean }>("desktop.read_picked", { path, offset, length }),
       downloadBegin: (name: string) => b.request<{ path: string }>("desktop.download_begin", { name }),

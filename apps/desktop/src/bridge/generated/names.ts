@@ -15,6 +15,7 @@ export const methods = {
   SESSION_ATTACHMENT_PUT: "session.attachment.put",
   SESSION_FILE_READ: "session.file.read",
   SESSION_FILES_STAT: "session.files.stat",
+  SESSION_FILE_GRANT: "session.file.grant",
   GIT_STATUS: "git.status",
   GIT_DIFF: "git.diff",
   GIT_COMMIT: "git.commit",

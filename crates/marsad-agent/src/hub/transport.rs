@@ -242,6 +242,7 @@ mod tests {
             platform: None,
             created_at_ms: 0,
             interactive_auth: false,
+            local_files: false,
         }
     }
 

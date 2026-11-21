@@ -111,6 +111,7 @@ pub mod fleet;
 pub mod fs;
 pub mod git;
 pub mod hosts;
+pub mod paths;
 pub mod pty;
 pub mod store;
 pub mod workstream;

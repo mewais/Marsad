@@ -22,6 +22,17 @@ fn is_url(s: &str) -> bool {
         .any(|p| s.starts_with(p))
 }
 
+/// The path to hand to the OS for a target: for a WSL host the Windows form of its Linux path,
+/// checked for reachability (a stopped distro and an unreadable file get distinct messages).
+fn resolve_target(distro: Option<&str>, target: &str) -> Result<String, BridgeError> {
+    match distro {
+        None => Ok(target.to_string()),
+        Some(d) => marsad_proto::paths::resolve_wsl(d, target)
+            .map(|p| p.to_string_lossy().into_owned())
+            .map_err(|e| BridgeError::new("unreachable", e.to_string())),
+    }
+}
+
 pub async fn call(app: &AppHandle, method: &str, p: Value) -> Result<Value, BridgeError> {
     let failed = |e: tauri_plugin_opener::Error| BridgeError::new("io", e.to_string());
     match method {
@@ -32,15 +43,15 @@ pub async fn call(app: &AppHandle, method: &str, p: Value) -> Result<Value, Brid
                     .open_url(a.target, None::<&str>)
                     .map_err(failed)?;
             } else {
-                app.opener()
-                    .open_path(a.target, None::<&str>)
-                    .map_err(failed)?;
+                let t = resolve_target(a.distro.as_deref(), &a.target)?;
+                app.opener().open_path(t, None::<&str>).map_err(failed)?;
             }
             Ok(Value::Null)
         }
         "reveal" => {
             let a: OpenArgs = args(p)?;
-            app.opener().reveal_item_in_dir(a.target).map_err(failed)?;
+            let t = resolve_target(a.distro.as_deref(), &a.target)?;
+            app.opener().reveal_item_in_dir(t).map_err(failed)?;
             Ok(Value::Null)
         }
         "pick_folder" => {
@@ -53,7 +64,19 @@ pub async fn call(app: &AppHandle, method: &str, p: Value) -> Result<Value, Brid
             if let Some(t) = a.title {
                 d = d.set_title(t);
             }
-            if let Some(dir) = a.default_path {
+            let distro = a.distro.clone();
+            if let Some(dist) = &distro {
+                // Root the picker in the distro (or the folder asked for, when Windows can see it).
+                let start = a
+                    .default_path
+                    .as_deref()
+                    .and_then(|p| marsad_proto::paths::resolve_wsl(dist, p).ok())
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .or_else(|| marsad_proto::paths::wsl_to_windows(dist, "/").ok());
+                if let Some(s) = start {
+                    d = d.set_directory(s);
+                }
+            } else if let Some(dir) = a.default_path {
                 d = d.set_directory(dir);
             }
             let (tx, rx) = oneshot::channel();
@@ -65,6 +88,14 @@ pub async fn call(app: &AppHandle, method: &str, p: Value) -> Result<Value, Brid
             let path = rx
                 .await
                 .map_err(|_| BridgeError::new("io", "the folder picker went away"))?;
+            // A folder chosen in a distro (or on a drive) comes back as the Linux path.
+            let path = match (distro, path) {
+                (Some(d), Some(p)) => Some(
+                    marsad_proto::paths::windows_to_wsl(&d, &p)
+                        .map_err(|e| BridgeError::new("unreachable", e.to_string()))?,
+                ),
+                (_, p) => p,
+            };
             Ok(picked(path))
         }
         "pick_files" => {

@@ -13,6 +13,11 @@ path: string,
  */
 resolved: string, size: number, mime: string, is_dir: boolean, 
 /**
+ * The path lies outside the session's roots (only reported when the request asked for
+ * `outside`): reading it needs the user's click, i.e. a grant.
+ */
+outside: boolean, 
+/**
  * Modification time (ms since the Unix epoch), when known.
  */
 modified_ms?: number | null, };

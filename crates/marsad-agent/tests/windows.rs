@@ -342,8 +342,11 @@ async fn wsl_host_end_to_end() {
         .find(|h| h.id == host)
         .unwrap();
     assert_eq!(entry.platform.as_ref().unwrap().os, "linux");
+    // A Windows hub reaches a WSL host's files directly.
+    assert!(entry.local_files);
 
     gate_round_trip(&c, &host).await;
+    wsl_files_are_reachable(&distro);
 
     // Terminate the distro under the link: it reconnects by itself (a transport drop).
     let st = std::process::Command::new("wsl.exe")
@@ -363,6 +366,33 @@ async fn wsl_host_end_to_end() {
     if let Ok(i) = c.daemon_info(None).await {
         stop_pid(i.pid);
     }
+}
+
+/// A file created inside the distro is readable from Windows at the translated path, and the
+/// shell's open/reveal resolution (`resolve_wsl`) accepts it (no app is launched); a missing
+/// file and a relative path are refused with their own errors.
+fn wsl_files_are_reachable(distro: &str) {
+    use marsad_proto::paths::{resolve_wsl, wsl_to_windows, PathError};
+    let dir = "/tmp/marsad e2e \u{e9}";
+    let file = format!("{dir}/hello world.txt");
+    let st = std::process::Command::new("wsl.exe")
+        .args(["-d", distro, "--exec", "sh", "-c"])
+        .arg(format!("mkdir -p '{dir}' && printf 'from-wsl' > '{file}'"))
+        .status()
+        .unwrap();
+    assert!(st.success());
+    let win = wsl_to_windows(distro, &file).unwrap();
+    assert!(win.starts_with(&format!("\\\\wsl.localhost\\{distro}\\tmp\\")), "{win}");
+    assert_eq!(std::fs::read_to_string(&win).unwrap(), "from-wsl");
+    let resolved = resolve_wsl(distro, &file).expect("desktop.open/reveal accept the path");
+    assert_eq!(resolved.to_string_lossy(), win);
+    // The directory is what `reveal` shows.
+    assert!(resolve_wsl(distro, dir).unwrap().is_dir());
+    assert!(matches!(
+        resolve_wsl(distro, "/tmp/marsad-e2e-missing"),
+        Err(PathError::NotReadable { .. })
+    ));
+    assert!(matches!(resolve_wsl(distro, "tmp/x"), Err(PathError::NotAbsolute(_))));
 }
 
 // ── SSH from Windows to Linux ───────────────────────────────────────────────

@@ -53,6 +53,28 @@ pub struct HostEntry {
     /// explicit `hosts.reconnect`.
     #[serde(default)]
     pub interactive_auth: bool,
+    /// The host's files are directly reachable from the hub's machine (the GUI machine): true
+    /// for the local host, and for a WSL host when the hub runs on Windows. Derived by the hub
+    /// ([`HostEntry::derive_local_files`]); the UI decides open / reveal / download from it.
+    #[serde(default)]
+    pub local_files: bool,
+}
+
+impl HostEntry {
+    /// Whether files of a host of this kind are directly reachable from a hub running on
+    /// Windows (`hub_windows`) or elsewhere.
+    pub fn files_reachable(kind: &HostKind, hub_windows: bool) -> bool {
+        match kind {
+            HostKind::Local => true,
+            HostKind::Wsl { .. } => hub_windows,
+            HostKind::Ssh { .. } => false,
+        }
+    }
+
+    /// Set `local_files` for the machine this hub runs on.
+    pub fn derive_local_files(&mut self) {
+        self.local_files = Self::files_reachable(&self.kind, cfg!(windows));
+    }
 }
 
 /// What an authentication prompt asks for (a guess from its text, for presentation only;
@@ -312,5 +334,20 @@ Host=eqhost
         assert_eq!(h[1].port, Some(2222));
         assert_eq!(h[1].identity_file.as_deref(), Some("~/.ssh/id_box"));
         assert_eq!(h[2].hostname.as_deref(), Some("eq.example"));
+    }
+}
+
+#[cfg(test)]
+mod local_files_tests {
+    use super::*;
+
+    #[test]
+    fn only_local_and_wsl_on_windows_reach_files() {
+        let wsl = HostKind::Wsl { distro: "U".into() };
+        let ssh = HostKind::Ssh { target: "a".into(), port: None, identity_file: None, options: vec![] };
+        assert!(HostEntry::files_reachable(&HostKind::Local, false));
+        assert!(HostEntry::files_reachable(&wsl, true));
+        assert!(!HostEntry::files_reachable(&wsl, false));
+        assert!(!HostEntry::files_reachable(&ssh, true));
     }
 }

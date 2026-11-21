@@ -9,7 +9,12 @@ import { openPreview } from "./preview";
 export interface MediaScope {
   host: HostId;
   session: SessionId;
-  local: boolean;
+  /** The session host's files are directly reachable from this machine (open / reveal instead of download). */
+  localFiles: boolean;
+  /** The host is a WSL distro: paths are translated by the shell. */
+  distro?: string | null;
+  /** The host runs Windows: `C:\\x` mentions are path candidates. */
+  windows?: boolean;
 }
 
 export const MediaCtx = createContext<MediaScope | null>(null);

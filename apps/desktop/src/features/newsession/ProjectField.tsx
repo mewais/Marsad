@@ -1,11 +1,22 @@
 import { useEffect, useState } from "react";
 import { errorMessage } from "../../bridge/api";
 import type { FsListing, HostId, RecentProject } from "../../bridge/wire";
-import { useApi } from "../../state";
+import { useApi, useHost } from "../../state";
+import { toast } from "../../ui/toast";
 import { Button, Icon, Popover } from "../../ui";
 
 /** Project folder: free text, recent projects on this host, and a directory browser over `fs.list`. */
 export function ProjectField({ host, value, onChange, recent }: { host: HostId; value: string; onChange: (v: string) => void; recent: RecentProject[] }) {
+  const api = useApi();
+  const hv = useHost(host);
+  // A WSL host's files are visible to Windows: offer the native picker rooted in the distro
+  // (it answers a Linux path; `/mnt/c/...` is shown as is in the browser).
+  const native = hv?.distro && hv.localFiles ? hv.distro : null;
+  const pickNative = () =>
+    api.desktop.pickFolder({ title: "Choose a project folder", defaultPath: value || undefined, distro: native }).then(
+      (r) => r.path && onChange(r.path),
+      (e: unknown) => toast({ tone: "err", title: "Could not open the folder picker", detail: errorMessage(e) }),
+    );
   const mine = recent.filter((r) => r.host === host && r.path !== value).slice(0, 4);
   return (
     <div className="field">
@@ -13,6 +24,7 @@ export function ProjectField({ host, value, onChange, recent }: { host: HostId; 
       <div className="input">
         <Icon name="folder" size="sm" />
         <input id="ns-cwd" value={value} onChange={(e) => onChange(e.target.value)} placeholder="~/src/project" spellCheck={false} />
+        {native ? <button type="button" className="linkbtn" onClick={() => void pickNative()}>Windows picker…</button> : null}
         <Popover align="right" className="dirpop" trigger={({ props }) => <button type="button" className="linkbtn" {...props}>Browse…</button>}>
           {({ close }) => <DirBrowser host={host} start={value || "~"} onPick={(p) => { onChange(p); close(); }} />}
         </Popover>

@@ -1,0 +1,21 @@
+/* Syntax colours come from the app's tokens, so they follow dark / light / translucent. */
+pre.hl { margin: 0; font: 12.5px/1.55 var(--f-mono); color: var(--fg); tab-size: 2; overflow: auto; white-space: pre; }
+pre.hl.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.hl-l { display: block; }
+pre.hl.ln .hl-l { padding-left: 4.2em; position: relative; }
+pre.hl.ln .hl-l::before { content: attr(data-ln); position: absolute; left: 0; width: 3.4em; text-align: right; color: var(--fg-3); user-select: none; }
+.hl-l.focus { background: var(--accent-bg); box-shadow: inset 2px 0 0 var(--accent); }
+.hl-note { padding: 2px 0 6px; }
+.hljs-comment, .hljs-quote { color: var(--fg-3); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-meta .hljs-keyword { color: var(--drv-2); }
+.hljs-string, .hljs-regexp, .hljs-template-variable, .hljs-addition { color: var(--done); }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet { color: var(--needs); }
+.hljs-title, .hljs-section, .hljs-selector-id, .hljs-selector-class { color: var(--accent); }
+.hljs-type, .hljs-built_in, .hljs-class .hljs-title, .hljs-title.class_ { color: var(--working); }
+.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-property, .hljs-params { color: var(--drv-0); }
+.hljs-tag, .hljs-name { color: var(--drv-3); }
+.hljs-meta, .hljs-link { color: var(--drv-5); }
+.hljs-deletion { color: var(--del); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 700; }
+.hljs-subst { color: var(--fg); }

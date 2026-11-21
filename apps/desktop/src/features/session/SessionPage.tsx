@@ -44,7 +44,7 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
   useTranscriptOpen(key);
   const slice = useAppState((s) => s.transcripts[key]);
   const items = useMemo(() => buildItems(slice?.events ?? []), [slice?.events]);
-  const media = useMemo(() => ({ host, session: id, local: !!hostLink?.local }), [host, id, hostLink?.local]);
+  const media = useMemo(() => ({ host, session: id, localFiles: !!hostLink?.localFiles, distro: hostLink?.distro ?? null, windows: hostLink?.os === "windows" }), [host, id, hostLink?.localFiles, hostLink?.distro, hostLink?.os]);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 

@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import type { Api } from "../../bridge/api";
 import type { FileStat, HostId, SessionId } from "../../bridge/wire";
 import { useApi } from "../../state";
-import { baseName } from "./fetch";
-import { FileChip, useMediaScope } from "./Parts";
+import { useMediaScope } from "./Parts";
+import { parsePathRefs } from "./pathRefs";
+import { PathChip } from "./PathChip";
 
 /** Input keys that name the file a tool writes or edits. */
 const FILE_KEYS = ["file_path", "filePath", "notebook_path", "path"];
@@ -24,51 +25,58 @@ export function toolFileRefs(name: string, input: unknown): string[] {
   return [...new Set(out)];
 }
 
-const PATH_RE = /(?:^|[\s`'"(\[])((?:~?\/|\.{1,2}\/)?(?:[\w@+-][\w.@+-]*\/)*[\w@+-][\w.@+-]*\.[A-Za-z0-9]{1,8})(?=$|[\s`'"),:;\]!?]|\.(?:\s|$))/g;
-
-/** Path-like tokens in prose (`src/app.ts`, `./out/chart.svg`, `/abs/x.pdf`), at most 20. */
-export function textPathCandidates(text: string): string[] {
-  const out = new Set<string>();
-  for (const m of text.matchAll(PATH_RE)) {
-    const p = m[1];
-    if (p.length > 300 || /^\d+(\.\d+)+$/.test(p) || p.includes("://")) continue;
-    // A bare name needs a known-looking extension; anything with a slash is a candidate.
-    if (!p.includes("/") && !/\.(svg|png|jpe?g|gif|webp|pdf|html?|md|json|csv|tsv|txt|py|ts|tsx|js|rs|go|sh|toml|ya?ml|mp3|mp4|wav)$/i.test(p)) continue;
-    out.add(p);
-    if (out.size >= 20) break;
-  }
-  return [...out];
+/** Path-like tokens in prose (`src/app.ts`, `~/x`, `../y/z.rs:12`, `/abs/x.pdf`), at most 30. */
+export function textPathCandidates(text: string, windows = false): string[] {
+  return [...new Set(parsePathRefs(text, windows).map((r) => r.path))];
 }
 
-/** Per-session answers of `session.files.stat` (null: missing or outside the session). */
+/** Per-session answers of `session.files.stat` (null: missing). */
 const known = new Map<string, Map<string, FileStat | null>>();
-const inflight = new Map<string, Promise<void>>();
+const waiting = new Map<string, { api: Api; host: HostId; session: SessionId; paths: Set<string>; done: Array<() => void>; timer: ReturnType<typeof setTimeout> }>();
+/** Paths are asked together after a short pause (a transcript renders many messages at once). */
+export const STAT_DEBOUNCE_MS = 120;
+export const STAT_BATCH = 50;
 
-async function statAll(api: Api, host: HostId, session: SessionId, paths: string[]) {
+/** Ask the host about `paths` not yet known: debounced, batched, cached; resolves when answered. */
+function statAll(api: Api, host: HostId, session: SessionId, paths: string[]): Promise<void> {
   const k = `${host}/${session}`;
   const m = known.get(k) ?? new Map<string, FileStat | null>();
   known.set(k, m);
   const ask = paths.filter((p) => !m.has(p));
-  if (!ask.length) return;
-  const key = `${k}:${ask.join("\0")}`;
-  const running = inflight.get(key);
-  if (running) return running;
-  const p = api.media
-    .stat(host, session, ask)
-    .then((r) => {
-      for (const p of ask) m.set(p, null);
-      for (const f of r.files) m.set(f.path, f);
-    })
-    .catch(() => {
-      // Hosts without the method (older helpers) simply link nothing.
-      for (const p of ask) m.set(p, null);
-    })
-    .finally(() => inflight.delete(key));
-  inflight.set(key, p);
-  return p;
+  if (!ask.length) return Promise.resolve();
+  let w = waiting.get(k);
+  if (!w) {
+    w = { api, host, session, paths: new Set(), done: [], timer: setTimeout(() => flush(k), STAT_DEBOUNCE_MS) };
+    waiting.set(k, w);
+  }
+  for (const p of ask) w.paths.add(p);
+  return new Promise((res) => w!.done.push(res));
 }
 
-/** The subset of `paths` that exist inside the session's folder, as stats. */
+async function flush(k: string) {
+  const w = waiting.get(k);
+  if (!w) return;
+  waiting.delete(k);
+  const m = known.get(k)!;
+  const all = [...w.paths].filter((p) => !m.has(p));
+  for (let i = 0; i < all.length; i += STAT_BATCH) {
+    const batch = all.slice(i, i + STAT_BATCH);
+    await w.api.media.stat(w.host, w.session, batch, true).then(
+      (r) => {
+        for (const p of batch) m.set(p, null);
+        for (const f of r.files) m.set(f.path, f);
+      },
+      // Hosts without the method (older helpers) simply link nothing.
+      () => batch.forEach((p) => m.set(p, null)),
+    );
+  }
+  w.done.forEach((f) => f());
+}
+
+/** Number of stat requests waiting for their debounce (tests). */
+export const pendingStats = () => waiting.size;
+
+/** The subset of `paths` that exist on the session's host (files and folders), as stats. */
 export function useExistingFiles(paths: string[]): FileStat[] {
   const api = useApi();
   const scope = useMediaScope();
@@ -79,7 +87,7 @@ export function useExistingFiles(paths: string[]): FileStat[] {
     let live = true;
     void statAll(api, scope.host, scope.session, paths).then(() => {
       const m = known.get(`${scope.host}/${scope.session}`);
-      if (live && m) setStats(paths.map((p) => m.get(p)).filter((x): x is FileStat => !!x && !x.is_dir));
+      if (live && m) setStats(paths.map((p) => m.get(p)).filter((x): x is FileStat => !!x));
     });
     return () => {
       live = false;
@@ -94,15 +102,15 @@ export function clearFileRefs() {
   known.clear();
 }
 
-/** Chips for the files among `paths` that exist in the session's folder. */
-export function FileRefs({ paths, label = "Files" }: { paths: string[]; label?: string }) {
+/** Chips for the paths that exist on the session's host; `lines` maps a path to the line a mention names. */
+export function FileRefs({ paths, label = "Files", lines }: { paths: string[]; label?: string; lines?: Record<string, number> }) {
   const uniq = useMemo(() => [...new Set(paths)], [paths]);
   const files = useExistingFiles(uniq);
   if (!files.length) return null;
   return (
     <div className="parts frefs" aria-label={label} data-testid="file-refs">
       {files.map((f) => (
-        <FileChip key={f.resolved} target={{ path: f.resolved }} name={baseName(f.path)} mime={f.mime} size={f.size} testId="file-ref" />
+        <PathChip key={f.resolved} stat={f} line={lines?.[f.path]} />
       ))}
     </div>
   );

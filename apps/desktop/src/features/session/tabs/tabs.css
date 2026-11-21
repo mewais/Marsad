@@ -24,9 +24,9 @@
 .diff.split .sl{display:grid;grid-template-columns:1fr 1fr}
 .diff.split .sl>.ln{grid-template-columns:38px 16px 1fr;min-width:0;overflow:hidden}
 .diff.split .sl>.ln:first-child{border-right:1px solid var(--line)}
-.diff.split .ln span:nth-child(2){color:inherit;text-align:center;padding:0}
+.diff.split .ln>span:nth-child(2){color:inherit;text-align:center;padding:0}
 .diff.split .ln.a span:nth-child(2){color:var(--add)} .diff.split .ln.d span:nth-child(2){color:var(--del)}
-.diff .ln span:last-child{overflow:hidden;text-overflow:ellipsis}
+.diff .ln>span:last-child{overflow:hidden;text-overflow:ellipsis}
 .diff-note{display:flex;gap:8px;align-items:center;padding:10px 14px;font-size:12px;color:var(--fg-2);font-family:var(--f-ui)}
 .diff-note.warn{color:var(--needs);background:var(--needs-bg);border-top:1px solid var(--needs-line)}
 .diff-note.err{color:var(--failed)}
