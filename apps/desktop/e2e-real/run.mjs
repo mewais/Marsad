@@ -192,6 +192,18 @@ const scenario = {
       { type: "image", mime: "image/png", path: "assets/sketch.png" },
       { type: "say", text: "Drew `out/chart.svg` from your sketch; the write-up is in report.pdf and preview.html shows both." },
     ] },
+    // Polish: an HTML file with a relative image, a code file, a Markdown file, an edit (diff) and
+    // a reply with a fenced block and path mentions (one inside the folder with a line, one outside).
+    { when: "write the polish files", steps: [
+      { type: "tool", name: "Write", input: { file_path: "polish/site/index.html" }, needs_permission: false, result_if_allowed: "File created successfully at: polish/site/index.html",
+        write_file: { path: "polish/site/index.html", content: "<!doctype html><html><head><style>body{font-family:sans-serif;background:#f6f7fa}</style></head><body><h1 id='t'>Polish report</h1><img id='sk' src='../../assets/sketch.png' alt='sketch' width='96'><img src='https://example.com/tracker.png' alt='remote'><img src='../../../../../../etc/passwd.png' alt='escape'></body></html>" } },
+      { type: "tool", name: "Write", input: { file_path: "polish/src/app.ts" }, needs_permission: false, result_if_allowed: "File created successfully at: polish/src/app.ts",
+        write_file: { path: "polish/src/app.ts", content: "import { readFile } from 'node:fs/promises';\n\n/** Sum the rows. */\nexport async function total(path: string): Promise<number> {\n  const rows: number[] = JSON.parse(await readFile(path, 'utf8'));\n  return rows.reduce((a, b) => a + b, 0); // done\n}\n" } },
+      { type: "tool", name: "Write", input: { file_path: "polish/docs/guide.md" }, needs_permission: false, result_if_allowed: "File created successfully at: polish/docs/guide.md",
+        write_file: { path: "polish/docs/guide.md", content: "# Guide\n\nRun it:\n\n```bash\nnpm test -- --watch\n```\n\n- [x] install\n- [ ] ship\n\n| a | b |\n|---|---|\n| 1 | 2 |\n" } },
+      { type: "tool", name: "Edit", input: { file_path: "polish/src/app.ts", old_string: "return rows.reduce((a, b) => a + b, 0);", new_string: "return rows.length ? rows.reduce((a, b) => a + b, 0) : 0;" }, needs_permission: false, result_if_allowed: "Edited polish/src/app.ts" },
+      { type: "say", text: "Done:\n\n```ts\nexport const total = (rows: number[]) => rows.reduce((a, b) => a + b, 0);\n```\n\nSee `polish/src/app.ts:2`, `polish/site/index.html` and `polish/docs/guide.md`; not `../../etc/passwd`." },
+    ] },
     { when: "long task", steps: [
       { type: "say", text: "Starting the long refactor." },
       { type: "plan", entries: [{ content: "Refactor the session store", status: "in_progress", priority: "high" }], needs_approval: false },
@@ -340,7 +352,7 @@ const openSession = async (s, tab = "") => {
 };
 
 /** Launch through the New session dialog (real DOM), return the snapshot once it exists. */
-async function launchViaDialog({ agent, cwd, prompt, latest = false, resumeTitle, resumeId, model }) {
+async function launchViaDialog({ agent, cwd, prompt, latest = false, resumeTitle, resumeId, model, attach, beforeStart }) {
   await go("#/inbox");
   await button("New session");
   await el("[role=dialog]");
@@ -371,6 +383,20 @@ async function launchViaDialog({ agent, cwd, prompt, latest = false, resumeTitle
     else await click("[role=option]", resumeTitle, 60_000);
   }
   if (prompt) await type("#ns-prompt", prompt);
+  if (attach) {
+    // Drop an image on the first-prompt field, as a user would.
+    await waitFor(() => wd.exec(() => !document.querySelector("[aria-label='Attach files']")?.disabled), "attach enabled", 30_000);
+    await wd.exec((b64) => {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const dt = new DataTransfer();
+      dt.items.add(new File([bytes], "sketch.png", { type: "image/png" }));
+      const target = document.querySelector(".ns-prompt");
+      target.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, bubbles: true, cancelable: true }));
+      target.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    }, attach);
+    await el("[role=dialog] [data-testid=pending-attachment]", "sketch.png");
+  }
+  await beforeStart?.();
   const before = new Set((await fleetSessions()).map((s) => s.id));
   await click("[role=dialog] button.primary:not([disabled])", null, 60_000);
   return waitFor(async () => (await fleetSessions()).find((s) => !before.has(s.id)), "the launched session", 60_000);
@@ -512,6 +538,53 @@ scenario_("media", async () => {
   if (!refused) throw new Error("a path outside the session folder was readable");
   // Leave the project as the next scenarios expect it (the Changes tab counts files).
   fs.rmSync(path.join(project, "out"), { recursive: true, force: true });
+});
+
+// Polish round: a session launched with an image on the first prompt (create, upload, send),
+// previews of an HTML file with a relative image, highlighted code and rendered Markdown, a
+// transcript with a coloured fenced block and a diff, and path chips only inside the folder.
+scenario_("polish", async () => {
+  const png = fs.readFileSync(path.join(project, "assets/sketch.png")).toString("base64");
+  const s = await launchViaDialog({ agent: "Claude Code", cwd: project, prompt: "write the polish files", attach: png, beforeStart: () => shot("polish-new-session-attachments") });
+  await waitPhase(s.id, "idle", 90_000);
+  await openSession(s);
+  await wd.exec(() => document.querySelectorAll(".toast button[aria-label=Dismiss]").forEach((b) => b.click()));
+  await bodyHas("polish/src/app.ts");
+  // The attached image reached the session: it is in the first prompt as a real image.
+  await waitFor(() => wd.exec(() => [...document.querySelectorAll("[data-testid=media-image] img")].filter((i) => i.complete && i.naturalWidth > 0).length >= 1), "the attached image shows in the transcript", 30_000);
+  const hist = await rpc("session.history", { id: s.id, limit: 50 }, local);
+  if (!JSON.stringify(hist).includes("sketch.png")) throw new Error("the first prompt did not carry the attachment");
+  await wd.exec(() => document.querySelector(".transcript").scrollTo(0, 1e9));
+  // Chips: inside the folder (with the line), none for the path outside it.
+  await click("[data-testid=file-ref] button", "app.ts:2");
+  await waitFor(() => wd.exec(() => !!document.querySelector("[data-testid=preview-text] .hljs-keyword")), "code highlighted", 30_000);
+  const focus = await wd.exec(() => document.querySelector("[data-testid=preview-text] .focus")?.getAttribute("data-ln"));
+  if (focus !== "2") throw new Error(`the preview did not open at line 2 (${focus})`);
+  await shot("polish-code-preview");
+  await wd.exec(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  const chips = await wd.exec(() => [...document.querySelectorAll("[data-testid=file-ref]")].map((c) => c.textContent));
+  if (chips.some((t) => t.includes("passwd"))) throw new Error("a path outside the folder became a chip");
+  await click("[data-testid=file-ref] button", "index.html");
+  await waitFor(() => wd.exec(() => document.querySelector("[data-testid=preview-html]")?.getAttribute("srcdoc")?.includes("data:image/png")), "relative image inlined", 30_000);
+  const doc = await wd.exec(() => document.querySelector("[data-testid=preview-html]").getAttribute("srcdoc"));
+  if (doc.includes("example.com")) throw new Error("remote content reached the frame");
+  await waitFor(() => wd.exec(() => /Remote content blocked: 1/.test(document.body.textContent)), "remote content note", 10_000);
+  await shot("polish-html-preview");
+  await wd.exec(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await click("[data-testid=file-ref] button", "guide.md");
+  await el("[data-testid=preview-markdown] h1", "Guide");
+  await waitFor(() => wd.exec(() => !!document.querySelector("[data-testid=preview-markdown] .hljs-built_in, [data-testid=preview-markdown] .hljs-string, [data-testid=preview-markdown] .hljs-keyword")), "fenced code in the markdown coloured", 30_000);
+  await shot("polish-markdown-preview");
+  await wd.exec(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  // The transcript: a coloured fenced block and the edit as a diff.
+  await wd.exec(() => [...document.querySelectorAll(".tool-h")].filter((b) => b.textContent.includes("Edit")).forEach((b) => b.click()));
+  await el("[data-testid=tool-diff]");
+  await wd.exec(() => document.querySelector(".transcript").scrollTo(0, 1e9));
+  await waitFor(() => wd.exec(() => !!document.querySelector("[data-testid=md-code] .hljs-keyword")), "transcript block coloured", 30_000);
+  await shot("polish-transcript");
+  const refused = await rpc("session.file.read", { id: s.id, path: "../../../etc/passwd", offset: 0, length: 16 }, local).then(() => false, () => true);
+  if (!refused) throw new Error("a path outside the session folder was readable");
+  fs.rmSync(path.join(project, "polish"), { recursive: true, force: true });
 });
 
 scenario_("interrupt", async () => {

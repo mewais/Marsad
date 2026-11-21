@@ -23,6 +23,7 @@ test("transcript shows images inline and files as chips; the lightbox opens them
   // The user's attachment and the tool's image load as thumbnails.
   const imgs = page.getByTestId("media-image");
   await expect(imgs).toHaveCount(2);
+  await imgs.nth(1).scrollIntoViewIfNeeded();
   await expect(imgs.nth(1).locator("img")).toHaveJSProperty("complete", true);
   expect(await imgs.nth(1).locator("img").evaluate((i: HTMLImageElement) => i.naturalWidth)).toBe(240);
   // Files the agent wrote and mentions, and the resource it showed.
@@ -100,4 +101,63 @@ test("composer: attach, see chips, remove, send uploads and shows the attachment
   const sent = page.getByTestId("sent-attachments").last();
   await expect(sent.getByTestId("media-image")).toHaveCount(1);
   await expect(sent.getByTestId("file-chip").filter({ hasText: "notes.txt" })).toBeVisible();
+});
+
+// Polish: relative HTML resources, highlighted code, Markdown, path chips, first-prompt attachments.
+test("html preview inlines its relative image and counts blocked remote content; code is coloured; markdown renders", async ({ page }) => {
+  await open(page);
+  const chip = (name: string) => page.getByTestId("file-ref").filter({ hasText: name }).first();
+  const pv = page.getByTestId("preview");
+
+  await chip("index.html").click();
+  await expect(page.getByTestId("html-blocked")).toContainText("Remote content blocked: 2");
+  const frame = page.getByTestId("preview-html");
+  expect(await frame.getAttribute("sandbox")).toBe("");
+  const doc = await frame.getAttribute("srcdoc");
+  expect(doc).toContain("data:image/png;base64,");
+  expect(doc).not.toContain("example.com");
+  // The image really renders inside the frame.
+  const img = page.frameLocator("[data-testid=preview-html]").locator("#dot");
+  await expect(img).toBeVisible();
+  await expect.poll(() => img.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
+  await page.keyboard.press("Escape");
+
+  await chip("app.ts:2").click();
+  await expect(pv).toHaveAttribute("data-kind", "text");
+  await expect(page.locator("[data-testid=preview-text] .hljs-keyword").first()).toBeVisible();
+  await expect(page.locator("[data-testid=preview-text] [data-ln='2'].focus")).toHaveCount(1);
+  await page.getByLabel("Wrap lines").check();
+  await page.keyboard.press("Escape");
+
+  await chip("guide.md").click();
+  await expect(page.getByTestId("preview-markdown").locator("h1")).toHaveText("Guide");
+  await expect(page.getByTestId("preview-markdown").locator("script")).toHaveCount(0);
+  await page.getByRole("button", { name: "Source" }).click();
+  await expect(page.getByTestId("preview-text")).toHaveAttribute("data-lang", "markdown");
+});
+
+test("the transcript colours code and diffs, and only paths inside the folder are chips", async ({ page }) => {
+  await open(page);
+  await expect(page.locator("[data-testid=md-code] .hljs-keyword").first()).toBeVisible();
+  const chips = await page.getByTestId("file-ref").allTextContents();
+  expect(chips.some((c) => c.startsWith("todo.md"))).toBe(false);
+  expect(chips.some((c) => c.startsWith("config"))).toBe(false);
+  await expect(page.locator("main")).toContainText("../notes/todo.md");
+  await page.getByRole("button", { name: /Edit/ }).first().click();
+  await expect(page.getByTestId("tool-diff").first()).toBeVisible();
+});
+
+test("new session: attach an image to the first prompt; it is uploaded and sent after the session is created", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/${FX}#/inbox`);
+  await expect(page.locator("[data-session]").first()).toBeVisible();
+  await page.keyboard.press("n");
+  const dlg = page.getByRole("dialog", { name: "New session" });
+  await expect(dlg.getByLabel("Project folder")).not.toHaveValue("");
+  await expect(dlg.getByRole("button", { name: "Attach files" })).toBeEnabled();
+  await dlg.getByTestId("ns-attach-input").setInputFiles({ name: "shot.png", mimeType: "image/png", buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47]) });
+  await expect(dlg.getByTestId("pending-attachment")).toHaveCount(1);
+  await dlg.getByLabel(/First message/).fill("what is in this picture");
+  await dlg.getByRole("button", { name: /Start session/ }).click();
+  await expect(page).toHaveURL(/#\/session\/x1\//);
 });

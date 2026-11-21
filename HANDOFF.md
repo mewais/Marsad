@@ -46,9 +46,44 @@ https://github.com/mewais/Marsad/actions/runs/44859855066 (later commits: see th
   `media.spec.ts` (`?media=1` fixture); real app `media` scenario (fake CLI `image` /
   `write_file` steps) and `--real` `live-claude-media` (Haiku described the attached chart and
   wrote `live_chart.svg`, opened in the preview). Shots: `media-*.png`.
-- **Not done**: no media in the New session dialog's first prompt; codex image input untested
-  live; HTML previews do not resolve relative images; no syntax highlighting (plain numbered
-  text); paths in prose are linked only when they exist inside the session's folder.
+- **Not done**: codex image input untested live (the earlier gaps — first-prompt media, relative
+  HTML resources, highlighting — are closed in the polish round below).
+
+### Polish round: WSL files, HTML resources, first-prompt attachments, highlighting
+- **WSL = local files (Windows GUI).** `marsad-proto::paths`: the ONE pure translation
+  (`wsl_to_windows` → `\\wsl.localhost\<distro>\…`, `/mnt/<d>/…` → `D:\…`, Windows paths pass
+  through, non-absolute / backslash / bad distro rejected; `windows_to_wsl` inverse; `resolve_wsl`
+  adds the "distro not running" vs "not readable" messages). `HostEntry.local_files` (hub-derived:
+  local host, and WSL when the hub runs on Windows; UI reads `HostView.localFiles`, no host-kind
+  string checks). Shell `desktop.open/reveal/pick_folder` take `distro`; ProjectField offers a
+  "Windows picker…" rooted at the distro (answers a Linux path; `/mnt/c/...` shown as is in the
+  browser). windows-e2e asserts a file created inside the distro is readable from Windows at the
+  translated path, `resolve_wsl` (what open/reveal use) accepts it and refuses missing/relative
+  paths, and the WSL host reports `local_files`. No GUI app is launched in CI.
+- **HTML previews** (`media/htmlResources.ts`): relative images/`srcset`/media/CSS (`url()`,
+  `@import`, fonts)/scripts (only with "Run scripts") are read via `session.file.read` (host roots,
+  4 workers, 200 files / 24 MB budget) and inlined as `data:` URLs; remote refs are removed and
+  counted ("Remote content blocked: N"); links, iframes, `<meta http-equiv>`, `<base>` stripped.
+- **First prompt attachments** (`newsession/launch.ts`): create (no first prompt) → upload each
+  file → send the prompt with them, with progress in the footer; limits from `host.info`'s driver
+  `prompt_input`, re-validated on driver/host change (`revalidate`, dropped files explained). A
+  failure after creation opens the session with text + files in its composer (`session/draft.ts`).
+  Workstream "Add agent" (design mode) does not launch from the dialog, so no attachments there.
+- **Highlighting**: highlight.js core + 29 languages in ONE lazy chunk (`features/highlight/`,
+  149 kB / 46 kB gz, off the main bundle); output parsed into tokens (never `innerHTML`); colours
+  from design tokens (`highlight.css`); per-block cache; skipped > 256 KB / 6000 lines; auto-detect
+  only without tag/extension and ≤ 16 KB. Used by file previews (line numbers, wrap, `path:line`
+  focus, Rendered/Source for Markdown, pretty JSON), the shared `Markdown` (fenced blocks, tables,
+  nested lists, task lists), tool bodies (edit diffs coloured per language, written files by
+  extension, shell commands, JSON, unified diffs). Changes-tab diffs are NOT syntax-coloured.
+- **Path chips** (`media/pathRefs.ts`): relative / absolute / `path:line[:col]` / Windows forms,
+  existence via debounced, batched (50), cached `session.files.stat`. Reads stay confined to the
+  session roots (an earlier grant design was removed at the owner's request): a path outside the
+  folder is plain text and the host refuses to read it.
+- **Tests**: Rust paths/hosts units, windows.rs; vitest `polish.test.tsx` (languages, limits,
+  token sanitising, markdown, html resources incl. traversal/remote/budget, chip forms, batching,
+  launch flow success/failure, dialog flow, WSL open buttons, outside paths never chips);
+  Playwright `media.spec.ts` additions; real app scenario `polish`. Shots `polish-*.png`.
 
 ### Windows first-run round (verified on a real Windows runner) + UI requests
 - **Windows fixes** (Marsad 9500fdc..4ba256d, Wasit daba94c/6fd7b4d, Wasl bf7c305): every process
@@ -167,7 +202,7 @@ https://github.com/mewais/Marsad/actions/runs/44859855066 (later commits: see th
   this machine first in host lists and as the dialog default; graph lanes with agents first.
 
 ### Real-app suite `apps/desktop/e2e-real/` (`pnpm --dir apps/desktop test:real [-- --real] [--shots DIR]`)
-Default (fake CLIs): 33 scenarios (incl. `spawn`, `translucent-window`, `media`), last run 33/33 — incl. notifications per prefs (Settings
+Default (fake CLIs): 34 scenarios (incl. `spawn`, `translucent-window`, `media`, `polish`), last run 33/33 — incl. notifications per prefs (Settings
 page → shell log), kill -9 of the app mid-turn + relaunch, daemon kill -9, ssh key / password
 hosts, and a **real second factor**: sshd keyboard-interactive through PAM (pam_unix +
 pam_oath TOTP; needs `libpam-oath`, the run swaps `/etc/pam.d/sshd` and restores it).
