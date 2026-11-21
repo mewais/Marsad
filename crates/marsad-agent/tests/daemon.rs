@@ -260,14 +260,7 @@ async fn launch_prompt_gate_answer_and_kill9_restart() {
             break;
         }
     }
-    rt.command(
-        &id,
-        Command::Prompt {
-            text: "list".into(),
-        },
-    )
-    .await
-    .unwrap();
+    rt.command(&id, Command::prompt("list")).await.unwrap();
     let request_id = loop {
         let e = next_event(&mut sub).await;
         let rid = match &e.kind {

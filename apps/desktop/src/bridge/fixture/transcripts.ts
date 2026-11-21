@@ -1,4 +1,5 @@
-import type { AgentEvent, Command, JsonValue, PendingGate, PlanEntry, SessionEvent } from "../wire";
+import type { AgentEvent, Attachment, Command, ContentPart, JsonValue, PendingGate, PlanEntry, SessionEvent } from "../wire";
+import { BLOB_CHART, chartPng, MEDIA_SPEC, SKETCH_ATTACHMENT } from "./media";
 
 /** A session event without its cursor and time (distributes over the kinds). */
 export type SessionEventKind = SessionEvent extends infer E ? (E extends unknown ? Omit<E, "cursor" | "t"> : never) : never;
@@ -21,13 +22,13 @@ class Builder {
   agent(event: AgentEvent, dt?: number) {
     return this.push({ kind: "agent", event }, dt);
   }
-  prompt(text: string) {
-    const c: Command = { command: "prompt", text };
+  prompt(text: string, attachments: Attachment[] = []) {
+    const c: Command = { command: "prompt", text, attachments };
     return this.push({ kind: "input", command: c, status: { status: "sent" } });
   }
-  tool(name: string, call_id: string, input: JsonValue, ok: boolean, result: JsonValue, dt = 3000) {
+  tool(name: string, call_id: string, input: JsonValue, ok: boolean, result: JsonValue, dt = 3000, parts: ContentPart[] = []) {
     this.agent({ type: "tool_call_started", name, call_id, input, is_subagent: false }, dt);
-    this.agent({ type: "tool_call_finished", call_id, name, ok, result }, 900);
+    this.agent({ type: "tool_call_finished", call_id, name, ok, result, parts }, 900);
   }
 }
 
@@ -38,6 +39,7 @@ export function buildTranscript(spec: Spec, sessionId: string, now: number): { e
   b.agent({ type: "session_init", model: undefined, cwd: `~/src/${spec.proj}`, cli_version: "fixture" }, 200);
   const plan: PlanEntry[] = [];
   if (spec.n === 7) richAuthTranscript(b, plan);
+  else if (spec.n === MEDIA_SPEC.n) mediaTranscript(b, sessionId);
   else genericTranscript(b, spec, spec.longHistory ? 70 : 1);
 
   const nGates = spec.gates?.length ?? 0;
@@ -120,4 +122,21 @@ function richAuthTranscript(b: Builder, plan: PlanEntry[]) {
     { content: "Fix cookie-compat tests", priority: "medium", status: "pending" },
     { content: "Remove express-session dependency", priority: "low", status: "pending" },
   );
+}
+
+/** `?media=1`: images in a prompt, a tool result and a reply; files the agent wrote and mentions. */
+function mediaTranscript(b: Builder, sessionId: string) {
+  b.prompt("Turn data.csv into a bar chart like this sketch, save it as SVG, and write a short PDF report.", [SKETCH_ATTACHMENT(sessionId)]);
+  b.agent({ type: "turn_started" });
+  b.tool("Read", "m1", { file_path: "data.csv" }, true, "quarter,revenue,growth\nQ1,1200,0.05\n…");
+  b.tool("Write", "m2", { file_path: "out/chart.svg", content: "<svg …>" }, true, "File created successfully at: out/chart.svg");
+  b.tool("Bash", "m3", { command: "rsvg-convert out/chart.svg -o out/chart.png" }, true, "");
+  const png = chartPng().length;
+  b.tool("Read", "m4", { file_path: "out/chart.png" }, true, [{ type: "image", source: { type: "base64", media_type: "image/png", data: "[omitted]" } }], 3000, [
+    { type: "image", mime: "image/png", source: { source: "blob", id: BLOB_CHART, size: png }, width: 240, height: 150 },
+  ]);
+  b.tool("Write", "m5", { file_path: "report.pdf" }, true, "File created successfully at: report.pdf");
+  b.agent({ type: "assistant_delta", text: "Done. The chart is in `out/chart.svg` (a PNG copy in `out/chart.png`), the write-up is `report.pdf`, and `preview.html` shows both. See README.md for notes.", message_id: "mm1" }, 2000);
+  b.agent({ type: "assistant_content", parts: [{ type: "file", source: { source: "path", path: "preview.html" }, name: "preview.html", mime: "text/html", uri: "file:///home/you/src/reports/preview.html" }], message_id: "mm1" }, 300);
+  b.agent({ type: "turn_completed", was_interrupted: false, num_turns: 6, usage: { input_tokens: 2000, output_tokens: 400, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: 0.12 } }, 800);
 }

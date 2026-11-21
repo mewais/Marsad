@@ -1,5 +1,8 @@
 import type { Backend, RequestOptions, SubscribeOptions, Unsubscribe } from "../backend";
 import type {
+  AttachmentPut,
+  FileReadRequest,
+  FilesStatRequest,
   AuthAnswer, AuthCancel, AuthPrompt, BaseRequest, HostEntry, FleetEvent, FleetHost, FsListRequest, FsPathRequest, GateRequest, GitCommitRequest, GitDiffRequest,
   GitDiscardRequest, GitRefresh, GitStatus, GitStatusRequest, GitSummary, GitTarget, HistoryRequest, RenameSession, HostId, InventoryRequest, LinkState, SessionRef, SessionSnapshot, CommandRequest,
 } from "../wire";
@@ -9,6 +12,7 @@ import { fsExists, fsHome, fsList } from "./fs";
 import { buildTree, diffOf, type Tree } from "./git";
 import { FixtureHub } from "./hub";
 import { err, SessionSim, type Entry } from "./runtime";
+import { FixtureFiles, MEDIA_SPEC } from "./media";
 import { buildSession, fixtureId, SPAWN_CHOICES, SPECS, type Spec } from "./sessions";
 import { SPAWN_REQUEST } from "./workstreams";
 
@@ -41,6 +45,8 @@ export class FixtureBackend implements Backend {
   readonly opts: Required<Omit<FixtureOptions, "specs">>;
   readonly hub: FixtureHub;
   private hosts = new Map<HostId, HostRec>();
+  /** Blobs, uploads and session files (media previews). */
+  readonly files = new FixtureFiles();
   private fleetSubs = new Set<(e: unknown) => void>();
   private wsSubs = new Set<(e: unknown) => void>();
   private trees = new Map<string, Tree>();
@@ -63,6 +69,7 @@ export class FixtureBackend implements Backend {
     for (const spec of o.specs ?? SPECS) {
       const { snap, events } = buildSession(spec, now);
       this.hosts.get(spec.host)!.sessions.set(snap.id, { snap, events, subs: new Set(), host: spec.host });
+      if (spec.n === MEDIA_SPEC.n) this.files.seed(snap.id, snap.cwd ?? "");
       this.trees.set(`${spec.host}/${snap.id}`, buildTree(spec));
     }
     this.hub = new FixtureHub({
@@ -149,7 +156,7 @@ export class FixtureBackend implements Backend {
     switch (method) {
       case M.HOST_INFO:
         return { host_id: hostId, build: "fixture", pid: 4242, started_at_ms: now - 86_400_000, data_dir: "~/.local/share/marsad", os: host.def.entry.platform?.os ?? "linux", arch: host.def.entry.platform?.arch ?? "x86_64",
-          drivers: DRIVERS.filter((d) => host.def.drivers[d.id]).map(({ id, display_name, capabilities }) => ({ id, display_name, capabilities })) };
+          drivers: DRIVERS.filter((d) => host.def.drivers[d.id]).map(({ id, display_name, capabilities, prompt_input }) => ({ id, display_name, capabilities, prompt_input })) };
       case M.DRIVERS_INVENTORY:
         return { drivers: inventoryFor(host.def, (p as InventoryRequest | undefined)?.project ?? null, now) };
       case M.DRIVERS_REFRESH:
@@ -163,6 +170,19 @@ export class FixtureBackend implements Backend {
         const all = this.entry(host, r).events.filter((e) => r.before == null || e.cursor < r.before);
         const events = all.slice(Math.max(0, all.length - r.limit));
         return { events, has_more: all.length > events.length };
+      }
+      case M.SESSION_ATTACHMENT_PUT: {
+        const r = p as AttachmentPut;
+        this.entry(host, r);
+        return this.files.put(r);
+      }
+      case M.SESSION_FILE_READ: {
+        const r = p as FileReadRequest;
+        return this.files.read(r, this.entry(host, r).snap.cwd ?? null);
+      }
+      case M.SESSION_FILES_STAT: {
+        const r = p as FilesStatRequest;
+        return this.files.stat(r.id, this.entry(host, r).snap.cwd ?? null, r.paths);
       }
       case M.SESSION_COMMAND: {
         const r = p as CommandRequest;

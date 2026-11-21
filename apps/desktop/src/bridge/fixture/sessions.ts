@@ -156,6 +156,7 @@ export function buildSession(spec: Spec, now: number): Built {
     labels: {},
     created_at_ms: now - 3_600_000 * 2,
     capabilities: drv.capabilities,
+    prompt_input: drv.prompt_input,
     phase,
     generation: 1,
     pid: 1000 + spec.n,

@@ -249,9 +249,7 @@ async fn gate_round_trip(c: &MarsadClient, host: &HostId) {
             break;
         }
     }
-    rt.command(&id, Command::Prompt { text: "go".into() })
-        .await
-        .unwrap();
+    rt.command(&id, Command::prompt("go")).await.unwrap();
     let request_id = loop {
         if let SessionEventKind::Agent {
             event: AgentEvent::GateRequested { gate },

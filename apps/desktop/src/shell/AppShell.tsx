@@ -6,6 +6,7 @@ import { useActions, useApi, useAppState } from "../state";
 import { ToastRegion } from "../ui";
 import { openNewSession, openNewWorkstream } from "./dialogs";
 import { GlobalDialogs } from "./GlobalDialogs";
+import { PreviewHost } from "../features/media/PreviewHost";
 import { applyTheme, loadTheme } from "../lib/theme";
 import { applySurface, clampStrength, loadSurface, surfaceSupport } from "../lib/surface";
 import { useStore } from "../lib/store";
@@ -92,6 +93,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <CommandPalette open={palette} onClose={() => setPalette(false)} />
       <ShortcutHelp open={help} onClose={() => setHelp(false)} />
       <GlobalDialogs />
+      <PreviewHost />
       <ToastRegion />
     </div>
   );

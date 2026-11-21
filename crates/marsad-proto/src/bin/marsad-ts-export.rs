@@ -169,6 +169,13 @@ fn run(dir: &Path) -> Result<usize, String> {
         rt::InventoryReply,
         rt::RefreshRequest,
         rt::Ack,
+        p::media::AttachmentPut,
+        p::media::AttachmentPutReply,
+        p::media::FileReadRequest,
+        p::media::FileChunk,
+        p::media::FilesStatRequest,
+        p::media::FilesStatReply,
+        p::media::FileStat,
         // Wasit core
         p::AgentEvent,
         p::Command,
@@ -180,6 +187,11 @@ fn run(dir: &Path) -> Result<usize, String> {
         p::QuestionAnswer,
         p::ConfigItem,
         p::Unsupported,
+        p::ContentPart,
+        p::MediaSource,
+        p::Attachment,
+        p::PromptInput,
+        p::FileInput,
     );
     write_names(dir)?;
     let mut names = Vec::new();
@@ -230,6 +242,9 @@ fn write_names(dir: &Path) -> Result<(), String> {
         ("SESSION_SNAPSHOT", rm::SESSION_SNAPSHOT),
         ("SESSION_HISTORY", rm::SESSION_HISTORY),
         ("SESSION_COMMAND", rm::SESSION_COMMAND),
+        ("SESSION_ATTACHMENT_PUT", rm::SESSION_ATTACHMENT_PUT),
+        ("SESSION_FILE_READ", rm::SESSION_FILE_READ),
+        ("SESSION_FILES_STAT", rm::SESSION_FILES_STAT),
         ("GIT_STATUS", m::GIT_STATUS),
         ("GIT_DIFF", m::GIT_DIFF),
         ("GIT_COMMIT", m::GIT_COMMIT),

@@ -1,4 +1,4 @@
-import type { ConfigItem, DriverCapabilities, DriverInventory, HostEntry, LinkState, ModelInfo, ResumableSession, SessionMode, SlashCommandInfo } from "../wire";
+import type { ConfigItem, DriverCapabilities, PromptInput, DriverInventory, HostEntry, LinkState, ModelInfo, ResumableSession, SessionMode, SlashCommandInfo } from "../wire";
 
 /** Fixture-only data: drivers and hosts as discovery and the hub would report them. */
 
@@ -7,11 +7,18 @@ const caps = (over: Partial<DriverCapabilities> = {}): DriverCapabilities => ({
   usage: true, cost: true, resume: true, continue_latest: true, streaming_output: false, prompt_while_busy: "queued_by_cli", ...over,
 });
 
+/** What each real driver reports (Wasit descriptors). */
+const IMAGES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+export const promptInput = (files: PromptInput["files"], embeds = true, maxImage = 5 * 1024 * 1024): PromptInput => ({
+  image_mimes: IMAGES, max_image_bytes: maxImage, files, max_file_bytes: 50 * 1024 * 1024, max_attachments: 10, embeds_bytes: embeds,
+});
+
 export interface DriverDef {
   id: string;
   display_name: string;
   binary: string;
   capabilities: DriverCapabilities;
+  prompt_input: PromptInput;
   version: string;
   models: ModelInfo[];
   modes: SessionMode[];
@@ -27,7 +34,7 @@ const mcp = (name: string, scope: string, path: string, command: string, args: s
 
 export const DRIVERS: DriverDef[] = [
   {
-    id: "claude", display_name: "Claude Code", binary: "claude", capabilities: caps(), version: "2.1.4",
+    id: "claude", display_name: "Claude Code", binary: "claude", capabilities: caps(), prompt_input: promptInput("path_reference"), version: "2.1.4",
     models: [m("claude-sonnet-4.5", true, "claude-sonnet-4.5", "Balanced"), m("claude-opus-4.1", false, "claude-opus-4.1", "Most capable"), m("claude-haiku-4.5", false, "claude-haiku-4.5", "Fast")],
     modes: [
       { id: "default", label: "Default", description: "Ask before edits and commands" },
@@ -55,7 +62,7 @@ export const DRIVERS: DriverDef[] = [
     ],
   },
   {
-    id: "codex", display_name: "Codex", binary: "codex", capabilities: caps({ prompt_while_busy: "steered", streaming_output: true }), version: "0.58.0",
+    id: "codex", display_name: "Codex", binary: "codex", capabilities: caps({ prompt_while_busy: "steered", streaming_output: true }), prompt_input: promptInput("path_reference", false, 20 * 1024 * 1024), version: "0.58.0",
     models: [m("gpt-5-codex", true), m("gpt-5-codex-mini"), m("gpt-5"), m("o4-mini")],
     modes: [
       { id: "read-only", label: "Read only", description: "" },
@@ -74,7 +81,7 @@ export const DRIVERS: DriverDef[] = [
     ],
   },
   {
-    id: "opencode", display_name: "OpenCode", binary: "opencode", capabilities: caps({ prompt_while_busy: "queued_by_protocol" }), version: "1.3.2",
+    id: "opencode", display_name: "OpenCode", binary: "opencode", capabilities: caps({ prompt_while_busy: "queued_by_protocol" }), prompt_input: promptInput("embedded"), version: "1.3.2",
     models: [m("anthropic/claude-sonnet-4.5", true, "claude-sonnet-4.5 (anthropic)"), m("openai/gpt-5", false, "gpt-5 (openai)")],
     modes: [
       { id: "build", label: "Build", description: "Full tool access" },
@@ -88,7 +95,7 @@ export const DRIVERS: DriverDef[] = [
     ],
   },
   {
-    id: "kilo", display_name: "Kilo Code", binary: "kilo", capabilities: caps({ prompt_while_busy: "queued_by_protocol", plan_gate: false }), version: "7.8.27",
+    id: "kilo", display_name: "Kilo Code", binary: "kilo", capabilities: caps({ prompt_while_busy: "queued_by_protocol", plan_gate: false }), prompt_input: promptInput("embedded"), version: "7.8.27",
     models: [m("kilo/claude-sonnet-4.5", true), m("kilo/gpt-5")],
     modes: [
       { id: "code", label: "Code", description: "" },

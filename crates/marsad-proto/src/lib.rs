@@ -121,6 +121,7 @@ pub use wasl_proto as wasl;
 use serde::{Deserialize, Serialize};
 
 /// The Wasit runtime's wire types (sessions, snapshots, events, inventory).
+pub use wasit_runtime::media;
 pub use wasit_runtime::wire as runtime;
 
 pub use wasit_control::{
@@ -132,6 +133,7 @@ pub use wasit_core::{
     ConfigSource, DriverId, GateChoice, GateChoiceKind, GateDecision, GateRequest, McpServerConfig,
     McpTransport, QuestionAnswer, Unsupported,
 };
+pub use wasit_core::{Attachment, ContentPart, FileInput, MediaSource, PromptInput};
 pub use wasit_runtime::wire::{Ack, SessionId, SessionSnapshot};
 
 /// Method names.

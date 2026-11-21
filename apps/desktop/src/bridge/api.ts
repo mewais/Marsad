@@ -3,6 +3,13 @@ import type { SurfaceSupport } from "../lib/surface";
 import type * as W from "./wire";
 import { methods as M, topics as T } from "./wire";
 
+/** A file chosen in the desktop shell's native picker. */
+export interface PickedFile {
+  path: string;
+  name: string;
+  size: number;
+}
+
 /** Method name → [params, result]. The only place method strings meet payload types. */
 export interface MethodMap {
   [M.HOST_INFO]: [void, W.HostInfo];
@@ -15,6 +22,9 @@ export interface MethodMap {
   [M.FLEET_GIT_REFRESH]: [W.GitRefresh, W.Ack];
   [M.SESSION_HISTORY]: [W.HistoryRequest, W.HistoryPage];
   [M.SESSION_COMMAND]: [W.CommandRequest, W.CommandReply];
+  [M.SESSION_ATTACHMENT_PUT]: [W.AttachmentPut, W.AttachmentPutReply];
+  [M.SESSION_FILE_READ]: [W.FileReadRequest, W.FileChunk];
+  [M.SESSION_FILES_STAT]: [W.FilesStatRequest, W.FilesStatReply];
   [M.GIT_STATUS]: [W.GitStatusRequest, W.GitStatus];
   [M.GIT_DIFF]: [W.GitDiffRequest, W.GitDiff];
   [M.GIT_COMMIT]: [W.GitCommitRequest, W.GitCommitReply];
@@ -93,6 +103,20 @@ export function createApi(b: Backend) {
     refreshGit: (host: W.HostId, cwd: string) => call(b, M.FLEET_GIT_REFRESH, { host, cwd }),
     launch: (r: W.LaunchRequest) => call(b, M.SESSIONS_LAUNCH, r),
     daemonInfo: (host?: W.HostId) => call(b, M.DAEMON_INFO, undefined, on(host)),
+    media: {
+      put: (host: W.HostId, r: W.AttachmentPut) => call(b, M.SESSION_ATTACHMENT_PUT, r, { host }),
+      read: (host: W.HostId, r: W.FileReadRequest) => call(b, M.SESSION_FILE_READ, r, { host }),
+      stat: (host: W.HostId, id: W.SessionId, paths: string[]) => call(b, M.SESSION_FILES_STAT, { id, paths }, { host }),
+    },
+    /** Desktop shell (absent in a browser: these reject with `method_not_found`). */
+    desktop: {
+      open: (target: string) => b.request<null>("desktop.open", { target }),
+      reveal: (target: string) => b.request<null>("desktop.reveal", { target }),
+      pickFiles: (title?: string) => b.request<{ files: PickedFile[] }>("desktop.pick_files", { title: title ?? null }),
+      readPicked: (path: string, offset: number, length: number) => b.request<{ data: string; eof: boolean }>("desktop.read_picked", { path, offset, length }),
+      downloadBegin: (name: string) => b.request<{ path: string }>("desktop.download_begin", { name }),
+      downloadChunk: (path: string, data: string) => b.request<null>("desktop.download_chunk", { path, data }),
+    },
     /** Desktop shell: solid or translucent window background (native backdrop where the OS has one). */
     windowSurface: (translucent: boolean) => b.request<SurfaceSupport>("desktop.window_surface", { translucent }),
     git: {

@@ -188,9 +188,7 @@ async fn ssh_host_provision_fleet_git_and_link_drop() {
             break;
         }
     }
-    rt.command(&id, Command::Prompt { text: "go".into() })
-        .await
-        .unwrap();
+    rt.command(&id, Command::prompt("go")).await.unwrap();
     let request_id = loop {
         let e = session_event(&mut sub).await;
         let rid = match &e.kind {

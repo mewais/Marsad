@@ -777,12 +777,7 @@ async fn fake_agent_spawns_through_its_mcp_tools() {
     };
     wait_snap(&c, &me, "idle", |s| s.phase.name() == "idle").await;
     c.runtime(None)
-        .command(
-            &solo.id,
-            Command::Prompt {
-                text: "work out 6*7 with a helper".into(),
-            },
-        )
+        .command(&solo.id, Command::prompt("work out 6*7 with a helper"))
         .await
         .unwrap();
     let snap = wait_snap(&c, &me, "spawn gate from the agent's tool", |s| {
@@ -864,9 +859,7 @@ async fn spawn_gate_is_withdrawn_when_the_asking_turn_is_interrupted() {
     };
     let rt = c.runtime(None);
     wait_snap(&c, &me, "idle", |s| s.phase.name() == "idle").await;
-    rt.command(&solo.id, Command::Prompt { text: "go".into() })
-        .await
-        .unwrap();
+    rt.command(&solo.id, Command::prompt("go")).await.unwrap();
     wait_snap(&c, &me, "turn running", |s| s.turn.is_some()).await;
 
     let mut pending = spawn_bg(

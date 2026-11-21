@@ -8,6 +8,7 @@ import { Button, ConfirmDialog, ConnState, DriverBadge, EmptyState, HostChip, Ic
 import { toast } from "../../ui/toast";
 import { Gate } from "../gates/Gate";
 import { Composer } from "./Composer";
+import { MediaCtx } from "../media/Parts";
 import { TranscriptItem } from "./TranscriptView";
 import { buildItems } from "./transcript";
 import { ChangesTab } from "./tabs/ChangesTab";
@@ -43,6 +44,7 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
   useTranscriptOpen(key);
   const slice = useAppState((s) => s.transcripts[key]);
   const items = useMemo(() => buildItems(slice?.events ?? []), [slice?.events]);
+  const media = useMemo(() => ({ host, session: id, local: !!hostLink?.local }), [host, id, hostLink?.local]);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 
@@ -71,6 +73,17 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
     const el = scroller.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [items.length, snap?.pending_gates.length]);
+  // Images load after the items render: keep the bottom in view while it grows.
+  useEffect(() => {
+    const el = scroller.current;
+    const inner = el?.firstElementChild;
+    if (!el || !inner || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (stick.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [slice !== undefined, tab]);
   useShortcut({ id: "session-back", keys: ["escape"], title: "Back to the Inbox", group: "Session", run: () => nav("/inbox") });
 
   if (!snap || !v) {
@@ -137,6 +150,7 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
         <div className="sd-body">
           <div className="tr-wrap">
             <div className="transcript" ref={scroller} onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
+              <MediaCtx.Provider value={media}>
               <div className="tr">
                 {slice?.hasMore ? <Button size="sm" variant="ghost" pending={slice.loading} onClick={() => void transcripts.loadEarlier(key)}>Load earlier messages</Button> : null}
                 {!slice || (slice.loading && items.length === 0) ? <><Skeleton width="50%" /><Skeleton /><Skeleton width="70%" /></> : null}
@@ -148,8 +162,11 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
                   </div>
                 ))}
               </div>
+              </MediaCtx.Provider>
             </div>
-            <Composer sessionKey={key} snap={snap} />
+            <MediaCtx.Provider value={media}>
+              <Composer sessionKey={key} snap={snap} />
+            </MediaCtx.Provider>
           </div>
           <aside className="side" aria-label="Session details">
             {gates.length ? (

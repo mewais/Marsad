@@ -1,6 +1,8 @@
-import { memo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { DriverBadge, Icon, StatusPill, type DriverDescriptor } from "../../ui";
 import { Markdown } from "./Markdown";
+import { AttachmentsView, PartsView } from "../media/Parts";
+import { FileRefs, textPathCandidates, toolFileRefs } from "../media/refs";
 import { resultText, toolArg, type Item } from "./transcript";
 
 function ToolBody({ item }: { item: Extract<Item, { kind: "tool" }> }) {
@@ -16,14 +18,15 @@ function ToolBody({ item }: { item: Extract<Item, { kind: "tool" }> }) {
     );
   }
   const text = resultText(item.result);
-  return <div className="tool-b">{text || (item.done ? "(no output)" : "Running…")}</div>;
+  return <div className="tool-b">{text || (item.done ? (item.parts.length ? "" : "(no output)") : "Running…")}</div>;
 }
 
 function Tool({ item }: { item: Extract<Item, { kind: "tool" }> }) {
   const [open, setOpen] = useState(false);
   const icon = !item.done ? "working" : item.ok === false ? "failed" : "done";
   const tone = !item.done ? "c-working" : item.ok === false ? "c-failed" : "c-done";
-  const first = resultText(item.result).split("\n")[0].slice(0, 60);
+  const first = resultText(item.result).split("\n")[0].slice(0, 60) || (item.parts.length ? `${item.parts.length} attachment${item.parts.length > 1 ? "s" : ""}` : "");
+  const files = useMemo(() => (item.done && item.ok !== false ? toolFileRefs(item.name, item.input) : []), [item.done, item.ok, item.name, item.input]);
   return (
     <div className="tool">
       <button type="button" className="tool-h plainbtn wfull" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
@@ -34,6 +37,8 @@ function Tool({ item }: { item: Extract<Item, { kind: "tool" }> }) {
         <Icon name={open ? "chev" : "chevr"} size="xs" className="faint" />
       </button>
       {open ? <ToolBody item={item} /> : null}
+      <PartsView parts={item.parts} />
+      {files.length ? <FileRefs paths={files} label="Files this tool wrote" /> : null}
     </div>
   );
 }
@@ -68,16 +73,35 @@ function Thinking({ text }: { text: string }) {
   );
 }
 
+/** Paths in assistant prose that exist in the session's folder, as clickable chips. */
+function MentionedFiles({ text }: { text: string }) {
+  const paths = useMemo(() => textPathCandidates(text), [text]);
+  return paths.length ? <FileRefs paths={paths} label="Files mentioned" /> : null;
+}
+
 export const TranscriptItem = memo(function TranscriptItem({ item, driver }: { item: Item; driver?: DriverDescriptor }) {
   switch (item.kind) {
     case "user":
-      return <div className="msg-user">{item.text}{item.queued ? <span className="faint"> · queued</span> : null}</div>;
+      return (
+        <div className="msg-user">
+          {item.text}
+          {item.queued ? <span className="faint"> · queued</span> : null}
+          <AttachmentsView attachments={item.attachments} />
+        </div>
+      );
     case "assistant":
       return (
         <div className="msg-ai">
           <div className="who">{driver ? <DriverBadge driver={driver} compact /> : null} {driver?.displayName ?? "Agent"}</div>
           <Markdown text={item.text} />
+          <MentionedFiles text={item.text} />
         </div>
+      );
+    case "media":
+      return item.role === "user" ? (
+        <div className="msg-user"><PartsView parts={item.parts} /></div>
+      ) : (
+        <div className="msg-ai"><PartsView parts={item.parts} /></div>
       );
     case "thinking":
       return <Thinking text={item.text} />;

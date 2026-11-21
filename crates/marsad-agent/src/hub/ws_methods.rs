@@ -329,7 +329,7 @@ impl HubServices {
                     rt_methods::SESSION_COMMAND,
                     CommandRequest {
                         id: s.session.clone(),
-                        command: Command::Prompt { text: prompt },
+                        command: Command::prompt(prompt),
                     },
                 )
                 .await;

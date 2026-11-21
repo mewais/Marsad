@@ -7,6 +7,7 @@ import type { ModelUsage } from "./ModelUsage";
 import type { PendingGate } from "./PendingGate";
 import type { Phase } from "./Phase";
 import type { PlanEntry } from "./PlanEntry";
+import type { PromptInput } from "./PromptInput";
 import type { SessionId } from "./SessionId";
 import type { SessionMode } from "./SessionMode";
 import type { SlashCommandInfo } from "./SlashCommandInfo";
@@ -18,7 +19,11 @@ import type { Usage } from "./Usage";
 /**
  * The continuously reduced state of one session. Rebuilt exactly by replaying its journal.
  */
-export type SessionSnapshot = { id: SessionId, driver: DriverId, cwd?: string | null, labels?: { [key in string]: string }, created_at_ms: number, capabilities: DriverCapabilities, phase: Phase, 
+export type SessionSnapshot = { id: SessionId, driver: DriverId, cwd?: string | null, labels?: { [key in string]: string }, created_at_ms: number, capabilities: DriverCapabilities, 
+/**
+ * What a prompt may carry besides text.
+ */
+prompt_input: PromptInput, phase: Phase, 
 /**
  * Process generations so far (1 after create; +1 per continue).
  */
