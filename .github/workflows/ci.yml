@@ -121,7 +121,7 @@ jobs:
   windows-e2e:
     # Real Windows: a WSL host end to end (hub lists distros, provisions the Linux helper into
     # the distro, a fake-CLI session's gate round-trips, the link survives `wsl --terminate`)
-    # and the no-console-window checks.
+    # and the no-console-window checks; ssh from Windows to Linux (sshd inside the distro).
     needs: linux-helper
     runs-on: windows-latest
     timeout-minutes: 45
@@ -148,9 +148,20 @@ jobs:
           wsl.exe -d $env:MARSAD_E2E_WSL_DISTRO -u root --exec sh -c "install -m 755 '$p' /usr/local/bin/claude && claude --version && uname -a"
           if ($LASTEXITCODE -ne 0) { exit 1 }
           wsl.exe --list --verbose
+      - name: sshd inside the distro (key auth) for the ssh-from-Windows test
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:USERPROFILE\.ssh" | Out-Null
+          cmd /c 'ssh-keygen -q -t ed25519 -N "" -f "%USERPROFILE%\.ssh\marsad_e2e"'
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $p = "$env:USERPROFILE\.ssh\marsad_e2e.pub" -replace '\\','/'
+          $p = '/mnt/' + $p.Substring(0,1).ToLower() + $p.Substring(2)
+          wsl.exe -d $env:MARSAD_E2E_WSL_DISTRO -u root --exec sh -c "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server >/dev/null && ssh-keygen -A && mkdir -p /root/.ssh && cp '$p' /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys && printf 'SetEnv MARSAD_BUILD_ID=e2e-ssh\nPermitRootLogin prohibit-password\n' > /etc/ssh/sshd_config.d/marsad.conf && mkdir -p /run/sshd && /usr/sbin/sshd -t"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
       - run: cargo build -p marsad-agent --tests
       - name: WSL end to end + no console windows
         shell: pwsh
         run: |
           $env:MARSAD_E2E_LINUX_BIN_DIR = (Resolve-Path linux-bin).Path
+          $env:MARSAD_E2E_SSH_KEY = "$env:USERPROFILE\.ssh\marsad_e2e"
           cargo test -p marsad-agent --test windows -- --include-ignored --nocapture --test-threads 1

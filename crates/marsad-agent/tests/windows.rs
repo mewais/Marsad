@@ -366,3 +366,85 @@ async fn wsl_host_end_to_end() {
         stop_pid(i.pid);
     }
 }
+
+// ── SSH from Windows to Linux ───────────────────────────────────────────────
+
+/// The hub on Windows reaches a Linux machine over ssh (Windows' own `ssh.exe`): sshd runs
+/// inside the WSL distro on port 2222 with key auth (CI's windows-e2e job installs it and
+/// sets `SetEnv MARSAD_BUILD_ID=e2e-ssh`). The bootstrap reports `Linux x86_64`, the hub picks
+/// the bundled musl helper (the owner's report: it looked for an `x86_64-unknown-linux-gnu`
+/// build), uploads it, and a fake-CLI session's gate round-trips over the link.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs sshd in a WSL distro prepared by CI (MARSAD_E2E_WSL_DISTRO, MARSAD_E2E_SSH_KEY)"]
+async fn ssh_host_from_windows_end_to_end() {
+    let distro = std::env::var("MARSAD_E2E_WSL_DISTRO").expect("MARSAD_E2E_WSL_DISTRO");
+    let bin_dir = std::env::var("MARSAD_E2E_LINUX_BIN_DIR").expect("MARSAD_E2E_LINUX_BIN_DIR");
+    let key = std::env::var("MARSAD_E2E_SSH_KEY").expect("MARSAD_E2E_SSH_KEY");
+    // sshd in the foreground for the test's duration (it also keeps the distro running).
+    let mut sshd = std::process::Command::new("wsl.exe")
+        .args([
+            "-d",
+            &distro,
+            "-u",
+            "root",
+            "--exec",
+            "sh",
+            "-c",
+            "mkdir -p /run/sshd && exec /usr/sbin/sshd -D -e -p 2222",
+        ])
+        .stdin(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let d = TempDir::new();
+    let mut cfg = marsad_client::ClientConfig::new(
+        d.path().join("l"),
+        wasit_control::Hello::new("test", "gui", "gui"),
+    );
+    cfg.agent_bin = Some(agent());
+    cfg.serve_args = serve_args();
+    cfg.supervise.backoff.initial = Duration::from_millis(200);
+    cfg.daemon_env = vec![
+        ("MARSAD_AGENT_BIN_DIR".into(), bin_dir),
+        ("MARSAD_BUILD_ID".into(), "e2e-ssh".into()),
+    ];
+    let c = MarsadClient::connect(cfg);
+    let mut fleet = c.fleet(None);
+    next(&mut fleet).await;
+    let host = HostId::new("lin");
+    c.add_host(HostDraft {
+        name: "linux over ssh".into(),
+        kind: HostKind::Ssh {
+            target: "root@127.0.0.1".into(),
+            port: Some(2222),
+            identity_file: Some(key),
+            options: vec![
+                "StrictHostKeyChecking=accept-new".into(),
+                "BatchMode=yes".into(),
+            ],
+        },
+        id: Some(host.clone()),
+    })
+    .await
+    .unwrap();
+    until(&mut fleet, "the ssh host connected", |e| {
+        link_is(e, "lin", LinkState::is_connected)
+    })
+    .await;
+    let entry = c
+        .hosts()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|h| h.id == host)
+        .unwrap();
+    let platform = entry.platform.as_ref().unwrap();
+    assert_eq!(platform.os, "linux", "{platform:?}");
+
+    gate_round_trip(&c, &host).await;
+
+    if let Ok(i) = c.daemon_info(None).await {
+        stop_pid(i.pid);
+    }
+    let _ = sshd.kill();
+}
