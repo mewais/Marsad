@@ -136,9 +136,14 @@ mod files {
 
     const MAX_CHUNK: u64 = 4 * 1024 * 1024;
 
-    fn set(which: &'static OnceLock<Mutex<HashSet<PathBuf>>>) -> std::sync::MutexGuard<'static, HashSet<PathBuf>> {
+    fn set(
+        which: &'static OnceLock<Mutex<HashSet<PathBuf>>>,
+    ) -> std::sync::MutexGuard<'static, HashSet<PathBuf>> {
         // Paths are inserted whole; a poisoned set is still consistent.
-        which.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+        which
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
     static PICKED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
     static DOWNLOADS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
@@ -161,7 +166,10 @@ mod files {
     pub async fn read_picked(a: ReadPicked) -> Result<Value, BridgeError> {
         let path = PathBuf::from(&a.path);
         if !set(&PICKED).contains(&path) {
-            return Err(BridgeError::new("forbidden", "only files picked in the file dialog can be read"));
+            return Err(BridgeError::new(
+                "forbidden",
+                "only files picked in the file dialog can be read",
+            ));
         }
         let mut f = tokio::fs::File::open(&path).await.map_err(io)?;
         let size = f.metadata().await.map_err(io)?.len();
@@ -188,19 +196,38 @@ mod files {
             .next()
             .unwrap_or("download")
             .chars()
-            .map(|c| if c.is_control() || ":*?\"<>|".contains(c) { '_' } else { c })
+            .map(|c| {
+                if c.is_control() || ":*?\"<>|".contains(c) {
+                    '_'
+                } else {
+                    c
+                }
+            })
             .collect();
         let base = base.trim().trim_start_matches('.').to_string();
-        let base = if base.is_empty() { "download".to_string() } else { base };
+        let base = if base.is_empty() {
+            "download".to_string()
+        } else {
+            base
+        };
         let (stem, ext) = match base.rsplit_once('.') {
             Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
             _ => (base.clone(), String::new()),
         };
         tokio::fs::create_dir_all(dir).await.map_err(io)?;
         for n in 0..1000 {
-            let file = if n == 0 { base.clone() } else { format!("{stem} ({n}){ext}") };
+            let file = if n == 0 {
+                base.clone()
+            } else {
+                format!("{stem} ({n}){ext}")
+            };
             let p = dir.join(file);
-            match tokio::fs::OpenOptions::new().write(true).create_new(true).open(&p).await {
+            match tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&p)
+                .await
+            {
                 Ok(_) => {
                     set(&DOWNLOADS).insert(p.clone());
                     return Ok(json!({ "path": p.to_string_lossy() }));
@@ -209,7 +236,10 @@ mod files {
                 Err(e) => return Err(io(e)),
             }
         }
-        Err(BridgeError::new("io", "no free file name in the Downloads folder"))
+        Err(BridgeError::new(
+            "io",
+            "no free file name in the Downloads folder",
+        ))
     }
 
     #[derive(Deserialize)]
@@ -221,12 +251,19 @@ mod files {
     pub async fn download_chunk(a: DownloadChunk) -> Result<Value, BridgeError> {
         let path = PathBuf::from(&a.path);
         if !set(&DOWNLOADS).contains(&path) {
-            return Err(BridgeError::new("forbidden", "not a download started by this window"));
+            return Err(BridgeError::new(
+                "forbidden",
+                "not a download started by this window",
+            ));
         }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(a.data.as_bytes())
             .map_err(|e| BridgeError::new("invalid_params", e.to_string()))?;
-        let mut f = tokio::fs::OpenOptions::new().append(true).open(&path).await.map_err(io)?;
+        let mut f = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .await
+            .map_err(io)?;
         f.write_all(&bytes).await.map_err(io)?;
         f.flush().await.map_err(io)?;
         Ok(Value::Null)
@@ -241,15 +278,40 @@ mod files {
             let dir = std::env::temp_dir().join(format!("marsad-dl-{}", std::process::id()));
             let a = download_begin(&dir, "../../evil.txt").await.unwrap();
             let b = download_begin(&dir, "../../evil.txt").await.unwrap();
-            let (a, b) = (a["path"].as_str().unwrap().to_string(), b["path"].as_str().unwrap().to_string());
+            let (a, b) = (
+                a["path"].as_str().unwrap().to_string(),
+                b["path"].as_str().unwrap().to_string(),
+            );
             assert!(a.ends_with("evil.txt") && Path::new(&a).parent() == Some(dir.as_path()));
             assert!(b.ends_with("evil (1).txt"));
-            download_chunk(DownloadChunk { path: a.clone(), data: "aGk=".into() }).await.unwrap();
+            download_chunk(DownloadChunk {
+                path: a.clone(),
+                data: "aGk=".into(),
+            })
+            .await
+            .unwrap();
             assert_eq!(std::fs::read(&a).unwrap(), b"hi");
-            assert!(download_chunk(DownloadChunk { path: dir.join("x").to_string_lossy().into(), data: "aGk=".into() }).await.is_err());
-            assert!(read_picked(ReadPicked { path: a.clone(), offset: 0, length: 2 }).await.is_err());
+            assert!(download_chunk(DownloadChunk {
+                path: dir.join("x").to_string_lossy().into(),
+                data: "aGk=".into()
+            })
+            .await
+            .is_err());
+            assert!(read_picked(ReadPicked {
+                path: a.clone(),
+                offset: 0,
+                length: 2
+            })
+            .await
+            .is_err());
             allow_read(Path::new(&a));
-            let r = read_picked(ReadPicked { path: a, offset: 1, length: 9 }).await.unwrap();
+            let r = read_picked(ReadPicked {
+                path: a,
+                offset: 1,
+                length: 9,
+            })
+            .await
+            .unwrap();
             assert_eq!(r["data"], "aQ==");
             let _ = std::fs::remove_dir_all(&dir);
         }

@@ -12,6 +12,44 @@ for the wasit/wasl crates in `.` and `apps/desktop/src-tauri`, move it back. Rel
 CI (`ci.yml`, Linux/Windows/macOS + `linux-helper` + `windows-e2e`): green at 43e90ba —
 https://github.com/mewais/Marsad/actions/runs/44859855066 (later commits: see the branch).
 
+### Media round: images and files (Wasit b58753e+, Wasl fb52161, Marsad this branch)
+- **Verified with the real CLIs** (fixtures in `wasit-claude/tests/fixtures/claude-{image-prompt,read-image}`,
+  `wasit-opencode/tests/fixtures/{opencode-image-prompt,opencode-read-image,kilo-image-prompt}`):
+  claude 2.1.327 — `image` blocks in a stream-json user message are seen (Haiku said "Red"); a `Read`
+  of a PNG returns a `tool_result` image block (+ base64 in `tool_use_result`). opencode 1.19.6 /
+  kilo 7.8.27 — `initialize` reports `promptCapabilities {image, embeddedContext}`; ACP `image`
+  and embedded `resource` work; the read tool returns `image` content (and a data URL in
+  `rawOutput.attachments`). Model matters: opencode `deepseek-v4.1-flash-free` and
+  `nemotron-3.5-super-vl-free`, kilo `nvidia/nemotron-3.5-super-vl:free` see images;
+  `opencode/big-pickle` and `kilo/kilo-auto/free` answer that they cannot. codex 0.169 — from
+  the app-server schema only (no login here): `localImage {path}` input; `imageView` /
+  `imageGeneration` items.
+- **Model** (`wasit-core::content`, ARCHITECTURE §3.4): `ContentPart`, `MediaSource`,
+  `Attachment` on `Command::Prompt`, `PromptInput` on the descriptor (claude: images + files by
+  path; ACP: images + text files embedded / others as `resource_link`; codex: `localImage` + path).
+  The pure core moves inline media into `<session>/blobs/<sha256>` (dims sniffed), scrubs base64
+  from raw JSON; a missing blob is rebuilt by replaying the journal.
+- **Methods** (wasit-runtime, routed by host over the existing link): `session.attachment.put`
+  (chunks ≤ 1 MiB, files ≤ 50 MiB, into `<session>/attachments/<upload>/`), `session.file.read`
+  (blob | path, ranges ≤ 4 MiB, host-sniffed mime, canonical paths inside cwd/attachments/blobs
+  unless `outside`), `session.files.stat`. Prompt attachments must be uploads of that session.
+- **UI** (`features/media/`): inline thumbnails + lightbox (fit / actual size), file chips,
+  `FileRefs` (tool write targets, resource links, prose paths that exist), `PreviewHost`
+  (image, SVG via `<img>`, PDF via pdf.js chunk, text, markdown without HTML/remote images, JSON,
+  CSV, HTML in a sandboxed frame with a no-network CSP and a scripts toggle, audio/video,
+  metadata + open/reveal (local) or download through the link (remote)). Composer: paste, drop,
+  attach (shell `desktop.pick_files`/`read_picked`; file input in a browser), chips with limits
+  from `prompt_input`. Shell `desktop.download_begin/chunk` (Downloads, created files only).
+- **Tests**: Wasit replay fixtures above, unit tests (ACP fallbacks, codex input), runtime
+  `tests/media.rs` (blobs across restart, uploads + limits, traversal/symlink/ranges); Marsad
+  `tests/media.rs` over a real ssh link; vitest `features/media.test.tsx`; Playwright
+  `media.spec.ts` (`?media=1` fixture); real app `media` scenario (fake CLI `image` /
+  `write_file` steps) and `--real` `live-claude-media` (Haiku described the attached chart and
+  wrote `live_chart.svg`, opened in the preview). Shots: `media-*.png`.
+- **Not done**: no media in the New session dialog's first prompt; codex image input untested
+  live; HTML previews do not resolve relative images; no syntax highlighting (plain numbered
+  text); paths in prose are linked only when they exist inside the session's folder.
+
 ### Windows first-run round (verified on a real Windows runner) + UI requests
 - **Windows fixes** (Marsad 9500fdc..4ba256d, Wasit daba94c/6fd7b4d, Wasl bf7c305): every process
   via `wasit-process` (CREATE_NO_WINDOW; daemon detached with an invisible console; source scan
@@ -129,7 +167,7 @@ https://github.com/mewais/Marsad/actions/runs/44859855066 (later commits: see th
   this machine first in host lists and as the dialog default; graph lanes with agents first.
 
 ### Real-app suite `apps/desktop/e2e-real/` (`pnpm --dir apps/desktop test:real [-- --real] [--shots DIR]`)
-Default (fake CLIs): 32 scenarios (incl. `spawn`, `translucent-window`), last run 32/32 — incl. notifications per prefs (Settings
+Default (fake CLIs): 33 scenarios (incl. `spawn`, `translucent-window`, `media`), last run 33/33 — incl. notifications per prefs (Settings
 page → shell log), kill -9 of the app mid-turn + relaunch, daemon kill -9, ssh key / password
 hosts, and a **real second factor**: sshd keyboard-interactive through PAM (pam_unix +
 pam_oath TOTP; needs `libpam-oath`, the run swaps `/etc/pam.d/sshd` and restores it).

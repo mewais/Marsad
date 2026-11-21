@@ -32,7 +32,9 @@
 .preview-dlg .dlg-b{display:flex;flex-direction:column;min-height:0;flex:1}
 .pv-body{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:8px}
 .pv-img{flex:1;display:flex;align-items:center;justify-content:center;background:repeating-conic-gradient(var(--sunken) 0 25%,var(--surface) 0 50%) 0 0/16px 16px;border-radius:var(--r2);min-height:200px}
-.pv-img img{max-width:100%;max-height:calc(100vh - 220px);object-fit:contain}
+.pv-img img{width:100%;height:calc(100vh - 230px);object-fit:contain;cursor:zoom-in}
+.pv-img.actual{overflow:auto;align-items:flex-start;justify-content:flex-start}
+.pv-img.actual img{width:auto;height:auto;max-width:none;cursor:zoom-out}
 .pv-code{margin:0;font-family:var(--f-mono);font-size:12px;line-height:1.55;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r2);padding:8px 0;overflow:auto;white-space:pre}
 .pv-ln{display:flex}
 .pv-no{flex:none;width:4em;padding-right:12px;text-align:right;color:var(--fg-3);user-select:none}

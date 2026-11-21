@@ -24,6 +24,16 @@ function useBlobUrl(l: Loaded | null, mime: string) {
   return url;
 }
 
+/** Fit to the panel (small images scale up) or actual size; click toggles. */
+function ZoomImage({ url, alt }: { url: string; alt: string }) {
+  const [actual, setActual] = useState(false);
+  return (
+    <div className={`pv-img${actual ? " actual" : ""}`}>
+      <img src={url} alt={alt} data-testid="preview-image" title={actual ? "Click to fit" : "Click for actual size"} onClick={() => setActual((a) => !a)} />
+    </div>
+  );
+}
+
 function TextView({ text }: { text: string }) {
   const lines = text.split("\n");
   return (
@@ -128,7 +138,7 @@ function Body({ req, kind, data }: { req: PreviewRequest; kind: Kind; data: Load
     case "image":
     case "svg":
       // An <img> never runs an SVG's scripts or loads its external references.
-      return url ? <div className="pv-img"><img src={url} alt={req.name} data-testid="preview-image" /></div> : null;
+      return url ? <ZoomImage url={url} alt={req.name} /> : null;
     case "pdf":
       return <Suspense fallback={<Skeleton />}><PdfView bytes={data.bytes} name={req.name} /></Suspense>;
     case "html":
