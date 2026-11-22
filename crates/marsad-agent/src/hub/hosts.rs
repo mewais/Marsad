@@ -16,7 +16,7 @@ use wasit_control::{HostSpec, Hub};
 use super::auth::Prompts;
 use super::fleet::Fleet;
 use super::provision::{Entries, Learned};
-use super::transport::bootstrap_argv;
+use super::transport::{bootstrap_argv, RemoteShell};
 use crate::util::now_ms;
 
 /// See the module docs. Cheap to clone.
@@ -130,7 +130,7 @@ impl Registry {
     async fn link(&self, entry: HostEntry) -> Result<(), MarsadError> {
         let mut entry = entry;
         entry.derive_local_files();
-        let argv = bootstrap_argv(&entry).ok_or_else(|| {
+        let argv = bootstrap_argv(&entry, RemoteShell::for_entry(&entry)).ok_or_else(|| {
             MarsadError::invalid("no link for this host (the local host, or an unusable id)")
         })?;
         self.inner

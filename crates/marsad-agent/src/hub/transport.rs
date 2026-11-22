@@ -129,8 +129,38 @@ pub fn posix_bootstrap(id: &str) -> String {
     format!("{POSIX_BOOTSTRAP}{id}")
 }
 
-fn is_windows(p: Option<&HostPlatform>) -> bool {
-    p.is_some_and(|p| p.os == "windows")
+/// Which bootstrap a host gets: POSIX `sh`, or PowerShell for native Windows (OpenSSH for
+/// Windows runs commands with cmd.exe or PowerShell).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteShell {
+    Posix,
+    PowerShell,
+}
+
+impl RemoteShell {
+    /// What the host's known platform says (a host never connected is tried with `sh`).
+    pub fn for_entry(entry: &HostEntry) -> RemoteShell {
+        match &entry.kind {
+            HostKind::Ssh { .. } if entry.platform.as_ref().is_some_and(|p| p.os == "windows") => {
+                RemoteShell::PowerShell
+            }
+            _ => RemoteShell::Posix,
+        }
+    }
+}
+
+/// The POSIX bootstrap could not run because the host is native Windows: its shell (cmd.exe
+/// or PowerShell) has no `sh`, or the `sh` it found is a Windows port (Git for Windows, MSYS2,
+/// Cygwin, busybox-w32) whose `uname -s` is not a platform Marsad ships for. Given what the
+/// host printed instead of a report, or the `<os>` of its report.
+pub fn native_windows_sign(printed: &str) -> bool {
+    let missing_sh = printed.contains("'sh' is not recognized as an internal or external command")
+        || printed.contains("The term 'sh' is not recognized");
+    let os = printed.trim().to_ascii_uppercase();
+    missing_sh
+        || ["MINGW", "MSYS", "CYGWIN", "WINDOWS_NT"]
+            .iter()
+            .any(|p| os.starts_with(p))
 }
 
 /// `powershell -EncodedCommand <base64 UTF-16LE>`: no quoting through ssh/cmd at all.
@@ -145,20 +175,20 @@ pub fn powershell_command(script: &str) -> String {
     )
 }
 
-/// Full argv of one connect attempt: transport + bootstrap.
+/// Full argv of one connect attempt: transport + the bootstrap for `shell`.
 /// `None` for the local host, or a host id that is not [`safe_host_id`].
-pub fn bootstrap_argv(entry: &HostEntry) -> Option<Vec<String>> {
+pub fn bootstrap_argv(entry: &HostEntry, shell: RemoteShell) -> Option<Vec<String>> {
     let mut argv = transport_prefix(&entry.kind)?;
     let id = entry.id.as_str();
     if !safe_host_id(id) {
         return None;
     }
-    match (&entry.kind, is_windows(entry.platform.as_ref())) {
+    match (&entry.kind, shell) {
         (HostKind::Wsl { .. }, _) => argv.push(posix_bootstrap(id)),
-        (_, true) => argv.push(powershell_command(
+        (_, RemoteShell::PowerShell) => argv.push(powershell_command(
             &POWERSHELL_BOOTSTRAP.replace("@HOST_ID@", id),
         )),
-        (_, false) => argv.push(format!("sh -c '{}'", posix_bootstrap(id))),
+        (_, RemoteShell::Posix) => argv.push(format!("sh -c '{}'", posix_bootstrap(id))),
     }
     Some(argv)
 }
@@ -255,7 +285,7 @@ mod tests {
             identity_file: Some("/k".into()),
             options: vec!["UserKnownHostsFile=/kh".into()],
         });
-        let a = bootstrap_argv(&e).unwrap();
+        let a = bootstrap_argv(&e, RemoteShell::for_entry(&e)).unwrap();
         assert_eq!(a[0], "ssh");
         for o in [
             "ServerAliveInterval=15",
@@ -271,7 +301,7 @@ mod tests {
         let w = entry(HostKind::Wsl {
             distro: "Ubuntu".into(),
         });
-        let wa = bootstrap_argv(&w).unwrap();
+        let wa = bootstrap_argv(&w, RemoteShell::for_entry(&w)).unwrap();
         assert!(wa[0].ends_with("wsl.exe"));
         assert_eq!(
             &wa[1..],
@@ -290,15 +320,51 @@ mod tests {
         assert!(wa.last().unwrap().ends_with("bridge --host-id h"));
         let mut bad = e.clone();
         bad.id = "a b;c".into();
-        assert!(bootstrap_argv(&bad).is_none());
+        assert!(bootstrap_argv(&bad, RemoteShell::Posix).is_none());
         let mut win = e.clone();
         win.platform = platform_from("Windows", "AMD64");
-        assert!(bootstrap_argv(&win)
+        assert_eq!(RemoteShell::for_entry(&win), RemoteShell::PowerShell);
+        assert!(bootstrap_argv(&win, RemoteShell::for_entry(&win))
             .unwrap()
             .last()
             .unwrap()
             .contains("-EncodedCommand "));
-        assert!(bootstrap_argv(&entry(HostKind::Local)).is_none());
+        // A host not connected yet is tried with sh; told it is Windows, with PowerShell.
+        assert!(bootstrap_argv(&e, RemoteShell::PowerShell)
+            .unwrap()
+            .last()
+            .unwrap()
+            .starts_with("powershell -NoProfile"));
+        assert!(bootstrap_argv(&entry(HostKind::Local), RemoteShell::Posix).is_none());
+    }
+
+    #[test]
+    fn native_windows_is_recognised_from_what_the_posix_bootstrap_got() {
+        // cmd.exe (OpenSSH for Windows' default shell) and PowerShell without `sh`.
+        assert!(native_windows_sign(
+            "'sh' is not recognized as an internal or external command,\r\noperable program or batch file."
+        ));
+        assert!(native_windows_sign(
+            "sh : The term 'sh' is not recognized as the name of a cmdlet, function, script file"
+        ));
+        // `sh` from Git for Windows / MSYS2 / Cygwin / busybox-w32 answered the report.
+        for os in [
+            "MINGW64_NT-10.0-20348",
+            "MSYS_NT-10.0",
+            "CYGWIN_NT-10.0-19045",
+            "Windows_NT",
+        ] {
+            assert!(native_windows_sign(os), "{os}");
+            assert!(platform_from(os, "x86_64").is_none(), "{os}");
+        }
+        for other in [
+            "Linux",
+            "Darwin",
+            "sh: 1: marsad-agent: not found",
+            "Permission denied",
+        ] {
+            assert!(!native_windows_sign(other), "{other}");
+        }
     }
 
     #[test]

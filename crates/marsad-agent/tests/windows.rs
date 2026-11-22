@@ -10,6 +10,8 @@
 //!   `MARSAD_E2E_LINUX_BIN_DIR` holds `x86_64-unknown-linux-musl/marsad-agent`. The hub lists
 //!   the distro, adds it as a host (provisioning the Linux helper into it), launches a session
 //!   there, answers its gate, and the link comes back by itself after `wsl --terminate`.
+//! * Native Windows over SSH (opt-in; windows-e2e runs OpenSSH Server on the runner and passes
+//!   `MARSAD_E2E_WINSSH_KEY`): this machine as a Windows host through Marsad's real ssh link.
 #![cfg(windows)]
 
 mod common;
@@ -556,4 +558,228 @@ async fn wsl_host_environment_settings(c: &MarsadClient, host: &HostId, distro: 
         "{cl:?}"
     );
     assert!(cl.version.is_some() && cl.warning.is_none(), "{cl:?}");
+}
+
+// ── Native Windows over SSH ─────────────────────────────────────────────────
+
+/// What a terminal on `host` prints for `cmd` (cmd.exe, the default shell), until `want`.
+async fn terminal_prints(c: &MarsadClient, host: &HostId, cwd: &Path, cmd: &str, want: &str) {
+    use base64::Engine;
+    let info = c
+        .pty_start(
+            Some(host),
+            PtyStartRequest {
+                target: GitTarget::cwd(cwd.to_string_lossy()),
+                cols: 120,
+                rows: 30,
+                shell: None,
+            },
+        )
+        .await
+        .unwrap();
+    let mut out = c.pty_output(Some(host), &info.id, None);
+    c.pty_input(Some(host), &info.id, &format!("{cmd}\r\n"))
+        .await
+        .unwrap();
+    let mut text = String::new();
+    while !text.contains(want) {
+        match tokio::time::timeout(T, out.next()).await {
+            Ok(Some(Ok((_, marsad_proto::pty::PtyEvent::Output { data, .. })))) => {
+                text.push_str(&String::from_utf8_lossy(
+                    &base64::engine::general_purpose::STANDARD
+                        .decode(data)
+                        .unwrap(),
+                ))
+            }
+            other => panic!(
+                "terminal: {:?}; printed {text:?}",
+                other.map(|o| o.map(|r| r.is_ok()))
+            ),
+        }
+    }
+    c.pty_close(Some(host), &info.id).await.unwrap();
+}
+
+/// This runner as a native Windows host over Marsad's real ssh link (OpenSSH Server on
+/// localhost, key auth; CI's windows-e2e job sets it up). The first attempt runs the POSIX
+/// bootstrap and finds Windows (cmd.exe has no `sh`, or Git's `sh` reports MINGW), the
+/// PowerShell bootstrap uploads this build's helper into `%LOCALAPPDATA%\Marsad\bin`, and the
+/// host daemon serves: discovery; per-host setup commands in PowerShell with non-ASCII output
+/// and `$env:` values; variables (one secret); an agent command (the fake CLI, which only acts
+/// as claude because a host variable says so) found by Test; a claude session that runs it and
+/// sees the setup's non-ASCII value; a terminal (cmd.exe in ConPTY) with the variables.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs OpenSSH Server on this machine prepared by CI (MARSAD_E2E_WINSSH_KEY)"]
+async fn native_windows_host_over_ssh_end_to_end() {
+    let key = std::env::var("MARSAD_E2E_WINSSH_KEY").expect("MARSAD_E2E_WINSSH_KEY");
+    let user = std::env::var("USERNAME").expect("USERNAME");
+    let d = TempDir::new();
+    let c = client(&d.path().join("l"));
+    let mut fleet = c.fleet(None);
+    next(&mut fleet).await;
+    let host = HostId::new("winssh");
+    c.add_host(HostDraft {
+        name: "this PC over ssh".into(),
+        kind: HostKind::Ssh {
+            target: format!("{user}@127.0.0.1"),
+            port: None,
+            identity_file: Some(key),
+            options: vec![
+                "StrictHostKeyChecking=accept-new".into(),
+                "BatchMode=yes".into(),
+            ],
+        },
+        id: Some(host.clone()),
+    })
+    .await
+    .unwrap();
+    until(&mut fleet, "the Windows ssh host connected", |e| {
+        link_is(e, "winssh", LinkState::is_connected)
+    })
+    .await;
+    let entry = c
+        .hosts()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|h| h.id == host)
+        .unwrap();
+    let platform = entry.platform.clone().unwrap();
+    assert_eq!(platform.os, "windows", "{platform:?}");
+    assert_eq!(platform.target, "x86_64-pc-windows-msvc", "{platform:?}");
+
+    // The helper was provisioned into the user's %LOCALAPPDATA% and serves this host.
+    let info = c.daemon_info(Some(&host)).await.unwrap();
+    eprintln!("Windows host daemon: {info:?}");
+    let installed = Path::new(&std::env::var("LOCALAPPDATA").unwrap())
+        .join("Marsad")
+        .join("bin")
+        .join("marsad-agent.exe");
+    assert!(installed.is_file(), "{}", installed.display());
+    assert!(
+        info.exe
+            .to_ascii_lowercase()
+            .ends_with("\\marsad\\bin\\marsad-agent.exe"),
+        "{info:?}"
+    );
+    assert_eq!(info.host_id, "winssh");
+
+    // Discovery: every driver reported; claude is not installed on the runner.
+    let rt = c.runtime(Some(host.clone()));
+    let inv = rt.inventory(None).await.unwrap();
+    for drv in DRIVERS {
+        assert!(
+            inv.drivers.iter().any(|x| x.driver.as_str() == drv),
+            "{drv}: {inv:?}"
+        );
+    }
+
+    // Setup commands (PowerShell, non-ASCII), variables, an agent command.
+    let transcript = d.path().join("transcript grüße ✓.ndjson");
+    let secret = "hush-win-secret-71";
+    let saved = c
+        .set_host_env(marsad_proto::hosts::HostEnvSettings {
+            host: host.clone(),
+            setup: format!(
+                "Write-Output 'héllo ✓ 日本語'\n$env:FROM_SETUP = 'grüße'\n\
+                 $env:WASIT_FAKE_TRANSCRIPT = '{}'\n$env:Path = \"C:\\marsad-e2e\\tools;$env:Path\"",
+                transcript.display()
+            ),
+            vars: vec![
+                marsad_proto::hosts::HostVar {
+                    name: "WASIT_FAKE_PERSONA".into(),
+                    value: Some("claude".into()),
+                    secret: false,
+                },
+                marsad_proto::hosts::HostVar {
+                    name: "PLAIN".into(),
+                    value: Some("plain-value".into()),
+                    secret: false,
+                },
+                marsad_proto::hosts::HostVar {
+                    name: "API_TOKEN".into(),
+                    value: Some(secret.into()),
+                    secret: true,
+                },
+            ],
+            commands: [(
+                marsad_proto::DriverId::new("claude"),
+                fake().display().to_string(),
+            )]
+            .into(),
+            revision: String::new(),
+        })
+        .await
+        .unwrap();
+    eprintln!("Windows settings applied: {saved:?}");
+    assert!(saved.not_applied.is_none(), "{saved:?}");
+    let env = saved.environment.clone().unwrap();
+    let s = env.setup.clone().unwrap();
+    assert!(s.ok && s.applied, "{s:?}");
+    assert_eq!(s.shell, "powershell -NoProfile");
+    assert!(s.output.contains("héllo ✓ 日本語"), "{s:?}");
+    assert_eq!(
+        env.path.first().map(String::as_str),
+        Some("C:\\marsad-e2e\\tools"),
+        "{env:?}"
+    );
+    assert!(!serde_json::to_string(&saved).unwrap().contains(secret));
+
+    // Test: claude is the fake CLI (answering like claude only through the host variable).
+    let t = c.test_host_env(&host).await.unwrap();
+    let cl = t
+        .agents
+        .iter()
+        .find(|a| a.driver.as_str() == "claude")
+        .unwrap();
+    eprintln!("claude on the Windows host: {cl:?}");
+    assert!(
+        cl.installed && cl.version.is_some() && cl.warning.is_none(),
+        "{cl:?}"
+    );
+    assert_eq!(cl.command.as_deref(), Some(&*fake().display().to_string()));
+
+    // A claude session runs it, in the setup's environment (the transcript path is a non-ASCII
+    // value the setup left).
+    let sc = Scenario::builder()
+        .turn(Turn::builder().say("hello from windows"))
+        .build();
+    let mut req = LaunchRequest::new("claude");
+    req.host = Some(host.clone());
+    req.cwd = Some(d.path().to_string_lossy().into_owned());
+    req.first_prompt = Some("hi".into());
+    req.overrides = OverrideLayer {
+        env: vec![("WASIT_FAKE_SCENARIO_JSON".into(), sc.to_json())],
+        ..OverrideLayer::default()
+    };
+    let id = c.launch(req).await.unwrap().id;
+    let mut sub = rt.subscribe_session(&id, None);
+    let snap = tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            let s = rt.snapshot(&id).await.unwrap();
+            if s.turns_completed >= 1 {
+                return s;
+            }
+            session_event(&mut sub).await;
+        }
+    })
+    .await
+    .expect("the session on the Windows host finished a turn");
+    assert_eq!(
+        snap.command.as_deref(),
+        Some(&*fake().display().to_string())
+    );
+    let lines = std::fs::read_to_string(&transcript)
+        .unwrap_or_else(|e| panic!("transcript at {}: {e}", transcript.display()));
+    assert!(lines.contains("hello from windows"), "{lines}");
+    rt.delete(&id).await.unwrap();
+
+    // A terminal (cmd.exe in ConPTY) has the variables and the setup's values.
+    terminal_prints(&c, &host, d.path(), "echo [%PLAIN%]", "[plain-value]").await;
+    terminal_prints(&c, &host, d.path(), "echo [%FROM_SETUP%]", "[grüße]").await;
+
+    stop_pid(info.pid);
+    if let Ok(i) = c.daemon_info(None).await {
+        stop_pid(i.pid);
+    }
 }

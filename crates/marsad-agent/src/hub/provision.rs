@@ -41,7 +41,9 @@ use wasit_control::{
 };
 
 use super::auth::Prompts;
-use super::transport::{bootstrap_argv, helper_target, platform_from, triple_platform};
+use super::transport::{
+    bootstrap_argv, helper_target, native_windows_sign, platform_from, triple_platform, RemoteShell,
+};
 
 /// Environment variable naming the directory with binaries for other target triples.
 pub const BIN_DIR_ENV: &str = "MARSAD_AGENT_BIN_DIR";
@@ -331,28 +333,50 @@ impl LinkConnector for BootstrapConnector {
                 "this host signs in interactively: connect to sign in",
             ));
         }
-        let argv = bootstrap_argv(&entry)
-            .ok_or_else(|| ConnectError::Spawn("the local host has no link".into()))?;
         let exe = std::env::current_exe().map_err(|e| ConnectError::Spawn(e.to_string()))?;
-        let mut cmd = CommandSpec::new(argv);
-        cmd.env = vec![
-            (
-                "SSH_ASKPASS".into(),
-                wasit_process::plain_path(&exe).display().to_string(),
-            ),
-            ("SSH_ASKPASS_REQUIRE".into(), "force".into()),
-            ("DISPLAY".into(), ":0".into()),
-            (ASKPASS_HOST_ENV.into(), host.to_string()),
-            (ASKPASS_SOCKET_ENV.into(), self.socket.display().to_string()),
-        ];
         self.prompts.begin_attempt(&host);
-        let (mut io, child) = CommandTransport::spawn(&cmd)?;
-        let child = Arc::new(child);
-        let boot = match read_boot_line(&mut io).await {
-            Ok(l) => l,
-            Err(raw) => {
-                let out = wasit_process::decode_console_output(&raw);
-                return Err(self.no_bootstrap(&entry, &child, out.trim()).await);
+        // A host never connected is tried with `sh`; one that turns out to be native Windows
+        // is asked again at once with PowerShell (its platform is then known for next time).
+        let mut shell = RemoteShell::for_entry(&entry);
+        let (mut io, child, boot) = loop {
+            let argv = bootstrap_argv(&entry, shell)
+                .ok_or_else(|| ConnectError::Spawn("the local host has no link".into()))?;
+            let mut cmd = CommandSpec::new(argv);
+            cmd.env = vec![
+                (
+                    "SSH_ASKPASS".into(),
+                    wasit_process::plain_path(&exe).display().to_string(),
+                ),
+                ("SSH_ASKPASS_REQUIRE".into(), "force".into()),
+                ("DISPLAY".into(), ":0".into()),
+                (ASKPASS_HOST_ENV.into(), host.to_string()),
+                (ASKPASS_SOCKET_ENV.into(), self.socket.display().to_string()),
+            ];
+            let (mut io, child) = CommandTransport::spawn(&cmd)?;
+            let child = Arc::new(child);
+            let posix = shell == RemoteShell::Posix;
+            match read_boot_line(&mut io).await {
+                Ok(l)
+                    if posix && native_windows_sign(l.split_whitespace().nth(1).unwrap_or("")) =>
+                {
+                    tracing::info!(host = %host, report = %l, "native Windows behind a POSIX sh port; using PowerShell");
+                    shell = RemoteShell::PowerShell;
+                }
+                Ok(l) => break (io, child, l),
+                Err(raw) => {
+                    let out = wasit_process::decode_console_output(&raw);
+                    let out = out.trim();
+                    if posix && matches!(entry.kind, marsad_proto::hosts::HostKind::Ssh { .. }) {
+                        // The complete stderr of the failed `sh` attempt.
+                        child.wait_exit(Duration::from_secs(5)).await;
+                        if native_windows_sign(&format!("{out}\n{}", child.stderr_tail())) {
+                            tracing::info!(host = %host, "native Windows host (no sh); using PowerShell");
+                            shell = RemoteShell::PowerShell;
+                            continue;
+                        }
+                    }
+                    return Err(self.no_bootstrap(&entry, &child, out).await);
+                }
             }
         };
         if self.prompts.asked(&host) > 0 && !entry.interactive_auth {
