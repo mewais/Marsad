@@ -257,7 +257,7 @@ async fn launch_prompt_gate_answer_and_kill9_restart() {
     let mut sub = rt.subscribe_session(&id, None);
     let mut seen: Vec<SessionEvent> = Vec::new();
     loop {
-        let e = next_session_event(&mut sub).await;
+        let e = next_event(&mut sub).await;
         let idle = is_phase(&e, "idle");
         seen.push(e);
         if idle {
@@ -266,7 +266,7 @@ async fn launch_prompt_gate_answer_and_kill9_restart() {
     }
     rt.command(&id, Command::prompt("list")).await.unwrap();
     let request_id = loop {
-        let e = next_session_event(&mut sub).await;
+        let e = next_event(&mut sub).await;
         let rid = match &e.kind {
             SessionEventKind::Agent {
                 event: AgentEvent::GateRequested { gate },
@@ -309,7 +309,7 @@ async fn launch_prompt_gate_answer_and_kill9_restart() {
         "a new daemon serves"
     );
     loop {
-        let e = next_session_event(&mut sub).await;
+        let e = next_event(&mut sub).await;
         let done = matches!(
             &e.kind,
             SessionEventKind::Agent {
@@ -542,18 +542,6 @@ async fn ask_user_injected_by_capability_and_round_trips() {
     stop_pid(pid);
 }
 
-async fn next_session_event(
-    sub: &mut wasit_runtime::TypedSubscription<SessionEvent>,
-) -> SessionEvent {
-    match tokio::time::timeout(T, sub.next()).await {
-        Ok(Some(Ok((_, e)))) => e,
-        other => panic!(
-            "no session event: {:?}",
-            other.map(|o| o.map(|r| r.is_ok()))
-        ),
-    }
-}
-
 /// `ask_user` while the user interrupts the asking turn: the fake OpenCode calls the injected
 /// `marsad` MCP server's `ask_user` and, like a real CLI, waits for the tool call before it
 /// can act on the cancel. The interrupt itself withdraws the question gate and answers the
@@ -590,7 +578,7 @@ async fn ask_user_gate_is_withdrawn_when_the_turn_is_interrupted() {
     let request_id = loop {
         if let SessionEventKind::Agent {
             event: AgentEvent::GateRequested { gate },
-        } = next_session_event(&mut sub).await.kind
+        } = next_event(&mut sub).await.kind
         {
             break gate.request_id().to_string();
         }
@@ -599,7 +587,7 @@ async fn ask_user_gate_is_withdrawn_when_the_turn_is_interrupted() {
     rt.command(&id, Command::Interrupt).await.unwrap();
     let (mut withdrawn, mut tool_result, mut interrupted) = (None, None, None);
     while interrupted.is_none() {
-        match next_session_event(&mut sub).await.kind {
+        match next_event(&mut sub).await.kind {
             SessionEventKind::Agent {
                 event:
                     AgentEvent::GateResolved {
