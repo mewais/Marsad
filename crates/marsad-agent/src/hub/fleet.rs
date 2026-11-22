@@ -108,6 +108,9 @@ impl State {
             }
             Input::Feed(id, ev) => {
                 let Some(h) = self.hosts.get_mut(&id) else {
+                    // A feed is started only after its host was upserted; this is the tail of
+                    // a host just removed.
+                    tracing::debug!(host = %id, "session feed of a host the fleet does not know");
                     return;
                 };
                 let mut touch: Vec<String> = Vec::new();

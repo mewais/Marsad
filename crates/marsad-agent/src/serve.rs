@@ -280,7 +280,6 @@ async fn start_hub(
     let routing: Arc<dyn Service> = Arc::new(RoutingService::new(hub.clone(), local));
     hub.set_inbound_service(routing.clone());
     let local_id = HostId::new(host_id);
-    fleet.feed_local(local_id.clone(), manager);
     fleet.feed_links(hub.clone());
     let local_entry = HostEntry {
         id: local_id.clone(),
@@ -308,6 +307,10 @@ async fn start_hub(
     )
     .await
     .map_err(|e| e.to_string())?;
+    // Only now: the registry has put the local host into the fleet, which drops the session
+    // feed of a host it does not know (the feed's first event, the full session list, would
+    // be lost and the fleet would show the host without sessions until one changed).
+    fleet.feed_local(local_id.clone(), manager);
     let link = loopback(routing.clone(), build, host_id);
     let git = GitWatch::spawn(link.clone(), fleet.clone());
     let envs = crate::hub::hostenv::HostEnvs::start(

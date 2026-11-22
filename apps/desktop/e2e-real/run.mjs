@@ -11,6 +11,7 @@
 // --shots   save named screenshots (1440x900) of every screen into <dir>
 // --only    run only the named scenarios
 // --keep    keep the temporary data directory
+// --repeat  run the selected scenarios this many times in a row (hunting flaky ones)
 //
 // Needs: tauri-driver (`cargo install tauri-driver`), WebKitWebDriver (`webkit2gtk-driver`), git,
 // and a display (run under `xvfb-run -a dbus-run-session`; `pnpm test:real` does that). On
@@ -36,6 +37,7 @@ const REAL = flag("--real");
 const SHOTS = opt("--shots");
 const ONLY = opt("--only")?.split(",");
 const KEEP = flag("--keep");
+const REPEAT = Number(opt("--repeat") ?? 1);
 
 // Windows: the same suite drives the app through tauri-driver + msedgedriver (on PATH, matching
 // the WebView2 runtime); CI runs the Windows-specific scenario (`--only translucent-window`).
@@ -1678,7 +1680,7 @@ try {
   local = (await rpc("hosts.list")).hosts.find((h) => h.kind.kind === "local").id;
   // Screenshots for the owner are taken in the dark theme (the showcase adds light ones).
   if (dirs.shots) await setTheme("dark");
-  for (const sc of scenarios) {
+  for (const sc of Array.from({ length: REPEAT }, () => scenarios).flat()) {
     if (sc.real && !REAL) continue;
     if (ONLY && !ONLY.includes(sc.name)) continue;
     const t0 = Date.now();
