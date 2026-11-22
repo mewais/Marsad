@@ -674,6 +674,14 @@ impl MarsadClient {
         self.call(None, methods::HOSTS_ENVIRONMENT_SET, s).await
     }
 
+    /// Where the hub keeps secret variable values.
+    pub async fn secrets_location(
+        &self,
+    ) -> Result<marsad_proto::hosts::SecretsLocation, ClientError> {
+        self.call(None, methods::HOSTS_ENVIRONMENT_SECRETS, ())
+            .await
+    }
+
     /// Re-run a host's setup and report what it then finds.
     pub async fn test_host_env(
         &self,

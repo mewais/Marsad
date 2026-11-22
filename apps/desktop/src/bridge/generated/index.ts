@@ -184,6 +184,7 @@ export type * from "./ResumeRequest";
 export type * from "./RpcError";
 export type * from "./RuntimeError";
 export type * from "./SaveTemplate";
+export type * from "./SecretsLocation";
 export type * from "./SeenMark";
 export type * from "./SeenMarkers";
 export type * from "./SessionEvent";

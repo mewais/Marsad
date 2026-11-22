@@ -3,6 +3,10 @@
 //! environment stage (`host.environment.configure`, Wasit ARCHITECTURE.md §3.5), which keeps
 //! them in memory.
 //!
+//! Secret values are kept by the store in the system credential store, or in its owner-only
+//! `secrets.json` where there is none ([`marsad_store::secrets`]; `hosts.environment.secrets`
+//! says which).
+//!
 //! A host gets its settings when they are saved, whenever its link (re)connects (a restarted
 //! daemon has none), and before every launch on it ([`HostEnvs::ensure`]: a no-op when the
 //! host already reports the stored revision). Secret values are sent only in those requests;

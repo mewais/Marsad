@@ -332,6 +332,25 @@ pub struct HostEnvSaved {
     pub not_applied: Option<String>,
 }
 
+/// Where the hub keeps secret variable values (result of `hosts.environment.secrets`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SecretsLocation {
+    /// The operating system's credential store.
+    System {
+        /// Its name, e.g. "Windows Credential Manager", "macOS Keychain", "Secret Service".
+        store: String,
+    },
+    /// A file only this user can read (`secrets.json` in the hub's store), because the system
+    /// store cannot be used.
+    File {
+        path: String,
+        /// Why not the system store.
+        reason: String,
+    },
+}
+
 /// Payload of `hosts.links`: every remote host's link state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

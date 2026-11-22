@@ -420,6 +420,7 @@ impl HubServices {
                 let host = self.host_of(Some(r.id))?;
                 enc(ok(self.envs.test(&host).await?))
             }
+            methods::HOSTS_ENVIRONMENT_SECRETS => enc(ok(self.store.secrets_location().clone())),
             methods::HOSTS_IMPORT_SUGGESTIONS => enc(ok(self.registry.import_suggestions().await)),
             methods::HOSTS_WSL_DISTROS => enc(ok(wsl::distros().await)),
             methods::AGENTCONFIG_EFFECTIVE => {

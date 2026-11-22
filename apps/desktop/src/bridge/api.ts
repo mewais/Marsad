@@ -51,6 +51,7 @@ export interface MethodMap {
   [M.HOSTS_ENVIRONMENT_GET]: [W.HostRef, W.HostEnvSettings];
   [M.HOSTS_ENVIRONMENT_SET]: [W.HostEnvSettings, W.HostEnvSaved];
   [M.HOSTS_ENVIRONMENT_TEST]: [W.HostRef, W.EnvironmentTest];
+  [M.HOSTS_ENVIRONMENT_SECRETS]: [void, W.SecretsLocation];
   [M.AGENTCONFIG_EFFECTIVE]: [W.EffectiveRequest, W.EffectiveConfig];
   [M.SESSIONS_LAUNCH]: [W.LaunchRequest, W.LaunchReply];
   [M.STORE_SETTINGS_GET]: [void, W.Settings];
@@ -168,6 +169,8 @@ export function createApi(b: Backend) {
       setEnvironment: (s: W.HostEnvSettings) => call(b, M.HOSTS_ENVIRONMENT_SET, s),
       /** Re-run the setup on the host and report what it then finds (bounded; can take a minute). */
       testEnvironment: (id: W.HostId) => call(b, M.HOSTS_ENVIRONMENT_TEST, { id }),
+      /** Where the hub keeps secret values (system credential store, or its owner-only file and why). */
+      secretsLocation: () => call(b, M.HOSTS_ENVIRONMENT_SECRETS, undefined),
     },
     store: {
       settings: () => call(b, M.STORE_SETTINGS_GET, undefined),

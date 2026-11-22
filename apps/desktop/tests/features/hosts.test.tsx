@@ -1,4 +1,4 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { hostKindOf } from "../../src/features/hosts/AddHostDialog";
@@ -167,6 +167,22 @@ describe("hosts", () => {
     await user.click(within(panel).getByRole("button", { name: "Test" }));
     const result = await within(panel).findByLabelText("Test result");
     expect(within(result).getByText(/genie → \/opt\/site\/modules\/tools\/bin\/genie/)).toBeInTheDocument();
+  });
+
+  it("says where secret values are kept: the system store, or the owner-only file and why", async () => {
+    const { backend } = await hostsPage("/hosts?h=x1");
+    const panel = await screen.findByRole("complementary", { name: "thinkpad-x1 details" });
+    expect(await within(panel).findByLabelText("Where secrets are kept")).toHaveTextContent("Secret values are kept in Secret Service on the computer running Marsad.");
+    cleanup();
+    backend.envs.secretsLocation = { kind: "file", path: "/home/me/.marsad/machines/k/store/secrets.json", reason: "the Secret Service cannot be used: none is running on the session bus (GNOME Keyring, KWallet)" };
+    act(() => { localStorage.clear(); });
+    const again = await renderApp("/inbox", backend);
+    act(() => again.history.push("/hosts?h=x1"));
+    const p2 = await screen.findByRole("complementary", { name: "thinkpad-x1 details" });
+    const where = await within(p2).findByLabelText("Where secrets are kept");
+    expect(where).toHaveTextContent("readable only by you, because the Secret Service cannot be used: none is running");
+    expect(where).toHaveTextContent("store/secrets.json");
+    expect(where.className).toContain("c-needs");
   });
 
   it("says plainly when the setup fails and when an agent command is not the agent", async () => {

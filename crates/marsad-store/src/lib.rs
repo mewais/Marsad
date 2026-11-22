@@ -14,20 +14,25 @@
 //!   needs no native dependency — which is why this is not sqlite. Only the document a write
 //!   touches is rewritten.
 //! * **Private files.** Every document is created readable by the owner only (Unix `0600`;
-//!   on Windows the per-user profile directory's ACL). Secret values of host variables live in
-//!   their own document, `secrets.json`, never in the others, and are held in [`SecretValue`]s
+//!   on Windows the per-user profile directory's ACL).
+//! * **Secrets in the system credential store.** Secret values of host variables never go into
+//!   the documents: they live in the operating system's credential store, or — where that
+//!   cannot be used — in their own owner-only document, `secrets.json` (see [`secrets`]); where
+//!   they are is reported ([`Store::secrets_location`]). In memory they are [`SecretValue`]s,
 //!   whose `Debug` hides them.
 //! * **No migration.** A document with another `version` is refused with
 //!   [`StoreError::Version`] (formats may break between releases; nothing is migrated).
 
 #![forbid(unsafe_code)]
 
+pub mod secrets;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use marsad_proto::agentconfig::{LayerScope, OverrideLayer};
-use marsad_proto::hosts::{HostEntry, HostEnvSettings, HostVar};
+use marsad_proto::hosts::{HostEntry, HostEnvSettings, HostVar, SecretsLocation};
 use marsad_proto::store::{NotificationPrefs, RecentProject, SeenMark, Settings, StoredLayer};
 use marsad_proto::workstream::{Workstream, WorkstreamTemplate};
 use marsad_proto::{HostId, MarsadError, SessionId};
@@ -178,6 +183,7 @@ pub struct Store {
     tx: mpsc::Sender<Op>,
     changes: broadcast::Sender<Doc>,
     dir: PathBuf,
+    secrets_location: SecretsLocation,
 }
 
 fn now_ms() -> u64 {
@@ -264,7 +270,12 @@ struct SeenDoc {
     markers: Vec<SeenMark>,
 }
 
-async fn persist(dir: &Path, doc: Doc, st: &State) -> Result<(), StoreError> {
+async fn persist(
+    dir: &Path,
+    doc: Doc,
+    st: &State,
+    secrets: &mut secrets::Backend,
+) -> Result<(), StoreError> {
     let path = dir.join(doc.file_name());
     match doc {
         Doc::Hosts => save(&path, &st.hosts).await,
@@ -293,13 +304,18 @@ async fn persist(dir: &Path, doc: Doc, st: &State) -> Result<(), StoreError> {
             let v: Vec<&HostEnvSettings> = st.host_envs.values().collect();
             save(&path, &v).await
         }
-        Doc::Secrets => save(&path, &st.secrets).await,
+        Doc::Secrets => secrets.persist(&st.secrets).await,
     }
 }
 
-async fn persist_all(dir: &Path, docs: &[Doc], st: &State) -> Result<(), StoreError> {
+async fn persist_all(
+    dir: &Path,
+    docs: &[Doc],
+    st: &State,
+    secrets: &mut secrets::Backend,
+) -> Result<(), StoreError> {
     for d in docs {
-        persist(dir, *d, st).await?;
+        persist(dir, *d, st, secrets).await?;
     }
     Ok(())
 }
@@ -323,6 +339,14 @@ impl Store {
         let workstreams: Vec<Workstream> = load(&f(Doc::Workstreams)).await?;
         let templates: Vec<WorkstreamTemplate> = load(&f(Doc::Templates)).await?;
         let host_envs: Vec<HostEnvSettings> = load(&f(Doc::HostEnvs)).await?;
+        let wanted = host_envs
+            .iter()
+            .map(|h| {
+                let names = h.vars.iter().filter(|v| v.secret).map(|v| v.name.clone());
+                (h.host.clone(), names.collect())
+            })
+            .collect();
+        let (backend, secrets, secrets_location) = secrets::Backend::open(&dir, wanted).await?;
         let state = State {
             hosts: load(&f(Doc::Hosts)).await?,
             settings: load(&f(Doc::Settings)).await?,
@@ -337,16 +361,33 @@ impl Store {
             workstreams: workstreams.into_iter().map(|w| (w.id.clone(), w)).collect(),
             templates: templates.into_iter().map(|t| (t.id.clone(), t)).collect(),
             host_envs: host_envs.into_iter().map(|h| (h.host.clone(), h)).collect(),
-            secrets: load(&f(Doc::Secrets)).await?,
+            secrets,
         };
         let (tx, rx) = mpsc::channel(MAILBOX);
         let changes = broadcast::channel(64).0;
-        tokio::spawn(writer(dir.clone(), state, rx, changes.clone(), lock));
-        Ok(Store { tx, changes, dir })
+        tokio::spawn(writer(
+            dir.clone(),
+            state,
+            backend,
+            rx,
+            changes.clone(),
+            lock,
+        ));
+        Ok(Store {
+            tx,
+            changes,
+            dir,
+            secrets_location,
+        })
     }
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Where secret variable values are kept (chosen at open).
+    pub fn secrets_location(&self) -> &SecretsLocation {
+        &self.secrets_location
     }
 
     /// Every committed write, by document. A lagging receiver should re-read.
@@ -773,6 +814,7 @@ impl Store {
 async fn writer(
     dir: PathBuf,
     mut state: State,
+    mut secrets: secrets::Backend,
     mut rx: mpsc::Receiver<Op>,
     changes: broadcast::Sender<Doc>,
     lock: InstanceLock,
@@ -791,7 +833,7 @@ async fn writer(
                 let mut next = state.clone();
                 let res = match apply(&mut next) {
                     Err(e) => Err(e),
-                    Ok(()) => match persist_all(&dir, &docs, &next).await {
+                    Ok(()) => match persist_all(&dir, &docs, &next, &mut secrets).await {
                         Ok(()) => {
                             state = next;
                             for doc in docs {

@@ -15,4 +15,16 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 fastrand = { workspace = true }
 
+# Secret values in the system credential store (see src/secrets.rs). Linux uses the pure-Rust
+# zbus Secret Service client (no libdbus), so Linux and musl builds need no system library.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["async-secret-service", "tokio", "crypto-rust"] }
+# Only to ask the session bus whether a Secret Service runs (never D-Bus-activate one: an
+# activated keyring with no unlocked collection waits for a password prompt).
+zbus = { version = "4", default-features = false, features = ["tokio"] }
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["apple-native"] }
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
+
 [dev-dependencies]

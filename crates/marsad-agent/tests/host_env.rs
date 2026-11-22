@@ -20,7 +20,7 @@ use marsad_client::{MarsadClient, Subscription};
 use marsad_proto::agentconfig::{LaunchRequest, OverrideLayer};
 use marsad_proto::fleet::FleetEvent;
 use marsad_proto::git::GitTarget;
-use marsad_proto::hosts::{HostDraft, HostEnvSettings, HostVar};
+use marsad_proto::hosts::{HostDraft, HostEnvSettings, HostVar, SecretsLocation};
 use marsad_proto::pty::{PtyEvent, PtyStartRequest};
 use marsad_proto::runtime::{DriverInventory, EnvironmentTest};
 use marsad_proto::{DriverId, HostId};
@@ -322,15 +322,28 @@ async fn host_environment_settings_over_ssh_and_local() {
     )
     .await;
 
-    // The secret: in the process environment only. Not in the hub's documents but secrets.json
-    // (owner-only), not in any log, journal or session file on either side.
+    // The secret: in the process environment only. Not in the hub's documents (only in its
+    // owner-only secrets.json when there is no system credential store, as the hub says), not
+    // in any log, journal or session file on either side.
     let mut found = Vec::new();
     files_containing(&hub_dir, SECRET, &mut found);
     files_containing(&home.join(".marsad"), SECRET, &mut found);
-    assert_eq!(found.len(), 1, "files holding the secret: {found:?}");
-    assert!(found[0].ends_with("store/secrets.json"), "{found:?}");
-    let mode = std::fs::metadata(&found[0]).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600);
+    match c.secrets_location().await.unwrap() {
+        SecretsLocation::File { path, reason } => {
+            assert!(!reason.is_empty());
+            assert_eq!(
+                found,
+                std::slice::from_ref(&path),
+                "files holding the secret"
+            );
+            assert!(path.ends_with("store/secrets.json"), "{path}");
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        SecretsLocation::System { .. } => {
+            assert!(found.is_empty(), "files holding the secret: {found:?}")
+        }
+    }
     for v in [
         serde_json::to_string(&saved).unwrap(),
         serde_json::to_string(&t).unwrap(),

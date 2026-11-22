@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { DriverInventory, EnvironmentTest, HostEnvironment, HostEnvSettings, HostVar, SetupReport } from "../../bridge/wire";
+import { errorMessage } from "../../bridge/api";
+import type { DriverInventory, EnvironmentTest, HostEnvironment, HostEnvSettings, HostVar, SecretsLocation, SetupReport } from "../../bridge/wire";
 import { useActions, useApi, useAppState, usePending } from "../../state";
 import { Button, Checkbox, DriverBadge, Icon, IconButton, Wrap, makeDriver } from "../../ui";
 
@@ -49,6 +50,7 @@ export function EnvironmentSection({ hostId, hostName, windows, now }: { hostId:
   const [draft, setDraft] = useState<Draft | null>(null);
   const [notApplied, setNotApplied] = useState<string | null>(null);
   const [test, setTest] = useState<EnvironmentTest | null>(null);
+  const [secrets, setSecrets] = useState<SecretsLocation | string | null>(null);
   const refreshPk = `env:${hostId}`;
   const savePk = `envsave:${hostId}`;
   const testPk = `envtest:${hostId}`;
@@ -63,6 +65,7 @@ export function EnvironmentSection({ hostId, hostName, windows, now }: { hostId:
       (s) => { if (live) { setSaved(s); setDraft(draftOf(s)); } },
       () => live && setSaved(null),
     );
+    api.hosts.secretsLocation().then((l) => live && setSecrets(l), (e) => live && setSecrets(errorMessage(e)));
     return () => { live = false; };
   }, [api, hostId]);
 
@@ -145,6 +148,7 @@ export function EnvironmentSection({ hostId, hostName, windows, now }: { hostId:
             ) : null}
             <div><Button size="sm" variant="ghost" icon="plus" onClick={() => set((d) => ({ ...d, vars: [...d.vars, { key: keys++, name: "", value: "", secret: false, stored: false }] }))}>Add variable</Button></div>
             <span className="hint">Set after the setup commands, as written (no expansion). A secret is never shown again, logged or sent back here.</span>
+            <SecretsWhere location={secrets} />
           </div>
 
           <div className="field">
@@ -226,5 +230,17 @@ function TestResult({ test }: { test: EnvironmentTest }) {
         })}
       </tbody></table>
     </div>
+  );
+}
+
+/** Where the hub keeps secret values: said plainly, and as a warning when it is the fallback file. */
+function SecretsWhere({ location }: { location: SecretsLocation | string | null }) {
+  if (location == null) return null;
+  if (typeof location === "string") return <span className="hint c-failed" aria-label="Where secrets are kept">Could not ask where secrets are kept: {location}</span>;
+  if (location.kind === "system") return <span className="hint" aria-label="Where secrets are kept"><Icon name="lock" size="xs" /> Secret values are kept in {location.store} on the computer running Marsad.</span>;
+  return (
+    <span className="hint c-needs" aria-label="Where secrets are kept">
+      <Icon name="warn" size="xs" /> Secret values are kept in <Wrap text={location.path} />, readable only by you, because {location.reason}.
+    </span>
   );
 }

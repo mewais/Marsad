@@ -47,6 +47,7 @@ export const methods = {
   HOSTS_ENVIRONMENT_GET: "hosts.environment.get",
   HOSTS_ENVIRONMENT_SET: "hosts.environment.set",
   HOSTS_ENVIRONMENT_TEST: "hosts.environment.test",
+  HOSTS_ENVIRONMENT_SECRETS: "hosts.environment.secrets",
   STORE_SETTINGS_GET: "store.settings.get",
   STORE_SETTINGS_SET: "store.settings.set",
   STORE_NOTIFICATIONS_GET: "store.notifications.get",

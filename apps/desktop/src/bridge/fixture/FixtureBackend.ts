@@ -277,6 +277,7 @@ export class FixtureBackend implements Backend {
       if (e) this.gitChanged(r.host, { session: e.snap.id, cwd: null });
       return {};
     }
+    if (method === M.HOSTS_ENVIRONMENT_SECRETS) return this.envs.secretsLocation;
     if (method === M.HOSTS_ENVIRONMENT_GET || method === M.HOSTS_ENVIRONMENT_SET || method === M.HOSTS_ENVIRONMENT_TEST) return this.envRequest(method, p);
     return this.hub.handle(method, p);
   }

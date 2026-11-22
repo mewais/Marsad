@@ -1,4 +1,4 @@
-import type { DriverInventory, EnvironmentTest, HostEnvSaved, HostEnvSettings, HostEnvironment, HostId, SetupReport } from "../wire";
+import type { DriverInventory, EnvironmentTest, HostEnvSaved, HostEnvSettings, HostEnvironment, HostId, SecretsLocation, SetupReport } from "../wire";
 import { err } from "./runtime";
 
 /**
@@ -12,6 +12,8 @@ export class FixtureHostEnvs {
   private secrets = new Map<HostId, Map<string, string>>();
   private applied = new Map<HostId, { revision: string; setup: SetupReport | null }>();
   private n = 1;
+  /** Where the hub keeps secret values (tests may change it). */
+  secretsLocation: SecretsLocation = { kind: "system", store: "Secret Service" };
 
   constructor(private now: () => number) {}
 
