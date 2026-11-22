@@ -115,13 +115,13 @@ $s = Run-Mode 'solid' 'solid'
 Stop-Process -Id $bg.Id -Force -ErrorAction SilentlyContinue
 
 function Magenta($c) { return (($c.R + $c.B) / 2) - $c.G }
-function Diff($a, $b) { return [Math]::Max([Math]::Max([Math]::Abs($a.R - $b.R), [Math]::Abs($a.G - $b.G)), [Math]::Abs($a.B - $b.B)) }
+function ColourDistance($a, $b) { return [Math]::Max([Math]::Max([Math]::Abs($a.R - $b.R), [Math]::Abs($a.G - $b.G)), [Math]::Abs($a.B - $b.B)) }
 $fail = @(); $seeThrough = $true
 $effect = (Get-Content (Join-Path $Out 'translucent.log') -ErrorAction SilentlyContinue | Select-String 'window surface: translucent' | Select-Object -Last 1)
 Write-Host "shell answer: $effect"
 if ("$effect" -notmatch 'acrylic') { $fail += 'the shell did not apply Acrylic' }
 foreach ($k in $t.Keys) {
-  $mt = Magenta $t[$k]; $mn = Magenta $n[$k]; $ms = Magenta $s[$k]; $d = Diff $t[$k] $s[$k]
+  $mt = Magenta $t[$k]; $mn = Magenta $n[$k]; $ms = Magenta $s[$k]; $d = ColourDistance $t[$k] $s[$k]
   Write-Host ("{0,-8} magenta influence: translucent {1,6:N1}  no-effect {2,6:N1}  solid {3,6:N1}; translucent vs solid {4}" -f $k, $mt, $mn, $ms, $d)
   # Every area (chrome included) lets the backdrop DWM draws show: it differs from solid.
   if ($d -lt 10) { $fail += "$k looks the same translucent and solid ($d)" }

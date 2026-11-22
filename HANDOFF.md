@@ -9,8 +9,8 @@ those. Re-pin after pushing Wasit with: move `.cargo/config.toml` aside, `cargo 
 for the wasit/wasl crates in `.` and `apps/desktop/src-tauri`, move it back. Release builds use
 `--locked`.
 
-CI (`ci.yml`, Linux/Windows/macOS + `linux-helper` + `windows-e2e`): green at 43e90ba —
-https://github.com/mewais/Marsad/actions/runs/44859855066 (later commits: see the branch).
+CI (`ci.yml`, Linux/Windows/macOS + `linux-helper` + `windows-e2e` + the Windows translucency
+screenshot step in `desktop (windows-latest)`): see the branch's latest run.
 
 ### Shared-home / environment / translucency round (owner's Windows 11 reports)
 - **Two SSH hosts sharing a network home** (one failed with `bridge_unavailable … Connection
@@ -43,9 +43,19 @@ https://github.com/mewais/Marsad/actions/runs/44859855066 (later commits: see th
   installs a fake `kilo` under `/root/.nvm/...` added only by `.bashrc` and asserts discovery.
 - **Translucency** (Marsad 414e87c): Acrylic before Mica; one tint layer (`.app`), chrome and
   panels light tints, dialogs/menus near-opaque + backdrop blur; `data-backdrop`;
-  `MARSAD_SURFACE` test hook; CI desktop (windows) job screenshots over magenta
-  (`e2e-real/translucency.ps1`, artifact `translucency-windows`). Windows draws system
-  backdrops solid while the window is inactive (said in Settings). macOS unverified.
+  `MARSAD_SURFACE` / `MARSAD_WINDOW_EFFECT` test hooks; the shell reports a hint when Windows'
+  Transparency effects are off (Acrylic is then drawn solid — the runner's default, and a
+  likely cause of the owner's "varying shade"). CI desktop (windows) job screenshots over
+  magenta (`e2e-real/translucency.ps1`, artifact `translucency-windows`). Observed on the
+  hosted runner: Acrylic applied + window active + effects on → solid fallback grey
+  (220,221,222 vs solid 246,247,250) — no GPU composition; once, without an effect, the
+  content showed the magenta through the whole stack (250,139,252), top bar/rail 253,208,254.
+  CI asserts the Acrylic answer and that content/top bar/rail/status bar differ from solid.
+  Real blur over other windows is unverified on real Windows 11 hardware; macOS unverified.
+- **WSL capture fix found by CI**: under `wsl.exe` the daemon has a controlling terminal, so
+  `bash -l -i` in a background group stopped on SIGTTOU (6 s deadline, `.bashrc` never read);
+  the capture shell now starts with `setsid` (`wasit_process::new_session`). windows-e2e then
+  found the fake `kilo` under `/root/.nvm/...` (added only by `.bashrc`).
 
 ### Next: per-host environment (specified by the owner; not started)
 Each host gets, in the Hosts screen: (1) environment variables, optionally secret (secrets in
