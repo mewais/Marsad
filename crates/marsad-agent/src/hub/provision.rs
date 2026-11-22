@@ -308,6 +308,20 @@ impl BootstrapConnector {
     }
 }
 
+/// The remote command ran (the connection and sign-in worked) but printed no bootstrap report.
+fn remote_command_ran(e: &ConnectError) -> bool {
+    matches!(
+        e,
+        ConnectError::Command {
+            kind: CommandFailureKind::Other
+                | CommandFailureKind::CommandNotFound
+                | CommandFailureKind::UnexpectedOutput
+                | CommandFailureKind::PermissionDenied,
+            ..
+        }
+    )
+}
+
 fn truncate(s: &str, max: usize) -> String {
     let t: String = s.chars().take(max).collect();
     if t.len() < s.len() {
@@ -335,9 +349,14 @@ impl LinkConnector for BootstrapConnector {
         }
         let exe = std::env::current_exe().map_err(|e| ConnectError::Spawn(e.to_string()))?;
         self.prompts.begin_attempt(&host);
-        // A host never connected is tried with `sh`; one that turns out to be native Windows
-        // is asked again at once with PowerShell (its platform is then known for next time).
+        // A host never connected is tried with `sh`. One that turns out to be native Windows
+        // is asked again at once with PowerShell (its platform is then learned): its `sh` is a
+        // Windows port that reports MINGW/MSYS/CYGWIN, or the remote command ran but printed no
+        // report (cmd.exe has no `sh` and mangles the POSIX line; its messages are localised,
+        // so any such failure gets one PowerShell attempt, and a host where that fails too
+        // keeps the POSIX attempt's error).
         let mut shell = RemoteShell::for_entry(&entry);
+        let mut posix_failed: Option<ConnectError> = None;
         let (mut io, child, boot) = loop {
             let argv = bootstrap_argv(&entry, shell)
                 .ok_or_else(|| ConnectError::Spawn("the local host has no link".into()))?;
@@ -354,10 +373,14 @@ impl LinkConnector for BootstrapConnector {
             ];
             let (mut io, child) = CommandTransport::spawn(&cmd)?;
             let child = Arc::new(child);
-            let posix = shell == RemoteShell::Posix;
+            // Only a host that never connected (once connected, its platform is known).
+            let first_posix = shell == RemoteShell::Posix
+                && entry.platform.is_none()
+                && matches!(entry.kind, marsad_proto::hosts::HostKind::Ssh { .. });
             match read_boot_line(&mut io).await {
                 Ok(l)
-                    if posix && native_windows_sign(l.split_whitespace().nth(1).unwrap_or("")) =>
+                    if first_posix
+                        && native_windows_sign(l.split_whitespace().nth(1).unwrap_or("")) =>
                 {
                     tracing::info!(host = %host, report = %l, "native Windows behind a POSIX sh port; using PowerShell");
                     shell = RemoteShell::PowerShell;
@@ -365,17 +388,25 @@ impl LinkConnector for BootstrapConnector {
                 Ok(l) => break (io, child, l),
                 Err(raw) => {
                     let out = wasit_process::decode_console_output(&raw);
-                    let out = out.trim();
-                    if posix && matches!(entry.kind, marsad_proto::hosts::HostKind::Ssh { .. }) {
-                        // The complete stderr of the failed `sh` attempt.
-                        child.wait_exit(Duration::from_secs(5)).await;
-                        if native_windows_sign(&format!("{out}\n{}", child.stderr_tail())) {
-                            tracing::info!(host = %host, "native Windows host (no sh); using PowerShell");
-                            shell = RemoteShell::PowerShell;
-                            continue;
-                        }
+                    let err = self.no_bootstrap(&entry, &child, out.trim()).await;
+                    if first_posix && remote_command_ran(&err) {
+                        tracing::info!(host = %host, error = %err, "no report from sh; trying the host as native Windows");
+                        posix_failed = Some(err);
+                        shell = RemoteShell::PowerShell;
+                        continue;
                     }
-                    return Err(self.no_bootstrap(&entry, &child, out).await);
+                    return Err(match posix_failed {
+                        Some(ConnectError::Command {
+                            kind,
+                            exit_code,
+                            stderr,
+                        }) => cmd_err(
+                            kind,
+                            exit_code,
+                            format!("{stderr} (tried as a Windows host too: {err})"),
+                        ),
+                        _ => err,
+                    });
                 }
             }
         };

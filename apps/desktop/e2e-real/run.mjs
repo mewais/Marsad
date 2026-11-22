@@ -1701,6 +1701,13 @@ try {
 } catch (e) {
   failed++;
   console.log(`  FAIL setup: ${e.stack ?? e}`);
+  // What tauri-driver, the native driver and the app printed (the app's stdio is the driver's).
+  try {
+    const log = fs.readFileSync(path.join(root, "tauri-driver.log"), "utf8").split(/\r?\n/);
+    console.log(`  tauri-driver.log (last 60 lines):\n    ${log.slice(-60).join("\n    ")}`);
+  } catch (le) {
+    console.log(`  no tauri-driver.log: ${le.message}`);
+  }
 } finally {
   await wd.quit().catch(() => {});
   driver.kill();
