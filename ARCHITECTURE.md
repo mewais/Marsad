@@ -17,11 +17,23 @@ Marsad-specific decisions.
 
 `apps/desktop` (Tauri + React) is outside the Rust workspace and is being rebuilt separately.
 
+## Files on a machine (shared homes)
+
+`marsad_proto::layout` (Wasit ARCHITECTURE §4.2): the data root `~/.marsad` may be shared by
+several machines, so durable data lives in `~/.marsad/machines/<machine key>/` (sessions, wasl,
+store, log) and sockets/locks in a machine-local runtime dir (`/tmp/marsad-<uid>/<tag>/` unless
+the user lingers, then `$XDG_RUNTIME_DIR/marsad/<tag>/`; macOS `$TMPDIR`; Windows
+`%LOCALAPPDATA%\Marsad\run`). The helper cache `~/.marsad/bin/<os>-<arch>/` stays shared
+(installed via a unique temp name + rename). `src/migrate.rs` adopts the flat layout of earlier
+builds. `stop` also stops a daemon of an earlier build at the old socket. The hub records each
+host's machine key (`HostEntry.machine`, from `Hello.machine`), warns when two hosts are one
+machine, and refuses to restart a daemon away from its twin.
+
 ## Daemon composition
 
 Every daemon serves, in one `wasit_control::ServiceMux`: the Wasit `RuntimeService` (`host.info`,
 `drivers.*`, `sessions.*`, `session.*`), an embedded Wasl node (`wasl.*`, journal in
-`<data>/wasl/`) and Marsad's host services (`git.*`, `pty.*`, `fs.*`, `agentconfig.base`,
+`<data>/machines/<key>/wasl/`) and Marsad's host services (`git.*`, `pty.*`, `fs.*`, `agentconfig.base`,
 `daemon.*`). The GUI machine's daemon runs with `--hub` and additionally serves `hosts.*`,
 `store.*`, `fleet`, `workstreams[.*]`, `agentconfig.effective` and `sessions.launch`; host
 services, `wasl.*` and runtime methods carrying `host = <id>` are forwarded by

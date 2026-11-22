@@ -1609,7 +1609,7 @@ try {
   }
   spawnSync(bin.agent, ["stop", "--data", dirs.data], { stdio: "ignore" });
   // Sessions outlive the daemon by design (their shims hold them); end this run's ones.
-  spawnSync("pkill", ["-f", `${dirs.data}/sessions`], { stdio: "ignore" });
+  spawnSync("pkill", ["-f", `${dirs.data}/machines`], { stdio: "ignore" });
   // The ssh hosts' daemons and sessions live under this run's temp dir too.
   spawnSync("pkill", ["-f", root], { stdio: "ignore" });
   code = failed ? 1 : 0;

@@ -81,12 +81,12 @@ pub fn transport_prefix(kind: &HostKind) -> Option<Vec<String>> {
 
 /// The POSIX bootstrap (no single quotes inside: it is wrapped in `sh -c '…'`).
 pub const POSIX_BOOTSTRAP: &str = concat!(
-    "b=\"$HOME/.marsad/bin/marsad-agent\"; v=none; ",
+    "b=\"$HOME/.marsad/bin/$(uname -s)-$(uname -m)/marsad-agent\"; v=none; ",
     "if [ -x \"$b\" ]; then v=$(\"$b\" --version 2>/dev/null | tr -d \" \"); [ -n \"$v\" ] || v=none; fi; ",
     "echo \"MARSAD-BOOT $(uname -s) $(uname -m) $v\"; ",
     "read c n || exit 65; ",
     "case \"$c\" in ",
-    "UPLOAD) mkdir -p \"$HOME/.marsad/bin\" && head -c \"$n\" > \"$b.new\" && chmod 755 \"$b.new\" && mv -f \"$b.new\" \"$b\" || exit 70; ",
+    "UPLOAD) t=\"$b.new.$(uname -n).$$\"; mkdir -p \"${b%/*}\" && head -c \"$n\" > \"$t\" && chmod 755 \"$t\" && mv -f \"$t\" \"$b\" || { rm -f \"$t\"; exit 70; }; ",
     "\"$b\" stop >/dev/null 2>&1; echo MARSAD-OK;; ",
     "RESTART) \"$b\" stop >/dev/null 2>&1; echo MARSAD-OK;; ",
     "RUN) echo MARSAD-OK;; ",
@@ -105,10 +105,10 @@ Say "MARSAD-BOOT Windows $env:PROCESSOR_ARCHITECTURE $v"
 $cmd=(ReadLine).Split(' ')
 if ($cmd[0] -eq 'UPLOAD') {
   New-Item -ItemType Directory -Force $d | Out-Null
-  $n=[long]$cmd[1]; $f=[IO.File]::Create("$b.new"); $buf=New-Object byte[] 65536
+  $n=[long]$cmd[1]; $t="$b.new.$PID"; $f=[IO.File]::Create($t); $buf=New-Object byte[] 65536
   while ($n -gt 0) { $r=$i.Read($buf,0,[Math]::Min($buf.Length,$n)); if ($r -le 0) { exit 70 }; $f.Write($buf,0,$r); $n-=$r }
   $f.Close(); & $b stop | Out-Null
-  if (Test-Path $b) { Move-Item -Force $b "$b.old" }; Move-Item -Force "$b.new" $b
+  if (Test-Path $b) { Move-Item -Force $b "$b.old" }; Move-Item -Force $t $b
 } elseif ($cmd[0] -eq 'RESTART') { & $b stop | Out-Null } elseif ($cmd[0] -ne 'RUN') { exit 64 }
 Say 'MARSAD-OK'
 & $b bridge --host-id @HOST_ID@
@@ -243,6 +243,7 @@ mod tests {
             created_at_ms: 0,
             interactive_auth: false,
             local_files: false,
+            machine: None,
         }
     }
 

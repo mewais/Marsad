@@ -107,6 +107,13 @@ export function hostView(h: HostState): HostView {
   return v;
 }
 
+/** Names of the other hosts that run on the same machine as `id` (same machine key). */
+export function sameMachineAs(hosts: Record<string, { entry: HostEntry }>, id: string): string[] {
+  const m = hosts[id]?.entry.machine;
+  if (!m) return [];
+  return Object.values(hosts).filter((h) => h.entry.id !== id && h.entry.machine === m).map((h) => h.entry.name);
+}
+
 export function osWord(os?: string): string {
   if (!os) return "";
   return os === "macos" ? "macOS" : os === "windows" ? "Windows" : os === "linux" ? "Linux" : os;

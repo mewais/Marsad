@@ -337,6 +337,31 @@ mod sshd {
             }
         }
 
+        /// One "machine" of several that share the home directory `home`: its own machine key
+        /// and runtime directory (the overrides Marsad honours), the same `HOME`.
+        pub fn start_machine(dir: &Path, name: &str, home: &Path, machine: &str) -> Sshd {
+            let mut s = Self::start_custom(dir, name, "", true);
+            let run = s.dir.join("run");
+            let pubkey = std::fs::read_to_string(s.key.with_extension("pub")).unwrap();
+            let path = format!(
+                "{}:/usr/local/bin:/usr/bin:/bin",
+                s.dir.join("bin").display()
+            );
+            std::fs::write(
+                s.dir.join("authorized_keys"),
+                format!(
+                    "environment=\"HOME={}\",environment=\"PATH={path}\",\
+                     environment=\"MARSAD_MACHINE_KEY={machine}\",\
+                     environment=\"MARSAD_RUNTIME_DIR={}\" {pubkey}",
+                    home.display(),
+                    run.display()
+                ),
+            )
+            .unwrap();
+            s.remote_home = home.to_path_buf();
+            s
+        }
+
         /// The host kind for this sshd, logging in with `key`.
         pub fn kind(&self, key: &Path) -> marsad_proto::hosts::HostKind {
             marsad_proto::hosts::HostKind::Ssh {
@@ -352,10 +377,21 @@ mod sshd {
         }
 
         pub fn installed_agent(&self) -> PathBuf {
-            self.remote_home.join(".marsad/bin/marsad-agent")
+            self.remote_home.join(common_bin_rel())
         }
     }
 }
 #[cfg(unix)]
 #[allow(unused_imports)]
 pub use sshd::*;
+
+/// Where the bootstrap installs the helper under the remote home (POSIX hosts).
+#[allow(dead_code)]
+pub fn common_bin_rel() -> String {
+    let os = if cfg!(target_os = "macos") {
+        "Darwin"
+    } else {
+        "Linux"
+    };
+    format!(".marsad/bin/{os}-{}/marsad-agent", std::env::consts::ARCH)
+}

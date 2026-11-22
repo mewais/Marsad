@@ -78,7 +78,8 @@ impl ClientError {
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
     pub data_dir: PathBuf,
-    /// Endpoint path (default `<data>/marsad.sock`).
+    /// Endpoint path (default: `marsad.sock` in this machine's runtime directory for
+    /// `data_dir`, see `marsad_proto::layout`).
     pub socket: Option<PathBuf>,
     /// Start the daemon when nothing serves the endpoint.
     pub start_daemon: bool,
@@ -114,9 +115,23 @@ impl ClientConfig {
     }
 
     pub fn socket_path(&self) -> PathBuf {
-        self.socket
-            .clone()
-            .unwrap_or_else(|| self.data_dir.join("marsad.sock"))
+        if let Some(s) = &self.socket {
+            return s.clone();
+        }
+        match self.layout() {
+            Ok(l) => l.socket(),
+            Err(e) => {
+                // The daemon refuses to start in this state too and logs why; this path only
+                // names where it would have listened.
+                tracing::error!(error = %e, "cannot prepare the runtime directory");
+                self.data_dir.join("marsad.sock")
+            }
+        }
+    }
+
+    /// This machine's layout of `data_dir`.
+    pub fn layout(&self) -> std::io::Result<marsad_proto::layout::Layout> {
+        marsad_proto::layout::Layout::resolve(self.data_dir.clone(), None)
     }
 
     pub fn endpoint(&self) -> Endpoint {
@@ -142,13 +157,16 @@ impl ClientConfig {
 /// Start `marsad-agent serve --hub` detached and wait for its readiness line.
 async fn start_daemon(cfg: &ClientConfig) -> Result<(), ConnectError> {
     use std::process::Stdio;
-    tokio::fs::create_dir_all(&cfg.data_dir)
+    let layout = cfg
+        .layout()
+        .map_err(|e| ConnectError::Spawn(format!("runtime directory: {e}")))?;
+    tokio::fs::create_dir_all(&layout.data)
         .await
-        .map_err(|e| ConnectError::Spawn(format!("{}: {e}", cfg.data_dir.display())))?;
+        .map_err(|e| ConnectError::Spawn(format!("{}: {e}", layout.data.display())))?;
     let log = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(cfg.data_dir.join("marsad-agent.log"))
+        .open(layout.log())
         .map_err(|e| ConnectError::Spawn(format!("daemon log: {e}")))?;
     let bin = cfg.agent();
     let mut cmd = wasit_process::detached_command(&bin);

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { hostKindOf } from "../../src/features/hosts/AddHostDialog";
 import { quietBackend, renderApp } from "../helpers";
+import { sameMachineAs } from "../../src/state/hosts";
 
 async function hostsPage(path = "/hosts") {
   const backend = quietBackend();
@@ -107,5 +108,12 @@ describe("hosts", () => {
     await user.click(within(panel).getByRole("button", { name: "Use this distribution" }));
     await waitFor(() => expect(backend.requests.find((x) => x.method === "hosts.update")?.params).toMatchObject({ kind: { kind: "wsl", distro: "Debian" } }));
     await waitFor(() => expect(backend.requests.some((x) => x.method === "hosts.reconnect")).toBe(true));
+  });
+  it("names hosts that reach the same machine (same machine key)", () => {
+    const e = (id: string, machine?: string) => ({ entry: { id, name: id.toUpperCase(), machine } as never });
+    const hosts = { a: e("a", "m1"), a2: e("a2", "m1"), b: e("b", "m2"), c: e("c") };
+    expect(sameMachineAs(hosts, "a")).toEqual(["A2"]);
+    expect(sameMachineAs(hosts, "b")).toEqual([]);
+    expect(sameMachineAs(hosts, "c")).toEqual([]);
   });
 });

@@ -73,7 +73,11 @@ async fn readiness_single_instance_version_mcp_and_stop() {
     let mut mcp = tokio::process::Command::new(agent())
         .arg("mcp")
         .arg("--socket")
-        .arg(data.join("marsad.sock"))
+        .arg(
+            marsad_proto::layout::Layout::resolve(data.clone(), None)
+                .unwrap()
+                .socket(),
+        )
         .arg("--session")
         .arg("aaaaaaaaaaaa")
         .stdin(Stdio::piped())

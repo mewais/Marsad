@@ -38,7 +38,9 @@ pub const EXIT_ALREADY_RUNNING: u8 = 3;
 
 fn runtime_config(o: &Options) -> Result<RuntimeConfig, String> {
     let launcher = ShimLauncher::current_exe("shim").map_err(|e| e.to_string())?;
-    let mut cfg = RuntimeConfig::new(o.data.clone(), launcher);
+    let layout = o.layout();
+    let mut cfg = RuntimeConfig::new(layout.data.clone(), launcher);
+    cfg.run_dir = Some(layout.run.clone());
     for (d, p) in &o.driver_bin {
         let id = DriverId::new(d.clone());
         cfg.registry.get(&id).map_err(|e| e.to_string())?;
@@ -71,8 +73,9 @@ fn fail(msg: impl std::fmt::Display, code: u8) -> ExitCode {
 }
 
 pub async fn serve(o: Options) -> ExitCode {
-    if let Err(e) = tokio::fs::create_dir_all(&o.data).await {
-        return fail(format!("cannot create {}: {e}", o.data.display()), 1);
+    let layout = o.layout().clone();
+    if let Err(e) = tokio::fs::create_dir_all(&layout.data).await {
+        return fail(format!("cannot create {}: {e}", layout.data.display()), 1);
     }
     let cfg = match runtime_config(&o) {
         Ok(c) => c,
@@ -88,6 +91,10 @@ pub async fn serve(o: Options) -> ExitCode {
         }
         Err(e) => return fail(format!("cannot listen: {e}"), 1),
     };
+    // Holding this machine's lock: adopt what an earlier build left in the flat layout.
+    if o.socket.is_none() {
+        crate::migrate::run(&layout).await;
+    }
     let build = version::build_id();
     let host_id = o.host_id.clone().unwrap_or_else(default_host_id);
     let discovery = Discovery::new(DiscoveryConfig::from_runtime(&cfg));
@@ -110,7 +117,7 @@ pub async fn serve(o: Options) -> ExitCode {
         Err(e) => tracing::error!(error = %e, "cannot scan sessions"),
     }
     let node = match Node::open(
-        NodeConfig::new(host_id.clone(), o.data.join("wasl")),
+        NodeConfig::new(host_id.clone(), layout.data.join("wasl")),
         manager.clone(),
     )
     .await
@@ -127,7 +134,7 @@ pub async fn serve(o: Options) -> ExitCode {
         version: version::info(),
         host_id: host_id.clone(),
         hub: o.hub,
-        data_dir: o.data.display().to_string(),
+        data_dir: layout.data.display().to_string(),
         pid: std::process::id(),
         exe: exe.display().to_string(),
         socket: o.socket_path().display().to_string(),
@@ -189,7 +196,7 @@ pub async fn serve(o: Options) -> ExitCode {
     let role = if o.hub { "hub" } else { "daemon" };
     let server = ControlServer::new(
         top,
-        Hello::new(build.clone(), host_id, role),
+        Hello::new(build.clone(), host_id, role).with_machine(layout.machine.clone()),
         ConnConfig::default(),
     );
     if !o.hub {
@@ -233,7 +240,7 @@ async fn start_hub(
     drivers: wasit_core::DriverRegistry,
     node: &Node,
 ) -> Result<(Arc<dyn Service>, Hub), String> {
-    let store = Store::open(o.data.join("store"))
+    let store = Store::open(o.layout().data.join("store"))
         .await
         .map_err(|e| e.to_string())?;
     let fleet = Fleet::spawn();
@@ -257,7 +264,8 @@ async fn start_hub(
         restarts,
         prompts: prompts.clone(),
     };
-    let mut hcfg = HubConfig::new(Hello::new(build, host_id, "hub"));
+    let mut hcfg =
+        HubConfig::new(Hello::new(build, host_id, "hub").with_machine(o.layout().machine.clone()));
     // One attempt includes the user answering sign-in prompts and an upload.
     hcfg.supervise.connect_timeout = prompt_timeout * 3 + Duration::from_secs(120);
     let hub = Hub::new(hcfg, Arc::new(connector), Some(Arc::new(provisioner)));
@@ -279,6 +287,7 @@ async fn start_hub(
         created_at_ms: 0,
         interactive_auth: false,
         local_files: true,
+        machine: Some(o.layout().machine.clone()),
     };
     let registry = Registry::start(
         store.clone(),
@@ -385,12 +394,12 @@ async fn termination() -> &'static str {
 pub async fn bridge(o: Options) -> ExitCode {
     let ep = o.endpoint();
     let raw = o.raw.clone();
-    let data = o.data.clone();
+    let log = o.layout().log();
     match wasit_control::bridge(
         tokio::io::stdin(),
         tokio::io::stdout(),
         &ep,
-        move || start_detached(raw, data),
+        move || start_detached(raw, log),
         wasit_control::BridgeOptions::default(),
     )
     .await
@@ -400,15 +409,18 @@ pub async fn bridge(o: Options) -> ExitCode {
     }
 }
 
-/// Start `serve` detached with `args` and wait for its readiness line (or its exit).
-pub async fn start_detached(args: Vec<String>, data: PathBuf) -> std::io::Result<()> {
+/// Start `serve` detached with `args` and wait for its readiness line. A daemon that exits
+/// first is an error naming why (another instance holds this machine's lock, or see the log).
+pub async fn start_detached(args: Vec<String>, log_path: PathBuf) -> std::io::Result<()> {
     use std::process::Stdio;
     use tokio::io::AsyncBufReadExt;
-    tokio::fs::create_dir_all(&data).await?;
+    if let Some(d) = log_path.parent() {
+        tokio::fs::create_dir_all(d).await?;
+    }
     let log = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(data.join("marsad-agent.log"))?;
+        .open(&log_path)?;
     let exe = std::env::current_exe()?;
     let mut cmd = wasit_process::detached_command(exe);
     cmd.arg("serve")
@@ -425,14 +437,35 @@ pub async fn start_detached(args: Vec<String>, data: PathBuf) -> std::io::Result
     tokio::io::BufReader::new(stdout)
         .read_line(&mut line)
         .await?;
-    // EOF without a readiness line usually means another instance won the lock; the caller's
-    // connect decides.
-    drop(child);
-    Ok(())
+    if !line.trim().is_empty() {
+        drop(child);
+        return Ok(());
+    }
+    // EOF without a readiness line: the daemon exited. Another instance on this machine that
+    // won the lock is fine (the caller's connect decides); anything else is reported.
+    let status = tokio::time::timeout(Duration::from_secs(10), child.wait()).await;
+    match status {
+        Ok(Ok(s)) if s.code() == Some(EXIT_ALREADY_RUNNING as i32) => Ok(()),
+        Ok(Ok(s)) => Err(std::io::Error::other(format!(
+            "the daemon exited ({s}) before it was ready; see {}",
+            log_path.display()
+        ))),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(std::io::Error::other(
+            "the daemon closed its readiness pipe but did not exit",
+        )),
+    }
 }
 
 /// `stop`: ask the daemon to exit and wait until its single-instance lock is free.
 pub async fn stop(o: Options) -> ExitCode {
+    if o.socket.is_none() {
+        // A daemon of a build before the per-machine layout, on this machine.
+        let legacy = wasit_control::local_endpoint(&o.layout().legacy_socket());
+        if crate::migrate::stop_endpoint(&legacy).await {
+            println!("stopped a daemon of an earlier build");
+        }
+    }
     let ep: Endpoint = o.endpoint();
     let opts = ClientOptions::new(Hello::new(version::build_id(), "marsad-agent-stop", "cli"));
     let client = match ControlClient::connect_endpoint(&ep, opts).await {

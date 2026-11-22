@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { WslDistros } from "../../bridge/wire";
 import { useNavigate, sessionPath } from "../../router";
-import { linkView, osWord, useActions, useSessionView, useApi, useAppState, usePending, type HostView } from "../../state";
+import { linkView, osWord, sameMachineAs, useActions, useSessionView, useApi, useAppState, usePending, type HostView } from "../../state";
 import { Button, ConfirmDialog, ConnState, DriverBadge, Icon, STATUS, Wrap, hostIcon, makeDriver, useNow } from "../../ui";
 import { address, linkSub } from "./linkText";
 import { WslDistroPicker, defaultDistro } from "./WslDistroPicker";
@@ -15,6 +15,7 @@ export function HostDetail({ host }: { host: HostView }) {
   const inv = useAppState((s) => s.inventory[host.id]);
   const keys = useAppState((s) => Object.keys(s.sessions).filter((k) => k.startsWith(host.id + "/")).join("|"));
   const drivers = useAppState((s) => s.drivers);
+  const twins = useAppState((s) => sameMachineAs(s.hosts, host.id).join(", "));
   const [confirm, setConfirm] = useState(false);
   const reconnectPk = `reconnect:${host.id}`;
   const busy = !!usePending(reconnectPk);
@@ -58,6 +59,7 @@ export function HostDetail({ host }: { host: HostView }) {
     <aside className="hd" aria-label={`${host.name} details`}>
       <div className="hd-title"><Icon name={hostIcon(host)} size="lg" /><div><div className="h2">{host.name}</div><div className="faint small">{[osWord(entry?.platform?.os), entry?.platform?.arch, host.local ? "Local" : k?.kind === "ssh" ? "SSH" : "WSL"].filter(Boolean).join(" · ")}</div></div><span className="sp" /><ConnState host={host} /></div>
       {card}
+      {twins ? <div className="gate" role="note"><div className="gate-h"><Icon name="warn" size="sm" />Same machine as {twins}</div><div className="small">These hosts reach one machine. Keep one of them: sessions and agents are the same on both.</div></div> : null}
       <div>
         <h4 className="eyebrow">Connection</h4>
         <dl className="kvl">

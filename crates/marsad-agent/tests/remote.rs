@@ -487,7 +487,7 @@ async fn password_signin_wrong_answer_cancel_timeout_and_no_auto_reconnect() {
         link_is(e, "pw", LinkState::is_connected)
     })
     .await;
-    assert!(home.join(".marsad/bin/marsad-agent").is_file());
+    assert!(home.join(common::common_bin_rel()).is_file());
     assert!(
         c.hosts()
             .await

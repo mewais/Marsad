@@ -221,6 +221,7 @@ impl Registry {
             created_at_ms: now_ms(),
             interactive_auth: false,
             local_files: false,
+            machine: None,
         };
         let mut entry = entry;
         entry.derive_local_files();
@@ -248,9 +249,11 @@ impl Registry {
             // A different machine (or route to it): what we knew about it no longer holds.
             entry.platform = None;
             entry.interactive_auth = false;
+            entry.machine = None;
         } else {
             entry.platform = old.platform.clone();
             entry.interactive_auth = old.interactive_auth;
+            entry.machine = old.machine.clone();
         }
         self.inner.store.put_host(entry.clone()).await?;
         if entry.kind != old.kind {
@@ -306,7 +309,9 @@ impl Registry {
 
     async fn learned(&self, l: Learned) -> Result<(), MarsadError> {
         let id = match &l {
-            Learned::Platform { host, .. } | Learned::Interactive { host } => host.clone(),
+            Learned::Platform { host, .. }
+            | Learned::Interactive { host }
+            | Learned::Machine { host, .. } => host.clone(),
         };
         let Some(mut entry) = self.get(&id) else {
             return Ok(());
@@ -314,6 +319,12 @@ impl Registry {
         match l {
             Learned::Platform { platform, .. } => entry.platform = Some(platform),
             Learned::Interactive { .. } => entry.interactive_auth = true,
+            Learned::Machine { machine, .. } => {
+                if entry.machine.as_deref() == Some(machine.as_str()) {
+                    return Ok(());
+                }
+                entry.machine = Some(machine)
+            }
         }
         self.inner.store.put_host(entry.clone()).await?;
         self.inner

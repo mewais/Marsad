@@ -22,6 +22,7 @@ pub mod askmcp;
 pub mod cli;
 pub mod host;
 pub mod hub;
+pub mod migrate;
 pub mod serve;
 pub mod util;
 pub mod version;

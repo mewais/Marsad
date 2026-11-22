@@ -62,6 +62,8 @@ pub enum Learned {
     },
     /// The host asked an interactive question while signing in.
     Interactive { host: HostId },
+    /// The machine key the host's daemon reported in its hello.
+    Machine { host: HostId, machine: String },
 }
 
 /// Hosts whose next attempt must restart the remote daemon.
@@ -415,6 +417,31 @@ impl LinkConnector for BootstrapConnector {
         }
         let client = ControlClient::connect(io, opts).await?;
         let hello = client.connection().remote_hello().clone();
+        if let Some(m) = &hello.machine {
+            let twin = self
+                .entries
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .values()
+                .find(|e| e.id != host && e.machine.as_deref() == Some(m.as_str()))
+                .map(|e| e.name.clone());
+            if let Some(twin) = twin {
+                if hello.host_id != host {
+                    // Restarting it under this id would take it away from the other host,
+                    // which would then restart it back.
+                    return Err(ConnectError::Protocol(format!(
+                        "this is the same machine as the host {twin:?} (machine key {m}); \
+                         remove one of the two hosts"
+                    )));
+                }
+                tracing::warn!(host = %host, twin = %twin, machine = %m, "two hosts are the same machine");
+            }
+            self.learn(Learned::Machine {
+                host: host.clone(),
+                machine: m.clone(),
+            })
+            .await;
+        }
         let theirs = hello.host_id;
         // (Another build is restarted through the provisioner, which also fixes the id.)
         if theirs != host && hello.build == self.own.build {

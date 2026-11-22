@@ -18,4 +18,9 @@ interactive_auth: boolean,
  * for the local host, and for a WSL host when the hub runs on Windows. Derived by the hub
  * ([`HostEntry::derive_local_files`]); the UI decides open / reveal / download from it.
  */
-local_files: boolean, };
+local_files: boolean, 
+/**
+ * Key of the machine the host's daemon runs on (from its hello; the hub's own for the
+ * local host). Two hosts with the same key are the same machine.
+ */
+machine?: string | null, };

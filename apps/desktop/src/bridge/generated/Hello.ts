@@ -13,4 +13,9 @@ build: string, host_id: HostId,
 /**
  * Free-form role, e.g. `"gui"`, `"daemon"`, `"hub"`.
  */
-role: string, features: Array<string>, };
+role: string, features: Array<string>, 
+/**
+ * Key of the machine the sender runs on (`wasit_runtime::machine::machine_key`), so a hub
+ * can tell two hosts apart even when they share a home directory or an alias.
+ */
+machine?: string | null, };

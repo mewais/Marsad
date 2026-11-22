@@ -21,7 +21,7 @@ use super::ring::{self, Joined, Ring};
 const INPUT_QUEUE: usize = 1024;
 
 enum Input {
-    HostUpserted(HostEntry, FleetLink),
+    HostUpserted(Box<HostEntry>, FleetLink),
     HostRemoved(HostId),
     Link(HostId, LinkState),
     Feed(HostId, HostEvent),
@@ -68,6 +68,7 @@ impl State {
     fn apply(&mut self, input: Input) {
         match input {
             Input::HostUpserted(entry, link) => {
+                let entry = *entry;
                 let id = entry.id.clone();
                 match self.hosts.get_mut(&id) {
                     Some(h) => h.host = entry.clone(),
@@ -222,7 +223,7 @@ impl Fleet {
     }
 
     pub async fn host_upserted(&self, entry: HostEntry, link: FleetLink) {
-        self.send(Input::HostUpserted(entry, link)).await
+        self.send(Input::HostUpserted(Box::new(entry), link)).await
     }
 
     pub async fn auth_prompt(&self, id: HostId, prompt: Option<AuthPrompt>) {

@@ -245,6 +245,7 @@ mod tests {
                     created_at_ms: 0,
                     interactive_auth: false,
                     local_files: false,
+                    machine: None,
                 },
                 link: FleetLink::Remote {
                     state: LinkState::Connecting,

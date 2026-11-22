@@ -58,6 +58,10 @@ pub struct HostEntry {
     /// ([`HostEntry::derive_local_files`]); the UI decides open / reveal / download from it.
     #[serde(default)]
     pub local_files: bool,
+    /// Key of the machine the host's daemon runs on (from its hello; the hub's own for the
+    /// local host). Two hosts with the same key are the same machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 
 impl HostEntry {
@@ -68,6 +72,17 @@ impl HostEntry {
             HostKind::Local => true,
             HostKind::Wsl { .. } => hub_windows,
             HostKind::Ssh { .. } => false,
+        }
+    }
+
+    /// Other hosts in `all` that run on the same machine as `self` (same machine key).
+    pub fn same_machine<'a>(&self, all: &'a [HostEntry]) -> Vec<&'a HostEntry> {
+        match &self.machine {
+            None => Vec::new(),
+            Some(m) => all
+                .iter()
+                .filter(|h| h.id != self.id && h.machine.as_deref() == Some(m))
+                .collect(),
         }
     }
 

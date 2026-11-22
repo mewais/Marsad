@@ -1,7 +1,7 @@
 //! Command-line options shared by `serve`, `bridge` and `stop`.
 //!
 //! ```text
-//! marsad-agent serve  [--hub] [--data <dir>] [--socket <path>] [--host-id <id>] [options]
+//! marsad-agent serve  [--hub] [--data <dir>] [--run-dir <dir>] [--socket <path>] [--host-id <id>] [options]
 //! marsad-agent bridge [same options]      (starts `serve` with them if no daemon runs)
 //! marsad-agent stop   [--data <dir>] [--socket <path>]
 //! marsad-agent shim   <wasit-shim arguments>
@@ -14,18 +14,24 @@
 //! `--stop-grace-ms`, `--command-timeout-ms`, `--auth-prompt-timeout-ms` (hub: how long a
 //! sign-in prompt waits; default 120 s).
 //!
-//! Defaults: data `~/.marsad` (Windows: `%LOCALAPPDATA%\Marsad`), socket `<data>/marsad.sock`
-//! (Windows: a named pipe derived from it). Keep the data path short: session sockets live at
-//! `<data>/sessions/<12 chars>/ctl.sock` (Unix socket paths are limited to ~104 bytes).
+//! Defaults: data root `~/.marsad` (Windows: `%LOCALAPPDATA%\Marsad`), which may be shared by
+//! several machines; this machine's durable data lives in `<data>/machines/<machine key>/` and
+//! its sockets and locks in a machine-local runtime directory (`--run-dir`, see
+//! `marsad_proto::layout`). Socket `<run>/marsad.sock` (Windows: a named pipe derived from it).
 
 use std::path::PathBuf;
 use std::time::Duration;
 
+use marsad_proto::layout::Layout;
 use wasit_control::Endpoint;
 
 #[derive(Debug, Clone, Default)]
 pub struct Options {
+    /// The data root (possibly shared between machines).
     pub data: PathBuf,
+    pub run_dir: Option<PathBuf>,
+    /// Resolved by [`Options::parse`].
+    pub layout: Option<Layout>,
     pub socket: Option<PathBuf>,
     pub host_id: Option<String>,
     pub hub: bool,
@@ -69,6 +75,7 @@ impl Options {
             };
             match flag.as_str() {
                 "--data" => data = Some(PathBuf::from(val()?)),
+                "--run-dir" => o.run_dir = Some(PathBuf::from(val()?)),
                 "--socket" => o.socket = Some(PathBuf::from(val()?)),
                 "--host-id" => o.host_id = Some(val()?),
                 "--hub" => o.hub = true,
@@ -97,13 +104,24 @@ impl Options {
             Some(d) => d,
             None => default_data_dir().ok_or("no home directory: pass --data <dir>")?,
         };
+        o.layout = Some(
+            Layout::resolve(o.data.clone(), o.run_dir.clone())
+                .map_err(|e| format!("cannot prepare the runtime directory: {e}"))?,
+        );
         Ok(o)
+    }
+
+    /// The resolved layout (set by [`Options::parse`]).
+    pub fn layout(&self) -> &Layout {
+        self.layout
+            .as_ref()
+            .expect("Options::parse resolves the layout")
     }
 
     pub fn socket_path(&self) -> PathBuf {
         self.socket
             .clone()
-            .unwrap_or_else(|| self.data.join("marsad.sock"))
+            .unwrap_or_else(|| self.layout().socket())
     }
 
     pub fn endpoint(&self) -> Endpoint {
@@ -113,17 +131,7 @@ impl Options {
 
 /// This machine's default host id.
 pub fn default_host_id() -> String {
-    std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            std::fs::read_to_string("/etc/hostname")
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-        })
-        .unwrap_or_else(|| "local".into())
+    wasit_runtime::machine::host_name()
 }
 
 #[cfg(test)]
@@ -148,7 +156,8 @@ mod tests {
         .collect();
         let o = Options::parse(&a).unwrap();
         assert!(o.hub);
-        assert_eq!(o.socket_path(), PathBuf::from("/d/marsad.sock"));
+        assert_eq!(o.socket_path(), o.layout().run.join("marsad.sock"));
+        assert!(o.layout().data.starts_with("/d/machines"));
         assert_eq!(o.driver_env, [("claude".into(), "A".into(), "b=c".into())]);
         assert_eq!(o.stop_grace, Some(Duration::from_millis(500)));
         assert!(Options::parse(&["--nope".to_string()]).is_err());
