@@ -59,11 +59,10 @@ function Shot([string]$name) {
   return $bmp
 }
 
-function Run-Mode([string]$mode, [string]$name, [string]$effect = '') {
+function Run-Mode([string]$mode, [string]$name) {
   $data = Join-Path $Out "data-$name"
   $env:MARSAD_DATA = $data
   $env:MARSAD_SURFACE = $mode
-  if ($effect) { $env:MARSAD_WINDOW_EFFECT = $effect } else { Remove-Item Env:MARSAD_WINDOW_EFFECT -ErrorAction SilentlyContinue }
   $log = Join-Path $Out "$name.log"
   $p = Start-Process $App -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
   $h = [IntPtr]::Zero
@@ -110,7 +109,6 @@ function Run-Mode([string]$mode, [string]$name, [string]$effect = '') {
 }
 
 $t = Run-Mode 'translucent:80' 'translucent'
-$n = Run-Mode 'translucent:80' 'translucent-noeffect' 'none'
 $s = Run-Mode 'solid' 'solid'
 Stop-Process -Id $bg.Id -Force -ErrorAction SilentlyContinue
 
@@ -121,8 +119,8 @@ $effect = (Get-Content (Join-Path $Out 'translucent.log') -ErrorAction SilentlyC
 Write-Host "shell answer: $effect"
 if ("$effect" -notmatch 'acrylic') { $fail += 'the shell did not apply Acrylic' }
 foreach ($k in $t.Keys) {
-  $mt = Magenta $t[$k]; $mn = Magenta $n[$k]; $ms = Magenta $s[$k]; $d = ColourDistance $t[$k] $s[$k]
-  Write-Host ("{0,-8} magenta influence: translucent {1,6:N1}  no-effect {2,6:N1}  solid {3,6:N1}; translucent vs solid {4}" -f $k, $mt, $mn, $ms, $d)
+  $mt = Magenta $t[$k]; $ms = Magenta $s[$k]; $d = ColourDistance $t[$k] $s[$k]
+  Write-Host ("{0,-8} magenta influence: translucent {1,6:N1}  solid {2,6:N1}; translucent vs solid {3}" -f $k, $mt, $ms, $d)
   # Every area (chrome included) lets the backdrop DWM draws show: it differs from solid.
   if ($d -lt 10) { $fail += "$k looks the same translucent and solid ($d)" }
   if ($ms -gt 12) { $fail += "$k is not solid in solid mode ($ms)" }
