@@ -9,8 +9,95 @@ those. Re-pin after pushing Wasit with: move `.cargo/config.toml` aside, `cargo 
 for the wasit/wasl crates in `.` and `apps/desktop/src-tauri`, move it back. Release builds use
 `--locked`.
 
-CI (`ci.yml`, Linux/Windows/macOS + `linux-helper` + `windows-e2e` + the Windows translucency
-screenshot step in `desktop (windows-latest)`): see the branch's latest run.
+CI (`ci.yml`, Linux/Windows/macOS + `linux-helper` + `windows-e2e` (WSL, ssh to WSL, native
+Windows over ssh) + the Windows WebDriver translucency step in `desktop (windows-latest)` + a
+Secret Service step on Linux): see the branch's latest run. Pin helper: replace the Wasit/Wasl
+hash in both Cargo.lock files (index only), or re-resolve with the patches moved aside.
+
+### Gap-closing round (11 items; Wasit, Wasl, Marsad on this branch)
+1. **Save vs. launch ordering** (Marsad 253db74): the per-host lock now spans storing *and*
+   applying a save; `pty.start`, `sessions.create`, `sessions.continue` go through
+   `hub/hostenv.rs::EnvGated` (exact routes in the hub's mux), which `ensure`s the host runs the
+   stored revision before the routed call, as `sessions.launch` did. No sleeps; nothing in the
+   UI waits. Test `host_env.rs::terminal_asked_for_during_a_save_gets_the_saved_environment`
+   (setup held open on a FIFO; failed before the fix).
+2. **Agent command in the UI** (Wasit eb1089e, Marsad 418485a): `SessionSnapshot.command` (the
+   stored spec's binary; a continued session keeps it). New session dialog: the agent picker
+   shows the command (warning-styled when it does not answer like the CLI), the discovery line
+   names it, the warning is spelled out; Config tab: "Command" field. vitest + host_env asserts.
+3. **fish / tcsh / csh / zsh** (Wasit cfcde7a, 0a23d2d): real shells (CI installs them).
+   Found: tcsh refuses `-l` with `-c`, so every tcsh capture fell back to the daemon's own env;
+   csh has no `2>` (the capture's `env -0 2>/dev/null` broke). csh-family now captures with
+   `-c` (reads `.cshrc`/`.tcshrc`) sourcing `/etc/csh.login` + `~/.login`; fish setup lines are
+   parsed with `fish -n` first (a syntax error used to be "applied" as status 123). Setup lines
+   for csh-family logins stay POSIX, run by `/bin/sh` (documented; a csh `module` alias is not
+   available there — source the module system's sh init). Test `tests/host_setup_shells.rs`.
+4. **Native Windows over SSH** (Marsad d559836..1392f62, Wasit 3f916dd): windows-e2e runs Win32
+   OpenSSH Server on the runner (port 2223: 127.0.0.1:22 is the WSL distro's sshd via WSL
+   localhost forwarding) and `windows.rs::native_windows_host_over_ssh_end_to_end` connects it
+   through Marsad's real ssh link: helper provisioning, discovery, PowerShell setup with
+   non-ASCII output and `$env:` values, variables (one secret), agent command (the fake CLI,
+   claude only through a host variable), a claude session, cmd terminals. Product bugs found:
+   a never-connected Windows host got the POSIX bootstrap (Git's `sh` reports MINGW; cmd.exe
+   mangles the line) — now recognised / one PowerShell attempt for a first-contact host whose
+   POSIX bootstrap printed no report (locale-independent); PowerShell read the redirected stdin
+   itself (`-InputFormat None`); PowerShell capture/setup output came back in the OEM code page
+   (now a UTF-8 writer on raw stdout; Wasit Windows test covers a non-ASCII registry variable,
+   setup output and `$env:` value). **NOT closed:** on the runner the link gets through the
+   POSIX attempt (cmd mangles it: "The system cannot find the path specified"), falls back to
+   PowerShell, reads its `MARSAD-BOOT Windows AMD64 none` report and starts `UPLOAD` of the 30 MB
+   debug helper, which never answers `MARSAD-OK` within 300 s (hub log in the CI output).
+   Cause not found within the push budget; candidates: PowerShell 5.1 still consuming the
+   redirected stdin despite `-InputFormat None` (its host and the script's
+   `[Console]::OpenStandardInput()` racing for the bytes, so the loop waits for bytes it never
+   gets), or Win32-OpenSSH's non-pty stdin pipe stalling on a large binary stream. Next step:
+   reproduce on a Windows machine with `ssh -T host "powershell -NoProfile -InputFormat None
+   -EncodedCommand …" < helper.exe`; if PowerShell is the culprit, upload base64 lines (or via
+   sftp on the same connection) instead of raw bytes. windows-e2e is red because of this test
+   only (WSL, ssh-to-WSL and no-console tests pass).
+5. **Secrets in the OS credential store** (Marsad 255c4de): `marsad-store/src/secrets.rs`,
+   keyring 3 (Windows Credential Manager, macOS Keychain, Secret Service via the pure-Rust
+   zbus client — no libdbus; musl helper unaffected). Chosen at store open by a write/read/
+   delete probe (5 s); a Secret Service is never D-Bus-activated (an activated, locked keyring
+   waits for a password prompt — seen locally); blocking calls on their own thread with a
+   deadline. Fallback: owner-only `secrets.json`, with the reason. `secrets.json` values move to
+   the system store once. `hosts.environment.secrets` → `SecretsLocation`; Hosts → Environment
+   says where (warning for the file). Verified on CI: Keychain (macOS), Credential Manager
+   (Windows), gnome-keyring under `dbus-run-session` (Linux step), file fallback (headless).
+6. **`MARSAD_SURFACE` removed** (Marsad a7d08a9, a8a7b36): the WebDriver suite could not drive
+   the app on the hosted runner (tauri-driver 2.1.0 + msedgedriver 157 matching WebView2
+   157.0.4341.46: msedgedriver launched the app with `--remote-debugging-port=0` in
+   `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` but never found `DevToolsActivePort`; 2 CI attempts,
+   verbose driver log in the run), so `e2e-real/translucency.ps1` clicks the real Settings →
+   Window background control through Windows UI Automation (mouse at the element), samples the
+   screen over a magenta window, and checks the shell's Acrylic answer (its log), every area
+   differs from Solid, Solid is solid. Green: content/top bar/rail/status bar differ by 18–19.
+   Hosted runners draw Acrylic as its solid fallback (no GPU composition), so "the colour behind
+   shows through" is reported, not required — real blur is unverified on real hardware.
+7. **Changes tab colouring** (Marsad 58e666f): `DiffView` uses the one highlighter
+   (`useHighlighted`/`Tokens`); old side (context+deletions) and new side are each highlighted
+   whole by the file's language. vitest.
+8. **`ask_user` on interrupt** (Wasit 1313078, Marsad 152cb25): a CLI waits for its tool call
+   before acting on a cancel, so the turn never ended. The session's `Interrupt` input after the
+   gate went up withdraws the gate and answers the tool; turn ends/interrupts before the gate's
+   `GateRequested` are ignored (the old "earlier turn" gap). Fake OpenCode/Kilo now call MCP
+   servers from `OPENCODE_CONFIG_CONTENT`/`KILO_CONFIG_CONTENT`; test
+   `daemon.rs::ask_user_gate_is_withdrawn_when_the_turn_is_interrupted` (hung before the fix).
+9. **Deadline inheritance** (Wasl 6ddfab9): a delegated task gets min(own, parent's deadline);
+   none left → rejected (`expired`). Test `tasks.rs::delegated_task_inherits_the_parent_deadline`.
+10. **daemon-kill-recovery flake** (Marsad 1ecc230): reproduced 2/10 in a codex scenario chain.
+   Cause: the hub started the local session feed before the registry put the local host into
+   the fleet; the fleet drops feeds of unknown hosts, so when the feed's first event (the full
+   list) won the race after a restart the UI showed 0 sessions. Feed now starts after. After:
+   15/15 (chain), 20/20 isolated, 20/20 (gate chain), full suite 35/35. `run.mjs --repeat N`.
+   Also: `host_env` failed once on Linux CI (a restarted host daemon never got its settings
+   back; not reproduced in 6 local runs); background applies now retry on a backoff schedule
+   (Marsad 558d7c4) — cause not proven.
+11. **codex** (Wasit 7856987): `live_codex_image` — a PNG uploaded to a codex 0.169.1 session goes
+   out as `localImage`, codex sends it to the (fake) Responses model as an `input_image` data
+   URL with the same bytes, the model's reply names it. Not verifiable without an account: real
+   OpenAI auth/login, real model behaviour (reasoning items, real image understanding, rate
+   limits and real error shapes), anything a real model chooses to do with tools.
 
 ### Shared-home / environment / translucency round (owner's Windows 11 reports)
 - **Two SSH hosts sharing a network home** (one failed with `bridge_unavailable … Connection
@@ -43,14 +130,15 @@ screenshot step in `desktop (windows-latest)`): see the branch's latest run.
   installs a fake `kilo` under `/root/.nvm/...` added only by `.bashrc` and asserts discovery.
 - **Translucency** (Marsad 414e87c): Acrylic before Mica; one tint layer (`.app`), chrome and
   panels light tints, dialogs/menus near-opaque + backdrop blur; `data-backdrop`;
-  `MARSAD_SURFACE` test hook (`MARSAD_WINDOW_EFFECT` since removed); the shell reports a hint when Windows'
+  (the `MARSAD_SURFACE` / `MARSAD_WINDOW_EFFECT` test hooks have since been removed); the shell reports a hint when Windows'
   Transparency effects are off (Acrylic is then drawn solid — the runner's default, and a
   likely cause of the owner's "varying shade"). CI desktop (windows) job screenshots over
   magenta (`e2e-real/translucency.ps1`, artifact `translucency-windows`). Observed on the
   hosted runner: Acrylic applied + window active + effects on → solid fallback grey
   (220,221,222 vs solid 246,247,250) — no GPU composition; once, without an effect, the
   content showed the magenta through the whole stack (250,139,252), top bar/rail 253,208,254.
-  CI asserts the Acrylic answer and that content/top bar/rail/status bar differ from solid.
+  CI (now through the real Settings control over WebDriver) asserts Acrylic and that content/
+  top bar/rail/status bar differ from solid.
   Real blur over other windows is unverified on real Windows 11 hardware; macOS unverified.
 - **WSL capture fix found by CI**: under `wsl.exe` the daemon has a controlling terminal, so
   `bash -l -i` in a background group stopped on SIGTTOU (6 s deadline, `.bashrc` never read);
@@ -78,9 +166,8 @@ screenshot step in `desktop (windows-latest)`): see the branch's latest run.
   runs runs again (`again` set), env changes refresh every cached inventory, probes get the
   base environment (was the daemon's own for `HOME`/`CODEX_HOME`).
 - **Hub**: `hosts.environment.{get,set,test}`. Store: `host-environments.json` (settings, secret
-  values absent) + `secrets.json` (values only); every store file is now created 0600. Secrets:
-  OS keychain NOT used (0600 file chosen: no native deps, headless Linux CI); Windows relies on
-  the profile directory ACL. A secret is sent to its host only inside
+  values absent); secret values in the OS credential store (gap round, item 5), else
+  `secrets.json` 0600; every store file is created 0600. A secret is sent to its host only inside
   `host.environment.configure/test` (kept in memory by that daemon), never returned to the UI
   (`get` → `value: null`; `set` with `null` keeps it), scrubbed from setup output/notes, hidden
   by `EnvVar`/`HostVar`/`SecretValue` `Debug`, and request decoding errors do not echo params.
@@ -93,12 +180,12 @@ screenshot step in `desktop (windows-latest)`): see the branch's latest run.
   secret shows as `••••••••` with Replace), agent command per driver (placeholder = default),
   Save, Test (saved settings only; per agent command → resolved path, version or error,
   warning), setup failure as a red gate with exit status and output; Agent CLIs list shows
-  `command →` and warnings. New session dialog / Config tab do NOT show the command yet.
+  `command →` and warnings; New session dialog and Config tab show the command.
 - **Tests**: Wasit `tests/host_setup.rs` (bash login shell + rc-defined `module`; kilo/genie/
   lister; order; secrets scrubbed and absent from session.json/journal; failing/exit/malformed/
   hanging setups), `tests/host_setup_windows.rs` (PowerShell, Windows CI), version parser units.
   Marsad `tests/host_env.rs` (real sshd: module system, genie session, terminals, local host,
-  secret only in `secrets.json` 0600 and in no log/journal/reply, failing setup, daemon restart
+  secret only where the hub says secrets are kept and in no log/journal/reply, failing setup, daemon restart
   ⇒ re-applied), windows-e2e WSL (setup puts a genie wrapper on PATH; Test finds it), vitest
   (editing, write-only secret, failure, warning), real-app scenario `host-environment`.
 - **Also this round**: `MARSAD_WINDOW_EFFECT` removed (shell + CI script). Flaky Playwright
@@ -109,11 +196,7 @@ screenshot step in `desktop (windows-latest)`): see the branch's latest run.
 - **Setup syntax errors**: macOS `/bin/bash` 3.2 in `-l -i` mode prints the syntax error of an
   `eval` and returns status 0, so POSIX shells now parse the lines with `-n` first and report a
   syntax error without running anything (Wasit 17541f2).
-- **Not done / unverified**: OS keychain; fish setup (no fish here); csh family; native
-  Windows setup over SSH end to end (PowerShell runner covered only by the Wasit unit-level
-  Windows test); setup output encoding of non-ASCII on Windows; showing the agent command in
-  the New session dialog / Config tab; a terminal opened while a save is still applying gets
-  the previous environment.
+- (The not-done items of this round are closed in the gap-closing round above.)
 
 ### Media round: images and files (Wasit b58753e+, Wasl fb52161, Marsad this branch)
 - **Verified with the real CLIs** (fixtures in `wasit-claude/tests/fixtures/claude-{image-prompt,read-image}`,
@@ -149,8 +232,8 @@ screenshot step in `desktop (windows-latest)`): see the branch's latest run.
   `media.spec.ts` (`?media=1` fixture); real app `media` scenario (fake CLI `image` /
   `write_file` steps) and `--real` `live-claude-media` (Haiku described the attached chart and
   wrote `live_chart.svg`, opened in the preview). Shots: `media-*.png`.
-- **Not done**: codex image input untested live (the earlier gaps — first-prompt media, relative
-  HTML resources, highlighting — are closed in the polish round below).
+- codex image input: verified through the real codex app-server with the fake Responses model
+  (gap round, item 11); never against a real OpenAI model.
 
 ### Polish round: WSL files, HTML resources, first-prompt attachments, highlighting
 - **WSL = local files (Windows GUI).** `marsad-proto::paths`: the ONE pure translation
@@ -178,7 +261,7 @@ screenshot step in `desktop (windows-latest)`): see the branch's latest run.
   only without tag/extension and ≤ 16 KB. Used by file previews (line numbers, wrap, `path:line`
   focus, Rendered/Source for Markdown, pretty JSON), the shared `Markdown` (fenced blocks, tables,
   nested lists, task lists), tool bodies (edit diffs coloured per language, written files by
-  extension, shell commands, JSON, unified diffs). Changes-tab diffs are NOT syntax-coloured.
+  extension, shell commands, JSON, unified diffs) and Changes-tab diffs (gap round, item 7).
 - **Path chips** (`media/pathRefs.ts`): relative / absolute / `path:line[:col]` / Windows forms,
   existence via debounced, batched (50), cached `session.files.stat`. Reads stay confined to the
   session roots (an earlier grant design was removed at the owner's request): a path outside the
@@ -305,7 +388,7 @@ screenshot step in `desktop (windows-latest)`): see the branch's latest run.
   this machine first in host lists and as the dialog default; graph lanes with agents first.
 
 ### Real-app suite `apps/desktop/e2e-real/` (`pnpm --dir apps/desktop test:real [-- --real] [--shots DIR]`)
-Default (fake CLIs): 35 scenarios (incl. `spawn`, `translucent-window`, `media`, `polish`, `host-environment`), last full run 33/33 (an earlier round; `host-environment` was run on its own this round) — incl. notifications per prefs (Settings
+Default (fake CLIs): 35 scenarios (incl. `spawn`, `translucent-window`, `media`, `polish`, `host-environment`), last full run 35/35 (gap round) — incl. notifications per prefs (Settings
 page → shell log), kill -9 of the app mid-turn + relaunch, daemon kill -9, ssh key / password
 hosts, and a **real second factor**: sshd keyboard-interactive through PAM (pam_unix +
 pam_oath TOTP; needs `libpam-oath`, the run swaps `/etc/pam.d/sshd` and restores it).
@@ -336,9 +419,6 @@ Screenshots: `--real --shots DIR` (dark set via the UI's localStorage preference
   scenario can cascade into the next ones on the same session — rerun with `--only`.
 - Spawning: templates saved from a workstream keep spawned nodes as ordinary nodes; `--real` e2e
   has no live spawn scenario (Rust live test only); the hub view does not say *why* a spawn gate
-  went away (the asking agent gets the reason). A delegated task does not inherit its parent
-  task's deadline (only spawns cap the first task by it).
-- `ask_user` (Marsad) treats any turn end after its cursor as the end of the question, including a
-  turn that ended before the question was raised (same pattern Wasl now guards against).
+  went away (the asking agent gets the reason).
 - The fake CLI's `mcp_call` step is synchronous, so the interrupt-while-a-tool-blocks tests drive
   `wasl.spawn` over RPC during a `wait_for_interrupt` turn instead of through the fake agent.
