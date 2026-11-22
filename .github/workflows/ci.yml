@@ -89,30 +89,14 @@ jobs:
         working-directory: apps/desktop
       - run: cargo build --features custom-protocol
         working-directory: apps/desktop/src-tauri
-      - name: Translucent window picked in Settings (real app over WebDriver) over a vivid backdrop
+      - name: Translucent window picked in Settings (UI Automation) over a vivid backdrop
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build -p marsad-agent -p marsad-fake-cli
+          cargo build -p marsad-agent
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          cargo install tauri-driver --locked
+          powershell -NoProfile -ExecutionPolicy Bypass -File apps/desktop/e2e-real/translucency.ps1 -App apps/desktop/src-tauri/target/debug/marsad-desktop.exe -Agent target/debug/marsad-agent.exe -Out translucency
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          # msedgedriver for the installed WebView2 runtime (the image's driver follows Edge).
-          $wv = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}').pv
-          Write-Host "WebView2 runtime $wv"
-          $zip = "$env:RUNNER_TEMP\edgedriver.zip"
-          try { Invoke-WebRequest "https://msedgedriver.microsoft.com/$wv/edgedriver_win64.zip" -OutFile $zip }
-          catch { Invoke-WebRequest "https://msedgedriver.azureedge.net/$wv/edgedriver_win64.zip" -OutFile $zip }
-          Expand-Archive $zip "$env:RUNNER_TEMP\edgedriver" -Force
-          $env:Path = "$env:RUNNER_TEMP\edgedriver;$env:Path"
-          # msedgedriver with a verbose log (printed when the run fails).
-          Set-Content -Encoding ascii "$env:RUNNER_TEMP\edgedriver\msedgedriver-logged.cmd" "@`"%~dp0msedgedriver.exe`" --verbose --log-path=`"%RUNNER_TEMP%\msedgedriver.log`" %*"
-          $env:MARSAD_E2E_NATIVE_DRIVER = "$env:RUNNER_TEMP\edgedriver\msedgedriver-logged.cmd"
-          node apps/desktop/e2e-real/run.mjs --only translucent-window --shots translucency
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content "$env:RUNNER_TEMP\msedgedriver.log" -Tail 80 -ErrorAction Continue
-            exit 1
-          }
       - uses: actions/upload-artifact@v4
         if: always() && runner.os == 'Windows'
         with:
@@ -120,6 +104,7 @@ jobs:
           path: |
             translucency/*.png
             translucency/*.log
+            translucency/*.err
       - name: Lint and unit tests
         if: runner.os == 'Linux'
         working-directory: apps/desktop/src-tauri

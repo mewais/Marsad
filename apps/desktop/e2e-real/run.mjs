@@ -14,8 +14,7 @@
 // --repeat  run the selected scenarios this many times in a row (hunting flaky ones)
 //
 // Needs: tauri-driver (`cargo install tauri-driver`), WebKitWebDriver (`webkit2gtk-driver`), git,
-// and a display (run under `xvfb-run -a dbus-run-session`; `pnpm test:real` does that). On
-// Windows: tauri-driver and msedgedriver (for the installed WebView2) on PATH, git.
+// and a display (run under `xvfb-run -a dbus-run-session`; `pnpm test:real` does that).
 
 import { spawn, spawnSync, execFileSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -39,10 +38,7 @@ const ONLY = opt("--only")?.split(",");
 const KEEP = flag("--keep");
 const REPEAT = Number(opt("--repeat") ?? 1);
 
-// Windows: the same suite drives the app through tauri-driver + msedgedriver (on PATH, matching
-// the WebView2 runtime); CI runs the Windows-specific scenario (`--only translucent-window`).
-const WIN = process.platform === "win32";
-const EXE = WIN ? ".exe" : "";
+const EXE = process.platform === "win32" ? ".exe" : "";
 const bin = {
   agent: path.join(repo, `target/debug/marsad-agent${EXE}`),
   fake: path.join(repo, `target/debug/wasit-fake-cli${EXE}`),
@@ -1378,7 +1374,6 @@ scenario_("live-delegation", async () => {
 }, { real: true });
 
 scenario_("translucent-window", async () => {
-  if (WIN) return translucentWindows();
   // Settings → General → Window background. Without a compositor the shell answers that the
   // window cannot be transparent and the UI stays solid; with one (xcompmgr) the alpha surface
   // tokens apply from the first paint after a restart, and the screen shows a checkerboard
@@ -1436,65 +1431,6 @@ scenario_("translucent-window", async () => {
     await restart();
   }
 });
-
-/**
- * Windows: Settings → General → Window background → Translucent, over a vivid magenta window,
- * then Solid; each time the screen is sampled at the app's content, top bar, rail and status
- * bar (`translucency.ps1 -Sample`). Checked: the shell applied Acrylic (the page's
- * `data-backdrop`), every area differs from solid, and solid is solid. Whether the magenta
- * itself shows through is reported, not required: hosted runners have no GPU composition and
- * DWM draws Acrylic as its solid fallback colour there.
- */
-async function translucentWindows() {
-  const ps1 = path.join(here, "translucency.ps1");
-  const out = dirs.shots ?? path.join(root, "translucency");
-  fs.mkdirSync(out, { recursive: true });
-  const surface = () => wd.exec(() => [document.documentElement.getAttribute("data-surface"), document.documentElement.getAttribute("data-backdrop")]);
-  const pick = async (label) => {
-    await go("#/settings?s=general");
-    await click("button", label);
-  };
-  const sample = (name) => {
-    const r = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1, "-Sample", name, "-Out", out], { encoding: "utf8" });
-    if (r.status !== 0) throw new Error(`sampling ${name}: ${r.stderr || r.stdout}`);
-    const v = JSON.parse(r.stdout.trim().split(/\r?\n/).pop());
-    console.log(`       ${name}: active=${v.active} ${JSON.stringify(v.pixels)}`);
-    return v;
-  };
-  await rpc("store.settings.set", { key: "surface", value: "solid" });
-  const backdrop = spawn("powershell", ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", ps1, "-Backdrop"], { stdio: "ignore" });
-  try {
-    await sleep(4000); // the backdrop window maps asynchronously; nothing to wait on
-    await pick("Translucent");
-    const [s, effect] = await waitFor(async () => { const v = await surface(); return v[0] === "translucent" && v; }, "translucent");
-    await waitFor(async () => (await rpc("store.settings.get")).values.surface === "translucent", "the choice saved in the hub");
-    await go("#/inbox");
-    await sleep(1500);
-    const t = sample("translucent");
-    await pick("Solid");
-    await waitFor(async () => (await surface())[0] === null, "solid again");
-    await go("#/inbox");
-    await sleep(1500);
-    const so = sample("solid");
-    const magenta = ([r, g, b]) => (r + b) / 2 - g;
-    const dist = (a, b) => Math.max(...a.map((x, i) => Math.abs(x - b[i])));
-    const fail = [];
-    if (s !== "translucent" || effect !== "acrylic") fail.push(`the shell applied ${effect} (surface ${s}), not Acrylic`);
-    let seeThrough = true;
-    for (const k of Object.keys(t.pixels)) {
-      const [pt, ps] = [t.pixels[k], so.pixels[k]];
-      if (dist(pt, ps) < 10) fail.push(`${k} looks the same translucent and solid (${pt} vs ${ps})`);
-      if (magenta(ps) > 12) fail.push(`${k} is not solid in solid mode (${ps})`);
-      if (magenta(pt) < 25) seeThrough = false;
-    }
-    if (fail.length) throw new Error(fail.join("; "));
-    return seeThrough
-      ? "Acrylic applied; the magenta behind shows through every sampled area"
-      : `Acrylic applied; every area differs from solid, but the magenta behind does not reach the screenshot (window active: ${t.active}) — DWM draws Acrylic as its solid fallback without GPU composition (hosted runners)`;
-  } finally {
-    backdrop.kill();
-  }
-}
 
 // ── screenshots for the owner (--shots): every screen on believable live data ─────────────
 

@@ -197,9 +197,14 @@ async fn until(
     what: &str,
     pred: impl Fn(&FleetEvent) -> bool,
 ) -> FleetEvent {
+    // One deadline for the whole wait: a first connect uploads the (debug) helper, during
+    // which the link reports nothing for a while.
     let fut = async {
         loop {
-            let (_, e) = next(f).await;
+            let e = match f.next().await {
+                Some(Ok((_, e))) => e,
+                other => panic!("fleet subscription ended: {:?}", other.map(|r| r.is_ok())),
+            };
             if let FleetEvent::Link { host, state } = &e {
                 eprintln!("link {host}: {state:?}");
             }
