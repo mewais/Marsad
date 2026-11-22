@@ -12,6 +12,60 @@ for the wasit/wasl crates in `.` and `apps/desktop/src-tauri`, move it back. Rel
 CI (`ci.yml`, Linux/Windows/macOS + `linux-helper` + `windows-e2e`): green at 43e90ba —
 https://github.com/mewais/Marsad/actions/runs/44859855066 (later commits: see the branch).
 
+### Shared-home / environment / translucency round (owner's Windows 11 reports)
+- **Two SSH hosts sharing a network home** (one failed with `bridge_unavailable … Connection
+  refused … Attempt 11`). Cause confirmed: everything lived in `~/.marsad` — host A's daemon
+  owned `marsad.sock` + its (NFS-wide) lock; host B's bridge saw a socket nobody on its kernel
+  served, its daemon lost the lock and exited, the link retried forever. Fix (Wasit fa82296,
+  1ee15aa; Marsad 54045cd, a854df7): `wasit_runtime::machine` (hashed machine key, owner-checked
+  0700 runtime dir chosen from machine facts only), shim `--run` (lock + socket there),
+  `RuntimeConfig::run_dir`, `marsad_proto::layout` (data in `~/.marsad/machines/<key>/`, sockets
+  and locks in the runtime dir, helper cache `bin/<os>-<arch>/` installed via unique temp +
+  rename), `marsad-agent/src/migrate.rs` (flat layout adopted), `Hello.machine` →
+  `HostEntry.machine` (twin hosts warned in the Hosts screen, never restarted away from each
+  other), `bridge_unavailable` ×3 → `Failed` with a plain message, `start_detached` reports a
+  daemon that exits before ready. Layout: Wasit ARCHITECTURE §4.2. Overrides
+  `MARSAD_MACHINE_KEY`, `MARSAD_RUNTIME_DIR`, `--run-dir`.
+  Tests: Marsad `tests/shared_home.rs` (two sshd "machines", one HOME: concurrent provisioning,
+  own daemons/sessions, restart re-adopts only its own, twin alias refused; flat layout with a
+  live session adopted and still answering; foreign flat layout left alone), Wasit shim
+  `runtime_dir_holds_lock_and_endpoint`, `machine` units (permission check incl. foreign owner),
+  control `supervised_parks_failed_after_repeated_bridge_unavailable`.
+  Not verified on a real NFS pair; remaining risk: with NFS `nolock` a foreign machine's live
+  legacy shim looks dead — its directory is only claimed when untouched for 10 min.
+- **WSL found Claude/Codex but not Kilo/OpenCode.** Cause: probes/sessions ran with the
+  daemon's bare non-login env; tools on rc-added paths (nvm in `.bashrc`) were invisible.
+  Fix (Wasit c56a09d, 19fde2f; Marsad 6100625): `wasit_runtime::environment::HostEnv` (login +
+  interactive shell → login → own env; Windows registry), installed as
+  `wasit_process::set_base_env` for every spawn, terminals too; `host.environment[.refresh]`;
+  Hosts screen "Environment" section + "Refresh environment". Test sshds use a profile-free
+  login shell (`bin/loginsh`) so `/etc/profile` does not put a real CLI first. windows-e2e
+  installs a fake `kilo` under `/root/.nvm/...` added only by `.bashrc` and asserts discovery.
+- **Translucency** (Marsad 414e87c): Acrylic before Mica; one tint layer (`.app`), chrome and
+  panels light tints, dialogs/menus near-opaque + backdrop blur; `data-backdrop`;
+  `MARSAD_SURFACE` test hook; CI desktop (windows) job screenshots over magenta
+  (`e2e-real/translucency.ps1`, artifact `translucency-windows`). Windows draws system
+  backdrops solid while the window is inactive (said in Settings). macOS unverified.
+
+### Next: per-host environment (specified by the owner; not started)
+Each host gets, in the Hosts screen: (1) environment variables, optionally secret (secrets in
+the hub's OS keychain via a maintained crate, else a 0600 file; never returned to the UI, logs,
+journals, errors, discovery reports or displayed config; sent over the link only when needed,
+kept in memory there); (2) setup commands (multi-line snippet evaluated once after the login
+capture with the same marker technique/deadline/stdin closed; failure → stderr tail + exit
+status, host still connects; PowerShell on Windows); (3) agent command per driver (name or
+path, e.g. `genie` for claude; same driver, verified with the driver's version/handshake probe,
+warning otherwise). Order: captured → setup → variables → agent command, through the single
+spawn path (incl. injected MCP servers). UI: Environment section editors + Test (per agent:
+command, resolved path, version or error, setup output tail, captured time); applies to new
+sessions/terminals only (say so); New session dialog / Config tab show the command, never
+secrets. Seams in place: `HostEnv::refresh` (add a config with setup + vars, re-run on change),
+`wasit_process::set_base_env`, `DriverOverride.binary` (needs to become runtime-updatable for
+discovery + sessions), `host.environment` report. Tests: fake login shell + fake module system
+(`genie` only on a setup-added PATH), secret scan of events/journals/logs/wire, failing and
+hanging snippets, non-agent override warning, sshd harness, windows-e2e WSL; vitest, fixture,
+one real-app scenario; regenerate TS types.
+
 ### Media round: images and files (Wasit b58753e+, Wasl fb52161, Marsad this branch)
 - **Verified with the real CLIs** (fixtures in `wasit-claude/tests/fixtures/claude-{image-prompt,read-image}`,
   `wasit-opencode/tests/fixtures/{opencode-image-prompt,opencode-read-image,kilo-image-prompt}`):

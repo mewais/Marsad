@@ -92,7 +92,9 @@ jobs:
         if: always() && runner.os == 'Windows'
         with:
           name: translucency-windows
-          path: translucency/*.png
+          path: |
+            translucency/*.png
+            translucency/*.log
       - name: Lint and unit tests
         if: runner.os == 'Linux'
         working-directory: apps/desktop/src-tauri
@@ -158,7 +160,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           # Problem 2 reproduction: `kilo` only on a PATH that ~/.bashrc adds (nvm style, after
           # the interactive guard), as on the owner's distro. Discovery must find it.
-          wsl.exe -d $env:MARSAD_E2E_WSL_DISTRO -u root --exec sh -c "d=/root/.nvm/versions/node/v22.11.0/bin; mkdir -p `$d && install -m 755 '$p' `$d/kilo && printf '\nexport PATH=\"%s:`$PATH\"\n' `$d >> /root/.bashrc && tail -3 /root/.bashrc && head -12 /root/.bashrc && echo user: `$(whoami) && sh -c 'command -v kilo || echo kilo not on the bare PATH'"
+          wsl.exe -d $env:MARSAD_E2E_WSL_DISTRO -u root --exec sh -c "mkdir -p /root/.nvm/versions/node/v22.11.0/bin && install -m 755 '$p' /root/.nvm/versions/node/v22.11.0/bin/kilo && echo 'export PATH=/root/.nvm/versions/node/v22.11.0/bin:`$PATH' >> /root/.bashrc && tail -2 /root/.bashrc && head -10 /root/.bashrc && whoami && (command -v kilo || echo kilo is not on the bare PATH)"
           if ($LASTEXITCODE -ne 0) { exit 1 }
           wsl.exe --list --verbose
       - name: sshd inside the distro (key auth) for the ssh-from-Windows test

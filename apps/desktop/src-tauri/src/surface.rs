@@ -64,15 +64,20 @@ fn apply(w: &tauri::WebviewWindow, translucent: bool) -> SurfaceResult {
     // tints from the wallpaper and reads as a flat shade. On Windows 11 the system backdrop
     // is drawn solid while the window is inactive (by design); the UI's tint layer is the same
     // either way.
-    let effect = if apply_acrylic(w, None).is_ok() {
+    // `MARSAD_WINDOW_EFFECT` (acrylic | mica | blur | none) pins one effect: CI uses `none` to
+    // check the window/WebView transparency on its own.
+    let only = std::env::var("MARSAD_WINDOW_EFFECT").ok();
+    let wants = |e: &str| only.as_deref().is_none_or(|o| o == e);
+    let effect = if wants("acrylic") && apply_acrylic(w, None).is_ok() {
         Some("acrylic")
-    } else if apply_mica(w, None).is_ok() {
+    } else if wants("mica") && apply_mica(w, None).is_ok() {
         Some("mica")
-    } else if apply_blur(w, None).is_ok() {
+    } else if wants("blur") && apply_blur(w, None).is_ok() {
         Some("blur")
     } else {
         None
     };
+    tracing::info!(?effect, "window surface: translucent");
     // A WebView2 window created transparent shows the desktop through alpha pixels even
     // without a backdrop effect.
     SurfaceResult {

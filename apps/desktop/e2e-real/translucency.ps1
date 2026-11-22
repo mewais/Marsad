@@ -24,6 +24,11 @@ public static class W {
 }
 "@
 [W]::SetProcessDPIAware() | Out-Null
+# Windows only composites Acrylic/Mica with "Transparency effects" on (off on some runner images).
+$pers = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+New-Item -Force $pers -ErrorAction SilentlyContinue | Out-Null
+Write-Host "EnableTransparency was: $((Get-ItemProperty $pers -ErrorAction SilentlyContinue).EnableTransparency)"
+Set-ItemProperty $pers EnableTransparency 1 -Type DWord
 $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 Write-Host "screen: $($screen.Width)x$($screen.Height)"
 
@@ -49,11 +54,13 @@ function Shot([string]$name) {
   return $bmp
 }
 
-function Run-Mode([string]$mode) {
-  $data = Join-Path $Out "data-$($mode.Split(':')[0])"
+function Run-Mode([string]$mode, [string]$name, [string]$effect = '') {
+  $data = Join-Path $Out "data-$name"
   $env:MARSAD_DATA = $data
   $env:MARSAD_SURFACE = $mode
-  $p = Start-Process $App -PassThru
+  $env:MARSAD_WINDOW_EFFECT = $effect
+  $log = Join-Path $Out "$name.log"
+  $p = Start-Process $App -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
   $h = [IntPtr]::Zero
   for ($i = 0; $i -lt 60 -and $h -eq [IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 500; $p.Refresh(); $h = $p.MainWindowHandle }
   if ($h -eq [IntPtr]::Zero) { throw "no main window for $mode" }
@@ -67,7 +74,7 @@ function Run-Mode([string]$mode) {
   $r = New-Object W+RECT
   [W]::GetWindowRect($h, [ref]$r) | Out-Null
   Write-Host "$mode window: $($r.L),$($r.T) - $($r.R),$($r.B)"
-  $bmp = Shot ($mode.Split(':')[0])
+  $bmp = Shot $name
   $w = $r.R - $r.L; $hh = $r.B - $r.T
   # Points relative to the window: content (centre-right), the app's top bar (below the native
   # caption), the side rail (left strip), the status bar.
@@ -82,25 +89,32 @@ function Run-Mode([string]$mode) {
     $x = $pts[$k][0]; $y = $pts[$k][1]
     $c = $bmp.GetPixel([Math]::Min($x, $bmp.Width - 1), [Math]::Min($y, $bmp.Height - 1))
     $res[$k] = $c
-    Write-Host ("{0,-12} {1,-8} at {2},{3}: R={4} G={5} B={6}" -f $mode, $k, $x, $y, $c.R, $c.G, $c.B)
+    Write-Host ("{0,-12} {1,-8} at {2},{3}: R={4} G={5} B={6}" -f $name, $k, $x, $y, $c.R, $c.G, $c.B)
   }
   $bmp.Dispose()
   Stop-Process -Id $p.Id -Force
   Start-Sleep -Seconds 2
+  Get-Content $log -ErrorAction SilentlyContinue | Select-String 'window surface' | ForEach-Object { Write-Host "$name shell: $_" }
   return $res
 }
 
-$t = Run-Mode 'translucent:80'
-$s = Run-Mode 'solid'
+$t = Run-Mode 'translucent:80' 'translucent'
+$n = Run-Mode 'translucent:80' 'translucent-noeffect' 'none'
+$s = Run-Mode 'solid' 'solid'
 Stop-Process -Id $bg.Id -Force -ErrorAction SilentlyContinue
 
 function Magenta($c) { return (($c.R + $c.B) / 2) - $c.G }
-$fail = @()
+$fail = @(); $backdrop = $true
 foreach ($k in $t.Keys) {
-  $mt = Magenta $t[$k]; $ms = Magenta $s[$k]
-  Write-Host ("{0,-8} magenta influence: translucent {1,6:N1}  solid {2,6:N1}" -f $k, $mt, $ms)
-  if ($mt -lt 25) { $fail += "$k shows no colour from behind in translucent mode ($mt)" }
+  $mt = Magenta $t[$k]; $mn = Magenta $n[$k]; $ms = Magenta $s[$k]
+  Write-Host ("{0,-8} magenta influence: translucent {1,6:N1}  no-effect {2,6:N1}  solid {3,6:N1}" -f $k, $mt, $mn, $ms)
+  # The window, WebView and page are transparent everywhere (chrome included): the colour
+  # behind shows through with no OS effect.
+  if ($mn -lt 25) { $fail += "$k shows no colour from behind with the window transparent and no effect ($mn)" }
   if ($ms -gt 12) { $fail += "$k is not solid in solid mode ($ms)" }
+  if ($mt -lt 25) { $backdrop = $false }
 }
+if ($backdrop) { Write-Host 'OS backdrop: the blurred colour behind shows through in every sampled area' }
+else { Write-Host 'OBSERVED: with the OS backdrop (Acrylic) applied, this runner draws its solid fallback colour instead of compositing what is behind (see translucent.png)' }
 if ($fail.Count) { $fail | ForEach-Object { Write-Host "FAIL: $_" }; exit 1 }
 Write-Host 'translucency OK'
