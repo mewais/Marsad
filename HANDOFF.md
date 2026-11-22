@@ -43,7 +43,7 @@ screenshot step in `desktop (windows-latest)`): see the branch's latest run.
   installs a fake `kilo` under `/root/.nvm/...` added only by `.bashrc` and asserts discovery.
 - **Translucency** (Marsad 414e87c): Acrylic before Mica; one tint layer (`.app`), chrome and
   panels light tints, dialogs/menus near-opaque + backdrop blur; `data-backdrop`;
-  `MARSAD_SURFACE` / `MARSAD_WINDOW_EFFECT` test hooks; the shell reports a hint when Windows'
+  `MARSAD_SURFACE` test hook (`MARSAD_WINDOW_EFFECT` since removed); the shell reports a hint when Windows'
   Transparency effects are off (Acrylic is then drawn solid — the runner's default, and a
   likely cause of the owner's "varying shade"). CI desktop (windows) job screenshots over
   magenta (`e2e-real/translucency.ps1`, artifact `translucency-windows`). Observed on the
@@ -57,24 +57,68 @@ screenshot step in `desktop (windows-latest)`): see the branch's latest run.
   the capture shell now starts with `setsid` (`wasit_process::new_session`). windows-e2e then
   found the fake `kilo` under `/root/.nvm/...` (added only by `.bashrc`).
 
-### Next: per-host environment (specified by the owner; not started)
-Each host gets, in the Hosts screen: (1) environment variables, optionally secret (secrets in
-the hub's OS keychain via a maintained crate, else a 0600 file; never returned to the UI, logs,
-journals, errors, discovery reports or displayed config; sent over the link only when needed,
-kept in memory there); (2) setup commands (multi-line snippet evaluated once after the login
-capture with the same marker technique/deadline/stdin closed; failure → stderr tail + exit
-status, host still connects; PowerShell on Windows); (3) agent command per driver (name or
-path, e.g. `genie` for claude; same driver, verified with the driver's version/handshake probe,
-warning otherwise). Order: captured → setup → variables → agent command, through the single
-spawn path (incl. injected MCP servers). UI: Environment section editors + Test (per agent:
-command, resolved path, version or error, setup output tail, captured time); applies to new
-sessions/terminals only (say so); New session dialog / Config tab show the command, never
-secrets. Seams in place: `HostEnv::refresh` (add a config with setup + vars, re-run on change),
-`wasit_process::set_base_env`, `DriverOverride.binary` (needs to become runtime-updatable for
-discovery + sessions), `host.environment` report. Tests: fake login shell + fake module system
-(`genie` only on a setup-added PATH), secret scan of events/journals/logs/wire, failing and
-hanging snippets, non-agent override warning, sshd harness, windows-e2e WSL; vitest, fixture,
-one real-app scenario; regenerate TS types.
+### Per-host environment round (setup commands, variables, agent commands)
+- **Behaviour** (Wasit `environment.rs`, ARCHITECTURE §3.5; Marsad `hub/hostenv.rs`): per host
+  only. Order: login capture → setup commands → variables → agent commands. Setup: Unix = the
+  login shell in the capture's mode (`-l -i`, so `module` from rc files exists), lines passed in
+  `__WASIT_SETUP` and run with `eval` inside `{ …; } </dev/null 2>&1` between nonce markers,
+  deadline 30 s, process group killed; the environment it leaves is taken (capture's PATH
+  entries kept after its own); fish runs them as fish, csh/tcsh/nu/elvish/xonsh/pwsh login
+  shells via `/bin/sh`. **Native Windows: PowerShell `-NoProfile -NonInteractive` in the
+  captured environment, lines in `& { }`; `$env:` changes taken; exit status = a thrown error
+  (1) or `$LASTEXITCODE`; non-terminating cmdlet errors do not count as failure; a parse error
+  means nothing runs ("the shell did not run the commands" + PowerShell's message).** Failure ⇒
+  `SetupReport {ok:false, exit_code, error, output tail, applied}`: a failing last command keeps
+  the environment it left (`applied: true`); a hang, `exit` or a dead shell keeps the login
+  environment. Variables are literal. Agent commands (`AgentCommands`, shared by discovery and
+  launches, read at use time, win over `--driver-bin`) stand in for the CLI with the same
+  argv; the driver's version probe must answer like that CLI (parsers now reject output that
+  is not a version; codex needs `codex-cli <v>`), else `DriverInventory.warning`.
+  `DriverInventory.command` names the command in use. Discovery: a refresh asked for while one
+  runs runs again (`again` set), env changes refresh every cached inventory, probes get the
+  base environment (was the daemon's own for `HOME`/`CODEX_HOME`).
+- **Hub**: `hosts.environment.{get,set,test}`. Store: `host-environments.json` (settings, secret
+  values absent) + `secrets.json` (values only); every store file is now created 0600. Secrets:
+  OS keychain NOT used (0600 file chosen: no native deps, headless Linux CI); Windows relies on
+  the profile directory ACL. A secret is sent to its host only inside
+  `host.environment.configure/test` (kept in memory by that daemon), never returned to the UI
+  (`get` → `value: null`; `set` with `null` keeps it), scrubbed from setup output/notes, hidden
+  by `EnvVar`/`HostVar`/`SecretValue` `Debug`, and request decoding errors do not echo params.
+  Applied (`configure` with the stored random revision; no-op when the host reports it): on
+  save (awaited, reply carries the report or `not_applied`), whenever a link becomes
+  Connected (a restarted daemon has none), at hub start for the local host, and before every
+  launch (`launch` → `envs.ensure`). Terminals and git use the base environment, so they get
+  it from the next process on; a continued session keeps the command stored at its creation.
+- **UI**: Hosts → Environment: setup textarea, variables (name / value / Secret / remove; a saved
+  secret shows as `••••••••` with Replace), agent command per driver (placeholder = default),
+  Save, Test (saved settings only; per agent command → resolved path, version or error,
+  warning), setup failure as a red gate with exit status and output; Agent CLIs list shows
+  `command →` and warnings. New session dialog / Config tab do NOT show the command yet.
+- **Tests**: Wasit `tests/host_setup.rs` (bash login shell + rc-defined `module`; kilo/genie/
+  lister; order; secrets scrubbed and absent from session.json/journal; failing/exit/malformed/
+  hanging setups), `tests/host_setup_windows.rs` (PowerShell, Windows CI), version parser units.
+  Marsad `tests/host_env.rs` (real sshd: module system, genie session, terminals, local host,
+  secret only in `secrets.json` 0600 and in no log/journal/reply, failing setup, daemon restart
+  ⇒ re-applied), windows-e2e WSL (setup puts a genie wrapper on PATH; Test finds it), vitest
+  (editing, write-only secret, failure, warning), real-app scenario `host-environment`.
+- **Also this round**: `MARSAD_WINDOW_EFFECT` removed (shell + CI script). Flaky Playwright
+  "html preview": cause found (Chromium kept the first `srcdoc` document when `srcdoc` changed
+  while loading); the preview frame is keyed per document. Wasit `SessionManager::delete` now
+  waits for the aborted actor, loader and `session.json` writer before removing the directory
+  (macOS CI "Directory not empty").
+- **Open CI failure (stopped after 4 pushes)**: Wasit `test (macos-latest)`,
+  `host_setup.rs` malformed-setup case. macOS `/bin/bash` 3.2 in `-l -i` mode prints the syntax
+  error of `eval "if then fi ("` and returns status 0 (bash 5 returns 2; a sentinel for an
+  abandoned group did not catch it), so such a setup is reported `ok` with the error in its
+  output. Fix candidates: check the lines first with the shell's `-n` (POSIX shells), or run
+  them non-interactively with the interactive capture's functions exported. The other three
+  macOS findings were fixed (eval from a variable, delete racing the session.json writer,
+  status taken inside the group).
+- **Not done / unverified**: OS keychain; fish setup (no fish here); csh family; native
+  Windows setup over SSH end to end (PowerShell runner covered only by the Wasit unit-level
+  Windows test); setup output encoding of non-ASCII on Windows; showing the agent command in
+  the New session dialog / Config tab; a terminal opened while a save is still applying gets
+  the previous environment.
 
 ### Media round: images and files (Wasit b58753e+, Wasl fb52161, Marsad this branch)
 - **Verified with the real CLIs** (fixtures in `wasit-claude/tests/fixtures/claude-{image-prompt,read-image}`,
@@ -266,7 +310,7 @@ one real-app scenario; regenerate TS types.
   this machine first in host lists and as the dialog default; graph lanes with agents first.
 
 ### Real-app suite `apps/desktop/e2e-real/` (`pnpm --dir apps/desktop test:real [-- --real] [--shots DIR]`)
-Default (fake CLIs): 34 scenarios (incl. `spawn`, `translucent-window`, `media`, `polish`), last run 33/33 — incl. notifications per prefs (Settings
+Default (fake CLIs): 35 scenarios (incl. `spawn`, `translucent-window`, `media`, `polish`, `host-environment`), last full run 33/33 (an earlier round; `host-environment` was run on its own this round) — incl. notifications per prefs (Settings
 page → shell log), kill -9 of the app mid-turn + relaunch, daemon kill -9, ssh key / password
 hosts, and a **real second factor**: sshd keyboard-interactive through PAM (pam_unix +
 pam_oath TOTP; needs `libpam-oath`, the run swaps `/etc/pam.d/sshd` and restores it).
