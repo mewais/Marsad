@@ -5,7 +5,10 @@
 //! question the CLI asked itself, and replayed after a daemon restart. The answer arrives as
 //! the session's `AnswerQuestion` input event. A retried request (same `request_id`, after the
 //! MCP server lost its connection) waits for the gate already raised. The gate is withdrawn
-//! when the turn ends without an answer (an interrupt) and when the caller goes away.
+//! when the user interrupts the asking turn (the interrupt itself: a CLI may wait for this
+//! tool call to return before it ends the turn), when that turn ends without an answer, and
+//! when the caller goes away. Turn ends and interrupts before the gate went up belong to
+//! earlier turns and are ignored.
 
 use marsad_proto::ask::{AskUserReply, AskUserRequest};
 use marsad_proto::runtime::SessionEventKind;
@@ -77,6 +80,8 @@ pub async fn ask_user(
             .await
             .map_err(|e| MarsadError::invalid(format!("cannot ask the user: {e}")))?;
     }
+    // Events before our gate's `GateRequested` belong to earlier turns.
+    let mut raised = pending;
     let mut guard = Withdraw {
         manager: manager.clone(),
         session: session.clone(),
@@ -112,8 +117,19 @@ pub async fn ask_user(
                     break 'outer AskUserReply::cancelled("the question was withdrawn");
                 }
                 SessionEventKind::Agent {
+                    event: AgentEvent::GateRequested { gate },
+                } if gate.request_id() == r.request_id => raised = true,
+                SessionEventKind::Input {
+                    command: Command::Interrupt,
+                    ..
+                } if raised => {
+                    break 'outer AskUserReply::cancelled("the user interrupted the turn")
+                }
+                SessionEventKind::Agent {
                     event: AgentEvent::TurnCompleted { .. },
-                } => break 'outer AskUserReply::cancelled("the turn ended before an answer"),
+                } if raised => {
+                    break 'outer AskUserReply::cancelled("the turn ended before an answer")
+                }
                 SessionEventKind::Exited { .. } | SessionEventKind::Lost { .. } => {
                     guard.armed = false;
                     break 'outer AskUserReply::cancelled("the session ended before an answer");
@@ -123,7 +139,7 @@ pub async fn ask_user(
         }
         break AskUserReply::cancelled("the session was deleted");
     };
-    // Dropping an armed guard takes the gate down (turn ended without an answer).
+    // Dropping an armed guard takes the gate down (interrupted, or the turn ended unanswered).
     drop(guard);
     Ok(reply)
 }
