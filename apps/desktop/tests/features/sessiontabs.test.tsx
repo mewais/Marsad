@@ -53,6 +53,20 @@ describe("session tabs", () => {
     expect(await screen.findByText(/Binary file/)).toBeInTheDocument();
   });
 
+  it("changes: diffs are coloured by the file's language, deletions from the old side", async () => {
+    const user = userEvent.setup();
+    await open("migrate-auth-middleware", "changes");
+    await screen.findByText("import { authMiddleware } from '@ledgerline/auth'");
+    const table = () => screen.getByRole("table", { name: /^Diff of / });
+    await waitFor(() => expect(table().getAttribute("data-lang")).toBe("typescript"));
+    const kw = [...table().querySelectorAll(".ln.a .hljs-keyword, .ln.d .hljs-keyword, .ln.u .hljs-keyword")].map((e) => e.textContent);
+    expect(kw).toContain("import");
+    expect(table().querySelector(".ln.d .hljs-string, .ln.d .hljs-keyword")).not.toBeNull();
+    // Side by side keeps the colours.
+    await user.click(screen.getByRole("button", { name: "Split" }));
+    expect(table().querySelector(".sl .hljs-keyword")).not.toBeNull();
+  });
+
   it("changes: commit sends exactly the picked files with the message", async () => {
     const user = userEvent.setup();
     const { backend, s } = await open("migrate-auth-middleware", "changes");

@@ -79,3 +79,22 @@ export function countLines(hunks: Hunk[]): { added: number; removed: number } {
   for (const h of hunks) for (const l of h.lines) l.kind === "add" ? added++ : l.kind === "del" ? removed++ : 0;
   return { added, removed };
 }
+
+/**
+ * The old and the new file as far as the hunks show them (context + deletions, context +
+ * additions), each one text to highlight as a whole, and where every diff line sits in them.
+ */
+export function diffSides(hunks: Hunk[]): { oldText: string; newText: string; at: Map<DiffLine, { o?: number; n?: number }> } {
+  const oldLines: string[] = [];
+  const newLines: string[] = [];
+  const at = new Map<DiffLine, { o?: number; n?: number }>();
+  for (const h of hunks) {
+    for (const l of h.lines) {
+      const pos: { o?: number; n?: number } = {};
+      if (l.kind !== "add") pos.o = oldLines.push(l.text) - 1;
+      if (l.kind !== "del") pos.n = newLines.push(l.text) - 1;
+      at.set(l, pos);
+    }
+  }
+  return { oldText: oldLines.join("\n"), newText: newLines.join("\n"), at };
+}
