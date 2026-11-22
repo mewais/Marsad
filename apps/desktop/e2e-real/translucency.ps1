@@ -21,6 +21,8 @@ public static class W {
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int cx, int cy, uint f);
   [DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageTimeout(IntPtr h, uint m, UIntPtr w, string l, uint f, uint t, out UIntPtr r);
 }
 "@
 [W]::SetProcessDPIAware() | Out-Null
@@ -29,6 +31,9 @@ $pers = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
 New-Item -Force $pers -ErrorAction SilentlyContinue | Out-Null
 Write-Host "EnableTransparency was: $((Get-ItemProperty $pers -ErrorAction SilentlyContinue).EnableTransparency)"
 Set-ItemProperty $pers EnableTransparency 1 -Type DWord
+# Tell running windows (DWM, explorer) that the setting changed.
+$res = [UIntPtr]::Zero
+[W]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'ImmersiveColorSet', 2, 5000, [ref]$res) | Out-Null
 $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 Write-Host "screen: $($screen.Width)x$($screen.Height)"
 
@@ -68,8 +73,14 @@ function Run-Mode([string]$mode, [string]$name, [string]$effect = '') {
   [W]::ShowWindow($h, 1) | Out-Null
   [W]::SetWindowPos($h, [IntPtr]::Zero, 20, 10, 980, 660, 0x0040) | Out-Null
   Start-Sleep -Seconds 12   # page load, the surface hook's reload, the backdrop
-  [W]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero); [W]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)  # ALT: allows SetForegroundWindow
-  [W]::SetForegroundWindow($h) | Out-Null
+  # Active, or Windows draws the system backdrop as its solid fallback.
+  for ($i = 0; $i -lt 6 -and [W]::GetForegroundWindow() -ne $h; $i++) {
+    [W]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero); [W]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)  # ALT unlocks SetForegroundWindow
+    [W]::SetForegroundWindow($h) | Out-Null
+    Start-Sleep -Milliseconds 700
+    if ([W]::GetForegroundWindow() -ne $h) { [W]::ShowWindow($h, 6) | Out-Null; Start-Sleep -Milliseconds 300; [W]::ShowWindow($h, 9) | Out-Null; Start-Sleep -Milliseconds 700 }
+  }
+  Write-Host "$name active: $([W]::GetForegroundWindow() -eq $h)"
   Start-Sleep -Seconds 3
   $r = New-Object W+RECT
   [W]::GetWindowRect($h, [ref]$r) | Out-Null
