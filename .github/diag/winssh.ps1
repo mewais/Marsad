@@ -1,6 +1,5 @@
-# Temporary diagnosis of the native Windows ssh bootstrap (see diag-winssh.yml). Round 3:
-# the product's command line (PowerShell <NUL compiles the C# boot program, which speaks the
-# protocol), with pwsh (which does not read stdin itself) standing in for the bridge.
+# Temporary diagnosis of the native Windows ssh bootstrap (see diag-winssh.yml). Round 4:
+# how stdin of a command under Win32-OpenSSH can be read (.NET Framework sync vs async FileStream).
 $ErrorActionPreference = 'Continue'
 $key = "$env:USERPROFILE\.ssh\marsad_winssh"
 $work = Join-Path $env:RUNNER_TEMP 'diag'
@@ -64,31 +63,19 @@ function Run2($name, $remote, $steps, $timeout = 60) {
   if ($e) { Write-Host "  stderr: $($e.Substring([Math]::Max(0, $e.Length - 600)))" }
 }
 
-$boot = (Get-Content -Raw .github/diag/boot-cmd.txt).Trim()
-$bridgePart = '"%LOCALAPPDATA%\Marsad\bin\marsad-agent.exe" bridge --host-id diag'
-if (-not $boot.EndsWith($bridgePart)) { throw 'unexpected command line' }
-$remote = $boot.Substring(0, $boot.Length - $bridgePart.Length) + "pwsh -NoProfile -NonInteractive -EncodedCommand $bridge"
-Write-Host "remote command: $($remote.Length) chars"
-$bin = "$env:LOCALAPPDATA\Marsad\bin"
+$probe = "$work\probe.exe"
+powershell -NoProfile -Command "Add-Type -OutputType ConsoleApplication -OutputAssembly '$probe' -TypeDefinition (Get-Content -Raw '.github/diag/probe.cs')"
+Write-Host "probe compiled: $(Test-Path $probe)"
 function Raw([byte[]]$data) { $h = Ascii "UPLOAD $($data.Length)`n"; $r = [byte[]]::new($h.Length + $data.Length); [Array]::Copy($h, $r, $h.Length); [Array]::Copy($data, 0, $r, $h.Length, $data.Length); , $r }
 function Rand([long]$n) { $r = [byte[]]::new($n); [Random]::new(7).NextBytes($r); , $r }
-$hello = Ascii "HELLO`n"
-function Show { Get-ChildItem $bin -ErrorAction SilentlyContinue | ForEach-Object { "  $($_.Name) $($_.Length)" } | Write-Host }
-function Clean { Get-ChildItem $bin -Filter 'marsad-agent.exe*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction Continue }
-foreach ($n in 1024, 1048576, 31457280) {
-  Clean
-  Run2 "install-$n" $remote @(@($null, 'MARSAD-BOOT', $false), @((Raw (Rand $n)), 'MARSAD-OK', $false), @($hello, 'BRIDGE-GOT HELLO', $false)) 120
-  Show
+$up = Raw (Rand 31457280)
+foreach ($mode in 'sync', 'async') {
+  Run2 "probe-$mode-direct" "$probe $mode" @(@($null, 'PROBE-READY', $false), @($up, 'PROBE-DONE', $false)) 60
+  Run2 "probe-$mode-after-ps" "powershell -NoProfile -NonInteractive -Command exit 0 <NUL && $probe $mode" @(@($null, 'PROBE-READY', $false), @($up, 'PROBE-DONE', $false)) 60
 }
-Run2 'run-on-a-broken-helper' $remote @(@($null, 'never', $false)) 30
-Clean
-$where = [IO.File]::ReadAllBytes("$env:WINDIR\System32\where.exe")
-Run2 'install-where' $remote @(@($null, 'MARSAD-BOOT', $false), @((Raw $where), 'MARSAD-OK', $false), @($hello, 'BRIDGE-GOT HELLO', $false))
-Run2 'run' $remote @(@($null, 'MARSAD-BOOT', $false), @((Ascii "RUN`n"), 'MARSAD-OK', $false), @($hello, 'BRIDGE-GOT HELLO', $false))
-Run2 'restart' $remote @(@($null, 'MARSAD-BOOT', $false), @((Ascii "RESTART`n"), 'MARSAD-OK', $false), @($hello, 'BRIDGE-GOT HELLO', $false))
-Run2 'update' $remote @(@($null, 'MARSAD-BOOT', $false), @((Raw $where), 'MARSAD-OK', $false), @($hello, 'BRIDGE-GOT HELLO', $false))
-Show
-Run2 'unknown-command' $remote @(@($null, 'MARSAD-BOOT', $false), @((Ascii "BOGUS`n"), 'never', $false)) 20
-$half = [byte[]]::new(300000); [Array]::Copy((Raw (Rand 1048576)), $half, 300000)
-Run2 'closed-mid-upload' $remote @(@($null, 'MARSAD-BOOT', $false), @($half, 'never', $true)) 30
-Show
+$pw = Enc @'
+$o=[Console]::OpenStandardOutput(); $x=[Text.Encoding]::ASCII.GetBytes("PROBE-READY`n"); $o.Write($x,0,$x.Length); $o.Flush()
+$i=[Console]::OpenStandardInput(); $s=''; while ($true) { $c=$i.ReadByte(); if ($c -lt 0 -or $c -eq 10) { break }; $s+=[char]$c }
+$x=[Text.Encoding]::ASCII.GetBytes("PROBE-GOT $s`n"); $o.Write($x,0,$x.Length); $o.Flush()
+'@
+Run2 'pwsh-reads-after-ready' "pwsh -NoProfile -NonInteractive -EncodedCommand $pw" @(@($null, 'PROBE-READY', $false), @((Ascii "HI 1`n"), 'PROBE-GOT HI', $false)) 30
