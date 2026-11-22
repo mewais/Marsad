@@ -223,15 +223,19 @@ async fn pty_echo_and_scrollback_replay() {
     assert!(replay.contains("marsad-42"));
     // …and one resuming from a cursor gets only what came after it.
     c.pty_input(None, &info.id, &line(ECHO_2)).await.unwrap();
+    // Byte-exact: the first chunk starts at the cursor and the rest follow contiguously. (Not
+    // "the old text is absent": ConPTY may repaint the screen, sending the old lines again as
+    // new output.)
     let mut resumed = c.pty_output(None, &info.id, Some(last));
     let mut text = String::new();
+    let mut at = last;
     while !text.contains("after-2") {
-        let (_, ev) = next_or_dump(&mut resumed, &text).await;
+        let (cur, ev) = next_or_dump(&mut resumed, &text).await;
         let (off, chunk) = decode(&ev);
-        assert!(off >= last);
+        assert_eq!(off, at, "resumed at the cursor, contiguous");
+        at = cur.as_u64().unwrap();
         text.push_str(&chunk);
     }
-    assert!(!text.contains("marsad-42"));
     // Resized after the cursor checks: ConPTY repaints the whole screen on a resize.
     c.pty_resize(None, &info.id, 100, 30).await.unwrap();
     let listed = c.pty_list(None).await.unwrap();

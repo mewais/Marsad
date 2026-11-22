@@ -74,6 +74,11 @@ hash in both Cargo.lock files (index only), or re-resolve with the patches moved
    holding handoff gates read `starting` while its CLI handshake was still pending — product
    fix (Wasit 31fa6b5): pending gates take precedence (`needs_you`), test
    `core.rs::a_gate_raised_while_starting_needs_you` (failed before). After: 160/160.
+   `git_pty.rs::pty_echo_and_scrollback_replay` failed once on `test (windows-latest)`: after
+   resuming from a cursor it asserted the old line's text was absent, but ConPTY may repaint the
+   screen (old lines sent again as new bytes). The test was wrong; it now checks the resumed
+   stream byte-exactly (first chunk at the cursor, contiguous after), which is what the cursor
+   promises.
 5. **Secrets in the OS credential store** (Marsad 255c4de): `marsad-store/src/secrets.rs`,
    keyring 3 (Windows Credential Manager, macOS Keychain, Secret Service via the pure-Rust
    zbus client — no libdbus; musl helper unaffected). Chosen at store open by a write/read/
