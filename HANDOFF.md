@@ -106,14 +106,9 @@ screenshot step in `desktop (windows-latest)`): see the branch's latest run.
   while loading); the preview frame is keyed per document. Wasit `SessionManager::delete` now
   waits for the aborted actor, loader and `session.json` writer before removing the directory
   (macOS CI "Directory not empty").
-- **Open CI failure (stopped after 4 pushes)**: Wasit `test (macos-latest)`,
-  `host_setup.rs` malformed-setup case. macOS `/bin/bash` 3.2 in `-l -i` mode prints the syntax
-  error of `eval "if then fi ("` and returns status 0 (bash 5 returns 2; a sentinel for an
-  abandoned group did not catch it), so such a setup is reported `ok` with the error in its
-  output. Fix candidates: check the lines first with the shell's `-n` (POSIX shells), or run
-  them non-interactively with the interactive capture's functions exported. The other three
-  macOS findings were fixed (eval from a variable, delete racing the session.json writer,
-  status taken inside the group).
+- **Setup syntax errors**: macOS `/bin/bash` 3.2 in `-l -i` mode prints the syntax error of an
+  `eval` and returns status 0, so POSIX shells now parse the lines with `-n` first and report a
+  syntax error without running anything (Wasit 17541f2).
 - **Not done / unverified**: OS keychain; fish setup (no fish here); csh family; native
   Windows setup over SSH end to end (PowerShell runner covered only by the Wasit unit-level
   Windows test); setup output encoding of non-ASCII on Windows; showing the agent command in
