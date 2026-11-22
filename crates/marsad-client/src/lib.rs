@@ -653,6 +653,40 @@ impl MarsadClient {
         Ok(())
     }
 
+    /// A host's environment settings (secret values left out).
+    pub async fn host_env(
+        &self,
+        id: &HostId,
+    ) -> Result<marsad_proto::hosts::HostEnvSettings, ClientError> {
+        self.call(
+            None,
+            methods::HOSTS_ENVIRONMENT_GET,
+            HostRef { id: id.clone() },
+        )
+        .await
+    }
+
+    /// Store a host's environment settings and apply them when it is reachable.
+    pub async fn set_host_env(
+        &self,
+        s: marsad_proto::hosts::HostEnvSettings,
+    ) -> Result<marsad_proto::hosts::HostEnvSaved, ClientError> {
+        self.call(None, methods::HOSTS_ENVIRONMENT_SET, s).await
+    }
+
+    /// Re-run a host's setup and report what it then finds.
+    pub async fn test_host_env(
+        &self,
+        id: &HostId,
+    ) -> Result<marsad_proto::runtime::EnvironmentTest, ClientError> {
+        self.call(
+            None,
+            methods::HOSTS_ENVIRONMENT_TEST,
+            HostRef { id: id.clone() },
+        )
+        .await
+    }
+
     pub async fn import_suggestions(&self) -> Result<ImportSuggestions, ClientError> {
         self.call(None, methods::HOSTS_IMPORT_SUGGESTIONS, ()).await
     }

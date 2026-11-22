@@ -99,6 +99,9 @@ pub async fn serve(o: Options) -> ExitCode {
     // The user's real environment (login shell), for everything this daemon starts.
     let env = HostEnv::new(CaptureOptions::default());
     env.refresh().await;
+    // The host's agent commands (set with its environment settings) for discovery and launches.
+    let mut cfg = cfg;
+    cfg.commands = env.commands();
     let build = version::build_id();
     let host_id = o.host_id.clone().unwrap_or_else(default_host_id);
     let discovery = Discovery::new(DiscoveryConfig::from_runtime(&cfg));
@@ -307,6 +310,13 @@ async fn start_hub(
     .map_err(|e| e.to_string())?;
     let link = loopback(routing.clone(), build, host_id);
     let git = GitWatch::spawn(link.clone(), fleet.clone());
+    let envs = crate::hub::hostenv::HostEnvs::start(
+        store.clone(),
+        link.clone(),
+        drivers.clone(),
+        &hub,
+        local_id.clone(),
+    );
     fleet.set_git_watch(git.clone()).await;
     let workstreams = Workstreams::start(store.clone(), link, fleet.clone(), local_id.clone())
         .await
@@ -321,6 +331,7 @@ async fn start_hub(
         automatic: vec![Arc::new(WaslMcp), Arc::new(AskUserMcp)],
         workstreams,
         git,
+        envs,
         spawn_lock: tokio::sync::Mutex::new(()),
     };
     let mut top = ServiceMux::new();

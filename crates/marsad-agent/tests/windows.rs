@@ -378,6 +378,7 @@ async fn wsl_host_end_to_end() {
         "kilo not found on the rc-added PATH: {:?} (environment {env:?})",
         kilo.error
     );
+    wsl_host_environment_settings(&c, &host, &distro).await;
 
     // Terminate the distro under the link: it reconnects by itself (a transport drop).
     let st = std::process::Command::new("wsl.exe")
@@ -512,4 +513,47 @@ async fn ssh_host_from_windows_end_to_end() {
         stop_pid(i.pid);
     }
     let _ = sshd.kill();
+}
+
+/// Host environment settings on the WSL host: setup commands put a `genie` wrapper (standing in
+/// for claude) on PATH; Test finds it there, answering like Claude Code.
+async fn wsl_host_environment_settings(c: &MarsadClient, host: &HostId, distro: &str) {
+    let st = std::process::Command::new("wsl.exe")
+        .args(["-d", distro, "-u", "root", "--exec", "sh", "-c"])
+        .arg(
+            "mkdir -p /opt/site/genie && printf '#!/bin/sh\\nexec /usr/local/bin/claude \"$@\"\\n' \
+             > /opt/site/genie/genie && chmod 755 /opt/site/genie/genie && cat /opt/site/genie/genie",
+        )
+        .status()
+        .unwrap();
+    assert!(st.success());
+    let saved = c
+        .set_host_env(marsad_proto::hosts::HostEnvSettings {
+            host: host.clone(),
+            setup: "export PATH=/opt/site/genie:$PATH".into(),
+            vars: vec![marsad_proto::hosts::HostVar {
+                name: "SITE".into(),
+                value: Some("wsl".into()),
+                secret: false,
+            }],
+            commands: [(marsad_proto::DriverId::new("claude"), "genie".to_string())].into(),
+            revision: String::new(),
+        })
+        .await
+        .unwrap();
+    eprintln!("WSL settings applied: {saved:?}");
+    assert!(saved.environment.unwrap().setup.unwrap().ok);
+    let t = c.test_host_env(host).await.unwrap();
+    let cl = t
+        .agents
+        .iter()
+        .find(|a| a.driver.as_str() == "claude")
+        .unwrap();
+    eprintln!("claude via genie: {cl:?}");
+    assert_eq!(
+        cl.binary_path.as_deref(),
+        Some("/opt/site/genie/genie"),
+        "{cl:?}"
+    );
+    assert!(cl.version.is_some() && cl.warning.is_none(), "{cl:?}");
 }

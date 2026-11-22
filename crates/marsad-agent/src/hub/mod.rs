@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod fleet;
 pub mod gitwatch;
+pub mod hostenv;
 pub mod hosts;
 pub mod provision;
 pub mod ring;
@@ -23,8 +24,8 @@ use marsad_proto::agentconfig::{
 };
 use marsad_proto::daemon::DaemonInfo;
 use marsad_proto::hosts::{
-    AskpassReply, AskpassRequest, AuthAnswer, AuthCancel, HostDraft, HostEntry, HostList, HostRef,
-    LinkStates,
+    AskpassReply, AskpassRequest, AuthAnswer, AuthCancel, HostDraft, HostEntry, HostEnvSettings,
+    HostList, HostRef, LinkStates,
 };
 use marsad_proto::store::{
     LayerList, LayerSet, NotificationPrefs, RecentProject, RecentProjects, SeenMark, SeenMarkers,
@@ -129,6 +130,7 @@ pub struct HubServices {
     pub automatic: Vec<Arc<dyn AutomaticItems>>,
     pub workstreams: workstreams::Workstreams,
     pub git: gitwatch::GitWatch,
+    pub envs: hostenv::HostEnvs,
     /// Serialises spawn launches (a retried launch must find the first one's node).
     pub spawn_lock: tokio::sync::Mutex<()>,
 }
@@ -265,6 +267,8 @@ impl HubServices {
                 unsupported: Vec::new(),
             });
         }
+        // The session starts in the host's environment settings as stored now.
+        self.envs.ensure(&host).await?;
         // The id is chosen here so the session layer can be stored under it.
         let id = r.id.clone().unwrap_or_else(SessionId::random);
         let eff = self
@@ -398,6 +402,23 @@ impl HubServices {
                 }
                 let answer = self.prompts.ask(r.host, r.prompt).await?;
                 enc(ok(AskpassReply { answer }))
+            }
+            methods::HOSTS_ENVIRONMENT_GET => {
+                let r: HostRef = params(p).map_err(dec)?;
+                let host = self.host_of(Some(r.id))?;
+                enc(ok(self.envs.get(&host).await?))
+            }
+            methods::HOSTS_ENVIRONMENT_SET => {
+                // Not `params`: a decoding error could quote a secret value.
+                let mut s: HostEnvSettings = serde_json::from_value(p)
+                    .map_err(|_| MarsadError::invalid("not host environment settings"))?;
+                s.host = self.host_of(Some(s.host))?;
+                enc(ok(self.envs.set(s).await?))
+            }
+            methods::HOSTS_ENVIRONMENT_TEST => {
+                let r: HostRef = params(p).map_err(dec)?;
+                let host = self.host_of(Some(r.id))?;
+                enc(ok(self.envs.test(&host).await?))
             }
             methods::HOSTS_IMPORT_SUGGESTIONS => enc(ok(self.registry.import_suggestions().await)),
             methods::HOSTS_WSL_DISTROS => enc(ok(wsl::distros().await)),
