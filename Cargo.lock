@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "adler2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
 name = "aes"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -865,6 +871,7 @@ dependencies = [
  "marsad-client",
  "marsad-proto",
  "marsad-store",
+ "miniz_oxide",
  "portable-pty",
  "rmcp",
  "serde",
@@ -959,6 +966,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "miniz_oxide"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
+dependencies = [
+ "adler2",
 ]
 
 [[package]]
@@ -1912,7 +1928,7 @@ checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 [[package]]
 name = "wasit-claude"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#7856987f49a0fb6d85a5b4fde68747a186e8ab99"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#86e0a594c9a627dccc63e1a2f7feaf576754bf29"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -1921,7 +1937,7 @@ dependencies = [
 [[package]]
 name = "wasit-codex"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#7856987f49a0fb6d85a5b4fde68747a186e8ab99"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#86e0a594c9a627dccc63e1a2f7feaf576754bf29"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -1930,7 +1946,7 @@ dependencies = [
 [[package]]
 name = "wasit-control"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#7856987f49a0fb6d85a5b4fde68747a186e8ab99"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#86e0a594c9a627dccc63e1a2f7feaf576754bf29"
 dependencies = [
  "async-trait",
  "fastrand",
@@ -1948,7 +1964,7 @@ dependencies = [
 [[package]]
 name = "wasit-core"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#7856987f49a0fb6d85a5b4fde68747a186e8ab99"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#86e0a594c9a627dccc63e1a2f7feaf576754bf29"
 dependencies = [
  "base64",
  "serde",
@@ -1960,7 +1976,7 @@ dependencies = [
 [[package]]
 name = "wasit-fake-cli"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#7856987f49a0fb6d85a5b4fde68747a186e8ab99"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#86e0a594c9a627dccc63e1a2f7feaf576754bf29"
 dependencies = [
  "base64",
  "regex",
@@ -1972,7 +1988,7 @@ dependencies = [
 [[package]]
 name = "wasit-opencode"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#7856987f49a0fb6d85a5b4fde68747a186e8ab99"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#86e0a594c9a627dccc63e1a2f7feaf576754bf29"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -1981,7 +1997,7 @@ dependencies = [
 [[package]]
 name = "wasit-process"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#7856987f49a0fb6d85a5b4fde68747a186e8ab99"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#86e0a594c9a627dccc63e1a2f7feaf576754bf29"
 dependencies = [
  "libc",
  "tokio",
@@ -1991,7 +2007,7 @@ dependencies = [
 [[package]]
 name = "wasit-runtime"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#7856987f49a0fb6d85a5b4fde68747a186e8ab99"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#86e0a594c9a627dccc63e1a2f7feaf576754bf29"
 dependencies = [
  "async-trait",
  "fastrand",
@@ -2016,7 +2032,7 @@ dependencies = [
 [[package]]
 name = "wasit-shim"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#7856987f49a0fb6d85a5b4fde68747a186e8ab99"
+source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#86e0a594c9a627dccc63e1a2f7feaf576754bf29"
 dependencies = [
  "futures-core",
  "libc",

@@ -19,7 +19,9 @@ use std::time::Duration;
 use marsad_proto::hosts::{HostEnvSaved, HostEnvSettings, HostVar};
 use marsad_proto::{HostId, LinkState, MarsadError};
 use marsad_store::{SecretValue, Store};
-use wasit_control::{CallContext, CallError, Hub, RequestOpts, RpcError, Service, Supervised};
+use wasit_control::{
+    CallContext, CallError, Hub, LinkEvent, RequestOpts, RpcError, Service, Supervised,
+};
 use wasit_core::DriverRegistry;
 use wasit_runtime::wire::{
     methods as rt, ConfigureEnvironment, EnvVar, EnvironmentTest, HostEnvConfig, HostEnvironment,
@@ -31,8 +33,6 @@ const APPLY_DEADLINE: Duration = Duration::from_secs(60);
 const TEST_DEADLINE: Duration = Duration::from_secs(110);
 /// Reading the host's report.
 const REPORT_DEADLINE: Duration = Duration::from_secs(15);
-/// Attempts of a background apply (on connect / at start) before giving up until the next.
-const RETRIES: u32 = 6;
 /// How long a request waits for the hub's loopback link (in-process; connects at once).
 const WAIT_CONNECTED: Duration = Duration::from_secs(10);
 
@@ -69,50 +69,51 @@ impl HostEnvs {
             }),
         };
         envs.ensure_in_background(local);
-        let mut states = hub.states();
+        // Every transition (a `watch` of the states would skip a quick reconnect, leaving a
+        // restarted daemon without its settings). Subscribed before the states are read, so
+        // a host connecting in between is seen at least once.
+        let mut events = hub.events();
+        let states = hub.states();
         let this = envs.clone();
         tokio::spawn(async move {
-            let mut connected: BTreeMap<HostId, bool> = BTreeMap::new();
+            let connected = |states: &tokio::sync::watch::Receiver<_>| -> Vec<HostId> {
+                let m: &BTreeMap<HostId, LinkState> = &states.borrow();
+                m.iter()
+                    .filter(|(_, s)| s.is_connected())
+                    .map(|(h, _)| h.clone())
+                    .collect()
+            };
+            for h in connected(&states) {
+                this.ensure_in_background(h);
+            }
             loop {
-                let now: Vec<(HostId, bool)> = states
-                    .borrow_and_update()
-                    .iter()
-                    .map(|(h, s)| (h.clone(), matches!(s, LinkState::Connected { .. })))
-                    .collect();
-                for (h, up) in now {
-                    if up && !connected.get(&h).copied().unwrap_or(false) {
-                        this.ensure_in_background(h.clone());
+                match events.recv().await {
+                    Ok(LinkEvent {
+                        host,
+                        state: Some(LinkState::Connected { .. }),
+                    }) => this.ensure_in_background(host),
+                    Ok(_) => {}
+                    // Missed transitions: any connected host may have reconnected (an ensure
+                    // of a host that runs the stored revision is one report request).
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        for h in connected(&states) {
+                            this.ensure_in_background(h);
+                        }
                     }
-                    connected.insert(h, up);
-                }
-                if states.changed().await.is_err() {
-                    return;
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 }
             }
         });
         envs
     }
 
-    /// Apply in the background, retrying on a backoff schedule while it fails (a link that has
-    /// just come up may not route requests yet) — at most [`RETRIES`] times; after that the
-    /// next connect or launch tries again.
     fn ensure_in_background(&self, host: HostId) {
         let this = self.clone();
         tokio::spawn(async move {
-            let mut delay = Duration::from_millis(200);
-            for attempt in 1..=RETRIES {
-                match this.ensure(&host).await {
-                    Ok(_) => return,
-                    Err(e) if attempt == RETRIES => {
-                        tracing::warn!(%host, error = %e, "cannot apply the host's environment settings");
-                    }
-                    Err(e) => {
-                        tracing::info!(%host, error = %e, attempt, "applying the host's environment settings failed; retrying");
-                        // Backoff schedule between attempts.
-                        tokio::time::sleep(delay).await;
-                        delay = (delay * 2).min(Duration::from_secs(5));
-                    }
-                }
+            if let Err(e) = this.ensure(&host).await {
+                // The host shows the settings as not applied (Hosts → Environment); the next
+                // connect, launch or terminal tries again.
+                tracing::warn!(%host, error = %e, "cannot apply the host's environment settings");
             }
         });
     }
