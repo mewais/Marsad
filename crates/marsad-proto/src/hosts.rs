@@ -259,6 +259,79 @@ pub struct WslDistros {
     pub problem: Option<String>,
 }
 
+/// A host's environment settings as the UI edits them (`hosts.environment.get` / `.set`):
+/// setup commands, variables, and an agent command per driver (ARCHITECTURE.md §3.5 of
+/// Wasit). Applied to sessions, terminals and git started after they reach the host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct HostEnvSettings {
+    pub host: HostId,
+    #[serde(default)]
+    pub setup: String,
+    #[serde(default)]
+    pub vars: Vec<HostVar>,
+    #[serde(default)]
+    pub commands: BTreeMap<wasit_core::DriverId, String>,
+    /// Changes on every save (`hosts.environment.set` ignores it); a host whose
+    /// `HostEnvironment.revision` equals it has these settings.
+    #[serde(default)]
+    pub revision: String,
+}
+
+impl HostEnvSettings {
+    /// No setup, variables or commands.
+    pub fn empty(host: HostId) -> Self {
+        HostEnvSettings {
+            host,
+            setup: String::new(),
+            vars: Vec::new(),
+            commands: BTreeMap::new(),
+            revision: String::new(),
+        }
+    }
+}
+
+/// One variable of [`HostEnvSettings`]. A secret's value never leaves the hub towards the UI:
+/// `get` answers `value: None` for it, and `set` with `value: None` keeps the stored one.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct HostVar {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub secret: bool,
+}
+
+impl std::fmt::Debug for HostVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value: &dyn std::fmt::Debug = match (&self.value, self.secret) {
+            (Some(_), true) => &"<secret>",
+            (v, _) => v,
+        };
+        f.debug_struct("HostVar")
+            .field("name", &self.name)
+            .field("value", value)
+            .field("secret", &self.secret)
+            .finish()
+    }
+}
+
+/// Result of `hosts.environment.set`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct HostEnvSaved {
+    /// As stored (secret values left out).
+    pub settings: HostEnvSettings,
+    /// The host's environment after applying them, when it could be reached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<wasit_runtime::wire::HostEnvironment>,
+    /// Why they are not applied yet (the host is not connected, …); they are applied when it
+    /// connects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_applied: Option<String>,
+}
+
 /// Payload of `hosts.links`: every remote host's link state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

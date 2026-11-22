@@ -13,6 +13,10 @@
 //!   one. The data is small (tens of hosts, a few hundred markers), human-inspectable, and
 //!   needs no native dependency — which is why this is not sqlite. Only the document a write
 //!   touches is rewritten.
+//! * **Private files.** Every document is created readable by the owner only (Unix `0600`;
+//!   on Windows the per-user profile directory's ACL). Secret values of host variables live in
+//!   their own document, `secrets.json`, never in the others, and are held in [`SecretValue`]s
+//!   whose `Debug` hides them.
 //! * **No migration.** A document with another `version` is refused with
 //!   [`StoreError::Version`] (formats may break between releases; nothing is migrated).
 
@@ -23,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use marsad_proto::agentconfig::{LayerScope, OverrideLayer};
-use marsad_proto::hosts::HostEntry;
+use marsad_proto::hosts::{HostEntry, HostEnvSettings, HostVar};
 use marsad_proto::store::{NotificationPrefs, RecentProject, SeenMark, Settings, StoredLayer};
 use marsad_proto::workstream::{Workstream, WorkstreamTemplate};
 use marsad_proto::{HostId, MarsadError, SessionId};
@@ -87,10 +91,12 @@ pub enum Doc {
     Recent,
     Workstreams,
     Templates,
+    HostEnvs,
+    Secrets,
 }
 
 impl Doc {
-    pub const ALL: [Doc; 8] = [
+    pub const ALL: [Doc; 10] = [
         Doc::Hosts,
         Doc::Settings,
         Doc::Notifications,
@@ -99,6 +105,8 @@ impl Doc {
         Doc::Recent,
         Doc::Workstreams,
         Doc::Templates,
+        Doc::HostEnvs,
+        Doc::Secrets,
     ];
 
     pub fn file_name(self) -> &'static str {
@@ -111,6 +119,8 @@ impl Doc {
             Doc::Recent => "recent.json",
             Doc::Workstreams => "workstreams.json",
             Doc::Templates => "workstream-templates.json",
+            Doc::HostEnvs => "host-environments.json",
+            Doc::Secrets => "secrets.json",
         }
     }
 }
@@ -126,6 +136,21 @@ pub struct State {
     pub recent: Vec<RecentProject>,
     pub workstreams: BTreeMap<String, Workstream>,
     pub templates: BTreeMap<String, WorkstreamTemplate>,
+    /// Per host: setup, variables (secret ones without their value) and agent commands.
+    pub host_envs: BTreeMap<HostId, HostEnvSettings>,
+    /// Per host: secret variable values by name.
+    pub secrets: BTreeMap<HostId, BTreeMap<String, SecretValue>>,
+}
+
+/// A secret variable's value: serialised as is (in `secrets.json` only), hidden by `Debug`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SecretValue(pub String);
+
+impl std::fmt::Debug for SecretValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<secret>")
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -140,7 +165,7 @@ type WriteFn = Box<dyn FnOnce(&mut State) -> Result<(), StoreError> + Send>;
 enum Op {
     Read(ReadFn),
     Write {
-        doc: Doc,
+        docs: Vec<Doc>,
         apply: WriteFn,
         done: oneshot::Sender<Result<(), StoreError>>,
     },
@@ -202,9 +227,19 @@ async fn save<T: Serialize>(path: &Path, data: &T) -> Result<(), StoreError> {
     })
     .map_err(|e| io_err(path, e))?;
     let tmp = path.with_extension("json.tmp");
-    let mut f = tokio::fs::File::create(&tmp)
-        .await
-        .map_err(|e| io_err(&tmp, e))?;
+    let mut opts = tokio::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+    let mut f = opts.open(&tmp).await.map_err(|e| io_err(&tmp, e))?;
+    // A file created by an earlier build may be wider: narrow it before writing.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
+            .await
+            .map_err(|e| io_err(&tmp, e))?;
+    }
     f.write_all(&bytes).await.map_err(|e| io_err(&tmp, e))?;
     f.sync_all().await.map_err(|e| io_err(&tmp, e))?;
     drop(f);
@@ -254,7 +289,19 @@ async fn persist(dir: &Path, doc: Doc, st: &State) -> Result<(), StoreError> {
             let v: Vec<&WorkstreamTemplate> = st.templates.values().collect();
             save(&path, &v).await
         }
+        Doc::HostEnvs => {
+            let v: Vec<&HostEnvSettings> = st.host_envs.values().collect();
+            save(&path, &v).await
+        }
+        Doc::Secrets => save(&path, &st.secrets).await,
     }
+}
+
+async fn persist_all(dir: &Path, docs: &[Doc], st: &State) -> Result<(), StoreError> {
+    for d in docs {
+        persist(dir, *d, st).await?;
+    }
+    Ok(())
 }
 
 impl Store {
@@ -275,6 +322,7 @@ impl Store {
         let seen: SeenDoc = load(&f(Doc::Seen)).await?;
         let workstreams: Vec<Workstream> = load(&f(Doc::Workstreams)).await?;
         let templates: Vec<WorkstreamTemplate> = load(&f(Doc::Templates)).await?;
+        let host_envs: Vec<HostEnvSettings> = load(&f(Doc::HostEnvs)).await?;
         let state = State {
             hosts: load(&f(Doc::Hosts)).await?,
             settings: load(&f(Doc::Settings)).await?,
@@ -288,6 +336,8 @@ impl Store {
             recent: load(&f(Doc::Recent)).await?,
             workstreams: workstreams.into_iter().map(|w| (w.id.clone(), w)).collect(),
             templates: templates.into_iter().map(|t| (t.id.clone(), t)).collect(),
+            host_envs: host_envs.into_iter().map(|h| (h.host.clone(), h)).collect(),
+            secrets: load(&f(Doc::Secrets)).await?,
         };
         let (tx, rx) = mpsc::channel(MAILBOX);
         let changes = broadcast::channel(64).0;
@@ -336,10 +386,19 @@ impl Store {
         doc: Doc,
         f: impl FnOnce(&mut State) -> Result<R, StoreError> + Send + 'static,
     ) -> Result<R, StoreError> {
+        self.write_docs(vec![doc], f).await
+    }
+
+    /// Change several documents together (written in the given order; each one atomically).
+    pub async fn write_docs<R: Send + 'static>(
+        &self,
+        docs: Vec<Doc>,
+        f: impl FnOnce(&mut State) -> Result<R, StoreError> + Send + 'static,
+    ) -> Result<R, StoreError> {
         let (rtx, rrx) = oneshot::channel();
         let (dtx, drx) = oneshot::channel();
         self.send(Op::Write {
-            doc,
+            docs,
             apply: Box::new(move |s| {
                 let r = f(s)?;
                 // The caller may have given up waiting.
@@ -414,9 +473,94 @@ impl Store {
             Ok(())
         })
         .await?;
+        let id5 = id4.clone();
         self.write(Doc::Recent, move |s| {
             s.recent.retain(|r| r.host != id4);
             Ok(())
+        })
+        .await?;
+        self.write_docs(vec![Doc::Secrets, Doc::HostEnvs], move |s| {
+            s.secrets.remove(&id5);
+            s.host_envs.remove(&id5);
+            Ok(())
+        })
+        .await
+    }
+
+    // ── host environments ───────────────────────────────────────────────────
+
+    /// A host's environment settings (secret values left out); empty when none were saved.
+    pub async fn host_env(&self, host: HostId) -> Result<HostEnvSettings, StoreError> {
+        self.read(move |s| {
+            s.host_envs
+                .get(&host)
+                .cloned()
+                .unwrap_or_else(|| HostEnvSettings::empty(host))
+        })
+        .await
+    }
+
+    /// The settings with the secret values (for applying them on the host).
+    pub async fn host_env_with_secrets(
+        &self,
+        host: HostId,
+    ) -> Result<(HostEnvSettings, BTreeMap<String, SecretValue>), StoreError> {
+        self.read(move |s| {
+            let settings = s
+                .host_envs
+                .get(&host)
+                .cloned()
+                .unwrap_or_else(|| HostEnvSettings::empty(host.clone()));
+            (settings, s.secrets.get(&host).cloned().unwrap_or_default())
+        })
+        .await
+    }
+
+    /// Replace a host's settings. A secret variable without a value keeps its stored value
+    /// (an error if it has none); secrets no longer listed are deleted. Returns the stored
+    /// settings (secret values left out) with a new revision.
+    pub async fn set_host_env(
+        &self,
+        settings: HostEnvSettings,
+    ) -> Result<HostEnvSettings, StoreError> {
+        self.write_docs(vec![Doc::Secrets, Doc::HostEnvs], move |s| {
+            let host = settings.host.clone();
+            let old = s.secrets.remove(&host).unwrap_or_default();
+            let mut secrets = BTreeMap::new();
+            let mut vars = Vec::with_capacity(settings.vars.len());
+            for v in settings.vars {
+                if v.secret {
+                    let value = match v.value {
+                        Some(x) => SecretValue(x),
+                        None => old.get(&v.name).cloned().ok_or_else(|| {
+                            StoreError::Invalid(format!("enter a value for the secret {}", v.name))
+                        })?,
+                    };
+                    secrets.insert(v.name.clone(), value);
+                    vars.push(HostVar {
+                        name: v.name,
+                        value: None,
+                        secret: true,
+                    });
+                } else {
+                    vars.push(HostVar {
+                        value: Some(v.value.unwrap_or_default()),
+                        ..v
+                    });
+                }
+            }
+            if !secrets.is_empty() {
+                s.secrets.insert(host.clone(), secrets);
+            }
+            let stored = HostEnvSettings {
+                host: host.clone(),
+                setup: settings.setup,
+                vars,
+                commands: settings.commands,
+                revision: format!("{:016x}", fastrand::u64(..)),
+            };
+            s.host_envs.insert(host, stored.clone());
+            Ok(stored)
         })
         .await
     }
@@ -642,16 +786,18 @@ async fn writer(
                 return;
             }
             Op::Read(f) => f(&state),
-            Op::Write { doc, apply, done } => {
+            Op::Write { docs, apply, done } => {
                 // Apply to a copy so a failed callback or a failed write changes nothing.
                 let mut next = state.clone();
                 let res = match apply(&mut next) {
                     Err(e) => Err(e),
-                    Ok(()) => match persist(&dir, doc, &next).await {
+                    Ok(()) => match persist_all(&dir, &docs, &next).await {
                         Ok(()) => {
                             state = next;
-                            // No subscribers is fine.
-                            let _ = changes.send(doc);
+                            for doc in docs {
+                                // No subscribers is fine.
+                                let _ = changes.send(doc);
+                            }
                             Ok(())
                         }
                         Err(e) => {

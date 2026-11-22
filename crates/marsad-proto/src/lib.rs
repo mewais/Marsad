@@ -43,6 +43,9 @@
 //! | [`methods::HOSTS_AUTH_ANSWER`] | [`hosts::AuthAnswer`] | [`Ack`] |
 //! | [`methods::HOSTS_AUTH_CANCEL`] | [`hosts::AuthCancel`] | [`Ack`] |
 //! | [`methods::HOSTS_ASKPASS`] (internal) | [`hosts::AskpassRequest`] | [`hosts::AskpassReply`] |
+//! | [`methods::HOSTS_ENVIRONMENT_GET`] | [`hosts::HostRef`] | [`hosts::HostEnvSettings`] (secret values left out) |
+//! | [`methods::HOSTS_ENVIRONMENT_SET`] | [`hosts::HostEnvSettings`] | [`hosts::HostEnvSaved`] (stored; applied when the host is connected) |
+//! | [`methods::HOSTS_ENVIRONMENT_TEST`] | [`hosts::HostRef`] | `wasit_runtime::wire::EnvironmentTest` (setup re-run, agents re-detected) |
 //! | [`methods::FLEET_GIT_REFRESH`] | [`fleet::GitRefresh`] | [`Ack`] |
 //! | [`methods::AGENTCONFIG_EFFECTIVE`] | [`agentconfig::EffectiveRequest`] | [`agentconfig::EffectiveConfig`] |
 //! | [`methods::SESSIONS_LAUNCH`] | [`agentconfig::LaunchRequest`] | [`agentconfig::LaunchReply`] |
@@ -183,6 +186,9 @@ pub mod methods {
     pub const HOSTS_AUTH_CANCEL: &str = "hosts.auth_cancel";
     /// Internal: the `SSH_ASKPASS` helper waits here for the user's answer.
     pub const HOSTS_ASKPASS: &str = "hosts.askpass";
+    pub const HOSTS_ENVIRONMENT_GET: &str = "hosts.environment.get";
+    pub const HOSTS_ENVIRONMENT_SET: &str = "hosts.environment.set";
+    pub const HOSTS_ENVIRONMENT_TEST: &str = "hosts.environment.test";
 
     pub const STORE_SETTINGS_GET: &str = "store.settings.get";
     pub const STORE_SETTINGS_SET: &str = "store.settings.set";
