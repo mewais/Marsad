@@ -127,4 +127,61 @@ describe("hosts", () => {
     await user.click(within(panel).getByRole("button", { name: "Refresh environment" }));
     await waitFor(() => expect(backend.requests.some((r) => r.method === "host.environment.refresh" && r.host === "x1")).toBe(true));
   });
+
+  it("edits setup commands, variables (a secret stays write-only) and agent commands, saves and tests", async () => {
+    const user = userEvent.setup();
+    const { backend } = await hostsPage("/hosts?h=x1");
+    const panel = await screen.findByRole("complementary", { name: "thinkpad-x1 details" });
+    const setup = await within(panel).findByLabelText(/Setup commands/);
+    const save = within(panel).getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    await user.type(setup, "module load tools");
+    await user.click(within(panel).getByRole("button", { name: "Add variable" }));
+    await user.type(within(panel).getByLabelText("Variable name"), "API_TOKEN");
+    await user.click(within(panel).getByRole("checkbox", { name: "Secret" }));
+    const value = within(panel).getByLabelText("Value of API_TOKEN");
+    expect(value).toHaveAttribute("type", "password");
+    expect(save).toBeDisabled(); // a new secret needs a value
+    await user.type(value, "s3cret-ui");
+    await user.type(within(panel).getByLabelText("Command for Claude Code"), "genie");
+    // Test runs saved settings only.
+    expect(within(panel).getByRole("button", { name: "Test" })).toBeDisabled();
+    await user.click(save);
+    await waitFor(() => expect(backend.requests.some((r) => r.method === "hosts.environment.set")).toBe(true));
+    const sent = backend.requests.find((r) => r.method === "hosts.environment.set")!.params as { setup: string; vars: { name: string; value: string; secret: boolean }[]; commands: Record<string, string> };
+    expect(sent.setup).toBe("module load tools");
+    expect(sent.vars).toEqual([{ name: "API_TOKEN", value: "s3cret-ui", secret: true }]);
+    expect(sent.commands).toEqual({ claude: "genie" });
+    // After saving the secret is never shown again; the setup outcome and the command are.
+    await waitFor(() => expect(within(panel).getByLabelText("Value of API_TOKEN")).toHaveValue("••••••••"));
+    expect(panel.innerHTML).not.toContain("s3cret-ui");
+    expect(await within(panel).findByText(/Setup commands ran in/)).toBeInTheDocument();
+    await waitFor(() => expect(within(panel).getAllByText(/genie →/).length).toBeGreaterThan(0));
+    // Saving again without touching the secret keeps it (no value sent).
+    await user.type(within(panel).getByLabelText(/Setup commands/), "{enter}export X=1");
+    await user.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(backend.requests.filter((r) => r.method === "hosts.environment.set").length).toBe(2));
+    const second = backend.requests.filter((r) => r.method === "hosts.environment.set")[1].params as { vars: { value: string | null }[] };
+    expect(second.vars[0].value).toBeNull();
+    // Test: per agent the command, where it resolved and its version.
+    await user.click(within(panel).getByRole("button", { name: "Test" }));
+    const result = await within(panel).findByLabelText("Test result");
+    expect(within(result).getByText(/genie → \/opt\/site\/modules\/tools\/bin\/genie/)).toBeInTheDocument();
+  });
+
+  it("says plainly when the setup fails and when an agent command is not the agent", async () => {
+    const user = userEvent.setup();
+    await hostsPage("/hosts?h=x1");
+    const panel = await screen.findByRole("complementary", { name: "thinkpad-x1 details" });
+    await user.type(await within(panel).findByLabelText(/Setup commands/), "module load nope");
+    await user.type(within(panel).getByLabelText("Command for Claude Code"), "lister");
+    await user.click(within(panel).getByRole("button", { name: "Save" }));
+    const alert = await within(panel).findByRole("alert");
+    expect(alert).toHaveTextContent("Setup commands failed");
+    expect(alert).toHaveTextContent("exit status 1");
+    expect(alert).toHaveTextContent("module: nope not found");
+    await user.click(within(panel).getByRole("button", { name: "Test" }));
+    const result = await within(panel).findByLabelText("Test result");
+    expect(within(result).getByText(/`lister` does not answer like Claude Code/)).toBeInTheDocument();
+  });
 });

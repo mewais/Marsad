@@ -14,7 +14,15 @@ export type DriverInventory = { driver: DriverId, display_name: string, capabili
 /**
  * The binary was found (`PATH` lookup or configured path).
  */
-installed: boolean, binary_path?: string | null, 
+installed: boolean, 
+/**
+ * The host's agent command for this driver, when it has one (what was looked up).
+ */
+command?: string | null, 
+/**
+ * The agent command was found but does not answer like this CLI.
+ */
+warning?: string | null, binary_path?: string | null, 
 /**
  * Why the driver is unusable here (e.g. the binary was not found).
  */

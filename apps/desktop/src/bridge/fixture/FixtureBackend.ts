@@ -5,12 +5,14 @@ import type {
   FilesStatRequest,
   AuthAnswer, AuthCancel, AuthPrompt, BaseRequest, HostEntry, FleetEvent, FleetHost, FsListRequest, FsPathRequest, GateRequest, GitCommitRequest, GitDiffRequest,
   GitDiscardRequest, GitRefresh, GitStatus, GitStatusRequest, GitSummary, GitTarget, HistoryRequest, RenameSession, HostId, InventoryRequest, LinkState, SessionRef, SessionSnapshot, CommandRequest,
+  HostEnvironment, HostEnvSettings, HostRef,
 } from "../wire";
 import { methods as M, topics as T } from "../wire";
 import { DRIVERS, FIXTURE_HOSTS, driverDef, inventoryFor, type FixtureHost } from "./catalog";
 import { fsExists, fsHome, fsList } from "./fs";
 import { buildTree, diffOf, type Tree } from "./git";
 import { FixtureHub } from "./hub";
+import { FixtureHostEnvs } from "./hostenv";
 import { err, SessionSim, type Entry } from "./runtime";
 import { FixtureFiles, MEDIA_SPEC } from "./media";
 import { buildSession, fixtureId, SPAWN_CHOICES, SPECS, type Spec } from "./sessions";
@@ -56,10 +58,13 @@ export class FixtureBackend implements Backend {
   private promptN = 1;
   private reqLog: { method: string; params: unknown; host?: HostId }[] = [];
   readonly sim: SessionSim;
+  readonly envs: FixtureHostEnvs;
+  private invSubs = new Map<HostId, Set<(e: unknown) => void>>();
 
   constructor(o: FixtureOptions = {}) {
     this.opts = { live: o.live ?? true, latencyMs: o.latencyMs ?? 140, speed: o.speed ?? 1, now: o.now ?? Date.now };
     const now = this.opts.now();
+    this.envs = new FixtureHostEnvs(this.opts.now);
     this.sim = new SessionSim({ now: this.opts.now, after: (ms, fn) => this.later(ms * this.opts.speed, fn), publish: (e) => this.publish(e) });
     for (const def of FIXTURE_HOSTS) {
       const d = structuredClone(def);
@@ -130,8 +135,12 @@ export class FixtureBackend implements Backend {
     const host = this.hosts.get(opts.host ?? "x1");
     if (!host) return () => undefined;
     if (topic === T.DRIVERS_INVENTORY) {
-      this.later(0, () => this.isUp(host) && onEvent({ drivers: inventoryFor(host.def, null, this.opts.now()) }));
-      return () => undefined;
+      const id = host.def.entry.id;
+      const subs = this.invSubs.get(id) ?? new Set();
+      this.invSubs.set(id, subs);
+      subs.add(onEvent);
+      this.later(0, () => this.isUp(host) && onEvent(this.hostInventory(id)));
+      return () => subs.delete(onEvent);
     }
     const m = /^session\.events:(.+)$/.exec(topic);
     const entry = m ? host.sessions.get(m[1]) : undefined;
@@ -158,14 +167,12 @@ export class FixtureBackend implements Backend {
         return { host_id: hostId, build: "fixture", pid: 4242, started_at_ms: now - 86_400_000, data_dir: "~/.local/share/marsad", os: host.def.entry.platform?.os ?? "linux", arch: host.def.entry.platform?.arch ?? "x86_64",
           drivers: DRIVERS.filter((d) => host.def.drivers[d.id]).map(({ id, display_name, capabilities, prompt_input }) => ({ id, display_name, capabilities, prompt_input })) };
       case M.DRIVERS_INVENTORY:
-        return { drivers: inventoryFor(host.def, (p as InventoryRequest | undefined)?.project ?? null, now) };
+        return { drivers: this.envs.inventory(hostId, inventoryFor(host.def, (p as InventoryRequest | undefined)?.project ?? null, now)) };
       case M.DRIVERS_REFRESH:
         return {};
       case M.HOST_ENVIRONMENT:
       case M.HOST_ENVIRONMENT_REFRESH:
-        return host.def.entry.platform?.os === "windows"
-          ? { source: "registry", captured_at_ms: now - 120_000, duration_ms: 310, path: ["C:\\Windows\\system32", "C:\\Users\\me\\AppData\\Roaming\\npm"], notes: [] }
-          : { source: "login_interactive_shell", shell: "/bin/bash", captured_at_ms: now - 120_000, duration_ms: 140, path: ["/home/me/.nvm/versions/node/v22.11.0/bin", "/home/me/.local/bin", "/usr/local/bin", "/usr/bin", "/bin"], notes: [] };
+        return this.envs.report(hostId, this.capturedEnv(host, now));
       case M.SESSIONS_LIST:
         return { sessions: [...host.sessions.values()].map((e) => e.snap) };
       case M.SESSION_SNAPSHOT:
@@ -269,7 +276,44 @@ export class FixtureBackend implements Backend {
       if (e) this.gitChanged(r.host, { session: e.snap.id, cwd: null });
       return {};
     }
+    if (method === M.HOSTS_ENVIRONMENT_GET || method === M.HOSTS_ENVIRONMENT_SET || method === M.HOSTS_ENVIRONMENT_TEST) return this.envRequest(method, p);
     return this.hub.handle(method, p);
+  }
+
+  private capturedEnv(host: HostRec, now: number): HostEnvironment {
+    return host.def.entry.platform?.os === "windows"
+      ? { source: "registry", captured_at_ms: now - 120_000, duration_ms: 310, path: ["C:\\Windows\\system32", "C:\\Users\\me\\AppData\\Roaming\\npm"], notes: [], variables: [], commands: {} }
+      : { source: "login_interactive_shell", shell: "/bin/bash", captured_at_ms: now - 120_000, duration_ms: 140, path: ["/home/me/.nvm/versions/node/v22.11.0/bin", "/home/me/.local/bin", "/usr/local/bin", "/usr/bin", "/bin"], notes: [], variables: [], commands: {} };
+  }
+
+  private hostInventory(id: HostId) {
+    const host = this.hosts.get(id);
+    return { drivers: host ? this.envs.inventory(id, inventoryFor(host.def, null, this.opts.now())) : [] };
+  }
+
+  private inventoryChanged(id: HostId) {
+    const inv = this.hostInventory(id);
+    this.later(0, () => this.invSubs.get(id)?.forEach((cb) => cb(inv)));
+  }
+
+  /** `hosts.environment.*` (hub): stored here, applied to the host's simulated environment stage. */
+  private envRequest(method: string, p: unknown): unknown {
+    const id = method === M.HOSTS_ENVIRONMENT_SET ? (p as HostEnvSettings).host : (p as HostRef).id;
+    const host = this.hosts.get(id);
+    if (!host) throw err("not_found", `No host ${id}`, { marsad_error: "not_found", what: `host ${id}` });
+    if (method === M.HOSTS_ENVIRONMENT_GET) return this.envs.get(id);
+    if (method === M.HOSTS_ENVIRONMENT_SET) {
+      const saved = this.envs.set(p as HostEnvSettings, this.isUp(host));
+      if (!saved.not_applied) {
+        saved.environment = this.envs.report(id, this.capturedEnv(host, this.opts.now()));
+        this.inventoryChanged(id);
+      }
+      return saved;
+    }
+    if (!this.isUp(host)) throw err("upstream", `${host.def.entry.name} is not connected; try again once it is back.`);
+    const t = this.envs.test(id, this.capturedEnv(host, this.opts.now()), inventoryFor(host.def, null, this.opts.now()));
+    this.inventoryChanged(id);
+    return t;
   }
 
   private entry(host: HostRec, r: SessionRef): Entry {

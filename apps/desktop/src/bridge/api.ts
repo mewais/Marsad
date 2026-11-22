@@ -48,6 +48,9 @@ export interface MethodMap {
   [M.HOSTS_RECONNECT]: [W.HostRef, W.Ack];
   [M.HOSTS_AUTH_ANSWER]: [W.AuthAnswer, W.Ack];
   [M.HOSTS_AUTH_CANCEL]: [W.AuthCancel, W.Ack];
+  [M.HOSTS_ENVIRONMENT_GET]: [W.HostRef, W.HostEnvSettings];
+  [M.HOSTS_ENVIRONMENT_SET]: [W.HostEnvSettings, W.HostEnvSaved];
+  [M.HOSTS_ENVIRONMENT_TEST]: [W.HostRef, W.EnvironmentTest];
   [M.AGENTCONFIG_EFFECTIVE]: [W.EffectiveRequest, W.EffectiveConfig];
   [M.SESSIONS_LAUNCH]: [W.LaunchRequest, W.LaunchReply];
   [M.STORE_SETTINGS_GET]: [void, W.Settings];
@@ -159,6 +162,12 @@ export function createApi(b: Backend) {
       reconnect: (id: W.HostId) => call(b, M.HOSTS_RECONNECT, { id }),
       authAnswer: (a: W.AuthAnswer) => call(b, M.HOSTS_AUTH_ANSWER, a),
       authCancel: (a: W.AuthCancel) => call(b, M.HOSTS_AUTH_CANCEL, a),
+      /** Setup commands, variables and agent commands of a host (secret values left out). */
+      environment: (id: W.HostId) => call(b, M.HOSTS_ENVIRONMENT_GET, { id }),
+      /** Store them and apply them on the host when it is reachable. */
+      setEnvironment: (s: W.HostEnvSettings) => call(b, M.HOSTS_ENVIRONMENT_SET, s),
+      /** Re-run the setup on the host and report what it then finds (bounded; can take a minute). */
+      testEnvironment: (id: W.HostId) => call(b, M.HOSTS_ENVIRONMENT_TEST, { id }),
     },
     store: {
       settings: () => call(b, M.STORE_SETTINGS_GET, undefined),
