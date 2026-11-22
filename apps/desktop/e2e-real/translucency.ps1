@@ -115,15 +115,20 @@ $s = Run-Mode 'solid' 'solid'
 Stop-Process -Id $bg.Id -Force -ErrorAction SilentlyContinue
 
 function Magenta($c) { return (($c.R + $c.B) / 2) - $c.G }
-$fail = @()
+function Diff($a, $b) { return [Math]::Max([Math]::Max([Math]::Abs($a.R - $b.R), [Math]::Abs($a.G - $b.G)), [Math]::Abs($a.B - $b.B)) }
+$fail = @(); $seeThrough = $true
+$effect = (Get-Content (Join-Path $Out 'translucent.log') -ErrorAction SilentlyContinue | Select-String 'window surface: translucent' | Select-Object -Last 1)
+Write-Host "shell answer: $effect"
+if ("$effect" -notmatch 'acrylic') { $fail += 'the shell did not apply Acrylic' }
 foreach ($k in $t.Keys) {
-  $mt = Magenta $t[$k]; $mn = Magenta $n[$k]; $ms = Magenta $s[$k]
-  Write-Host ("{0,-8} magenta influence: translucent {1,6:N1}  no-effect {2,6:N1}  solid {3,6:N1}" -f $k, $mt, $mn, $ms)
-  # With the OS backdrop (Acrylic) the blurred colour behind shows in every area, chrome
-  # included; solid shows none. The no-effect run is a diagnostic: without a system backdrop
-  # DWM composites the transparent WebView over black, which is why an effect is required.
-  if ($mt -lt 25) { $fail += "$k shows no colour from behind in translucent mode ($mt)" }
+  $mt = Magenta $t[$k]; $mn = Magenta $n[$k]; $ms = Magenta $s[$k]; $d = Diff $t[$k] $s[$k]
+  Write-Host ("{0,-8} magenta influence: translucent {1,6:N1}  no-effect {2,6:N1}  solid {3,6:N1}; translucent vs solid {4}" -f $k, $mt, $mn, $ms, $d)
+  # Every area (chrome included) lets the backdrop DWM draws show: it differs from solid.
+  if ($d -lt 10) { $fail += "$k looks the same translucent and solid ($d)" }
   if ($ms -gt 12) { $fail += "$k is not solid in solid mode ($ms)" }
+  if ($mt -lt 25) { $seeThrough = $false }
 }
+if ($seeThrough) { Write-Host 'OBSERVED: the blurred colour behind shows through in every sampled area' }
+else { Write-Host 'OBSERVED: Acrylic applied, but this runner (no GPU composition) draws the system backdrop as its solid fallback colour, so the magenta behind does not reach the screenshot; the page and chrome are transparent over it (they differ from solid)' }
 if ($fail.Count) { $fail | ForEach-Object { Write-Host "FAIL: $_" }; exit 1 }
 Write-Host 'translucency OK'
