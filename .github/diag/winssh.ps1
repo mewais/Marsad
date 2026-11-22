@@ -1,4 +1,4 @@
-# Temporary diagnosis of the native Windows ssh bootstrap (see diag-winssh.yml). Round 5:
+# Temporary diagnosis of the native Windows ssh bootstrap (see diag-winssh.yml). Round 6:
 # the product command line, with pwsh (which reads stdin properly) standing in for the bridge.
 $ErrorActionPreference = 'Continue'
 $key = "$env:USERPROFILE\.ssh\marsad_winssh"
@@ -91,6 +91,8 @@ Run2 'unknown-command' $remote @(@($null, 'MARSAD-BOOT', $false), @((Ascii "BOGU
 $half = [byte[]]::new(300000); [Array]::Copy((Raw (Rand 1048576)), $half, 300000)
 Run2 'closed-mid-upload' $remote @(@($null, 'MARSAD-BOOT', $false), @($half, 'never', $true)) 30
 Show
-# A broken compile is reported plainly: an invalid source.
-$bad = $boot -replace 'set MARSAD_BOOT_CS=[A-Za-z0-9+/=]+&&', 'set MARSAD_BOOT_CS=AAAA&&' -replace 'marsad-boot-[0-9a-f]+\.exe', 'marsad-boot-broken.exe'
+# A broken compile is reported plainly (no boot program compiled yet, an invalid source).
+Get-ChildItem $bin -Filter 'marsad-boot-*' | Remove-Item -Force
+$bad = $boot -replace 'set MARSAD_BOOT_CS=[A-Za-z0-9+/=]+&&', 'set MARSAD_BOOT_CS=AAAA&&'
 Run2 'broken-source' $bad @(@($null, 'never', $false)) 30
+Show
