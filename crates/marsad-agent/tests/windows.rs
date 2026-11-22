@@ -609,9 +609,13 @@ async fn terminal_prints(c: &MarsadClient, host: &HostId, cwd: &Path, cmd: &str,
 /// as claude because a host variable says so) found by Test; a claude session that runs it and
 /// sees the setup's non-ASCII value; a terminal (cmd.exe in ConPTY) with the variables.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "needs OpenSSH Server on this machine prepared by CI (MARSAD_E2E_WINSSH_KEY)"]
+#[ignore = "needs OpenSSH Server on this machine prepared by CI (MARSAD_E2E_WINSSH_KEY, _PORT)"]
 async fn native_windows_host_over_ssh_end_to_end() {
     let key = std::env::var("MARSAD_E2E_WINSSH_KEY").expect("MARSAD_E2E_WINSSH_KEY");
+    let port: u16 = std::env::var("MARSAD_E2E_WINSSH_PORT")
+        .expect("MARSAD_E2E_WINSSH_PORT")
+        .parse()
+        .unwrap();
     let user = std::env::var("USERNAME").expect("USERNAME");
     let d = TempDir::new();
     let c = client(&d.path().join("l"));
@@ -622,7 +626,7 @@ async fn native_windows_host_over_ssh_end_to_end() {
         name: "this PC over ssh".into(),
         kind: HostKind::Ssh {
             target: format!("{user}@127.0.0.1"),
-            port: None,
+            port: Some(port),
             identity_file: Some(key),
             options: vec![
                 "StrictHostKeyChecking=accept-new".into(),

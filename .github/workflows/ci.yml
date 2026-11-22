@@ -89,10 +89,23 @@ jobs:
         working-directory: apps/desktop
       - run: cargo build --features custom-protocol
         working-directory: apps/desktop/src-tauri
-      - name: Translucent window over a vivid backdrop (screenshots)
+      - name: Translucent window picked in Settings (real app over WebDriver) over a vivid backdrop
         if: runner.os == 'Windows'
         shell: pwsh
-        run: pwsh -File apps/desktop/e2e-real/translucency.ps1 -App apps/desktop/src-tauri/target/debug/marsad-desktop.exe -Out translucency
+        run: |
+          cargo build -p marsad-agent -p marsad-fake-cli
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cargo install tauri-driver --locked
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # msedgedriver for the installed WebView2 runtime (the image's driver follows Edge).
+          $wv = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}').pv
+          Write-Host "WebView2 runtime $wv"
+          $zip = "$env:RUNNER_TEMP\edgedriver.zip"
+          try { Invoke-WebRequest "https://msedgedriver.microsoft.com/$wv/edgedriver_win64.zip" -OutFile $zip }
+          catch { Invoke-WebRequest "https://msedgedriver.azureedge.net/$wv/edgedriver_win64.zip" -OutFile $zip }
+          Expand-Archive $zip "$env:RUNNER_TEMP\edgedriver" -Force
+          $env:Path = "$env:RUNNER_TEMP\edgedriver;$env:Path"
+          node apps/desktop/e2e-real/run.mjs --only translucent-window --shots translucency
       - uses: actions/upload-artifact@v4
         if: always() && runner.os == 'Windows'
         with:
@@ -192,11 +205,12 @@ jobs:
           New-Item -ItemType Directory -Force "$env:USERPROFILE\.ssh" | Out-Null
           cmd /c 'ssh-keygen -q -t ed25519 -N "" -f "%USERPROFILE%\.ssh\marsad_winssh"'
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          # Port 2223: 127.0.0.1:22 reaches the WSL distro's sshd (WSL forwards localhost).
           # The image may come with an sshd_config of its own: use a known one (key auth; an
           # administrator's keys are in administrators_authorized_keys, which must be writable
           # by Administrators and SYSTEM only), logging to a file for diagnosis.
           Set-Content -Encoding ascii 'C:\ProgramData\ssh\sshd_config' @(
-            'Port 22', 'PubkeyAuthentication yes', 'PasswordAuthentication no',
+            'Port 2223', 'PubkeyAuthentication yes', 'PasswordAuthentication no',
             'AuthorizedKeysFile .ssh/authorized_keys', 'SyslogFacility LOCAL0', 'LogLevel DEBUG2',
             'Subsystem sftp sftp-server.exe',
             'Match Group administrators',
@@ -208,7 +222,7 @@ jobs:
           Restart-Service sshd
           Get-Service sshd
           whoami /groups | Select-String -SimpleMatch 'S-1-5-32-544'
-          ssh -i "$env:USERPROFILE\.ssh\marsad_winssh" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$env:USERNAME@127.0.0.1" "echo ssh to this runner works for %USERNAME% & (where sh || echo no sh on PATH)"
+          ssh -p 2223 -i "$env:USERPROFILE\.ssh\marsad_winssh" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$env:USERNAME@127.0.0.1" "echo ssh to this runner works for %USERNAME% & (where sh || echo no sh on PATH)"
           if ($LASTEXITCODE -ne 0) {
             Get-Content 'C:\ProgramData\ssh\logs\sshd.log' -Tail 60 -ErrorAction Continue
             exit 1
@@ -220,4 +234,5 @@ jobs:
           $env:MARSAD_E2E_LINUX_BIN_DIR = (Resolve-Path linux-bin).Path
           $env:MARSAD_E2E_SSH_KEY = "$env:USERPROFILE\.ssh\marsad_e2e"
           $env:MARSAD_E2E_WINSSH_KEY = "$env:USERPROFILE\.ssh\marsad_winssh"
+          $env:MARSAD_E2E_WINSSH_PORT = "2223"
           cargo test -p marsad-agent --test windows -- --include-ignored --nocapture --test-threads 1
