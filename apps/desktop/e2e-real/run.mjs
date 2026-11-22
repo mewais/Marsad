@@ -587,6 +587,46 @@ scenario_("polish", async () => {
   fs.rmSync(path.join(project, "polish"), { recursive: true, force: true });
 });
 
+scenario_("host-environment", async () => {
+  // A site wrapper `genie` that stands in for claude, only on a PATH the setup commands add.
+  const site = path.join(root, "site-tools");
+  fs.mkdirSync(site, { recursive: true });
+  const envOut = path.join(root, "genie-env");
+  fs.writeFileSync(path.join(site, "genie"), `#!/bin/sh\nenv > '${envOut}'\nexec '${bin.fake}' "$@"\n`, { mode: 0o755 });
+  const secret = "e2e-secret-9b2f";
+  await go(`#/hosts?h=${local}`);
+  const panel = `aside[aria-label$=" details"]`;
+  await el(`${panel} textarea[id^=setup-]`);
+  await type(`${panel} textarea[id^=setup-]`, `export PATH="${site}:$PATH"; echo site tools ready`);
+  await button("Add variable");
+  await type(`${panel} input[aria-label="Variable name"]`, "SITE_TOKEN");
+  await click(`${panel} .envs-var label.check-row`, "Secret");
+  await type(`${panel} input[aria-label="Value of SITE_TOKEN"]`, secret);
+  await type(`${panel} input[aria-label="Command for Claude Code"]`, "genie");
+  await wd.exec((css) => document.querySelector(css)?.scrollIntoView({ block: "center" }), `${panel} button.primary`);
+  await click(`${panel} button.primary`, "Save");
+  await el(`${panel} input[aria-label="Value of SITE_TOKEN"][readonly]`);
+  await bodyHas("Setup commands ran in");
+  if (await wd.exec((s) => document.body.innerHTML.includes(s), secret)) throw new Error("the secret is in the page after saving");
+  // The panel scrolls; bring the button up from under the status bar like a user would.
+  await wd.exec((css) => [...document.querySelectorAll(css)].find((b) => b.textContent.trim() === "Test")?.scrollIntoView({ block: "center" }), `${panel} button`);
+  await click(`${panel} button`, "Test");
+  await el(`${panel} [aria-label="Test result"]`, "genie →", 90_000);
+  const row = await wd.exec(() => document.querySelector("[aria-label='Test result']")?.innerText ?? "");
+  if (!row.includes(`${site}/genie`)) throw new Error(`Test did not resolve genie: ${row}`);
+  await shot("host-environment");
+  // A new claude session runs through genie, with the secret in its environment only.
+  const s = await launchViaDialog({ agent: "Claude Code", cwd: project, prompt: "hello via genie" });
+  await waitPhase(s.id, ["idle"]);
+  const env = fs.readFileSync(envOut, "utf8");
+  if (!env.includes(`SITE_TOKEN=${secret}`)) throw new Error("the session did not get the variable");
+  const settings = await rpc("hosts.environment.get", { id: local });
+  if (JSON.stringify(settings).includes(secret)) throw new Error("hosts.environment.get returned the secret");
+  // Leave the host as the other scenarios expect it.
+  await rpc("hosts.environment.set", { host: local, setup: "", vars: [], commands: {}, revision: "" });
+  return `genie at ${site}/genie`;
+});
+
 scenario_("interrupt", async () => {
   const s = launched.opencode ?? launched.codex;
   await openSession(s);
