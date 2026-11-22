@@ -71,7 +71,9 @@ fn apply(w: &tauri::WebviewWindow, translucent: bool) -> SurfaceResult {
     // either way.
     // `MARSAD_WINDOW_EFFECT` (acrylic | mica | blur | none) pins one effect: CI uses `none` to
     // check the window/WebView transparency on its own.
-    let only = std::env::var("MARSAD_WINDOW_EFFECT").ok();
+    let only = std::env::var("MARSAD_WINDOW_EFFECT")
+        .ok()
+        .filter(|v| !v.is_empty());
     let wants = |e: &str| only.as_deref().is_none_or(|o| o == e);
     let effect = if wants("acrylic") && apply_acrylic(w, None).is_ok() {
         Some("acrylic")
