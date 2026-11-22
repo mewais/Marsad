@@ -1,5 +1,5 @@
 //! `desktop.window_surface`: the window's background — solid, or translucent with the OS's
-//! blurred backdrop where there is one (Windows 11 Mica, else Acrylic, else Blur; macOS
+//! blurred backdrop where there is one (Windows Acrylic, else Mica, else Blur; macOS
 //! vibrancy). On Linux the window is see-through (alpha) without blur, and only when the
 //! desktop has a compositor; otherwise the answer says it stays solid.
 //!
@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Webview};
 use tokio::sync::oneshot;
 
 use crate::bridge::BridgeError;
@@ -60,10 +60,14 @@ fn apply(w: &tauri::WebviewWindow, translucent: bool) -> SurfaceResult {
             effect: None,
         };
     }
-    let effect = if apply_mica(w, None).is_ok() {
-        Some("mica")
-    } else if apply_acrylic(w, None).is_ok() {
+    // Acrylic first: it blurs the windows behind (what "translucent" should show); Mica only
+    // tints from the wallpaper and reads as a flat shade. On Windows 11 the system backdrop
+    // is drawn solid while the window is inactive (by design); the UI's tint layer is the same
+    // either way.
+    let effect = if apply_acrylic(w, None).is_ok() {
         Some("acrylic")
+    } else if apply_mica(w, None).is_ok() {
+        Some("mica")
     } else if apply_blur(w, None).is_ok() {
         Some("blur")
     } else {
@@ -124,5 +128,35 @@ fn apply(_w: &tauri::WebviewWindow, _translucent: bool) -> SurfaceResult {
     SurfaceResult {
         transparent: false,
         effect: None,
+    }
+}
+
+/// Test hook: `MARSAD_SURFACE=translucent[:<strength 0..100>]` or `solid` makes the page start
+/// with that window background (the UI's own cached choice), as if picked in Settings. Used by
+/// CI to screenshot the native backdrop; a hub setting chosen later still wins.
+pub const ENV: &str = "MARSAD_SURFACE";
+
+pub fn on_page_load(w: &Webview) {
+    let Ok(v) = std::env::var(ENV) else {
+        return;
+    };
+    let (surface, strength) = v.split_once(':').unwrap_or((v.as_str(), "50"));
+    let ok_surface = surface == "translucent" || surface == "solid";
+    let Ok(strength) = strength.parse::<u8>() else {
+        tracing::warn!(value = %v, "{ENV}: bad strength");
+        return;
+    };
+    if !ok_surface || strength > 100 {
+        tracing::warn!(value = %v, "{ENV}: expected translucent[:0..100] or solid");
+        return;
+    }
+    // Reload once when the cached choice differs, so the first paint already has it.
+    let js = format!(
+        "(function(){{var s=localStorage.getItem('marsad.surface'),n=localStorage.getItem('marsad.surface.strength');\
+         if(s!=='{surface}'||n!=='{strength}'){{localStorage.setItem('marsad.surface','{surface}');\
+         localStorage.setItem('marsad.surface.strength','{strength}');location.reload();}}}})()"
+    );
+    if let Err(e) = w.eval(&js) {
+        tracing::warn!(error = %e, "{ENV}: cannot apply");
     }
 }

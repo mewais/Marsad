@@ -60,28 +60,42 @@
 }
 
 /* Translucent window (Settings → General → Window background), independent of the theme.
-   Alpha variants of the surface tokens; `--glass` (0..1, the strength slider) scales them.
-   `.app` paints --win over the whole window, so that layer carries the see-through; panes and
-   cards sit on it and add their own (compounding) tint. Floors keep text readable over any
-   desktop, even where the OS adds no blur (Linux): at full strength the window layer is .45
-   opaque, a card on it .73, popovers .9. */
+   ONE layer carries the see-through: `.app` paints --win (html, body and #root are
+   transparent). `--glass` (0..1, the strength slider) is that layer's transparency. The shell
+   chrome (title bar, rail, status bar) and side panels add only a light tint of their own
+   (--chrome, --surface), so the backdrop shows through them too; popovers, menus, toasts and
+   dialogs stay nearly opaque (--raised, --dialog) for legibility. When the OS blurs what is
+   behind (`data-backdrop` = acrylic / mica / blur / vibrancy, from the shell's answer) the window
+   layer may go down to 10 % opacity; with no blur (Linux alpha only, `data-backdrop="none"`) it
+   keeps a 45 % floor so text stays readable over any desktop. */
 @supports (background: color-mix(in srgb, red 50%, transparent)){
 :root[data-surface="translucent"]{
-  --a-bg:calc(1 - var(--glass, .5) * .55); --a-win:calc(1 - var(--glass, .5) * .55);
-  --a-sf:calc(1 - var(--glass, .5) * .5); --a-raised:calc(1 - var(--glass, .5) * .1);
+  --c-bg:#0c0f14; --c-win:#10141a; --c-sf:#141920; --c-sf2:#191f28; --c-sunken:#0b0e12; --c-raised:#1f2632;
+  --a-win:calc(1 - var(--glass, .5) * .9);
+  --a-chrome:calc(.08 + (1 - var(--glass, .5)) * .3);
+  --a-sf:calc(.1 + (1 - var(--glass, .5)) * .4);
+  --a-raised:calc(1 - var(--glass, .5) * .08);
 }
-:root[data-surface="translucent"]{
-  --bg:color-mix(in srgb, #0c0f14 calc(var(--a-bg) * 100%), transparent); --win:color-mix(in srgb, #10141a calc(var(--a-win) * 100%), transparent);
-  --surface:color-mix(in srgb, #141920 calc(var(--a-sf) * 100%), transparent); --surface-2:color-mix(in srgb, #191f28 calc(var(--a-sf) * 100%), transparent); --sunken:color-mix(in srgb, #0b0e12 calc(var(--a-sf) * 100%), transparent); --raised:color-mix(in srgb, #1f2632 calc(var(--a-raised) * 100%), transparent);
+:root[data-surface="translucent"][data-backdrop="none"]{
+  --a-win:calc(1 - var(--glass, .5) * .55); --a-sf:calc(1 - var(--glass, .5) * .5); --a-chrome:var(--a-sf);
 }
 @media (prefers-color-scheme: light){ :root[data-surface="translucent"]:not([data-theme="dark"]){
-  --bg:color-mix(in srgb, #e7eaf0 calc(var(--a-bg) * 100%), transparent); --win:color-mix(in srgb, #f6f7fa calc(var(--a-win) * 100%), transparent);
-  --surface:color-mix(in srgb, #ffffff calc(var(--a-sf) * 100%), transparent); --surface-2:color-mix(in srgb, #f4f6f9 calc(var(--a-sf) * 100%), transparent); --sunken:color-mix(in srgb, #eef1f5 calc(var(--a-sf) * 100%), transparent); --raised:color-mix(in srgb, #ffffff calc(var(--a-raised) * 100%), transparent);
-}
-}
+  --c-bg:#e7eaf0; --c-win:#f6f7fa; --c-sf:#ffffff; --c-sf2:#f4f6f9; --c-sunken:#eef1f5; --c-raised:#ffffff;
+}}
 :root[data-surface="translucent"][data-theme="light"]{
-  --bg:color-mix(in srgb, #e7eaf0 calc(var(--a-bg) * 100%), transparent); --win:color-mix(in srgb, #f6f7fa calc(var(--a-win) * 100%), transparent);
-  --surface:color-mix(in srgb, #ffffff calc(var(--a-sf) * 100%), transparent); --surface-2:color-mix(in srgb, #f4f6f9 calc(var(--a-sf) * 100%), transparent); --sunken:color-mix(in srgb, #eef1f5 calc(var(--a-sf) * 100%), transparent); --raised:color-mix(in srgb, #ffffff calc(var(--a-raised) * 100%), transparent);
+  --c-bg:#e7eaf0; --c-win:#f6f7fa; --c-sf:#ffffff; --c-sf2:#f4f6f9; --c-sunken:#eef1f5; --c-raised:#ffffff;
 }
-:root[data-surface="translucent"],:root[data-surface="translucent"] body{background:transparent}
+:root[data-surface="translucent"]{
+  --bg:transparent;
+  --win:color-mix(in srgb, var(--c-win) calc(var(--a-win) * 100%), transparent);
+  --chrome:color-mix(in srgb, var(--c-sf) calc(var(--a-chrome) * 100%), transparent);
+  --surface:color-mix(in srgb, var(--c-sf) calc(var(--a-sf) * 100%), transparent);
+  --surface-2:color-mix(in srgb, var(--c-sf2) calc(var(--a-sf) * 100%), transparent);
+  --sunken:color-mix(in srgb, var(--c-sunken) calc(var(--a-sf) * 100%), transparent);
+  --raised:color-mix(in srgb, var(--c-raised) calc(var(--a-raised) * 100%), transparent);
+  --dialog:var(--raised);
+  /* Sticky headers sit over scrolling content: they blur it instead of hiding it. */
+  --sticky:color-mix(in srgb, var(--c-win) calc(var(--a-win) * 60%), transparent);
+}
+:root[data-surface="translucent"],:root[data-surface="translucent"] body,:root[data-surface="translucent"] #root{background:transparent}
 }

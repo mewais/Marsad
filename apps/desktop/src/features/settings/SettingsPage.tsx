@@ -61,7 +61,7 @@ function General() {
     : support && !support.transparent
       ? "Your desktop cannot show transparent windows (no compositor), so Marsad stays solid."
       : support?.effect
-        ? `Blurred backdrop (${support.effect === "vibrancy" ? "macOS vibrancy" : support.effect === "mica" ? "Mica" : support.effect === "acrylic" ? "Acrylic" : "blur"}).`
+        ? `Blurred backdrop (${support.effect === "vibrancy" ? "macOS vibrancy" : support.effect === "mica" ? "Mica" : support.effect === "acrylic" ? "Acrylic" : "blur"}). The strength sets how much of it shows.${support.effect === "acrylic" || support.effect === "mica" ? " Windows draws it solid while Marsad is not the active window." : ""}`
         : "Blurred where the system offers it (Windows 11, macOS). On Linux the window is see-through without blur, if your desktop has a compositor.";
   return (
     <>

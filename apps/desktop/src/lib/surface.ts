@@ -45,9 +45,12 @@ export function applySurface(surface: SurfaceChoice, strength: number, support: 
   const on = surface === "translucent" && (support?.transparent ?? true);
   if (on) {
     el.setAttribute("data-surface", "translucent");
+    // Whether the OS blurs what is behind decides how transparent the window layer may get.
+    el.setAttribute("data-backdrop", support?.effect ?? "none");
     el.style.setProperty("--glass", String(clampStrength(strength) / 100));
   } else {
     el.removeAttribute("data-surface");
+    el.removeAttribute("data-backdrop");
     el.style.removeProperty("--glass");
   }
   try {

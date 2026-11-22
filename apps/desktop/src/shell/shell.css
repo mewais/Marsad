@@ -1,5 +1,5 @@
 /* App shell, page header, toolbar. */
-.titlebar{position:relative;z-index:25;display:flex;align-items:center;gap:var(--s3);padding:0 6px 0 12px;border-bottom:1px solid var(--line);background:var(--surface)}
+.titlebar{position:relative;z-index:25;display:flex;align-items:center;gap:var(--s3);padding:0 6px 0 12px;border-bottom:1px solid var(--line);background:var(--chrome, var(--surface))}
 .brand{display:flex;align-items:center;gap:8px;font-weight:700;letter-spacing:.01em;min-width:150px}
 .brand .ar{font-weight:500;color:var(--fg-3);font-size:12px}
 .cmdk{flex:0 1 420px;margin:0 auto;display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;border:1px solid var(--line);border-radius:var(--r2);background:var(--sunken);color:var(--fg-3);font-size:12px}
@@ -7,14 +7,14 @@
 kbd{font-family:var(--f-mono);font-size:10.5px;padding:1px 5px;border-radius:4px;border:1px solid var(--line-2);border-bottom-width:2px;color:var(--fg-2);background:var(--surface-2);white-space:nowrap}
 .tb-right{display:flex;align-items:center;gap:6px}
 .body{display:grid;grid-template-columns:78px 1fr;min-height:0}
-.rail{border-right:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column;align-items:stretch;padding:8px 6px;gap:2px}
+.rail{border-right:1px solid var(--line);background:var(--chrome, var(--surface));display:flex;flex-direction:column;align-items:stretch;padding:8px 6px;gap:2px}
 .rail a{display:flex;flex-direction:column;align-items:center;gap:3px;padding:7px 2px;border-radius:var(--r2);color:var(--fg-2);font-size:10.5px;font-weight:500;text-decoration:none;position:relative;cursor:pointer}
 .rail a:hover{background:var(--surface-2);color:var(--fg)}
 .rail a[aria-current="true"]{background:var(--accent-bg);color:var(--accent)}
 .rail .badge{position:absolute;top:3px;right:8px;min-width:16px;height:16px;border-radius:8px;background:var(--needs);color:var(--on-needs);font-size:10px;font-weight:700;display:grid;place-items:center;padding:0 4px}
 .rail .sp{flex:1}
 .main{min-width:0;min-height:0;overflow:hidden;position:relative;display:flex;flex-direction:column}
-.statusbar{display:flex;align-items:center;gap:var(--s4);padding:0 12px;border-top:1px solid var(--line);background:var(--surface);font-size:11.5px;color:var(--fg-2);white-space:nowrap;overflow:hidden}
+.statusbar{display:flex;align-items:center;gap:var(--s4);padding:0 12px;border-top:1px solid var(--line);background:var(--chrome, var(--surface));font-size:11.5px;color:var(--fg-2);white-space:nowrap;overflow:hidden}
 .statusbar .sb-item{display:flex;align-items:center;gap:5px}
 .statusbar .sp{flex:1}
 
@@ -26,7 +26,7 @@ kbd{font-family:var(--f-mono);font-size:10.5px;padding:1px 5px;border-radius:4px
 .ph .sp{flex:1}
 .toolbar{display:flex;align-items:center;gap:8px;padding:10px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .toolbar .sp{flex:1}
-.keyhints{display:flex;gap:14px;align-items:center;padding:7px 20px;border-top:1px solid var(--line);font-size:11.5px;color:var(--fg-3);flex-wrap:wrap;background:var(--surface)}
+.keyhints{display:flex;gap:14px;align-items:center;padding:7px 20px;border-top:1px solid var(--line);font-size:11.5px;color:var(--fg-3);flex-wrap:wrap;background:var(--chrome, var(--surface))}
 .keyhints span{display:inline-flex;gap:5px;align-items:center}
 
 #root{background:var(--win)}
@@ -50,3 +50,8 @@ kbd{font-family:var(--f-mono);font-size:10.5px;padding:1px 5px;border-radius:4px
 @media (max-width:1100px){.cmdk{flex-basis:260px}}
 .cmdk span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .contents{display:contents} .keys{display:inline-flex;gap:4px}
+
+/* Translucent window: sticky headers blur the content scrolling under them; floating layers
+   blur what is under them too. */
+:root[data-surface="translucent"] :is(.sd-head,.ibx-head,.etab th){background:var(--sticky);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px)}
+:root[data-surface="translucent"] :is(.dlg,.menu,.popover,.toast,.combo-list,.tip){-webkit-backdrop-filter:blur(24px) saturate(1.2);backdrop-filter:blur(24px) saturate(1.2)}

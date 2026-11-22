@@ -84,6 +84,15 @@ jobs:
         working-directory: apps/desktop
       - run: cargo build --features custom-protocol
         working-directory: apps/desktop/src-tauri
+      - name: Translucent window over a vivid backdrop (screenshots)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File apps/desktop/e2e-real/translucency.ps1 -App apps/desktop/src-tauri/target/debug/marsad-desktop.exe -Out translucency
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Windows'
+        with:
+          name: translucency-windows
+          path: translucency/*.png
       - name: Lint and unit tests
         if: runner.os == 'Linux'
         working-directory: apps/desktop/src-tauri
