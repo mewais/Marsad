@@ -1,0 +1,39 @@
+name: diag-winssh
+# Temporary: experiments on the native Windows ssh bootstrap. Delete after diagnosis.
+on:
+  push:
+    branches: [claude/awesome-euler-r7x45r]
+jobs:
+  diag:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: OpenSSH Server on port 2223 (as in ci.yml)
+        shell: pwsh
+        run: |
+          $v = 'v9.5.0.0p1-Beta'
+          Invoke-WebRequest "https://github.com/PowerShell/Win32-OpenSSH/releases/download/$v/OpenSSH-Win64.zip" -OutFile "$env:RUNNER_TEMP\openssh.zip"
+          Expand-Archive "$env:RUNNER_TEMP\openssh.zip" -DestinationPath 'C:\Program Files\OpenSSH' -Force
+          $dir = 'C:\Program Files\OpenSSH\OpenSSH-Win64'
+          powershell -NoProfile -ExecutionPolicy Bypass -File "$dir\install-sshd.ps1"
+          Start-Service sshd
+          New-Item -ItemType Directory -Force "$env:USERPROFILE\.ssh" | Out-Null
+          cmd /c 'ssh-keygen -q -t ed25519 -N "" -f "%USERPROFILE%\.ssh\marsad_winssh"'
+          Set-Content -Encoding ascii 'C:\ProgramData\ssh\sshd_config' @(
+            'Port 2223', 'PubkeyAuthentication yes', 'PasswordAuthentication no',
+            'AuthorizedKeysFile .ssh/authorized_keys', 'SyslogFacility LOCAL0', 'LogLevel DEBUG2',
+            'Subsystem sftp sftp-server.exe',
+            'Match Group administrators',
+            '       AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys')
+          $pub = Get-Content "$env:USERPROFILE\.ssh\marsad_winssh.pub"
+          Set-Content -Encoding ascii 'C:\ProgramData\ssh\administrators_authorized_keys' $pub
+          icacls 'C:\ProgramData\ssh\administrators_authorized_keys' /inheritance:r /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F'
+          Set-Content -Encoding ascii "$env:USERPROFILE\.ssh\authorized_keys" $pub
+          Restart-Service sshd
+          ssh -p 2223 -i "$env:USERPROFILE\.ssh\marsad_winssh" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$env:USERNAME@127.0.0.1" "echo ok %USERNAME%"
+          (Get-Command ssh).Source
+          ssh -V
+      - name: Experiments
+        shell: pwsh
+        run: .github/diag/winssh.ps1
