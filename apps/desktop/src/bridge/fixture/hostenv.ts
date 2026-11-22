@@ -63,6 +63,11 @@ export class FixtureHostEnvs {
     return { ...base, revision: a.revision, setup: a.setup, variables: s.vars.map((v) => v.name), commands: s.commands, path: [...extra, ...base.path] };
   }
 
+  /** The agent command a launch of `driver` on `host` runs, once applied. */
+  command(host: HostId, driver: string): string | null {
+    return this.applied.has(host) ? this.get(host).commands[driver] ?? null : null;
+  }
+
   /** Inventory as the host's discovery reports it with the agent commands in effect. */
   inventory(host: HostId, inv: DriverInventory[]): DriverInventory[] {
     const s = this.applied.has(host) ? this.get(host) : null;

@@ -8,6 +8,8 @@
 .dp.on{border-color:var(--accent);background:var(--accent-bg)}
 .dp:disabled{opacity:.55;cursor:not-allowed}
 .dp .v{font-size:11px;color:var(--fg-3);font-family:var(--f-mono)}
+.dp .cmd{font-size:11px;color:var(--fg-2);font-family:var(--f-mono);display:flex;align-items:center;gap:3px;min-width:0}
+.dp .cmd span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dp .drv{color:var(--fg);font-weight:600;min-width:0}
 .dp .drv span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dp{padding:8px 7px}

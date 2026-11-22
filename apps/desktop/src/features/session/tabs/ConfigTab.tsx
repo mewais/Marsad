@@ -45,6 +45,10 @@ export function ConfigTab({ sessionKey, snap }: { sessionKey: string; snap: Sess
           <Select label="Model" value={model || undefined} placeholder="Not reported" options={choice.options} onChange={setModel} />
           <span className="hint">{snap.available_models.length ? `Reported by ${name}${snap.cli_version ? ` ${snap.cli_version}` : ""} on ${hv?.name ?? host}: ${snap.available_models.map((m) => m.id).join(", ")}` : `${name} has not reported its models.`}</span>
         </div>
+        {snap.command ? <div className="field"><span className="lbl">Command</span>
+          <code className="mono">{snap.command}</code>
+          <span className="hint">{name} runs as <b className="mono">{snap.command}</b> on {hv?.name ?? host}: the host's agent command when the session was created (a continued session keeps it).</span>
+        </div> : null}
         <div className="field"><span className="lbl">Mode</span>
           <Select label="Mode" value={mode || undefined} placeholder="Not reported" options={snap.available_modes.map((m) => ({ value: m.id, label: m.label, description: m.description }))} onChange={setMode} />
           <span className="hint">{snap.available_modes.length ? `Modes offered by ${name}` : `${name} reports no modes.`}</span>

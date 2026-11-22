@@ -280,6 +280,11 @@ async fn host_environment_settings_over_ssh_and_local() {
     .await
     .expect("the genie session finished a turn");
     assert_eq!(snap.turns_completed, 1);
+    assert_eq!(
+        snap.command.as_deref(),
+        Some("genie"),
+        "the session names its command"
+    );
     let genie_env = std::fs::read_to_string(home.join("genie-env")).expect("genie ran");
     assert!(genie_env.contains("PLAIN=plain-value"), "{genie_env}");
     assert!(genie_env.contains("FROM_SETUP=yes"));

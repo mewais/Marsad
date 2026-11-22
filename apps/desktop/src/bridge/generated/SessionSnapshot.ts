@@ -19,7 +19,13 @@ import type { Usage } from "./Usage";
 /**
  * The continuously reduced state of one session. Rebuilt exactly by replaying its journal.
  */
-export type SessionSnapshot = { id: SessionId, driver: DriverId, cwd?: string | null, labels?: { [key in string]: string }, created_at_ms: number, capabilities: DriverCapabilities, 
+export type SessionSnapshot = { id: SessionId, driver: DriverId, cwd?: string | null, labels?: { [key in string]: string }, created_at_ms: number, 
+/**
+ * The command this session's CLI is started as instead of the driver's default binary
+ * (the host's agent command, or a configured binary), stored with the session: a
+ * continued session keeps it. `None`: the default binary.
+ */
+command?: string | null, capabilities: DriverCapabilities, 
 /**
  * What a prompt may carry besides text.
  */

@@ -216,8 +216,9 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
           </div>
           <span className="disc">
             <Icon name="refresh" size="xs" />
-            {error ? <span className="c-failed">{error}</span> : inv ? `Models and modes discovered from ${inv.binary_path?.split(/[\\/]/).pop() ?? inv.driver} ${inv.version ?? ""} on ${host?.name ?? f.host} · ${inv.models.length} models, ${inv.modes.length} modes${loading ? " · refreshing…" : ""}` : loading ? "Asking the host what is installed…" : ""}
+            {error ? <span className="c-failed">{error}</span> : inv ? `Models and modes discovered from ${inv.command ? `${inv.command} (this host's command for ${inv.display_name})` : inv.binary_path?.split(/[\\/]/).pop() ?? inv.driver} ${inv.version ?? ""} on ${host?.name ?? f.host} · ${inv.models.length} models, ${inv.modes.length} modes${loading ? " · refreshing…" : ""}` : loading ? "Asking the host what is installed…" : ""}
           </span>
+          {inv?.warning ? <span className="disc c-needs" role="status"><Icon name="warn" size="xs" />{inv.warning}</span> : null}
           {inv?.installed ? (
             <div className="profile">
               <Icon name="layers" size="sm" />

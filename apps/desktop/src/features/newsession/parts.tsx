@@ -4,7 +4,7 @@ import { linkView, osWord, useAppState, type HostView } from "../../state";
 import { ConnState, DriverBadge, Icon, hostIcon, makeDriver } from "../../ui";
 import type { ResumeRow } from "./model";
 
-/** Agent picker: every driver the host's inventory knows, with version; missing ones say why. */
+/** Agent picker: every driver the host's inventory knows, with version and the host's agent command when it has one; missing ones say why. */
 export function DriverPick({ drivers, value, onChange }: { drivers: DriverInventory[]; value: string; onChange: (id: string) => void }) {
   const known = useAppState((s) => s.drivers);
   return (
@@ -14,6 +14,7 @@ export function DriverPick({ drivers, value, onChange }: { drivers: DriverInvent
           className={`dp${d.driver === value ? " on" : ""}`} onClick={() => onChange(d.driver)}>
           <DriverBadge driver={known[d.driver] ?? makeDriver(d.driver, d.display_name)} />
           <span className="v">{d.installed ? `v${d.version ?? "?"}` : d.refreshing && !d.refreshed_at_ms ? "checking…" : "not installed"}</span>
+          {d.command ? <span className={`cmd${d.warning ? " c-needs" : ""}`} title={d.warning ?? `This host runs ${d.command} for ${d.display_name}`}>{d.warning ? <Icon name="warn" size="xs" /> : null}<span>{d.command}</span></span> : null}
         </button>
       ))}
       {drivers.length === 0 ? <span className="faint">No agent CLIs reported by this host yet.</span> : null}

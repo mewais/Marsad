@@ -88,6 +88,7 @@ export class FixtureBackend implements Backend {
       cancelAuth: (a) => this.cancelAuth(a),
       createSession: (host, snap, first) => this.createSession(host, snap, first),
       session: (host, id) => this.hosts.get(host)?.sessions.get(id)?.snap,
+      agentCommand: (host, driver) => this.envs.command(host, driver),
       emitWorkstreams: (e) => this.wsSubs.forEach((s) => s(e)),
     });
     // A returning user has seen the old idle sessions.

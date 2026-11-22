@@ -62,3 +62,35 @@ describe("new session: dialog", () => {
     await waitFor(() => expect(backend.requests.find((r) => r.method === "sessions.launch")?.params).toMatchObject({ resume: { kind: "resume", native_session_id: "c-term-1" } }));
   });
 });
+
+describe("new session: the host's agent command", () => {
+  it("shows the command in the agent picker, the discovery line and the session's Config tab", async () => {
+    const user = userEvent.setup();
+    const { backend, history } = await renderApp();
+    backend.envs.set({ host: "x1", setup: "module load tools", vars: [], commands: { claude: "genie" }, revision: "" }, true);
+    await user.keyboard("n");
+    const dlg = await screen.findByRole("dialog", { name: "New session" });
+    const claude = await within(dlg).findByRole("radio", { name: /Claude Code/ });
+    await waitFor(() => expect(claude).toHaveTextContent("genie"));
+    expect(within(dlg).getByText(/discovered from genie \(this host's command for Claude Code\)/)).toBeInTheDocument();
+    await waitFor(() => expect(within(dlg).getByLabelText("Project folder")).toHaveValue("~/src/ledgerline"));
+    await user.type(within(dlg).getByLabelText(/First message/), "hello");
+    await user.click(within(dlg).getByRole("button", { name: /Start session/ }));
+    await waitFor(() => expect(history.store.get()).toMatch(/^\/session\/x1\//));
+    history.push(`${history.store.get().split("?")[0]}?tab=config`);
+    expect(await screen.findByText("Command")).toBeInTheDocument();
+    expect(screen.getByText(/runs as/)).toHaveTextContent("Claude Code runs as genie on");
+  });
+
+  it("warns in the picker when the command does not answer like the agent", async () => {
+    const user = userEvent.setup();
+    const { backend } = await renderApp();
+    backend.envs.set({ host: "x1", setup: "", vars: [], commands: { claude: "lister" }, revision: "" }, true);
+    await user.keyboard("n");
+    const dlg = await screen.findByRole("dialog", { name: "New session" });
+    const claude = await within(dlg).findByRole("radio", { name: /Claude Code/ });
+    await waitFor(() => expect(claude.querySelector(".cmd.c-needs")).not.toBeNull());
+    // The selected agent's warning is spelled out once the folder's inventory is in.
+    await waitFor(() => expect(within(dlg).getByText(/does not answer like Claude Code/, { selector: ".disc" })).toBeInTheDocument(), { timeout: 3000 });
+  });
+});
