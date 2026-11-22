@@ -31,6 +31,8 @@ const APPLY_DEADLINE: Duration = Duration::from_secs(60);
 const TEST_DEADLINE: Duration = Duration::from_secs(110);
 /// Reading the host's report.
 const REPORT_DEADLINE: Duration = Duration::from_secs(15);
+/// Attempts of a background apply (on connect / at start) before giving up until the next.
+const RETRIES: u32 = 6;
 /// How long a request waits for the hub's loopback link (in-process; connects at once).
 const WAIT_CONNECTED: Duration = Duration::from_secs(10);
 
@@ -91,13 +93,26 @@ impl HostEnvs {
         envs
     }
 
+    /// Apply in the background, retrying on a backoff schedule while it fails (a link that has
+    /// just come up may not route requests yet) — at most [`RETRIES`] times; after that the
+    /// next connect or launch tries again.
     fn ensure_in_background(&self, host: HostId) {
         let this = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = this.ensure(&host).await {
-                // The host shows the settings as not applied; the next connect or launch
-                // tries again.
-                tracing::warn!(%host, error = %e, "cannot apply the host's environment settings");
+            let mut delay = Duration::from_millis(200);
+            for attempt in 1..=RETRIES {
+                match this.ensure(&host).await {
+                    Ok(_) => return,
+                    Err(e) if attempt == RETRIES => {
+                        tracing::warn!(%host, error = %e, "cannot apply the host's environment settings");
+                    }
+                    Err(e) => {
+                        tracing::info!(%host, error = %e, attempt, "applying the host's environment settings failed; retrying");
+                        // Backoff schedule between attempts.
+                        tokio::time::sleep(delay).await;
+                        delay = (delay * 2).min(Duration::from_secs(5));
+                    }
+                }
             }
         });
     }
