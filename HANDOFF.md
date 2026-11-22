@@ -43,18 +43,37 @@ hash in both Cargo.lock files (index only), or re-resolve with the patches moved
    POSIX bootstrap printed no report (locale-independent); PowerShell read the redirected stdin
    itself (`-InputFormat None`); PowerShell capture/setup output came back in the OEM code page
    (now a UTF-8 writer on raw stdout; Wasit Windows test covers a non-ASCII registry variable,
-   setup output and `$env:` value). **NOT closed:** on the runner the link gets through the
-   POSIX attempt (cmd mangles it: "The system cannot find the path specified"), falls back to
-   PowerShell, reads its `MARSAD-BOOT Windows AMD64 none` report and starts `UPLOAD` of the 30 MB
-   debug helper, which never answers `MARSAD-OK` within 300 s (hub log in the CI output).
-   Cause not found within the push budget; candidates: PowerShell 5.1 still consuming the
-   redirected stdin despite `-InputFormat None` (its host and the script's
-   `[Console]::OpenStandardInput()` racing for the bytes, so the loop waits for bytes it never
-   gets), or Win32-OpenSSH's non-pty stdin pipe stalling on a large binary stream. Next step:
-   reproduce on a Windows machine with `ssh -T host "powershell -NoProfile -InputFormat None
-   -EncodedCommand …" < helper.exe`; if PowerShell is the culprit, upload base64 lines (or via
-   sftp on the same connection) instead of raw bytes. windows-e2e is red because of this test
-   only (WSL, ssh-to-WSL and no-console tests pass).
+   setup output and `$env:` value). **Upload stall — root cause (diagnosed with a throwaway
+   matrix workflow on windows-latest, Marsad 6366e1d..5a6374c, since deleted):** OpenSSH for
+   Windows gives the remote command a stdin pipe opened for overlapped I/O (`NtQueryInformationFile`
+   mode 0x0: no `FILE_SYNCHRONOUS_IO_*`). Windows PowerShell 5.1 and any .NET Framework console
+   stream read it synchronously: the first read returns what is already buffered, the next never
+   completes. Evidence: the old script read `UPLOAD n` and the first 6129 bytes then hung at
+   1 MB/30 MB, with and without `-InputFormat None`, even with stdin closed; 1 KB passed; pwsh 7
+   passed 30 MB; `$input` never yielded a line while stdin stayed open; a .NET Framework probe
+   hung with `Console.OpenStandardInput()` and read 30 MB in 3 s through an asynchronous
+   `FileStream` on the same handle. Also found: first install always failed in `& $b stop`
+   (helper not there yet, `$ErrorActionPreference='Stop'`), and errors came back as CLIXML.
+   sshd itself closes the channel when the command exits (not a cause). **Fix (Marsad 19a6cb2):**
+   the Windows bootstrap is one cmd.exe line — `set MARSAD_BOOT_CS=<deflated C#>&& powershell
+   … -EncodedCommand <compile once> <NUL && set MARSAD_BOOT_CS=&& "%LOCALAPPDATA%\Marsad\bin\
+   marsad-boot-<hash>.exe" && "…\marsad-agent.exe" bridge --host-id <id>`. PowerShell never
+   touches the connection; the C# boot program (`hub/windows_boot.cs`, compiled by Add-Type,
+   cached by source hash) speaks the same line protocol on an asynchronous unbuffered stdin;
+   failures are one plain `Marsad bootstrap: …` stderr line + exit 1 and nothing further starts
+   (verified on the runner: unknown command, connection closed mid-upload, an invalid helper).
+   A host whose OpenSSH DefaultShell is Windows PowerShell 5.1 cannot work this way (its shell
+   would read stdin itself); cmd.exe is OpenSSH's default. With it, the native test got through
+   provisioning, discovery, PowerShell setup (non-ASCII), variables, the agent command and the
+   claude session on the first CI run; the cmd terminal then timed out because the test's
+   terminal never answered ConPTY's cursor-position query (`ESC[6n`), which the app's xterm.js
+   does — test fixed to answer like `git_pty.rs` already did (a test gap, not a product bug).
+   Two latent races surfaced in `workstreams.rs::three_nodes_across_local_and_ssh_host` with the
+   new timing (3/144 locally): the edge view's gates (session snapshot feed) and in-flight tasks
+   (task feed) are two feeds — the test now waits for both before asserting both; and a session
+   holding handoff gates read `starting` while its CLI handshake was still pending — product
+   fix (Wasit 31fa6b5): pending gates take precedence (`needs_you`), test
+   `core.rs::a_gate_raised_while_starting_needs_you` (failed before). After: 160/160.
 5. **Secrets in the OS credential store** (Marsad 255c4de): `marsad-store/src/secrets.rs`,
    keyring 3 (Windows Credential Manager, macOS Keychain, Secret Service via the pure-Rust
    zbus client — no libdbus; musl helper unaffected). Chosen at store open by a write/read/
@@ -91,8 +110,15 @@ hash in both Cargo.lock files (index only), or re-resolve with the patches moved
    list) won the race after a restart the UI showed 0 sessions. Feed now starts after. After:
    15/15 (chain), 20/20 isolated, 20/20 (gate chain), full suite 35/35. `run.mjs --repeat N`.
    Also: `host_env` failed once on Linux CI (a restarted host daemon never got its settings
-   back; not reproduced in 6 local runs); background applies now retry on a backoff schedule
-   (Marsad 558d7c4) — cause not proven.
+   back). Root cause (Wasit 86e0a59): the link supervisor announced `Connected` before
+   installing the client, so the settings apply that `HostEnvs` starts on that transition could
+   be routed in between and fail with "host is not connected". Reproduced 7/60 (8 parallel runs
+   on 4 cores, pre-retry code); with the Wasit order fix alone 60/60; final 80/80 + 60/60.
+   Wasit test `hub.rs::a_link_announced_connected_is_usable_at_once` (deterministic: the
+   state callback checks the client; failed before). The retry schedule (558d7c4) is removed
+   (Marsad 063aac2); `HostEnvs` also follows `Hub::events` (every transition; the states watch
+   may skip a quick reconnect) and, on lag, ensures every connected host. A failing apply is
+   logged and the host shows its settings as not applied (Hosts → Environment).
 11. **codex** (Wasit 7856987): `live_codex_image` — a PNG uploaded to a codex 0.169.1 session goes
    out as `localImage`, codex sends it to the (fake) Responses model as an `input_image` data
    URL with the same bytes, the model's reply names it. Not verifiable without an account: real
