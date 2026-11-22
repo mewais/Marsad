@@ -332,8 +332,12 @@ async fn three_nodes_across_local_and_ssh_host() {
     assert!(matches!(t1.state, TaskState::PendingApproval { .. }));
     assert!(matches!(t2.state, TaskState::PendingApproval { .. }));
     let v = views
-        .until(&ws.id, "two handoff gates", |v| {
-            v.edges.iter().all(|e| e.pending_gates.len() == 1)
+        // The gates come with the orchestrator's session snapshot, the tasks with the task
+        // feed: two feeds, so the view can show one before the other.
+        .until(&ws.id, "two handoff gates, their tasks in flight", |v| {
+            v.edges
+                .iter()
+                .all(|e| e.pending_gates.len() == 1 && e.in_flight.len() == 1)
         })
         .await;
     let gate_of = |to: &str| {

@@ -588,6 +588,7 @@ fn print_logs(dir: &Path) {
 }
 
 /// What a terminal on `host` prints for `cmd` (cmd.exe, the default shell), until `want`.
+/// Acts as the app's terminal would: it answers ConPTY's cursor-position query.
 async fn terminal_prints(c: &MarsadClient, host: &HostId, cwd: &Path, cmd: &str, want: &str) {
     use base64::Engine;
     let info = c
@@ -610,11 +611,20 @@ async fn terminal_prints(c: &MarsadClient, host: &HostId, cwd: &Path, cmd: &str,
     while !text.contains(want) {
         match tokio::time::timeout(T, out.next()).await {
             Ok(Some(Ok((_, marsad_proto::pty::PtyEvent::Output { data, .. })))) => {
-                text.push_str(&String::from_utf8_lossy(
+                let chunk = String::from_utf8_lossy(
                     &base64::engine::general_purpose::STANDARD
                         .decode(data)
                         .unwrap(),
-                ))
+                )
+                .into_owned();
+                // Answer a cursor-position query like a terminal does (ConPTY asks before it
+                // draws; the app's xterm.js answers it).
+                if chunk.contains("\x1b[6n") {
+                    c.pty_input(Some(host), &info.id, "\x1b[1;1R")
+                        .await
+                        .unwrap();
+                }
+                text.push_str(&chunk);
             }
             other => panic!(
                 "terminal: {:?}; printed {text:?}",
