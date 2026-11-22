@@ -12,4 +12,9 @@ from: string,
 /**
  * Peers by agent id (`host/session`) or display name.
  */
-to: Array<string>, mode: TaskMode, instruction: string, deadline_secs?: number | null, attachments?: Array<string>, };
+to: Array<string>, mode: TaskMode, instruction: string, 
+/**
+ * Seconds the task may take (default: the workstream's). Never beyond the deadline of the
+ * task the caller is working on: a delegated task inherits what is left of it.
+ */
+deadline_secs?: number | null, attachments?: Array<string>, };
