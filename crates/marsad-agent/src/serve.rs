@@ -321,6 +321,11 @@ async fn start_hub(
     let workstreams = Workstreams::start(store.clone(), link, fleet.clone(), local_id.clone())
         .await
         .map_err(|e| e.to_string())?;
+    let gated: Arc<dyn Service> = Arc::new(crate::hub::hostenv::EnvGated {
+        envs: envs.clone(),
+        inner: routing.clone(),
+        local: local_id.clone(),
+    });
     let svc = HubServices {
         registry,
         prompts,
@@ -344,6 +349,7 @@ async fn start_hub(
         routing,
     )
     .and_then(|_| top.register(HUB_ROUTES.iter().copied(), Arc::new(svc)))
+    .and_then(|_| top.register(crate::hub::hostenv::ENV_GATED.iter().copied(), gated))
     .map_err(|e| e.to_string())?;
     let top: Arc<dyn Service> = Arc::new(top);
     // The hub is the spawn authority: its node (and, through it, every other host's node)

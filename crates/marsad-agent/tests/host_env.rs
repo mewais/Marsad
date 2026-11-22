@@ -381,3 +381,73 @@ async fn host_environment_settings_over_ssh_and_local() {
     .expect("settings applied again after the daemon restarted");
     assert_eq!(env.setup.unwrap().exit_code, Some(1));
 }
+
+/// A terminal or session asked for while a save is still being applied starts in the saved
+/// environment: it waits for the apply. The setup holds the apply open on a FIFO until the
+/// terminal has been asked for; before the fix the terminal started at once with the
+/// previous environment.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_asked_for_during_a_save_gets_the_saved_environment() {
+    let d = TempDir::new();
+    let hub_dir = d.path().join("l");
+    let c = hub_client(&hub_dir);
+    let local = HostId::new("hub");
+    let started = d.path().join("started.fifo");
+    let release = d.path().join("release.fifo");
+    for f in [&started, &release] {
+        let st = std::process::Command::new("mkfifo")
+            .arg(f)
+            .status()
+            .unwrap();
+        assert!(st.success());
+    }
+    c.set_host_env(HostEnvSettings {
+        host: local.clone(),
+        setup: "export ORDERED=old".into(),
+        vars: Vec::new(),
+        commands: BTreeMap::new(),
+        revision: String::new(),
+    })
+    .await
+    .unwrap();
+
+    let save = {
+        let c = c.clone();
+        let local = local.clone();
+        let setup = format!(
+            "echo go > '{}'\nread x < '{}'\nexport ORDERED=new",
+            started.display(),
+            release.display()
+        );
+        tokio::spawn(async move {
+            c.set_host_env(HostEnvSettings {
+                host: local,
+                setup,
+                vars: Vec::new(),
+                commands: BTreeMap::new(),
+                revision: String::new(),
+            })
+            .await
+        })
+    };
+    // The setup is running (blocking open of the FIFO until it writes).
+    let first = tokio::time::timeout(Duration::from_secs(60), tokio::fs::read_to_string(&started))
+        .await
+        .expect("the setup started")
+        .unwrap();
+    assert_eq!(first.trim(), "go");
+    let releaser = {
+        let release = release.clone();
+        tokio::spawn(async move {
+            // Gives the terminal request time to reach the hub while the apply is pending; a
+            // late request only makes the test weaker, never fail wrongly.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::fs::write(&release, "done\n").await.unwrap();
+        })
+    };
+    let text = terminal(&c, None, d.path(), "echo \"o=$ORDERED.\"", "o=new.").await;
+    assert!(!text.contains("o=old."), "{text}");
+    releaser.await.unwrap();
+    let saved = save.await.unwrap().unwrap();
+    assert!(saved.environment.unwrap().setup.unwrap().ok);
+}

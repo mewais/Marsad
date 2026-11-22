@@ -15,7 +15,7 @@ use std::time::Duration;
 use marsad_proto::hosts::{HostEnvSaved, HostEnvSettings, HostVar};
 use marsad_proto::{HostId, LinkState, MarsadError};
 use marsad_store::{SecretValue, Store};
-use wasit_control::{CallError, Hub, RequestOpts, Supervised};
+use wasit_control::{CallContext, CallError, Hub, RequestOpts, RpcError, Service, Supervised};
 use wasit_core::DriverRegistry;
 use wasit_runtime::wire::{
     methods as rt, ConfigureEnvironment, EnvVar, EnvironmentTest, HostEnvConfig, HostEnvironment,
@@ -153,8 +153,12 @@ impl HostEnvs {
         };
         shape.validate().map_err(MarsadError::invalid)?;
         let host = settings.host.clone();
+        // Held from before the settings are stored until they are applied, so a launch or
+        // terminal asked for meanwhile waits for them ([`EnvGated`]).
+        let lock = self.lock_for(&host);
+        let _g = lock.lock().await;
         let stored = self.inner.store.set_host_env(settings).await?;
-        let (environment, not_applied) = match self.ensure(&host).await {
+        let (environment, not_applied) = match self.ensure_locked(&host).await {
             Ok(env) => (Some(env), None),
             Err(e) => (None, Some(e.to_string())),
         };
@@ -170,6 +174,11 @@ impl HostEnvs {
     pub async fn ensure(&self, host: &HostId) -> Result<HostEnvironment, MarsadError> {
         let lock = self.lock_for(host);
         let _g = lock.lock().await;
+        self.ensure_locked(host).await
+    }
+
+    /// [`HostEnvs::ensure`] with the host's lock held by the caller.
+    async fn ensure_locked(&self, host: &HostId) -> Result<HostEnvironment, MarsadError> {
         let r = self.configuration(host).await?;
         let current: Option<HostEnvironment> = self
             .call(host, rt::HOST_ENVIRONMENT, (), REPORT_DEADLINE)
@@ -195,6 +204,40 @@ impl HostEnvs {
     async fn configuration(&self, host: &HostId) -> Result<ConfigureEnvironment, MarsadError> {
         let (settings, secrets) = self.inner.store.host_env_with_secrets(host.clone()).await?;
         configuration(settings, &secrets)
+    }
+}
+
+/// Methods that start processes on a host (terminals, sessions created or continued without
+/// `sessions.launch`, which ensures by itself): they first wait until the host runs with the
+/// stored settings, including a save still being applied. Everything else is passed through.
+pub const ENV_GATED: &[&str] = &[
+    marsad_proto::methods::PTY_START,
+    rt::SESSIONS_CREATE,
+    rt::SESSIONS_CONTINUE,
+];
+
+/// Serves [`ENV_GATED`]: [`HostEnvs::ensure`] on the request's host, then the routed call.
+pub struct EnvGated {
+    pub envs: HostEnvs,
+    pub inner: Arc<dyn Service>,
+    /// The host a request without `host` is for.
+    pub local: HostId,
+}
+
+#[async_trait::async_trait]
+impl Service for EnvGated {
+    async fn call(
+        &self,
+        ctx: CallContext,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, RpcError> {
+        let host = ctx.host.clone().unwrap_or_else(|| self.local.clone());
+        self.envs
+            .ensure(&host)
+            .await
+            .map_err(MarsadError::into_rpc)?;
+        self.inner.call(ctx, method, params).await
     }
 }
 
