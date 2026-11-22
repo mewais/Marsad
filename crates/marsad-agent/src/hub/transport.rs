@@ -164,13 +164,15 @@ pub fn native_windows_sign(printed: &str) -> bool {
 }
 
 /// `powershell -EncodedCommand <base64 UTF-16LE>`: no quoting through ssh/cmd at all.
+/// `-InputFormat None`: with a redirected stdin PowerShell would otherwise read it as pipeline
+/// input itself, taking the bootstrap's command line and upload away from the script.
 pub fn powershell_command(script: &str) -> String {
     let utf16: Vec<u8> = script
         .encode_utf16()
         .flat_map(|u| u.to_le_bytes())
         .collect();
     format!(
-        "powershell -NoProfile -NonInteractive -EncodedCommand {}",
+        "powershell -NoProfile -NonInteractive -InputFormat None -EncodedCommand {}",
         base64::engine::general_purpose::STANDARD.encode(utf16)
     )
 }

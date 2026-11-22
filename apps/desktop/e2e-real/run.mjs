@@ -249,7 +249,9 @@ const env = {
   MARSAD_NOTIFY_LOG: path.join(root, "notifications.ndjson"),
 };
 const driverLog = fs.openSync(path.join(root, "tauri-driver.log"), "a");
-const driver = spawn("tauri-driver", ["--port", String(port), "--native-port", String(nativePort)], { env, stdio: ["ignore", driverLog, driverLog] });
+// MARSAD_E2E_NATIVE_DRIVER: the native WebDriver to use (e.g. a wrapper that makes msedgedriver log).
+const nativeDriver = process.env.MARSAD_E2E_NATIVE_DRIVER ? ["--native-driver", process.env.MARSAD_E2E_NATIVE_DRIVER] : [];
+const driver = spawn("tauri-driver", ["--port", String(port), "--native-port", String(nativePort), ...nativeDriver], { env, stdio: ["ignore", driverLog, driverLog] });
 for (let i = 0; i < 100; i++) {
   if (await fetch(`http://127.0.0.1:${port}/status`).then(() => true, () => false)) break;
   await sleep(100);

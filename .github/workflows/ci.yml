@@ -105,7 +105,14 @@ jobs:
           catch { Invoke-WebRequest "https://msedgedriver.azureedge.net/$wv/edgedriver_win64.zip" -OutFile $zip }
           Expand-Archive $zip "$env:RUNNER_TEMP\edgedriver" -Force
           $env:Path = "$env:RUNNER_TEMP\edgedriver;$env:Path"
+          # msedgedriver with a verbose log (printed when the run fails).
+          Set-Content -Encoding ascii "$env:RUNNER_TEMP\edgedriver\msedgedriver-logged.cmd" "@`"%~dp0msedgedriver.exe`" --verbose --log-path=`"%RUNNER_TEMP%\msedgedriver.log`" %*"
+          $env:MARSAD_E2E_NATIVE_DRIVER = "$env:RUNNER_TEMP\edgedriver\msedgedriver-logged.cmd"
           node apps/desktop/e2e-real/run.mjs --only translucent-window --shots translucency
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content "$env:RUNNER_TEMP\msedgedriver.log" -Tail 80 -ErrorAction Continue
+            exit 1
+          }
       - uses: actions/upload-artifact@v4
         if: always() && runner.os == 'Windows'
         with:
