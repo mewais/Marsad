@@ -115,7 +115,6 @@ pub fn run() {
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
                 smoke::on_page_load(webview);
-                surface::on_page_load(webview);
             }
         })
         .on_window_event(|window, ev| {
