@@ -567,6 +567,26 @@ async fn wsl_host_environment_settings(c: &MarsadClient, host: &HostId, distro: 
 
 // ── Native Windows over SSH ─────────────────────────────────────────────────
 
+/// Print every `*.log` under `dir` (diagnostics for a failed run).
+fn print_logs(dir: &Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            print_logs(&p);
+        } else if p.extension().is_some_and(|x| x == "log") {
+            let text = std::fs::read_to_string(&p).unwrap_or_default();
+            let tail: Vec<&str> = text.lines().rev().take(80).collect();
+            eprintln!("── {} ──", p.display());
+            for l in tail.into_iter().rev() {
+                eprintln!("{l}");
+            }
+        }
+    }
+}
+
 /// What a terminal on `host` prints for `cmd` (cmd.exe, the default shell), until `want`.
 async fn terminal_prints(c: &MarsadClient, host: &HostId, cwd: &Path, cmd: &str, want: &str) {
     use base64::Engine;
@@ -642,10 +662,32 @@ async fn native_windows_host_over_ssh_end_to_end() {
     })
     .await
     .unwrap();
-    until(&mut fleet, "the Windows ssh host connected", |e| {
-        link_is(e, "winssh", LinkState::is_connected)
-    })
-    .await;
+    let connected = async {
+        loop {
+            match fleet.next().await {
+                Some(Ok((_, e))) => {
+                    if let FleetEvent::Link { host, state } = &e {
+                        eprintln!("link {host}: {state:?}");
+                    }
+                    if link_is(&e, "winssh", LinkState::is_connected) {
+                        return;
+                    }
+                }
+                other => panic!("fleet subscription ended: {:?}", other.map(|r| r.is_ok())),
+            }
+        }
+    };
+    if tokio::time::timeout(Duration::from_secs(300), connected)
+        .await
+        .is_err()
+    {
+        // What the hub and the host's daemon logged (the connect attempt's stages).
+        let profile = std::env::var("USERPROFILE").unwrap_or_default();
+        for root in [d.path().join("l"), Path::new(&profile).join(".marsad")] {
+            print_logs(&root);
+        }
+        panic!("the Windows ssh host did not connect within 300 s");
+    }
     let entry = c
         .hosts()
         .await
