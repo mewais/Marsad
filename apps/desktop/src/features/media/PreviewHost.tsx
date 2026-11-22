@@ -143,8 +143,10 @@ function HtmlView({ text, resolver }: { text: string; resolver: HtmlResolver | n
         {ready && ready.blocked ? <span className="pv-note" data-testid="html-blocked">Remote content blocked: {ready.blocked}</span> : null}
         {ready && ready.missing ? <span className="faint fs12" data-testid="html-missing">{ready.missing} local resource{ready.missing > 1 ? "s" : ""} could not be loaded</span> : null}
       </div>
-      {/* No allow-same-origin: the frame's origin is opaque, so it can reach neither the app nor the bridge. */}
-      <iframe key={scripts ? "s" : "n"} title="HTML preview" data-testid="preview-html" sandbox={scripts ? "allow-scripts" : ""} srcDoc={ready?.html ?? fallback} referrerPolicy="no-referrer" />
+      {/* No allow-same-origin: the frame's origin is opaque, so it can reach neither the app nor the bridge.
+          A new frame for each document: Chromium can keep showing the first document when `srcdoc`
+          changes while that one is still loading (the resolved page then never appears). */}
+      <iframe key={`${scripts ? "s" : "n"}-${ready ? "resolved" : "plain"}`} title="HTML preview" data-testid="preview-html" sandbox={scripts ? "allow-scripts" : ""} srcDoc={ready?.html ?? fallback} referrerPolicy="no-referrer" />
     </div>
   );
 }
