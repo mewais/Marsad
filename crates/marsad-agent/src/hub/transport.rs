@@ -5,7 +5,8 @@
 //! does so once: the bootstrap reports `MARSAD-BOOT <os> <arch> <installed --version|none>`,
 //! then reads one command line from stdin — `RUN`, `RESTART` (stop the running daemon) or
 //! `UPLOAD <n>` followed by exactly `n` bytes of binary (written to `marsad-agent.new`,
-//! renamed into place atomically, old daemon stopped) — answers `MARSAD-OK`, and finally
+//! renamed into place atomically, old daemon stopped; on Windows see [`WINDOWS_BOOT_CS`]) —
+//! answers `MARSAD-OK`, and finally
 //! `exec`s `marsad-agent bridge --host-id <id>` on the same channel (so a daemon it starts
 //! knows itself by the id the hub routes by; its Wasl node addresses agents with it). The hub
 //! sends nothing after the command until it has read `MARSAD-OK`, so nothing the protocol
@@ -94,26 +95,68 @@ pub const POSIX_BOOTSTRAP: &str = concat!(
     "exec \"$b\" bridge --host-id "
 );
 
-/// The PowerShell bootstrap for Windows OpenSSH hosts (same line protocol).
-pub const POWERSHELL_BOOTSTRAP: &str = r#"$ErrorActionPreference='Stop'
-$d=Join-Path $env:LOCALAPPDATA 'Marsad\bin'; $b=Join-Path $d 'marsad-agent.exe'; $v='none'
-if (Test-Path $b) { $v=((& $b --version) -join '') -replace ' ','' }
-$o=[Console]::OpenStandardOutput(); $i=[Console]::OpenStandardInput()
-function Say($t) { $x=[Text.Encoding]::ASCII.GetBytes("$t`n"); $o.Write($x,0,$x.Length); $o.Flush() }
-function ReadLine { $s=''; while ($true) { $c=$i.ReadByte(); if ($c -lt 0 -or $c -eq 10) { return $s }; $s+=[char]$c } }
-Say "MARSAD-BOOT Windows $env:PROCESSOR_ARCHITECTURE $v"
-$cmd=(ReadLine).Split(' ')
-if ($cmd[0] -eq 'UPLOAD') {
-  New-Item -ItemType Directory -Force $d | Out-Null
-  $n=[long]$cmd[1]; $t="$b.new.$PID"; $f=[IO.File]::Create($t); $buf=New-Object byte[] 65536
-  while ($n -gt 0) { $r=$i.Read($buf,0,[Math]::Min($buf.Length,$n)); if ($r -le 0) { exit 70 }; $f.Write($buf,0,$r); $n-=$r }
-  $f.Close(); & $b stop | Out-Null
-  if (Test-Path $b) { Move-Item -Force $b "$b.old" }; Move-Item -Force $t $b
-} elseif ($cmd[0] -eq 'RESTART') { & $b stop | Out-Null } elseif ($cmd[0] -ne 'RUN') { exit 64 }
-Say 'MARSAD-OK'
-& $b bridge --host-id @HOST_ID@
-exit $LASTEXITCODE
+/// The Windows bootstrap's protocol side: a small C# program, compiled on the host by
+/// [`POWERSHELL_BOOTSTRAP`] into `%LOCALAPPDATA%\Marsad\bin\marsad-boot-<hash>.exe`. It speaks
+/// the line protocol with exact, unbuffered reads of stdin and ends with `MARSAD-OK`; cmd.exe
+/// then starts the bridge (see [`windows_bootstrap`]). A failure ends it with one plain line on
+/// stderr and exit 1, so cmd.exe starts nothing more and the connection closes.
+///
+/// Why not PowerShell itself: OpenSSH for Windows hands the command a stdin pipe opened for
+/// overlapped I/O, and Windows PowerShell 5.1 (the .NET Framework's console stream) reads it
+/// synchronously — such a read returns what is already there, then never completes. This
+/// program opens it as an asynchronous `FileStream`. PowerShell gets stdin from NUL, so its own
+/// input reader takes nothing from the connection.
+pub const WINDOWS_BOOT_CS: &str = include_str!("windows_boot.cs");
+
+/// Compiles [`WINDOWS_BOOT_CS`] (raw deflate, base64, in `%MARSAD_BOOT_CS%`) to
+/// `marsad-boot-@HASH@.exe` unless it is there. Errors come back as one plain line on stderr and exit 1 (no CLIXML
+/// error record).
+pub const POWERSHELL_BOOTSTRAP: &str = r#"$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'
+trap { $m=[Text.Encoding]::UTF8.GetBytes("Marsad bootstrap: $_`n"); $e=[Console]::OpenStandardError(); $e.Write($m,0,$m.Length); $e.Flush(); exit 1 }
+$d=Join-Path $env:LOCALAPPDATA 'Marsad\bin'; $x=Join-Path $d 'marsad-boot-@HASH@.exe'
+if (-not (Test-Path $x)) {
+New-Item -ItemType Directory -Force $d | Out-Null; $t="$x.$PID.exe"
+$z=New-Object IO.Compression.DeflateStream(([IO.MemoryStream][Convert]::FromBase64String($env:MARSAD_BOOT_CS)),[IO.Compression.CompressionMode]::Decompress)
+Add-Type -OutputType ConsoleApplication -OutputAssembly $t -TypeDefinition (New-Object IO.StreamReader($z)).ReadToEnd()
+if (Test-Path $x) { Remove-Item $t } else { Move-Item $t $x }
+}
 "#;
+
+/// cmd.exe's longest command line; the Windows bootstrap must fit.
+pub const CMD_MAX_LINE: usize = 8191;
+
+/// The name part of the compiled boot program: changes with its source (FNV-1a).
+fn windows_boot_hash() -> String {
+    let h = WINDOWS_BOOT_CS
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        });
+    format!("{h:016x}")
+}
+
+/// The Windows bootstrap, as one cmd.exe command line (OpenSSH for Windows' default shell):
+/// PowerShell with stdin from NUL makes sure the boot program exists (`-EncodedCommand`: no
+/// quoting through ssh/cmd), the boot program speaks the protocol, then the bridge starts on
+/// the same stdin. Each step runs only if the one before succeeded. The program's source goes
+/// in an environment variable (base64 is plain text to cmd.exe; inside `-EncodedCommand` it
+/// would take 2.7 times the room), cleared before the boot program and the bridge start.
+pub fn windows_bootstrap(id: &str) -> String {
+    let hash = windows_boot_hash();
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let source = miniz_oxide::deflate::compress_to_vec(WINDOWS_BOOT_CS.as_bytes(), 10);
+    let script = POWERSHELL_BOOTSTRAP.replace("@HASH@", &hash);
+    let utf16: Vec<u8> = script
+        .encode_utf16()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
+    let dir = "%LOCALAPPDATA%\\Marsad\\bin";
+    format!(
+        "set MARSAD_BOOT_CS={}&& powershell -NoProfile -NonInteractive -EncodedCommand {} <NUL && set MARSAD_BOOT_CS=&& \"{dir}\\marsad-boot-{hash}.exe\" && \"{dir}\\marsad-agent.exe\" bridge --host-id {id}",
+        b64.encode(source),
+        b64.encode(utf16)
+    )
+}
 
 /// Whether `id` can be passed to the remote shell unquoted (host ids are restricted to this
 /// at `hosts.add`).
@@ -163,20 +206,6 @@ pub fn native_windows_sign(printed: &str) -> bool {
             .any(|p| os.starts_with(p))
 }
 
-/// `powershell -EncodedCommand <base64 UTF-16LE>`: no quoting through ssh/cmd at all.
-/// `-InputFormat None`: with a redirected stdin PowerShell would otherwise read it as pipeline
-/// input itself, taking the bootstrap's command line and upload away from the script.
-pub fn powershell_command(script: &str) -> String {
-    let utf16: Vec<u8> = script
-        .encode_utf16()
-        .flat_map(|u| u.to_le_bytes())
-        .collect();
-    format!(
-        "powershell -NoProfile -NonInteractive -InputFormat None -EncodedCommand {}",
-        base64::engine::general_purpose::STANDARD.encode(utf16)
-    )
-}
-
 /// Full argv of one connect attempt: transport + the bootstrap for `shell`.
 /// `None` for the local host, or a host id that is not [`safe_host_id`].
 pub fn bootstrap_argv(entry: &HostEntry, shell: RemoteShell) -> Option<Vec<String>> {
@@ -187,9 +216,7 @@ pub fn bootstrap_argv(entry: &HostEntry, shell: RemoteShell) -> Option<Vec<Strin
     }
     match (&entry.kind, shell) {
         (HostKind::Wsl { .. }, _) => argv.push(posix_bootstrap(id)),
-        (_, RemoteShell::PowerShell) => argv.push(powershell_command(
-            &POWERSHELL_BOOTSTRAP.replace("@HOST_ID@", id),
-        )),
+        (_, RemoteShell::PowerShell) => argv.push(windows_bootstrap(id)),
         (_, RemoteShell::Posix) => argv.push(format!("sh -c '{}'", posix_bootstrap(id))),
     }
     Some(argv)
@@ -331,12 +358,23 @@ mod tests {
             .last()
             .unwrap()
             .contains("-EncodedCommand "));
+        // cmd.exe runs the boot program, then the bridge, each only if the step before worked.
+        let w = windows_bootstrap(&"h".repeat(64));
+        assert!(w.starts_with("set MARSAD_BOOT_CS="));
+        assert!(w.contains(
+            " <NUL && set MARSAD_BOOT_CS=&& \"%LOCALAPPDATA%\\Marsad\\bin\\marsad-boot-"
+        ));
+        assert!(w.ends_with(&format!(
+            ".exe\" && \"%LOCALAPPDATA%\\Marsad\\bin\\marsad-agent.exe\" bridge --host-id {}",
+            "h".repeat(64)
+        )));
+        assert!(w.len() < CMD_MAX_LINE, "{} chars", w.len());
         // A host not connected yet is tried with sh; told it is Windows, with PowerShell.
         assert!(bootstrap_argv(&e, RemoteShell::PowerShell)
             .unwrap()
             .last()
             .unwrap()
-            .starts_with("powershell -NoProfile"));
+            .contains("&& powershell -NoProfile -NonInteractive -EncodedCommand "));
         assert!(bootstrap_argv(&entry(HostKind::Local), RemoteShell::Posix).is_none());
     }
 

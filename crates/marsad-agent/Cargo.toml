@@ -36,6 +36,7 @@ portable-pty = "0.9"
 rmcp = { version = "0.9", features = ["server", "transport-io"] }
 base64 = "0.22"
 tokio-util = { version = "0.7", features = ["rt"] }
+miniz_oxide = "0.9.1"
 
 [dev-dependencies]
 marsad-client = { workspace = true }
