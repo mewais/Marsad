@@ -79,6 +79,8 @@ async fn session_ids(c: &MarsadClient, host: &HostId) -> Vec<String> {
         .collect()
 }
 
+// The localhost sshd runs on the Linux CI runners only.
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_machines_sharing_a_home_keep_their_own_daemons_and_sessions() {
     let d = TempDir::new();

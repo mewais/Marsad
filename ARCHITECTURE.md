@@ -22,7 +22,7 @@ Marsad-specific decisions.
 `marsad_proto::layout` (Wasit ARCHITECTURE §4.2): the data root `~/.marsad` may be shared by
 several machines, so durable data lives in `~/.marsad/machines/<machine key>/` (sessions, wasl,
 store, log) and sockets/locks in a machine-local runtime dir (`/tmp/marsad-<uid>/<tag>/` unless
-the user lingers, then `$XDG_RUNTIME_DIR/marsad/<tag>/`; macOS `$TMPDIR`; Windows
+the user lingers, then `/run/user/<uid>/marsad/<tag>/`; macOS the per-user temp dir; Windows
 `%LOCALAPPDATA%\Marsad\run`). The helper cache `~/.marsad/bin/<os>-<arch>/` stays shared
 (installed via a unique temp name + rename). `src/migrate.rs` adopts the flat layout of earlier
 builds. `stop` also stops a daemon of an earlier build at the old socket. The hub records each

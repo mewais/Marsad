@@ -148,6 +148,7 @@ async fn adopt(layout: &Layout) -> Report {
                             if let Err(e) = tokio::fs::symlink(&to, &dir).await {
                                 tracing::warn!(session = %name, error = %e, "cannot link the old session path");
                             }
+                            link_runtime(layout, &name, &to).await;
                         }
                         #[cfg(not(unix))]
                         let _ = live;
@@ -239,5 +240,22 @@ async fn claimable(dir: &Path) -> Option<bool> {
             (!recent).then_some(false)
         }
         Err(_) => None,
+    }
+}
+
+/// A live shim of an earlier build keeps its lock and socket in its (moved) data directory:
+/// point this machine's runtime directory for the session at them, so the runtime finds it
+/// where it looks for every session (and the socket path stays short).
+#[cfg(unix)]
+async fn link_runtime(layout: &Layout, name: &str, data: &Path) {
+    let run = layout.run.join("sessions").join(name);
+    if let Err(e) = tokio::fs::create_dir_all(&run).await {
+        tracing::warn!(session = %name, error = %e, "cannot create {}", run.display());
+        return;
+    }
+    for f in [wasit_shim::LOCK_FILE, "ctl.sock"] {
+        if let Err(e) = tokio::fs::symlink(data.join(f), run.join(f)).await {
+            tracing::warn!(session = %name, error = %e, "cannot link {f}");
+        }
     }
 }
