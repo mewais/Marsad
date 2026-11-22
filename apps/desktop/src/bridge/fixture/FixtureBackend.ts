@@ -161,6 +161,11 @@ export class FixtureBackend implements Backend {
         return { drivers: inventoryFor(host.def, (p as InventoryRequest | undefined)?.project ?? null, now) };
       case M.DRIVERS_REFRESH:
         return {};
+      case M.HOST_ENVIRONMENT:
+      case M.HOST_ENVIRONMENT_REFRESH:
+        return host.def.entry.platform?.os === "windows"
+          ? { source: "registry", captured_at_ms: now - 120_000, duration_ms: 310, path: ["C:\\Windows\\system32", "C:\\Users\\me\\AppData\\Roaming\\npm"], notes: [] }
+          : { source: "login_interactive_shell", shell: "/bin/bash", captured_at_ms: now - 120_000, duration_ms: 140, path: ["/home/me/.nvm/versions/node/v22.11.0/bin", "/home/me/.local/bin", "/usr/local/bin", "/usr/bin", "/bin"], notes: [] };
       case M.SESSIONS_LIST:
         return { sessions: [...host.sessions.values()].map((e) => e.snap) };
       case M.SESSION_SNAPSHOT:

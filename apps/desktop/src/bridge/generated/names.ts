@@ -3,6 +3,8 @@ export const methods = {
   HOST_INFO: "host.info",
   DRIVERS_INVENTORY: "drivers.inventory",
   DRIVERS_REFRESH: "drivers.refresh",
+  HOST_ENVIRONMENT: "host.environment",
+  HOST_ENVIRONMENT_REFRESH: "host.environment.refresh",
   SESSIONS_LIST: "sessions.list",
   SESSIONS_CREATE: "sessions.create",
   SESSIONS_CONTINUE: "sessions.continue",

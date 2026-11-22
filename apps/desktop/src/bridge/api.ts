@@ -15,6 +15,8 @@ export interface MethodMap {
   [M.HOST_INFO]: [void, W.HostInfo];
   [M.DRIVERS_INVENTORY]: [W.InventoryRequest, W.InventoryReply];
   [M.DRIVERS_REFRESH]: [W.RefreshRequest, W.Ack];
+  [M.HOST_ENVIRONMENT]: [void, W.HostEnvironment | null];
+  [M.HOST_ENVIRONMENT_REFRESH]: [void, W.HostEnvironment];
   [M.SESSIONS_CONTINUE]: [W.SessionRef, W.Ack];
   [M.SESSIONS_STOP]: [W.SessionRef, W.Ack];
   [M.SESSIONS_DELETE]: [W.SessionRef, W.Ack];
@@ -94,6 +96,8 @@ export function createApi(b: Backend) {
     hostInfo: (host: W.HostId) => call(b, M.HOST_INFO, undefined, { host }),
     inventory: (host: W.HostId, project?: string | null) => call(b, M.DRIVERS_INVENTORY, { project: project ?? null }, { host }),
     refreshDrivers: (host: W.HostId, r: W.RefreshRequest = {}) => call(b, M.DRIVERS_REFRESH, r, { host }),
+    hostEnvironment: (host: W.HostId) => call(b, M.HOST_ENVIRONMENT, undefined, { host }),
+    refreshEnvironment: (host: W.HostId) => call(b, M.HOST_ENVIRONMENT_REFRESH, undefined, { host }),
     command: (host: W.HostId, id: W.SessionId, command: W.Command) => call(b, M.SESSION_COMMAND, { id, command }, { host }),
     history: (host: W.HostId, r: W.HistoryRequest) => call(b, M.SESSION_HISTORY, r, { host }),
     continueSession: (host: W.HostId, id: W.SessionId) => call(b, M.SESSIONS_CONTINUE, { id }, { host }),

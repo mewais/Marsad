@@ -885,7 +885,11 @@ function startSshd() {
   for (const k of ["hostkey", "id"]) execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", path.join(d, k)]);
   const pub = fs.readFileSync(path.join(d, "id.pub"), "utf8").trim();
   const PATH = `${path.join(d, "bin")}:/usr/local/bin:/usr/bin:/bin`;
-  fs.writeFileSync(path.join(d, "authorized_keys"), `environment="HOME=${rh}",environment="PATH=${PATH}",environment="WASIT_FAKE_SCENARIO=${scenarioPath}" ${pub}\n`);
+  // The "remote" login shell runs commands without profiles: the host's environment stage
+  // keeps this PATH (this machine's /etc/profile would put a real CLI first).
+  const loginsh = path.join(d, "bin", "loginsh");
+  fs.writeFileSync(loginsh, '#!/bin/sh\nwhile [ $# -gt 1 ]; do shift; done\nexec /bin/sh -c "$1"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(d, "authorized_keys"), `environment="HOME=${rh}",environment="PATH=${PATH}",environment="SHELL=${loginsh}",environment="WASIT_FAKE_SCENARIO=${scenarioPath}" ${pub}\n`);
   sshd.port = 20000 + Math.floor(Math.random() * 20000);
   fs.writeFileSync(path.join(d, "sshd_config"), [
     `Port ${sshd.port}`, "ListenAddress 127.0.0.1", `HostKey ${path.join(d, "hostkey")}`, `AuthorizedKeysFile ${path.join(d, "authorized_keys")}`,

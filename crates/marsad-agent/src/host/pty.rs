@@ -147,6 +147,14 @@ impl Ptys {
                 })
                 .map_err(|e| MarsadError::io(format!("openpty: {e}")))?;
             let mut cmd = CommandBuilder::new(&shell);
+            // The host's base environment (the user's login environment), like every other
+            // process the daemon starts.
+            if let Some(base) = wasit_process::base_env() {
+                cmd.env_clear();
+                for (k, v) in base.iter() {
+                    cmd.env(k, v);
+                }
+            }
             cmd.cwd(&cwd2);
             cmd.env("TERM", "xterm-256color");
             let child = pair

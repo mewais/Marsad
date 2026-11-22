@@ -348,6 +348,37 @@ async fn wsl_host_end_to_end() {
     gate_round_trip(&c, &host).await;
     wsl_files_are_reachable(&distro);
 
+    // `kilo` lives only on a PATH that ~/.bashrc adds (CI installs it nvm-style): the host's
+    // environment stage (login + interactive shell) makes discovery find it.
+    let rt = c.runtime(Some(host.clone()));
+    let env = rt.host_environment().await.unwrap();
+    eprintln!("WSL environment: {env:?}");
+    let kilo = tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            let inv = rt.inventory(None).await.unwrap();
+            if let Some(k) = inv
+                .drivers
+                .into_iter()
+                .find(|d| d.driver.as_str() == "kilo")
+            {
+                if !k.refreshing {
+                    break k;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .expect("kilo inventory");
+    eprintln!("kilo: {kilo:?}");
+    assert!(
+        kilo.binary_path
+            .as_deref()
+            .is_some_and(|p| p.contains("/.nvm/")),
+        "kilo not found on the rc-added PATH: {:?} (environment {env:?})",
+        kilo.error
+    );
+
     // Terminate the distro under the link: it reconnects by itself (a transport drop).
     let st = std::process::Command::new("wsl.exe")
         .args(["--terminate", &distro])

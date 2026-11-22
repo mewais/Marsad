@@ -150,6 +150,8 @@ fn run(dir: &Path) -> Result<usize, String> {
         p::HostId,
         // Wasit runtime
         rt::HostInfo,
+        rt::HostEnvironment,
+        rt::EnvSource,
         rt::SessionList,
         rt::SessionSnapshot,
         rt::SessionEvent,
@@ -233,6 +235,8 @@ fn write_names(dir: &Path) -> Result<(), String> {
         ("HOST_INFO", rm::HOST_INFO),
         ("DRIVERS_INVENTORY", rm::DRIVERS_INVENTORY),
         ("DRIVERS_REFRESH", rm::DRIVERS_REFRESH),
+        ("HOST_ENVIRONMENT", rm::HOST_ENVIRONMENT),
+        ("HOST_ENVIRONMENT_REFRESH", rm::HOST_ENVIRONMENT_REFRESH),
         ("SESSIONS_LIST", rm::SESSIONS_LIST),
         ("SESSIONS_CREATE", rm::SESSIONS_CREATE),
         ("SESSIONS_CONTINUE", rm::SESSIONS_CONTINUE),

@@ -86,6 +86,9 @@ pub fn stop_pid(pid: u32) {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
+        if std::env::var_os("MARSAD_TEST_KEEP").is_some() {
+            return;
+        }
         // Daemons, shims and fake CLIs started under this dir.
         pkill(&self.0.to_string_lossy());
         let _ = std::fs::remove_dir_all(&self.0);
@@ -248,6 +251,22 @@ mod sshd {
             let fakebin = dir.join("bin");
             std::fs::create_dir_all(&fakebin).unwrap();
             std::os::unix::fs::symlink(fake(), fakebin.join("claude")).unwrap();
+            // The "remote" user's login shell: runs the command without any profile, so the
+            // environment stage keeps this test's PATH (the machine's /etc/profile would put a
+            // real `claude` first).
+            std::fs::write(
+                fakebin.join("loginsh"),
+                "#!/bin/sh\nwhile [ $# -gt 1 ]; do shift; done\nexec /bin/sh -c \"$1\"\n",
+            )
+            .unwrap();
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(
+                    fakebin.join("loginsh"),
+                    std::fs::Permissions::from_mode(0o755),
+                )
+                .unwrap();
+            }
             let (hostkey, key, wrong) = (dir.join("hostkey"), dir.join("id"), dir.join("wrong"));
             keygen(&hostkey);
             keygen(&key);
@@ -256,8 +275,10 @@ mod sshd {
             let path = format!("{}:/usr/local/bin:/usr/bin:/bin", fakebin.display());
             let ak = if env_home {
                 format!(
-                    "environment=\"HOME={}\",environment=\"PATH={path}\" {pubkey}",
-                    remote_home.display()
+                    "environment=\"HOME={}\",environment=\"PATH={path}\",\
+                     environment=\"SHELL={}\" {pubkey}",
+                    remote_home.display(),
+                    fakebin.join("loginsh").display()
                 )
             } else {
                 pubkey.clone()
@@ -351,9 +372,11 @@ mod sshd {
                 s.dir.join("authorized_keys"),
                 format!(
                     "environment=\"HOME={}\",environment=\"PATH={path}\",\
+                     environment=\"SHELL={}/bin/loginsh\",\
                      environment=\"MARSAD_MACHINE_KEY={machine}\",\
                      environment=\"MARSAD_RUNTIME_DIR={}\" {pubkey}",
                     home.display(),
+                    s.dir.display(),
                     run.display()
                 ),
             )

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { WslDistros } from "../../bridge/wire";
+import type { HostEnvironment, WslDistros } from "../../bridge/wire";
 import { useNavigate, sessionPath } from "../../router";
 import { linkView, osWord, sameMachineAs, useActions, useSessionView, useApi, useAppState, usePending, type HostView } from "../../state";
 import { Button, ConfirmDialog, ConnState, DriverBadge, Icon, STATUS, Wrap, hostIcon, makeDriver, useNow } from "../../ui";
@@ -81,6 +81,7 @@ export function HostDetail({ host }: { host: HostView }) {
         )}
         {lv.connected ? <Button size="sm" variant="ghost" icon="refresh" className="mt6" onClick={() => void actions.run(`refresh:${host.id}`, "Could not refresh the agents", () => api.refreshDrivers(host.id))}>Re-detect agents</Button> : null}
       </div>
+      {lv.connected ? <EnvironmentSection hostId={host.id} hostName={host.name} now={now} /> : null}
       <div>
         <h4 className="eyebrow">Sessions here</h4>
         <div className="hist">
@@ -128,5 +129,46 @@ function FixDistro({ hostId, hostName }: { hostId: string; hostName: string }) {
       <WslDistroPicker list={list} value={distro} onChange={setDistro} />
       <div className="acts"><Button size="sm" variant="primary" icon="refresh" pending={busy} disabled={!distro.trim()} onClick={save}>Use this distribution</Button></div>
     </>
+  );
+}
+
+const ENV_SOURCE: Record<HostEnvironment["source"], string> = {
+  login_interactive_shell: "Your login shell (login + interactive, startup files included)",
+  login_shell: "Your login shell (login only; the interactive start failed)",
+  registry: "Your Windows user and system variables",
+  process: "The helper's own environment (your shell could not be asked)",
+};
+
+function ago(ms: number, now: number): string {
+  const s = Math.max(0, Math.round((now - ms) / 1000));
+  return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
+}
+
+/** The host's environment stage: where agents, terminals and git get their PATH from. */
+function EnvironmentSection({ hostId, hostName, now }: { hostId: string; hostName: string; now: number }) {
+  const api = useApi();
+  const actions = useActions();
+  const [env, setEnv] = useState<HostEnvironment | null | undefined>(undefined);
+  const pk = `env:${hostId}`;
+  const busy = !!usePending(pk);
+  useEffect(() => {
+    let live = true;
+    api.hostEnvironment(hostId).then((e) => live && setEnv(e), () => live && setEnv(null));
+    return () => { live = false; };
+  }, [api, hostId]);
+  const refresh = () => void actions.run(pk, `Could not refresh the environment of ${hostName}`, async () => setEnv(await api.refreshEnvironment(hostId)));
+  return (
+    <div>
+      <h4 className="eyebrow">Environment</h4>
+      {env === undefined ? <div className="faint small">Asking the host…</div> : env === null ? <div className="faint small">Not reported by this host.</div> : (
+        <>
+          <div className="small">{ENV_SOURCE[env.source]}{env.shell ? <> · <span className="mono">{env.shell}</span></> : null}</div>
+          <div className="faint small">Captured {ago(env.captured_at_ms, now)} in {env.duration_ms} ms. Agents, terminals and git on {hostName} start with it.</div>
+          {env.notes.length ? <div className="gate bad mt6" role="note">{env.notes.map((n, i) => <div key={i} className="small mono"><Wrap text={n} /></div>)}</div> : null}
+          <details className="mt6"><summary className="small">PATH ({env.path.length} entries)</summary><ol className="mono small" aria-label="PATH">{env.path.map((p, i) => <li key={i}><Wrap text={p} /></li>)}</ol></details>
+        </>
+      )}
+      <Button size="sm" variant="ghost" icon="refresh" className="mt6" pending={busy} onClick={refresh}>Refresh environment</Button>
+    </div>
   );
 }

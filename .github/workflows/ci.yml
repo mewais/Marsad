@@ -147,6 +147,10 @@ jobs:
           $p = '/mnt/' + $p.Substring(0,1).ToLower() + $p.Substring(2)
           wsl.exe -d $env:MARSAD_E2E_WSL_DISTRO -u root --exec sh -c "install -m 755 '$p' /usr/local/bin/claude && claude --version && uname -a"
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          # Problem 2 reproduction: `kilo` only on a PATH that ~/.bashrc adds (nvm style, after
+          # the interactive guard), as on the owner's distro. Discovery must find it.
+          wsl.exe -d $env:MARSAD_E2E_WSL_DISTRO -u root --exec sh -c "d=/root/.nvm/versions/node/v22.11.0/bin; mkdir -p `$d && install -m 755 '$p' `$d/kilo && printf '\nexport PATH=\"%s:`$PATH\"\n' `$d >> /root/.bashrc && tail -3 /root/.bashrc && head -12 /root/.bashrc && echo user: `$(whoami) && sh -c 'command -v kilo || echo kilo not on the bare PATH'"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           wsl.exe --list --verbose
       - name: sshd inside the distro (key auth) for the ssh-from-Windows test
         shell: pwsh

@@ -16,6 +16,7 @@ use wasit_control::{
     SupervisedOptions, Uplink,
 };
 use wasit_core::DriverId;
+use wasit_runtime::environment::{CaptureOptions, HostEnv};
 use wasit_runtime::wire::ROUTES;
 use wasit_runtime::{
     Discovery, DiscoveryConfig, RuntimeConfig, RuntimeService, SessionManager, ShimLauncher,
@@ -95,6 +96,9 @@ pub async fn serve(o: Options) -> ExitCode {
     if o.socket.is_none() {
         crate::migrate::run(&layout).await;
     }
+    // The user's real environment (login shell), for everything this daemon starts.
+    let env = HostEnv::new(CaptureOptions::default());
+    env.refresh().await;
     let build = version::build_id();
     let host_id = o.host_id.clone().unwrap_or_else(default_host_id);
     let discovery = Discovery::new(DiscoveryConfig::from_runtime(&cfg));
@@ -144,7 +148,8 @@ pub async fn serve(o: Options) -> ExitCode {
         discovery.clone(),
         host_id.clone(),
         build.clone(),
-    );
+    )
+    .with_environment(env);
     let host = HostServices {
         manager: manager.clone(),
         discovery,

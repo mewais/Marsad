@@ -116,4 +116,15 @@ describe("hosts", () => {
     expect(sameMachineAs(hosts, "b")).toEqual([]);
     expect(sameMachineAs(hosts, "c")).toEqual([]);
   });
+  it("shows where the host's environment came from, its PATH, and refreshes it", async () => {
+    const user = userEvent.setup();
+    const { backend } = await hostsPage("/hosts?h=x1");
+    const panel = await screen.findByRole("complementary", { name: "thinkpad-x1 details" });
+    expect(await within(panel).findByText(/Your login shell \(login \+ interactive/)).toBeInTheDocument();
+    expect(within(panel).getByText("/bin/bash")).toBeInTheDocument();
+    expect(within(panel).getByText(/PATH \(5 entries\)/)).toBeInTheDocument();
+    expect(within(panel).getByRole("list", { name: "PATH", hidden: true })).toHaveTextContent(".nvm/versions/node");
+    await user.click(within(panel).getByRole("button", { name: "Refresh environment" }));
+    await waitFor(() => expect(backend.requests.some((r) => r.method === "host.environment.refresh" && r.host === "x1")).toBe(true));
+  });
 });
