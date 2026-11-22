@@ -66,7 +66,7 @@ function Run-Mode([string]$mode, [string]$name, [string]$effect = '') {
   if ($h -eq [IntPtr]::Zero) { throw "no main window for $mode" }
   # A known place and size, then active (Windows draws system backdrops solid while inactive).
   [W]::ShowWindow($h, 1) | Out-Null
-  [W]::SetWindowPos($h, [IntPtr]::Zero, 60, 40, 1100, 720, 0x0040) | Out-Null
+  [W]::SetWindowPos($h, [IntPtr]::Zero, 20, 10, 980, 660, 0x0040) | Out-Null
   Start-Sleep -Seconds 12   # page load, the surface hook's reload, the backdrop
   [W]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero); [W]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)  # ALT: allows SetForegroundWindow
   [W]::SetForegroundWindow($h) | Out-Null
@@ -104,17 +104,15 @@ $s = Run-Mode 'solid' 'solid'
 Stop-Process -Id $bg.Id -Force -ErrorAction SilentlyContinue
 
 function Magenta($c) { return (($c.R + $c.B) / 2) - $c.G }
-$fail = @(); $backdrop = $true
+$fail = @()
 foreach ($k in $t.Keys) {
   $mt = Magenta $t[$k]; $mn = Magenta $n[$k]; $ms = Magenta $s[$k]
   Write-Host ("{0,-8} magenta influence: translucent {1,6:N1}  no-effect {2,6:N1}  solid {3,6:N1}" -f $k, $mt, $mn, $ms)
-  # The window, WebView and page are transparent everywhere (chrome included): the colour
-  # behind shows through with no OS effect.
-  if ($mn -lt 25) { $fail += "$k shows no colour from behind with the window transparent and no effect ($mn)" }
+  # With the OS backdrop (Acrylic) the blurred colour behind shows in every area, chrome
+  # included; solid shows none. The no-effect run is a diagnostic: without a system backdrop
+  # DWM composites the transparent WebView over black, which is why an effect is required.
+  if ($mt -lt 25) { $fail += "$k shows no colour from behind in translucent mode ($mt)" }
   if ($ms -gt 12) { $fail += "$k is not solid in solid mode ($ms)" }
-  if ($mt -lt 25) { $backdrop = $false }
 }
-if ($backdrop) { Write-Host 'OS backdrop: the blurred colour behind shows through in every sampled area' }
-else { Write-Host 'OBSERVED: with the OS backdrop (Acrylic) applied, this runner draws its solid fallback colour instead of compositing what is behind (see translucent.png)' }
 if ($fail.Count) { $fail | ForEach-Object { Write-Host "FAIL: $_" }; exit 1 }
 Write-Host 'translucency OK'

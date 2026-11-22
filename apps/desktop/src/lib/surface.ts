@@ -16,6 +16,8 @@ const KEY_STRENGTH = "marsad.surface.strength";
 export interface SurfaceSupport {
   transparent: boolean;
   effect: string | null;
+  /** Something the user can change for the effect to show (from the shell). */
+  hint?: string | null;
 }
 
 /** The shell's latest answer for this window. */

@@ -56,7 +56,7 @@ function General() {
   const [strength, setStrength] = useSetting<number>("surface.strength", local.strength);
   const support = useStore(surfaceSupport, (s) => s);
   const translucent = surface === "translucent";
-  const surfaceHint = !translucent
+  const surfaceHint = translucent && support?.hint ? support.hint : !translucent
     ? "Translucent lets your desktop show through the window, in either theme."
     : support && !support.transparent
       ? "Your desktop cannot show transparent windows (no compositor), so Marsad stays solid."

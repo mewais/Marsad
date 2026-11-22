@@ -26,6 +26,10 @@ pub struct SurfaceResult {
     pub transparent: bool,
     /// The native backdrop applied (`mica`, `acrylic`, `blur`, `vibrancy`), if any.
     pub effect: Option<&'static str>,
+    /// Something the user can change for the effect to show (e.g. Windows' transparency
+    /// effects are off, so the backdrop is drawn as a solid colour).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<&'static str>,
 }
 
 pub async fn window_surface(app: &AppHandle, a: SurfaceArgs) -> Result<Value, BridgeError> {
@@ -58,6 +62,7 @@ fn apply(w: &tauri::WebviewWindow, translucent: bool) -> SurfaceResult {
         return SurfaceResult {
             transparent: false,
             effect: None,
+            hint: None,
         };
     }
     // Acrylic first: it blurs the windows behind (what "translucent" should show); Mica only
@@ -78,11 +83,31 @@ fn apply(w: &tauri::WebviewWindow, translucent: bool) -> SurfaceResult {
         None
     };
     tracing::info!(?effect, "window surface: translucent");
-    // A WebView2 window created transparent shows the desktop through alpha pixels even
-    // without a backdrop effect.
     SurfaceResult {
         transparent: true,
         effect,
+        hint: (!transparency_effects_on()).then_some(
+            "Windows' Transparency effects are off (Settings → Personalization → Colors), so the backdrop is drawn solid.",
+        ),
+    }
+}
+
+/// Windows' "Transparency effects" switch (HKCU `EnableTransparency`; on unless set to 0).
+#[cfg(target_os = "windows")]
+fn transparency_effects_on() -> bool {
+    let out = wasit_process::std_command("reg")
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            "/v",
+            "EnableTransparency",
+        ])
+        .output();
+    match out {
+        Ok(o) => !String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .any(|l| l.contains("EnableTransparency") && l.trim_end().ends_with("0x0")),
+        Err(_) => true,
     }
 }
 
@@ -97,6 +122,7 @@ fn apply(w: &tauri::WebviewWindow, translucent: bool) -> SurfaceResult {
         return SurfaceResult {
             transparent: false,
             effect: None,
+            hint: None,
         };
     }
     let ok = apply_vibrancy(
@@ -109,6 +135,7 @@ fn apply(w: &tauri::WebviewWindow, translucent: bool) -> SurfaceResult {
     SurfaceResult {
         transparent: true,
         effect: ok.then_some("vibrancy"),
+        hint: None,
     }
 }
 
@@ -125,6 +152,7 @@ fn apply(w: &tauri::WebviewWindow, translucent: bool) -> SurfaceResult {
     SurfaceResult {
         transparent: translucent && composited,
         effect: None,
+        hint: None,
     }
 }
 
@@ -133,6 +161,7 @@ fn apply(_w: &tauri::WebviewWindow, _translucent: bool) -> SurfaceResult {
     SurfaceResult {
         transparent: false,
         effect: None,
+        hint: None,
     }
 }
 
