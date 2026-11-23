@@ -717,6 +717,17 @@ table.t td.r,table.t th.r{text-align:right;font-variant-numeric:tabular-nums}
 .dga-t{font-size:11px;text-align:right;color:var(--fg-3);font-family:var(--f-mono)}
 .dga-fail{border-top:1px solid var(--failed-line);padding-top:6px;display:flex;flex-direction:column;gap:4px;font-size:12px}
 .dga-err{margin:0;padding:6px 8px;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r2);white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;font-family:var(--f-mono)}
+/* Export diagnostics (Settings → Diagnostics) */
+.dgx-note{margin:0;padding:12px 0 4px;line-height:1.5;font-size:12px}
+.dgx-pick{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 0;border-bottom:1px solid var(--line)} .dgx-pick .sp{flex:1}
+.dgx-cur{display:flex;flex-direction:column;gap:10px;padding:12px 0}
+.dgx-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap} .dgx-head .sp{flex:1}
+.dgx-src{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:var(--r3);background:var(--sunken)}
+.dgx-row{display:grid;grid-template-columns:minmax(120px,200px) minmax(110px,150px) 70px 1fr;gap:4px 12px;align-items:baseline;padding:6px 10px;border-bottom:1px solid var(--line);font-size:12.5px} .dgx-row:last-child{border-bottom:0}
+.dgx-st{display:inline-flex;align-items:center;gap:6px} .dgx-st.ok{color:var(--done)} .dgx-st.warn{color:var(--needs)} .dgx-st.bad{color:var(--failed)} .dgx-st.info{color:var(--working)} .dgx-st.plain{color:var(--fg-2)}
+.dgx-sz{text-align:right;font-size:12px;color:var(--fg-3)} .dgx-why{font-size:12px;color:var(--fg-3);min-width:0}
+.dgx-acts{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dgx-pick .btn[disabled]{opacity:.5;cursor:not-allowed}
 </style>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -903,7 +914,7 @@ const SCREENS=[
  {id:'config',n:6,label:'Agent config',short:'Config'},
  {id:'hosts',n:7,label:'Hosts',short:'Hosts',vars:[['a','Host list'],['b','Add host']]},
  {id:'gates',n:8,label:'Gates + alerts',short:'Gates',vars:[['a','Gate review'],['b','Notifications']]},
- {id:'diag',n:9,label:'Diagnostics',short:'Diag',vars:[['s','Settings'],['p','Session · this computer'],['r','Session · remote'],['h','Host · connect failed'],['l','Host · local']]},
+ {id:'diag',n:9,label:'Diagnostics',short:'Diag',vars:[['s','Settings'],['x','Export · running'],['y','Export · done'],['z','Export · failed'],['u','Export · hub down'],['p','Session · this computer'],['r','Session · remote'],['h','Host · connect failed'],['l','Host · local']]},
 ];
 const CAPTIONS={
  'home-a':'Every session in one list, including the ones inside workstreams (tagged). Sorted by what needs you. Choices on each row are the agent\'s own.',
@@ -920,9 +931,13 @@ const CAPTIONS={
  'hosts-b':'Add-host flow: connect over SSH, install the helper, detect CLIs.',
  'gates-a':'Full gate review. Permission, edit and plan choices mirror the agent; handoffs use Marsad\'s three fixed choices. Toasts bottom-right are the error surface.',
  'gates-b':'Settings collapsed into six sections. Notifications are one table: event by channel.',
- 'diag-s':'Settings → Diagnostics. Developer mode is off until you turn it on; it only changes what Marsad shows (the logs are always written). The export card is added above it by a later change.',
+ 'diag-s':'Settings → Diagnostics. The export card is always there, with Developer mode on or off: one file with the logs of this app, this computer and the hosts you are connected to, for a window of 24 hours, 3 or 7 days. Developer mode below it only changes what Marsad shows (the logs are always written).',
+ 'diag-x':'An export that is running: one row per source in plain words, with its state and the bytes read. The hub does one export at a time, so Export is off until it ends. The card is the same when the page is opened while an export is already running.',
+ 'diag-y':'A finished export: its size, and that some parts were left out (a host that was not connected, one read only in part) with the file listing them. Save… asks where; after saving, Show in folder. Closing the dialog is not an error.',
+ 'diag-z':'A failed export shows the hub\'s reason and Try again.',
+ 'diag-u':'While the local service is unreachable the card is off and says why. The app\'s own log file is still in the data folder.',
  'diag-p':'Developer mode: a Diagnostics tab on a session. Each prompt shows the steps it took; a step nothing observed is hollow, never guessed. Times are relative to the first step. Everything here is ids, sizes, timings and reasons.',
- 'diag-r':'The same tab for a session on another machine: that machine\'s clock is not this computer\'s, so its times carry "≈" and each step says who saw it. The timeline is the host\'s own trail, in its order.',
+ 'diag-r':'The same tab for a session on another machine: that machine\'s clock is not this computer\'s, so its times carry "≈" and each step says who saw it. The host\'s clock offset is measured once when the tab opens and its times are corrected by it; the legend gives the offset and the round trip. The timeline is the host\'s own trail, in its order.',
  'diag-h':'Developer mode: a host\'s connection log by attempt, with the stage, exit code and the host\'s scrubbed words when a connect failed. For a connected host its own log follows.',
  'diag-l':'The local host has no link to log: the app reaches it through the local service, so this shows that service\'s own log and says so.',
 };
@@ -1686,10 +1701,28 @@ const dgRow=(t,tone,w,open)=>`<div class="dgr ${tone}"><div class="dgr-main"><sp
 function dgSessionHead(dev){
   return sessionHead().replace(/<div class="tabs" role="tablist">.*?<\/div>\s*<\/div>$/s,`<div class="tabs" role="tablist">${[['activity','Activity'],['changes','Changes','7'],['config','Config'],['terminal','Terminal'],['diagnostics','Diagnostics']].map(([k,l,n])=>`<button role="tab" aria-selected="${k==='diagnostics'}">${l}${n?`<span class="n">${n}</span>`:''}</button>`).join('')}</div></div>`);
 }
-function diagSettings(){
+/* The export card. kind: idle | running | done | failed | down */
+const dgxRow=(name,st,tone,bytes,why,spin)=>`<li class="dgx-row"><b>${name}</b><span class="dgx-st ${tone}">${spin?I('i-working','xs'):''}${st}</span><span class="tnum dgx-sz">${bytes}</span><span class="dgx-why">${why}</span></li>`;
+function dgExport(kind){
+  const about='One file with the connection steps, session states, timings and error codes recorded by this app, this computer and the hosts you are connected to. It never contains prompts, replies, tool output, files or secrets.';
+  const head=`<div class="eyebrow" style="padding:10px 0 2px">Export diagnostics</div><p class="dgx-note faint">${about}</p>`;
+  if(kind==='down') return `<div class="card" style="padding:6px 16px;display:flex;flex-direction:column">${head}<div class="dg-problem"><span class="i">${I('i-clock','sm')}</span><div class="pt"><b>An export cannot be made now.</b> <span style="font-size:12px">Not connected to the local service (the daemon socket is gone). The app's own log file is still in the data folder (<span class="mono">diag/app.ndjson</span>), and can be read there.</span></div></div></div>`;
+  const win=`<div class="dgx-pick"><div class="seg" role="group" aria-label="Time window"><button aria-pressed="true">Last 24 hours</button><button aria-pressed="false">Last 3 days</button><button aria-pressed="false">Last 7 days</button></div><span class="sp"></span><button class="btn primary"${kind==='running'?' disabled title="An export is already running."':''}>${I('i-download','xs')}Export</button></div>`;
+  const meta=`<span class="sp"></span><span class="faint" style="font-size:12px">Started 14:03 · covers the time since Nov 22, 2026, 14:03</span>`;
+  let cur='';
+  if(kind==='running') cur=`<div class="dgx-cur"><div class="dgx-head">${I('i-working','sm')}<b>Exporting…</b><span class="faint" style="font-size:12px">3 of 6 sources finished</span>${meta}</div><ul class="dgx-src">${dgxRow('This app','Done','ok','18 KB','')}${dgxRow('This computer','Done','ok','31 KB','')}${dgxRow('hetzner-ax41','Reading','info','6.0 KB','',true)}${dgxRow('win-build','Not connected','warn','','the link is reconnecting (attempt 3): connection reset by peer')}${dgxRow('gpu-box','Waiting','plain','','')}${dgxRow('pi-runner','Waiting','plain','','')}</ul><div class="faint" style="font-size:12px">Another export cannot start until this one ends.</div></div>`;
+  if(kind==='done') cur=`<div class="dgx-cur"><div class="dgx-head"><span class="c-done">${I('i-done','sm')}</span><b>Export finished</b>${meta}</div><ul class="dgx-src">${dgxRow('This app','Done','ok','18 KB','')}${dgxRow('This computer','Done','ok','31 KB','')}${dgxRow('hetzner-ax41','Only partly read','warn','52 KB',"the host's read budget ran out: 3 older sections were left out")}${dgxRow('win-build','Not connected','warn','','the link is reconnecting (attempt 3): connection reset by peer')}${dgxRow('gpu-box','Not connected','warn','','the host is waiting for you to sign in')}${dgxRow('pi-runner','Not connected','warn','',"the host's helper is being installed or updated")}</ul>
+    <div><b>16 KB</b> · <span class="c-needs">Some parts were left out. The file lists what is missing and why.</span></div>
+    <div class="dgx-acts"><button class="btn sm primary">${I('i-download','xs')}Save…</button><span class="faint" style="font-size:12px">Saved to <span class="mono">/home/me/Downloads/marsad-diagnostics-x1-fx001.ndjson.gz</span></span><button class="btn sm">${I('i-folder','xs')}Show in folder</button></div></div>`;
+  if(kind==='failed') cur=`<div class="dgx-cur"><div class="dgx-head"><span class="c-failed">${I('i-failed','sm')}</span><b>Export failed</b>${meta}</div><ul class="dgx-src">${dgxRow('This app','Failed','bad','0 B',"the app's log could not be read")}</ul><div class="dgx-acts"><span class="c-failed">the export directory is not writable</span><button class="btn sm">${I('i-refresh','xs')}Try again</button></div></div>`;
+  if(kind==='idle') cur=`<div class="dgx-cur faint" style="font-size:12px">No export has been made yet.</div>`;
+  return `<div class="card" style="padding:6px 16px;display:flex;flex-direction:column">${head}${win}${cur}</div>`;
+}
+function diagSettings(kind='idle'){
   const nav=[['General','i-gear'],['Notifications','i-bell'],['Keyboard','i-slash'],['Diagnostics','i-list'],['About','i-tower']];
   return `<div class="set"><nav class="setnav"><div class="eyebrow" style="padding:0 8px 6px">Settings</div>${nav.map(([l,ic])=>`<div class="lr-item ${l==='Diagnostics'?'on':''}">${I(ic,'sm')}${l}</div>`).join('')}</nav>
   <div class="setbody" style="max-width:880px"><div><h1 class="h1">Diagnostics</h1><div class="muted" style="margin-top:4px">What Marsad records about itself, and how to look at it.</div></div>
+   ${dgExport(kind)}
    <div class="card" style="padding:6px 16px;display:flex;flex-direction:column"><div style="display:flex;align-items:center;gap:12px;padding:12px 0"><div style="flex:1"><div class="h3">Developer mode</div><div class="faint" style="font-size:12px">Shows a Diagnostics tab on every session and a connection log on every host, with where each prompt went, how a session's state changed and why a host would not connect, as ids, sizes, timings and reasons and never your prompts, replies or files.</div></div><span class="tg on"></span></div></div>
    <div class="faint" style="font-size:12px">Saving shows a spinner on the switch; if the hub refuses, it stays as it was and the reason appears as a message.</div>
   </div></div>`;
@@ -1720,7 +1753,7 @@ function diagSessionRemote(){
    <div class="dg-top"><dl class="dg-facts">${facts.map(([k,v])=>dgFact(k,v)).join('')}</dl><div class="dg-copy"><button class="btn sm">${I('i-copy','xs')}Copy as text</button><span class="faint" style="font-size:12px">Ids, sizes, timings and reasons only; no prompts, replies or files.</span></div></div>
    <section>${dgHead('Prompts','Each step is shown only where something observed it. Times are relative to the first step.')}
     ${dgPrompt('#9','Prompt · 112 characters, 2 attachments (1.4 MB)','u-91d0e3a7c4f2b586',[['App','start','app','seen'],['Hub','+0.4 s','hub','seen'],['hetzner-ax41','≈+0.9 s','hetzner-ax41','seen'],['Recorded','≈+0.9 s','hetzner-ax41','seen'],['Sent','≈+0.9 s','hetzner-ax41','seen'],['Written','≈+0.9 s','hetzner-ax41','seen'],['Acknowledged','≈+1.6 s','hetzner-ax41','ok']],['App: answered ok in 410 ms','Hub: session.command · ok · 395 ms','upload: 2 files, 1.4 MB, 380 ms: ok'])}
-    <div class="faint" style="font-size:12px">≈ means another machine's clock: only approximately comparable to the first step.</div>
+    <div class="faint" style="font-size:12px">≈ means another machine's clock: only approximately comparable to the first step. hetzner-ax41's clock is 2.5 s ahead of this computer's (measured once when this tab opened; round trip 38 ms). Its times are corrected by that and are still approximate.</div>
     ${dgPrompt('#10','Prompt · 31 characters','u-0b6a77c1e9d5342f',[['App','start','app','seen'],['Hub','+0.2 s','hub','seen'],['hetzner-ax41','not seen','','hollow'],['Recorded','≈+0.7 s','hetzner-ax41','seen'],['Sent','≈+0.7 s','hetzner-ax41','seen'],['Written','not yet','','hollow'],['Acknowledged','not yet','','hollow']],['Hub: session.command · ok · 180 ms'])}
    </section>
    <section>${dgHead('Timeline',"The host's trail, in the host's order and clock. Newest at the bottom.")}
@@ -1754,7 +1787,7 @@ function diagHost(local){
   return `<div class="ph"><h1 class="h1">Hosts</h1><span class="muted" style="font-size:12.5px">5 machines · 3 connected</span></div><div class="hs">${hostsList(local?'x1':'win')}${aside}</div>`;
 }
 function diagScreen(v){
-  return v==='s'?diagSettings():v==='p'?diagSessionLocal():v==='r'?diagSessionRemote():diagHost(v==='l');
+  return v==='s'?diagSettings('idle'):v==='x'?diagSettings('running'):v==='y'?diagSettings('done'):v==='z'?diagSettings('failed'):v==='u'?diagSettings('down'):v==='p'?diagSessionLocal():v==='r'?diagSessionRemote():diagHost(v==='l');
 }
 
 /* ================= RENDER ================= */

@@ -44,7 +44,7 @@ export function createDiagLog(store: AppStore, backend: Pick<Backend, "diagLog">
 }
 
 /** An error's `code` when it is an RPC error's (the shell's and the daemons' errors have one). */
-const codeOf = (e: unknown): string | undefined => {
+export const codeOf = (e: unknown): string | undefined => {
   const c = (e as { code?: unknown } | null | undefined)?.code;
   return typeof c === "string" && /^[A-Za-z0-9_.:-]{1,64}$/.test(c) ? c : undefined;
 };

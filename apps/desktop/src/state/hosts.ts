@@ -47,6 +47,7 @@ const PROBLEM: Record<string, string> = {
   unsupported_platform: "Platform not supported",
   helper_missing: "Helper missing from this install",
   unexpected_output: "Unexpected answer from host",
+  helper_failed: "Helper stopped before connecting",
   other: "Cannot connect",
 };
 

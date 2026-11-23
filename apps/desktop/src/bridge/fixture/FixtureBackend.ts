@@ -6,11 +6,12 @@ import type {
   FilesStatRequest,
   AuthAnswer, AuthCancel, AuthPrompt, BaseRequest, HostEntry, FleetEvent, FleetHost, FsListRequest, FsPathRequest, GateRequest, GitCommitRequest, GitDiffRequest,
   GitDiscardRequest, GitRefresh, GitStatus, GitStatusRequest, GitSummary, GitTarget, HistoryRequest, RenameSession, HostId, InventoryRequest, LinkState, SessionRef, SessionSnapshot, CommandRequest,
-  HostEnvironment, HostEnvSettings, HostRef, UiEvent, DiagTailParams, TrailItem, TrailRequest, LaunchRequest, LaunchReply,
+  HostEnvironment, HostEnvSettings, HostRef, UiEvent, ExportRequest, DiagTailParams, TrailItem, TrailRequest, LaunchRequest, LaunchReply,
 } from "../wire";
 import { methods as M, topics as T } from "../wire";
 import pkg from "../../../package.json";
 import { DRIVERS, FIXTURE_HOSTS, driverDef, inventoryFor, type FixtureHost } from "./catalog";
+import { FixtureExports } from "./exports";
 import { FixtureLog, scriptedTrail, seedHost, seedHub, trailOf } from "./diagnostics";
 import { fsExists, fsHome, fsList } from "./fs";
 import { buildTree, diffOf, type Tree } from "./git";
@@ -64,6 +65,10 @@ export class FixtureBackend implements Backend {
   readonly diagEvents: UiEvent[] = [];
   /** What `desktop.export_save` answers (tests set `{ saved: false }` for a cancelled dialog). */
   exportSaveAnswer: (id: string) => ExportSaved = (id) => ({ path: `/home/me/Downloads/${id}` });
+  /** The hub's diagnostics exports (`diagnostics.export.start`, topic `diagnostics.exports`). */
+  readonly exports: FixtureExports;
+  /** How far each host's wall clock is ahead of this computer's, in ms (what `diag.sources` reveals to a reader that measures it). */
+  readonly hostClockSkew: Record<HostId, number> = {};
   readonly sim: SessionSim;
   readonly envs: FixtureHostEnvs;
   private invSubs = new Map<HostId, Set<(e: unknown) => void>>();
@@ -93,6 +98,11 @@ export class FixtureBackend implements Backend {
     this.opts = { live: o.live ?? true, latencyMs: o.latencyMs ?? 140, speed: o.speed ?? 1, now: o.now ?? Date.now };
     const now = this.opts.now();
     this.envs = new FixtureHostEnvs(this.opts.now);
+    this.exports = new FixtureExports({
+      now: this.opts.now,
+      hosts: () => [...this.hosts.values()].map((h) => ({ id: h.def.entry.id, up: this.isUp(h), link: h.def.link })),
+      after: (ms, fn) => this.later(ms * this.opts.speed, fn),
+    });
     this.sim = new SessionSim({ now: this.opts.now, after: (ms, fn) => this.later(ms * this.opts.speed, fn), publish: (e) => this.publish(e) });
     for (const def of FIXTURE_HOSTS) {
       const d = structuredClone(def);
@@ -234,6 +244,15 @@ export class FixtureBackend implements Backend {
       this.deliver(() => this.wsSubs.has(onEvent) && onEvent(this.hub.ws.reset()));
       return () => this.wsSubs.delete(onEvent);
     }
+    if (topic === T.DIAGNOSTICS_EXPORTS) {
+      const off = this.exports.attach(onEvent);
+      let live = true;
+      this.deliver(() => live && onEvent(this.exports.reset()));
+      return () => {
+        live = false;
+        off();
+      };
+    }
     if (topic === T.DIAG_TAIL) {
       const rec = opts.host ? this.hosts.get(opts.host) : undefined;
       const log = opts.host ? this.hostLog(opts.host) : this.hubLog;
@@ -342,6 +361,8 @@ export class FixtureBackend implements Backend {
       case M.HOST_ENVIRONMENT:
       case M.HOST_ENVIRONMENT_REFRESH:
         return this.envs.report(hostId, this.capturedEnv(host, now));
+      case M.DIAG_SOURCES:
+        return { now_ms: now + (this.hostClockSkew[hostId] ?? 0), boot: `host${hostId}01`, sources: [{ name: "daemon", gens: [] }] };
       case M.SESSIONS_LIST:
         return { sessions: [...host.sessions.values()].map((e) => e.snap) };
       case M.SESSION_SNAPSHOT:
@@ -446,7 +467,10 @@ export class FixtureBackend implements Backend {
   private hubRequest(method: string, p: unknown): unknown {
     // The desktop shell's window background: a browser tab can always show alpha (CSS only).
     if (method === "desktop.window_surface") return { transparent: (p as { translucent: boolean }).translucent, effect: null };
+    // The desktop shell opens and reveals things itself; a browser has no such shell (see `Backend`).
+    if (method === "desktop.open" || method === "desktop.reveal") return null;
     if (method === "desktop.export_save") return this.exportSaveAnswer((p as { id: string }).id);
+    if (method === M.DIAGNOSTICS_EXPORT_START) return this.exports.start(p as ExportRequest);
     if (method === M.FLEET_GIT_REFRESH) {
       const r = p as GitRefresh;
       const e = [...(this.hosts.get(r.host)?.sessions.values() ?? [])].find((x) => x.snap.cwd === r.cwd);

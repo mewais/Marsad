@@ -1,4 +1,5 @@
 import type { Command, CommandReply, GateRequest, HostId, InputDropReason, InputId, PhaseCause, RpcError, SessionEvent, SessionSnapshot, TrailItem } from "../wire";
+import { conversationFacts } from "./catalog";
 import { projectEvent } from "./diagnostics";
 import type { SessionEventKind } from "./transcripts";
 
@@ -208,7 +209,8 @@ export class SessionSim {
   }
 
   patch(e: Entry, p: Partial<SessionSnapshot>) {
-    e.snap = { ...e.snap, ...p, cursor: e.events[e.events.length - 1]?.cursor ?? e.snap.cursor };
+    const next = { ...e.snap, ...p, cursor: e.events[e.events.length - 1]?.cursor ?? e.snap.cursor };
+    e.snap = { ...next, ...conversationFacts(next) };
     this.h.publish(e);
   }
 

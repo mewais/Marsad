@@ -1,9 +1,10 @@
 import { CopyButton, Icon } from "../../ui";
+import { clockWords, type ClockState } from "./clock";
 import { stepTime, type PromptRow } from "./prompts";
 import { sizeWords } from "./words";
 
 /** One prompt and the path it took: each step with when it was seen (relative to the first) and who saw it; steps not observed are hollow. */
-export function PromptPath({ row }: { row: PromptRow }) {
+export function PromptPath({ row, clock, hostName }: { row: PromptRow; clock?: ClockState | null; hostName?: string }) {
   const what = [row.kind === "slash" ? "Slash command" : "Prompt", `${row.chars} characters`, row.attachments ? `${row.attachments} attachment${row.attachments === 1 ? "" : "s"} (${sizeWords(row.bytes)})` : ""].filter(Boolean).join(" · ");
   // What the observers recorded beyond the step itself (the outcome of a request, a reason, an upload), one line each.
   const notes = [...row.steps.filter((s) => s.detail && s.state !== "not_seen").map((s) => `${s.label}: ${s.detail}`), ...row.facts.filter((f) => f.k !== "trace" && f.k !== "input").map((f) => `${f.k}: ${f.v}`)];
@@ -24,7 +25,7 @@ export function PromptPath({ row }: { row: PromptRow }) {
       </div>
       <ol className="dgp-path" aria-label="Path of this prompt">
         {row.steps.map((s, i) => (
-          <li key={s.id} className={`dgp-step ${s.state} ${s.tone}`} data-step={s.id} data-state={s.state} title={s.detail}>
+          <li key={s.id} className={`dgp-step ${s.state} ${s.tone}`} data-step={s.id} data-state={s.state} title={[s.detail, s.corrected ? "time corrected by the measured clock offset" : ""].filter(Boolean).join("\n") || undefined}>
             {i > 0 ? <Icon name="chevr" size="xs" className="dgp-sep" /> : null}
             <span className="dgp-chip">
               <span className="dgp-lbl">{s.label}</span>
@@ -34,7 +35,7 @@ export function PromptPath({ row }: { row: PromptRow }) {
           </li>
         ))}
       </ol>
-      {row.steps.some((s) => s.state === "seen" && s.approx) ? <div className="faint small">≈ means another machine's clock: only approximately comparable to the first step.</div> : null}
+      {row.steps.some((s) => s.state === "seen" && s.approx) ? <div className="faint small" data-testid="clock-legend">≈ means another machine's clock: only approximately comparable to the first step. {clock ? clockWords(clock, hostName ?? "the host") : null}</div> : null}
       {notes.length ? (
         <ul className="dgp-notes faint small">
           {notes.map((n) => <li key={n}>{n}</li>)}

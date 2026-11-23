@@ -205,3 +205,49 @@ describe("connection attempts", () => {
   });
   it("nothing is nothing", () => expect(connectionAttempts([])).toEqual([]));
 });
+
+describe("the host's clock offset", () => {
+  const SKEW = 5_000;
+  /** A prompt whose host entries were written by a clock 5 s ahead of this computer's. */
+  const sources = (o: Partial<PromptSources> = {}) =>
+    base({
+      trail: [applied(T0 + 12 + SKEW, 3), item(T0 + 15 + SKEW, { ev: "input.written", input: 3 })],
+      app: [app(T0, prompt())],
+      hub: [log(T0 + 4, "rpc.traced", { trace: T, method: "session.command", host: "hz", hops: 1, ms: 40, outcome: "ok" })],
+      host: [log(T0 + 8 + SKEW, "rpc.traced", { trace: T, method: "session.command", hops: 0, ms: 20, outcome: "ok" })],
+      ...o,
+    });
+
+  it("without a measured offset the host's times are the raw differences, approximate", () => {
+    const [row] = promptRows(sources());
+    expect(row.steps.map(stepTime)).toEqual(["start", "+4 ms", "≈+5.0 s", "≈+5.0 s", "≈+5.0 s", "≈+5.0 s", "not yet"]);
+    expect(row.steps.some((s) => s.corrected)).toBe(false);
+  });
+
+  it("with the offset the host's times are moved onto this computer's clock, and stay marked approximate", () => {
+    const [row] = promptRows(sources({ offset: { offsetMs: SKEW, rttMs: 12 } }));
+    expect(row.steps.map(stepTime)).toEqual(["start", "+4 ms", "≈+8 ms", "≈+12 ms", "≈+12 ms", "≈+15 ms", "not yet"]);
+    // Only what another machine's clock wrote was moved.
+    expect(row.steps.filter((s) => s.state === "seen").map((s) => !!s.corrected)).toEqual([false, false, true, true, true, true]);
+    expect(row.steps.filter((s) => s.state === "seen").slice(2).every((s) => s.approx)).toBe(true);
+    // The order of the steps is the path's order, whatever the times.
+    expect(row.steps.map((s) => s.id)).toEqual(["app", "hub", "host", "recorded", "sent", "written", "acknowledged"]);
+  });
+
+  it("a host behind this computer is corrected the same way", () => {
+    const [row] = promptRows(sources({ offset: { offsetMs: -3_000, rttMs: 4 }, host: [log(T0 + 8 - 3_000, "rpc.traced", { trace: T, method: "session.command", hops: 0, ms: 20, outcome: "ok" })], trail: [applied(T0 + 12 - 3_000, 3)] }));
+    expect(row.steps.map(stepTime).slice(0, 4)).toEqual(["start", "+4 ms", "≈+8 ms", "≈+12 ms"]);
+  });
+
+  it("a prompt to the local host is never corrected", () => {
+    const [row] = promptRows(base({ session: local, trail: [applied(T0 + 30, 3)], app: [app(T0, prompt(T, "s1", "x1"))], offset: { offsetMs: 9_999, rttMs: 1 } }));
+    expect(row.steps.some((s) => s.corrected)).toBe(false);
+    expect(row.steps.map(stepTime)[0]).toBe("start");
+  });
+
+  it("a corrected host time earlier than the hub's record shows as earlier, not later", () => {
+    // Nothing of this computer's was seen (an old session): the host's own entries come first, then the hub's record.
+    const [row] = promptRows(base({ trail: [applied(T0 + 12 + SKEW, 3), item(T0 + 20 + SKEW, { ev: "input.written", input: 3 })], hub: [log(T0 + 30, "rpc.traced", { trace: T, method: "session.command", hops: 1, ms: 40, outcome: "ok" })], offset: { offsetMs: SKEW, rttMs: 0 } }));
+    expect(row.steps.filter((s) => s.state === "seen").map((s) => [s.id, stepTime(s)])).toEqual([["hub", "start"], ["recorded", "≈-18 ms"], ["sent", "≈-18 ms"], ["written", "≈-10 ms"]]);
+  });
+});

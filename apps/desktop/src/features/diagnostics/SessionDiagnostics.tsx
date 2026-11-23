@@ -4,7 +4,8 @@ import { splitKey } from "../../bridge/wire";
 import { useHost, useAppState, useReach, type TailSpec } from "../../state";
 import { Button, Icon, Skeleton, useCopy } from "../../ui";
 import { DiagList } from "./DiagList";
-import { useReconnect, useTail, useTrail } from "./hooks";
+import { clockWords } from "./clock";
+import { useClockOffset, useReconnect, useTail, useTrail } from "./hooks";
 import { Facts, Problem, Reading, SectionHead, Unreachable } from "./parts";
 import { PromptPath } from "./PromptPath";
 import { promptRows, promptTraces } from "./prompts";
@@ -40,6 +41,10 @@ export function SessionDiagnostics({ sessionKey, snap }: { sessionKey: string; s
   const hubLoaded = !reach && (!hubSpec || hubTail.slice?.state === "live");
   const hostLoaded = !reach && (!hostSpec || hostTail.slice?.state === "live");
 
+  // The host's clock against ours, measured once as the panel opens; the local host has none (the app and the hub share this computer's).
+  const clock = useClockOffset(host, !reach && !local);
+  const offset = clock?.state === "ready" ? clock.offset : null;
+
   const prompts = useMemo(
     () =>
       promptRows({
@@ -49,8 +54,9 @@ export function SessionDiagnostics({ sessionKey, snap }: { sessionKey: string; s
         host: hostTail.slice?.records ?? [],
         session: { host, id, hostName, local },
         loaded: { hub: hubLoaded, host: hostLoaded },
+        offset,
       }),
-    [items, appEvents, hubTail.slice, hostTail.slice, host, id, hostName, local, hubLoaded, hostLoaded],
+    [items, appEvents, hubTail.slice, hostTail.slice, host, id, hostName, local, hubLoaded, hostLoaded, offset],
   );
   const timeline = useMemo(() => trailRows(items ?? []), [items]);
   /** The trail has been asked for and nothing has come back (not an empty trail: that is an answer). */
@@ -75,8 +81,8 @@ export function SessionDiagnostics({ sessionKey, snap }: { sessionKey: string; s
     [id, host, hostName, hostView, snap.driver, snap.generation, snap.native_session_id, snap.phase.state, snap.cli_version, snap.model],
   );
   const text = useMemo(
-    () => panelText({ facts, prompts, trail: items ?? null, trailHasMore: !!trail.slice?.hasMore, hostLog: log.slice?.state === "live" ? log.slice.records : null, at: Date.now() }),
-    [facts, prompts, items, trail.slice?.hasMore, log.slice],
+    () => panelText({ facts, prompts, trail: items ?? null, trailHasMore: !!trail.slice?.hasMore, hostLog: log.slice?.state === "live" ? log.slice.records : null, at: Date.now(), clock: clock ? clockWords(clock, hostName) : null }),
+    [facts, prompts, items, trail.slice?.hasMore, log.slice, clock, hostName],
   );
   const copy = useCopy(text);
 
@@ -106,7 +112,7 @@ export function SessionDiagnostics({ sessionKey, snap }: { sessionKey: string; s
       <section aria-label="Prompts">
         <SectionHead title="Prompts" note="Each step is shown only where something observed it. Times are relative to the first step." />
         {trailPending ? <Reading what="Reading the trail from the host…" /> : null}
-        {prompts.map((r) => <PromptPath key={r.key} row={r} />)}
+        {prompts.map((r) => <PromptPath key={r.key} row={r} clock={clock} hostName={hostName} />)}
         {!prompts.length && !trailPending && !trail.slice?.error ? <div className="faint small">No prompts yet.</div> : null}
         {trail.slice?.hasMore ? <div className="faint small">Only the loaded part of the trail is searched for prompts; load earlier entries below for older ones.</div> : null}
         {hubTail.feedError ? <Problem title="The hub's log stopped." detail={hubTail.feedError} onRetry={hubTail.retry} /> : null}

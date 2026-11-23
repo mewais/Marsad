@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FixtureBackend } from "../../src/bridge/fixture/FixtureBackend";
-import { ErrorBoundary } from "../../src/ui";
+import { ErrorBoundary, RenderErrorReport } from "../../src/ui";
 import { quietBackend, renderApp, sessionByName } from "../helpers";
 
 // The page a test makes fail. Everything else in the app is the real thing.
@@ -34,7 +34,7 @@ describe("ErrorBoundary", () => {
       return (
         <div>
           <button type="button" onClick={() => setExplode(false)}>repair</button>
-          <ErrorBoundary variant="page" what="this page"><Bomb explode={explode} /></ErrorBoundary>
+          <ErrorBoundary variant="page" name="test.page" what="this page"><Bomb explode={explode} /></ErrorBoundary>
           <p>the rest of the window</p>
         </div>
       );
@@ -55,9 +55,9 @@ describe("ErrorBoundary", () => {
   });
 
   it("draws again by itself when its resetKey changes (another page, a newer item)", () => {
-    const { rerender } = render(<ErrorBoundary variant="item" what="this entry" resetKey="a"><Bomb explode /></ErrorBoundary>);
+    const { rerender } = render(<ErrorBoundary variant="item" name="test.item" what="this entry" resetKey="a"><Bomb explode /></ErrorBoundary>);
     expect(screen.getByTestId("boundary-item")).toHaveTextContent("Could not display this entry: kaboom");
-    rerender(<ErrorBoundary variant="item" what="this entry" resetKey="b"><Bomb explode={false} /></ErrorBoundary>);
+    rerender(<ErrorBoundary variant="item" name="test.item" what="this entry" resetKey="b"><Bomb explode={false} /></ErrorBoundary>);
     expect(screen.getByText("fine")).toBeInTheDocument();
   });
 
@@ -65,10 +65,28 @@ describe("ErrorBoundary", () => {
     const reload = vi.fn();
     Object.defineProperty(window, "location", { configurable: true, value: { ...window.location, reload } });
     const user = userEvent.setup();
-    render(<ErrorBoundary variant="app" what="the window"><Bomb explode /></ErrorBoundary>);
+    render(<ErrorBoundary variant="app" name="test.app" what="the window"><Bomb explode /></ErrorBoundary>);
     expect(screen.getByTestId("boundary-app")).toHaveTextContent("cannot show this window");
     await user.click(screen.getByRole("button", { name: "Reload the window" }));
     expect(reload).toHaveBeenCalled();
+  });
+});
+
+describe("reporting", () => {
+  it("a failure is reported once, by the boundary's name and nothing else", async () => {
+    const user = userEvent.setup();
+    const report = vi.fn();
+    render(<RenderErrorReport.Provider value={report}><ErrorBoundary variant="page" name="test.page" what="this page"><Bomb explode /></ErrorBoundary></RenderErrorReport.Provider>);
+    expect(report.mock.calls).toEqual([["test.page"]]);
+    // Reloading while it still fails is another failure, reported as one.
+    await user.click(screen.getByRole("button", { name: "Reload this page" }));
+    expect(report).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(report.mock.calls)).not.toContain("kaboom");
+  });
+
+  it("a boundary outside the app reports nowhere and still shows the failure", () => {
+    render(<ErrorBoundary variant="item" name="test.item" what="this entry"><Bomb explode /></ErrorBoundary>);
+    expect(screen.getByTestId("boundary-item")).toBeInTheDocument();
   });
 });
 
@@ -81,6 +99,9 @@ describe("in the app", () => {
     const fallback = await screen.findByTestId("boundary-page");
     expect(fallback).toHaveTextContent("Could not display this page");
     expect(fallback).toHaveTextContent("config page blew up");
+    // The app's log has the failure: the boundary's name, never the message.
+    await waitFor(() => expect(r.backend.diagEvents.filter((e) => e.ev === "ui.render_error")).toEqual([{ ev: "ui.render_error", component: "page.config" }]));
+    expect(JSON.stringify(r.backend.diagEvents)).not.toContain("blew up");
     // The title bar, rail and status bar are still there and work.
     const rail = screen.getByRole("navigation", { name: "Main" });
     expect(screen.getByRole("contentinfo", { name: "Status" })).toBeInTheDocument();
@@ -126,6 +147,7 @@ describe("in the app", () => {
     expect(screen.getByText("before the bad one")).toBeInTheDocument();
     expect(screen.getByText("after the bad one")).toBeInTheDocument();
     expect(screen.queryByTestId("boundary-page")).toBeNull();
+    await waitFor(() => expect(backend.diagEvents.filter((e) => e.ev === "ui.render_error").map((e) => (e as { component: string }).component)).toEqual(["transcript_entry"]));
     // The composer next to the transcript still works.
     expect(screen.getByRole("textbox", { name: "Message" })).toBeEnabled();
   });

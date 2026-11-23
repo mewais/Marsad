@@ -1,4 +1,4 @@
-import type { ConfigItem, DriverCapabilities, PromptInput, DriverInventory, HostEntry, LinkState, ModelInfo, ResumableSession, SessionMode, SlashCommandInfo } from "../wire";
+import type { ConfigItem, DriverCapabilities, PromptInput, DriverInventory, HostEntry, LinkState, ModelInfo, NotContinuable, ResumableSession, ResumeCommand, SessionMode, SessionSnapshot, SlashCommandInfo } from "../wire";
 
 /** Fixture-only data: drivers and hosts as discovery and the hub would report them. */
 
@@ -24,6 +24,8 @@ export interface DriverDef {
   modes: SessionMode[];
   slash: SlashCommandInfo[];
   config: ConfigItem[];
+  /** The command with which the user opens a saved conversation in their own CLI; null: the CLI has none (the descriptor's `user_resume_argv`). */
+  resumeArgv: ((nativeSessionId: string) => string[]) | null;
 }
 
 const m = (id: string, is_default = false, display_name = id, description = ""): ModelInfo => ({ id, display_name, description, is_default });
@@ -60,6 +62,7 @@ export const DRIVERS: DriverDef[] = [
       { kind: "command", name: "review", source: src("project", ".claude/commands/"), enabled: true, description: "Slash command", path: ".claude/commands/review.md" },
       { kind: "command", name: "deploy-preview", source: src("project", ".claude/commands/"), enabled: true, description: "Slash command", path: ".claude/commands/deploy-preview.md" },
     ],
+    resumeArgv: (id) => ["claude", "--resume", id],
   },
   {
     id: "codex", display_name: "Codex", binary: "codex", capabilities: caps({ prompt_while_busy: "steered", streaming_output: true }), prompt_input: promptInput("path_reference", false, 20 * 1024 * 1024), version: "0.58.0",
@@ -79,6 +82,7 @@ export const DRIVERS: DriverDef[] = [
       { kind: "skill", name: "release-notes", source: src("user", "~/.codex/skills/"), enabled: true, path: "~/.codex/skills/release-notes" },
       { kind: "command", name: "fix-ci", source: src("user", "~/.codex/prompts/"), enabled: true, description: "Custom prompt", path: "~/.codex/prompts/fix-ci.md" },
     ],
+    resumeArgv: (id) => ["codex", "resume", id],
   },
   {
     id: "opencode", display_name: "OpenCode", binary: "opencode", capabilities: caps({ prompt_while_busy: "queued_by_protocol" }), prompt_input: promptInput("embedded"), version: "1.3.2",
@@ -93,6 +97,7 @@ export const DRIVERS: DriverDef[] = [
       { kind: "agent", name: "reviewer", source: src("global", "~/.config/opencode/agent/"), enabled: true, description: "Reviews diffs before commit", path: "~/.config/opencode/agent/reviewer.md" },
       { kind: "plugin", name: "notify", source: src("global", "~/.config/opencode/opencode.json"), enabled: true, path: "~/.config/opencode/plugin/notify" },
     ],
+    resumeArgv: null,
   },
   {
     id: "kilo", display_name: "Kilo Code", binary: "kilo", capabilities: caps({ prompt_while_busy: "queued_by_protocol", plan_gate: false }), prompt_input: promptInput("embedded"), version: "7.8.27",
@@ -104,9 +109,25 @@ export const DRIVERS: DriverDef[] = [
     ],
     slash: [],
     config: [mcp("github", "global", "~/.config/kilo/kilo.jsonc", "github-mcp-server")],
+    resumeArgv: (id) => ["kilo", "--session", id],
   },
 ];
 export const driverDef = (id: string) => DRIVERS.find((d) => d.id === id)!;
+
+/**
+ * The conversation facts of a snapshot as the runtime derives them (`continue_verdict`, `apply_conversation`): a live session is not
+ * continuable; an ended one is when its driver can resume and the agent saved the conversation (it does with the first turn).
+ */
+export type ConversationFacts = Pick<SessionSnapshot, "continuable" | "not_continuable" | "resume_command">;
+export function conversationFacts(s: Omit<SessionSnapshot, keyof ConversationFacts>): ConversationFacts {
+  const live = ["starting", "idle", "working", "needs_you"].includes(s.phase.state);
+  const saved = !!s.native_session_id && (s.turns_completed > 0 || !!s.turn);
+  const why: NotContinuable | null = !s.loaded ? "loading" : live ? "not_ended" : !s.capabilities.resume ? "agent_cannot_resume"
+    : !s.native_session_id ? "no_conversation_id" : !saved ? "nothing_saved" : null;
+  const argv = saved && s.cwd ? driverDef(s.driver)?.resumeArgv?.(s.native_session_id!) : undefined;
+  const resume_command: ResumeCommand | null = argv ? { argv, cwd: s.cwd! } : null;
+  return { continuable: why === null, not_continuable: why, resume_command };
+}
 
 export interface FixtureHost {
   entry: HostEntry;

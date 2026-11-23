@@ -102,7 +102,7 @@ export function HostDetail({ host }: { host: HostView }) {
           {keys ? keys.split("|").map((key) => <SessionLine key={key} sessionKey={key} />) : <div className="faint small">No sessions on this host.</div>}
         </div>
       </div>
-      {developer ? <ErrorBoundary variant="item" what="the diagnostics" resetKey={host.id}><HostDiagnostics host={host} /></ErrorBoundary> : null}
+      {developer ? <ErrorBoundary variant="item" name="host_diagnostics" what="the diagnostics" resetKey={host.id}><HostDiagnostics host={host} /></ErrorBoundary> : null}
       {!host.local ? <div className="hd-foot"><Button size="sm" variant="ghost" icon="x" blocked={reach} onClick={() => setConfirm(true)}>Remove host</Button></div> : null}
       <ConfirmDialog open={confirm} title={`Remove ${host.name}?`} confirmLabel="Remove host" danger onConfirm={() => void remove()} onClose={() => setConfirm(false)}>
         <p>Marsad stops connecting to {host.name}. Sessions already running there keep running; you can add the host again later.</p>

@@ -65,6 +65,8 @@ export interface MethodMap {
   [M.HOSTS_ENVIRONMENT_SET]: [W.HostEnvSettings, W.HostEnvSaved];
   [M.HOSTS_ENVIRONMENT_TEST]: [W.HostRef, W.EnvironmentTest];
   [M.HOSTS_ENVIRONMENT_SECRETS]: [void, W.SecretsLocation];
+  [M.DIAGNOSTICS_EXPORT_START]: [W.ExportRequest, W.ExportStarted];
+  [M.DIAG_SOURCES]: [void, W.DiagSources];
   [M.AGENTCONFIG_EFFECTIVE]: [W.EffectiveRequest, W.EffectiveConfig];
   [M.SESSIONS_LAUNCH]: [W.LaunchRequest, W.LaunchReply];
   [M.STORE_SETTINGS_GET]: [void, W.Settings];
@@ -130,6 +132,10 @@ export function createApi(b: Backend) {
     launch: (r: W.LaunchRequest, trace?: string) => call(b, M.SESSIONS_LAUNCH, r, { trace }),
     appVersion: () => b.appVersion(),
     daemonInfo: (host?: W.HostId) => call(b, M.DAEMON_INFO, undefined, on(host)),
+    /** The diagnostics files of a daemon and its wall clock now (`now_ms`): what the clock offset to it is measured with. */
+    diagSources: (host: W.HostId) => call(b, M.DIAG_SOURCES, undefined, { host }),
+    /** Start a diagnostics export (the hub answers at once; follow it with `subscribe.exports`). */
+    startExport: (r: W.ExportRequest) => call(b, M.DIAGNOSTICS_EXPORT_START, r),
     media: {
       put: (host: W.HostId, r: W.AttachmentPut) => call(b, M.SESSION_ATTACHMENT_PUT, r, { host }),
       read: (host: W.HostId, r: W.FileReadRequest) => call(b, M.SESSION_FILE_READ, r, { host }),
@@ -248,6 +254,8 @@ export function createApi(b: Backend) {
       /** The session's trail from `from` (a cursor of its events), on the session's host. */
       sessionTrail: (host: W.HostId, id: W.SessionId, from: number, cb: (e: W.TrailItem) => void, onEnd?: End): Unsubscribe =>
         b.subscribe(T.sessionTrail(id), { host, from }, (e) => cb(e as W.TrailItem), onEnd),
+      /** The hub's diagnostics exports: every one it knows (`reset`), then each change (`upsert`). */
+      exports: (cb: (e: W.ExportsEvent) => void, onEnd?: End): Unsubscribe => b.subscribe(T.DIAGNOSTICS_EXPORTS, {}, (e) => cb(e as W.ExportsEvent), onEnd),
       /**
        * A daemon's own diagnostics records: the hub's (`host` omitted) or a host's. `from`: the
        * cursor of the last record seen (`<boot>.<seq>`); an expired one restarts with a `reset`.

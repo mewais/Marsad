@@ -40,18 +40,18 @@ describe("settings: Developer mode", () => {
     expect(await screen.findByRole("switch", { name: "Developer mode" })).toHaveAttribute("aria-checked", "false");
   });
 
-  it("is a switch in a Diagnostics section, with one sentence of what it shows, and a place for the export card that draws nothing", async () => {
+  it("is a switch in a Diagnostics section, with one sentence of what it shows, below the export card that needs no Developer mode", async () => {
     await settings();
     expect(await screen.findByRole("heading", { name: "Diagnostics" })).toBeInTheDocument();
     const sw = screen.getByRole("switch", { name: "Developer mode" });
     expect(sw).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText(/Shows a Diagnostics tab on every session and a connection log on every host/)).toBeInTheDocument();
-    const slot = document.querySelector('[data-slot="export-diagnostics"]') as HTMLElement;
-    expect(slot).not.toBeNull();
-    expect(slot.hidden).toBe(true);
-    expect(slot.querySelector("button, a, input")).toBeNull();
-    // The only control in the section is the switch.
-    expect(Array.from(document.querySelectorAll(".setbody button, .setbody input, .setbody [role=switch]")).map((e) => e.getAttribute("aria-label"))).toEqual(["Developer mode"]);
+    // The export card is there with Developer mode off, above the switch; the placeholder that held its place is gone.
+    const exportCard = await screen.findByTestId("export-diagnostics");
+    expect(exportCard.compareDocumentPosition(sw) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.querySelector('[data-slot="export-diagnostics"]')).toBeNull();
+    // The one switch in the section is Developer mode.
+    expect(Array.from(document.querySelectorAll(".setbody [role=switch]")).map((e) => e.getAttribute("aria-label"))).toEqual(["Developer mode"]);
   });
 
   it("turning it on is pending until the hub has it, is stored under developer.mode, and is recorded by the app afterwards", async () => {
@@ -265,6 +265,71 @@ describe("a session's Diagnostics tab", () => {
     expect(row.querySelector('[data-step="host"]')).toBeNull();
     expect(within(row).queryByText(/≈/)).toBeNull();
     expect(backend.subscriptions.filter((x) => x.topic === "diag.tail").every((t) => t.host === undefined)).toBe(true);
+  });
+
+  describe("the host's clock offset", () => {
+    /** The Diagnostics tab of a session of `name` with one prompt sent from the app; the legend is under its path. */
+    async function promptPath(name: string, setup: (b: Backend) => void = () => undefined) {
+      const user = userEvent.setup();
+      const backend = quietBackend();
+      backend.hub.settings["developer.mode"] = true;
+      setup(backend);
+      const s = sessionByName(backend, name);
+      const r = await renderApp(`/session/${s.host}/${s.id}`, backend);
+      await screen.findByRole("heading", { name });
+      await user.type(await screen.findByRole("textbox", { name: "Message" }), `a prompt{Enter}`);
+      await waitFor(() => expect(backend.requests.some((q) => q.method === "session.command" && q.trace)).toBe(true));
+      act(() => r.history.push(`/session/${s.host}/${s.id}?tab=diagnostics`));
+      const trace = backend.requests.find((q) => q.method === "session.command")!.trace!;
+      const rowOf = async () => (await within(await panel()).findAllByTestId("prompt-row")).find((x) => x.textContent!.includes(trace))!;
+      await waitFor(async () => expect((await rowOf())?.querySelector('[data-step="written"]')).toHaveAttribute("data-state", "seen"));
+      return { backend, rowOf, s };
+    }
+    const asked = (b: Backend) => b.requests.filter((q) => q.method === "diag.sources");
+
+    it("is measured once when the tab opens, against the host's own answer, and the legend gives the offset and the round trip", async () => {
+      const { backend, rowOf } = await promptPath("sqlite-wal-tuning", (b) => { b.hostClockSkew.hz = 2500; });
+      const legend = await within(await rowOf()).findByTestId("clock-legend");
+      await waitFor(() => expect(legend.textContent).toMatch(/hetzner-ax41's clock is 2\.[45] s ahead of this computer's \(measured once when this tab opened; round trip \d+ ms\)\. Its times are corrected by that and are still approximate\.$/));
+      expect(legend).toHaveTextContent(/^≈ means another machine's clock/);
+      // One request, to the host's daemon; nothing polls.
+      expect(asked(backend).map((q) => q.host)).toEqual(["hz"]);
+      await act(async () => { await new Promise((r) => setTimeout(r, 120)); });
+      expect(asked(backend)).toHaveLength(1);
+      // The times the host wrote are shown moved by the offset, and marked as corrected.
+      const host = (await rowOf()).querySelector('[data-step="host"]')!;
+      expect(host.getAttribute("title")).toMatch(/time corrected by the measured clock offset/);
+      expect(host.querySelector(".dgp-time")!.textContent).toMatch(/^≈-2\.[0-9] s$/);
+    });
+
+    it("says it is measuring until the host answers, and says why when it cannot be measured, leaving the times as the host wrote them", async () => {
+      const gate = { sources: null as null | ReturnType<typeof hold> };
+      const { rowOf } = await promptPath("sqlite-wal-tuning", (b) => { gate.sources = hold(b, "diag.sources"); });
+      const legend = await within(await rowOf()).findByTestId("clock-legend");
+      expect(legend).toHaveTextContent("Measuring hetzner-ax41's clock offset…");
+      expect((await rowOf()).querySelector('[data-step="host"]')!.getAttribute("title") ?? "").not.toMatch(/corrected/);
+      expect(gate.sources!.pending()).toBe(1);
+      gate.sources!.reject({ code: "timeout", message: "the host did not answer in time" });
+      await waitFor(() => expect(legend).toHaveTextContent("hetzner-ax41's clock could not be read (the host did not answer in time); its times are shown as the host wrote them."));
+      expect((await rowOf()).querySelector('[data-step="host"] .dgp-time')!.textContent).toMatch(/^≈\+/);
+    });
+
+    it("the local host has no clock to measure: nothing is asked, and nothing is marked approximate", async () => {
+      const { backend, rowOf } = await promptPath("docs-search-index");
+      expect(within(await rowOf()).queryByTestId("clock-legend")).toBeNull();
+      expect(asked(backend)).toEqual([]);
+    });
+
+    it("the offset is part of the text the panel copies", async () => {
+      const user = userEvent.setup();
+      const { rowOf } = await promptPath("sqlite-wal-tuning", (b) => { b.hostClockSkew.hz = -1500; });
+      await waitFor(async () => expect(await rowOf()).toHaveTextContent(/1\.[45] s behind this computer's/));
+      const written: string[] = [];
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t: string) => void written.push(t) } });
+      await user.click(screen.getByRole("button", { name: "Copy as text" }));
+      await waitFor(() => expect(written).toHaveLength(1));
+      expect(written[0]).toMatch(/Clock: hetzner-ax41's clock is 1\.[45] s behind this computer's/);
+    });
   });
 
   it("a prompt the host refused is a row that ends at Refused with the host's reason", async () => {
