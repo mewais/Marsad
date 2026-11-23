@@ -41,6 +41,8 @@
 .small{font-size:12px}
 .termwrap{flex:1;margin:12px 20px 16px;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r3);padding:8px;display:flex;flex-direction:column;min-height:0;gap:6px}
 .xterm-box{flex:1;min-height:0}
-.term-status{font-size:12px;display:flex;align-items:center;gap:8px}
+.term-status{font-size:12px;display:flex;align-items:center;gap:8px;min-height:28px}
+.term-status .sp{flex:1}
+.term-cwd{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tabbody{flex:1;min-height:0;display:flex;flex-direction:column}
 @media (max-width:1100px){.chg{grid-template-columns:240px 1fr}}

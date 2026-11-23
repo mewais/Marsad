@@ -32,6 +32,7 @@ use marsad_proto::git::{
 use marsad_proto::hosts::{HostDraft, HostEntry, HostList, HostRef, ImportSuggestions, LinkStates};
 use marsad_proto::pty::{
     PtyEvent, PtyInfo, PtyInputRequest, PtyList, PtyRef, PtyResizeRequest, PtyStartRequest,
+    PtyStarted,
 };
 use marsad_proto::store::{
     NotificationPrefs, RecentProject, RecentProjects, SeenMark, SeenMarkers, SettingSet, Settings,
@@ -459,11 +460,12 @@ impl MarsadClient {
 
     // ── pty ─────────────────────────────────────────────────────────────────
 
+    /// Open the session's terminal (a live one is returned as it is) or start a directory's.
     pub async fn pty_start(
         &self,
         host: Option<&HostId>,
         req: PtyStartRequest,
-    ) -> Result<PtyInfo, ClientError> {
+    ) -> Result<PtyStarted, ClientError> {
         self.call(host, methods::PTY_START, req).await
     }
 

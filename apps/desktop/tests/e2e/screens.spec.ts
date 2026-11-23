@@ -42,7 +42,9 @@ for (const theme of ["dark", "light"] as const) {
       await shot(page, "session-sidebar-usage-dark-1440");
       await expect(page.getByRole("tab", { name: "Usage" })).toHaveCount(0);
       await page.getByRole("tab", { name: "Terminal" }).click();
-      await expect(page.getByText("Terminal not available")).toBeVisible();
+      // The fixture host has a terminal for the session: attached, with its prompt on screen and Close terminal offered.
+      await expect(page.getByRole("button", { name: "Close terminal" })).toBeVisible();
+      await expect(page.locator(".xterm-box .xterm-rows")).toContainText("$");
       await shot(page, "session-terminal-dark-1440");
     });
 

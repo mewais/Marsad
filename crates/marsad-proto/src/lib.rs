@@ -17,7 +17,7 @@
 //! | [`methods::GIT_DIFF`] | [`git::GitDiffRequest`] | [`git::GitDiff`] |
 //! | [`methods::GIT_COMMIT`] | [`git::GitCommitRequest`] | [`git::GitCommitReply`] |
 //! | [`methods::GIT_DISCARD`] | [`git::GitDiscardRequest`] | [`Ack`] |
-//! | [`methods::PTY_START`] | [`pty::PtyStartRequest`] | [`pty::PtyInfo`] |
+//! | [`methods::PTY_START`] | [`pty::PtyStartRequest`] | [`pty::PtyStarted`] |
 //! | [`methods::PTY_INPUT`] | [`pty::PtyInputRequest`] | [`Ack`] |
 //! | [`methods::PTY_RESIZE`] | [`pty::PtyResizeRequest`] | [`Ack`] |
 //! | [`methods::PTY_CLOSE`] | [`pty::PtyRef`] | [`Ack`] |
@@ -288,6 +288,7 @@ pub mod codes {
     pub const UPSTREAM: &str = "upstream";
     pub const STORE: &str = "store";
     pub const CONFLICT: &str = "conflict";
+    pub const LIMIT_REACHED: &str = "limit_reached";
 }
 
 /// A failed Marsad operation (carried as `RpcError.data`).
@@ -323,6 +324,10 @@ pub enum MarsadError {
     },
     #[error("store error: {message}")]
     Store { message: String },
+    /// The host holds as many of something as it allows (e.g. terminals not tied to a session);
+    /// the caller ends one first.
+    #[error("limit reached: {message}")]
+    LimitReached { message: String },
     /// The object changed since the caller read it (`expected_revision` did not match).
     #[error("conflict: {message}")]
     Conflict { message: String },
@@ -359,6 +364,7 @@ impl MarsadError {
             MarsadError::NotHub => codes::NOT_HUB,
             MarsadError::Upstream { .. } => codes::UPSTREAM,
             MarsadError::Store { .. } => codes::STORE,
+            MarsadError::LimitReached { .. } => codes::LIMIT_REACHED,
             MarsadError::Conflict { .. } => codes::CONFLICT,
             MarsadError::Spawn { code, .. } => match code {
                 SpawnError::Refused => wasl_proto::codes::SPAWN_REFUSED,

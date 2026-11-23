@@ -2,7 +2,11 @@
 import type { GitTarget } from "./GitTarget";
 
 /**
- * `pty.start`. `target` names the working directory like a git request.
+ * `pty.start`. `target` names the working directory like a git request. For a session target
+ * this is "open the session's terminal": a live one is returned as it is (`cols`, `rows` and
+ * `shell` then change nothing; send `pty.resize`), an exited one is replaced by a new shell,
+ * and a missing one is started. A directory target always starts a new terminal (the host
+ * allows a bounded number of them; the refusal is the `limit_reached` error).
  */
 export type PtyStartRequest = { target: GitTarget, cols: number, rows: number, 
 /**

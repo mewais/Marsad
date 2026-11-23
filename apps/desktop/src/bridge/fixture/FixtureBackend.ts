@@ -7,6 +7,7 @@ import type {
   AuthAnswer, AuthCancel, AuthPrompt, BaseRequest, HostEntry, FleetEvent, FleetHost, FsListRequest, FsPathRequest, GateReason, GateRequest, GitCommitRequest, GitDiffRequest,
   GitDiscardRequest, GitRefresh, GitStatus, GitStatusRequest, GitSummary, GitTarget, HistoryRequest, RenameSession, HostId, InventoryRequest, LinkState, SessionRef, SignInRepeat, SessionSnapshot, CommandRequest,
   HostEnvironment, HostEnvSettings, HostRef, UiEvent, ExportRequest, DiagTailParams, TrailItem, TrailRequest, LaunchRequest, LaunchReply,
+  PtyInputRequest, PtyRef, PtyResizeRequest, PtyStartRequest, PtyEvent,
 } from "../wire";
 import { methods as M, topics as T } from "../wire";
 import pkg from "../../../package.json";
@@ -16,6 +17,7 @@ import { FixtureLog, scriptedTrail, seedHost, seedHub, trailOf } from "./diagnos
 import { fsExists, fsHome, fsList } from "./fs";
 import { buildTree, diffOf, type Tree } from "./git";
 import { FixtureHub } from "./hub";
+import { FixturePtys } from "./pty";
 import { FixtureHostEnvs } from "./hostenv";
 import { err, SessionSim, type Entry } from "./runtime";
 import { FixtureFiles, MEDIA_SPEC } from "./media";
@@ -79,6 +81,8 @@ export class FixtureBackend implements Backend {
   readonly hostClockSkew: Record<HostId, number> = {};
   readonly sim: SessionSim;
   readonly envs: FixtureHostEnvs;
+  /** The hosts' terminals (`pty.*`): one per session, scripted shells. */
+  readonly ptys = new FixturePtys({ deliver: (fn) => this.deliver(fn) });
   private invSubs = new Map<HostId, Set<(e: unknown) => void>>();
   private navigators = new Set<(t: { host: HostId; session?: string }) => void>();
   /** The app's link to its local daemon (what the desktop shell reports); starts connected. */
@@ -239,7 +243,18 @@ export class FixtureBackend implements Backend {
   }
 
   subscribe(topic: string, opts: SubscribeOptions, onEvent: (e: unknown) => void, onEnd?: (end: SubscriptionEnd) => void): Unsubscribe {
-    const rec = { topic, host: opts.host, params: opts.params, onEnd, off: this.attach(topic, opts, onEvent) };
+    const rec: { topic: string; host?: HostId; params?: unknown; onEnd?: (e: SubscriptionEnd) => void; off: Unsubscribe } = {
+      topic,
+      host: opts.host,
+      params: opts.params,
+      onEnd,
+      off: () => undefined,
+    };
+    // A topic that ends by itself (a terminal after its shell exits) is no longer a subscription.
+    rec.off = this.attach(topic, opts, onEvent, (end) => {
+      if (!this.openSubs.delete(rec)) return;
+      onEnd?.(end);
+    });
     this.openSubs.add(rec);
     return () => {
       this.openSubs.delete(rec);
@@ -247,7 +262,7 @@ export class FixtureBackend implements Backend {
     };
   }
 
-  private attach(topic: string, opts: SubscribeOptions, onEvent: (e: unknown) => void): Unsubscribe {
+  private attach(topic: string, opts: SubscribeOptions, onEvent: (e: unknown) => void, ended: (end: SubscriptionEnd) => void): Unsubscribe {
     if (topic === T.FLEET) {
       this.fleetSubs.add(onEvent);
       this.deliver(() => this.fleetSubs.has(onEvent) && onEvent({ kind: "reset", hosts: [...this.hosts.values()].map((h) => this.fleetHost(h)) } satisfies FleetEvent));
@@ -293,6 +308,13 @@ export class FixtureBackend implements Backend {
       subs.add(onEvent);
       this.deliver(() => subs.has(onEvent) && this.isUp(host) && onEvent(this.hostInventory(id)));
       return () => subs.delete(onEvent);
+    }
+    if (topic.startsWith(T.ptyOutput(""))) {
+      const id = topic.slice(T.ptyOutput("").length);
+      const from = opts.from == null ? undefined : Number(opts.from);
+      // Not while the host is unreachable: the subscription waits for its link.
+      if (!this.isUp(host)) return () => undefined;
+      return this.ptys.subscribe(host.def.entry.id, id, from, (e: PtyEvent) => onEvent(e), ended);
     }
     const trailTopic = /^session\.trail:(.+)$/.exec(topic);
     if (trailTopic) {
@@ -433,6 +455,7 @@ export class FixtureBackend implements Backend {
         const e = this.entry(host, r);
         if (e.snap.phase.state === "working" || e.snap.phase.state === "needs_you" || e.snap.phase.state === "starting") this.sim.end(e);
         host.sessions.delete(r.id);
+        this.ptys.sessionDeleted(hostId, r.id);
         this.fleet({ kind: "session_removed", host: hostId, id: r.id });
         return {};
       }
@@ -472,12 +495,41 @@ export class FixtureBackend implements Backend {
         if (!host.def.drivers[r.driver]) throw err("not_found", `${r.driver} is not installed here`);
         return { driver: r.driver, project: r.project ?? null, items: driverDef(r.driver).config, refreshing: false, errors: [], refreshed_at_ms: now - 4 * 60_000 };
       }
-      case M.PTY_START:
+      case M.PTY_START: {
+        const r = p as PtyStartRequest;
+        return this.ptys.start(hostId, r, this.ptyTarget(host, r));
+      }
       case M.PTY_LIST:
-        throw err("unsupported", "Terminals need the Marsad helper on a real host; the demo backend has none.", { marsad_error: "unsupported", message: "no pty in the demo backend" });
+        return { ptys: this.ptys.list(hostId) };
+      case M.PTY_INPUT: {
+        const r = p as PtyInputRequest;
+        this.ptys.input(hostId, r.id, r.data);
+        return {};
+      }
+      case M.PTY_RESIZE: {
+        const r = p as PtyResizeRequest;
+        this.ptys.resize(hostId, r.id, r.cols, r.rows);
+        return {};
+      }
+      case M.PTY_CLOSE:
+        this.ptys.close(hostId, (p as PtyRef).id);
+        return {};
       default:
         throw err("method_not_found", `Fixture does not implement ${method}`);
     }
+  }
+
+  /** The directory a terminal is for, and its session: the host's `resolve` (exactly one of `session` and `cwd`). */
+  private ptyTarget(host: HostRec, r: PtyStartRequest) {
+    const { session, cwd } = r.target;
+    if (session != null && cwd == null) {
+      const e = host.sessions.get(session);
+      if (!e) throw err("not_found", `not found: session ${session}`, { marsad_error: "not_found", what: `session ${session}` });
+      if (!e.snap.cwd) throw err("invalid_params", `invalid request: session ${session} has no working directory`, { marsad_error: "invalid_request", message: `session ${session} has no working directory` });
+      return { cwd: e.snap.cwd, session };
+    }
+    if (session == null && cwd != null) return { cwd, session: null };
+    throw err("invalid_params", "invalid request: exactly one of `session` and `cwd` must be given", { marsad_error: "invalid_request", message: "exactly one of `session` and `cwd` must be given" });
   }
 
   private hubRequest(method: string, p: unknown): unknown {

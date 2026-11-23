@@ -196,6 +196,7 @@ export type * from "./PtyList";
 export type * from "./PtyRef";
 export type * from "./PtyResizeRequest";
 export type * from "./PtyStartRequest";
+export type * from "./PtyStarted";
 export type * from "./QuestionAnswer";
 export type * from "./QuestionOption";
 export type * from "./QuestionPrompt";

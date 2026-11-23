@@ -13,6 +13,10 @@ session?: string | null, cols: number, rows: number,
  */
 offset: number, 
 /**
- * Exit code once the shell has exited.
+ * The shell has exited. The entry stays readable until it is closed or replaced.
  */
-exited?: number | null, };
+exited: boolean, 
+/**
+ * The shell's exit status once it has exited, when the host could read it.
+ */
+exit_code?: number | null, };

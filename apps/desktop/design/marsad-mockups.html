@@ -422,6 +422,10 @@ a.wk-main:hover{background:var(--surface-2)} a.wk-main[aria-current="page"]{back
 .commit{margin-top:auto;border-top:1px solid var(--line);padding:12px;display:flex;flex-direction:column;gap:8px}
 .ta{border:1px solid var(--line-2);border-radius:var(--r2);background:var(--sunken);padding:8px 10px;font-size:12.5px;color:var(--fg);min-height:64px;line-height:1.45}
 .term{flex:1;margin:12px 20px 16px;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r3);padding:12px 14px;font-family:var(--f-mono);font-size:12px;line-height:1.6;color:var(--fg-2);overflow:auto;white-space:pre}
+.termwrap{flex:1;margin:12px 20px 16px;display:flex;flex-direction:column;min-height:0;gap:6px}
+.termwrap .term{margin:0;flex:1}
+.term-status{font-size:12px;display:flex;align-items:center;gap:8px;min-height:28px;color:var(--fg-3)} .term-status .sp{flex:1} .term-status .mono{font-family:var(--f-mono)}
+.termvar{display:flex;align-items:center;gap:8px;margin:12px 20px 0;font-size:11.5px;color:var(--fg-3)}
 .term .p{color:var(--accent)} .term .ok{color:var(--done)} .term .er{color:var(--failed)} .term .w{color:var(--needs)}
 .cfgcols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;padding:16px 20px;overflow:auto;align-content:start}
 .cfgcols .card{padding:14px 16px;display:flex;flex-direction:column;gap:12px}
@@ -1368,7 +1372,8 @@ function configTab(){
   </div>`;
 }
 function terminalTab(){
-  return `<div class="term"><span class="p">dev@thinkpad-x1</span>:<span class="c-accent">~/src/ledgerline</span>$ pnpm --filter api test auth
+  const t=state.term||'live';
+  const shown=`<span class="p">dev@thinkpad-x1</span>:<span class="c-accent">~/src/ledgerline</span>$ pnpm --filter api test auth
 
  <span class="ok">✓</span> auth/login.spec.ts (8)
  <span class="ok">✓</span> auth/logout.spec.ts (4)
@@ -1385,7 +1390,14 @@ function terminalTab(){
       Tests  <span class="er">2 failed</span> | <span class="ok">27 passed</span> (29)
    Duration  8.41s
 
-<span class="p">dev@thinkpad-x1</span>:<span class="c-accent">~/src/ledgerline</span>$ <span class="w">▌</span></div>`;
+<span class="p">dev@thinkpad-x1</span>:<span class="c-accent">~/src/ledgerline</span>$ `;
+  // The mockup's own switch between the terminal's states (the app shows the one the host reports).
+  const pick=`<div class="termvar"><span>State</span><div class="seg">${[['live','Open'],['exited','Shell exited'],['closed','Closed']].map(([k,l])=>`<button data-term="${k}" aria-pressed="${t===k}">${l}</button>`).join('')}</div><span>The terminal belongs to the session: leaving this tab only detaches, coming back shows the same shell and its scrollback.</span></div>`;
+  if(t==='closed') return pick+`<div class="empty" role="status" style="flex:1;justify-content:center;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;color:var(--fg-2)">${I('i-term','lg')}<h3>No terminal is open</h3><p>The shell and anything that was running in it have ended.</p><button class="btn sm primary">${I('i-term','sm')}Open a new terminal</button></div>`;
+  const bar=t==='live'
+    ?`<span class="mono">~/src/ledgerline</span><span class="sp"></span><button class="btn sm ghost">${I('i-stop','sm')}Close terminal</button>`
+    :`<span>The shell exited with status 0.</span><span class="sp"></span><button class="btn sm ghost">${I('i-term','sm')}Open a new terminal</button>`;
+  return pick+`<div class="termwrap"><div class="term-status" role="status">${bar}</div><div class="term">${shown}${t==='live'?'<span class="w">▌</span>':'exit\n'}</div></div>`;
 }
 function sessionScreen(){
   const t=state.tab;
@@ -1981,10 +1993,11 @@ function closeMenu(){ const m=document.getElementById('split-menu'); if(m&&!m.hi
 
 document.addEventListener('click',e=>{
   if(e.target.closest('input,textarea')) return;
-  const t=e.target.closest('[data-selrow],[data-sc],[data-v],[data-t],[data-go],[data-tab],[data-node],[data-edge],[data-gate],[data-gt],[data-close],[data-qo],[data-q],[data-v-go],#slash-btn,#split-caret,#strip-tg,#quiet-on,#quiet-off,[data-gdrv],[data-cdrv],[data-ws-start],[data-jump]');
+  const t=e.target.closest('[data-selrow],[data-sc],[data-v],[data-t],[data-go],[data-tab],[data-node],[data-edge],[data-gate],[data-gt],[data-close],[data-qo],[data-q],[data-v-go],#slash-btn,#split-caret,#strip-tg,#quiet-on,#quiet-off,[data-gdrv],[data-cdrv],[data-ws-start],[data-jump],[data-term]');
   if(!t||t.id!=='split-caret') closeMenu();
   if(!t) return;
   if(t.id==='split-caret'){ const m=document.getElementById('split-menu'); m.hidden=!m.hidden; t.setAttribute('aria-expanded',String(!m.hidden)); return; }
+  if(t.dataset.term){ state.term=t.dataset.term; render(); return; }
   if(t.id==='strip-tg'){ state.strip=!state.strip; render(); return; }
   if(t.id==='quiet-on'||t.id==='quiet-off'){ state.quiet=t.id==='quiet-on'; render(); return; }
   if(t.dataset.gdrv){ state.gdrv=t.dataset.gdrv; render(); return; }

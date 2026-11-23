@@ -1,10 +1,9 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { renderApp, sessionByName, quietBackend } from "../helpers";
+import { hold, renderApp, sessionByName, quietBackend } from "../helpers";
 
-async function open(name: string) {
-  const backend = quietBackend();
+async function open(name: string, backend = quietBackend()) {
   const s = sessionByName(backend, name);
   const r = await renderApp(`/session/${s.host}/${s.id}`, backend);
   await screen.findByRole("heading", { name });
@@ -38,12 +37,14 @@ describe("Session view", () => {
     expect(screen.getByText(/Plan · 3 of 6/i)).toBeInTheDocument();
   });
 
-  it("terminal tab is honest when the backend has no terminals", async () => {
+  it("terminal tab is honest when the host cannot give a terminal", async () => {
     const user = userEvent.setup();
-    await open("docs-search-index");
+    const backend = quietBackend();
+    hold(backend, "pty.list").failAll({ code: "unsupported", message: "Terminals need the Marsad helper on a real host." });
+    await open("docs-search-index", backend);
     await user.click(screen.getByRole("tab", { name: "Terminal" }));
     expect(await screen.findByText("Terminal not available")).toBeInTheDocument();
-    expect(screen.getByText(/demo backend has none/)).toBeInTheDocument();
+    expect(screen.getByText(/need the Marsad helper/)).toBeInTheDocument();
   });
 
   it("composer: slash menu comes from the snapshot, mode and model pickers too, and sending fires a prompt", async () => {

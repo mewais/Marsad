@@ -151,7 +151,8 @@ async fn nothing_opens_a_console_window_from_a_consoleless_hub() {
             },
         )
         .await
-        .unwrap();
+        .unwrap()
+        .pty;
     more_reports(&report, before, "the terminal").await;
     let _ = c.pty_close(None, &pty.id).await;
 
@@ -600,7 +601,8 @@ async fn terminal_prints(c: &MarsadClient, host: &HostId, cwd: &Path, cmd: &str,
             },
         )
         .await
-        .unwrap();
+        .unwrap()
+        .pty;
     let mut out = c.pty_output(Some(host), &info.id, None);
     c.pty_input(Some(host), &info.id, &format!("{cmd}\r\n"))
         .await

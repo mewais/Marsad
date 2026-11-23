@@ -29,6 +29,13 @@ wasit_diag::diag_events! {
         /// A terminal's writer thread could not be started: its input goes nowhere.
         #[diag(ev = "pty.writer_failed", lvl = error)]
         PtyWriterFailed { error: ErrorInfo },
+        /// The runtime's session feed failed in a way resubscribing does not fix: terminals are
+        /// no longer closed when their session is deleted.
+        #[diag(ev = "pty.session_feed_failed", lvl = error)]
+        PtySessionFeedFailed { error: ErrorInfo },
+        /// A terminal's shell was hung up and killed and still has not been reaped.
+        #[diag(ev = "pty.not_ended", lvl = error)]
+        PtyNotEnded { pty: Ident },
         /// A git summary was not scheduled: the watcher's queue was full (the directory is
         /// refreshed by the next touch) or closed (the watcher is gone). `code` says which.
         #[diag(ev = "git.touch_dropped", lvl = debug)]
@@ -181,6 +188,20 @@ pub fn pty_kill_failed(pty: &str, e: &io::Error) {
 /// A terminal's writer thread could not be started.
 pub fn pty_writer_failed(e: &io::Error) {
     record(HubEvent::PtyWriterFailed { error: diag::io(e) });
+}
+
+/// The session feed the terminals follow ended with an error (its text is the runtime's).
+pub fn pty_session_feed_failed(e: &str) {
+    record(HubEvent::PtySessionFeedFailed {
+        error: foreign("feed", &e),
+    });
+}
+
+/// The shell of terminal `pty` is still not reaped after it was hung up and killed.
+pub fn pty_not_ended(pty: &str) {
+    record(HubEvent::PtyNotEnded {
+        pty: Ident::new(pty),
+    });
 }
 
 /// A git summary touch was dropped; the queue was full or closed.
@@ -427,6 +448,22 @@ mod tests {
                 "pty.writer_failed",
                 "error",
                 &["error"],
+            ),
+            (
+                HubEvent::PtySessionFeedFailed {
+                    error: foreign_text(),
+                },
+                "pty.session_feed_failed",
+                "error",
+                &["error"],
+            ),
+            (
+                HubEvent::PtyNotEnded {
+                    pty: Ident::st("pty-1"),
+                },
+                "pty.not_ended",
+                "error",
+                &["pty"],
             ),
             (
                 HubEvent::GitTouchDropped {
