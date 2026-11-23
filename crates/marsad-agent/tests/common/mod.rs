@@ -16,6 +16,7 @@ use marsad_proto::runtime::{SessionEvent, SessionEventKind};
 use marsad_proto::{AgentEvent, LinkState};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use tokio::io::AsyncBufReadExt;
 use wasit_control::Hello;
 use wasit_fake_cli::scenario::Scenario;
 
@@ -211,7 +212,18 @@ pub fn client_config(data: impl AsRef<Path>, hello: Hello) -> ClientConfig {
 }
 
 pub fn client(data: &Path) -> MarsadClient {
+    client_with(data, true)
+}
+
+/// A client of a daemon the test started itself: it never starts one, so ending that daemon does
+/// not bring up a successor behind the test's back. Otherwise the same as [`client`].
+pub fn client_of(data: &Path) -> MarsadClient {
+    client_with(data, false)
+}
+
+fn client_with(data: &Path, start_daemon: bool) -> MarsadClient {
     let mut cfg = client_config(data, Hello::new("test", "gui-test", "gui"));
+    cfg.start_daemon = start_daemon;
     cfg.serve_args = serve_args();
     cfg.supervise.backoff.initial = Duration::from_millis(50);
     cfg.supervise.backoff.max = Duration::from_millis(500);
@@ -226,6 +238,39 @@ pub fn hub_client(dir: &Path, extra: &[&str]) -> MarsadClient {
     cfg.serve_args.extend(extra.iter().map(|s| s.to_string()));
     cfg.supervise.backoff.initial = Duration::from_millis(50);
     MarsadClient::connect(cfg)
+}
+
+/// A hub daemon of `data` that the test starts itself (so its exit can be awaited and it is
+/// ended by [`end_own_daemon`]), with the options of [`data_args`] and [`serve_args`]. Its
+/// clients are [`client_of`]s.
+pub async fn own_daemon(data: &Path) -> tokio::process::Child {
+    let mut child = tokio::process::Command::new(agent())
+        .arg("serve")
+        .arg("--hub")
+        .args(data_args(data))
+        .args(serve_args())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    tokio::time::timeout(
+        T,
+        tokio::io::BufReader::new(child.stdout.take().unwrap()).read_line(&mut line),
+    )
+    .await
+    .expect("the daemon said it is ready")
+    .unwrap();
+    assert!(line.contains("ready"), "{line}");
+    child
+}
+
+/// Ends a daemon of [`own_daemon`] and returns when it is gone and reaped.
+pub async fn end_own_daemon(mut daemon: tokio::process::Child) {
+    stop_daemon(daemon.id().unwrap()).await;
+    daemon.wait().await.unwrap();
 }
 
 /// Wait on the fleet until `pred` matches an event.

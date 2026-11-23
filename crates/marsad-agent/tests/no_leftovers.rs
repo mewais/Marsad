@@ -218,6 +218,77 @@ fn the_default_place_is_the_products() {
     }
 }
 
+/// The processes whose command line names `dir` (with its separator, so that `dir-1` is not
+/// `dir`), as pid and command line. A zombie has no command line and is not listed.
+fn alive_naming(dir: &Path) -> Vec<(u32, String)> {
+    let needle = format!("{}/", dir.display());
+    let mut found = Vec::new();
+    for e in std::fs::read_dir("/proc").unwrap().flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Ok(raw) = std::fs::read(e.path().join("cmdline")) else {
+            continue;
+        };
+        let line = raw
+            .split(|b| *b == 0)
+            .map(|arg| String::from_utf8_lossy(arg).into_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if line.contains(&needle) {
+            found.push((pid, line));
+        }
+    }
+    found
+}
+
+/// Waits until the client's link has completed an attempt to reach a daemon after the daemon's
+/// loss. The loss is seen first (`!is_connected`: the state from before it is not an outcome).
+/// Then the state must be past every attempt's start and not the `Reconnecting { attempt: 1 }`
+/// that the backoff publishes before the first attempt runs: `Connecting` is mid-attempt, and
+/// every other state after a loss (`Connected`, a failed attempt's `Reconnecting`, a parked
+/// `Failed`) is published only once an attempt has ended. It waits on the link's state, so it
+/// neither sleeps nor guesses.
+async fn wait_for_first_attempt_after_loss(c: &marsad_client::MarsadClient) {
+    let mut state = c.link().state();
+    state.wait_for(|s| !s.is_connected()).await.unwrap();
+    state
+        .wait_for(|s| {
+            !matches!(s, LinkState::Connecting)
+                && !matches!(s, LinkState::Reconnecting { attempt: 1, .. })
+        })
+        .await
+        .unwrap();
+}
+
+/// The miniature of `pty_lifecycle`'s `no_shell_outlives_the_daemon`: a daemon the test starts
+/// itself, a client of it that starts none ([`client_of`]), the daemon ended and awaited, then
+/// the client's first attempt to reach a daemon awaited. A client that starts daemons ([`client`])
+/// spawns its successor within that attempt, and the successor names the test's directory; so
+/// after the attempt nothing naming the directory may be alive. Then everything is dropped, and
+/// the directory is gone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_daemon_its_test_ended_leaves_no_successor_behind() {
+    let d = TempDir::new();
+    let root = d.path().to_owned();
+    let data = root.join("d");
+    let daemon = own_daemon(&data).await;
+    let c = client_of(&data);
+    assert_eq!(c.daemon_info(None).await.unwrap().pid, daemon.id().unwrap());
+    end_own_daemon(daemon).await;
+    wait_for_first_attempt_after_loss(&c).await;
+    let alive = alive_naming(&root);
+    assert!(
+        alive.is_empty(),
+        "a daemon was started after the test's daemon ended: {alive:?}"
+    );
+    drop(c);
+    drop(d);
+    let alive = alive_naming(&root);
+    assert!(alive.is_empty(), "still running after the test: {alive:?}");
+    assert!(!root.exists(), "{} was not removed", root.display());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_failing_test_leaves_no_process_and_no_directory_behind() {
     the_default_place_is_the_products();

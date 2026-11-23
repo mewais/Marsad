@@ -19,7 +19,7 @@ use marsad_proto::git::GitTarget;
 use marsad_proto::pty::{PtyEvent, PtyInfo, PtyStartRequest, PtyStarted};
 use marsad_proto::runtime::{SessionEvent, SessionEventKind};
 use marsad_proto::{MarsadError, SessionId};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::AsyncReadExt;
 use wasit_fake_cli::scenario::Scenario;
 
 const SH: &str = "/bin/sh";
@@ -206,7 +206,9 @@ async fn exits(out: &mut Subscription<PtyEvent>) -> (u64, Option<i32>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn opening_a_sessions_terminal_twice_is_one_shell() {
     let d = TempDir::new();
-    let c = client(&d.path().join("d"));
+    let data = d.path().join("d");
+    let daemon = own_daemon(&data).await;
+    let c = client_of(&data);
     let work = d.path().join("w");
     let id = session(&c, &d, &work).await;
     let target = || GitTarget::session(id.clone());
@@ -236,13 +238,15 @@ async fn opening_a_sessions_terminal_twice_is_one_shell() {
     let b = open(&c, GitTarget::cwd(work.to_string_lossy())).await;
     assert!(a.created && b.created);
     assert!(a.pty.id != b.pty.id && a.pty.session.is_none());
-    stop_hub(&c).await;
+    end_own_daemon(daemon).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn output_survives_detaching_and_reattaching_by_offset() {
     let d = TempDir::new();
-    let c = client(&d.path().join("d"));
+    let data = d.path().join("d");
+    let daemon = own_daemon(&data).await;
+    let c = client_of(&data);
     let id = session(&c, &d, &d.path().join("w")).await;
     let target = || GitTarget::session(id.clone());
     let info = open(&c, target()).await.pty;
@@ -284,13 +288,15 @@ async fn output_survives_detaching_and_reattaching_by_offset() {
         all[before as usize..],
         "resumes right after the cursor"
     );
-    stop_hub(&c).await;
+    end_own_daemon(daemon).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_shell_that_exits_stays_readable_until_replaced_or_closed() {
     let d = TempDir::new();
-    let c = client(&d.path().join("d"));
+    let data = d.path().join("d");
+    let daemon = own_daemon(&data).await;
+    let c = client_of(&data);
     let id = session(&c, &d, &d.path().join("w")).await;
     let target = || GitTarget::session(id.clone());
     let info = open(&c, target()).await.pty;
@@ -373,13 +379,15 @@ async fn a_shell_that_exits_stays_readable_until_replaced_or_closed() {
     assert_eq!(exits(&mut out).await.1, Some(0));
     c.pty_close(None, &fresh.pty.id).await.unwrap();
     assert!(c.pty_list(None).await.unwrap().is_empty());
-    stop_hub(&c).await;
+    end_own_daemon(daemon).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn closing_ends_the_shell_and_what_it_started() {
     let d = TempDir::new();
-    let c = client(&d.path().join("d"));
+    let data = d.path().join("d");
+    let daemon = own_daemon(&data).await;
+    let c = client_of(&data);
     let id = session(&c, &d, &d.path().join("w")).await;
     let info = open(&c, GitTarget::session(id.clone())).await.pty;
     let pid = shell_pid(&c, &info).await;
@@ -406,13 +414,15 @@ async fn closing_ends_the_shell_and_what_it_started() {
     let fresh = open(&c, GitTarget::session(id.clone())).await;
     assert!(fresh.created && fresh.pty.id != info.id);
     assert_ne!(shell_pid(&c, &fresh.pty).await, pid);
-    stop_hub(&c).await;
+    end_own_daemon(daemon).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_ended_session_keeps_its_terminal_and_a_deleted_one_does_not() {
     let d = TempDir::new();
-    let c = client(&d.path().join("d"));
+    let data = d.path().join("d");
+    let daemon = own_daemon(&data).await;
+    let c = client_of(&data);
     let id = session(&c, &d, &d.path().join("w")).await;
     let rt = c.runtime(None);
     let info = open(&c, GitTarget::session(id.clone())).await.pty;
@@ -443,13 +453,15 @@ async fn an_ended_session_keeps_its_terminal_and_a_deleted_one_does_not() {
         MarsadError::NotFound { .. }
     ));
     assert!(c.pty_list(None).await.unwrap().is_empty());
-    stop_hub(&c).await;
+    end_own_daemon(daemon).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminals_not_tied_to_a_session_are_capped() {
     let d = TempDir::new();
-    let c = client(&d.path().join("d"));
+    let data = d.path().join("d");
+    let daemon = own_daemon(&data).await;
+    let c = client_of(&data);
     let cwd = || GitTarget::cwd(d.path().to_string_lossy());
     let mut made = Vec::new();
     for _ in 0..marsad_agent::host::pty::MAX_DIRECTORY_TERMINALS {
@@ -467,32 +479,7 @@ async fn terminals_not_tied_to_a_session_are_capped() {
     // Closing one makes room.
     c.pty_close(None, &made[0].id).await.unwrap();
     assert!(open(&c, cwd()).await.created);
-    stop_hub(&c).await;
-}
-
-/// A daemon this test starts itself (so its exit can be awaited), serving `data`.
-async fn own_daemon(data: &Path) -> tokio::process::Child {
-    let mut child = tokio::process::Command::new(agent())
-        .arg("serve")
-        .arg("--hub")
-        .args(data_args(data))
-        .args(serve_args())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let mut line = String::new();
-    tokio::time::timeout(
-        T,
-        BufReader::new(child.stdout.take().unwrap()).read_line(&mut line),
-    )
-    .await
-    .expect("the daemon said it is ready")
-    .unwrap();
-    assert!(line.contains("ready"), "{line}");
-    child
+    end_own_daemon(daemon).await;
 }
 
 /// Start a daemon, open a session's terminal and two directory ones, then end the daemon the
@@ -501,7 +488,7 @@ async fn no_shell_outlives_the_daemon(end: impl AsyncFnOnce(&Path, &tokio::proce
     let d = TempDir::new();
     let data = d.path().join("d");
     let mut daemon = own_daemon(&data).await;
-    let c = client(&data);
+    let c = client_of(&data);
     let id = session(&c, &d, &d.path().join("w")).await;
     let mut shells = Vec::new();
     let mut held = Vec::new();
