@@ -89,9 +89,6 @@ wasit_diag::diag_events! {
         /// A topology push failed with a retryable error; it is tried again on a backoff.
         #[diag(ev = "workstreams.topology_push_retry", lvl = debug)]
         TopologyPushRetry { host: Ident, error: ErrorInfo },
-        /// A launched node's session could not be renamed after its node.
-        #[diag(ev = "launch.node_name_failed", lvl = warn)]
-        NodeNameFailed { node: Ident, error: ErrorInfo },
         /// A node of a workstream could not be launched (the error is also in the reply).
         #[diag(ev = "launch.node_failed", lvl = warn)]
         NodeLaunchFailed {
@@ -293,14 +290,6 @@ pub fn topology_push_retry(host: &impl Display, e: &impl Display) {
     record(HubEvent::TopologyPushRetry {
         host: ident(host),
         error: foreign("topology_push_retry", e),
-    });
-}
-
-/// The session of launched `node` could not be renamed.
-pub fn node_name_failed(node: &impl Display, e: &impl Display) {
-    record(HubEvent::NodeNameFailed {
-        node: ident(node),
-        error: foreign("session_rename", e),
     });
 }
 
@@ -563,15 +552,6 @@ mod tests {
                 "workstreams.topology_push_retry",
                 "debug",
                 &["host", "error"],
-            ),
-            (
-                HubEvent::NodeNameFailed {
-                    node: Ident::st("node-1"),
-                    error: foreign_text(),
-                },
-                "launch.node_name_failed",
-                "warn",
-                &["node", "error"],
             ),
             (
                 HubEvent::NodeLaunchFailed {

@@ -774,3 +774,32 @@ async fn template_leaves_out_spawned_agents_and_session_identity() {
         .contains(pinned.as_str()));
     c.delete_template(&t.id).await.unwrap();
 }
+
+/// A launched node's session is created with the node's name: its snapshot shows that name as
+/// the display name, and the launch reports the node's own session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn launched_node_session_takes_the_node_name() {
+    let d = TempDir::new();
+    let c = hub_client(&d.path().join("l"));
+    let work = d.path().join("w");
+    std::fs::create_dir_all(&work).unwrap();
+    let mut reviewer = node(&work, "reviewer", None, &Scenario::builder().build());
+    reviewer.name = "Reviewer".into();
+    let ws = c
+        .create_workstream(WorkstreamDraft {
+            name: "Named".into(),
+            nodes: vec![reviewer],
+            ..WorkstreamDraft::default()
+        })
+        .await
+        .unwrap();
+    let launched = c.launch_workstream(&ws.id).await.unwrap();
+    assert_eq!(launched.launched[0].node, "reviewer");
+    let session = launched.launched[0].session.clone().unwrap();
+    let snap = c
+        .runtime(Some(session.host.clone()))
+        .snapshot(&session.session)
+        .await
+        .unwrap();
+    assert_eq!(snap.display_name.as_deref(), Some("Reviewer"));
+}

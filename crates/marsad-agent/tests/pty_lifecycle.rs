@@ -475,8 +475,7 @@ async fn own_daemon(data: &Path) -> tokio::process::Child {
     let mut child = tokio::process::Command::new(agent())
         .arg("serve")
         .arg("--hub")
-        .arg("--data")
-        .arg(data)
+        .args(data_args(data))
         .args(serve_args())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -539,7 +538,7 @@ async fn no_shell_outlives_the_daemon(end: impl AsyncFnOnce(&Path, &tokio::proce
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_terminated_daemon_leaves_no_shell() {
-    no_shell_outlives_the_daemon(async |_, daemon| stop_pid(daemon.id().unwrap())).await;
+    no_shell_outlives_the_daemon(async |_, daemon| stop_daemon(daemon.id().unwrap()).await).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
