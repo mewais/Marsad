@@ -133,6 +133,7 @@ fn run(dir: &Path) -> Result<usize, String> {
         p::workstream::EdgeHistoryPage,
         p::workstream::WorkstreamsEvent,
         p::workstream::WorkstreamView,
+        p::workstream::SpawnOutcomeView,
         // Wasl
         p::wasl::AgentId,
         p::wasl::Topology,
@@ -152,6 +153,9 @@ fn run(dir: &Path) -> Result<usize, String> {
         p::wasl::TaskBrief,
         p::wasl::EdgeEvent,
         p::wasl::HandoffDecision,
+        p::wasl::End,
+        p::wasl::EndCode,
+        p::wasl::SpawnEnded,
         // Wasit control
         p::Hello,
         p::RpcError,
@@ -222,6 +226,7 @@ fn run(dir: &Path) -> Result<usize, String> {
         p::GateRequest,
         p::GateChoice,
         p::GateChoiceKind,
+        p::GateReason,
         p::ChoiceText,
         p::QuestionAnswer,
         p::ConfigItem,

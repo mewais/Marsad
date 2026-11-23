@@ -607,7 +607,13 @@ async fn ask_user_gate_is_withdrawn_when_the_turn_is_interrupted() {
             _ => {}
         }
     }
-    assert_eq!(withdrawn.as_deref(), Some("withdrawn"));
+    // Withdrawn because the turn was interrupted, and it says so.
+    let withdrawn = withdrawn.expect("the gate was resolved with a reason");
+    assert_eq!(withdrawn.code, "turn_interrupted");
+    assert_eq!(
+        withdrawn.detail.as_deref(),
+        Some("the user interrupted the turn")
+    );
     let text = tool_result.map(|v| v.to_string()).unwrap_or_default();
     assert!(text.contains("interrupted"), "the tool's answer: {text}");
     assert_eq!(interrupted, Some(true));

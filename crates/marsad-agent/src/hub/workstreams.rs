@@ -10,6 +10,11 @@
 //!   document's `topology_version` is bumped (persisted first) and the topology is pushed to
 //!   every host in `topology_hosts` (idempotent, versioned). It is pushed again to a host
 //!   whenever its link connects, and to all hosts when the hub starts.
+//! * **Spawn outcomes.** Every host node publishes the spawn requests of its sessions that
+//!   reached their final state (`wasl.spawns`, a projection of the node's own journal record:
+//!   Wasl owns the outcome and its codes). The actor keeps the latest few per asking agent and
+//!   lists them in each workstream's view; nothing here is stored: after a hub restart the
+//!   feeds replay the nodes' journals.
 //! * **Decisions.** `wasl.edges` events with cause `decision` ("always allow" chosen in a
 //!   handoff gate) for the topology version in force are written into the document. Events
 //!   for older versions (e.g. replayed after a hub restart, or overtaken by a later edit)
@@ -28,8 +33,9 @@ use std::time::Duration;
 use futures::StreamExt;
 use marsad_proto::fleet::FleetEvent;
 use marsad_proto::workstream::{
-    EdgeView, HandoffGateView, NodeLaunch, NodeSession, NodeView, SpawnGateView, TopologySync,
-    Workstream, WorkstreamCost, WorkstreamState, WorkstreamView, WorkstreamsEvent,
+    EdgeView, HandoffGateView, NodeLaunch, NodeSession, NodeView, SpawnGateView, SpawnOutcomeView,
+    TopologySync, Workstream, WorkstreamCost, WorkstreamState, WorkstreamView, WorkstreamsEvent,
+    RECENT_SPAWNS,
 };
 use marsad_proto::{HostId, MarsadError, SessionSnapshot};
 use marsad_store::Store;
@@ -38,9 +44,9 @@ use tokio::task::JoinHandle;
 use wasit_control::{Cursor, DurableOpts, EventStream, RequestOpts, RpcError, Supervised};
 use wasit_core::GateRequest;
 use wasl_proto::{
-    methods as wasl_methods, topics as wasl_topics, AgentId, Edge, EdgeChangeCause, EdgeEvent,
-    EdgePolicy, PeerCard, PeerStatus, Side, TaskEvent, TaskId, TaskState, TaskView, Topology,
-    TopologyApplied,
+    methods as wasl_methods, spawn_request_id, topics as wasl_topics, AgentId, Edge,
+    EdgeChangeCause, EdgeEvent, EdgePolicy, PeerCard, PeerStatus, Side, SpawnEnded, TaskEvent,
+    TaskId, TaskState, TaskView, Topology, TopologyApplied,
 };
 
 use super::fleet::Fleet;
@@ -74,6 +80,7 @@ enum Input {
     Fleet(FleetEvent),
     Task(TaskEvent),
     Edge(EdgeEvent),
+    Spawn(SpawnEnded),
     Pushed {
         ws: String,
         host: HostId,
@@ -258,6 +265,9 @@ struct Actor {
     docs: BTreeMap<String, Workstream>,
     sessions: HashMap<NodeSession, SessionSnapshot>,
     tasks: HashMap<TaskId, TaskView>,
+    /// The latest ended spawn requests per asking agent (oldest first, at most
+    /// [`RECENT_SPAWNS`] each), as the asking agent's node published them.
+    ended_spawns: HashMap<AgentId, Vec<SpawnEnded>>,
     sync: HashMap<(String, HostId), TopologySync>,
     launching: HashSet<(String, String)>,
     feeds: HashMap<HostId, Vec<JoinHandle<()>>>,
@@ -289,6 +299,7 @@ impl Workstreams {
             docs,
             sessions: HashMap::new(),
             tasks: HashMap::new(),
+            ended_spawns: HashMap::new(),
             sync: HashMap::new(),
             launching: HashSet::new(),
             feeds: HashMap::new(),
@@ -478,6 +489,7 @@ impl Actor {
                 }
             }
             Input::Edge(e) => self.on_edge(e).await,
+            Input::Spawn(e) => self.on_spawn_ended(e),
             Input::Pushed {
                 ws,
                 host,
@@ -890,7 +902,8 @@ impl Actor {
         }
         let tasks = self.spawn_feed(host.clone(), wasl_topics::TASKS);
         let edges = self.spawn_feed(host.clone(), wasl_topics::EDGES);
-        self.feeds.insert(host.clone(), vec![tasks, edges]);
+        let spawns = self.spawn_feed(host.clone(), wasl_topics::SPAWNS);
+        self.feeds.insert(host.clone(), vec![tasks, edges, spawns]);
     }
 
     fn unfeed(&mut self, host: &HostId) {
@@ -901,7 +914,7 @@ impl Actor {
         }
     }
 
-    /// Follow a host node's `wasl.tasks` / `wasl.edges` over the loopback link.
+    /// Follow a host node's `wasl.tasks` / `wasl.edges` / `wasl.spawns` over the loopback link.
     fn spawn_feed(&self, host: HostId, topic: &'static str) -> JoinHandle<()> {
         let mut sub = self.link.subscribe_durable(
             topic,
@@ -920,10 +933,12 @@ impl Actor {
                         return;
                     }
                 };
-                let input = if topic == wasl_topics::TASKS {
-                    serde_json::from_value::<TaskEvent>(v).map(Input::Task)
-                } else {
-                    serde_json::from_value::<EdgeEvent>(v).map(Input::Edge)
+                let input = match topic {
+                    wasl_topics::TASKS => serde_json::from_value::<TaskEvent>(v).map(Input::Task),
+                    wasl_topics::SPAWNS => {
+                        serde_json::from_value::<SpawnEnded>(v).map(Input::Spawn)
+                    }
+                    _ => serde_json::from_value::<EdgeEvent>(v).map(Input::Edge),
                 };
                 match input {
                     Ok(i) => {
@@ -935,6 +950,36 @@ impl Actor {
                 }
             }
         })
+    }
+
+    /// A node published an ended spawn request: keep it for the workstreams its asker is a node
+    /// of. A request that is already kept (a feed that resumed) is not kept twice.
+    fn on_spawn_ended(&mut self, e: SpawnEnded) {
+        let asker = e.from.clone();
+        let list = self.ended_spawns.entry(asker.clone()).or_default();
+        if list.iter().any(|x| x.request_id == e.request_id) {
+            return;
+        }
+        list.push(e);
+        list.sort_by_key(|x| (x.ended_ms, x.request_id.clone()));
+        if list.len() > RECENT_SPAWNS {
+            list.remove(0);
+        }
+        let ids: Vec<String> = self
+            .docs
+            .values()
+            .filter(|w| {
+                w.nodes.iter().any(|n| {
+                    n.session.as_ref().is_some_and(|s| {
+                        s.host.as_str() == asker.host && s.session.as_str() == asker.session
+                    })
+                })
+            })
+            .map(|w| w.id.clone())
+            .collect();
+        for id in ids {
+            self.refresh(&id);
+        }
     }
 
     async fn on_edge(&mut self, e: EdgeEvent) {
@@ -1107,8 +1152,16 @@ impl Actor {
             let Some(snap) = self.sessions.get(s) else {
                 continue;
             };
+            let asker = AgentId::new(s.host.as_str(), s.session.as_str());
+            let ended = self.ended_spawns.get(&asker);
             for g in &snap.pending_gates {
-                if matches!(g.gate, GateRequest::Spawn { .. }) {
+                // The two feeds (the session's snapshot, the node's endings) are not in step:
+                // a request its node says ended is not pending, whatever the snapshot shows yet.
+                let over = ended.is_some_and(|l| {
+                    l.iter()
+                        .any(|e| spawn_request_id(&e.request_id) == g.gate.request_id())
+                });
+                if matches!(g.gate, GateRequest::Spawn { .. }) && !over {
                     pending_spawns.push(SpawnGateView {
                         node: n.id.clone(),
                         host: s.host.clone(),
@@ -1119,6 +1172,25 @@ impl Actor {
                 }
             }
         }
+        let mut recent_spawns = Vec::new();
+        for n in &ws.nodes {
+            let Some(s) = &n.session else { continue };
+            let asker = AgentId::new(s.host.as_str(), s.session.as_str());
+            for e in self.ended_spawns.get(&asker).into_iter().flatten() {
+                recent_spawns.push(SpawnOutcomeView {
+                    request_id: e.request_id.clone(),
+                    node: n.id.clone(),
+                    host: s.host.clone(),
+                    session: s.session.clone(),
+                    name: e.name.clone(),
+                    ended_ms: e.ended_ms,
+                    end: e.end.clone(),
+                    detail: e.detail.clone(),
+                });
+            }
+        }
+        recent_spawns.sort_by(|a, b| (b.ended_ms, &b.request_id).cmp(&(a.ended_ms, &a.request_id)));
+        recent_spawns.truncate(RECENT_SPAWNS);
         WorkstreamView {
             workstream: ws.clone(),
             nodes,
@@ -1126,6 +1198,7 @@ impl Actor {
             sync,
             cost,
             pending_spawns,
+            recent_spawns,
         }
     }
 }

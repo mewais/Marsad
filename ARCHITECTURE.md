@@ -63,7 +63,11 @@ supervised connection to the hub's routing service. `workstreams.launch` launche
 `sessions.launch` (labels `marsad.workstream` / `marsad.node`), pushes the topology and only
 then sends first prompts. The `workstreams` topic carries, per workstream, the document,
 node session snapshots, edges with in-flight tasks, pending handoff gates (from the sending
-session's `pending_gates`) and counters, topology sync per host and a cost roll-up.
+session's `pending_gates`) and counters, topology sync per host and a cost roll-up, pending spawn
+gates, and the latest ended spawn requests of its agents (`recent_spawns`, newest first, at most
+20: launched or why not). The hub only relays those: each host node publishes its ended spawn
+requests (`wasl.spawns`, from its own journal record, Wasl's `End` vocabulary); nothing is stored
+by the hub, and after a restart the feeds replay the nodes' journals.
 
 Every session Marsad launches gets the Wasl MCP server (`marsad-agent mcp --socket <that
 host's daemon socket> --session <id>`, from `daemon.info`) as a locked automatic item marked

@@ -13,15 +13,18 @@
 use marsad_proto::ask::{AskUserReply, AskUserRequest};
 use marsad_proto::runtime::SessionEventKind;
 use marsad_proto::{AgentEvent, Command, MarsadError, SessionId};
-use wasit_core::GateRequest;
+use wasit_core::{GateReason, GateRequest};
 use wasit_runtime::{SessionManager, StreamEnd};
+use wasl_proto::{End, EndCode};
 
-/// Withdraws the gate if the request is dropped before an answer (the caller went away).
+/// Withdraws the gate if the request is dropped before an answer: because the caller went away
+/// (unless `reason` was set to say otherwise first).
 struct Withdraw {
     manager: SessionManager,
     session: SessionId,
     request_id: String,
     armed: bool,
+    reason: GateReason,
 }
 
 impl Drop for Withdraw {
@@ -29,14 +32,15 @@ impl Drop for Withdraw {
         if !self.armed {
             return;
         }
-        let (m, s, r) = (
+        let (m, s, r, why) = (
             self.manager.clone(),
             self.session.clone(),
             self.request_id.clone(),
+            self.reason.clone(),
         );
         if let Ok(h) = tokio::runtime::Handle::try_current() {
             h.spawn(async move {
-                let _ = m.resolve_gate(&s, &r).await;
+                let _ = m.resolve_gate(&s, &r, why).await;
             });
         }
     }
@@ -87,6 +91,8 @@ pub async fn ask_user(
         session: session.clone(),
         request_id: r.request_id.clone(),
         armed: true,
+        reason: End::new(EndCode::CallerGone)
+            .gate_reason("the ask_user call stopped waiting for the answer"),
     };
     let reply = 'outer: loop {
         let mut stream = match manager.subscribe(&session, from).await {
@@ -123,12 +129,16 @@ pub async fn ask_user(
                     command: Command::Interrupt,
                     ..
                 } if raised => {
-                    break 'outer AskUserReply::cancelled("the user interrupted the turn")
+                    let why = "the user interrupted the turn";
+                    guard.reason = End::new(EndCode::TurnInterrupted).gate_reason(why);
+                    break 'outer AskUserReply::cancelled(why);
                 }
                 SessionEventKind::Agent {
                     event: AgentEvent::TurnCompleted { .. },
                 } if raised => {
-                    break 'outer AskUserReply::cancelled("the turn ended before an answer")
+                    let why = "the turn ended before an answer";
+                    guard.reason = End::new(EndCode::TurnEnded).gate_reason(why);
+                    break 'outer AskUserReply::cancelled(why);
                 }
                 SessionEventKind::Exited { .. } | SessionEventKind::Lost { .. } => {
                     guard.armed = false;
