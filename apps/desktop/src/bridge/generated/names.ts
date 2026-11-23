@@ -14,6 +14,8 @@ export const methods = {
   SESSION_SNAPSHOT: "session.snapshot",
   SESSION_HISTORY: "session.history",
   SESSION_TRAIL_PAGE: "session.trail.page",
+  DIAG_SOURCES: "diag.sources",
+  DIAG_READ: "diag.read",
   SESSION_COMMAND: "session.command",
   SESSION_ATTACHMENT_PUT: "session.attachment.put",
   SESSION_FILE_READ: "session.file.read",
@@ -90,6 +92,7 @@ export const topics = {
   WORKSTREAMS: "workstreams",
   HOST_SESSIONS: "host.sessions",
   DRIVERS_INVENTORY: "drivers.inventory",
+  DIAG_TAIL: "diag.tail",
   WASL_TASKS: "wasl.tasks",
   WASL_EDGES: "wasl.edges",
 } as const;

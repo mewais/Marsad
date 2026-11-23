@@ -1,4 +1,4 @@
-import type { Backend, HubLinkInfo, RequestOptions, SubscribeOptions, SubscriptionEnd, UiEvent, Unsubscribe } from "../backend";
+import type { Backend, HubLinkInfo, RequestOptions, SubscribeOptions, SubscriptionEnd, Unsubscribe } from "../backend";
 import type { ExportSaved } from "../api";
 import type {
   AttachmentPut,
@@ -6,11 +6,12 @@ import type {
   FilesStatRequest,
   AuthAnswer, AuthCancel, AuthPrompt, BaseRequest, HostEntry, FleetEvent, FleetHost, FsListRequest, FsPathRequest, GateRequest, GitCommitRequest, GitDiffRequest,
   GitDiscardRequest, GitRefresh, GitStatus, GitStatusRequest, GitSummary, GitTarget, HistoryRequest, RenameSession, HostId, InventoryRequest, LinkState, SessionRef, SessionSnapshot, CommandRequest,
-  HostEnvironment, HostEnvSettings, HostRef,
+  HostEnvironment, HostEnvSettings, HostRef, UiEvent, DiagTailParams, TrailItem, TrailRequest, LaunchRequest, LaunchReply,
 } from "../wire";
 import { methods as M, topics as T } from "../wire";
 import pkg from "../../../package.json";
 import { DRIVERS, FIXTURE_HOSTS, driverDef, inventoryFor, type FixtureHost } from "./catalog";
+import { FixtureLog, scriptedTrail, seedHost, seedHub, trailOf } from "./diagnostics";
 import { fsExists, fsHome, fsList } from "./fs";
 import { buildTree, diffOf, type Tree } from "./git";
 import { FixtureHub } from "./hub";
@@ -70,11 +71,23 @@ export class FixtureBackend implements Backend {
   private hubLink: HubLinkInfo = { state: "connected" };
   private hubWatchers = new Set<(l: HubLinkInfo) => void>();
   /** Every open subscription with its end callback, so a test can end one the way the shell does. */
-  private openSubs = new Set<{ topic: string; host?: HostId; onEnd?: (e: SubscriptionEnd) => void; off: () => void }>();
+  private openSubs = new Set<{ topic: string; host?: HostId; params?: unknown; onEnd?: (e: SubscriptionEnd) => void; off: () => void }>();
   /** How many times the UI asked to reconnect to the local daemon (tests). */
   hubReconnects = 0;
   /** What reaches the app once its link to the daemon is back (subscription deliveries wait for it). */
   private parked: (() => void)[] = [];
+  /** The hub's diagnostics log; also the local host's daemon's, which is the hub. */
+  readonly hubLog: FixtureLog;
+  private hostLogs = new Map<HostId, FixtureLog>();
+  /** Whether a `diag.tail` filter reaches the daemon; false emulates a transport that drops it (the app must then check it itself). */
+  tailFilters = true;
+  /** Scripted trail history of a session (by key) and how many of its events it stands in for. */
+  private trailBase = new Map<string, { base: TrailItem[]; from: number }>();
+  /** The last connect attempt of each host's link, for the hub's connection records. */
+  private attempts = new Map<HostId, number>();
+  private attemptStart = new Map<HostId, number>();
+  /** The trace of the request being served (the fixture serves one at a time, synchronously). */
+  private requestTrace: string | undefined;
 
   constructor(o: FixtureOptions = {}) {
     this.opts = { live: o.live ?? true, latencyMs: o.latencyMs ?? 140, speed: o.speed ?? 1, now: o.now ?? Date.now };
@@ -91,7 +104,11 @@ export class FixtureBackend implements Backend {
       this.hosts.get(spec.host)!.sessions.set(snap.id, { snap, events, subs: new Set(), host: spec.host });
       if (spec.n === MEDIA_SPEC.n) this.files.seed(snap.id, snap.cwd ?? "");
       this.trees.set(`${spec.host}/${snap.id}`, buildTree(spec));
+      const script = scriptedTrail(spec.n, events);
+      if (script) this.trailBase.set(`${spec.host}/${snap.id}`, { base: script, from: events.length });
     }
+    this.hubLog = new FixtureLog("hub", "hubb0001", this.opts.now, now - 3 * 3_600_000);
+    for (const [h, n] of Object.entries(seedHub(this.hubLog, now))) this.attempts.set(h, n);
     this.hub = new FixtureHub({
       now: this.opts.now,
       hostDefs: () => [...this.hosts.values()].map((h) => h.def),
@@ -117,6 +134,11 @@ export class FixtureBackend implements Backend {
     return this.reqLog;
   }
 
+  /** The subscriptions open now: what the UI is holding open on which daemon (tests). */
+  get subscriptions(): { topic: string; host?: HostId; params?: unknown }[] {
+    return [...this.openSubs].map(({ topic, host, params }) => ({ topic, host, params }));
+  }
+
   dispose() {
     if (this.interval) clearInterval(this.interval);
     this.timers.forEach(clearTimeout);
@@ -129,19 +151,71 @@ export class FixtureBackend implements Backend {
     this.reqLog.push({ method, params, host: opts.host, ...(opts.trace ? { trace: opts.trace } : {}) });
     return new Promise<T>((resolve, reject) => {
       this.later(this.opts.latencyMs, () => {
+        // The shell answers `desktop.*` itself; everything else needs the local daemon.
+        if (this.hubLink.state !== "connected" && !method.startsWith("desktop.")) return reject(err("not_connected", "not connected to the local daemon"));
+        this.requestTrace = opts.trace;
         try {
-          // The shell answers `desktop.*` itself; everything else needs the local daemon.
-          if (this.hubLink.state !== "connected" && !method.startsWith("desktop.")) throw err("not_connected", "not connected to the local daemon");
-          resolve((opts.host ? this.hostRequest(opts.host, method, params) : this.hubRequest(method, params)) as T);
+          const result = opts.host ? this.hostRequest(opts.host, method, params) : this.hubRequest(method, params);
+          this.requestTrace = undefined;
+          if (opts.trace) this.recordTraced(opts.trace, method, params, opts.host, result);
+          resolve(result as T);
         } catch (e) {
+          this.requestTrace = undefined;
+          if (opts.trace) this.recordTraced(opts.trace, method, params, opts.host, undefined, e);
           reject(e);
         }
       });
     });
   }
 
+  /** What the daemons record of a request that carries a trace: the hub's and the host's `rpc.traced`, a refusal, a launch. */
+  private recordTraced(trace: string, method: string, params: unknown, host: HostId | undefined, result?: unknown, e?: unknown) {
+    const ms = Math.max(1, this.opts.latencyMs);
+    const code = e ? String((e as { code?: unknown }).code ?? "error") : undefined;
+    const outcome = e ? "error" : "ok";
+    const rec = this.hosts.get(host ?? "");
+    const remote = !!rec?.def.link;
+    this.hubLog.emit("rpc.traced", { trace, method, ...(remote ? { host } : {}), hops: remote ? 1 : 0, ms, outcome, ...(code ? { code } : {}) });
+    if (rec && host) {
+      const up = this.isUp(rec);
+      if (remote && !up) this.hubLog.emit("rpc.forward_failed", { method, host, code: code ?? "error", ms }, "warn");
+      if (up) {
+        const log = this.hostLog(host)!;
+        if (remote) log.emit("rpc.traced", { trace, method, hops: 0, ms: Math.max(1, Math.round(ms / 2)), outcome, ...(code ? { code } : {}) });
+        if (e && method === M.SESSION_COMMAND) log.emit("session.command_refused", { session: (params as CommandRequest).id, trace, kind: (params as CommandRequest).command.command, code }, "warn");
+      }
+    }
+    if (method === M.SESSIONS_LAUNCH) {
+      const r = params as LaunchRequest;
+      const reply = result as LaunchReply | undefined;
+      this.hubLog.emit("launch", { trace, host: r.host ?? "x1", ...(reply ? { session: reply.id } : {}), driver: r.driver, resume: r.resume.kind === "new" ? "fresh" : r.resume.kind === "latest" ? "continue" : "resume", first_prompt: r.first_prompt != null, ms, outcome, ...(code ? { error: { code } } : {}) });
+    }
+  }
+
+  /** A host's own diagnostics log (the local host's is the hub's); made when first asked for. */
+  private hostLog(id: HostId): FixtureLog | undefined {
+    const h = this.hosts.get(id);
+    if (!h) return undefined;
+    if (!h.def.link) return this.hubLog;
+    let log = this.hostLogs.get(id);
+    if (!log) {
+      const now = this.opts.now();
+      log = new FixtureLog("daemon", `host${id}01`, this.opts.now, now - 3 * 3_600_000);
+      seedHost(log, id, now, [...h.sessions.keys()]);
+      this.hostLogs.set(id, log);
+    }
+    return log;
+  }
+
+  /** The trail of a session: its scripted history, then the projection of its events. */
+  private trail(host: HostRec, id: string): TrailItem[] {
+    const e = host.sessions.get(id)!;
+    const t = this.trailBase.get(`${host.def.entry.id}/${id}`);
+    return trailOf(e.events, t?.base, t?.from);
+  }
+
   subscribe(topic: string, opts: SubscribeOptions, onEvent: (e: unknown) => void, onEnd?: (end: SubscriptionEnd) => void): Unsubscribe {
-    const rec = { topic, host: opts.host, onEnd, off: this.attach(topic, opts, onEvent) };
+    const rec = { topic, host: opts.host, params: opts.params, onEnd, off: this.attach(topic, opts, onEvent) };
     this.openSubs.add(rec);
     return () => {
       this.openSubs.delete(rec);
@@ -160,6 +234,23 @@ export class FixtureBackend implements Backend {
       this.deliver(() => this.wsSubs.has(onEvent) && onEvent(this.hub.ws.reset()));
       return () => this.wsSubs.delete(onEvent);
     }
+    if (topic === T.DIAG_TAIL) {
+      const rec = opts.host ? this.hosts.get(opts.host) : undefined;
+      const log = opts.host ? this.hostLog(opts.host) : this.hubLog;
+      // A host that is not connected delivers nothing: the subscription waits for its link.
+      if (!log || (rec && !this.isUp(rec))) return () => undefined;
+      const filter = this.tailFilters ? (opts.params as DiagTailParams | undefined) ?? {} : {};
+      const from = opts.from == null ? undefined : String(opts.from);
+      let live = true;
+      let off: Unsubscribe | undefined;
+      this.deliver(() => {
+        if (live) off = log.tail(filter, from, onEvent as never);
+      });
+      return () => {
+        live = false;
+        off?.();
+      };
+    }
     const host = this.hosts.get(opts.host ?? "x1");
     if (!host) return () => undefined;
     if (topic === T.DRIVERS_INVENTORY) {
@@ -169,6 +260,16 @@ export class FixtureBackend implements Backend {
       subs.add(onEvent);
       this.deliver(() => subs.has(onEvent) && this.isUp(host) && onEvent(this.hostInventory(id)));
       return () => subs.delete(onEvent);
+    }
+    const trailTopic = /^session\.trail:(.+)$/.exec(topic);
+    if (trailTopic) {
+      const te = host.sessions.get(trailTopic[1]);
+      if (!te) return () => undefined;
+      const from = Number(opts.from ?? Number.POSITIVE_INFINITY);
+      const send = (item: TrailItem) => onEvent(item);
+      (te.trailSubs ??= new Set()).add(send);
+      if (Number.isFinite(from)) this.deliver(() => te.trailSubs?.has(send) && this.trail(host, trailTopic[1]).filter((it) => it.cursor > from).forEach(send));
+      return () => te.trailSubs?.delete(send);
     }
     const m = /^session\.events:(.+)$/.exec(topic);
     const entry = m ? host.sessions.get(m[1]) : undefined;
@@ -251,6 +352,13 @@ export class FixtureBackend implements Backend {
         const events = all.slice(Math.max(0, all.length - r.limit));
         return { events, has_more: all.length > events.length };
       }
+      case M.SESSION_TRAIL_PAGE: {
+        const r = p as TrailRequest;
+        this.entry(host, r);
+        const all = this.trail(host, r.id).filter((it) => r.before == null || it.cursor < r.before);
+        const entries = all.slice(Math.max(0, all.length - r.limit));
+        return { entries, has_more: all.length > entries.length };
+      }
       case M.SESSION_ATTACHMENT_PUT: {
         const r = p as AttachmentPut;
         this.entry(host, r);
@@ -269,7 +377,7 @@ export class FixtureBackend implements Backend {
         const e = this.entry(host, r);
         // Spawn answers are applied while the gate is still pending (the hub launches, then the agent hears back).
         if (r.command.command === "answer_gate" && e.snap.pending_gates.some((g) => g.gate.request_id === (r.command as { request_id: string }).request_id && g.gate.gate_type === "spawn")) this.hub.ws.onSpawnAnswer(r.command.request_id, r.command.decision.choice);
-        const reply = this.sim.command(e, r.command);
+        const reply = this.sim.command(e, r.command, this.requestTrace);
         if (r.command.command === "answer_gate") this.hub.ws.onHandoffAnswer(r.command.request_id, r.command.decision.choice === "deny");
         return reply;
       }
@@ -452,10 +560,30 @@ export class FixtureBackend implements Backend {
   /** Force a link state (tests, demos). */
   setLink(id: HostId, state: LinkState) {
     const h = this.hosts.get(id)!;
+    this.recordLink(id, h.def.link, state);
     h.def.link = state;
     this.fleet({ kind: "link", host: id, state });
     // Like the hub: once the host is connected it delivers its session list.
     if (state.state === "connected") this.fleet({ kind: "sessions", host: id, sessions: [...h.sessions.values()].map((e) => e.snap) });
+  }
+
+  /** The hub's connection records of a link changing state: an attempt begins, ends with an outcome, and the state itself. */
+  private recordLink(id: HostId, from: LinkState | null, to: LinkState) {
+    const link = `hosts:${id}`;
+    const now = this.opts.now();
+    if (to.state === "connecting") {
+      const n = (this.attempts.get(id) ?? 0) + 1;
+      this.attempts.set(id, n);
+      this.attemptStart.set(id, now);
+      this.hubLog.emit("link.attempt_begin", { link, n });
+    } else if (this.attemptStart.has(id) && (to.state === "connected" || to.state === "reconnecting" || to.state === "auth_needed" || to.state === "failed")) {
+      const outcome = to.state === "connected" ? "connected" : to.state === "reconnecting" ? "backoff" : "park";
+      const why = to.state === "reconnecting" ? to.last_error : to.state === "auth_needed" ? to.detail : to.state === "failed" ? to.reason : undefined;
+      this.hubLog.emit("link.attempt_end", { link, n: this.attempts.get(id) ?? 1, outcome, ms: now - this.attemptStart.get(id)!, ...(why ? { error: { code: to.state, text: why } } : {}) });
+      this.attemptStart.delete(id);
+    }
+    const text = to.state === "reconnecting" ? to.last_error : to.state === "auth_needed" ? to.detail : to.state === "failed" ? to.reason : undefined;
+    this.hubLog.emit("link.state", { link, from: from?.state ?? "connecting", to: to.state, ...(to.state === "reconnecting" ? { attempt: to.attempt } : {}), ...(text ? { error: text } : {}) });
   }
 
   /** Show a sign-in prompt for a host (tests, demos). */
@@ -538,7 +666,7 @@ export class FixtureBackend implements Backend {
     this.hosts.get(host)!.sessions.set(snap.id, e);
     this.sim.emit(e, { kind: "spawned", generation: 1, pid: snap.pid ?? null, argv: [driverDef(snap.driver).binary] });
     // Like the daemon: the first prompt is journaled with the start, before the agent says anything.
-    const input = first ? this.sim.firstPrompt(e, first) : undefined;
+    const input = first ? this.sim.firstPrompt(e, first, this.requestTrace) : undefined;
     this.publish(e);
     this.later(300 * this.opts.speed, () => (first ? this.sim.startTurn(e, first, input) : this.sim.ready(e)));
   }

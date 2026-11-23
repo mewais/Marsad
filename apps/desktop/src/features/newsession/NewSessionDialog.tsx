@@ -160,7 +160,7 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
     }
     if (files.length && canAttach) {
       const text = f.prompt.trim();
-      const out = await launchWithAttachments(api, launchRequest(f), text, files, setStep);
+      const out = await launchWithAttachments(api, launchRequest(f), text, files, setStep, actions.trace());
       setStep(null);
       if (!out.ok && out.stage === "create") return toast({ tone: "err", title: "Could not start the session", detail: errorMessage(out.error) });
       onClose();
@@ -176,7 +176,7 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
       for (const u of r.unsupported) toast({ tone: "warn", title: "Started without one setting", detail: `${u.item}: ${u.reason}` });
       return nav(sessionPath(r.host, r.id));
     }
-    const r = await actions.run(pk, "Could not start the session", () => api.launch(launchRequest(f)));
+    const r = await actions.launch(pk, launchRequest(f));
     if (!r) return;
     onClose();
     toast({ tone: "ok", title: f.start === "continue" ? "Session continued" : "Session started", detail: `${inv.display_name} on ${host?.name ?? f.host}` });

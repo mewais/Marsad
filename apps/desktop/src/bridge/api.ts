@@ -1,4 +1,4 @@
-import type { Backend, HubLinkInfo, RequestOptions, SubscriptionEnd, UiEvent, Unsubscribe } from "./backend";
+import type { Backend, HubLinkInfo, RequestOptions, SubscriptionEnd, Unsubscribe } from "./backend";
 import type { SurfaceSupport } from "../lib/surface";
 import type * as W from "./wire";
 import { methods as M, topics as T } from "./wire";
@@ -35,6 +35,7 @@ export interface MethodMap {
   [M.SESSIONS_RENAME]: [W.RenameSession, W.Ack];
   [M.FLEET_GIT_REFRESH]: [W.GitRefresh, W.Ack];
   [M.SESSION_HISTORY]: [W.HistoryRequest, W.HistoryPage];
+  [M.SESSION_TRAIL_PAGE]: [W.TrailRequest, W.TrailPage];
   [M.SESSION_COMMAND]: [W.CommandRequest, W.CommandReply];
   [M.SESSION_ATTACHMENT_PUT]: [W.AttachmentPut, W.AttachmentPutReply];
   [M.SESSION_FILE_READ]: [W.FileReadRequest, W.FileChunk];
@@ -116,14 +117,17 @@ export function createApi(b: Backend) {
     refreshDrivers: (host: W.HostId, r: W.RefreshRequest = {}) => call(b, M.DRIVERS_REFRESH, r, { host }),
     hostEnvironment: (host: W.HostId) => call(b, M.HOST_ENVIRONMENT, undefined, { host }),
     refreshEnvironment: (host: W.HostId) => call(b, M.HOST_ENVIRONMENT_REFRESH, undefined, { host }),
-    command: (host: W.HostId, id: W.SessionId, command: W.Command) => call(b, M.SESSION_COMMAND, { id, command }, { host }),
+    /** `trace`: the id of the user action this command serves (see `RequestOptions.trace`). */
+    command: (host: W.HostId, id: W.SessionId, command: W.Command, trace?: string) => call(b, M.SESSION_COMMAND, { id, command }, { host, trace }),
     history: (host: W.HostId, r: W.HistoryRequest) => call(b, M.SESSION_HISTORY, r, { host }),
-    continueSession: (host: W.HostId, id: W.SessionId) => call(b, M.SESSIONS_CONTINUE, { id }, { host }),
-    stopSession: (host: W.HostId, id: W.SessionId) => call(b, M.SESSIONS_STOP, { id }, { host }),
+    /** The session's trail (content-free facts, in the host's order), the newest `limit` before `before`. */
+    trailPage: (host: W.HostId, r: W.TrailRequest) => call(b, M.SESSION_TRAIL_PAGE, r, { host }),
+    continueSession: (host: W.HostId, id: W.SessionId, trace?: string) => call(b, M.SESSIONS_CONTINUE, { id }, { host, trace }),
+    stopSession: (host: W.HostId, id: W.SessionId, trace?: string) => call(b, M.SESSIONS_STOP, { id }, { host, trace }),
     deleteSession: (host: W.HostId, id: W.SessionId) => call(b, M.SESSIONS_DELETE, { id }, { host }),
     renameSession: (host: W.HostId, id: W.SessionId, display_name: string | null) => call(b, M.SESSIONS_RENAME, { id, display_name }, { host }),
     refreshGit: (host: W.HostId, cwd: string) => call(b, M.FLEET_GIT_REFRESH, { host, cwd }),
-    launch: (r: W.LaunchRequest) => call(b, M.SESSIONS_LAUNCH, r),
+    launch: (r: W.LaunchRequest, trace?: string) => call(b, M.SESSIONS_LAUNCH, r, { trace }),
     appVersion: () => b.appVersion(),
     daemonInfo: (host?: W.HostId) => call(b, M.DAEMON_INFO, undefined, on(host)),
     media: {
@@ -150,7 +154,7 @@ export function createApi(b: Backend) {
       exportSave: (id: string) => b.request<ExportSaved>("desktop.export_save", { id }),
     },
     /** Record events in the app's diagnostics log (see `Backend.diagLog`). */
-    diagLog: (events: readonly UiEvent[]) => b.diagLog(events),
+    diagLog: (events: readonly W.UiEvent[]) => b.diagLog(events),
     /** Desktop shell: solid or translucent window background (native backdrop where the OS has one). */
     windowSurface: (translucent: boolean) => b.request<SurfaceSupport>("desktop.window_surface", { translucent }),
     git: {
@@ -241,6 +245,16 @@ export function createApi(b: Backend) {
       inventory: (host: W.HostId, cb: (e: W.InventoryReply) => void, onEnd?: End): Unsubscribe => b.subscribe(T.DRIVERS_INVENTORY, { host }, (e) => cb(e as W.InventoryReply), onEnd),
       sessionEvents: (host: W.HostId, id: W.SessionId, from: number, cb: (e: W.SessionEvent) => void, onEnd?: End): Unsubscribe =>
         b.subscribe(T.sessionEvents(id), { host, from }, (e) => cb(e as W.SessionEvent), onEnd),
+      /** The session's trail from `from` (a cursor of its events), on the session's host. */
+      sessionTrail: (host: W.HostId, id: W.SessionId, from: number, cb: (e: W.TrailItem) => void, onEnd?: End): Unsubscribe =>
+        b.subscribe(T.sessionTrail(id), { host, from }, (e) => cb(e as W.TrailItem), onEnd),
+      /**
+       * A daemon's own diagnostics records: the hub's (`host` omitted) or a host's. `from`: the
+       * cursor of the last record seen (`<boot>.<seq>`); an expired one restarts with a `reset`.
+       * `filter` goes to the daemon; see `SubscribeOptions.params`.
+       */
+      diagTail: (host: W.HostId | undefined, filter: W.DiagTailParams, from: string | undefined, cb: (e: W.DiagTailEvent) => void, onEnd?: End): Unsubscribe =>
+        b.subscribe(T.DIAG_TAIL, { host, from, params: filter }, (e) => cb(e as W.DiagTailEvent), onEnd),
     },
     on,
   };

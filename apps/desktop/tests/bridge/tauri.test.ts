@@ -92,6 +92,18 @@ describe("TauriBackend: the app's link to its local daemon", () => {
 });
 
 describe("TauriBackend: subscriptions", () => {
+  it("passes the topic's parameters (diag.tail's filter) to the shell", async () => {
+    new TauriBackend().subscribe("diag.tail", { host: "hz", from: "b1.7", params: { session: "s1", traces: ["u-0123456789abcdef"] } }, () => undefined);
+    await vi.waitFor(() => expect(shell.calls.filter((c) => c.cmd === "rpc_subscribe")).toHaveLength(1));
+    expect(shell.calls.find((c) => c.cmd === "rpc_subscribe")!.args).toMatchObject({ topic: "diag.tail", host: "hz", from: "b1.7", params: { session: "s1", traces: ["u-0123456789abcdef"] } });
+  });
+
+  it("a topic without parameters is subscribed without any", async () => {
+    new TauriBackend().subscribe("fleet", {}, () => undefined);
+    await vi.waitFor(() => expect(shell.calls.filter((c) => c.cmd === "rpc_subscribe")).toHaveLength(1));
+    expect("params" in (shell.calls.find((c) => c.cmd === "rpc_subscribe")!.args as object)).toBe(false);
+  });
+
   it("forwards events, and an `end` message reaches onEnd with its error (it used to be dropped)", async () => {
     const events: unknown[] = [];
     const ends: unknown[] = [];

@@ -47,6 +47,12 @@ export function reachBlock(s: AppState, host?: HostId): string | null {
   return null;
 }
 
+/** The hub setting that turns the Diagnostics panels on. */
+export const DEVELOPER_MODE = "developer.mode";
+
+/** Developer mode is on only when the hub's settings have loaded and say so. */
+export const selectDeveloperMode = (s: AppState): boolean => s.loads.settings.state === "ready" && s.settings[DEVELOPER_MODE] === true;
+
 export function selectView(s: AppState, key: SessionKey): SessionView | undefined {
   const snap = s.sessions[key];
   const host = splitKey(key).host;

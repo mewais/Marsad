@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Attachment, SessionSnapshot } from "../../bridge/wire";
 import { splitKey } from "../../bridge/wire";
 import { useActions, useApi, usePending, useSessionReach, useSessionView } from "../../state";
+import { sumBytes } from "../../state/diaglog";
 import { modelChoice } from "../../state/domain";
 import { Button, Icon, IconButton, Kbd, Select } from "../../ui";
 import { formatBytes } from "../media/fetch";
@@ -80,11 +81,14 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
     if (files.length) {
       const { host, id } = splitKey(sessionKey);
       const sent = files;
-      const ok = await actions.run(`cmd:${sessionKey}:prompt`, "Could not send your message", async () => {
-        const attachments: Attachment[] = [];
-        for (const f of sent) attachments.push(await upload(api, host, id, f));
-        await api.command(host, id, { command: "prompt", text: t, attachments });
-        return true;
+      const ok = await actions.sendPrompt(sessionKey, t, {
+        count: sent.length,
+        bytes: sumBytes(sent),
+        upload: async () => {
+          const attachments: Attachment[] = [];
+          for (const f of sent) attachments.push(await upload(api, host, id, f));
+          return attachments;
+        },
       });
       if (ok) {
         sent.forEach((f) => f.thumb && URL.revokeObjectURL(f.thumb));

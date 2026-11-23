@@ -1,4 +1,5 @@
-import { DIAG_BATCH_MAX, type Backend, type HubLinkInfo, type RequestOptions, type SubscribeOptions, type SubscriptionEnd, type UiEvent, type Unsubscribe } from "./backend";
+import { DIAG_BATCH_MAX, type Backend, type HubLinkInfo, type RequestOptions, type SubscribeOptions, type SubscriptionEnd, type Unsubscribe } from "./backend";
+import type { UiEvent } from "./wire";
 
 /**
  * What the shell sends on a subscription's channel (src-tauri/src/bridge.rs `SubMessage`):
@@ -104,7 +105,7 @@ export class TauriBackend implements Backend {
       };
       const from = opts.from == null ? null : String(opts.from);
       try {
-        const id = await invoke<number>("rpc_subscribe", { topic, host: opts.host ?? null, from, channel });
+        const id = await invoke<number>("rpc_subscribe", { topic, host: opts.host ?? null, from, channel, ...(opts.params === undefined ? {} : { params: opts.params }) });
         stop = () => void invoke("rpc_unsubscribe", { id }).catch(() => undefined);
         if (cancelled) stop();
       } catch (e) {

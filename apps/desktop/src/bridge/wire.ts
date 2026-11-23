@@ -26,5 +26,6 @@ export const methods = generatedMethods;
 export const topics = {
   ...generatedTopics,
   sessionEvents: (id: SessionId) => `${topicPrefixes.SESSION_EVENTS}${id}`,
+  sessionTrail: (id: SessionId) => `${topicPrefixes.SESSION_TRAIL}${id}`,
   ptyOutput: (id: string) => `${topicPrefixes.PTY_OUTPUT}${id}`,
 } as const;

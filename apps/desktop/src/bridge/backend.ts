@@ -1,4 +1,4 @@
-import type { HostId } from "./wire";
+import type { HostId, UiEvent } from "./wire";
 
 export type Unsubscribe = () => void;
 
@@ -17,29 +17,15 @@ export interface RequestOptions {
 /** The most events the shell takes in one `diag_log` call (`diagLog` splits longer lists). */
 export const DIAG_BATCH_MAX = 100;
 
-/**
- * What the app may record in its own diagnostics log (`Backend.diagLog`): ids, codes, sizes,
- * timings and flags, never text a user wrote (a prompt, a session name, an error message). The
- * shell refuses anything that is not one of these, and keeps an id or a code that is not shaped
- * like one as its length only. Mirrors `marsad_proto::diag::UiEvent`.
- *
- * TEMPORARY, until `UiEvent` is in the type export list (`marsad-ts-export`): then delete this
- * declaration (the generated one arrives through `./wire` and would clash with it) and import
- * `UiEvent` from "./wire" here and in the fixture.
- */
-export type UiEvent =
-  | { ev: "ui.prompt"; trace: string; host: string; session: string; kind: string; chars: number; attachments: number; bytes: number }
-  | { ev: "ui.upload"; trace: string; files: number; bytes: number; ms: number; outcome: string; code?: string | null }
-  | { ev: "ui.command"; trace: string; host: string; session: string; command: string }
-  | { ev: "ui.launch"; trace: string; host: string; driver: string; resume: string; first_prompt: boolean; attachments: number }
-  | { ev: "ui.rpc"; trace: string; method: string; ms: number; outcome: string; code?: string | null }
-  | { ev: "ui.render_error"; component: string }
-  | { ev: "ui.developer_mode"; on: boolean }
-  | { ev: "ui.export"; stage: string; code?: string | null };
-
 export interface SubscribeOptions extends RequestOptions {
   /** Resume cursor (opaque string for hub/host topics, decimal u64 for session event and pty topics). */
   from?: string | number;
+  /**
+   * The topic's parameters (`diag.tail`'s filter). Only topics that take parameters are given
+   * any. A consumer that needs the result to match them must check it itself: a transport that
+   * does not carry them delivers the unfiltered topic.
+   */
+  params?: unknown;
 }
 
 /**

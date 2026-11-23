@@ -1,12 +1,18 @@
 import type { Api } from "../bridge/api";
 import { errorMessage } from "../bridge/api";
-import type { Command, GateDecision, HostId, QuestionAnswer, SessionKey } from "../bridge/wire";
+import type { Attachment, Command, GateDecision, HostId, LaunchReply, LaunchRequest, QuestionAnswer, SessionKey, UiEvent } from "../bridge/wire";
 import { splitKey } from "../bridge/wire";
 import { toast } from "../ui/toast";
 import { seenState } from "./controller";
 import type { Controller } from "./controller";
-import type { AppStore, LoadKey } from "./model";
+import { charCount, type FilesSummary, type Trace } from "./diaglog";
+import type { AppState, AppStore, LoadKey } from "./model";
 import { reachBlock } from "./selectors";
+
+/** Files for a prompt: how many and how big (for the log), and what uploads them to the session's host. */
+export interface PromptFiles extends FilesSummary {
+  upload: () => Promise<Attachment[]>;
+}
 
 export interface Actions {
   /**
@@ -20,7 +26,14 @@ export interface Actions {
   command(key: SessionKey, command: Command, opts?: { pendingKey?: string; failTitle?: string; keepSent?: boolean }): Promise<boolean>;
   answerGate(key: SessionKey, requestId: string, decision: GateDecision): Promise<boolean>;
   answerQuestion(key: SessionKey, requestId: string, answer: QuestionAnswer): Promise<boolean>;
-  sendPrompt(key: SessionKey, text: string): Promise<boolean>;
+  /** Send a prompt; with `files`, upload them first and send them with it. Resolves true when the host accepted it. */
+  sendPrompt(key: SessionKey, text: string, files?: PromptFiles): Promise<boolean>;
+  /** Launch a session (hub): pending flag under `pk`, toast on failure. Resolves to its reply, or undefined when it did not start. */
+  launch(pk: string, request: LaunchRequest): Promise<LaunchReply | undefined>;
+  /** Begin a user action that takes several calls (a launch that uploads files): its trace id and `ui.*` events. */
+  trace(): Trace;
+  /** Record something the app did that is not a command (`ui.developer_mode`, `ui.render_error`…). Never waits, never fails. */
+  record(event: UiEvent): void;
   stop(key: SessionKey): Promise<boolean>;
   /** End the session's process (sessions.stop). */
   stopSession(key: SessionKey): Promise<boolean>;
@@ -51,7 +64,8 @@ export const gatePendingKey = (key: SessionKey, requestId: string) => `gate:${ke
  * Every action is fire, pending state, result: the UI is never blocked on the backend.
  * `pending[...]` drives disabled buttons and spinners; failures become toasts.
  */
-export function createActions(store: AppStore, api: Api, controller: Controller): Actions {
+export function createActions(store: AppStore, api: Api, controller: Controller, diag: { trace: () => Trace; log: (e: UiEvent) => void }): Actions {
+  const { trace } = diag;
   const setPending = (k: string, v: "pending" | "sent" | null) =>
     store.set((s) => {
       const p = { ...s.pending };
@@ -85,10 +99,21 @@ export function createActions(store: AppStore, api: Api, controller: Controller)
   };
   const ok = (p: Promise<unknown>) => p.then((r) => r !== undefined);
 
+  // Every command to a session, and every launch, is one traced user action. The trace and its
+  // `ui.*` events begin when the request is about to go out: a request refused before that (the
+  // host is not connected) was never sent and leaves no trail of having been.
   const command: Actions["command"] = (key, c, o = {}) => {
     const { host, id } = splitKey(key);
-    return ok(run(o.pendingKey ?? `cmd:${key}:${c.command}`, o.failTitle ?? "That did not go through", () => api.command(host, id, c), { keepSent: o.keepSent, host }));
+    return ok(
+      run(o.pendingKey ?? `cmd:${key}:${c.command}`, o.failTitle ?? "That did not go through", () => {
+        const t = trace();
+        t.sent(host, id, c);
+        return api.command(host, id, c, t.id);
+      }, { keepSent: o.keepSent, host }),
+    );
   };
+
+  const localHost = (s: AppState) => s.hostOrder.find((h) => s.hosts[h]?.link.link === "local") ?? "";
 
   const mark = (key: SessionKey, now: number) => {
     const snap = store.get().sessions[key];
@@ -104,17 +129,43 @@ export function createActions(store: AppStore, api: Api, controller: Controller)
       command(key, { command: "answer_gate", request_id: requestId, decision }, { pendingKey: gatePendingKey(key, requestId), failTitle: "Could not send your answer", keepSent: true }),
     answerQuestion: (key, requestId, answer) =>
       command(key, { command: "answer_question", request_id: requestId, answer }, { pendingKey: gatePendingKey(key, requestId), failTitle: "Could not send your answer", keepSent: true }),
-    sendPrompt: (key, text) => command(key, { command: "prompt", text }, { failTitle: "Could not send your message" }),
+    sendPrompt(key, text, files) {
+      if (!files?.count) return command(key, { command: "prompt", text }, { failTitle: "Could not send your message" });
+      const { host, id } = splitKey(key);
+      return ok(
+        run(`cmd:${key}:prompt`, "Could not send your message", async () => {
+          const t = trace();
+          t.prompt(host, id, "prompt", charCount(text), files);
+          const attachments = await t.upload(files, files.upload);
+          await api.command(host, id, { command: "prompt", text, attachments }, t.id);
+          return true;
+        }, { host }),
+      );
+    },
+    launch: (pk, request) =>
+      run(pk, "Could not start the session", () => {
+        const t = trace();
+        t.launch(request.host ?? localHost(store.get()), request, request.first_prompt != null, 0);
+        return api.launch(request, t.id);
+      }),
+    trace,
+    record: diag.log,
     stop: (key) => command(key, { command: "interrupt" }, { failTitle: "Could not interrupt the session" }),
     stopSession: (key) => {
       const { host, id } = splitKey(key);
-      return ok(run(`stop:${key}`, "Could not stop the session", () => api.stopSession(host, id), { host }));
+      return ok(run(`stop:${key}`, "Could not stop the session", () => {
+        const t = trace();
+        t.command(host, id, "stop");
+        return api.stopSession(host, id, t.id);
+      }, { host }));
     },
     retry: (key) => {
       const { host, id } = splitKey(key);
       return ok(
         run(`retry:${key}`, "Could not continue the session", async () => {
-          await api.continueSession(host, id);
+          const t = trace();
+          t.command(host, id, "continue");
+          await api.continueSession(host, id, t.id);
           toast({ tone: "ok", title: "Session continued", detail: "It picked up where it stopped." });
           return true;
         }, { host }),

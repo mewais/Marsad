@@ -5,9 +5,11 @@ import type { HostId, SessionKey } from "../bridge/wire";
 import { shallowEqual, useStore } from "../lib/store";
 import { createActions, type Actions } from "./actions";
 import { connectStore } from "./controller";
+import { createDiagLog, createTracer, withRpcOutcomes } from "./diaglog";
 import { createFeeds } from "./feeds";
 import { createAppStore, type AppState, type AppStore } from "./model";
-import { reachBlock, selectCounts, selectGroups, selectHost, selectHosts, selectStaleHosts, selectView, groupsEqual, type Counts, type Filters, type Groups } from "./selectors";
+import { reachBlock, selectCounts, selectDeveloperMode, selectGroups, selectHost, selectHosts, selectStaleHosts, selectView, groupsEqual, type Counts, type Filters, type Groups } from "./selectors";
+import { createTails, createTrails, type Tails, type Trails } from "./diagnostics";
 import { createTranscripts, type Transcripts } from "./transcript";
 import type { SessionView } from "./domain";
 import type { HostView } from "./hosts";
@@ -26,16 +28,30 @@ export interface AppContextValue {
   api: Api;
   actions: Actions;
   transcripts: Transcripts;
+  /** Developer mode's session trails and daemon log tails: subscribed only while a panel has them open. */
+  trails: Trails;
+  tails: Tails;
 }
 
 const Ctx = createContext<AppContextValue | null>(null);
 
 export function createApp(backend: Backend, partial?: Partial<AppState>): AppContextValue & { dispose: () => void } {
   const store = createAppStore(partial);
-  const api = createApi(backend);
+  const diag = createDiagLog(store, backend);
+  // Every request that carries a trace has its outcome recorded as it passes through here.
+  const api = createApi(withRpcOutcomes(backend, diag.log));
   const feeds = createFeeds(store);
   const controller = connectStore(store, api, feeds);
-  return { store, backend, api, actions: createActions(store, api, controller), transcripts: createTranscripts(store, api, feeds), dispose: controller.dispose };
+  return {
+    store,
+    backend,
+    api,
+    actions: createActions(store, api, controller, { trace: createTracer(diag.log), log: diag.log }),
+    transcripts: createTranscripts(store, api, feeds),
+    trails: createTrails(store, api, feeds),
+    tails: createTails(store, api, feeds),
+    dispose: controller.dispose,
+  };
 }
 
 export function AppProvider({ value, children }: { value: AppContextValue; children: React.ReactNode }) {
@@ -83,6 +99,9 @@ export function useStaleHosts(): ReadonlySet<HostId> {
   const key = useAppState(selectStaleHosts);
   return useMemo(() => new Set(key ? key.split("|") : []), [key]);
 }
+
+/** Whether Developer mode is on: the hub's setting, once the hub has told us (never assumed before). */
+export const useDeveloperMode = (): boolean => useAppState(selectDeveloperMode);
 
 /** Open a session's transcript (history + live) while the component is mounted. */
 export function useTranscriptOpen(key: SessionKey) {
