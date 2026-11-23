@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { errorMessage } from "../../bridge/api";
 import type { DriverInventory, EnvironmentTest, HostEnvironment, HostEnvSettings, HostVar, SecretsLocation, SetupReport } from "../../bridge/wire";
-import { useActions, useApi, useAppState, usePending } from "../../state";
+import { useActions, useApi, useAppState, usePending, useReach } from "../../state";
 import { Button, Checkbox, DriverBadge, Icon, IconButton, Wrap, makeDriver } from "../../ui";
 
 const ENV_SOURCE: Record<HostEnvironment["source"], string> = {
@@ -69,6 +69,7 @@ export function EnvironmentSection({ hostId, hostName, windows, now }: { hostId:
     return () => { live = false; };
   }, [api, hostId]);
 
+  const reach = useReach(hostId);
   const dirty = !!(saved && draft && !sameDraft(draft, draftOf(saved)));
   const missingSecret = draft?.vars.some((v) => v.secret && !v.stored && !v.value);
   const badName = draft?.vars.some((v) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(v.name));
@@ -113,7 +114,7 @@ export function EnvironmentSection({ hostId, hostName, windows, now }: { hostId:
           <details className="mt6"><summary className="small">PATH ({env.path.length} entries)</summary><ol className="mono small" aria-label="PATH">{env.path.map((p, i) => <li key={i}><Wrap text={p} /></li>)}</ol></details>
         </>
       )}
-      <Button size="sm" variant="ghost" icon="refresh" className="mt6" pending={refreshing} onClick={refresh}>Refresh environment</Button>
+      <Button size="sm" variant="ghost" icon="refresh" className="mt6" blocked={reach} pending={refreshing} onClick={refresh}>Refresh environment</Button>
 
       {draft ? (
         <div className="envs-edit">
@@ -167,8 +168,8 @@ export function EnvironmentSection({ hostId, hostName, windows, now }: { hostId:
           </div>
 
           <div className="acts">
-            <Button size="sm" variant="primary" icon="check" pending={saving} disabled={!dirty || !!missingSecret || !!badName || testing} onClick={save}>Save</Button>
-            <Button size="sm" icon="sparkle" pending={testing} disabled={dirty || saving} onClick={runTest} title={dirty ? "Save first: Test runs the saved settings" : undefined}>Test</Button>
+            <Button size="sm" variant="primary" icon="check" blocked={reach} pending={saving} disabled={!dirty || !!missingSecret || !!badName || testing} onClick={save}>Save</Button>
+            <Button size="sm" icon="sparkle" blocked={reach} pending={testing} disabled={dirty || saving} onClick={runTest} title={dirty ? "Save first: Test runs the saved settings" : undefined}>Test</Button>
             <span className="faint small">{missingSecret ? "Enter a value for each new secret." : badName ? "Names are letters, digits and '_', not starting with a digit." : "Applies to new sessions and terminals; running ones keep their environment."}</span>
           </div>
           {notApplied ? <div className="gate mt6" role="status"><div className="gate-h"><Icon name="clock" size="sm" />Saved, not applied yet</div><div className="small"><Wrap text={notApplied} /></div><div className="faint small">Marsad applies them when {hostName} connects.</div></div> : null}

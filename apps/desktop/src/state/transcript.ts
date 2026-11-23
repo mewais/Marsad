@@ -2,6 +2,7 @@ import type { Api } from "../bridge/api";
 import { errorMessage } from "../bridge/api";
 import type { SessionEvent, SessionKey } from "../bridge/wire";
 import { splitKey } from "../bridge/wire";
+import type { Feeds } from "./feeds";
 import type { AppStore, TranscriptSlice } from "./model";
 
 const PAGE = 60;
@@ -10,7 +11,7 @@ const PAGE = 60;
  * Per-session transcripts are loaded lazily when a session view opens: the latest page of history,
  * then a live subscription from its last cursor. Older pages load on demand.
  */
-export function createTranscripts(store: AppStore, api: Api) {
+export function createTranscripts(store: AppStore, api: Api, feeds: Feeds) {
   const live = new Map<SessionKey, { n: number; off: () => void }>();
   /** An older page being fetched, so a second request for the same page waits for it instead of returning early. */
   const earlier = new Map<SessionKey, Promise<void>>();
@@ -65,7 +66,11 @@ export function createTranscripts(store: AppStore, api: Api) {
       void (async () => {
         const from = existing?.events.length ? existing.events[existing.events.length - 1].cursor : await load(key);
         if (from == null || live.get(key) !== entry) return;
-        entry.off = api.subscribe.sessionEvents(host, id, from, (e) => append(key, e));
+        // Started again (if it ends) from wherever the transcript has got to.
+        entry.off = feeds.open(`events:${key}`, (onEnd) => {
+          const have = store.get().transcripts[key]?.events;
+          return api.subscribe.sessionEvents(host, id, have?.length ? have[have.length - 1].cursor : from, (e) => append(key, e), onEnd);
+        });
       })();
       return () => release(key);
     },

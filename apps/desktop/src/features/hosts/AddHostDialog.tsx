@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { HostKind, ImportSuggestions, SshConfigHost, WslDistros } from "../../bridge/wire";
-import { linkView, useActions, useApi, useAppState, usePending } from "../../state";
+import { linkView, useActions, useApi, useAppState, usePending, useReach } from "../../state";
 import { Button, Dialog, Icon, Segmented, TextField } from "../../ui";
 import { WslDistroPicker, defaultDistro } from "./WslDistroPicker";
 
@@ -42,13 +42,14 @@ export function AddHostDialog({ open, onClose }: { open: boolean; onClose: () =>
   useEffect(() => {
     if (wsl) setD((x) => (x.distro ? x : { ...x, distro: defaultDistro(wsl) }));
   }, [wsl]);
+  const reach = useReach();
   const host = useAppState((s) => (added ? s.hosts[added] : undefined));
   const inv = useAppState((s) => (added ? s.inventory[added] : undefined));
 
   const useSugg = (h: SshConfigHost) => set({ kind: "ssh", name: h.alias, target: h.alias, port: h.port ? String(h.port) : "", identity: h.identity_file ?? "" });
   const problem = !d.name.trim() ? "Give the host a name." : d.kind === "ssh" && !d.target.trim() ? "Enter an ssh alias or user@host." : d.kind === "wsl" && !d.distro.trim() ? "Pick the WSL distribution." : d.port && !/^\d+$/.test(d.port) ? "The port is a number." : "";
   const submit = async () => {
-    if (problem) return;
+    if (problem || reach) return;
     const e = await actions.run("hosts.add", "Could not add the host", () => api.hosts.add({ name: d.name.trim(), kind: hostKindOf(d), id: null }));
     if (e) setAdded(e.id);
   };
@@ -63,7 +64,7 @@ export function AddHostDialog({ open, onClose }: { open: boolean; onClose: () =>
       footer={added ? (
         <><span className="faint small">{lv?.detail}</span><span className="sp" /><Button variant="primary" onClick={onClose}>{cur >= 4 ? "Done" : "Close and keep going"}</Button></>
       ) : (
-        <><span className="faint small">{problem}</span><span className="sp" /><Button onClick={onClose}>Cancel</Button><Button variant="primary" disabled={!!problem} pending={pending} onClick={() => void submit()}>Add and connect</Button></>
+        <><span className="faint small">{problem || reach}</span><span className="sp" /><Button onClick={onClose}>Cancel</Button><Button variant="primary" disabled={!!problem} blocked={reach} pending={pending} onClick={() => void submit()}>Add and connect</Button></>
       )}>
       <div className="addh">
         <div className="steps">{step(1, "Connect", cur)}<Icon name="chevr" size="xs" />{step(2, "Install helper", cur)}<Icon name="chevr" size="xs" />{step(3, "Detect agents", cur)}</div>

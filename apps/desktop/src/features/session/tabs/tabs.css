@@ -1,4 +1,4 @@
-/* Session tabs: Changes, Config, Usage, Terminal (mockup: changesTab, configTab, usageTab, terminalTab). */
+/* Session tabs: Changes, Config, Terminal (mockup: changesTab, configTab, terminalTab). */
 .chg{display:grid;grid-template-columns:300px 1fr;flex:1;min-height:0}
 .chg>*{min-height:0;min-width:0}
 .flist{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
@@ -39,14 +39,8 @@
 .provs{display:inline-flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
 .reason{font-size:11px;color:var(--fg-3);margin-top:2px;white-space:pre-wrap}
 .small{font-size:12px}
-.usage{padding:16px 20px;overflow:auto;display:flex;flex-direction:column;gap:16px;flex:1;min-height:0}
-.usage .card.pad{padding:14px 16px;display:flex;flex-direction:column;gap:10px}
-.ctxbar{margin-top:6px}
-.notices{display:flex;flex-direction:column;gap:8px}
-.note.warnnote{border-color:var(--needs-line);background:var(--needs-bg)}
-.note.warnnote .i{color:var(--needs)}
 .termwrap{flex:1;margin:12px 20px 16px;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r3);padding:8px;display:flex;flex-direction:column;min-height:0;gap:6px}
 .xterm-box{flex:1;min-height:0}
 .term-status{font-size:12px;display:flex;align-items:center;gap:8px}
 .tabbody{flex:1;min-height:0;display:flex;flex-direction:column}
-@media (max-width:1100px){.chg{grid-template-columns:240px 1fr}.tiles{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:1100px){.chg{grid-template-columns:240px 1fr}}

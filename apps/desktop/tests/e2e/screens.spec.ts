@@ -35,9 +35,12 @@ for (const theme of ["dark", "light"] as const) {
       await page.getByRole("tab", { name: "Config" }).click();
       await expect(page.getByText("turned off at Host").first()).toBeVisible();
       await shot(page, "session-config-dark-1440");
-      await page.getByRole("tab", { name: "Usage" }).click();
+      // Usage lives in the sidebar of the Activity tab now: cost, context window, cache, cost per model.
+      await page.getByRole("tab", { name: "Activity" }).click();
       await expect(page.getByText("Context window", { exact: true })).toBeVisible();
-      await shot(page, "session-usage-dark-1440");
+      await expect(page.getByText("Cost by model")).toBeVisible();
+      await shot(page, "session-sidebar-usage-dark-1440");
+      await expect(page.getByRole("tab", { name: "Usage" })).toHaveCount(0);
       await page.getByRole("tab", { name: "Terminal" }).click();
       await expect(page.getByText("Terminal not available")).toBeVisible();
       await shot(page, "session-terminal-dark-1440");

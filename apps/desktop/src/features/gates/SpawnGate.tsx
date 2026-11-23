@@ -43,7 +43,7 @@ export function SpawnGate({ view, pg, density, active, expanded, onActivate }: {
   const g = pg.gate;
   const reasonRef = useRef<HTMLInputElement>(null);
   const deny = sg.set.choices.find((c) => c.text !== "none");
-  const buttons = (keys: boolean) => <ChoiceButtons choices={sg.set.choices} busy={sg.busy} onChoose={(c) => sg.choose(c)} keys={keys} />;
+  const buttons = (keys: boolean) => <ChoiceButtons choices={sg.set.choices} busy={sg.busy} blocked={sg.blocked} onChoose={(c) => sg.choose(c)} keys={keys} />;
   const reason = deny ? <ReasonBox who={g.from} value={sg.reason} onChange={sg.setReason} inputRef={reasonRef} onSubmit={() => sg.choose(deny)} label={deny.label.map((p) => p.text).join("")} /> : null;
   const keys = active ? <Keys g={sg} /> : null;
   const facts = (

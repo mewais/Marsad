@@ -3,7 +3,7 @@ import { errorMessage } from "../../../bridge/api";
 import type { EffectiveConfig, SessionSnapshot } from "../../../bridge/wire";
 import { splitKey } from "../../../bridge/wire";
 import { useNavigate } from "../../../router";
-import { useActions, useApi, useDriver, useHost } from "../../../state";
+import { useActions, useApi, useDriver, useHost, useReach } from "../../../state";
 import { Button, Card, Icon, Select, Skeleton } from "../../../ui";
 import { KIND, provenance } from "../../config/provenance";
 import { modelChoice } from "../../../state/domain";
@@ -32,6 +32,7 @@ export function ConfigTab({ sessionKey, snap }: { sessionKey: string; snap: Sess
   useEffect(() => setModel(current), [current]);
   useEffect(() => setMode(snap.mode ?? ""), [snap.mode]);
   const name = drv?.displayName ?? snap.driver;
+  const reach = useReach(host);
   const live = ["idle", "working", "needs_you", "starting"].includes(snap.phase.state);
   const apply = () => {
     if (model && model !== current) void actions.command(sessionKey, { command: "set_model", model }, { failTitle: "Could not change the model" });
@@ -54,7 +55,7 @@ export function ConfigTab({ sessionKey, snap }: { sessionKey: string; snap: Sess
           <span className="hint">{snap.available_modes.length ? `Modes offered by ${name}` : `${name} reports no modes.`}</span>
         </div>
         <div className="row-gap">
-          <Button variant="primary" size="sm" disabled={!live || ((model === current || !snap.capabilities.set_model) && (mode === (snap.mode ?? "") || !snap.capabilities.set_mode))} onClick={apply}>Apply to running session</Button>
+          <Button variant="primary" size="sm" blocked={reach} disabled={!live || ((model === current || !snap.capabilities.set_model) && (mode === (snap.mode ?? "") || !snap.capabilities.set_mode))} onClick={apply}>Apply to running session</Button>
           {!snap.capabilities.set_model || !snap.capabilities.set_mode ? <span className="faint small">{name} cannot change {!snap.capabilities.set_model ? "the model" : "the mode"} without a restart.</span> : null}
         </div>
       </Card>

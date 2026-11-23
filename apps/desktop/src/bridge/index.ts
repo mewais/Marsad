@@ -17,9 +17,13 @@ export function createBackend(search = typeof location !== "undefined" ? locatio
   if (q.get("long") === "1") applyLongStrings();
   // ?media=1 adds a session whose transcript shows images and files.
   if (q.get("media") === "1") applyMedia();
-  return new FixtureBackend({
+  const backend = new FixtureBackend({
     live: q.get("live") !== "0",
     latencyMs: q.has("latency") ? Number(q.get("latency")) : undefined,
     speed: q.has("speed") ? Number(q.get("speed")) : undefined,
   });
+  // ?hub=connecting|reconnecting|offline (&hub_error=...) shows the app without its link to the local daemon.
+  const hub = q.get("hub");
+  if (hub === "connecting" || hub === "reconnecting" || hub === "offline") backend.setHubLink({ state: hub, ...(q.get("hub_error") ? { error: q.get("hub_error")! } : {}) });
+  return backend;
 }

@@ -14,13 +14,18 @@ export const nodeName = (v: WorkstreamView, id: string) => v.workstream.nodes.fi
 
 export type NodeStatus = StatusKey | "planned" | "launching";
 
-export function nodeStatus(nv: NodeView | undefined, s: SessionSnapshot | null | undefined): { status: NodeStatus; word: string } {
-  if (nv?.launching) return { status: "launching", word: "Launching" };
-  if (!s) return { status: "planned", word: "Not launched" };
+/**
+ * What a node's session is doing, in words. `stale`: its host is not reporting, so this is where the
+ * session was, said as such (and nothing about it animates or counts as live).
+ */
+export function nodeStatus(nv: NodeView | undefined, s: SessionSnapshot | null | undefined, stale = false): { status: NodeStatus; word: string; stale: boolean } {
+  if (nv?.launching) return { status: "launching", word: "Launching", stale: false };
+  if (!s) return { status: "planned", word: "Not launched", stale: false };
   const st = phaseToStatus(s.phase.state, false);
-  if (st === "needs" && s.pending_gates.some((g) => g.gate.gate_type === "handoff")) return { status: st, word: "Handoff waiting" };
-  if (st === "needs" && s.pending_gates.some((g) => g.gate.gate_type === "spawn")) return { status: st, word: "Spawn waiting" };
-  return { status: st, word: st === "needs" ? "Needs you" : st === "failed" ? "Failed" : st === "working" ? "Working" : s.phase.state === "exited" ? "Ended" : "Idle" };
+  const say = (word: string) => ({ status: st, word: stale ? `${word} · last known` : word, stale });
+  if (st === "needs" && s.pending_gates.some((g) => g.gate.gate_type === "handoff")) return say("Handoff waiting");
+  if (st === "needs" && s.pending_gates.some((g) => g.gate.gate_type === "spawn")) return say("Spawn waiting");
+  return say(st === "needs" ? "Needs you" : st === "failed" ? "Failed" : st === "working" ? "Working" : s.phase.state === "exited" ? "Ended" : "Idle");
 }
 
 export interface WsSummary {
@@ -34,13 +39,15 @@ export interface WsSummary {
   spawned: number;
 }
 
-export function summary(v: WorkstreamView): WsSummary {
+/** `isStale(host)`: that host's sessions are last-known; they are counted apart, not as live activity. */
+export function summary(v: WorkstreamView, isStale: (host: HostId) => boolean = () => false): WsSummary {
   const hosts = [...new Set(v.nodes.map((n) => n.host))];
   const live = v.nodes.filter((n) => n.session);
-  const c: Partial<Record<NodeStatus, number>> = {};
+  const c: Partial<Record<NodeStatus | "stale", number>> = {};
   for (const n of live) {
-    const st = nodeStatus(n, n.session).status;
-    c[st] = (c[st] ?? 0) + 1;
+    const st = nodeStatus(n, n.session, isStale(n.host));
+    const k = st.stale ? "stale" : st.status;
+    c[k] = (c[k] ?? 0) + 1;
   }
   const pending = v.edges.reduce((a, e) => a + e.pending_gates.length, 0) + (v.pending_spawns?.length ?? 0);
   const parts: WsSummary["parts"] = [];
@@ -52,6 +59,7 @@ export function summary(v: WorkstreamView): WsSummary {
     if (c.needs) parts.push({ cls: "needs", text: `${c.needs} need${c.needs === 1 ? "s" : ""} you`, icon: "needs" });
     if (c.failed) parts.push({ cls: "failed", text: `${c.failed} failed`, icon: "failed" });
     if (c.working) parts.push({ cls: "working", text: `${c.working} working`, icon: "working" });
+    if (c.stale) parts.push({ cls: "idle", text: `${c.stale} last known`, icon: "clock" });
     if (!parts.length) parts.push({ cls: "idle", text: "All idle", icon: "idle" });
   }
   const spawned = v.workstream.nodes.filter((n) => n.spawned_by).length;

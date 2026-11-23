@@ -30,3 +30,6 @@
   .gate-inline,.donebox{margin-left:128px}
   .toolbar .chip.hide-n{display:none}
 }
+
+/* Last known: the host is not reporting; the row says where the session was. */
+.ibx-item[data-stale] .ibx-row{opacity:.72}

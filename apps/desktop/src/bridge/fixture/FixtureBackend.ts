@@ -1,4 +1,4 @@
-import type { Backend, RequestOptions, SubscribeOptions, Unsubscribe } from "../backend";
+import type { Backend, HubLinkInfo, RequestOptions, SubscribeOptions, SubscriptionEnd, Unsubscribe } from "../backend";
 import type {
   AttachmentPut,
   FileReadRequest,
@@ -8,6 +8,7 @@ import type {
   HostEnvironment, HostEnvSettings, HostRef,
 } from "../wire";
 import { methods as M, topics as T } from "../wire";
+import pkg from "../../../package.json";
 import { DRIVERS, FIXTURE_HOSTS, driverDef, inventoryFor, type FixtureHost } from "./catalog";
 import { fsExists, fsHome, fsList } from "./fs";
 import { buildTree, diffOf, type Tree } from "./git";
@@ -60,6 +61,15 @@ export class FixtureBackend implements Backend {
   readonly sim: SessionSim;
   readonly envs: FixtureHostEnvs;
   private invSubs = new Map<HostId, Set<(e: unknown) => void>>();
+  /** The app's link to its local daemon (what the desktop shell reports); starts connected. */
+  private hubLink: HubLinkInfo = { state: "connected" };
+  private hubWatchers = new Set<(l: HubLinkInfo) => void>();
+  /** Every open subscription with its end callback, so a test can end one the way the shell does. */
+  private openSubs = new Set<{ topic: string; host?: HostId; onEnd?: (e: SubscriptionEnd) => void; off: () => void }>();
+  /** How many times the UI asked to reconnect to the local daemon (tests). */
+  hubReconnects = 0;
+  /** What reaches the app once its link to the daemon is back (subscription deliveries wait for it). */
+  private parked: (() => void)[] = [];
 
   constructor(o: FixtureOptions = {}) {
     this.opts = { live: o.live ?? true, latencyMs: o.latencyMs ?? 140, speed: o.speed ?? 1, now: o.now ?? Date.now };
@@ -88,6 +98,7 @@ export class FixtureBackend implements Backend {
       cancelAuth: (a) => this.cancelAuth(a),
       createSession: (host, snap, first) => this.createSession(host, snap, first),
       session: (host, id) => this.hosts.get(host)?.sessions.get(id)?.snap,
+      allSessions: () => [...this.hosts].flatMap(([host, h]) => [...h.sessions.values()].map((e) => ({ host, snap: e.snap }))),
       agentCommand: (host, driver) => this.envs.command(host, driver),
       emitWorkstreams: (e) => this.wsSubs.forEach((s) => s(e)),
     });
@@ -114,6 +125,8 @@ export class FixtureBackend implements Backend {
     return new Promise<T>((resolve, reject) => {
       this.later(this.opts.latencyMs, () => {
         try {
+          // The shell answers `desktop.*` itself; everything else needs the local daemon.
+          if (this.hubLink.state !== "connected" && !method.startsWith("desktop.")) throw err("not_connected", "not connected to the local daemon");
           resolve((opts.host ? this.hostRequest(opts.host, method, params) : this.hubRequest(method, params)) as T);
         } catch (e) {
           reject(e);
@@ -122,15 +135,24 @@ export class FixtureBackend implements Backend {
     });
   }
 
-  subscribe(topic: string, opts: SubscribeOptions, onEvent: (e: unknown) => void): Unsubscribe {
+  subscribe(topic: string, opts: SubscribeOptions, onEvent: (e: unknown) => void, onEnd?: (end: SubscriptionEnd) => void): Unsubscribe {
+    const rec = { topic, host: opts.host, onEnd, off: this.attach(topic, opts, onEvent) };
+    this.openSubs.add(rec);
+    return () => {
+      this.openSubs.delete(rec);
+      rec.off();
+    };
+  }
+
+  private attach(topic: string, opts: SubscribeOptions, onEvent: (e: unknown) => void): Unsubscribe {
     if (topic === T.FLEET) {
       this.fleetSubs.add(onEvent);
-      this.later(0, () => onEvent({ kind: "reset", hosts: [...this.hosts.values()].map((h) => this.fleetHost(h)) } satisfies FleetEvent));
+      this.deliver(() => this.fleetSubs.has(onEvent) && onEvent({ kind: "reset", hosts: [...this.hosts.values()].map((h) => this.fleetHost(h)) } satisfies FleetEvent));
       return () => this.fleetSubs.delete(onEvent);
     }
     if (topic === T.WORKSTREAMS) {
       this.wsSubs.add(onEvent);
-      this.later(0, () => onEvent(this.hub.ws.reset()));
+      this.deliver(() => this.wsSubs.has(onEvent) && onEvent(this.hub.ws.reset()));
       return () => this.wsSubs.delete(onEvent);
     }
     const host = this.hosts.get(opts.host ?? "x1");
@@ -140,7 +162,7 @@ export class FixtureBackend implements Backend {
       const subs = this.invSubs.get(id) ?? new Set();
       this.invSubs.set(id, subs);
       subs.add(onEvent);
-      this.later(0, () => this.isUp(host) && onEvent(this.hostInventory(id)));
+      this.deliver(() => subs.has(onEvent) && this.isUp(host) && onEvent(this.hostInventory(id)));
       return () => subs.delete(onEvent);
     }
     const m = /^session\.events:(.+)$/.exec(topic);
@@ -148,8 +170,44 @@ export class FixtureBackend implements Backend {
     if (!entry) return () => undefined;
     const from = Number(opts.from ?? Number.POSITIVE_INFINITY);
     entry.subs.add(onEvent);
-    if (Number.isFinite(from)) this.later(0, () => entry.events.filter((e) => e.cursor > from).forEach((e) => onEvent(e)));
+    if (Number.isFinite(from)) this.deliver(() => entry.subs.has(onEvent) && entry.events.filter((e) => e.cursor > from).forEach((e) => onEvent(e)));
     return () => entry.subs.delete(onEvent);
+  }
+
+  watchHubLink(cb: (l: HubLinkInfo) => void): Unsubscribe {
+    this.hubWatchers.add(cb);
+    this.later(0, () => this.hubWatchers.has(cb) && cb(this.hubLink));
+    return () => this.hubWatchers.delete(cb);
+  }
+
+  async appVersion(): Promise<string> {
+    return pkg.version;
+  }
+
+  async reconnectHub(): Promise<void> {
+    this.hubReconnects++;
+    this.setHubLink({ state: "connecting" });
+    this.later(300 * this.opts.speed, () => this.setHubLink({ state: "connected" }));
+  }
+
+  /** Force the app's link to the local daemon (tests, demos). */
+  setHubLink(link: HubLinkInfo) {
+    this.hubLink = link;
+    for (const w of [...this.hubWatchers]) w(link);
+    if (link.state === "connected") for (const fn of this.parked.splice(0)) fn();
+  }
+
+  /**
+   * End the open subscriptions of `topic` (all of them without one) the way the shell does when
+   * the daemon refuses or closes a topic: each gets `end` once and delivers nothing more.
+   */
+  endSubscriptions(topic?: string, end: SubscriptionEnd = { code: "not_hub", message: "this daemon is not a hub" }) {
+    for (const r of [...this.openSubs]) {
+      if (topic !== undefined && r.topic !== topic && !r.topic.startsWith(topic)) continue;
+      this.openSubs.delete(r);
+      r.off();
+      r.onEnd?.(end);
+    }
   }
 
   // ── host services (routed by `host`) ──────────────────────────────────────
@@ -295,7 +353,7 @@ export class FixtureBackend implements Backend {
 
   private inventoryChanged(id: HostId) {
     const inv = this.hostInventory(id);
-    this.later(0, () => this.invSubs.get(id)?.forEach((cb) => cb(inv)));
+    this.deliver(() => this.invSubs.get(id)?.forEach((cb) => cb(inv)));
   }
 
   /** `hosts.environment.*` (hub): stored here, applied to the host's simulated environment stage. */
@@ -366,7 +424,14 @@ export class FixtureBackend implements Backend {
   }
 
   private fleet(e: FleetEvent) {
-    this.fleetSubs.forEach((s) => s(e));
+    // While the app's link to the daemon is down nothing reaches it; the shell's subscription catches up from its cursor afterwards.
+    if (this.hubLink.state !== "connected") this.parked.push(() => this.fleetSubs.forEach((s) => s(e)));
+    else this.fleetSubs.forEach((s) => s(e));
+  }
+
+  /** Deliver a subscription's first events: soon, or once the app is connected to the daemon. */
+  private deliver(fn: () => void) {
+    this.later(0, () => (this.hubLink.state === "connected" ? fn() : this.parked.push(fn)));
   }
 
   private publish(e: Entry) {
@@ -379,6 +444,8 @@ export class FixtureBackend implements Backend {
     const h = this.hosts.get(id)!;
     h.def.link = state;
     this.fleet({ kind: "link", host: id, state });
+    // Like the hub: once the host is connected it delivers its session list.
+    if (state.state === "connected") this.fleet({ kind: "sessions", host: id, sessions: [...h.sessions.values()].map((e) => e.snap) });
   }
 
   /** Show a sign-in prompt for a host (tests, demos). */

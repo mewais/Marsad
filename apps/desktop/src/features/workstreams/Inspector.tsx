@@ -4,7 +4,7 @@ import type { EdgePolicy, TaskView, WorkstreamView } from "../../bridge/wire";
 import { sessionKey } from "../../bridge/wire";
 import { clockTime } from "../../lib/format";
 import { sessionPath, useNavigate } from "../../router";
-import { linkView, useActions, useApi, useAppState, useHost, useSessionView } from "../../state";
+import { linkView, useActions, useApi, useAppState, useHost, useSessionView, useStaleHosts } from "../../state";
 import { Button, ConnState, DriverBadge, HostChip, Icon, Select, makeDriver } from "../../ui";
 import { Gate } from "../gates/Gate";
 import { checklist, nodeName, nodeStatus, POLICY, taskWords } from "./model";
@@ -96,7 +96,8 @@ export function NodeInspector({ view, nodeId, design }: { view: WorkstreamView; 
   const [target, setTarget] = useState("");
   if (!node || !nv) return null;
   const snap = nv.session;
-  const st = nodeStatus(nv, snap);
+  const staleHosts = useStaleHosts();
+  const st = nodeStatus(nv, snap, staleHosts.has(nv.host));
   const drvId = snap?.driver ?? node.launch?.driver ?? "";
   const id = view.workstream.id;
   const others = view.workstream.nodes.filter((n) => n.id !== nodeId && !view.workstream.edges.some((e) => e.from === nodeId && e.to === n.id));
@@ -106,7 +107,7 @@ export function NodeInspector({ view, nodeId, design }: { view: WorkstreamView; 
       <div className="sec">
         <div className="eyebrow">Agent</div>
         <div className="h2">{node.name}</div>
-        <div className="row-gap"><span className={`st ${st.status}`}>{st.word}</span>{drvId ? <DriverBadge driver={drivers[drvId] ?? makeDriver(drvId)} /> : null}</div>
+        <div className="row-gap"><span className={`st ${st.status}${st.stale ? " stale" : ""}`}>{st.word}</span>{drvId ? <DriverBadge driver={drivers[drvId] ?? makeDriver(drvId)} /> : null}</div>
         {host ? <div className="hostline"><HostChip host={host} /><ConnState host={host} /></div> : null}
         <div className="mono faint small">{snap?.cwd ?? node.launch?.cwd ?? ""}</div>
       </div>

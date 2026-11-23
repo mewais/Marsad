@@ -4,7 +4,8 @@ import type { FleetEvent, FleetHost, HostId, InventoryReply, SessionSnapshot, Wo
 import { sessionKey } from "../bridge/wire";
 import { makeDriver } from "../ui/DriverBadge";
 import { linkView, type HostState } from "./hosts";
-import type { AppState, AppStore } from "./model";
+import type { Feeds } from "./feeds";
+import { LOADING, READY, type AppState, type AppStore, type HubLink, type LoadKey } from "./model";
 
 const toHost = (f: FleetHost): HostState => ({ entry: f.host, link: f.link, sessionsLive: f.sessions_live, authPrompt: f.auth_prompt ?? null });
 
@@ -30,7 +31,7 @@ export function applyFleet(s: AppState, e: FleetEvent): AppState {
         git[f.host.id] = Object.fromEntries((f.git ?? []).map((g) => [g.cwd, g]));
         for (const snap of f.sessions) sessions[sessionKey(f.host.id, snap.id)] = snap;
       }
-      return withDrivers({ ...s, fleetReady: true, fleetError: undefined, hosts, hostOrder: e.hosts.map((f) => f.host.id), sessions, git, pending: prunePending(s.pending, sessions) });
+      return withDrivers({ ...s, fleetReady: true, hosts, hostOrder: e.hosts.map((f) => f.host.id), sessions, git, pending: prunePending(s.pending, sessions) });
     }
     case "host_upserted": {
       const cur = s.hosts[e.host.id];
@@ -47,7 +48,9 @@ export function applyFleet(s: AppState, e: FleetEvent): AppState {
     case "link": {
       const cur = s.hosts[e.host];
       if (!cur || cur.link.link === "local") return s;
-      return { ...s, hosts: { ...s.hosts, [e.host]: { ...cur, link: { link: "remote", state: e.state } } } };
+      // The hub drops `sessions_live` when a link is not connected (and says so only through this
+      // event); it is true again when the host delivers its list (`sessions`).
+      return { ...s, hosts: { ...s.hosts, [e.host]: { ...cur, link: { link: "remote", state: e.state }, sessionsLive: cur.sessionsLive && e.state.state === "connected" } } };
     }
     case "git":
       return { ...s, git: { ...s.git, [e.host]: { ...s.git[e.host], [e.summary.cwd]: e.summary } } };
@@ -120,12 +123,59 @@ function withDrivers(s: AppState): AppState {
   return { ...s, drivers, driverOrder: order!.sort((a, b) => rank(a) - rank(b)) };
 }
 
+const sameHub = (a: HubLink, b: HubLink) => a.state === b.state && a.error === b.error;
+
+/** What the app does about the stored documents and the live subscriptions besides showing them. */
+export interface Controller {
+  dispose(): void;
+  /** Start the subscriptions that ended again. */
+  retryFeeds(): void;
+  /** Load a stored document again (after a failure, or when the user asks). */
+  reload(what: LoadKey): Promise<void>;
+}
+
 /**
- * Wires the backend into the store: the hub's `fleet` topic (hosts, links, sign-in prompts,
- * sessions), `drivers.inventory` of every connected host, and the hub store documents the shell
- * needs (seen markers, workstreams, notification prefs, settings). Returns a disposer.
+ * Wires the backend into the store: the app's link to the hub, the hub's `fleet` topic (hosts,
+ * links, sign-in prompts, sessions), `drivers.inventory` of every connected host, and the hub
+ * store documents the shell needs (seen markers, workstreams, notification prefs, settings).
+ * Every subscription goes through `feeds`, so one that ends is known and can be started again.
  */
-export function connectStore(store: AppStore, api: Api): () => void {
+export function connectStore(store: AppStore, api: Api, feeds: Feeds): Controller {
+  const setLoad = (k: LoadKey, load: AppState["loads"][LoadKey]) => store.set((s) => ({ ...s, loads: { ...s.loads, [k]: load } }));
+  const loaders: Record<LoadKey, () => Promise<void>> = {
+    seen: async () => {
+      const m = await api.store.seen();
+      store.set((s) => ({ ...s, ...seenState(m.markers) }));
+    },
+    notifications: async () => {
+      const n = await api.store.notifications();
+      store.set((s) => ({ ...s, notifications: n }));
+    },
+    settings: async () => {
+      const st = await api.store.settings();
+      store.set((s) => ({ ...s, settings: { ...st.values } }));
+    },
+  };
+  const reload = async (k: LoadKey) => {
+    setLoad(k, LOADING);
+    try {
+      await loaders[k]();
+      setLoad(k, READY);
+    } catch (e) {
+      setLoad(k, { state: "error", error: errorMessage(e) });
+    }
+  };
+
+  const offHub = api.hub.watch((link) => {
+    const was = store.get().hub.state;
+    store.set((s) => (sameHub(s.hub, link) ? s : { ...s, hub: link }));
+    if (link.state === "connected" && was !== "connected") {
+      // The link is back: subscriptions that ended start again, documents that failed to load are asked for again.
+      feeds.retry();
+      for (const [k, l] of Object.entries(store.get().loads)) if (l.state === "error") void reload(k as LoadKey);
+    }
+  });
+
   const inv = new Map<HostId, () => void>();
   const syncInventory = () => {
     const s = store.get();
@@ -133,29 +183,32 @@ export function connectStore(store: AppStore, api: Api): () => void {
       const h = s.hosts[id];
       const up = h && linkView(h.link).connected;
       if (up && !inv.has(id)) {
-        inv.set(id, api.subscribe.inventory(id, (r: InventoryReply) => store.set((st) => withDrivers({ ...st, inventory: { ...st.inventory, [id]: r.drivers } }))));
+        inv.set(id, feeds.open(`inventory:${id}`, (onEnd) => api.subscribe.inventory(id, (r: InventoryReply) => store.set((st) => withDrivers({ ...st, inventory: { ...st.inventory, [id]: r.drivers } })), onEnd)));
       } else if (!up && inv.has(id)) {
         inv.get(id)!();
         inv.delete(id);
       }
     }
   };
-  const offFleet = api.subscribe.fleet((e) => {
-    store.set((s) => applyFleet(s, e));
-    if (e?.kind === "reset" || e?.kind === "link" || e?.kind === "host_upserted" || e?.kind === "host_removed") syncInventory();
-  });
+  const offFleet = feeds.open("fleet", (onEnd) =>
+    api.subscribe.fleet((e) => {
+      store.set((s) => applyFleet(s, e));
+      if (e?.kind === "reset" || e?.kind === "link" || e?.kind === "host_upserted" || e?.kind === "host_removed") syncInventory();
+    }, onEnd),
+  );
+  const offWs = feeds.open("workstreams", (onEnd) => api.subscribe.workstreams((e) => store.set((s) => applyWorkstreams(s, e)), onEnd));
+  for (const k of Object.keys(loaders) as LoadKey[]) void reload(k);
 
-  const fail = (what: string) => (e: unknown) => console.warn(`${what}: ${errorMessage(e)}`);
-  api.store.seen().then((m) => store.set((s) => ({ ...s, ...seenState(m.markers) })), fail("seen markers"));
-  const offWs = api.subscribe.workstreams((e) => store.set((s) => applyWorkstreams(s, e)));
-  api.store.notifications().then((n) => store.set((s) => ({ ...s, notifications: n })), fail("notification prefs"));
-  api.store.settings().then((st) => store.set((s) => ({ ...s, settings: st.values as Record<string, unknown> })), fail("settings"));
-
-  return () => {
-    offFleet();
-    offWs();
-    inv.forEach((u) => u());
-    inv.clear();
+  return {
+    dispose() {
+      offHub();
+      offFleet();
+      offWs();
+      inv.forEach((u) => u());
+      inv.clear();
+    },
+    retryFeeds: feeds.retry,
+    reload,
   };
 }
 

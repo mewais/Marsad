@@ -12,15 +12,17 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   kbd?: string;
   /** Request in flight: disables the button, shows a spinner, sets aria-busy. */
   pending?: boolean;
+  /** Why the action cannot be made now (no link to the daemon): disables the button and says why on hover. */
+  blocked?: string | null;
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { variant = "default", size = "md", icon, kbd, pending, className, children, disabled, type = "button", ...rest },
+  { variant = "default", size = "md", icon, kbd, pending, blocked, className, children, disabled, type = "button", title, ...rest },
   ref,
 ) {
   const cls = ["btn", variant === "default" ? "" : variant, size === "sm" ? "sm" : "", className ?? ""].filter(Boolean).join(" ");
   return (
-    <button ref={ref} type={type} className={cls} disabled={disabled || pending} aria-busy={pending || undefined} {...rest}>
+    <button ref={ref} type={type} className={cls} disabled={disabled || pending || !!blocked} aria-busy={pending || undefined} title={blocked || title} data-blocked={blocked ? "" : undefined} {...rest}>
       {pending ? <Icon name="working" size="xs" spin /> : icon ? <Icon name={icon} size="xs" /> : null}
       {children}
       {kbd ? <Kbd>{kbd}</Kbd> : null}

@@ -2,7 +2,6 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { countLines, parseDiff, splitRows } from "../../src/features/session/tabs/diff";
-import { usageFacts } from "../../src/features/session/tabs/usage";
 import { quietBackend, renderApp, sessionByName } from "../helpers";
 
 const DIFF = `diff --git a/a.ts b/a.ts
@@ -101,17 +100,5 @@ describe("session tabs", () => {
     expect(await screen.findByText("turned off at Host")).toBeInTheDocument();
     expect(screen.getAllByText("from Claude Code config").length).toBeGreaterThan(2);
     expect(screen.getByText("added at Global")).toBeInTheDocument();
-  });
-
-  it("usage: tokens, context and the CLI's notices", async () => {
-    await open("upgrade-tauri-2-5", "usage");
-    expect(await screen.findByText(/History compacted/)).toBeInTheDocument();
-    expect(screen.getByText(/Rate limit: allowed_warning/)).toBeInTheDocument();
-    expect(screen.getByRole("meter", { name: "Context window used" })).toBeInTheDocument();
-  });
-
-  it("usage facts come from the latest per-model turn", () => {
-    const f = usageFacts([{ cursor: 1, t: 1, kind: "agent", event: { type: "turn_completed", was_interrupted: false, num_turns: 1, usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: 0 }, per_model: { m: { input_tokens: 5, output_tokens: 2, cost_usd: 0.1, estimated: false } } } }]);
-    expect(f.perModel?.m.input_tokens).toBe(5);
   });
 });

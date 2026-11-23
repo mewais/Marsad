@@ -133,24 +133,49 @@ describe("gate components", () => {
     expect(sent()[0]).toMatchObject({ method: "session.command", host: "x1", params: { id: s.id, command: { command: "answer_gate", request_id: "wasl-handoff-t4print", decision: { choice: "deny" } } } });
   });
 
-  it("shows a pending state while the request is in flight and a toast when the host is unreachable", async () => {
+  it("shows a pending state while the request is in flight and a toast when the host refuses it", async () => {
     const user = userEvent.setup();
     localStorage.clear();
     const backend = quietBackend({ latencyMs: 30 });
+    const app = createApp(backend);
+    const s = sessionByName(backend, "upgrade-tauri-2-5");
+    await waitFor(() => expect(app.store.get().sessions[s.key]).toBeDefined());
+    backend.raiseGate(s.host, s.id, { gate_type: "plan", request_id: "pl-x1", summary: "Print both sizes", choices: claudeChoices() });
+    await waitFor(() => expect(app.store.get().sessions[s.key].pending_gates.length).toBe(1));
+    const view = selectView(app.store.get(), s.key)!;
+    // The host answers the command with an error (it went away between the click and the answer).
+    const request = backend.request.bind(backend);
+    backend.request = (<T,>(method: string, params?: unknown, opts?: object) =>
+      method === "session.command" ? new Promise<T>((_, reject) => setTimeout(() => reject({ code: "upstream", message: "x1 dropped the connection" }), 30)) : request<T>(method, params, opts)) as typeof backend.request;
+    const { ToastRegion } = await import("../../src/ui");
+    render(<AppProvider value={app}><RouterProvider history={memoryHistory()}><Gate view={view} pg={view.gates[0]} density="full" active /><ToastRegion /></RouterProvider></AppProvider>);
+    void user;
+    const ok = app.actions.answerGate(view.key, "pl-x1", { choice: "allow" });
+    await waitFor(() => expect(Object.values(app.store.get().pending)).toContain("pending"));
+    expect(await ok).toBe(false);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/x1 dropped the connection/);
+    expect(Object.keys(app.store.get().pending)).toHaveLength(0);
+  });
+
+  it("a host that is not connected is not asked: the answer is refused at once with the reason, and the buttons say why", async () => {
+    localStorage.clear();
+    const backend = quietBackend();
     const app = createApp(backend);
     const s = sessionByName(backend, "windows-print-check");
     await waitFor(() => expect(app.store.get().sessions[s.key]).toBeDefined());
     backend.raiseGate(s.host, s.id, { gate_type: "plan", request_id: "pl-win", summary: "Print both sizes", choices: claudeChoices() });
     await waitFor(() => expect(app.store.get().sessions[s.key].pending_gates.length).toBe(1));
     const view = selectView(app.store.get(), s.key)!;
-    // Answer through the session's own host to hit the unreachable win host.
     const { ToastRegion } = await import("../../src/ui");
     render(<AppProvider value={app}><RouterProvider history={memoryHistory()}><Gate view={view} pg={view.gates[0]} density="full" active /><ToastRegion /></RouterProvider></AppProvider>);
-    void user;
-    const ok = app.actions.answerGate(view.key, "pl-win", { choice: "allow" });
-    await waitFor(() => expect(Object.values(app.store.get().pending)).toContain("pending"));
-    expect(await ok).toBe(false);
-    expect(await screen.findByRole("alert")).toHaveTextContent(/win-build is not connected/);
+    for (const b of within(screen.getByRole("group", { name: /choices/i })).getAllByRole("button")) {
+      expect(b).toBeDisabled();
+      expect(b).toHaveAttribute("title", expect.stringMatching(/win-build is not connected/));
+    }
+    const before = backend.requests.length;
+    expect(await app.actions.answerGate(view.key, "pl-win", { choice: "allow" })).toBe(false);
+    expect(await within(screen.getByLabelText("Notifications")).findByText(/win-build is not connected/)).toBeInTheDocument();
+    expect(backend.requests.length).toBe(before);
     expect(Object.keys(app.store.get().pending)).toHaveLength(0);
   });
 });

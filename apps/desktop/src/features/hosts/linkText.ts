@@ -1,9 +1,10 @@
-import type { FleetLink, HostEntry } from "../../bridge/wire";
-import { linkView } from "../../state";
+import type { HostEntry } from "../../bridge/wire";
+import { linkView, type HostLink } from "../../state";
 
 /** A line under the link state: what is going on, from the link's own fields. */
-export function linkSub(link: FleetLink, now = Date.now()): string {
-  if (link.link === "local") return "This machine";
+export function linkSub(link: HostLink, now = Date.now()): string {
+  if (link.link === "local") return link.hub && link.hub.state !== "connected" ? linkView(link, null, now).detail : "This machine";
+  if (link.stale) return linkView(link, null, now).detail;
   const l = link.state;
   switch (l.state) {
     case "connected":

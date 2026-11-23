@@ -64,7 +64,7 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
           <Icon name={isPlan ? "list" : isQuestion ? "needs" : "shield"} size="sm" className="c-needs" />
           <span className="gs"><Line g={gate} /></span>
           {src}
-          <ChoiceButtons choices={g.set.choices} busy={g.busy} onChoose={choose} />
+          <ChoiceButtons choices={g.set.choices} busy={g.busy} blocked={g.blocked} onChoose={choose} />
           <button type="button" className="iconbtn" aria-label="Review details" title="Review details" onClick={onActivate}>
             <Icon name="chevr" size="sm" />
           </button>
@@ -80,7 +80,7 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
             </div>
           </div>
           <div className="acts">
-            <ChoiceButtons choices={g.set.choices} busy={g.busy} onChoose={choose} keys={keys} />
+            <ChoiceButtons choices={g.set.choices} busy={g.busy} blocked={g.blocked} onChoose={choose} keys={keys} />
             <span className="sp" />
             {src}
             <Button size="sm" variant="ghost" onClick={() => setDetails((v) => !v)} aria-expanded={details}>
@@ -113,7 +113,7 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
             </div>
           ) : null}
           <div className="acts">
-            <ChoiceButtons choices={g.set.choices} busy={g.busy} onChoose={choose} keys={keys} />
+            <ChoiceButtons choices={g.set.choices} busy={g.busy} blocked={g.blocked} onChoose={choose} keys={keys} />
             <span className="sp" />
             {src}
           </div>

@@ -24,9 +24,9 @@ export const InboxRow = memo(function InboxRow({ sessionKey, selected, onSelect,
   const gate = needs ? v.gates[0] : undefined;
   const activate = () => (needs ? onSelect(v.key) : onOpen(v.key));
   return (
-    <div className={`ibx-item${selected ? " sel" : ""}`} role="listitem" data-session={v.key} data-status={v.status} aria-current={selected ? "true" : undefined}>
+    <div className={`ibx-item${selected ? " sel" : ""}`} role="listitem" data-session={v.key} data-status={v.status} data-stale={v.stale ? "" : undefined} aria-current={selected ? "true" : undefined}>
       <div className="ibx-row" onClick={activate} onDoubleClick={() => onOpen(v.key)}>
-        <div><StatusPill status={v.status} /></div>
+        <div><StatusPill status={v.status} stale={v.stale} />{v.stale ? <div className="lk">last known</div> : null}</div>
         <div className="sn">
           <div className="t">
             {v.unseen ? <NewDot /> : null}

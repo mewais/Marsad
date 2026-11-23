@@ -1,7 +1,7 @@
 import { memo, useMemo, useState, type ReactNode } from "react";
 import { Code, Tokens, useHighlighted } from "../highlight/Code";
 import { languageFromName } from "../highlight/lang";
-import { CopyButton, DriverBadge, Icon, StatusPill, type DriverDescriptor } from "../../ui";
+import { CopyButton, DriverBadge, ErrorBoundary, Icon, StatusPill, type DriverDescriptor } from "../../ui";
 import { Markdown } from "./Markdown";
 import { AttachmentsView, PartsView } from "../media/Parts";
 import { useMediaScope } from "../media/Parts";
@@ -189,7 +189,7 @@ function Delivery({ item }: { item: Extract<Item, { kind: "user" }> }) {
   );
 }
 
-export const TranscriptItem = memo(function TranscriptItem({ item, driver }: { item: RowItem; driver?: DriverDescriptor }) {
+const TranscriptItemView = memo(function TranscriptItemView({ item, driver }: { item: RowItem; driver?: DriverDescriptor }) {
   switch (item.kind) {
     case "user":
       return (
@@ -222,6 +222,22 @@ export const TranscriptItem = memo(function TranscriptItem({ item, driver }: { i
     case "toolrun":
       return <ToolRun item={item} />;
     case "notice":
-      return <div className={`fs12 ${item.tone === "err" ? "c-failed" : "faint"}`} role={item.tone === "err" ? "alert" : undefined}>{item.text}</div>;
+      return item.tone === "warn" ? (
+        <div className="fs12 c-needs" role="status"><Icon name="warn" size="xs" /> {item.text}</div>
+      ) : (
+        <div className={`fs12 ${item.tone === "err" ? "c-failed" : "faint"}`} role={item.tone === "err" ? "alert" : undefined}>{item.text}</div>
+      );
   }
+});
+
+/**
+ * One transcript row. A row that cannot be drawn says so in its place and offers to try again; the
+ * rest of the transcript is unaffected. It is drawn again by itself when its item changes.
+ */
+export const TranscriptItem = memo(function TranscriptItem({ item, driver }: { item: RowItem; driver?: DriverDescriptor }) {
+  return (
+    <ErrorBoundary variant="item" what="this entry" resetKey={item}>
+      <TranscriptItemView item={item} driver={driver} />
+    </ErrorBoundary>
+  );
 });

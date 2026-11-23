@@ -44,7 +44,7 @@ export function QuestionGate({ view, pg, density, active, expanded, onActivate }
   const focusOther = (qi: number) => setTimeout(() => otherRefs.current[qi]?.focus(), 0);
   const src = <SourceCaption source="agent" driver={view.driver} />;
   const send = (
-    <Button size="sm" variant="primary" icon="send" disabled={!q.complete} pending={q.busy} onClick={q.send} kbd={active ? "Enter" : undefined}>
+    <Button size="sm" variant="primary" icon="send" disabled={!q.complete} blocked={q.blocked} pending={q.busy} onClick={q.send} kbd={active ? "Enter" : undefined}>
       {density === "full" ? "Send answer" : "Send"}
     </Button>
   );

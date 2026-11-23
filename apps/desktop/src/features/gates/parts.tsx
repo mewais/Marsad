@@ -46,16 +46,18 @@ export function SourceCaption({ source, driver }: { source: "agent" | "neutral" 
 export interface ChoiceButtonsProps {
   choices: GateChoice[];
   busy: boolean;
+  /** Why the choices cannot be sent now (last-known data, no link): the buttons are off and say why. */
+  blocked?: string | null;
   onChoose: (c: GateChoice) => void;
   keys?: boolean;
   size?: "sm" | "md";
 }
 
-export function ChoiceButtons({ choices, busy, onChoose, keys, size = "sm" }: ChoiceButtonsProps) {
+export function ChoiceButtons({ choices, busy, blocked, onChoose, keys, size = "sm" }: ChoiceButtonsProps) {
   return (
     <div className="choices" role="group" aria-label="Answer choices" aria-busy={busy || undefined}>
       {choices.map((c, i) => (
-        <Button key={c.id} size={size} variant={c.kind} disabled={busy} icon={i === 0 ? "check" : undefined} onClick={() => onChoose(c)} className={size === "md" ? "lg" : undefined} title={c.description || undefined} data-choice={c.id}>
+        <Button key={c.id} size={size} variant={c.kind} disabled={busy} blocked={blocked} icon={i === 0 ? "check" : undefined} onClick={() => onChoose(c)} className={size === "md" ? "lg" : undefined} title={c.description || undefined} data-choice={c.id}>
           <Label parts={c.label} />
           {c.text === "required" && size === "sm" ? "…" : null}
           {keys ? <Kbd>{String(i + 1)}</Kbd> : null}

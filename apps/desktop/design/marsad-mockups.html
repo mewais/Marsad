@@ -410,7 +410,6 @@ h1,h2,h3{margin:0;text-wrap:balance}
 .term .p{color:var(--accent)} .term .ok{color:var(--done)} .term .er{color:var(--failed)} .term .w{color:var(--needs)}
 .cfgcols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;padding:16px 20px;overflow:auto;align-content:start}
 .cfgcols .card{padding:14px 16px;display:flex;flex-direction:column;gap:12px}
-.usage{padding:16px 20px;overflow:auto;display:flex;flex-direction:column;gap:16px}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
 .tile{padding:12px 14px;display:flex;flex-direction:column;gap:2px}
 .tile .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
@@ -1076,7 +1075,7 @@ function composer(withSlash){
 /* ================= SCREEN: SESSION ================= */
 function sessionHead(){
   const s=by('s7');
-  const tabs=[['activity','Activity'],['changes','Changes','7'],['config','Config'],['usage','Usage'],['terminal','Terminal']];
+  const tabs=[['activity','Activity'],['changes','Changes','7'],['config','Config'],['terminal','Terminal']];
   return `<div class="sd-head">
    <div class="crumbs"><a data-go="home">${I('i-inbox','xs')} Inbox</a>${I('i-chevr','xs')}<span>ledgerline</span>${I('i-chevr','xs')}<span style="color:var(--fg)">${s.name}</span></div>
    <div class="sd-title"><h1 class="h1">${s.name}</h1>${stPill('needs','Waiting for you · 1 permission, 1 question')}<span style="flex:1"></span>
@@ -1135,7 +1134,8 @@ apps/api/src/routes/invoices.ts:31     const org = req.session.orgId
    <div><h4>Plan · 3 of 6</h4><div class="todo">
      <div class="dn">${I('i-done','sm c-done')}Map session reads</div><div class="dn">${I('i-done','sm c-done')}Add legacySessionCompat shim</div><div class="dn">${I('i-done','sm c-done')}Wire authMiddleware in server.ts</div>
      <div>${I('i-needs','sm c-needs')}Migration for session_tokens</div><div class="muted">${I('i-idle','sm')}Fix cookie-compat tests</div><div class="muted">${I('i-idle','sm')}Remove express-session dependency</div></div></div>
-   <div><h4>Session</h4><dl class="kvl"><dt>Model</dt><dd class="mono">claude-sonnet-4.5</dd><dt>Mode</dt><dd>Default</dd><dt>Tokens in / out</dt><dd>412k / 38k</dd><dt>Cache hits</dt><dd>71%</dd><dt>Started</dt><dd>14:30</dd><dt>Config</dt><dd><a class="c-accent" data-go="config" style="cursor:pointer">Claude Code + 2 overrides</a></dd></dl></div>
+   <div><h4>Session</h4><dl class="kvl"><dt>Model</dt><dd class="mono">claude-sonnet-4.5</dd><dt>Mode</dt><dd>Default</dd><dt>Cost so far</dt><dd>$2.41 <span class="faint">· 3 turns</span></dd><dt>Context window</dt><dd><span class="kv ctx"><span class="bar"><i style="width:38%"></i></span><span>38%</span></span></dd><dt>Tokens in / out</dt><dd>412k / 38k</dd><dt>Cache hits</dt><dd>71%</dd><dt>Written to cache</dt><dd>9k</dd><dt>Started</dt><dd>14:30</dd><dt>Config</dt><dd><a class="c-accent" data-go="config" style="cursor:pointer">Claude Code + 2 overrides</a></dd></dl></div>
+   <div><h4>Cost by model</h4><dl class="kvl"><dt class="mono">claude-sonnet-4.5</dt><dd>$2.07</dd><dt class="mono">claude-haiku-4.5</dt><dd>$0.34</dd></dl></div>
   </aside></div>`;
 }
 function changesTab(){
@@ -1191,21 +1191,6 @@ function configTab(){
     <button class="btn sm ghost" style="align-self:flex-start">Revoke all for this session</button></div>
   </div>`;
 }
-function usageTab(){
-  const pts=[3,6,9,14,12,18,22,26,24,31,36,41];
-  const W=560,H=120,max=45;
-  const bars=pts.map((v,i)=>{const bw=W/pts.length-8;const x=i*(W/pts.length)+4;const h=v/max*H;return `<rect x="${x}" y="${H-h}" width="${bw}" height="${h}" rx="2" fill="var(--accent)" opacity="${i===pts.length-1?1:.55}"/>`}).join('');
-  const ticks=[0,15,30,45].map(t=>`<line x1="0" x2="${W}" y1="${H-t/max*H}" y2="${H-t/max*H}" stroke="var(--line)"/><text x="${W+6}" y="${H-t/max*H+4}" font-size="10" fill="var(--fg-3)" font-family="var(--f-mono)">${t}k</text>`).join('');
-  return `<div class="usage"><div class="tiles">
-   <div class="card tile"><span class="k">Cost so far</span><span class="v">$2.41</span><span class="k">cap $5.00</span></div>
-   <div class="card tile"><span class="k">Input tokens</span><span class="v">412k</span><span class="k">71% from cache</span></div>
-   <div class="card tile"><span class="k">Output tokens</span><span class="v">38.2k</span><span class="k">incl. 9.1k thinking</span></div>
-   <div class="card tile"><span class="k">Context window</span><span class="v">38%</span><span class="k">76k of 200k</span></div></div>
-   <div class="card" style="padding:14px 16px"><div class="h3" style="margin-bottom:10px">Tokens per 6-minute window <span class="faint" style="font-weight:400">· 14:30 to now</span></div>
-    <svg viewBox="0 0 600 140" width="100%" style="max-width:720px;display:block" role="img" aria-label="Tokens per window rising from 3k to 41k">${ticks}${bars}<text x="0" y="136" font-size="10" fill="var(--fg-3)">14:30</text><text x="${W-30}" y="136" font-size="10" fill="var(--fg-3)">15:42</text></svg></div>
-   <div class="card"><table class="t"><thead><tr><th>Tool</th><th class="r">Calls</th><th class="r">Tokens</th><th class="r">Share</th></tr></thead><tbody>
-    <tr><td>Read</td><td class="r">31</td><td class="r">182k</td><td class="r">41%</td></tr><tr><td>Bash</td><td class="r">12</td><td class="r">96k</td><td class="r">21%</td></tr><tr><td>Edit</td><td class="r">9</td><td class="r">61k</td><td class="r">14%</td></tr><tr><td>Subagent (Explore)</td><td class="r">1</td><td class="r">74k</td><td class="r">17%</td></tr><tr><td>Grep / Glob</td><td class="r">8</td><td class="r">33k</td><td class="r">7%</td></tr></tbody></table></div></div>`;
-}
 function terminalTab(){
   return `<div class="term"><span class="p">dev@thinkpad-x1</span>:<span class="c-accent">~/src/ledgerline</span>$ pnpm --filter api test auth
 
@@ -1228,7 +1213,7 @@ function terminalTab(){
 }
 function sessionScreen(){
   const t=state.tab;
-  const body=t==='activity'?activityTab():t==='changes'?changesTab():t==='config'?configTab():t==='usage'?usageTab():terminalTab();
+  const body=t==='activity'?activityTab():t==='changes'?changesTab():t==='config'?configTab():terminalTab();
   return sessionHead()+`<div style="flex:1;min-height:0;display:flex;flex-direction:column">${body}</div>`;
 }
 

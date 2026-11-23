@@ -1,4 +1,15 @@
 import type { AuthPrompt, FleetLink, HostEntry, HostId, LinkState } from "../bridge/wire";
+import type { HubLink } from "./model";
+
+/**
+ * A host's link as the UI uses it. A remote host's is the hub's report. The local host is reached
+ * through the app's own link to the local daemon, so its link is that one: `hub` is it (absent
+ * where only the fleet is known, which reads as connected).
+ */
+export type HostLink =
+  | { link: "local"; hub?: HubLink }
+  /** `stale`: the hub's report is the last one received, not live (the app lost its link to the hub). */
+  | { link: "remote"; state: LinkState; stale?: boolean };
 
 /** One host as the fleet reports it (UI state, built from `FleetEvent`s). */
 export interface HostState {
@@ -11,7 +22,7 @@ export interface HostState {
 export type LinkTone = "ok" | "warn" | "bad" | "info";
 /** A link state reduced to what the UI shows: a key for styling/tests, a tone and words. */
 export interface LinkView {
-  key: "local" | LinkState["state"] | "signing_in";
+  key: "local" | LinkState["state"] | "signing_in" | "stale";
   tone: LinkTone;
   /** Short words ("Reconnecting"). */
   word: string;
@@ -39,9 +50,29 @@ const PROBLEM: Record<string, string> = {
   other: "Cannot connect",
 };
 
-export function linkView(link: FleetLink, prompt: AuthPrompt | null = null, now = Date.now()): LinkView {
-  if (link.link === "local") return { key: "local", tone: "ok", word: "Connected", detail: "Connected · this machine", connected: true };
-  const l = link.state;
+/** The app's link to its local daemon, in words (the local host's link). */
+export function hubView(hub: HubLink | undefined): LinkView {
+  switch (hub?.state) {
+    case undefined:
+    case "connected":
+      return { key: "local", tone: "ok", word: "Connected", detail: "Connected · this machine", connected: true };
+    case "connecting":
+      return { key: "connecting", tone: "info", word: "Connecting", detail: "Connecting to the local service, starting it if it is not running…", connected: false };
+    case "reconnecting":
+      return { key: "reconnecting", tone: "warn", word: "Reconnecting", detail: hub.error ? `Reconnecting to the local service: ${hub.error}` : "Reconnecting to the local service…", connected: false };
+    case "offline":
+      return { key: "failed", tone: "bad", word: "Not connected", detail: hub.error ? `Cannot reach the local service: ${hub.error}` : "Cannot reach the local service", connected: false };
+  }
+}
+
+export function linkView(link: HostLink, prompt: AuthPrompt | null = null, now = Date.now()): LinkView {
+  if (link.link === "local") return hubView(link.hub);
+  const v = remoteView(link.state, prompt, now);
+  // Last known is not a connection: it cannot be acted on, and it says so instead of "Connected".
+  return link.stale ? { key: "stale", tone: "warn", word: `${v.word} (last known)`, detail: `Last known: ${v.word.toLowerCase()}`, connected: false } : v;
+}
+
+function remoteView(l: LinkState, prompt: AuthPrompt | null, now: number): LinkView {
   if (prompt) return { key: "signing_in", tone: "warn", word: "Waiting for sign-in", detail: "Waiting for you to sign in", connected: false };
   switch (l.state) {
     case "connected":
@@ -79,31 +110,34 @@ export interface HostView {
   kind: HostEntry["kind"];
   os?: string;
   where: string;
-  link: FleetLink;
+  link: HostLink;
   authPrompt: AuthPrompt | null;
   interactiveAuth: boolean;
 }
 
-const cache = new WeakMap<HostState, HostView>();
-export function hostView(h: HostState): HostView {
-  let v = cache.get(h);
-  if (!v) {
-    const k = h.entry.kind;
-    v = {
-      id: h.entry.id,
-      name: h.entry.name,
-      local: k.kind === "local",
-      localFiles: h.entry.local_files,
-      distro: k.kind === "wsl" ? k.distro : null,
-      kind: k,
-      os: h.entry.platform?.os,
-      where: k.kind === "local" ? "Local" : k.kind === "ssh" ? `${k.target}${k.port ? `:${k.port}` : ""}` : `WSL · ${k.distro}`,
-      link: h.link,
-      authPrompt: h.authPrompt,
-      interactiveAuth: h.entry.interactive_auth,
-    };
-    cache.set(h, v);
-  }
+const cache = new WeakMap<HostState, { hub: HubLink; live: boolean; view: HostView }>();
+/**
+ * UI view of a host, stable while neither the host nor what its link depends on changes: for the
+ * local host the app's link to the daemon, for a remote one whether the fleet is live (`live`).
+ */
+export function hostView(h: HostState, hub: HubLink, live: boolean): HostView {
+  const hit = cache.get(h);
+  if (hit && hit.live === live && (h.link.link !== "local" || hit.hub === hub)) return hit.view;
+  const k = h.entry.kind;
+  const v: HostView = {
+    id: h.entry.id,
+    name: h.entry.name,
+    local: k.kind === "local",
+    localFiles: h.entry.local_files,
+    distro: k.kind === "wsl" ? k.distro : null,
+    kind: k,
+    os: h.entry.platform?.os,
+    where: k.kind === "local" ? "Local" : k.kind === "ssh" ? `${k.target}${k.port ? `:${k.port}` : ""}` : `WSL · ${k.distro}`,
+    link: h.link.link === "local" ? { link: "local", hub } : { link: "remote", state: h.link.state, ...(live ? {} : { stale: true }) },
+    authPrompt: h.authPrompt,
+    interactiveAuth: h.entry.interactive_auth,
+  };
+  cache.set(h, { hub, live, view: v });
   return v;
 }
 

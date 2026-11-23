@@ -21,3 +21,4 @@ export * from "./Choice";
 export * from "./Misc";
 export * from "./VirtualList";
 export * from "./Wrap";
+export * from "./ErrorBoundary";

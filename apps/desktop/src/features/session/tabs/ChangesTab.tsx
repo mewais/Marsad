@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { errorMessage } from "../../../bridge/api";
 import type { GitDiff, GitFileChange, GitStatus } from "../../../bridge/wire";
 import { splitKey } from "../../../bridge/wire";
-import { useActions, useApi, useAppState } from "../../../state";
+import { useActions, useApi, useAppState, useReach } from "../../../state";
 import { Button, ConfirmDialog, EmptyState, Icon, Segmented, Skeleton, toast } from "../../../ui";
 import { DiffView } from "./DiffView";
 
@@ -60,6 +60,7 @@ export function ChangesTab({ sessionKey }: { sessionKey: string }) {
     };
   }, [api, host, id, file]);
 
+  const reach = useReach(host);
   const files = useMemo(() => status?.files ?? [], [status]);
   const chosen = files.filter((f) => picked.has(f.path)).map((f) => f.path);
   const toggle = (p: string) => setPicked((s) => {
@@ -96,7 +97,7 @@ export function ChangesTab({ sessionKey }: { sessionKey: string }) {
           <span className="h3">{files.length} files changed</span>
           <span className="mono"><span className="add">+{tot[0]}</span> <span className="del">−{tot[1]}</span></span>
           <span className="sp" />
-          <Button size="sm" variant="ghost" disabled={!chosen.length} onClick={() => setConfirm(true)}>Discard…</Button>
+          <Button size="sm" variant="ghost" blocked={reach} disabled={!chosen.length} onClick={() => setConfirm(true)}>Discard…</Button>
         </div>
         <div className="scroll" role="listbox" aria-label="Changed files" aria-multiselectable="false">
           {files.map((f) => (
@@ -124,7 +125,7 @@ export function ChangesTab({ sessionKey }: { sessionKey: string }) {
           <label className="eyebrow" htmlFor="commit-msg">Commit to {status.branch ?? "detached HEAD"}</label>
           <textarea id="commit-msg" className="ta" value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Describe the change" rows={3} />
           <div className="row-gap">
-            <Button variant="primary" size="sm" icon="commit" disabled={!msg.trim() || !chosen.length} pending={!!pending[`commit:${sessionKey}`]} onClick={() => void commit()}>
+            <Button variant="primary" size="sm" icon="commit" blocked={reach} disabled={!msg.trim() || !chosen.length} pending={!!pending[`commit:${sessionKey}`]} onClick={() => void commit()}>
               Commit {chosen.length} file{chosen.length === 1 ? "" : "s"}
             </Button>
             <Button size="sm" variant="ghost" icon="refresh" onClick={load}>Refresh</Button>

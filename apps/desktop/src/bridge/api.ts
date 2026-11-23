@@ -1,4 +1,4 @@
-import type { Backend, RequestOptions, Unsubscribe } from "./backend";
+import type { Backend, HubLinkInfo, RequestOptions, SubscriptionEnd, Unsubscribe } from "./backend";
 import type { SurfaceSupport } from "../lib/surface";
 import type * as W from "./wire";
 import { methods as M, topics as T } from "./wire";
@@ -93,6 +93,8 @@ export function call<K extends Method>(b: Backend, method: K, params: MethodMap[
   return b.request<MethodMap[K][1]>(method, params, opts);
 }
 
+type End = (end: SubscriptionEnd) => void;
+
 /** Typed wrappers: components never write method or topic strings. */
 export function createApi(b: Backend) {
   const on = (host?: W.HostId): RequestOptions | undefined => (host ? { host } : undefined);
@@ -110,6 +112,7 @@ export function createApi(b: Backend) {
     renameSession: (host: W.HostId, id: W.SessionId, display_name: string | null) => call(b, M.SESSIONS_RENAME, { id, display_name }, { host }),
     refreshGit: (host: W.HostId, cwd: string) => call(b, M.FLEET_GIT_REFRESH, { host, cwd }),
     launch: (r: W.LaunchRequest) => call(b, M.SESSIONS_LAUNCH, r),
+    appVersion: () => b.appVersion(),
     daemonInfo: (host?: W.HostId) => call(b, M.DAEMON_INFO, undefined, on(host)),
     media: {
       put: (host: W.HostId, r: W.AttachmentPut) => call(b, M.SESSION_ATTACHMENT_PUT, r, { host }),
@@ -207,12 +210,18 @@ export function createApi(b: Backend) {
       deleteTemplate: (id: string) => call(b, M.WS_TEMPLATES_DELETE, { id }),
       history: (r: W.EdgeHistoryRequest) => call(b, M.WS_HISTORY, r),
     },
+    /** The app's own link to its local daemon (desktop shell). */
+    hub: {
+      watch: (cb: (l: HubLinkInfo) => void): Unsubscribe => b.watchHubLink(cb),
+      reconnect: () => b.reconnectHub(),
+    },
+    /** Every subscription takes `onEnd`: called once if it ends for good (see `Backend.subscribe`). */
     subscribe: {
-      fleet: (cb: (e: W.FleetEvent) => void, from?: string): Unsubscribe => b.subscribe(T.FLEET, { from }, (e) => cb(e as W.FleetEvent)),
-      workstreams: (cb: (e: W.WorkstreamsEvent) => void, from?: string): Unsubscribe => b.subscribe(T.WORKSTREAMS, { from }, (e) => cb(e as W.WorkstreamsEvent)),
-      inventory: (host: W.HostId, cb: (e: W.InventoryReply) => void): Unsubscribe => b.subscribe(T.DRIVERS_INVENTORY, { host }, (e) => cb(e as W.InventoryReply)),
-      sessionEvents: (host: W.HostId, id: W.SessionId, from: number, cb: (e: W.SessionEvent) => void): Unsubscribe =>
-        b.subscribe(T.sessionEvents(id), { host, from }, (e) => cb(e as W.SessionEvent)),
+      fleet: (cb: (e: W.FleetEvent) => void, onEnd?: End, from?: string): Unsubscribe => b.subscribe(T.FLEET, { from }, (e) => cb(e as W.FleetEvent), onEnd),
+      workstreams: (cb: (e: W.WorkstreamsEvent) => void, onEnd?: End, from?: string): Unsubscribe => b.subscribe(T.WORKSTREAMS, { from }, (e) => cb(e as W.WorkstreamsEvent), onEnd),
+      inventory: (host: W.HostId, cb: (e: W.InventoryReply) => void, onEnd?: End): Unsubscribe => b.subscribe(T.DRIVERS_INVENTORY, { host }, (e) => cb(e as W.InventoryReply), onEnd),
+      sessionEvents: (host: W.HostId, id: W.SessionId, from: number, cb: (e: W.SessionEvent) => void, onEnd?: End): Unsubscribe =>
+        b.subscribe(T.sessionEvents(id), { host, from }, (e) => cb(e as W.SessionEvent), onEnd),
     },
     on,
   };

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { GateRequest, PendingGate, QuestionAnswer, QuestionPrompt } from "../../bridge/wire";
-import { gatePendingKey, useActions, useApp, usePending, type SessionView } from "../../state";
+import { gatePendingKey, useActions, useApp, usePending, useSessionReach, type SessionView } from "../../state";
 import { toast } from "../../ui/toast";
 import { gateChoices, type GateChoice } from "./choices";
 
@@ -48,7 +48,8 @@ export function useGoneNotice(view: SessionView, pg: PendingGate, open: boolean)
 export function useGateCommon(view: SessionView, pg: PendingGate) {
   const actions = useActions();
   const pending = usePending(gatePendingKey(view.key, pg.gate.request_id));
-  return { actions, pending, busy: !!pending };
+  const blocked = useSessionReach(view);
+  return { actions, pending, busy: !!pending, blocked };
 }
 
 /** Permission / plan / handoff / spawn gates: the gate's own choices, with the text flow for choices that take text. */
@@ -58,7 +59,7 @@ export function usePermissionGate(view: SessionView, pg: PendingGate & { gate: E
   const [reason, setReason] = useState("");
   const [armed, setArmed] = useState(false);
   const choose = (choice: GateChoice, focusReason?: () => void) => {
-    if (c.busy) return;
+    if (c.busy || c.blocked) return;
     if (choice.text === "required" && !reason.trim()) {
       setArmed(true);
       focusReason?.();
@@ -100,7 +101,7 @@ export function useQuestionGate(view: SessionView, pg: PendingGate & { gate: Ext
   };
   const complete = qs.every((_, i) => answerFor(i).length > 0);
   const send = () => {
-    if (!complete || c.busy) return;
+    if (!complete || c.busy || c.blocked) return;
     const answer: QuestionAnswer = { answers: Object.fromEntries(qs.map((q: QuestionPrompt, i) => [q.id, answerFor(i)])) };
     void c.actions.answerQuestion(view.key, pg.gate.request_id, answer);
   };

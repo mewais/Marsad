@@ -2,7 +2,7 @@ import { memo, useEffect, useState } from "react";
 import { useNavigate } from "../../router";
 import { PageHeader } from "../../shell/PageHeader";
 import { useShortcut } from "../../shortcuts/useShortcut";
-import { linkView, osWord, useActions, useApi, useAppState, useHost, useHosts } from "../../state";
+import { linkView, osWord, useActions, useApi, useAppState, useHost, useHosts, useReach } from "../../state";
 import { Button, ConnState, EmptyState, Icon, Skeleton, hostIcon, useNow } from "../../ui";
 import { AddHostDialog } from "./AddHostDialog";
 import { HostDetail } from "./HostDetail";
@@ -51,6 +51,7 @@ export function HostsPage({ q }: { q: Record<string, string> }) {
   const selected = hosts.find((h) => h.id === sel);
   useEffect(() => setAdding(q.add === "1"), [q.add]);
   useShortcut({ id: "hosts-add", keys: ["a"], title: "Add host", group: "Hosts", run: () => setAdding(true) });
+  const reach = useReach();
   const up = hosts.filter((h) => linkView(h.link, h.authPrompt).connected).length;
   const checkAll = () => {
     for (const h of hosts) {
@@ -61,8 +62,8 @@ export function HostsPage({ q }: { q: Record<string, string> }) {
   };
   return (
     <>
-      <PageHeader title="Hosts" summary={<span className="muted">{hosts.length} machine{hosts.length === 1 ? "" : "s"} · {up} connected</span>}
-        actions={<><Button size="sm" icon="refresh" onClick={checkAll}>Check all</Button><Button size="sm" variant="primary" icon="plus" kbd="A" onClick={() => setAdding(true)}>Add host</Button></>} />
+      <PageHeader title="Hosts" summary={<span className="muted">{ready ? `${hosts.length} machine${hosts.length === 1 ? "" : "s"} · ${up} connected` : "Waiting for the first report from the local service…"}</span>}
+        actions={<><Button size="sm" icon="refresh" blocked={reach} onClick={checkAll}>Check all</Button><Button size="sm" variant="primary" icon="plus" kbd="A" onClick={() => setAdding(true)}>Add host</Button></>} />
       <div className="hs">
         <div className="hlist" role="listbox" aria-label="Hosts">
           {!ready ? <><Skeleton height={52} /><Skeleton height={52} /></> : hosts.length === 0 ? <EmptyState icon="server" title="No hosts yet" action={<Button size="sm" variant="primary" onClick={() => setAdding(true)}>Add host</Button>}>Add a machine over SSH or WSL.</EmptyState> : null}

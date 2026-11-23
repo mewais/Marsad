@@ -14,7 +14,7 @@ import { hashHistory, RouterProvider, sessionPath, useNavigate, useRoute, type H
 import { AppShell } from "./shell/AppShell";
 import { installShortcuts } from "./shortcuts/registry";
 import { AppProvider, createApp } from "./state";
-import { IconSprite } from "./ui";
+import { ErrorBoundary, IconSprite } from "./ui";
 
 /** The desktop shell's `navigate` event (a notification brought the app forward). */
 function ShellNavigate({ backend }: { backend: Backend }) {
@@ -23,7 +23,18 @@ function ShellNavigate({ backend }: { backend: Backend }) {
   return null;
 }
 
+/** The routed page, inside its own boundary: a page that fails to draw is replaced by what failed, the shell around it stays. */
 function Routes() {
+  const r = useRoute();
+  const nav = useNavigate();
+  return (
+    <ErrorBoundary variant="page" what="this page" resetKey={JSON.stringify(r)} secondary={r.name === "inbox" ? undefined : { label: "Back to the Inbox", run: () => nav("/inbox") }}>
+      <Page />
+    </ErrorBoundary>
+  );
+}
+
+function Page() {
   const r = useRoute();
   switch (r.name) {
     case "inbox":
@@ -55,14 +66,17 @@ export function App({ backend, history }: { backend?: Backend; history?: History
     (window as unknown as { __marsad?: unknown }).__marsad = { state: () => app.store.get() };
   }, [app]);
   return (
-    <AppProvider value={app}>
-      <RouterProvider history={hist}>
-        <IconSprite />
-        <ShellNavigate backend={app.backend} />
-        <AppShell>
-          <Routes />
-        </AppShell>
-      </RouterProvider>
-    </AppProvider>
+    // The last resort: whatever fails outside a page or a list row (the shell itself) must not leave a blank window.
+    <ErrorBoundary variant="app" what="the window">
+      <AppProvider value={app}>
+        <RouterProvider history={hist}>
+          <IconSprite />
+          <ShellNavigate backend={app.backend} />
+          <AppShell>
+            <Routes />
+          </AppShell>
+        </RouterProvider>
+      </AppProvider>
+    </ErrorBoundary>
   );
 }

@@ -1,3 +1,4 @@
+import type { HubLinkInfo } from "../bridge/backend";
 import type { DriverDescriptor } from "../ui/DriverBadge";
 import type { DriverInventory, GitSummary, HostId, NotificationPrefs, SeenMark, SessionEvent, SessionKey, SessionSnapshot, WorkstreamView } from "../bridge/wire";
 import { createStore } from "../lib/store";
@@ -14,10 +15,27 @@ export interface TranscriptSlice {
 
 export type PendingState = "pending" | "sent";
 
+/** The app's own link to its local daemon (what the shell reports). */
+export type HubLink = HubLinkInfo;
+
+/** A document the hub holds, as loaded here: never shown as its default until it has arrived. */
+export type Load = { state: "loading" } | { state: "ready" } | { state: "error"; error: string };
+export type LoadKey = "settings" | "notifications" | "seen";
+export const LOADING: Load = { state: "loading" };
+export const READY: Load = { state: "ready" };
+
 export interface AppState {
   /** The first `fleet` reset has arrived. */
   fleetReady: boolean;
-  fleetError?: string;
+  /** The link between this app and its local daemon. Everything below is only as live as this. */
+  hub: HubLink;
+  /**
+   * Subscriptions that ended for good (the daemon refused the topic, or it closed), by name
+   * (`fleet`, `workstreams`, `inventory:<host>`, `events:<session>`), with the reason.
+   */
+  feedErrors: Record<string, string>;
+  /** Where the stored documents below are: loading, loaded, or failed with the reason. */
+  loads: Record<LoadKey, Load>;
   hostOrder: HostId[];
   hosts: Record<HostId, HostState>;
   /** `drivers.inventory` per host (subscribed while the host is connected). */
@@ -29,7 +47,7 @@ export interface AppState {
   transcripts: Record<SessionKey, TranscriptSlice>;
   /** `store.seen.*` markers. */
   seen: Record<SessionKey, SeenMark>;
-  /** Latest time the human marked something seen (for "finished since you looked at"). */
+  /** Valid once `loads.seen` is ready. Latest time the human marked something seen (for "finished since you looked at"). */
   lookedAt: number;
   /** In-flight and just-sent actions, keyed by `kind:...`. */
   pending: Record<string, PendingState>;
@@ -39,13 +57,18 @@ export interface AppState {
   workstreams: Record<string, WorkstreamView>;
   wsOrder: string[];
   workstreamsLoaded: boolean;
+  /** Valid once `loads.notifications` is ready. */
   notifications: NotificationPrefs | null;
+  /** Valid once `loads.settings` is ready; written only from the daemon's replies. */
   settings: Record<string, unknown>;
 }
 
 export function initialState(partial: Partial<AppState> = {}): AppState {
   return {
     fleetReady: false,
+    hub: { state: "connecting" },
+    feedErrors: {},
+    loads: { settings: LOADING, notifications: LOADING, seen: LOADING },
     hostOrder: [],
     hosts: {},
     inventory: {},

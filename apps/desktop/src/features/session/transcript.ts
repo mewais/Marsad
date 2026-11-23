@@ -1,4 +1,5 @@
-import type { Attachment, Command, CommandStatus, ContentPart, InputDropReason, InputId, SessionEvent } from "../../bridge/wire";
+import type { Attachment, Command, CommandStatus, CompactionInfo, ContentPart, InputDropReason, InputId, RateLimitInfo, SessionEvent } from "../../bridge/wire";
+import { clockTime, compactNumber } from "../../lib/format";
 
 /** Why a message the user wrote did not reach the agent. */
 export type NotSentCause = InputDropReason | Exclude<CommandStatus["status"], "sent" | "queued"> | "write_failed";
@@ -12,7 +13,8 @@ export type Delivery = { state: "sent" } | { state: "queued" } | { state: "not_s
 export type UserItem = { kind: "user"; key: string; input?: InputId; text: string; delivery: Delivery; attachments: Attachment[] };
 export type ThinkingItem = { kind: "thinking"; key: string; text: string };
 export type ToolItem = { kind: "tool"; key: string; callId: string; name: string; input: unknown; subagent: boolean; done: boolean; ok?: boolean; result?: unknown; status?: string; parts: ContentPart[] };
-export type NoticeItem = { kind: "notice"; key: string; text: string; tone: "info" | "err" };
+/** `warn`: the agent or its provider says something to watch (a rate limit), not a failure. */
+export type NoticeItem = { kind: "notice"; key: string; text: string; tone: "info" | "warn" | "err" };
 
 /**
  * One folded transcript entry. Items are immutable: a change replaces the item with a new object,
@@ -201,6 +203,12 @@ function apply(st: State, e: SessionEvent) {
     case "notice":
       notice(st, key, a.message, "info");
       return;
+    case "compaction":
+      notice(st, key, compactionWords(a.info, e.t), "info");
+      return;
+    case "rate_limit_notice":
+      notice(st, key, rateLimitWords(a.info), "warn");
+      return;
     case "command_rejected":
       notice(st, key, `${a.command} was rejected: ${a.message}`, "err");
       return;
@@ -208,6 +216,16 @@ function apply(st: State, e: SessionEvent) {
       // Includes input_acknowledged (a developer detail) and every event kind this build does not know.
       return;
   }
+}
+
+/** The agent compacted its context: how much it dropped, and when. */
+export function compactionWords(c: CompactionInfo, at: number): string {
+  return `History compacted at ${clockTime(at)} (${c.trigger}): ${compactNumber(c.pre_tokens)} → ${compactNumber(c.post_tokens)} tokens in ${(c.duration_ms / 1000).toFixed(1)}s · ${compactNumber(c.cumulative_dropped_tokens)} dropped so far`;
+}
+
+/** The provider's rate-limit status, and when it resets. */
+export function rateLimitWords(r: RateLimitInfo): string {
+  return `Rate limit: ${r.status} (${r.rate_limit_type}) · resets ${clockTime(r.resets_at * 1000)}${r.is_using_overage ? " · using overage" : ""}`;
 }
 
 /** Why a command was dropped, as a clause after "not sent" ("interrupted", "the session ended" ...). */

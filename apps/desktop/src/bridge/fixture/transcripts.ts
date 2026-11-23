@@ -1,4 +1,4 @@
-import type { AgentEvent, Attachment, Command, ContentPart, JsonValue, PendingGate, PlanEntry, SessionEvent } from "../wire";
+import type { AgentEvent, Attachment, Command, ContentPart, JsonValue, ModelUsage, PendingGate, PlanEntry, SessionEvent, Usage } from "../wire";
 import { BLOB_CHART, chartPng, MEDIA_SPEC, SKETCH_ATTACHMENT } from "./media";
 
 /** A session event without its cursor and time (distributes over the kinds). */
@@ -30,6 +30,14 @@ class Builder {
     this.agent({ type: "tool_call_started", name, call_id, input, is_subagent: false }, dt);
     this.agent({ type: "tool_call_finished", call_id, name, ok, result, parts }, 900);
   }
+}
+
+/** A session's usage split per model, as an agent that reports one does (the fixture's claude). */
+export function modelSplit(driver: string, usage: Usage, cost: number): Record<string, ModelUsage> | undefined {
+  return driver === "claude" ? {
+    "claude-sonnet-4.5": { input_tokens: Math.round(usage.input_tokens * 0.8), output_tokens: Math.round(usage.output_tokens * 0.85), cost_usd: +(cost * 0.86).toFixed(2), estimated: false },
+    "claude-haiku-4.5": { input_tokens: Math.round(usage.input_tokens * 0.2), output_tokens: Math.round(usage.output_tokens * 0.15), cost_usd: +(cost * 0.14).toFixed(2), estimated: false },
+  } : undefined;
 }
 
 export function buildTranscript(spec: Spec, sessionId: string, now: number): { events: SessionEvent[]; pending: PendingGate[]; plan: PlanEntry[] } {
@@ -73,10 +81,7 @@ function genericTranscript(b: Builder, spec: Spec, rounds: number) {
   } else if (spec.kind === "done" || spec.kind === "idle") {
     b.agent({ type: "assistant_delta", text: spec.line, message_id: "mdone" }, 3000);
     const usage = { input_tokens: Math.round(spec.cost * 170_000), output_tokens: Math.round(spec.cost * 15_000), cache_read_tokens: Math.round(spec.cost * 120_000), cache_creation_tokens: Math.round(spec.cost * 9_000), cost_usd: spec.cost };
-    const per_model = spec.driver === "claude" ? {
-      "claude-sonnet-4.5": { input_tokens: Math.round(usage.input_tokens * 0.8), output_tokens: Math.round(usage.output_tokens * 0.85), cost_usd: +(spec.cost * 0.86).toFixed(2), estimated: false },
-      "claude-haiku-4.5": { input_tokens: Math.round(usage.input_tokens * 0.2), output_tokens: Math.round(usage.output_tokens * 0.15), cost_usd: +(spec.cost * 0.14).toFixed(2), estimated: false },
-    } : undefined;
+    const per_model = modelSplit(spec.driver, usage, spec.cost);
     b.agent({ type: "turn_completed", was_interrupted: false, num_turns: 3, usage, per_model, reply: spec.line });
   } else if (spec.kind === "working") {
     b.agent({ type: "tool_call_started", name: "Edit", call_id: "edit-live", input: { file_path: "src-tauri/capabilities/default.json" }, is_subagent: false }, 2000);
