@@ -513,7 +513,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -868,6 +868,7 @@ dependencies = [
  "base64",
  "fastrand",
  "futures",
+ "marsad-agent",
  "marsad-client",
  "marsad-proto",
  "marsad-store",
@@ -883,6 +884,7 @@ dependencies = [
  "tracing-subscriber",
  "wasit-control",
  "wasit-core",
+ "wasit-diag",
  "wasit-fake-cli",
  "wasit-process",
  "wasit-runtime",
@@ -903,6 +905,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wasit-control",
+ "wasit-diag",
  "wasit-process",
  "wasit-runtime",
 ]
@@ -924,6 +927,7 @@ dependencies = [
  "ts-rs",
  "wasit-control",
  "wasit-core",
+ "wasit-diag",
  "wasit-runtime",
  "wasl-proto",
 ]
@@ -941,6 +945,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wasit-control",
+ "wasit-diag",
  "zbus",
 ]
 
@@ -1019,7 +1024,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1378,7 +1383,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1632,7 +1637,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1685,7 +1690,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1904,7 +1909,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1928,7 +1933,7 @@ checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 [[package]]
 name = "wasit-claude"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6127d6ed49d18e3ea49d5ece39a0905adc996577"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9bcb780b0bd618df35fcddf3d3ad328197be7971"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -1937,7 +1942,7 @@ dependencies = [
 [[package]]
 name = "wasit-codex"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6127d6ed49d18e3ea49d5ece39a0905adc996577"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9bcb780b0bd618df35fcddf3d3ad328197be7971"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -1946,7 +1951,7 @@ dependencies = [
 [[package]]
 name = "wasit-control"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6127d6ed49d18e3ea49d5ece39a0905adc996577"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9bcb780b0bd618df35fcddf3d3ad328197be7971"
 dependencies = [
  "async-trait",
  "fastrand",
@@ -1958,13 +1963,14 @@ dependencies = [
  "tokio-util",
  "tracing",
  "ts-rs",
+ "wasit-diag",
  "wasit-process",
 ]
 
 [[package]]
 name = "wasit-core"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6127d6ed49d18e3ea49d5ece39a0905adc996577"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9bcb780b0bd618df35fcddf3d3ad328197be7971"
 dependencies = [
  "base64",
  "serde",
@@ -1974,9 +1980,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasit-diag"
+version = "0.1.0"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9bcb780b0bd618df35fcddf3d3ad328197be7971"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "ts-rs",
+]
+
+[[package]]
 name = "wasit-fake-cli"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6127d6ed49d18e3ea49d5ece39a0905adc996577"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9bcb780b0bd618df35fcddf3d3ad328197be7971"
 dependencies = [
  "base64",
  "regex",
@@ -1988,7 +2008,7 @@ dependencies = [
 [[package]]
 name = "wasit-opencode"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6127d6ed49d18e3ea49d5ece39a0905adc996577"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9bcb780b0bd618df35fcddf3d3ad328197be7971"
 dependencies = [
  "serde_json",
  "wasit-core",
@@ -1997,7 +2017,7 @@ dependencies = [
 [[package]]
 name = "wasit-process"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6127d6ed49d18e3ea49d5ece39a0905adc996577"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9bcb780b0bd618df35fcddf3d3ad328197be7971"
 dependencies = [
  "libc",
  "tokio",
@@ -2007,7 +2027,7 @@ dependencies = [
 [[package]]
 name = "wasit-runtime"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6127d6ed49d18e3ea49d5ece39a0905adc996577"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9bcb780b0bd618df35fcddf3d3ad328197be7971"
 dependencies = [
  "async-trait",
  "fastrand",
@@ -2024,6 +2044,7 @@ dependencies = [
  "wasit-codex",
  "wasit-control",
  "wasit-core",
+ "wasit-diag",
  "wasit-opencode",
  "wasit-process",
  "wasit-shim",
@@ -2032,7 +2053,7 @@ dependencies = [
 [[package]]
 name = "wasit-shim"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasit?branch=claude%2Fawesome-euler-r7x45r#6127d6ed49d18e3ea49d5ece39a0905adc996577"
+source = "git+https://github.com/mewais/Wasit?branch=session-flows#9bcb780b0bd618df35fcddf3d3ad328197be7971"
 dependencies = [
  "futures-core",
  "libc",
@@ -2040,6 +2061,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
+ "wasit-diag",
  "wasit-process",
  "windows-sys 0.59.0",
 ]
@@ -2047,44 +2069,44 @@ dependencies = [
 [[package]]
 name = "wasl-audit"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasl?branch=claude%2Fawesome-euler-r7x45r#6ddfab9da7aa80aa5c094c064ab6d302b2ddd612"
+source = "git+https://github.com/mewais/Wasl?branch=session-flows#2c3b2edd2715280d02b0759fd5c42c201839f334"
 dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tracing",
+ "wasit-diag",
  "wasl-proto",
 ]
 
 [[package]]
 name = "wasl-mcp"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasl?branch=claude%2Fawesome-euler-r7x45r#6ddfab9da7aa80aa5c094c064ab6d302b2ddd612"
+source = "git+https://github.com/mewais/Wasl?branch=session-flows#2c3b2edd2715280d02b0759fd5c42c201839f334"
 dependencies = [
  "rmcp",
  "serde",
  "serde_json",
  "tokio",
  "tokio-util",
- "tracing",
  "wasit-control",
  "wasit-core",
+ "wasit-diag",
  "wasl-proto",
 ]
 
 [[package]]
 name = "wasl-node"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasl?branch=claude%2Fawesome-euler-r7x45r#6ddfab9da7aa80aa5c094c064ab6d302b2ddd612"
+source = "git+https://github.com/mewais/Wasl?branch=session-flows#2c3b2edd2715280d02b0759fd5c42c201839f334"
 dependencies = [
  "async-trait",
  "futures",
  "serde",
  "serde_json",
  "tokio",
- "tracing",
  "wasit-control",
  "wasit-core",
+ "wasit-diag",
  "wasit-runtime",
  "wasl-audit",
  "wasl-proto",
@@ -2093,13 +2115,14 @@ dependencies = [
 [[package]]
 name = "wasl-proto"
 version = "0.1.0"
-source = "git+https://github.com/mewais/Wasl?branch=claude%2Fawesome-euler-r7x45r#6ddfab9da7aa80aa5c094c064ab6d302b2ddd612"
+source = "git+https://github.com/mewais/Wasl?branch=session-flows#2c3b2edd2715280d02b0759fd5c42c201839f334"
 dependencies = [
  "fastrand",
  "serde",
  "serde_json",
  "ts-rs",
  "wasit-core",
+ "wasit-diag",
 ]
 
 [[package]]
@@ -2168,7 +2191,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
