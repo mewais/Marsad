@@ -209,9 +209,11 @@ async fn build_mismatch_restarts_the_remote_daemon() {
     let mut old = tokio::process::Command::new(&bin)
         .arg("serve")
         .env("HOME", &sshd.remote_home)
+        .env("MARSAD_RUNTIME_DIR", sshd.runtime_dir())
         .env("MARSAD_BUILD_ID", "0.0.0+old")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .unwrap();
     let mut line = String::new();
@@ -271,19 +273,12 @@ async fn build_mismatch_restarts_the_remote_daemon() {
     let data = d.path().join("l");
     let out = tokio::process::Command::new(agent())
         .arg("stop")
-        .arg("--data")
-        .arg(&data)
+        .args(data_args(&data))
         .output()
         .await
         .unwrap();
     assert!(out.status.success());
-    let log = std::fs::read_to_string(
-        marsad_proto::layout::Layout::resolve(data, None)
-            .unwrap()
-            .diag()
-            .join("daemon.ndjson"),
-    )
-    .unwrap();
+    let log = std::fs::read_to_string(layout(&data).diag().join("daemon.ndjson")).unwrap();
     let mismatch: Vec<serde_json::Value> = log
         .lines()
         .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())

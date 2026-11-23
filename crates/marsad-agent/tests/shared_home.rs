@@ -13,16 +13,13 @@ use marsad_client::{MarsadClient, Subscription};
 use marsad_proto::agentconfig::{LaunchRequest, OverrideLayer};
 use marsad_proto::fleet::FleetEvent;
 use marsad_proto::hosts::HostDraft;
-use marsad_proto::layout::Layout;
 use marsad_proto::HostId;
 use wasit_control::LinkState;
 use wasit_fake_cli::scenario::{Scenario, Turn};
 
 fn hub_client(dir: &Path) -> MarsadClient {
-    let mut cfg =
-        marsad_client::ClientConfig::new(dir, wasit_control::Hello::new("test", "gui", "gui"));
-    cfg.agent_bin = Some(agent());
-    cfg.serve_args = serve_args();
+    let mut cfg = client_config(dir, wasit_control::Hello::new("test", "gui", "gui"));
+    cfg.serve_args.extend(serve_args());
     cfg.supervise.backoff.initial = Duration::from_millis(50);
     MarsadClient::connect(cfg)
 }
@@ -256,7 +253,7 @@ async fn flat_layout_with_a_live_session_is_adopted() {
     std::fs::write(root.join("marsad.sock.lock"), "").unwrap();
 
     let c = hub_client(&root);
-    let layout = Layout::resolve(root.clone(), None).unwrap();
+    let layout = layout(&root);
     let rt = c.runtime(None);
     let ids = tokio::time::timeout(T, async {
         loop {

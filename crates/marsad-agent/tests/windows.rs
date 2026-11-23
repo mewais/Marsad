@@ -78,8 +78,8 @@ async fn nothing_opens_a_console_window_from_a_consoleless_hub() {
     // with plain flags: every console program it starts would get a new, visible window unless
     // it is created without one.
     let mut daemon = std::process::Command::new(agent())
-        .args(["serve", "--hub", "--data"])
-        .arg(&data)
+        .args(["serve", "--hub"])
+        .args(data_args(&data))
         .args(serve_args())
         .env("WASIT_FAKE_CONSOLE_REPORT", &report)
         .env("PATH", &path)
@@ -291,12 +291,11 @@ async fn wsl_host_end_to_end() {
     let distro = std::env::var("MARSAD_E2E_WSL_DISTRO").expect("MARSAD_E2E_WSL_DISTRO");
     let bin_dir = std::env::var("MARSAD_E2E_LINUX_BIN_DIR").expect("MARSAD_E2E_LINUX_BIN_DIR");
     let d = TempDir::new();
-    let mut cfg = marsad_client::ClientConfig::new(
+    let mut cfg = client_config(
         d.path().join("l"),
         wasit_control::Hello::new("test", "gui", "gui"),
     );
-    cfg.agent_bin = Some(agent());
-    cfg.serve_args = serve_args();
+    cfg.serve_args.extend(serve_args());
     cfg.supervise.backoff.initial = Duration::from_millis(50);
     // The Linux helper was built separately; both claim one build id (WSLENV carries it into
     // the distro, where the bootstrap's `--version` and the daemon read it).
@@ -470,12 +469,11 @@ async fn ssh_host_from_windows_end_to_end() {
         .unwrap();
 
     let d = TempDir::new();
-    let mut cfg = marsad_client::ClientConfig::new(
+    let mut cfg = client_config(
         d.path().join("l"),
         wasit_control::Hello::new("test", "gui", "gui"),
     );
-    cfg.agent_bin = Some(agent());
-    cfg.serve_args = serve_args();
+    cfg.serve_args.extend(serve_args());
     cfg.supervise.backoff.initial = Duration::from_millis(200);
     cfg.daemon_env = vec![
         ("MARSAD_AGENT_BIN_DIR".into(), bin_dir),

@@ -46,12 +46,11 @@ async fn live_claude_orchestrates_opencode_and_kilo() {
         panic!("{}", live_hint("live_workstream"));
     }
     let d = TempDir::new();
-    let mut cfg = marsad_client::ClientConfig::new(
+    let mut cfg = client_config(
         d.path().join("l"),
         wasit_control::Hello::new("test", "gui", "gui"),
     );
-    cfg.agent_bin = Some(agent());
-    cfg.serve_args = vec!["--host-id".into(), "hub".into()];
+    cfg.serve_args.extend(["--host-id".into(), "hub".into()]);
     let c = marsad_client::MarsadClient::connect(cfg);
     let work = d.path().join("w");
     std::fs::create_dir_all(&work).unwrap();
@@ -230,12 +229,11 @@ async fn live_claude_spawns_an_opencode_worker() {
         panic!("{}", live_hint("live_workstream"));
     }
     let d = TempDir::new();
-    let mut cfg = marsad_client::ClientConfig::new(
+    let mut cfg = client_config(
         d.path().join("l"),
         wasit_control::Hello::new("test", "gui", "gui"),
     );
-    cfg.agent_bin = Some(agent());
-    cfg.serve_args = vec!["--host-id".into(), "hub".into()];
+    cfg.serve_args.extend(["--host-id".into(), "hub".into()]);
     let c = marsad_client::MarsadClient::connect(cfg);
     let work = d.path().join("w");
     std::fs::create_dir_all(&work).unwrap();

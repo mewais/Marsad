@@ -39,8 +39,7 @@ async fn start_daemon(data: &Path, envs: &[(&str, &str)], stderr: Stdio) -> toki
     let mut child = tokio::process::Command::new(agent())
         .arg("serve")
         .arg("--hub")
-        .arg("--data")
-        .arg(data)
+        .args(data_args(data))
         .args(serve_args())
         .envs(envs.iter().copied())
         .stdin(Stdio::null())
@@ -72,8 +71,7 @@ async fn daemon_stop_and_a_losing_daemon_leave_their_records() {
     // A second daemon on the same data loses the lock race.
     let second = tokio::process::Command::new(agent())
         .arg("serve")
-        .arg("--data")
-        .arg(&data)
+        .args(data_args(&data))
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
@@ -158,8 +156,7 @@ async fn daemon_stop_and_a_losing_daemon_leave_their_records() {
     // `stop` with nothing running records that too.
     let again = tokio::process::Command::new(agent())
         .arg("stop")
-        .arg("--data")
-        .arg(&data)
+        .args(data_args(&data))
         .output()
         .await
         .unwrap();
@@ -210,8 +207,7 @@ async fn bridge(data: &Path, args: &[&str], envs: &[(&str, &str)]) -> std::proce
         T,
         tokio::process::Command::new(agent())
             .arg("bridge")
-            .arg("--data")
-            .arg(data)
+            .args(data_args(data))
             .args(args)
             .envs(envs.iter().copied())
             .stdin(Stdio::null())
@@ -338,8 +334,7 @@ async fn a_closed_readiness_pipe_does_not_end_the_daemon() {
     let mut child = tokio::process::Command::new(agent())
         .arg("serve")
         .arg("--hub")
-        .arg("--data")
-        .arg(&data)
+        .args(data_args(&data))
         .args(serve_args())
         .stdin(Stdio::null())
         .stdout(writer)
@@ -355,6 +350,7 @@ async fn a_closed_readiness_pipe_does_not_end_the_daemon() {
         wasit_control::Hello::new("test", "gui-test", "gui"),
     );
     cfg.start_daemon = false;
+    cfg.socket = Some(layout(&data).socket());
     cfg.agent_bin = Some(agent());
     cfg.supervise.backoff.initial = std::time::Duration::from_millis(50);
     cfg.supervise.backoff.max = std::time::Duration::from_millis(500);
@@ -699,7 +695,7 @@ async fn a_traced_launch_is_recorded_under_its_trace_without_its_prompt() {
 mod signin {
     use std::time::Duration;
 
-    use marsad_client::{ClientConfig, MarsadClient, Subscription};
+    use marsad_client::{MarsadClient, Subscription};
     use marsad_proto::fleet::FleetEvent;
     use marsad_proto::hosts::{AuthPrompt, PromptKind};
     use marsad_proto::HostId;
@@ -710,9 +706,8 @@ mod signin {
 
     /// A hub daemon (started on demand by its client) with `extra` serve options.
     pub fn hub(data: &Path, extra: &[&str]) -> MarsadClient {
-        let mut cfg = ClientConfig::new(data, wasit_control::Hello::new("test", "gui-test", "gui"));
-        cfg.agent_bin = Some(agent());
-        cfg.serve_args = serve_args();
+        let mut cfg = client_config(data, wasit_control::Hello::new("test", "gui-test", "gui"));
+        cfg.serve_args.extend(serve_args());
         cfg.serve_args.extend(extra.iter().map(|s| s.to_string()));
         cfg.supervise.backoff.initial = Duration::from_millis(50);
         cfg.supervise.backoff.max = Duration::from_millis(500);
@@ -967,8 +962,7 @@ async fn a_startup_failure_prints_what_the_record_holds_not_the_error_text() {
     let run = |envs: &[(&str, &str)]| {
         let mut cmd = tokio::process::Command::new(agent());
         cmd.arg("serve")
-            .arg("--data")
-            .arg(&data)
+            .args(data_args(&data))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .envs(envs.iter().copied());
@@ -1016,8 +1010,7 @@ async fn a_startup_failure_prints_what_the_record_holds_not_the_error_text() {
         T,
         tokio::process::Command::new(agent())
             .arg("serve")
-            .arg("--data")
-            .arg(blocked.join("sub"))
+            .args(data_args(&blocked.join("sub")))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .output(),
@@ -1036,7 +1029,7 @@ async fn a_startup_failure_prints_what_the_record_holds_not_the_error_text() {
 mod connect {
     use std::time::Duration;
 
-    use marsad_client::{ClientConfig, MarsadClient};
+    use marsad_client::MarsadClient;
     use marsad_proto::fleet::FleetEvent;
     use marsad_proto::hosts::{HostDraft, HostEnvSettings, HostKind, HostVar};
     use marsad_proto::{CommandFailureKind, HostId, LinkState};
@@ -1046,9 +1039,8 @@ mod connect {
 
     /// A hub whose daemon is started by its client with `env` (and `extra` serve options).
     fn hub(data: &Path, env: &[(&str, String)], extra: &[&str]) -> MarsadClient {
-        let mut cfg = ClientConfig::new(data, wasit_control::Hello::new("test", "gui", "gui"));
-        cfg.agent_bin = Some(agent());
-        cfg.serve_args = serve_args();
+        let mut cfg = client_config(data, wasit_control::Hello::new("test", "gui", "gui"));
+        cfg.serve_args.extend(serve_args());
         cfg.serve_args.extend(extra.iter().map(|s| s.to_string()));
         cfg.daemon_env = env
             .iter()
@@ -2868,10 +2860,8 @@ async fn an_export_over_its_cap_lists_what_it_left_out() {
     let data = d.path().join("d");
     let work = d.path().join("w");
     std::fs::create_dir_all(&work).unwrap();
-    let mut cfg =
-        marsad_client::ClientConfig::new(&data, wasit_control::Hello::new("test", "gui", "gui"));
-    cfg.agent_bin = Some(agent());
-    cfg.serve_args = serve_args();
+    let mut cfg = client_config(&data, wasit_control::Hello::new("test", "gui", "gui"));
+    cfg.serve_args.extend(serve_args());
     cfg.serve_args
         .extend(["--export-cap-bytes".into(), "3000".into()]);
     let c = marsad_client::MarsadClient::connect(cfg);
@@ -2958,8 +2948,7 @@ async fn the_command_line_export_asks_the_hub_or_reads_the_local_files() {
         let mut cmd = std::process::Command::new(agent());
         cmd.arg("diagnostics")
             .arg("export")
-            .arg("--data")
-            .arg(&data)
+            .args(data_args(&data))
             .args(args);
         cmd
     };
@@ -3113,8 +3102,7 @@ async fn the_command_line_export_beside_a_daemon_that_is_not_a_hub_reads_its_fil
     let data = d.path().join("d");
     let mut child = tokio::process::Command::new(agent())
         .arg("serve")
-        .arg("--data")
-        .arg(&data)
+        .args(data_args(&data))
         .args(serve_args())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -3133,8 +3121,8 @@ async fn the_command_line_export_beside_a_daemon_that_is_not_a_hub_reads_its_fil
     let out = d.path().join("host.ndjson.gz");
     let o = tokio::task::spawn_blocking({
         let mut cmd = std::process::Command::new(agent());
-        cmd.args(["diagnostics", "export", "--data"])
-            .arg(&data)
+        cmd.args(["diagnostics", "export"])
+            .args(data_args(&data))
             .arg("--out")
             .arg(&out);
         move || cmd.output().unwrap()

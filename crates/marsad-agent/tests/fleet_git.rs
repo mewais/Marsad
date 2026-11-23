@@ -96,8 +96,7 @@ async fn sessions_bring_their_folders_git_summary_into_the_fleet() {
     assert!(g.repo_root.is_none());
     let out = std::process::Command::new(agent())
         .arg("stop")
-        .arg("--data")
-        .arg(&data)
+        .args(data_args(&data))
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
