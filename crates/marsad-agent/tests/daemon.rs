@@ -622,6 +622,120 @@ async fn ask_user_gate_is_withdrawn_when_the_turn_is_interrupted() {
     stop_pid(pid);
 }
 
+/// `ask_user` while the asking turn ends on its own without an answer (the turn waits at a
+/// permission gate of the CLI and is let go): the session resolves the question gate itself, in
+/// the step that ends the turn, so `gate_resolved{turn_ended}` comes before the turn's
+/// completion, and the tool call is told the turn ended. The test reads the events exactly as
+/// they come: no waiting for the gate to be withdrawn by anyone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ask_user_gate_is_withdrawn_before_the_turn_that_ended_unanswered_completes() {
+    use marsad_proto::ask::AskUserRequest;
+    use wasit_core::QuestionPrompt;
+    let d = TempDir::new();
+    let work = d.path().join("w");
+    std::fs::create_dir_all(&work).unwrap();
+    let c = client(&d.path().join("d"));
+    let mut req = LaunchRequest::new("claude");
+    req.cwd = Some(work.to_string_lossy().into_owned());
+    req.first_prompt = Some("list".into());
+    req.overrides = OverrideLayer {
+        env: scenario_env(d.path(), &gate_scenario()),
+        ..OverrideLayer::default()
+    };
+    let id = c.launch(req).await.unwrap().id;
+    let rt = c.runtime(None);
+    let mut sub = rt.subscribe_session(&id, None);
+    // The turn waits at the CLI's own permission gate.
+    let cli_gate = loop {
+        if let SessionEventKind::Agent {
+            event: AgentEvent::GateRequested { gate },
+        } = next_event(&mut sub).await.kind
+        {
+            break gate.request_id().to_string();
+        }
+    };
+    let asking = tokio::spawn({
+        let c = c.clone();
+        let req = AskUserRequest {
+            session: id.to_string(),
+            request_id: "ask-1".into(),
+            question: QuestionPrompt {
+                id: String::new(),
+                question: "Ship it?".into(),
+                header: String::new(),
+                multi_select: false,
+                options: vec![],
+                allow_other: true,
+                secret: false,
+            },
+        };
+        async move { c.ask_user(None, req).await }
+    });
+    loop {
+        if let SessionEventKind::Agent {
+            event: AgentEvent::GateRequested { gate },
+        } = next_event(&mut sub).await.kind
+        {
+            if gate.request_id() == "ask-1" {
+                break;
+            }
+        }
+    }
+    // The CLI's gate is answered: the turn runs to its end with the question unanswered.
+    rt.command(
+        &id,
+        Command::AnswerGate {
+            request_id: cli_gate,
+            decision: GateDecision::choose("allow"),
+        },
+    )
+    .await
+    .unwrap();
+    let (mut resolved, mut resolution) = (None, None);
+    let completed_at = loop {
+        let e = next_event(&mut sub).await;
+        match e.kind {
+            SessionEventKind::Agent {
+                event: AgentEvent::GateResolved { request_id, reason },
+            } if request_id == "ask-1" => {
+                resolved = Some(e.cursor);
+                resolution = reason;
+            }
+            SessionEventKind::Agent {
+                event:
+                    AgentEvent::TurnCompleted {
+                        was_interrupted, ..
+                    },
+            } => {
+                assert!(!was_interrupted);
+                break e.cursor;
+            }
+            _ => {}
+        }
+    };
+    let resolved = resolved.expect("the question gate was resolved before the turn completed");
+    assert!(resolved < completed_at);
+    let resolution = resolution.expect("the session says why");
+    assert_eq!(resolution.code, "turn_ended");
+    assert_eq!(
+        resolution.detail.as_deref(),
+        Some("the turn ended before an answer")
+    );
+    let reply = tokio::time::timeout(T, asking)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(reply.answers.is_empty());
+    assert_eq!(
+        reply.cancelled.as_deref(),
+        Some("the turn ended before an answer")
+    );
+    assert!(rt.snapshot(&id).await.unwrap().pending_gates.is_empty());
+    let pid = c.daemon_info(None).await.unwrap().pid;
+    stop_pid(pid);
+}
+
 /// The name a launch gives is the session's display name: the hub passes it to the host, which
 /// sets it at creation, so the snapshot shows it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
