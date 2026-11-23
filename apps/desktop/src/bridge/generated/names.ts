@@ -13,6 +13,7 @@ export const methods = {
   SESSIONS_RENAME: "sessions.rename",
   SESSION_SNAPSHOT: "session.snapshot",
   SESSION_HISTORY: "session.history",
+  SESSION_TRAIL_PAGE: "session.trail.page",
   SESSION_COMMAND: "session.command",
   SESSION_ATTACHMENT_PUT: "session.attachment.put",
   SESSION_FILE_READ: "session.file.read",
@@ -96,5 +97,6 @@ export const topics = {
 /** Prefixes of per-object topics (append the session / terminal id). */
 export const topicPrefixes = {
   SESSION_EVENTS: "session.events:",
+  SESSION_TRAIL: "session.trail:",
   PTY_OUTPUT: "pty.output:",
 } as const;

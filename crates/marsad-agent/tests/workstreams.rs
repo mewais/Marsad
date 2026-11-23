@@ -21,8 +21,8 @@ use marsad_proto::wasl::{
 };
 use marsad_proto::workstream::{
     AddNode, Connect, EdgeHistoryRequest, FromTemplate, NodeLaunch, NodePosition, NodeSession,
-    SaveTemplate, WorkstreamDraft, WorkstreamEdge, WorkstreamNode, WorkstreamState, WorkstreamView,
-    WorkstreamsEvent,
+    SaveTemplate, SpawnPolicy, SpawnSettings, WorkstreamDraft, WorkstreamEdge, WorkstreamNode,
+    WorkstreamState, WorkstreamView, WorkstreamsEvent,
 };
 use marsad_proto::{
     Command, ConfigItemKind, GateChoiceKind, GateDecision, GateRequest, HostId, McpTransport,
@@ -717,11 +717,19 @@ async fn template_leaves_out_spawned_agents_and_session_identity() {
                 ("planner".into(), NodePosition { x: 1.0, y: 2.0 }),
                 ("helper".into(), NodePosition { x: 3.0, y: 4.0 }),
             ]),
+            spawn: SpawnSettings {
+                policy: SpawnPolicy::AlwaysAllow,
+                handoffs_always_allow: true,
+                max_agents: 3,
+                max_depth: 1,
+                ..SpawnSettings::default()
+            },
             ..WorkstreamDraft::default()
         })
         .await
         .unwrap();
     assert_eq!(ws.nodes.len(), 4);
+    assert_eq!(ws.spawn.policy, SpawnPolicy::AlwaysAllow);
 
     let t = c
         .save_template(SaveTemplate {
@@ -731,6 +739,7 @@ async fn template_leaves_out_spawned_agents_and_session_identity() {
         })
         .await
         .unwrap();
+    assert_eq!(t.spawn, ws.spawn, "the template keeps the spawn settings");
     let ids: Vec<&str> = t.nodes.iter().map(|n| n.id.as_str()).collect();
     assert_eq!(ids, ["planner", "worker"]);
     assert_eq!(t.edges.len(), 1);
@@ -758,6 +767,10 @@ async fn template_leaves_out_spawned_agents_and_session_identity() {
         })
         .await
         .unwrap();
+    assert_eq!(
+        copy.spawn, ws.spawn,
+        "a workstream made from the template keeps the spawn settings"
+    );
     let ids: Vec<&str> = copy.nodes.iter().map(|n| n.id.as_str()).collect();
     assert_eq!(ids, ["planner", "worker"]);
     assert_eq!(copy.edges.len(), 1);

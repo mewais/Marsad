@@ -152,6 +152,7 @@ fn run(dir: &Path) -> Result<usize, String> {
         p::LinkState,
         p::Cursor,
         p::HostId,
+        wasit_control::TraceId,
         // Wasit runtime
         rt::HostInfo,
         rt::HostEnvironment,
@@ -169,6 +170,11 @@ fn run(dir: &Path) -> Result<usize, String> {
         rt::ResumeRequest,
         rt::HistoryRequest,
         rt::HistoryPage,
+        rt::TrailRequest,
+        rt::TrailItem,
+        rt::TrailPage,
+        wasit_runtime::trail::TrailEntry,
+        wasit_runtime::trail::TrailCause,
         rt::CommandRequest,
         rt::CommandReply,
         rt::CommandError,
@@ -251,6 +257,7 @@ fn write_names(dir: &Path) -> Result<(), String> {
         ("SESSIONS_RENAME", rm::SESSIONS_RENAME),
         ("SESSION_SNAPSHOT", rm::SESSION_SNAPSHOT),
         ("SESSION_HISTORY", rm::SESSION_HISTORY),
+        ("SESSION_TRAIL_PAGE", rm::SESSION_TRAIL_PAGE),
         ("SESSION_COMMAND", rm::SESSION_COMMAND),
         ("SESSION_ATTACHMENT_PUT", rm::SESSION_ATTACHMENT_PUT),
         ("SESSION_FILE_READ", rm::SESSION_FILE_READ),
@@ -331,6 +338,7 @@ fn write_names(dir: &Path) -> Result<(), String> {
     ];
     let prefixes: &[(&str, &str)] = &[
         ("SESSION_EVENTS", rt::SESSION_EVENTS_PREFIX),
+        ("SESSION_TRAIL", rt::SESSION_TRAIL_PREFIX),
         ("PTY_OUTPUT", p::topics::PTY_OUTPUT_PREFIX),
     ];
     let table = |rows: &[(&str, &str)]| -> String {
