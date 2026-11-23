@@ -615,3 +615,47 @@ async fn ask_user_gate_is_withdrawn_when_the_turn_is_interrupted() {
     let pid = c.daemon_info(None).await.unwrap().pid;
     stop_pid(pid);
 }
+
+/// The name a launch gives is the session's display name: the hub passes it to the host, which
+/// sets it at creation, so the snapshot shows it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn launch_name_reaches_the_session_snapshot() {
+    let d = TempDir::new();
+    let work = d.path().join("w");
+    std::fs::create_dir_all(&work).unwrap();
+    let c = client(&d.path().join("d"));
+    let mut req = LaunchRequest::new("claude");
+    req.cwd = Some(work.to_string_lossy().into_owned());
+    req.name = Some("My named session".into());
+    let launched = c.launch(req).await.unwrap();
+    let rt = c.runtime(None);
+    let snap = rt.snapshot(&launched.id).await.unwrap();
+    assert_eq!(snap.display_name.as_deref(), Some("My named session"));
+    rt.delete(&launched.id).await.unwrap();
+    let pid = c.daemon_info(None).await.unwrap().pid;
+    stop_pid(pid);
+}
+
+/// A launch remembers the directory the host used, not the text the user typed: a directory
+/// given through a symlink is stored canonical.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recent_project_is_the_host_normalised_directory() {
+    let d = TempDir::new();
+    let real = d.path().join("real");
+    std::fs::create_dir_all(&real).unwrap();
+    let link = d.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let c = client(&d.path().join("d"));
+    let typed = link.to_string_lossy().into_owned();
+    let mut req = LaunchRequest::new("claude");
+    req.cwd = Some(typed.clone());
+    c.launch(req).await.unwrap();
+    let canonical = wasit_process::plain_path(&std::fs::canonicalize(&real).unwrap());
+    let recent = c.recent_projects().await.unwrap();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].path, canonical.to_string_lossy());
+    assert_ne!(recent[0].path, typed);
+    let pid = c.daemon_info(None).await.unwrap().pid;
+    stop_pid(pid);
+}

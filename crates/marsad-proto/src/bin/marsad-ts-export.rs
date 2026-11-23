@@ -168,6 +168,8 @@ fn run(dir: &Path) -> Result<usize, String> {
         rt::EnvironmentTest,
         rt::SessionList,
         rt::SessionSnapshot,
+        rt::NotContinuable,
+        rt::ResumeCommand,
         rt::SessionEvent,
         rt::HostEvent,
         rt::CreateSession,

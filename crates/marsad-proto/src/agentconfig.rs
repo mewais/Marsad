@@ -519,6 +519,10 @@ pub struct LaunchRequest {
     pub mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_prompt: Option<String>,
+    /// The session's display name, set at creation; the host tells the agent where the agent
+    /// supports naming a conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default)]
     pub resume: ResumeRequest,
     #[serde(default)]
@@ -543,6 +547,7 @@ impl LaunchRequest {
             model: None,
             mode: None,
             first_prompt: None,
+            name: None,
             resume: ResumeRequest::New,
             labels: BTreeMap::new(),
             workstream: None,
