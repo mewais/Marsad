@@ -1,4 +1,5 @@
-import type { Command, CommandReply, GateRequest, HostId, InputDropReason, InputId, PhaseCause, RpcError, SessionEvent, SessionSnapshot } from "../wire";
+import type { Command, CommandReply, GateRequest, HostId, InputDropReason, InputId, PhaseCause, RpcError, SessionEvent, SessionSnapshot, TrailItem } from "../wire";
+import { projectEvent } from "./diagnostics";
 import type { SessionEventKind } from "./transcripts";
 
 /** Fixture-only: one scripted session per entry; reacts to commands like an agent would. */
@@ -7,6 +8,8 @@ export interface Entry {
   snap: SessionSnapshot;
   events: SessionEvent[];
   subs: Set<(e: unknown) => void>;
+  /** Open `session.trail:<id>` subscriptions: each new event's trail entries go to them. */
+  trailSubs?: Set<(item: TrailItem) => void>;
   host: HostId;
   /** External gates withdrawn without an answer (a late answer is refused, typed). */
   withdrawn?: Set<string>;
@@ -18,6 +21,9 @@ export interface Entry {
   /** Counts the turns started: a scripted step of a turn that was interrupted or ended does nothing. */
   turn?: number;
 }
+
+/** The trace of the request a command arrived with, when it had one. */
+const traced = (trace?: string) => (trace ? { trace } : {});
 
 export const err = (code: string, message: string, data?: unknown): RpcError => ({ code, message, data: (data ?? null) as RpcError["data"] });
 
@@ -33,7 +39,7 @@ export class SessionSim {
   constructor(private h: SimHooks) {}
 
   /** Like the real runtime: a command to a session whose process is not running is refused, not journaled. */
-  command(e: Entry, c: Command): CommandReply {
+  command(e: Entry, c: Command, trace?: string): CommandReply {
     const answers = c.command === "answer_gate" || c.command === "answer_question";
     if (answers && !e.snap.pending_gates.some((x) => x.gate.request_id === c.request_id) && e.withdrawn?.has(c.request_id)) {
       throw err("gate_withdrawn", `the gate ${c.request_id} is no longer needed (withdrawn)`, { error: "gate_withdrawn", request_id: c.request_id });
@@ -52,18 +58,18 @@ export class SessionSim {
         // What a prompt does while the agent is busy is the driver's capability, as in the daemon.
         const busy = e.snap.capabilities.prompt_while_busy;
         if (phase === "idle") {
-          this.emit(e, { kind: "input", input, command: c, status: { status: "sent" } });
+          this.emit(e, { kind: "input", input, command: c, status: { status: "sent" }, ...traced(trace) });
           this.startTurn(e, text, input);
           return { outcome: "sent" };
         }
         if (phase === "starting" || busy === "queued_by_protocol") {
           // Held by the protocol: journaled queued, `input_sent` when it is written.
-          this.emit(e, { kind: "input", input, command: c, status: { status: "queued" } });
+          this.emit(e, { kind: "input", input, command: c, status: { status: "queued" }, ...traced(trace) });
           (e.queue ??= []).push({ input, text, held: false });
           this.h.publish(e);
           return { outcome: "queued" };
         }
-        this.emit(e, { kind: "input", input, command: c, status: { status: "sent" } });
+        this.emit(e, { kind: "input", input, command: c, status: { status: "sent" }, ...traced(trace) });
         if (busy === "steered") this.emit(e, { kind: "agent", event: { type: "input_acknowledged", input, steered: true } });
         else (e.queue ??= []).push({ input, text, held: true }); // written; the CLI runs it after the current turn
         this.h.publish(e);
@@ -76,24 +82,24 @@ export class SessionSim {
         const picked = c.command === "answer_gate" ? g.gate.gate_type !== "question" && g.gate.choices.find((x) => x.id === c.decision.choice) : undefined;
         if (c.command === "answer_gate" && !picked) throw err("rejected", `Gate ${c.request_id} offers no choice ${c.decision.choice}.`, { error: "rejected", reason: "no such choice" });
         const denied = !!picked && !picked.kind.startsWith("allow");
-        this.journal(e, c);
+        this.journal(e, c, trace);
         this.resolveGate(e, c.request_id, denied ? "Understood, I will not do that." : "Thanks, continuing.");
         return { outcome: "sent" };
       }
       case "interrupt":
-        this.journal(e, c);
+        this.journal(e, c, trace);
         this.dropQueued(e, "interrupted");
         e.turn = (e.turn ?? 0) + 1;
         e.snap = { ...e.snap, pending_gates: [], turn: null };
         this.setPhase(e, { state: "idle" });
         return { outcome: "sent" };
       case "set_model":
-        this.journal(e, c);
+        this.journal(e, c, trace);
         this.emit(e, { kind: "agent", event: { type: "model_changed", model: c.model } });
         this.patch(e, { model: c.model });
         return { outcome: "sent" };
       case "set_mode":
-        this.journal(e, c);
+        this.journal(e, c, trace);
         this.emit(e, { kind: "agent", event: { type: "modes_updated", current_mode: c.mode } });
         this.patch(e, { mode: c.mode });
         return { outcome: "sent" };
@@ -106,15 +112,15 @@ export class SessionSim {
   }
 
   /** Journal a command the agent took at once. */
-  private journal(e: Entry, c: Command) {
-    this.emit(e, { kind: "input", input: this.nextInput(e), command: c, status: { status: "sent" } });
+  private journal(e: Entry, c: Command, trace?: string) {
+    this.emit(e, { kind: "input", input: this.nextInput(e), command: c, status: { status: "sent" }, ...traced(trace) });
   }
 
   /** The first prompt of a session, journaled with its start like the daemon does; returns its id. */
-  firstPrompt(e: Entry, text: string): InputId {
+  firstPrompt(e: Entry, text: string, trace?: string): InputId {
     const input = this.nextInput(e);
-    this.emit(e, { kind: "started", generation: 1, resume: "fresh", first_input: input });
-    this.emit(e, { kind: "input", input, command: { command: "prompt", text }, status: { status: "sent" } });
+    this.emit(e, { kind: "started", generation: 1, resume: "fresh", first_input: input, ...traced(trace) });
+    this.emit(e, { kind: "input", input, command: { command: "prompt", text }, status: { status: "sent" }, ...traced(trace) });
     return input;
   }
 
@@ -220,5 +226,6 @@ export class SessionSim {
       e.snap = { ...e.snap, pending_gates: [...e.snap.pending_gates, { gate: kind.event.gate, raised_at_ms: ev.t, cursor: ev.cursor }] };
     }
     e.subs.forEach((s) => s(ev));
+    if (e.trailSubs?.size) for (const item of projectEvent(e.events, e.events.length - 1)) e.trailSubs.forEach((s) => s(item));
   }
 }

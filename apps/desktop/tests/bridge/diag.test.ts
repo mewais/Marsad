@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DIAG_BATCH_MAX, type UiEvent } from "../../src/bridge/backend";
+import { DIAG_BATCH_MAX } from "../../src/bridge/backend";
+import type { UiEvent } from "../../src/bridge/wire";
 import { createApi, newTraceId } from "../../src/bridge/api";
 import { FixtureBackend } from "../../src/bridge/fixture/FixtureBackend";
 import { TauriBackend } from "../../src/bridge/tauri";

@@ -7,7 +7,7 @@ import { useStore } from "../../lib/store";
 import { useNavigate } from "../../router";
 import { allShortcuts } from "../../shortcuts/catalog";
 import { prettyKey, shortcutStore } from "../../shortcuts/registry";
-import { linkView, useActions, useApi, useApp, useAppState, useHosts, usePending, useReach, type LoadKey } from "../../state";
+import { DEVELOPER_MODE, linkView, useActions, useApi, useApp, useAppState, useHosts, usePending, useReach, type LoadKey } from "../../state";
 import { Button, Card, Icon, Kbd, Segmented, Select, type IconName } from "../../ui";
 import "./settings.css";
 
@@ -15,6 +15,7 @@ const SECTIONS: { id: string; label: string; icon: IconName }[] = [
   { id: "general", label: "General", icon: "gear" },
   { id: "notifications", label: "Notifications", icon: "bell" },
   { id: "keyboard", label: "Keyboard", icon: "slash" },
+  { id: "diagnostics", label: "Diagnostics", icon: "list" },
   { id: "about", label: "About", icon: "tower" },
 ];
 
@@ -197,6 +198,27 @@ function Keyboard() {
   );
 }
 
+function Diagnostics() {
+  const actions = useActions();
+  const { value: developer, set, pending } = useSetting<boolean>(DEVELOPER_MODE, false);
+  // The app records that the switch was turned only once the hub has taken it.
+  const change = async (on: boolean) => {
+    if (await set(on)) actions.record({ ev: "ui.developer_mode", on });
+  };
+  return (
+    <>
+      <div><h1 className="h1">Diagnostics</h1><div className="muted">What Marsad records about itself, and how to look at it.</div></div>
+      <Loaded keys={["settings"]}>
+        {/* The "Export diagnostics" card belongs here, above Developer mode: a later change adds it. Nothing is drawn for it until it works. */}
+        <div data-slot="export-diagnostics" hidden />
+        <Card className="setcard">
+          <Toggle label="Developer mode" hint="Shows a Diagnostics tab on every session and a connection log on every host, with where each prompt went, how a session's state changed and why a host would not connect, as ids, sizes, timings and reasons and never your prompts, replies or files." on={developer} pending={pending} onChange={(v) => void change(v)} />
+        </Card>
+      </Loaded>
+    </>
+  );
+}
+
 function About() {
   const api = useApi();
   const hub = useAppState((s) => s.hub.state);
@@ -235,7 +257,7 @@ function About() {
   );
 }
 
-/** Settings: General, Notifications, Keyboard, About. */
+/** Settings: General, Notifications, Keyboard, Diagnostics, About. */
 export function SettingsPage({ q }: { q: Record<string, string> }) {
   const nav = useNavigate();
   const sec = SECTIONS.some((s) => s.id === q.s) ? q.s : "general";
@@ -249,7 +271,7 @@ export function SettingsPage({ q }: { q: Record<string, string> }) {
           </a>
         ))}
       </nav>
-      <div className="setbody">{sec === "general" ? <General /> : sec === "notifications" ? <Notifications /> : sec === "keyboard" ? <Keyboard /> : <About />}</div>
+      <div className="setbody">{sec === "general" ? <General /> : sec === "notifications" ? <Notifications /> : sec === "keyboard" ? <Keyboard /> : sec === "diagnostics" ? <Diagnostics /> : <About />}</div>
     </div>
   );
 }

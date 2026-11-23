@@ -676,6 +676,47 @@ table.t td.r,table.t th.r{text-align:right;font-variant-numeric:tabular-nums}
   .hrow{grid-template-columns:26px minmax(130px,1fr) minmax(140px,1fr) 56px}
   .hrow .clis{display:none}
 }
+
+/* ---------- Developer mode: diagnostics (Settings, session tab, host section) ---------- */
+.dg{display:flex;flex-direction:column;gap:18px;padding:16px 20px;overflow:hidden auto;min-height:0;flex:1;overflow-wrap:anywhere}
+.dg section{display:flex;flex-direction:column;gap:8px;min-width:0}
+.dg-top{display:grid;grid-template-columns:1fr auto;gap:12px 24px;align-items:start}
+.dg-copy{display:flex;flex-direction:column;gap:6px;align-items:flex-end;max-width:220px;text-align:right}
+.dg-facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px 28px;margin:0}
+.dg-fact{display:flex;flex-direction:column;gap:1px;min-width:0}
+.dg-fact dt{font-size:11px;color:var(--fg-3)} .dg-fact dd{display:flex;align-items:center;gap:6px;margin:0;font-size:12.5px;min-width:0}
+.dg-sh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap} .dg-sh h4{margin:0} .dg-sh .sp{flex:1}
+.dg-toggle{display:flex;align-items:center;gap:8px;padding:2px 0;background:none;border:0;color:var(--fg);text-align:left}
+.dg-problem{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--needs-line);background:var(--needs-bg);border-radius:var(--r2);font-size:12.5px}
+.dg-problem .i{color:var(--needs);flex:none;margin-top:1px} .dg-problem .pt{flex:1}
+.dgp{border:1px solid var(--line);background:var(--surface);border-radius:var(--r3);padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.dgp-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap} .dgp-h .sp{flex:1}
+.dgp-path{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;align-items:center;gap:4px 2px}
+.dgp-step{display:inline-flex;align-items:center;gap:2px} .dgp-step>.i{color:var(--fg-3)}
+.dgp-chip{display:inline-flex;flex-direction:column;gap:1px;padding:4px 9px;border-radius:var(--r2);border:1px solid var(--line-2);background:var(--surface-2);min-width:70px}
+.dgp-lbl{font-size:12px;font-weight:600;color:var(--fg)} .dgp-time{font-size:11px;color:var(--fg-2)} .dgp-src{font-size:10.5px;color:var(--fg-3)}
+.dgp-step.hollow .dgp-chip{background:transparent;border-style:dashed}
+.dgp-step.hollow .dgp-lbl{color:var(--fg-3);font-weight:500} .dgp-step.hollow .dgp-time{color:var(--fg-3);font-style:italic}
+.dgp-step.ok .dgp-chip{border-color:var(--done-line);background:var(--done-bg)}
+.dgp-step.bad .dgp-chip{border-color:var(--failed-line);background:var(--failed-bg)} .dgp-step.bad .dgp-lbl{color:var(--failed)}
+.dgp-notes{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:2px;font-size:11.5px}
+.dgl{border:1px solid var(--line);border-radius:var(--r3);background:var(--sunken);overflow:hidden}
+.dgr{border-bottom:1px solid var(--line)} .dgr:last-child{border-bottom:0}
+.dgr-main{display:flex;align-items:baseline;gap:8px;width:100%;padding:5px 10px;background:none;border:0;color:var(--fg);text-align:left;font-size:12px}
+.dgr-t{color:var(--fg-3);flex:none;font-size:11px;font-family:var(--f-mono)}
+.dgr-dot{width:7px;height:7px;border-radius:50%;background:var(--idle);flex:none;align-self:center}
+.dgr.ok .dgr-dot{background:var(--done)} .dgr.warn .dgr-dot{background:var(--needs)} .dgr.bad .dgr-dot{background:var(--failed)}
+.dgr.bad .dgr-w{color:var(--failed)} .dgr-w{flex:1;min-width:0} .dgr-x{color:var(--fg-3);align-self:center}
+.dgr-f{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;margin:0;padding:6px 10px 8px 34px;font-size:11px;color:var(--fg-2);background:var(--surface);font-family:var(--f-mono)}
+.dgr-f dt{color:var(--fg-3)} .dgr-f dd{margin:0}
+.dga{border:1px solid var(--line);background:var(--surface);border-radius:var(--r3);padding:8px 10px;display:flex;flex-direction:column;gap:6px}
+.dga.bad{border-color:var(--failed-line)} .dga.ok{border-color:var(--done-line)}
+.dga-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dga-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;font-size:11.5px}
+.dga-step{display:grid;grid-template-columns:62px 1fr;gap:8px} .dga-step.bad{color:var(--failed)} .dga-step.ok{color:var(--done)}
+.dga-t{font-size:11px;text-align:right;color:var(--fg-3);font-family:var(--f-mono)}
+.dga-fail{border-top:1px solid var(--failed-line);padding-top:6px;display:flex;flex-direction:column;gap:4px;font-size:12px}
+.dga-err{margin:0;padding:6px 8px;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r2);white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;font-family:var(--f-mono)}
 </style>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -862,6 +903,7 @@ const SCREENS=[
  {id:'config',n:6,label:'Agent config',short:'Config'},
  {id:'hosts',n:7,label:'Hosts',short:'Hosts',vars:[['a','Host list'],['b','Add host']]},
  {id:'gates',n:8,label:'Gates + alerts',short:'Gates',vars:[['a','Gate review'],['b','Notifications']]},
+ {id:'diag',n:9,label:'Diagnostics',short:'Diag',vars:[['s','Settings'],['p','Session · this computer'],['r','Session · remote'],['h','Host · connect failed'],['l','Host · local']]},
 ];
 const CAPTIONS={
  'home-a':'Every session in one list, including the ones inside workstreams (tagged). Sorted by what needs you. Choices on each row are the agent\'s own.',
@@ -878,8 +920,13 @@ const CAPTIONS={
  'hosts-b':'Add-host flow: connect over SSH, install the helper, detect CLIs.',
  'gates-a':'Full gate review. Permission, edit and plan choices mirror the agent; handoffs use Marsad\'s three fixed choices. Toasts bottom-right are the error surface.',
  'gates-b':'Settings collapsed into six sections. Notifications are one table: event by channel.',
+ 'diag-s':'Settings → Diagnostics. Developer mode is off until you turn it on; it only changes what Marsad shows (the logs are always written). The export card is added above it by a later change.',
+ 'diag-p':'Developer mode: a Diagnostics tab on a session. Each prompt shows the steps it took; a step nothing observed is hollow, never guessed. Times are relative to the first step. Everything here is ids, sizes, timings and reasons.',
+ 'diag-r':'The same tab for a session on another machine: that machine\'s clock is not this computer\'s, so its times carry "≈" and each step says who saw it. The timeline is the host\'s own trail, in its order.',
+ 'diag-h':'Developer mode: a host\'s connection log by attempt, with the stage, exit code and the host\'s scrubbed words when a connect failed. For a connected host its own log follows.',
+ 'diag-l':'The local host has no link to log: the app reaches it through the local service, so this shows that service\'s own log and says so.',
 };
-const state={screen:'home',vars:{home:'a',workstreams:'list',graph:'run',new:'s',hosts:'a',gates:'a'},tab:'activity',sel:'s7',quiet:false,strip:false,slash:false,edge:'e-win',gtab:'perm',gdrv:'cc',cdrv:'cc',qopt:0,ibxq:{s7:0},wstart:'sessions'};
+const state={screen:'home',vars:{home:'a',workstreams:'list',graph:'run',new:'s',hosts:'a',gates:'a',diag:'s'},tab:'activity',sel:'s7',quiet:false,strip:false,slash:false,edge:'e-win',gtab:'perm',gdrv:'cc',cdrv:'cc',qopt:0,ibxq:{s7:0},wstart:'sessions'};
 
 function readHash(){
   const h=(location.hash||'').slice(1); if(!h) return;
@@ -903,8 +950,8 @@ function renderReview(){
   document.getElementById('rb-caption').textContent=CAPTIONS[key]||''; document.getElementById('review').title=CAPTIONS[key]||'';
   const t=document.documentElement.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');
   document.querySelectorAll('#rb-theme button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.t===t));
-  const navmap={home:'home',session:'home',new:'home',workstreams:'workstreams:list',graph:'workstreams:list',hosts:'hosts',config:'config',gates:'home'};
-  let cur=navmap[state.screen]; if(state.screen==='gates'&&state.vars.gates==='b') cur='notify'; if(state.screen==='new'&&state.vars.new==='w') cur='workstreams:list';
+  const navmap={home:'home',session:'home',new:'home',workstreams:'workstreams:list',graph:'workstreams:list',hosts:'hosts',config:'config',gates:'home',diag:'notify'};
+  let cur=navmap[state.screen]; if(state.screen==='gates'&&state.vars.gates==='b') cur='notify'; if(state.screen==='diag'&&(state.vars.diag==='h'||state.vars.diag==='l')) cur='hosts'; if(state.screen==='diag'&&(state.vars.diag==='p'||state.vars.diag==='r')) cur='home'; if(state.screen==='new'&&state.vars.new==='w') cur='workstreams:list';
   document.querySelectorAll('#rail a').forEach(a=>a.setAttribute('aria-current',a.dataset.go===cur));
 }
 
@@ -1627,6 +1674,89 @@ function gatesB(){
   </div></div>`;
 }
 
+
+/* ================= SCREEN: DIAGNOSTICS (Developer mode) ================= */
+const dgFact=(k,v,copy=true)=>`<div class="dg-fact"><dt>${k}</dt><dd>${v===null?'<span class="faint">not reported</span>':`<span class="mono">${v}</span>`}${v!==null&&copy?`<button class="iconbtn" title="Copy ${k.toLowerCase()}">${I('i-copy','sm')}</button>`:''}</dd></div>`;
+const dgHead=(title,note,extra='')=>`<div class="dg-sh"><h4 class="eyebrow">${title}</h4>${note?`<span class="faint" style="font-size:12px">${note}</span>`:''}<span class="sp"></span>${extra}</div>`;
+/* A prompt and the path it took: [label, time, who, state(seen|hollow|ok|bad)]. Hollow = not observed. */
+const dgPrompt=(id,what,trace,steps,notes=[])=>`<div class="dgp"><div class="dgp-h"><span class="h3">${id}</span><span class="faint" style="font-size:12px">${what}</span><span class="sp"></span><span class="faint mono" style="font-size:12px">${trace}</span><button class="iconbtn" title="Copy trace id">${I('i-copy','sm')}</button></div>
+  <ol class="dgp-path">${steps.map(([l,t,w,st],i)=>`<li class="dgp-step ${st==='seen'?'':st}">${i?I('i-chevr','xs'):''}<span class="dgp-chip"><span class="dgp-lbl">${l}</span><span class="dgp-time mono tnum">${t}</span>${w?`<span class="dgp-src">${w}</span>`:''}</span></li>`).join('')}</ol>
+  ${notes.length?`<ul class="dgp-notes faint">${notes.map(n=>`<li>${n}</li>`).join('')}</ul>`:''}</div>`;
+const dgRow=(t,tone,w,open)=>`<div class="dgr ${tone}"><div class="dgr-main"><span class="dgr-t">${t}</span><span class="dgr-dot"></span><span class="dgr-w">${w}</span>${I(open?'i-chev':'i-chevr','xs')}</div>${open?`<dl class="dgr-f">${open.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`:''}</div>`;
+function dgSessionHead(dev){
+  return sessionHead().replace(/<div class="tabs" role="tablist">.*?<\/div>\s*<\/div>$/s,`<div class="tabs" role="tablist">${[['activity','Activity'],['changes','Changes','7'],['config','Config'],['terminal','Terminal'],['diagnostics','Diagnostics']].map(([k,l,n])=>`<button role="tab" aria-selected="${k==='diagnostics'}">${l}${n?`<span class="n">${n}</span>`:''}</button>`).join('')}</div></div>`);
+}
+function diagSettings(){
+  const nav=[['General','i-gear'],['Notifications','i-bell'],['Keyboard','i-slash'],['Diagnostics','i-list'],['About','i-tower']];
+  return `<div class="set"><nav class="setnav"><div class="eyebrow" style="padding:0 8px 6px">Settings</div>${nav.map(([l,ic])=>`<div class="lr-item ${l==='Diagnostics'?'on':''}">${I(ic,'sm')}${l}</div>`).join('')}</nav>
+  <div class="setbody" style="max-width:880px"><div><h1 class="h1">Diagnostics</h1><div class="muted" style="margin-top:4px">What Marsad records about itself, and how to look at it.</div></div>
+   <div class="card" style="padding:6px 16px;display:flex;flex-direction:column"><div style="display:flex;align-items:center;gap:12px;padding:12px 0"><div style="flex:1"><div class="h3">Developer mode</div><div class="faint" style="font-size:12px">Shows a Diagnostics tab on every session and a connection log on every host, with where each prompt went, how a session's state changed and why a host would not connect, as ids, sizes, timings and reasons and never your prompts, replies or files.</div></div><span class="tg on"></span></div></div>
+   <div class="faint" style="font-size:12px">Saving shows a spinner on the switch; if the hub refuses, it stays as it was and the reason appears as a message.</div>
+  </div></div>`;
+}
+function diagSessionLocal(){
+  const facts=[['Session id','fxedcbbvaihv'],['Host','thinkpad-x1 (x1)'],['Driver','claude'],['Generation','1'],['Native session id','native-7'],['Phase','needs_you'],['CLI version','2.1.4'],['Model','claude-sonnet-4.5']];
+  return dgSessionHead()+`<div class="dg">
+   <div class="dg-top"><dl class="dg-facts">${facts.map(([k,v])=>dgFact(k,v)).join('')}</dl><div class="dg-copy"><button class="btn sm">${I('i-copy','xs')}Copy as text</button><span class="faint" style="font-size:12px">Ids, sizes, timings and reasons only; no prompts, replies or files.</span></div></div>
+   <section>${dgHead('Prompts','Each step is shown only where something observed it. Times are relative to the first step.')}
+    ${dgPrompt('#3','Prompt · 61 characters','u-7c1e0a52b8d4f396',[['App','start','app','seen'],['Hub','+4 ms','hub','seen'],['Recorded','+31 ms','hub','seen'],['Sent','+31 ms','hub','seen'],['Written','+33 ms','hub','seen'],['Acknowledged','+0.9 s','hub','ok'],['Turn started','+0.9 s','hub','seen']],['App: answered ok in 41 ms','Hub: session.command · ok · 12 ms'])}
+    ${dgPrompt('#640','Prompt · 58 characters','u-2a9f4c01d37be685',[['App','start','app','seen'],['Hub','+3 ms','hub','seen'],['Recorded','+22 ms','hub','seen'],['Queued','+22 ms','hub','seen'],['Dropped (interrupted)','+1.2 s','hub','bad']])}
+    ${dgPrompt('Not recorded','Prompt · 23 characters','u-b84d1e6f0c7a2935',[['App','start','app','seen'],['Hub','+3 ms','hub','seen'],['Recorded','not seen','','hollow'],['Refused (not_running)','+9 ms','hub','bad']],['Refused: before it was recorded'])}
+   </section>
+   <section>${dgHead('Timeline',"The host's trail, in the host's order and clock. Newest at the bottom.",'<button class="btn sm ghost">Load earlier</button>')}
+    <div class="dgl">${dgRow('14:02:11.402','','Idle — the turn was interrupted')}${dgRow('14:02:11.512','','Tool Edit started — call late-1')}
+     ${dgRow('14:02:11.522','warn','The agent produced output after its turn had ended (first: tool_call_started)',[['cursor','17170440'],['time','14:02:11.522 (1795415617522)'],['ev','anomaly'],['kind','activity_while_idle'],['first','tool_call_started']])}
+     ${dgRow('14:02:11.612','','Working — a turn started')}${dgRow('14:02:15.812','','Tool Read started — call r68')}${dgRow('14:02:16.712','','Tool call r68 finished')}
+     ${dgRow('14:02:19.712','warn','Waiting for you — the agent asked for a permission decision on Bash (3 choices) — request p-prisma')}${dgRow('14:02:19.713','warn','Needs you — a request is waiting for your decision (p-prisma)')}</div></section>
+   <section><button class="dg-toggle">${I('i-chevr','xs')}<span class="eyebrow">Host log for this session</span><span class="faint" style="font-size:12px">this computer's service</span></button></section>
+  </div>`;
+}
+function diagSessionRemote(){
+  const facts=[['Session id','fxa7655lj5cg'],['Host','hetzner-ax41 (hz)'],['Driver','claude'],['Generation','1'],['Native session id','native-2'],['Phase','needs_you'],['CLI version','2.1.4'],['Model','claude-sonnet-4.5']];
+  const s2=by('s2');
+  const head=sessionHead().replace(by('s7').name,s2.name).replace('ledgerline</span>','ledgerline</span>');
+  const tabs=`<div class="tabs" role="tablist">${[['activity','Activity'],['changes','Changes'],['config','Config'],['terminal','Terminal'],['diagnostics','Diagnostics']].map(([k,l])=>`<button role="tab" aria-selected="${k==='diagnostics'}">${l}</button>`).join('')}</div></div>`;
+  return head.replace(/<div class="tabs" role="tablist">.*?<\/div>\s*<\/div>$/s,tabs).replace(hostEl('x1'),hostEl('hz')).replace(conn('ok','Connected · local'),conn('ok','Connected'))+`<div class="dg">
+   <div class="dg-top"><dl class="dg-facts">${facts.map(([k,v])=>dgFact(k,v)).join('')}</dl><div class="dg-copy"><button class="btn sm">${I('i-copy','xs')}Copy as text</button><span class="faint" style="font-size:12px">Ids, sizes, timings and reasons only; no prompts, replies or files.</span></div></div>
+   <section>${dgHead('Prompts','Each step is shown only where something observed it. Times are relative to the first step.')}
+    ${dgPrompt('#9','Prompt · 112 characters, 2 attachments (1.4 MB)','u-91d0e3a7c4f2b586',[['App','start','app','seen'],['Hub','+0.4 s','hub','seen'],['hetzner-ax41','≈+0.9 s','hetzner-ax41','seen'],['Recorded','≈+0.9 s','hetzner-ax41','seen'],['Sent','≈+0.9 s','hetzner-ax41','seen'],['Written','≈+0.9 s','hetzner-ax41','seen'],['Acknowledged','≈+1.6 s','hetzner-ax41','ok']],['App: answered ok in 410 ms','Hub: session.command · ok · 395 ms','upload: 2 files, 1.4 MB, 380 ms: ok'])}
+    <div class="faint" style="font-size:12px">≈ means another machine's clock: only approximately comparable to the first step.</div>
+    ${dgPrompt('#10','Prompt · 31 characters','u-0b6a77c1e9d5342f',[['App','start','app','seen'],['Hub','+0.2 s','hub','seen'],['hetzner-ax41','not seen','','hollow'],['Recorded','≈+0.7 s','hetzner-ax41','seen'],['Sent','≈+0.7 s','hetzner-ax41','seen'],['Written','not yet','','hollow'],['Acknowledged','not yet','','hollow']],['Hub: session.command · ok · 180 ms'])}
+   </section>
+   <section>${dgHead('Timeline',"The host's trail, in the host's order and clock. Newest at the bottom.")}
+    <div class="dgl">${dgRow('13:58:02.114','','The turn ended (the agent reported an error): 2 turns, 31800 tokens in, 2900 out, $0.3100, a reply of 410 characters')}${dgRow('13:58:02.118','','Idle — the turn ended (the agent reported an error)')}
+     ${dgRow('13:59:40.310','','A prompt was sent (112 characters, 2 attachments (1.4 MB)) — #9, handed to the agent')}${dgRow('13:59:40.312','','Input #9 was written to the agent\'s input')}${dgRow('13:59:41.020','ok','The agent acknowledged input #9')}${dgRow('13:59:41.021','','A turn started for input #9')}${dgRow('13:59:41.022','','Working — a turn started for input #9')}
+     ${dgRow('14:01:07.903','warn','Waiting for you — the agent asked for a permission decision on Bash (3 choices) — request p-pdf')}${dgRow('14:01:07.904','warn','Needs you — a request is waiting for your decision (p-pdf)')}</div></section>
+   <section><button class="dg-toggle">${I('i-chevr','xs')}<span class="eyebrow">Host log for this session</span><span class="faint" style="font-size:12px">hetzner-ax41</span></button></section>
+  </div>`;
+}
+function dgAttempt(a){
+  return `<div class="dga ${a.cls||''}"><div class="dga-h"><b>${a.title}</b><span class="faint mono" style="font-size:12px">${a.at||''}</span>${a.out?conn(a.out[0],a.out[1]):''}${a.ms?`<span class="faint" style="font-size:12px">${a.ms}</span>`:''}</div>
+   <ul class="dga-steps">${a.steps.map(([t,w,c])=>`<li class="dga-step ${c||''}"><span class="dga-t">${t}</span><span>${w}</span></li>`).join('')}</ul>
+   ${a.fail?`<div class="dga-fail"><div>Failed at <b>${a.fail[0]}</b> (${a.fail[1]}) · exit code <b>${a.fail[2]}</b></div><pre class="dga-err" aria-label="What the host's shell wrote (scrubbed)">${a.fail[3]}</pre></div>`:''}</div>`;
+}
+function diagHost(local){
+  const aside=local
+   ?`<aside class="hd"><div style="display:flex;align-items:center;gap:10px">${I('i-laptop','lg')}<div><div class="h2">thinkpad-x1</div><div class="faint" style="font-size:12px">Ubuntu 24.04 · x86_64 · Local</div></div></div>
+     <div><h4 class="eyebrow" style="margin:0 0 8px">Connection</h4><dl class="kvl"><dt>Address</dt><dd class="mono">this machine</dd><dt>Status</dt><dd>Connected</dd></dl></div>
+     <div class="dg" style="padding:0;gap:12px;overflow:visible"><h4 class="eyebrow">Diagnostics</h4>
+      <div class="faint" style="font-size:12px">This is the local host: this app reaches it through the local service (the hub), so there is no connection to log. This is the hub daemon's own log.</div>
+      <section>${dgHead('Local service log',"From this computer's daemon.")}<div class="dgl">${dgRow('09:12:03.220','','Daemon started (hub x1, build 0.7.3, pid 4242)')}${dgRow('09:12:03.432','','Daemon ready in 212 ms (environment 120 ms, adopting sessions 31 ms, node 9 ms)')}${dgRow('09:12:04.601','ok','Attempt 1 connected after 482 ms')}${dgRow('11:02:09.771','warn','The connection to win closed (an I/O error) after being up 120 min 0 s, the transport exited with code 255 — Connection reset by peer')}${dgRow('14:02:11.400','','session.command (0 hops) ok in 12 ms')}</div></section></div></aside>`
+   :`<aside class="hd"><div style="display:flex;align-items:center;gap:10px">${I('i-monitor','lg')}<div><div class="h2">win-build</div><div class="faint" style="font-size:12px">Windows 11 Pro · x86_64 · SSH</div></div><span class="sp" style="flex:1"></span>${conn('warn','Reconnecting in 4s')}</div>
+     <div class="gate" style="border-color:var(--needs-line)"><div class="gate-h">${I('i-refresh','sm')}Reconnecting in 4s</div><div style="font-size:12.5px">The connection dropped (connection reset by peer). Attempt 3.</div><div class="acts"><button class="btn sm">${I('i-refresh','xs')}Retry now</button></div></div>
+     <div class="dg" style="padding:0;gap:12px;overflow:visible"><h4 class="eyebrow">Diagnostics</h4>
+      <section>${dgHead('Connection log','From the hub, by attempt.')}
+       ${dgAttempt({title:'Attempt 1',at:'09:12:03.700',out:['ok','Connected'],ms:'482 ms',cls:'ok',steps:[['+0 ms','Connecting to win — attempt 1 began'],['+4 ms','Started ssh for win (attempt 1; 9 arguments, pid 21001)'],['+6 ms','Bootstrap attempt 1: powershell shell, first contact'],['+392 ms','The host reports windows/x86_64, helper 0.7.3 (372 ms)'],['+431 ms','The helper started on the host in 38 ms'],['+475 ms','The helper answered (build 0.7.3) in 44 ms'],['+482 ms','Attempt 1 connected after 482 ms','ok']]})}
+       ${dgAttempt({title:'Attempt 2',at:'13:04:07.100',out:['warn','Failed, will retry'],ms:'10 s',cls:'bad',steps:[['+0 ms','Connecting to win — attempt 2 began'],['+5 ms','Started ssh for win (attempt 2; 9 arguments, pid 21002)'],['+10 s','The transport to win exited (attempt 2) with code 255; 62 B of error output'],['+10 s','Bootstrap failed at spawn (unreachable), exit code 255','bad']],fail:['spawn','unreachable','255','ssh: connect to host win-build.lan port 22: Connection timed out']})}
+       ${dgAttempt({title:'Attempt 3',at:'13:05:09.100',out:['warn','Failed, will retry'],ms:'10 s',cls:'bad',steps:[['+0 ms','Connecting to win — attempt 3 began'],['+5 ms','Started ssh for win (attempt 3; 9 arguments, pid 21003)'],['+10 s','The transport to win exited (attempt 3) with code 255; 62 B of error output'],['+10 s','Bootstrap failed at spawn (unreachable), exit code 255','bad']],fail:['spawn','unreachable','255','ssh: connect to host win-build.lan port 22: Connection reset by peer']})}
+      </section>
+      <div class="faint" style="font-size:12px">win-build's own log is read while it is connected.</div></div></aside>`;
+  return `<div class="ph"><h1 class="h1">Hosts</h1><span class="muted" style="font-size:12.5px">5 machines · 3 connected</span></div><div class="hs">${hostsList(local?'x1':'win')}${aside}</div>`;
+}
+function diagScreen(v){
+  return v==='s'?diagSettings():v==='p'?diagSessionLocal():v==='r'?diagSessionRemote():diagHost(v==='l');
+}
+
 /* ================= RENDER ================= */
 function render(){
   const m=document.getElementById('main');
@@ -1640,6 +1770,7 @@ function render(){
   else if(sc==='config') html=configScreen();
   else if(sc==='hosts') html=v==='a'?hostsA():hostsB();
   else if(sc==='gates') html=v==='a'?gatesA():gatesB();
+  else if(sc==='diag') html=diagScreen(v);
   m.innerHTML=html;
   document.getElementById('overlay').innerHTML=state.gateOpen?`<div style="position:absolute;inset:40px 0 26px 78px;z-index:40">${gateOverlay(state.gateOpen)}</div>`:'';
   const tr=m.querySelector('.transcript'); if(tr) tr.scrollTop=tr.scrollHeight;

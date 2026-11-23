@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import type { WslDistros } from "../../bridge/wire";
 import { useNavigate, sessionPath } from "../../router";
-import { linkView, osWord, sameMachineAs, useActions, useReach, useSessionView, useApi, useAppState, usePending, type HostView } from "../../state";
-import { Button, ConfirmDialog, ConnState, DriverBadge, Icon, STATUS, Wrap, hostIcon, makeDriver, useNow } from "../../ui";
+import { linkView, osWord, sameMachineAs, useActions, useDeveloperMode, useReach, useSessionView, useApi, useAppState, usePending, type HostView } from "../../state";
+import { Button, ConfirmDialog, ConnState, DriverBadge, ErrorBoundary, Icon, STATUS, Wrap, hostIcon, makeDriver, useNow } from "../../ui";
 import { address, linkSub } from "./linkText";
 import { WslDistroPicker, defaultDistro } from "./WslDistroPicker";
 import { EnvironmentSection } from "./EnvironmentSection";
+import { HostDiagnostics } from "../diagnostics/HostDiagnostics";
 
 /** Right panel of the Hosts screen: link state with the action it calls for, connection, CLIs, sessions. */
 export function HostDetail({ host }: { host: HostView }) {
@@ -25,6 +26,7 @@ export function HostDetail({ host }: { host: HostView }) {
   const st = host.link.link === "remote" ? host.link.state : null;
   const reconnect = () => void actions.run(reconnectPk, `Could not connect to ${host.name}`, () => api.hosts.reconnect(host.id));
   const reach = useReach();
+  const developer = useDeveloperMode();
   // The local host is reached through the app's own link to the local daemon, not through the hub.
   const hub = host.link.link === "local" ? host.link.hub : undefined;
   const remove = async () => {
@@ -100,6 +102,7 @@ export function HostDetail({ host }: { host: HostView }) {
           {keys ? keys.split("|").map((key) => <SessionLine key={key} sessionKey={key} />) : <div className="faint small">No sessions on this host.</div>}
         </div>
       </div>
+      {developer ? <ErrorBoundary variant="item" what="the diagnostics" resetKey={host.id}><HostDiagnostics host={host} /></ErrorBoundary> : null}
       {!host.local ? <div className="hd-foot"><Button size="sm" variant="ghost" icon="x" blocked={reach} onClick={() => setConfirm(true)}>Remove host</Button></div> : null}
       <ConfirmDialog open={confirm} title={`Remove ${host.name}?`} confirmLabel="Remove host" danger onConfirm={() => void remove()} onClose={() => setConfirm(false)}>
         <p>Marsad stops connecting to {host.name}. Sessions already running there keep running; you can add the host again later.</p>

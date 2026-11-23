@@ -14,6 +14,8 @@ export interface VirtualListProps<T> {
   overscan?: number;
   /** Rows rendered when the viewport has no layout (tests, first paint). */
   initialCount?: number;
+  /** Which end those rows are taken from: the first ones (default), or the last ones (a list that starts at its bottom). */
+  anchor?: "start" | "end";
   role?: string;
   "aria-label"?: string;
 }
@@ -23,7 +25,7 @@ export interface VirtualListProps<T> {
  * details). Only rows near the viewport are mounted, so hundreds of sessions stay cheap.
  */
 function VirtualListInner<T>(
-  { items, getKey, estimateSize, renderItem, className = "", overscan = 6, initialCount = 40, role, ...aria }: VirtualListProps<T>,
+  { items, getKey, estimateSize, renderItem, className = "", overscan = 6, initialCount = 40, anchor = "start", role, ...aria }: VirtualListProps<T>,
   ref: React.ForwardedRef<VirtualListHandle>,
 ) {
   const box = useRef<HTMLDivElement>(null);
@@ -45,8 +47,8 @@ function VirtualListInner<T>(
   }, [items, getKey, estimateSize, ver]);
   const total = offsets[items.length];
 
-  let start = 0;
-  let end = Math.min(items.length, initialCount);
+  let start = anchor === "end" ? Math.max(0, items.length - initialCount) : 0;
+  let end = anchor === "end" ? items.length : Math.min(items.length, initialCount);
   if (viewport > 0) {
     let lo = 0;
     let hi = items.length;

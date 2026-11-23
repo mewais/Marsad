@@ -1,6 +1,7 @@
 import type { HubLinkInfo } from "../bridge/backend";
 import type { DriverDescriptor } from "../ui/DriverBadge";
-import type { DriverInventory, GitSummary, HostId, NotificationPrefs, SeenMark, SessionEvent, SessionKey, SessionSnapshot, WorkstreamView } from "../bridge/wire";
+import type { DiagTailParams, DriverInventory, GitSummary, HostId, NotificationPrefs, SeenMark, SessionEvent, SessionKey, SessionSnapshot, TrailItem, UiEvent, WorkstreamView } from "../bridge/wire";
+import type { DiagRecord, TailKeep } from "../lib/diagRecord";
 import { createStore } from "../lib/store";
 import type { HostState } from "./hosts";
 
@@ -12,6 +13,55 @@ export interface TranscriptSlice {
   loading: boolean;
   error?: string;
 }
+
+/** A session's trail as loaded here (Developer mode's Diagnostics tab); present only while that panel is open. */
+export interface TrailSlice {
+  /** Oldest first, in the host's order; contiguous from `items[0]` to the live edge. */
+  items: TrailItem[];
+  /** Older entries exist on the host. */
+  hasMore: boolean;
+  loading: boolean;
+  error?: string;
+}
+
+/** A `diag.tail` subscription: which daemon, what the daemon is asked for, what is kept of it. */
+export interface TailSpec {
+  /** Names the subscription (callers that want the same data use the same id). */
+  id: string;
+  /** The host whose daemon serves it; omitted: the hub (this computer's own daemon). */
+  host?: HostId;
+  filter: DiagTailParams;
+  keep?: TailKeep;
+}
+
+/** What a `diag.tail` subscription has delivered; present only while its panel is open. */
+export interface TailSlice {
+  /** `waiting`: subscribed, nothing delivered yet. */
+  state: "waiting" | "live";
+  /** Oldest first, in the daemon's order; the newest `TAIL_KEEP` that matched. */
+  records: DiagRecord[];
+  /** Records of the daemon that matched and were dropped to stay within `TAIL_KEEP`. */
+  trimmed: number;
+  /** Lines the daemon sent that are not diagnostics records. */
+  unreadable: number;
+}
+
+/** An event the app recorded of its own acts (`ui.*`), with when, by this computer's clock. */
+export interface AppEventRec {
+  t: number;
+  event: UiEvent;
+}
+
+/** What the app's own diagnostics log could not take. */
+export interface DiagLogState {
+  /** Events the shell refused or that could not be handed to it. */
+  failed: number;
+  /** Why the last one failed. */
+  error?: string;
+}
+
+export const APP_EVENTS_KEEP = 300;
+export const TAIL_KEEP = 1000;
 
 export type PendingState = "pending" | "sent";
 
@@ -61,6 +111,12 @@ export interface AppState {
   notifications: NotificationPrefs | null;
   /** Valid once `loads.settings` is ready; written only from the daemon's replies. */
   settings: Record<string, unknown>;
+  /** The last `APP_EVENTS_KEEP` things the app recorded of its own acts, oldest first. */
+  appEvents: AppEventRec[];
+  diagLog: DiagLogState;
+  /** Session trails, tails of daemon logs: only what an open Diagnostics panel is subscribed to. */
+  trails: Record<SessionKey, TrailSlice>;
+  tails: Record<string, TailSlice>;
 }
 
 export function initialState(partial: Partial<AppState> = {}): AppState {
@@ -85,6 +141,10 @@ export function initialState(partial: Partial<AppState> = {}): AppState {
     workstreamsLoaded: false,
     notifications: null,
     settings: {},
+    appEvents: [],
+    diagLog: { failed: 0 },
+    trails: {},
+    tails: {},
     ...partial,
   };
 }

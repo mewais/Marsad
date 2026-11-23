@@ -160,6 +160,8 @@ fn run(dir: &Path) -> Result<usize, String> {
         p::Cursor,
         p::HostId,
         wasit_control::TraceId,
+        // Marsad diagnostics (what the webview may record in the app log)
+        p::diag::UiEvent,
         // Wasit runtime
         rt::HostInfo,
         rt::HostEnvironment,
@@ -191,6 +193,13 @@ fn run(dir: &Path) -> Result<usize, String> {
         rt::DiagTailEvent,
         wasit_runtime::trail::TrailEntry,
         wasit_runtime::trail::TrailCause,
+        rt::DiagSources,
+        rt::DiagSource,
+        rt::DiagGen,
+        rt::DiagReadRequest,
+        rt::DiagChunk,
+        rt::DiagTailParams,
+        rt::DiagTailEvent,
         rt::CommandRequest,
         rt::CommandReply,
         rt::CommandError,
@@ -354,6 +363,7 @@ fn write_names(dir: &Path) -> Result<(), String> {
         ("HOST_SESSIONS", rt::HOST_SESSIONS),
         ("DIAG_TAIL", rt::DIAG_TAIL),
         ("DRIVERS_INVENTORY", rt::DRIVERS_INVENTORY),
+        ("DIAG_TAIL", rt::DIAG_TAIL),
         ("WASL_TASKS", wt::TASKS),
         ("WASL_EDGES", wt::EDGES),
     ];

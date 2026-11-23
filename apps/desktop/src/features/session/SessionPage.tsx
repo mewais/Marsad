@@ -3,8 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { money } from "../../lib/format";
 import { Link, sessionPath, useNavigate } from "../../router";
 import { useShortcut } from "../../shortcuts/useShortcut";
-import { selectView, useActions, useApi, useApp, useAppState, useDriver, useHost, useSessionReach, useSessionView, useTranscriptOpen } from "../../state";
-import { Button, ConfirmDialog, ConnState, DriverBadge, EmptyState, HostChip, Icon, IconButton, Skeleton, StatusPill, Tabs, useEscape } from "../../ui";
+import { selectView, useActions, useApi, useApp, useAppState, useDeveloperMode, useDriver, useHost, useSessionReach, useSessionView, useTranscriptOpen } from "../../state";
+import { Button, ConfirmDialog, ConnState, DriverBadge, EmptyState, ErrorBoundary, HostChip, Icon, IconButton, Skeleton, StatusPill, Tabs, useEscape } from "../../ui";
 import { toast } from "../../ui/toast";
 import { Gate } from "../gates/Gate";
 import { Composer } from "./Composer";
@@ -15,6 +15,7 @@ import { useTranscriptRows } from "./useTranscriptRows";
 import { usageSummary } from "./usage";
 import { ChangesTab } from "./tabs/ChangesTab";
 import { ConfigTab } from "./tabs/ConfigTab";
+import { SessionDiagnostics } from "../diagnostics/SessionDiagnostics";
 import { TerminalTab } from "./tabs/TerminalTab";
 import "./session.css";
 import "./tabs/tabs.css";
@@ -25,6 +26,8 @@ const TABS = [
   { id: "config", label: "Config" },
   { id: "terminal", label: "Terminal" },
 ];
+/** Developer mode adds this one (and takes it away again when it is switched off). */
+const DIAGNOSTICS_TAB = { id: "diagnostics", label: "Diagnostics" };
 
 function gateSummary(kinds: string[]): string {
   const c = (k: string, w: string) => (kinds.filter((x) => x === k).length ? `${kinds.filter((x) => x === k).length} ${w}${kinds.filter((x) => x === k).length > 1 ? "s" : ""}` : "");
@@ -32,8 +35,10 @@ function gateSummary(kinds: string[]): string {
 }
 
 export function SessionPage({ host, id, tab: tabParam }: { host: string; id: string; tab: string }) {
-  // An address that names a section this version does not have (an old `?tab=usage` link) opens the first one.
-  const tab = TABS.some((t) => t.id === tabParam) ? tabParam : "activity";
+  // An address that names a section this version does not have (an old `?tab=usage` link, or Diagnostics with Developer mode off) opens the first one.
+  const developer = useDeveloperMode();
+  const tabs = developer ? [...TABS, DIAGNOSTICS_TAB] : TABS;
+  const tab = tabs.some((t) => t.id === tabParam) ? tabParam : "activity";
   const key = `${host}/${id}`;
   const v = useSessionView(key);
   const snap = useAppState((s) => s.sessions[key]);
@@ -145,11 +150,11 @@ export function SessionPage({ host, id, tab: tabParam }: { host: string; id: str
           <span className="kv"><Icon name="coin" size="sm" /><span className="tnum">{usage.reportsCost ? money(usage.cost) : "n/a"}</span><span className="faint">· {mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`}</span></span>
         </div>
         {v.stale ? <div className="banner warn sd-stale" role="status" data-testid="stale-note"><Icon name="clock" size="sm" /><div className="bt"><b>Last known state.</b> <span>{reach}</span></div></div> : null}
-        <Tabs tabs={TABS} value={tab} label="Session sections" onChange={(t) => nav(sessionPath(host, id, t))} />
+        <Tabs tabs={tabs} value={tab} label="Session sections" onChange={(t) => nav(sessionPath(host, id, t))} />
       </div>
       {tab !== "activity" ? (
-        <div className="tabbody" role="tabpanel" aria-label={TABS.find((t) => t.id === tab)?.label}>
-          {tab === "changes" ? <ChangesTab sessionKey={key} /> : tab === "config" ? <ConfigTab sessionKey={key} snap={snap} /> : <TerminalTab key={key} sessionKey={key} />}
+        <div className="tabbody" role="tabpanel" aria-label={tabs.find((t) => t.id === tab)?.label}>
+          {tab === "changes" ? <ChangesTab sessionKey={key} /> : tab === "config" ? <ConfigTab sessionKey={key} snap={snap} /> : tab === "diagnostics" ? <ErrorBoundary variant="item" what="the diagnostics" resetKey={key}><SessionDiagnostics key={key} sessionKey={key} snap={snap} /></ErrorBoundary> : <TerminalTab key={key} sessionKey={key} />}
         </div>
       ) : (
         <div className="sd-body">
