@@ -342,6 +342,13 @@ h1,h2,h3{margin:0;text-wrap:balance}
 .tool-h .arg{font-family:var(--f-mono);font-size:11.5px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
 .tool-h .res{font-size:11.5px;color:var(--fg-3);white-space:nowrap}
 .tool-b{border-top:1px solid var(--line);background:var(--sunken);padding:8px 10px;font-family:var(--f-mono);font-size:11.5px;color:var(--fg-2);white-space:pre;overflow:auto;line-height:1.55}
+/* Run of consecutive tool calls: one .tool row (same look), "N tool calls" + the latest call; open, it lists the calls (.run-b) as ordinary .tool rows. Images and files the calls produced stay visible under the collapsed row. */
+.tool.run .nm{font-variant-numeric:tabular-nums}
+.run-b{border-top:1px solid var(--line);background:var(--sunken);padding:8px;display:flex;flex-direction:column;gap:8px}
+/* A message that did not reach the agent: dashed failed-coloured outline, a line under the text saying why. Queued: dimmed text, "Queued" under it. Sent: nothing. */
+.msg-user[data-delivery="not_sent"]{border-style:dashed;border-color:var(--failed-line)}
+.msg-user[data-delivery="not_sent"] .md,.msg-user[data-delivery="queued"] .md{opacity:.75}
+.msg-state{margin-top:4px;font-size:12px}
 .diff{font-family:var(--f-mono);font-size:11.5px;line-height:1.6;background:var(--sunken);overflow:auto}
 .diff .ln{display:grid;grid-template-columns:38px 38px 16px 1fr;white-space:pre}
 .diff .ln span:nth-child(-n+2){color:var(--fg-3);text-align:right;padding-right:8px;user-select:none}
@@ -1061,7 +1068,7 @@ function composer(withSlash){
       <button class="iconbtn" id="slash-btn" title="Slash commands">${I('i-slash','sm')}</button>
       <button class="pick">${I('i-shield','xs')}Default mode ${I('i-chev','xs')}</button>
       <button class="pick">${I('i-sparkle','xs')}claude-sonnet-4.5 ${I('i-chev','xs')}</button>
-      <span class="sp"></span><span class="faint" style="font-size:11.5px">${kbd('Enter')} send · ${kbd('⇧ Enter')} new line</span>
+      <span class="sp"></span><span class="faint" style="font-size:11.5px">${kbd('Enter')} send · ${kbd('⇧ Enter')} new line · ${kbd('↑')} earlier prompts</span>
       <button class="btn primary sm">${I('i-send','xs')}Send</button>
     </div></div></div>`;
 }
@@ -1107,6 +1114,18 @@ apps/api/src/routes/invoices.ts:31     const org = req.session.orgId
       <div class="ln a"><span></span><span>20</span><span>+</span><span>app.use(authMiddleware({ issuer: env.AUTH_ISSUER, cookie: 'll_session' }))</span></div>
       <div class="ln"><span>21</span><span>21</span><span></span><span>app.use('/v1', routes)</span></div></div></div>
    <div class="tool"><div class="tool-h">${I('i-failed','sm c-failed')}<span class="nm">Bash</span><span class="arg">pnpm --filter api test auth</span><span class="res">27 passed · 2 failed · 8.4s</span>${I('i-chevr','xs faint')}</div></div>
+   <!-- Run: 4 consecutive calls, collapsed (latest call + running state; updates in place while the agent works) -->
+   <div class="tool run"><div class="tool-h">${I('i-working','sm c-working')}<span class="nm">4 tool calls</span><span class="arg">Read apps/api/src/routes/me.ts</span><span class="res">running</span>${I('i-chevr','xs faint')}</div></div>
+   <!-- Run: finished, one call failed, expanded -->
+   <div class="tool run"><div class="tool-h">${I('i-failed','sm c-failed')}<span class="nm">3 tool calls</span><span class="arg">Bash pnpm --filter api test auth</span><span class="res">1 failed</span>${I('i-chev','xs faint')}</div>
+     <div class="run-b">
+      <div class="tool"><div class="tool-h">${I('i-done','sm c-done')}<span class="nm">Read</span><span class="arg">apps/api/src/routes/me.ts</span><span class="res">42 lines</span>${I('i-chevr','xs faint')}</div></div>
+      <div class="tool"><div class="tool-h">${I('i-done','sm c-done')}<span class="nm">Grep</span><span class="arg">"userId" in apps/api/src</span><span class="res">9 matches in 4 files</span>${I('i-chevr','xs faint')}</div></div>
+      <div class="tool"><div class="tool-h">${I('i-failed','sm c-failed')}<span class="nm">Bash</span><span class="arg">pnpm --filter api test auth</span><span class="res">failed · 2 failed</span>${I('i-chevr','xs faint')}</div></div>
+     </div></div>
+   <!-- Prompt states: queued, and not sent (interrupted / session ended / the agent refused it) -->
+   <div class="msg-user" data-delivery="queued"><div class="md">Then run the whole suite once more.</div><div class="msg-state faint">Queued</div></div>
+   <div class="msg-user" data-delivery="not_sent"><div class="md">Also bump the cookie TTL.</div><div class="msg-state c-failed">${I('i-warn','xs')} Not sent — interrupted</div></div>
    <div class="msg-ai"><p>The two failures are the cookie-compat tests. Before I fix them I need the session table migration, and a decision on legacy cookies.</p></div>
    ${permGate()}
    ${questionGate()}

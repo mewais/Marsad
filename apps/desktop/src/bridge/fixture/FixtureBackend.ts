@@ -219,13 +219,13 @@ export class FixtureBackend implements Backend {
       case M.SESSIONS_DELETE: {
         const r = p as SessionRef;
         const e = this.entry(host, r);
-        if (e.snap.phase.state === "working" || e.snap.phase.state === "needs_you" || e.snap.phase.state === "starting") this.sim.setPhase(e, { state: "exited", code: 0 });
+        if (e.snap.phase.state === "working" || e.snap.phase.state === "needs_you" || e.snap.phase.state === "starting") this.sim.end(e);
         host.sessions.delete(r.id);
         this.fleet({ kind: "session_removed", host: hostId, id: r.id });
         return {};
       }
       case M.SESSIONS_STOP:
-        this.sim.setPhase(this.entry(host, p as SessionRef), { state: "exited", code: 0 });
+        this.sim.end(this.entry(host, p as SessionRef));
         return {};
       case M.GIT_STATUS:
         return this.tree(hostId, (p as GitStatusRequest).target).status;
@@ -460,8 +460,10 @@ export class FixtureBackend implements Backend {
     const e: Entry = { snap, events: [], subs: new Set(), host };
     this.hosts.get(host)!.sessions.set(snap.id, e);
     this.sim.emit(e, { kind: "spawned", generation: 1, pid: snap.pid ?? null, argv: [driverDef(snap.driver).binary] });
+    // Like the daemon: the first prompt is journaled with the start, before the agent says anything.
+    const input = first ? this.sim.firstPrompt(e, first) : undefined;
     this.publish(e);
-    this.later(300 * this.opts.speed, () => (first ? this.sim.startTurn(e, first) : this.sim.setPhase(e, { state: "idle" })));
+    this.later(300 * this.opts.speed, () => (first ? this.sim.startTurn(e, first, input) : this.sim.ready(e)));
   }
 
   private later(ms: number, fn: () => void) {

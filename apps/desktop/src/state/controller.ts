@@ -8,9 +8,19 @@ import type { AppState, AppStore } from "./model";
 
 const toHost = (f: FleetHost): HostState => ({ entry: f.host, link: f.link, sessionsLive: f.sessions_live, authPrompt: f.auth_prompt ?? null });
 
-/** Pure: apply one `fleet` event. */
+const warned = new Set<string>();
+
+/** An event of a kind this build does not know: say so once per kind and leave the state alone. */
+function unknownEvent(topic: string, e: unknown): void {
+  const kind = String((e as { kind?: unknown } | null)?.kind);
+  if (warned.has(`${topic}:${kind}`)) return;
+  warned.add(`${topic}:${kind}`);
+  console.warn(`ignored a ${topic} event of unknown kind "${kind}"`);
+}
+
+/** Pure (apart from that warning): apply one `fleet` event. */
 export function applyFleet(s: AppState, e: FleetEvent): AppState {
-  switch (e.kind) {
+  switch (e?.kind) {
     case "reset": {
       const hosts: AppState["hosts"] = {};
       const sessions: AppState["sessions"] = {};
@@ -63,23 +73,30 @@ export function applyFleet(s: AppState, e: FleetEvent): AppState {
       delete sessions[sessionKey(e.host, e.id)];
       return { ...s, sessions };
     }
+    default:
+      unknownEvent("fleet", e);
+      return s;
   }
 }
 
-/** Pure: apply one `workstreams` event. */
+/** Pure (apart from the unknown-kind warning): apply one `workstreams` event. */
 export function applyWorkstreams(s: AppState, e: WorkstreamsEvent): AppState {
-  if (e.kind === "reset") {
+  if (e?.kind === "reset") {
     const workstreams: AppState["workstreams"] = {};
     for (const v of e.workstreams) workstreams[v.workstream.id] = v;
     return { ...s, workstreams, wsOrder: e.workstreams.map((v) => v.workstream.id), workstreamsLoaded: true };
   }
-  if (e.kind === "upserted") {
+  if (e?.kind === "upserted") {
     const id = e.workstream.workstream.id;
     return { ...s, workstreams: { ...s.workstreams, [id]: e.workstream }, wsOrder: s.wsOrder.includes(id) ? s.wsOrder : [...s.wsOrder, id] };
   }
-  const workstreams = { ...s.workstreams };
-  delete workstreams[e.id];
-  return { ...s, workstreams, wsOrder: s.wsOrder.filter((x) => x !== e.id) };
+  if (e?.kind === "removed") {
+    const workstreams = { ...s.workstreams };
+    delete workstreams[e.id];
+    return { ...s, workstreams, wsOrder: s.wsOrder.filter((x) => x !== e.id) };
+  }
+  unknownEvent("workstreams", e);
+  return s;
 }
 
 /** Learn driver presentation from inventories and session snapshots (never hardcoded). */
@@ -125,7 +142,7 @@ export function connectStore(store: AppStore, api: Api): () => void {
   };
   const offFleet = api.subscribe.fleet((e) => {
     store.set((s) => applyFleet(s, e));
-    if (e.kind === "reset" || e.kind === "link" || e.kind === "host_upserted" || e.kind === "host_removed") syncInventory();
+    if (e?.kind === "reset" || e?.kind === "link" || e?.kind === "host_upserted" || e?.kind === "host_removed") syncInventory();
   });
 
   const fail = (what: string) => (e: unknown) => console.warn(`${what}: ${errorMessage(e)}`);

@@ -143,7 +143,9 @@ test("the transcript colours code and diffs, and only paths inside the folder ar
   expect(chips.some((c) => c.startsWith("todo.md"))).toBe(false);
   expect(chips.some((c) => c.startsWith("config"))).toBe(false);
   await expect(page.locator("main")).toContainText("../notes/todo.md");
-  await page.getByRole("button", { name: /Edit/ }).first().click();
+  // The Edit is one of three consecutive tool calls: open that run first.
+  await page.getByTestId("tool-run").getByRole("button", { name: /tool calls/ }).last().click();
+  await page.getByRole("button", { name: /^Edit/ }).first().click();
   await expect(page.getByTestId("tool-diff").first()).toBeVisible();
 });
 

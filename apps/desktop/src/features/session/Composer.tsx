@@ -7,6 +7,7 @@ import { Button, Icon, IconButton, Kbd, Select } from "../../ui";
 import { formatBytes } from "../media/fetch";
 import { batchProblem, fromFile, fromPicked, handling, upload, type PendingFile } from "./attachments";
 import { clearDraft, peekDraft } from "./draft";
+import { usePromptRecall } from "./usePromptRecall";
 import { inShell } from "../../lib/shell";
 
 /** Pending attachments: thumbnails or chips, each with its tooltip and a remove button. */
@@ -66,7 +67,9 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
   const [active, setActive] = useState(0);
   const ta = useRef<HTMLTextAreaElement>(null);
   const sending = usePending(`cmd:${sessionKey}:prompt`) === "pending";
-  const slash = text.startsWith("/") && !text.includes(" ") && !text.includes("\n");
+  const recall = usePromptRecall(sessionKey, text, setText, ta);
+  // The slash menu belongs to typing a command; a recalled prompt is not being typed.
+  const slash = text.startsWith("/") && !text.includes(" ") && !text.includes("\n") && !recall.browsing;
   const items = useMemo(() => (slash ? snap.slash_commands.filter((c) => c.name.toLowerCase().startsWith(text.slice(1).toLowerCase())) : []), [slash, text, snap.slash_commands]);
   const live = snap.phase.state !== "exited" && snap.phase.state !== "lost";
 
@@ -85,17 +88,20 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
       if (ok) {
         sent.forEach((f) => f.thumb && URL.revokeObjectURL(f.thumb));
         setFiles([]);
+        recall.reset();
         setText("");
       }
       return;
     }
     const m = /^\/(\S+)\s*(.*)$/s.exec(t);
     const cmd = m && snap.slash_commands.some((c) => c.name === m[1]) ? m : null;
+    recall.reset();
     setText("");
     const ok = cmd ? await actions.command(sessionKey, { command: "run_slash", name: cmd[1], args: cmd[2] }, { failTitle: "Could not run the command" }) : await actions.sendPrompt(sessionKey, t);
     if (!ok) setText(t);
   };
   const pick = (name: string) => {
+    recall.reset();
     setText(`/${name} `);
     ta.current?.focus();
   };
@@ -143,20 +149,21 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
           aria-label="Message"
           placeholder={live ? "Message the agent" : "This session has ended; sending continues it"}
           value={text}
-          onChange={(e) => { setText(e.target.value); setActive(0); }}
+          onChange={(e) => { recall.reset(); setText(e.target.value); setActive(0); }}
           onKeyDown={(e) => {
             if (slash && items.length) {
               if (e.key === "ArrowDown") { e.preventDefault(); return setActive((a) => Math.min(items.length - 1, a + 1)); }
               if (e.key === "ArrowUp") { e.preventDefault(); return setActive((a) => Math.max(0, a - 1)); }
               if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && text.slice(1) !== items[active]?.name)) { e.preventDefault(); return pick(items[active].name); }
             }
+            if (recall.onKeyDown(e)) return;
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void submit(); }
             if (e.key === "Escape") (e.target as HTMLElement).blur();
           }}
         />
         <div className="comp-bar">
           <IconButton icon="clip" label={attachHint} onClick={() => void attach()} disabled={!canAttach} />
-          <IconButton icon="slash" label="Slash commands" onClick={() => { setText("/"); ta.current?.focus(); }} disabled={!snap.capabilities.slash_commands} />
+          <IconButton icon="slash" label="Slash commands" onClick={() => { recall.reset(); setText("/"); ta.current?.focus(); }} disabled={!snap.capabilities.slash_commands} />
           {snap.available_modes.length ? (
             <Select compact up label="Mode" leading={<Icon name="shield" size="xs" />} value={snap.mode ?? undefined} options={snap.available_modes.map((m) => ({ value: m.id, label: m.label, description: m.description }))}
               onChange={(v) => void actions.command(sessionKey, { command: "set_mode", mode: v }, { failTitle: "Could not change the mode" })} />
@@ -166,7 +173,7 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
               onChange={(v) => void actions.command(sessionKey, { command: "set_model", model: v }, { failTitle: "Could not change the model" })} />
           ) : null}
           <span className="sp" />
-          <span className="faint fs115"><Kbd>Enter</Kbd> send · <Kbd>⇧ Enter</Kbd> new line</span>
+          {recall.paging ? <span className="faint fs115" role="status">Loading earlier prompts…</span> : <span className="faint fs115"><Kbd>Enter</Kbd> send · <Kbd>⇧ Enter</Kbd> new line · <Kbd>↑</Kbd> earlier prompts</span>}
           <Button variant="primary" size="sm" icon="send" pending={sending} disabled={(!text.trim() && !files.length) || !!problem} onClick={() => void submit()}>Send</Button>
         </div>
       </div>
