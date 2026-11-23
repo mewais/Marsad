@@ -3,11 +3,15 @@
 Two blocks live here:
 
 - **D01 `src-tauri/`** (Rust): a thin Tauri v2 shell over `marsad-client` — exactly the generic
-  bridges `rpc`, `rpc_subscribe` (channel of `{type:"event",cursor,payload}` / `{type:"link"}` /
-  `{type:"end"}`), `rpc_unsubscribe`, `connection_state` (+ `connection` event); native extras
-  as `rpc` methods `desktop.open|reveal|pick_folder`; notifications, tray, single instance,
-  window state; the `navigate {host, session}` event after a notification brings the app
-  forward. See the Marsad README ("Desktop app").
+  bridges `rpc(method, params?, host?, trace?)`, `rpc_subscribe(topic, host?, from?, params?, channel)`
+  (channel of `{type:"event",cursor,payload}` / `{type:"link",state}` / `{type:"end"}`),
+  `rpc_unsubscribe(id)`, `connection_state()` (+ `connection` event), `reconnect_daemon()`, and
+  `diag_log(events)`; `smoke_report(report)` exists only in debug builds run with `MARSAD_SMOKE`.
+  Native extras as `rpc` methods `desktop.open|reveal|pick_folder|pick_files|read_picked|download_begin|download_chunk|export_save|window_surface`;
+  notifications, tray, single instance, window state; the `navigate {host, session?}` event after
+  a notification brings the app forward. The app's own log is `<data>/machines/<key>/diag/app.ndjson`
+  (`src-tauri/src/diag.rs`, typed `AppEvent`s only); the webview may only log typed `UiEvent`s
+  through `diag_log`. See the Marsad README ("Desktop app").
 - **D02 `src/`** (React/TypeScript, UI tier): the desktop UI, faithful to the design.
 
 **Design source of truth:** `design/marsad-mockups.html` — recreate the look,
@@ -17,11 +21,8 @@ The wire types and method/topic names are generated from the Rust crates into
 Real-app end-to-end suite: `pnpm test:real` (see the Marsad README).
 
 ## Screens to build (D02)
-Overview (command center: 4 stat tiles, "Needs your attention" gate grid, Active now, Idle &
-finished) · Session detail (tabs Activity/Changes/Config/Usage/Terminal) · Gate overlay
-(permission/plan/edit, approve / reject-with-reason) · New-session modal · Settings
-(Notifications/Hosts/Session defaults/General) · Workspaces manager · header (workspace switcher,
-search, theme + glass toggles, New session).
+Inbox (the landing page: sessions grouped Needs you, Failed, Finished not seen yet, Working, Idle, Ended) · Session detail (tabs Activity/Changes/Config/Terminal, plus Diagnostics in developer mode; usage is in the session sidebar) · Gates (permission/question/plan/handoff/spawn, drawn in the Inbox row or the session view; approve / reject-with-reason) · New-session modal · Settings
+(General/Notifications/Keyboard/Diagnostics/About; theme and window background are under General) · Workstreams manager · header (search, New session).
 
 ## What you may edit
 - **D01 code-agent:** write `apps/desktop/src-tauri/src/**` + its `Cargo.toml`/`tauri.conf.json`.

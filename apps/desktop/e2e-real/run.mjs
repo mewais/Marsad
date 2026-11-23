@@ -725,7 +725,7 @@ scenario_("stop-delete", async () => {
   const s = await launchViaDialog({ agent: DRIVER_NAMES.codex, cwd: project, prompt: "a session to stop and delete" });
   await waitPhase(s.id, "idle");
   await openSession(s);
-  await button("Stop");
+  await button("End session");
   await waitPhase(s.id, "exited");
   await button("Delete");
   await click("[role=dialog] button", "Delete session");
@@ -1017,7 +1017,7 @@ scenario_("ssh-host-password", async () => {
   await el(".authp-input", null, 60_000);
   await shot("41-host-sign-in");
   await type(".authp-input", sshd.password);
-  await button("Sign in");
+  await click("[role=dialog] button.primary", "Sign in");
   await waitFor(async () => (await linkOf("lab-pc"))?.state?.state === "connected", "lab-pc connected", 180_000);
   await resetUi();
   // A host that needed a password never reconnects on its own: it parks in auth_needed.
@@ -1026,10 +1026,11 @@ scenario_("ssh-host-password", async () => {
   await go("#/hosts");
   await click(".hrow[data-host]", "lab-pc").catch(() => {});
   await shot("42-host-auth-needed");
-  await click("button.primary", "Connect", 20_000);
+  // Held now (it connected once, then dropped): the card's button is "Sign in", and the host row shows it too.
+  await click("[data-testid=host-held] button", "Sign in", 20_000);
   await el(".authp-input", null, 60_000);
   await type(".authp-input", sshd.password);
-  await button("Sign in");
+  await click("[role=dialog] button.primary", "Sign in");
   await waitFor(async () => (await linkOf("lab-pc"))?.state?.state === "connected", "lab-pc connected again", 120_000);
 });
 
@@ -1091,7 +1092,7 @@ scenario_("ssh-host-second-factor", async () => {
       await shot("43-host-sign-in-second-factor");
     }
     await type(".authp-input", value());
-    await button("Sign in");
+    await click("[role=dialog] button.primary", "Sign in");
     await waitFor(async () => !(await wd.exec(() => !!document.querySelector(".authp-input"))), "the prompt answered", 20_000).catch(() => {});
   };
   await answer("password", () => sshd.password);
@@ -1537,7 +1538,7 @@ scenario_("showcase", async () => {
   if (lc) { await openSession(lc); await el("[data-gate=permission]", null, 5000).catch(() => {}); await shot("dark-02-session-activity-permission-gate-claude-live"); }
   if (lo) { await openSession(lo); await shot("dark-03-session-question-gate-ask-user-opencode-live"); }
   const main = launched.claude ?? launched.codex ?? finished;
-  for (const [tab, name] of [["changes", "dark-04-session-changes"], ["config", "dark-05-session-config"], ["usage", "dark-06-session-usage"], ["terminal", "dark-07-session-terminal"]]) {
+  for (const [tab, name] of [["changes", "dark-04-session-changes"], ["config", "dark-05-session-config"], ["terminal", "dark-07-session-terminal"]]) {
     await openSession(finished, tab);
     if (tab === "changes") { fs.appendFileSync(path.join(project, "src/auth.ts"), "export const TOKEN_TTL_DAYS = 30;\n"); await rpc("fleet.git_refresh", { host: local, cwd: project }); await click("[role=option]", "src/auth.ts", 20_000).catch(() => {}); }
     if (tab === "terminal") { await click(".xterm-box .xterm").catch(() => {}); await wd.sendKeys(await el(".xterm-box textarea"), "git log --oneline | head -5" + Keys.ENTER).catch(() => {}); await sleep(1200); }
