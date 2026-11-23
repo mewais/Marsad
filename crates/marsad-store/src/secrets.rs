@@ -20,6 +20,7 @@ use std::time::Duration;
 use marsad_proto::hosts::SecretsLocation;
 use marsad_proto::HostId;
 
+use crate::diag;
 use crate::{SecretValue, StoreError};
 
 /// Secret values by host and variable name.
@@ -218,7 +219,7 @@ impl Backend {
         };
         let id = store_id(dir);
         if let Err(e) = service_running().await {
-            tracing::warn!(store = name, error = %e, "secrets stay in the store's file");
+            diag::secrets_service_unavailable(name, &e);
             return Ok(file_backend(
                 file,
                 file_secrets,
@@ -226,7 +227,7 @@ impl Backend {
             ));
         }
         if let Err(e) = probe(&id, name).await {
-            tracing::warn!(store = name, error = %e, "secrets stay in the store's file");
+            diag::secrets_probe_failed(name, &e);
             return Ok(file_backend(
                 file,
                 file_secrets,
@@ -276,7 +277,7 @@ impl Backend {
             tokio::fs::remove_file(&file)
                 .await
                 .map_err(|e| crate::io_err(&file, e))?;
-            tracing::info!(store = name, "moved the secret values from secrets.json");
+            diag::secrets_moved_from_file(name);
         }
         Ok((
             backend,

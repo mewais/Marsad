@@ -21,6 +21,7 @@ use wasit_diag::{ErrorInfo, Ident};
 use wasit_runtime::wire::{topics as rt_topics, HostEvent, SessionSnapshot};
 use wasit_runtime::{SessionManager, StreamEnd};
 
+use super::fleet_events;
 use super::gitwatch::GitWatch;
 use super::ring::{self, Joined, Ring};
 use crate::diag::{self, emit};
@@ -126,7 +127,7 @@ impl State {
                 let Some(h) = self.hosts.get_mut(&id) else {
                     // A feed is started only after its host was upserted; this is the tail of
                     // a host just removed.
-                    tracing::debug!(host = %id, "session feed of a host the fleet does not know");
+                    fleet_events::feed_unknown_host(&id);
                     return;
                 };
                 let mut touch: Vec<String> = Vec::new();
@@ -237,7 +238,7 @@ impl Fleet {
 
     async fn send(&self, i: Input) {
         if self.tx.send(i).await.is_err() {
-            tracing::error!("the fleet aggregator is gone");
+            fleet_events::aggregator_gone();
         }
     }
 

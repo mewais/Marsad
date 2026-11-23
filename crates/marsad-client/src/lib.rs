@@ -11,6 +11,8 @@
 
 #![forbid(unsafe_code)]
 
+mod diag;
+
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -123,7 +125,7 @@ impl ClientConfig {
             Err(e) => {
                 // The daemon refuses to start in this state too and logs why; this path only
                 // names where it would have listened.
-                tracing::error!(error = %e, "cannot prepare the runtime directory");
+                diag::runtime_dir_failed(&e);
                 self.data_dir.join("marsad.sock")
             }
         }
@@ -208,7 +210,7 @@ async fn start_daemon(cfg: &ClientConfig) -> Result<(), ConnectError> {
     if !line.trim().is_empty() {
         let r: Readiness = serde_json::from_str(line.trim())
             .map_err(|e| ConnectError::Spawn(format!("bad readiness line {line:?}: {e}")))?;
-        tracing::info!(pid = r.pid, build = %r.build, "started the Marsad daemon");
+        diag::daemon_started(r.pid, &r.build);
     }
     drop(child);
     Ok(())

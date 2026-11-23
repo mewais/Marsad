@@ -3,6 +3,7 @@
 
 pub mod auth;
 pub mod fleet;
+mod fleet_events;
 pub mod gitwatch;
 pub mod hostenv;
 pub mod hosts;

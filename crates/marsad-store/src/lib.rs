@@ -27,6 +27,8 @@
 
 pub mod secrets;
 
+mod diag;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -258,7 +260,7 @@ async fn save<T: Serialize>(path: &Path, data: &T) -> Result<(), StoreError> {
         // durability across power loss, not consistency.
         if let Ok(d) = tokio::fs::File::open(dir).await {
             if let Err(e) = d.sync_all().await {
-                tracing::debug!(error = %e, "fsync of the store directory failed");
+                diag::dir_fsync_failed(&e);
             }
         }
     }
@@ -843,7 +845,7 @@ async fn writer(
                             Ok(())
                         }
                         Err(e) => {
-                            tracing::error!(error = %e, "store write failed");
+                            diag::write_failed(&e);
                             Err(e)
                         }
                     },
