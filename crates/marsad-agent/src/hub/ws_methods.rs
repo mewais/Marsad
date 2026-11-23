@@ -1,14 +1,15 @@
 //! The `workstreams.*` methods of [`HubServices`] (the document logic lives in the
 //! [`super::workstreams`] actor; launches and node calls run here, outside it).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use marsad_proto::agentconfig::{LaunchRequest, WorkstreamNodeRef};
+use marsad_proto::runtime::ResumeRequest;
 use marsad_proto::workstream::{
     AddNode, Connect, EdgeHistoryPage, EdgeHistoryRequest, EdgeRef, FromTemplate,
     LaunchWorkstreamReply, NodeLaunch, NodeLaunchOutcome, NodeRef, NodeSession, SaveTemplate,
-    Workstream, WorkstreamDraft, WorkstreamEdge, WorkstreamState, WorkstreamTemplate,
-    WorkstreamUpdate,
+    Workstream, WorkstreamDraft, WorkstreamEdge, WorkstreamNode, WorkstreamState,
+    WorkstreamTemplate, WorkstreamUpdate,
 };
 use marsad_proto::{Command, MarsadError};
 use wasit_control::CallContext;
@@ -27,6 +28,42 @@ fn not_in(ws: &str, what: &str) -> MarsadError {
     MarsadError::NotFound {
         what: format!("{what} in workstream {ws}"),
     }
+}
+
+/// Whether a template keeps `n`: only the agents the user designed. Agents an agent spawned at
+/// runtime are left out (they are not part of the design).
+fn is_designed(n: &WorkstreamNode) -> bool {
+    n.spawned_by.is_none() && n.spawn_request.is_none()
+}
+
+/// A node as a template holds it: no session of its own (a template describes agents to
+/// launch, never sessions), no spawn markers, and a launch that starts a fresh conversation
+/// under a new session id.
+fn template_node(mut n: WorkstreamNode) -> WorkstreamNode {
+    n.session = None;
+    n.spawned_by = None;
+    n.spawn_request = None;
+    if let Some(l) = n.launch.as_mut() {
+        l.session_id = None;
+        l.resume = ResumeRequest::New;
+    }
+    n
+}
+
+/// The edges a template keeps: those between two kept nodes, with "always allow" decisions
+/// taken while running downgraded to `ask` (they were about those sessions).
+fn template_edges(edges: &[WorkstreamEdge], kept: &HashSet<&str>) -> Vec<WorkstreamEdge> {
+    edges
+        .iter()
+        .filter(|e| kept.contains(e.from.as_str()) && kept.contains(e.to.as_str()))
+        .map(|e| {
+            let mut e = e.clone();
+            if e.policy == EdgePolicy::AlwaysAllow {
+                e.policy = EdgePolicy::Ask;
+            }
+            e
+        })
+        .collect()
 }
 
 impl HubServices {
@@ -367,8 +404,16 @@ impl HubServices {
         s: SaveTemplate,
     ) -> Result<WorkstreamTemplate, MarsadError> {
         let ws = self.workstreams.get(&s.workstream).await?;
+        // Agents spawned at runtime are not part of the design: they and their connections
+        // stay out of the template.
+        let kept: HashSet<&str> = ws
+            .nodes
+            .iter()
+            .filter(|n| is_designed(n))
+            .map(|n| n.id.as_str())
+            .collect();
         let mut nodes = Vec::new();
-        for n in &ws.nodes {
+        for n in ws.nodes.iter().filter(|n| is_designed(n)) {
             let mut n = n.clone();
             if n.launch.is_none() {
                 // A node added from a running session: launch the same CLI the same way.
@@ -388,21 +433,15 @@ impl HubServices {
                 l.model = snap.model.clone();
                 n.launch = Some(l);
             }
-            // A template starts fresh conversations: continuing or resuming one belongs to
-            // the workstream it was taken from.
-            if let Some(l) = n.launch.as_mut() {
-                l.resume = marsad_proto::runtime::ResumeRequest::New;
-            }
-            n.session = None;
-            nodes.push(n);
+            nodes.push(template_node(n));
         }
-        let mut edges = ws.edges.clone();
-        // Decisions taken while running were about those sessions, not the template.
-        for e in &mut edges {
-            if e.policy == EdgePolicy::AlwaysAllow {
-                e.policy = EdgePolicy::Ask;
-            }
-        }
+        let edges = template_edges(&ws.edges, &kept);
+        let layout = ws
+            .layout
+            .iter()
+            .filter(|(id, _)| kept.contains(id.as_str()))
+            .map(|(id, p)| (id.clone(), *p))
+            .collect();
         let name = s.name.unwrap_or_else(|| ws.name.clone());
         let existing: Vec<String> = self
             .store
@@ -426,7 +465,7 @@ impl HubServices {
             nodes,
             edges,
             limits: ws.limits.clone(),
-            layout: ws.layout.clone(),
+            layout,
             created_at_ms: now_ms(),
         };
         self.store.put_template(t.clone()).await?;
@@ -444,10 +483,11 @@ impl HubServices {
         ws.limits = t.limits;
         ws.layout = t.layout;
         ws.template = Some(t.id);
-        ws.nodes = t.nodes;
+        // Every node starts fresh, whatever the stored template says (older templates may
+        // still carry sessions or spawn markers).
+        ws.nodes = t.nodes.into_iter().map(template_node).collect();
         let local = self.registry.local().id.clone();
         for n in &mut ws.nodes {
-            n.session = None;
             if let Some(l) = &mut n.launch {
                 let from = l.host.clone().unwrap_or_else(|| local.clone());
                 if let Some(to) = f.hosts.get(&from) {
@@ -500,5 +540,80 @@ impl HubServices {
             None
         };
         Ok(EdgeHistoryPage { tasks, next_before })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn designed(id: &str) -> WorkstreamNode {
+        WorkstreamNode::launched(id, id, NodeLaunch::new("claude"))
+    }
+
+    fn spawned(id: &str, by: &str) -> WorkstreamNode {
+        let mut n = designed(id);
+        n.spawned_by = Some(by.into());
+        n.spawn_request = Some(format!("req-{id}"));
+        n
+    }
+
+    #[test]
+    fn template_keeps_only_designed_nodes_and_the_edges_between_them() {
+        assert!(is_designed(&designed("a")));
+        assert!(!is_designed(&spawned("w", "a")));
+        let mut by_request = designed("r");
+        by_request.spawn_request = Some("req-r".into());
+        assert!(!is_designed(&by_request));
+
+        let kept: HashSet<&str> = ["a", "b"].into_iter().collect();
+        let edges = vec![
+            WorkstreamEdge {
+                from: "a".into(),
+                to: "b".into(),
+                policy: EdgePolicy::AlwaysAllow,
+            },
+            WorkstreamEdge {
+                from: "a".into(),
+                to: "w".into(),
+                policy: EdgePolicy::AlwaysAllow,
+            },
+            WorkstreamEdge {
+                from: "w".into(),
+                to: "b".into(),
+                policy: EdgePolicy::Deny,
+            },
+        ];
+        let kept_edges = template_edges(&edges, &kept);
+        assert_eq!(kept_edges.len(), 1);
+        assert_eq!(
+            (kept_edges[0].from.as_str(), kept_edges[0].to.as_str()),
+            ("a", "b")
+        );
+        assert_eq!(
+            kept_edges[0].policy,
+            EdgePolicy::Ask,
+            "decisions are not templated"
+        );
+    }
+
+    #[test]
+    fn template_node_holds_no_session_identity_and_starts_fresh() {
+        let mut n = spawned("w", "a");
+        n.session = Some(NodeSession {
+            host: marsad_proto::HostId::new("hub"),
+            session: wasit_runtime::wire::SessionId::random(),
+        });
+        let launch = n.launch.as_mut().unwrap();
+        launch.session_id = Some(wasit_runtime::wire::SessionId::random());
+        launch.resume = ResumeRequest::Latest;
+
+        let t = template_node(n);
+        assert!(t.session.is_none());
+        assert!(t.spawned_by.is_none());
+        assert!(t.spawn_request.is_none());
+        let l = t.launch.unwrap();
+        assert!(l.session_id.is_none());
+        assert_eq!(l.resume, ResumeRequest::New);
     }
 }

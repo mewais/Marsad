@@ -20,12 +20,13 @@ use marsad_proto::wasl::{
     DelegateReply, EdgePolicy, HandoffDecision, Limits, TaskBrief, TaskId, TaskState, TaskStates,
 };
 use marsad_proto::workstream::{
-    AddNode, Connect, EdgeHistoryRequest, FromTemplate, NodeLaunch, NodeSession, SaveTemplate,
-    WorkstreamDraft, WorkstreamEdge, WorkstreamNode, WorkstreamState, WorkstreamView,
+    AddNode, Connect, EdgeHistoryRequest, FromTemplate, NodeLaunch, NodePosition, NodeSession,
+    SaveTemplate, WorkstreamDraft, WorkstreamEdge, WorkstreamNode, WorkstreamState, WorkstreamView,
     WorkstreamsEvent,
 };
 use marsad_proto::{
     Command, ConfigItemKind, GateChoiceKind, GateDecision, GateRequest, HostId, McpTransport,
+    SessionId,
 };
 use serde_json::json;
 use wasit_fake_cli::scenario::{Scenario, Turn};
@@ -676,5 +677,97 @@ async fn live_join_blocked_pause_history_and_templates() {
     tokio::time::timeout(Duration::from_secs(30), fut)
         .await
         .expect("topology removed");
+    stop_hub(&c).await;
+}
+
+/// A template keeps the agents the user designed: agents spawned at runtime and their
+/// connections stay out, no session identity survives (a pinned session id would make a
+/// workstream made from the template adopt the original session), and the copy starts fresh.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn template_leaves_out_spawned_agents_and_session_identity() {
+    let d = TempDir::new();
+    let c = hub_client(&d.path().join("l"));
+    let work = d.path().join("w");
+    std::fs::create_dir_all(&work).unwrap();
+    let none = Scenario::builder().build();
+
+    // A designed agent whose launch spec pins a session id (as a spawned agent's does).
+    let pinned = SessionId::random();
+    let mut planner = node(&work, "planner", None, &none);
+    planner.launch.as_mut().unwrap().session_id = Some(pinned.clone());
+    // Spawned at runtime: `helper` by the planner, `grand` by that helper.
+    let mut helper = node(&work, "helper", None, &none);
+    helper.spawned_by = Some("planner".into());
+    helper.spawn_request = Some("req-helper".into());
+    let mut grand = node(&work, "grand", None, &none);
+    grand.spawned_by = Some("helper".into());
+    grand.spawn_request = Some("req-grand".into());
+    let worker = node(&work, "worker", None, &none);
+
+    let ws = c
+        .create_workstream(WorkstreamDraft {
+            name: "Design".into(),
+            nodes: vec![planner, helper, grand, worker],
+            edges: vec![
+                edge("planner", "worker", EdgePolicy::AlwaysAllow),
+                edge("planner", "helper", EdgePolicy::AlwaysAllow),
+                edge("helper", "grand", EdgePolicy::Ask),
+            ],
+            layout: BTreeMap::from([
+                ("planner".into(), NodePosition { x: 1.0, y: 2.0 }),
+                ("helper".into(), NodePosition { x: 3.0, y: 4.0 }),
+            ]),
+            ..WorkstreamDraft::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(ws.nodes.len(), 4);
+
+    let t = c
+        .save_template(SaveTemplate {
+            workstream: ws.id.clone(),
+            name: Some("Design pair".into()),
+            description: None,
+        })
+        .await
+        .unwrap();
+    let ids: Vec<&str> = t.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert_eq!(ids, ["planner", "worker"]);
+    assert_eq!(t.edges.len(), 1);
+    assert_eq!(
+        (t.edges[0].from.as_str(), t.edges[0].to.as_str()),
+        ("planner", "worker")
+    );
+    assert_eq!(t.edges[0].policy, EdgePolicy::Ask);
+    let laid_out: Vec<&str> = t.layout.keys().map(String::as_str).collect();
+    assert_eq!(laid_out, ["planner"]);
+    assert!(t.nodes.iter().all(|n| n.session.is_none()
+        && n.spawned_by.is_none()
+        && n.spawn_request.is_none()
+        && n.launch.as_ref().is_some_and(|l| l.session_id.is_none())));
+    assert!(
+        !serde_json::to_string(&t).unwrap().contains(pinned.as_str()),
+        "the pinned session id must not reach the template"
+    );
+
+    let copy = c
+        .from_template(FromTemplate {
+            template: t.id.clone(),
+            name: None,
+            hosts: BTreeMap::new(),
+        })
+        .await
+        .unwrap();
+    let ids: Vec<&str> = copy.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert_eq!(ids, ["planner", "worker"]);
+    assert_eq!(copy.edges.len(), 1);
+    assert!(copy.nodes.iter().all(|n| n.session.is_none()
+        && n.spawned_by.is_none()
+        && n.spawn_request.is_none()
+        && n.launch.as_ref().is_some_and(|l| l.session_id.is_none())));
+    assert!(!serde_json::to_string(&copy)
+        .unwrap()
+        .contains(pinned.as_str()));
+    c.delete_template(&t.id).await.unwrap();
     stop_hub(&c).await;
 }
