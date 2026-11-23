@@ -1,7 +1,19 @@
-import type { Backend, HubLinkInfo, RequestOptions, SubscriptionEnd, Unsubscribe } from "./backend";
+import type { Backend, HubLinkInfo, RequestOptions, SubscriptionEnd, UiEvent, Unsubscribe } from "./backend";
 import type { SurfaceSupport } from "../lib/surface";
 import type * as W from "./wire";
 import { methods as M, topics as T } from "./wire";
+
+/**
+ * A new trace id for one user action: `u-` and 16 hex digits from the platform's random source
+ * (`RequestOptions.trace`; the shape the daemons accept, 8 to 40 of letters, digits, `_` and `-`).
+ */
+export function newTraceId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  return `u-${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** What `desktop.export_save` answers: where the export was saved, or that the user cancelled. */
+export type ExportSaved = { path: string } | { saved: false };
 
 /** A file chosen in the desktop shell's native picker. */
 export interface PickedFile {
@@ -131,7 +143,14 @@ export function createApi(b: Backend) {
       readPicked: (path: string, offset: number, length: number) => b.request<{ data: string; eof: boolean }>("desktop.read_picked", { path, offset, length }),
       downloadBegin: (name: string) => b.request<{ path: string }>("desktop.download_begin", { name }),
       downloadChunk: (path: string, data: string) => b.request<null>("desktop.download_chunk", { path, data }),
+      /**
+       * Save a diagnostics export the hub made (`id`: its file name, from the `diagnostics.exports`
+       * topic) where the user chooses, through the OS "Save as" dialog; `{saved: false}` when they cancel.
+       */
+      exportSave: (id: string) => b.request<ExportSaved>("desktop.export_save", { id }),
     },
+    /** Record events in the app's diagnostics log (see `Backend.diagLog`). */
+    diagLog: (events: readonly UiEvent[]) => b.diagLog(events),
     /** Desktop shell: solid or translucent window background (native backdrop where the OS has one). */
     windowSurface: (translucent: boolean) => b.request<SurfaceSupport>("desktop.window_surface", { translucent }),
     git: {

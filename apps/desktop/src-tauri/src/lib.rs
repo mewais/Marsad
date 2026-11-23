@@ -10,7 +10,10 @@
 //!   adds `serve` options — both for development and tests.
 //! * The webview gets exactly the generic bridges of [`bridge`]: `rpc`, `rpc_subscribe`,
 //!   `rpc_unsubscribe`, `connection_state` (+ the `connection` event), `reconnect_daemon`. No per-feature
-//!   commands; `desktop.*` methods of `rpc` are the native extras (open/reveal/pick folder).
+//!   commands; `desktop.*` methods of `rpc` are the native extras (open/reveal/pick folder,
+//!   save an exported diagnostics file). The one more command, [`diag::diag_log`], is how the
+//!   webview writes to the app's diagnostics log.
+//! * Diagnostics ([`diag`]): the app log `<data>/diag/app.ndjson`, installed first thing.
 //! * Native: OS notifications from the fleet and the stored preferences ([`watch`]), a tray
 //!   item with the attention count ([`tray`]), single instance, window state persistence.
 
@@ -18,6 +21,7 @@
 
 pub mod bridge;
 pub mod connection;
+pub mod diag;
 pub mod native;
 pub mod notify;
 pub mod smoke;
@@ -48,13 +52,17 @@ fn agent_bin_dir_env(
     ))
 }
 
-fn client_config(resource_dir: Option<PathBuf>) -> ClientConfig {
-    let data = std::env::var_os("MARSAD_DATA")
+/// The data root: `$MARSAD_DATA`, else the platform's default.
+fn data_root() -> PathBuf {
+    std::env::var_os("MARSAD_DATA")
         .map(PathBuf::from)
         .or_else(default_data_dir)
-        .unwrap_or_else(|| PathBuf::from(".marsad"));
+        .unwrap_or_else(|| PathBuf::from(".marsad"))
+}
+
+fn client_config(resource_dir: Option<PathBuf>) -> ClientConfig {
     let mut cfg = ClientConfig::new(
-        data,
+        data_root(),
         wasit_control::Hello::new(
             concat!("marsad-desktop/", env!("CARGO_PKG_VERSION")),
             "marsad-desktop",
@@ -83,13 +91,20 @@ fn default_data_dir() -> Option<PathBuf> {
 }
 
 pub fn run() {
-    // Only fails if a subscriber is already set.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("MARSAD_LOG")
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .try_init();
+    // First: the app log (and the panic hook), as soon as the data layout is known, so that
+    // everything after it, a failed start included, is on record.
+    let exports = match marsad_proto::layout::Layout::resolve(data_root(), None) {
+        Ok(layout) => {
+            diag::start(layout.diag());
+            Some(layout.diag().join("exports"))
+        }
+        Err(e) => {
+            // The daemon link fails for the same reason and says so in the window.
+            eprintln!("marsad-desktop: no diagnostics: {e}");
+            None
+        }
+    };
+    diag::init_tracing();
     let app = tauri::Builder::default()
         // First: a second launch focuses the running app instead.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -100,6 +115,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(watch::FocusTarget::default())
+        .manage(diag::ExportsDir(exports))
         .setup(|app| {
             let handle = app.handle().clone();
             // `connect` returns at once; it needs the runtime to spawn its supervisor.
@@ -107,7 +123,8 @@ pub fn run() {
             let client = tauri::async_runtime::block_on(async { MarsadClient::connect(cfg) });
             app.manage(bridge::Shell::new(client, handle.clone()));
             if let Err(e) = tray::create(&handle) {
-                tracing::warn!(error = %e, "no tray icon on this system");
+                // Linux without an AppIndicator host has none; the app runs without it.
+                diag::failed("tray_create", &e);
             }
             tauri::async_runtime::spawn(watch::run(handle));
             Ok(())
@@ -128,13 +145,16 @@ pub fn run() {
             bridge::rpc_unsubscribe,
             bridge::connection_state,
             bridge::reconnect_daemon,
+            diag::diag_log,
             smoke::smoke_report,
         ])
         .build(tauri::generate_context!());
     match app {
         Ok(app) => app.run(|_app, ev| {
             if let RunEvent::Exit = ev {
-                tracing::info!("exiting (the daemon and its sessions keep running)");
+                // The daemon and its sessions keep running.
+                diag::emit(marsad_proto::diag::AppEvent::Exit {});
+                diag::finish();
             }
         }),
         Err(e) => {

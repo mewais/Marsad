@@ -1,4 +1,4 @@
-import type { Backend, HubLinkInfo, RequestOptions, SubscribeOptions, SubscriptionEnd, Unsubscribe } from "./backend";
+import { DIAG_BATCH_MAX, type Backend, type HubLinkInfo, type RequestOptions, type SubscribeOptions, type SubscriptionEnd, type UiEvent, type Unsubscribe } from "./backend";
 
 /**
  * What the shell sends on a subscription's channel (src-tauri/src/bridge.rs `SubMessage`):
@@ -29,7 +29,12 @@ const asEnd = (e: unknown): NonNullable<SubscriptionEnd> =>
 export class TauriBackend implements Backend {
   async request<T>(method: string, params?: unknown, opts: RequestOptions = {}): Promise<T> {
     const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<T>("rpc", { method, params: params ?? null, host: opts.host ?? null });
+    return invoke<T>("rpc", { method, params: params ?? null, host: opts.host ?? null, trace: opts.trace ?? null });
+  }
+
+  async diagLog(events: readonly UiEvent[]): Promise<void> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    for (let i = 0; i < events.length; i += DIAG_BATCH_MAX) await invoke("diag_log", { events: events.slice(i, i + DIAG_BATCH_MAX) });
   }
 
   onNavigate(cb: (target: { host: string; session: string }) => void): Unsubscribe {
