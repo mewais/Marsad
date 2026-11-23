@@ -8,7 +8,7 @@ use marsad_agent::{cli::Options, serve, version};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: marsad-agent serve [--hub] [options] | bridge [options] | stop [options] | shim <args> | mcp --socket <path> --session <id> | --version"
+        "usage: marsad-agent serve [--hub] [options] | bridge [options] | stop [options] | diagnostics export [options] | shim <args> | mcp --socket <path> --session <id> | --version"
     );
     ExitCode::from(2)
 }
@@ -90,6 +90,30 @@ fn main() -> ExitCode {
                 Err(bad) => {
                     eprintln!("marsad-agent ask-mcp: argument is not UTF-8: {bad:?}");
                     ExitCode::from(2)
+                }
+            };
+        }
+        Some("diagnostics") => {
+            // No sink (it is a tool run beside the daemon, and what it reads is the daemon's
+            // files): a panic prints where, never what.
+            diag::content_free_panic_hook("diagnostics");
+            diag::init_tracing();
+            let rest: Result<Vec<String>, _> = args.map(|a| a.into_string()).collect();
+            let rest = match rest {
+                Ok(r) => r,
+                Err(bad) => {
+                    eprintln!("marsad-agent diagnostics: argument is not UTF-8: {bad:?}");
+                    return ExitCode::from(2);
+                }
+            };
+            return match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt.block_on(marsad_agent::export_cli::run(&rest)),
+                Err(e) => {
+                    eprintln!("marsad-agent: cannot start the runtime: {e}");
+                    ExitCode::from(1)
                 }
             };
         }

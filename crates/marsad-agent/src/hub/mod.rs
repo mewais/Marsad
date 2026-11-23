@@ -2,6 +2,7 @@
 //! provisioning, the fleet topic, the store, effective config and session launch.
 
 pub mod auth;
+pub mod export;
 pub mod fleet;
 mod fleet_events;
 pub mod gitwatch;
@@ -26,6 +27,7 @@ use marsad_proto::agentconfig::{
 };
 use marsad_proto::daemon::DaemonInfo;
 use marsad_proto::diag::MarsadEvent;
+use marsad_proto::export::ExportRequest;
 use marsad_proto::hosts::{
     AskpassReply, AskpassRequest, AuthAnswer, AuthCancel, HostDraft, HostEntry, HostEnvSettings,
     HostList, HostRef, LinkStates,
@@ -52,7 +54,7 @@ use wasit_runtime::wire::{
 };
 
 use crate::diag;
-use crate::util::{now_ms, ok, params};
+use crate::util::{now_ms, ok, params, params_or_default};
 use fleet::Fleet;
 use hosts::Registry;
 
@@ -147,6 +149,8 @@ pub struct HubServices {
     pub workstreams: workstreams::Workstreams,
     pub git: gitwatch::GitWatch,
     pub envs: hostenv::HostEnvs,
+    /// The diagnostics export (`diagnostics.export.start`, the `diagnostics.exports` topic).
+    pub exports: export::Exports,
     /// Serialises spawn launches (a retried launch must find the first one's node).
     pub spawn_lock: tokio::sync::Mutex<()>,
 }
@@ -512,6 +516,10 @@ impl HubServices {
                 let r: LaunchRequest = params(p).map_err(dec)?;
                 enc(ok(self.launch(ctx, r).await?))
             }
+            methods::DIAGNOSTICS_EXPORT_START => {
+                let r: ExportRequest = params_or_default(p).map_err(dec)?;
+                enc(ok(self.exports.start(r).await?))
+            }
             methods::STORE_SETTINGS_GET => enc(ok(self.store.settings().await?)),
             methods::STORE_SETTINGS_SET => {
                 let r: SettingSet = params(p).map_err(dec)?;
@@ -696,6 +704,7 @@ impl Service for HubServices {
             topics::FLEET => self.fleet.subscribe(from).await,
             topics::HOSTS_LINKS => Ok(self.links(from)),
             topics::WORKSTREAMS => self.workstreams.subscribe(from).await,
+            topics::DIAGNOSTICS_EXPORTS => self.exports.subscribe(from).await,
             _ => Err(RpcError::topic_not_found(topic)),
         }
     }

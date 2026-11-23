@@ -533,6 +533,42 @@ fn forms(marker: &str) -> Vec<String> {
     vec![marker.to_string(), once, twice]
 }
 
+/// How `marker` can show in bytes: raw, JSON-escaped once or twice, base64 (at each of the three
+/// alignments it can have inside a longer base64 text) and UTF-16LE. `Some(form)` of the first
+/// that is in `bytes`.
+fn found_in(bytes: &[u8], marker: &str) -> Option<&'static str> {
+    use wasit_core::content::b64_encode;
+    let text = String::from_utf8_lossy(bytes);
+    let f = forms(marker);
+    for (form, needle) in [
+        ("raw", &f[0]),
+        ("json-escaped", &f[1]),
+        ("json-escaped twice", &f[2]),
+    ] {
+        if text.contains(needle.as_str()) {
+            return Some(form);
+        }
+    }
+    for k in 0..3 {
+        let mut padded = vec![0u8; k];
+        padded.extend_from_slice(marker.as_bytes());
+        let enc = b64_encode(&padded);
+        let part = &enc[[0, 2, 3][k]..enc.len() - 4];
+        assert!(
+            part.len() >= 8,
+            "a marker too short to look for in base64: {marker}"
+        );
+        if text.contains(part) {
+            return Some("base64");
+        }
+    }
+    let wide: Vec<u8> = marker.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    bytes
+        .windows(wide.len())
+        .any(|w| w == wide.as_slice())
+        .then_some("utf-16le")
+}
+
 fn contains_any(haystack: &str, marker: &str) -> bool {
     forms(marker).iter().any(|f| haystack.contains(f.as_str()))
 }
@@ -1913,6 +1949,697 @@ mod connect {
         assert!(apply["revision"].is_string());
         assert_no_markers(&l, &[SECRET, ANSWER, PROMPT], 2);
     }
+
+    /// A box and a closed port: the box is connected and has a session, `gone` never connects.
+    /// Returns the hub, its fleet, the session's id and the box's data directory.
+    async fn a_box_with_a_session_and_a_gone_host(
+        d: &TempDir,
+        sshd: &Sshd,
+        data: &Path,
+    ) -> (
+        MarsadClient,
+        marsad_client::Subscription<FleetEvent>,
+        wasit_runtime::wire::SessionId,
+    ) {
+        let c = hub(data, &[], &[]);
+        let mut fleet = c.fleet(None);
+        c.add_host(draft("Box", "box", sshd.kind(&sshd.key)))
+            .await
+            .unwrap();
+        // A closed port on this machine: ssh says "Connection refused" at once.
+        let closed = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let kind = HostKind::Ssh {
+            target: "leaktarget-3c1f@127.0.0.1".into(),
+            port: Some(closed),
+            identity_file: None,
+            options: vec![],
+        };
+        c.add_host(draft("Gone", "gone", kind)).await.unwrap();
+        until(&mut fleet, "box connected", |e| {
+            link_is(e, "box", LinkState::is_connected)
+        })
+        .await;
+        until(&mut fleet, "gone reconnecting", |e| {
+            link_is(e, "gone", |s| matches!(s, LinkState::Reconnecting { .. }))
+        })
+        .await;
+        let work = sshd.remote_home.join("w");
+        std::fs::create_dir_all(&work).unwrap();
+        let sc = Scenario::builder()
+            .turn(Turn::builder().say("done on the box"))
+            .build();
+        let mut req = marsad_proto::agentconfig::LaunchRequest::new("claude");
+        req.host = Some(HostId::new("box"));
+        req.cwd = Some(work.to_string_lossy().into_owned());
+        req.first_prompt = Some("hello box".into());
+        req.overrides.env = scenario_env(d.path(), &sc);
+        let id = c.launch(req).await.unwrap().id;
+        let rt = c.runtime(Some(HostId::new("box")));
+        let mut sub = rt.subscribe_session(&id, None);
+        loop {
+            if is_turn_completed(&next_event(&mut sub).await) {
+                break;
+            }
+        }
+        (c, fleet, id)
+    }
+
+    /// `diag.sources` and `diag.read` answer on the hub's own daemon and, routed by `host`, on an
+    /// ssh host: the files the daemon and its helper wrote and the shim log of a session, whole
+    /// lines only.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn diag_sources_and_reads_work_locally_and_through_the_hub_to_an_ssh_host() {
+        let d = TempDir::new();
+        let sshd = Sshd::start(d.path());
+        let data = d.path().join("l");
+        let (c, _fleet, id) = a_box_with_a_session_and_a_gone_host(&d, &sshd, &data).await;
+        for host in [None, Some(HostId::new("box"))] {
+            let rt = c.runtime(host.clone());
+            let s = rt.diag_sources().await.unwrap();
+            assert!(!s.boot.is_empty());
+            assert!(s.now_ms.abs_diff(now_ms()) < 5_000);
+            let names: Vec<&str> = s.sources.iter().map(|x| x.name.as_str()).collect();
+            assert!(names.contains(&"daemon"), "{host:?}: {names:?}");
+            assert!(
+                names.contains(&format!("shim:{id}").as_str()) || host.is_none(),
+                "{host:?}: {names:?}"
+            );
+            let daemon = s.sources.iter().find(|x| x.name == "daemon").unwrap();
+            let gen = daemon.gens.last().unwrap();
+            assert!(gen.bytes > 0 && gen.last_t.is_some());
+            // Whole lines, each a record of that daemon.
+            let chunk = rt.diag_read("daemon", gen.gen, 0, 4096).await.unwrap();
+            assert!(
+                !chunk.data.is_empty() && chunk.data.ends_with('\n'),
+                "{host:?}"
+            );
+            assert_eq!(chunk.next as usize, chunk.data.len());
+            let first: Value = serde_json::from_str(chunk.data.lines().next().unwrap()).unwrap();
+            assert_eq!(first["diag_file"], 1);
+            // A name that is no source is refused on the host.
+            for bad in ["../journal", "session.json", "shim:../../x", "store"] {
+                assert!(
+                    rt.diag_read(bad, 1, 0, 100).await.is_err(),
+                    "{host:?}: {bad}"
+                );
+            }
+        }
+        drop(c);
+        stop(&data).await;
+    }
+
+    /// One connected and one unreachable host: the manifest lists both (the unreachable one with
+    /// its link state and last error), the hub's own log holds the failed attempts, and the
+    /// connected host's logs, shim log and trail are in the file.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_export_with_a_connected_and_an_unreachable_host_lists_both() {
+        use super::exporting::*;
+        use marsad_proto::export::{ExportRequest, ExportSourceState};
+        let d = TempDir::new();
+        let sshd = Sshd::start(d.path());
+        let data = d.path().join("l");
+        let (c, _fleet, id) = a_box_with_a_session_and_a_gone_host(&d, &sshd, &data).await;
+        let sid = id.to_string();
+        let e = export(&c, &data, ExportRequest::default()).await;
+
+        // The manifest: the hub, the box (connected: its facts), gone (its link and last error).
+        assert_eq!(e.manifest()["mode"], "hub");
+        let ids: Vec<&str> = e.manifest()["hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["hub", "box", "gone"]);
+        let bx = e.host("box");
+        assert_eq!(
+            (
+                bx["kind"].as_str(),
+                bx["role"].as_str(),
+                bx["link"].as_str()
+            ),
+            (Some("ssh"), Some("host"), Some("connected"))
+        );
+        assert_eq!(bx["build"], our_build());
+        assert_eq!(bx["os"], "linux");
+        assert_eq!(bx["target"], our_target());
+        assert!(bx["machine"].is_string());
+        assert!(
+            bx["clock_offset_ms"].as_i64().unwrap().abs() < 5_000,
+            "{bx}"
+        );
+        assert!(bx["rtt_ms"].is_u64());
+        assert_eq!(
+            (bx["sessions"].as_u64(), bx["sessions_in_window"].as_u64()),
+            (Some(1), Some(1))
+        );
+        let claude = bx["drivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["driver"] == "claude")
+            .unwrap();
+        assert_eq!(claude["installed"], true, "{claude}");
+        assert!(claude["version"].is_string(), "{claude}");
+        assert!(bx["env"]["path"].as_array().is_some_and(|p| !p.is_empty()));
+        assert!(bx["failures"].as_array().unwrap().is_empty(), "{bx}");
+        let gone = e.host("gone");
+        assert_eq!(gone["link"], "reconnecting");
+        assert!(
+            gone["last_error"]
+                .as_str()
+                .unwrap()
+                .contains("Connection refused"),
+            "{gone}"
+        );
+        assert!(gone.get("build").is_none() && gone.get("clock_offset_ms").is_none());
+        // The ssh target is nowhere in the file; the user name is in no record (it can be in a
+        // host's `PATH`, which the manifest shows: design decision 2).
+        assert!(
+            !e.text.contains("leaktarget"),
+            "the ssh target is in the export"
+        );
+        let records: String = e.text.lines().skip(1).collect::<Vec<_>>().join("\n");
+        assert!(
+            !records.contains(sshd.user.as_str()),
+            "the user name is in a record"
+        );
+
+        // The unreachable host is a source that could not be read, with the link's words.
+        let un = e.own("source_unavailable");
+        assert_eq!(un.len(), 1, "{un:#?}");
+        assert_eq!(un[0]["source"], "host:gone");
+        assert_eq!(un[0]["link_state"], "reconnecting");
+        assert!(un[0]["last_error"]
+            .as_str()
+            .unwrap()
+            .contains("Connection refused"));
+        let r = e.result("host:gone");
+        assert_eq!(
+            (r["outcome"].as_str(), r["reason"].as_str()),
+            (Some("not_connected"), Some("reconnecting"))
+        );
+        assert!(e.section("host:gone", "daemon").is_empty());
+
+        // The hub's own log has the failed attempts of both hosts, joined by (host, n).
+        let hub = e.section("host:hub", "daemon");
+        let ended: Vec<&&Value> = hub
+            .iter()
+            .filter(|r| r["ev"] == "link.attempt_end" && r["link"] == "hosts:gone")
+            .collect();
+        assert!(
+            !ended.is_empty() && ended.iter().all(|r| r["outcome"] == "backoff"),
+            "{ended:#?}"
+        );
+        let failed = of_ev(&hub, "boot.failed");
+        assert!(failed.iter().any(|r| r["host"] == "gone"
+            && r["stderr"]
+                .as_str()
+                .is_some_and(|t| t.contains("Connection refused"))));
+        assert!(of_ev(&hub, "boot.hello").iter().any(|r| r["host"] == "box"));
+
+        // The connected host: its daemon's and its bridge's logs, the session's shim log and trail.
+        let daemon = e.section("host:box", "daemon");
+        assert_eq!(of_ev(&daemon, "daemon.start").len(), 1);
+        assert!(
+            daemon
+                .iter()
+                .all(|r| r["src"] == "daemon" || r["src"] == "hub" || r.get("diag_file").is_some()),
+            "{daemon:#?}"
+        );
+        assert!(!of_ev(&e.section("host:box", "aux"), "bridge.start").is_empty());
+        assert!(!of_ev(&e.section("host:box", &format!("shim:{sid}")), "shim.start").is_empty());
+        let trail = e.trail("host:box", &sid);
+        let kinds: Vec<&str> = trail.iter().map(|t| t["ev"].as_str().unwrap()).collect();
+        for ev in ["input.applied", "input.written", "turn.completed", "phase"] {
+            assert!(kinds.contains(&ev), "{ev} in {kinds:?}");
+        }
+        // Nothing of the session's content.
+        for never in ["hello box", "done on the box"] {
+            assert!(!e.text.contains(never), "{never} is in the export");
+        }
+
+        // How the topic and the end line see it.
+        let end = e.end();
+        assert_eq!(end["complete"], false);
+        assert_eq!(e.status.complete, Some(false));
+        let state = |s: &str| {
+            e.status
+                .sources
+                .iter()
+                .find(|x| x.source == s)
+                .unwrap()
+                .state
+        };
+        assert_eq!(state("host:box"), ExportSourceState::Done);
+        assert_eq!(state("host:hub"), ExportSourceState::Done);
+        assert_eq!(state("host:gone"), ExportSourceState::NotConnected);
+        assert_eq!(e.result("host:box")["outcome"], "done");
+        drop(c);
+        stop(&data).await;
+    }
+
+    /// The owner's requirement: a marked prompt and a marked secret through a session, and
+    /// neither is in any log or in the export. A hub and one ssh host with the fake CLI; a unique
+    /// marker through every content channel (first prompt, a queued prompt, an attachment's
+    /// content and name, assistant text, thinking, a tool's input and result, a permission gate
+    /// answered "deny" with text, a question's answer, the CLI's stderr, a CLI failure, a garbage
+    /// stdout line, a session's new name, the project directory's name, a host secret variable,
+    /// an MCP server's env value in a session layer, a sign-in prompt and its answer); then an
+    /// export through `diagnostics.export.start`. Scanned afterwards: everything under both
+    /// machines' `diag/`, both `marsad-agent.log`, every `shim.log*` and `shim.stderr`, and the
+    /// export, each marker raw, JSON-escaped, base64 and UTF-16LE. The positive half is in the
+    /// same test, so it cannot pass on nothing: the markers ARE in the durable data of the
+    /// session (so the channels carried them) and the export holds the diagnostics a root cause
+    /// is found from.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn no_content_in_any_log_or_export() {
+        use super::exporting::*;
+        use marsad_proto::agentconfig::{
+            ItemOverride, ItemValue, LaunchReply, OverrideAction, OverrideLayer,
+        };
+        use marsad_proto::export::ExportRequest;
+        use marsad_proto::hosts::HostVar;
+        use marsad_proto::{
+            ConfigItemKind, GateDecision, GateRequest, McpTransport, QuestionAnswer,
+        };
+        const FIRST: &str = "LEAK\"first-prompt\"a1b2c3";
+        const QUEUED: &str = "LEAK\"queued-prompt\"d4e5f6";
+        const FINAL: &str = "LEAK\"final-prompt\"0a1b2c";
+        const ATT_CONTENT: &str = "LEAK-attachment-content-4d5e6f7a";
+        const ATT_NAME: &str = "LEAKATTNAME-7a8b9c.txt";
+        const SAY: &str = "LEAK\"assistant-text\"3d4e5f";
+        const THINK: &str = "LEAK\"thinking\"6a7b8c";
+        const TOOL_INPUT: &str = "LEAK\"tool-input\"9d0e1f";
+        const TOOL_RESULT: &str = "LEAK\"tool-result\"2a3b4c";
+        const GATE_INPUT: &str = "LEAK\"gated-tool-input\"5d6e7f";
+        const DENY: &str = "LEAK\"deny-reason\"8a9b0c";
+        const QUESTION: &str = "LEAK\"question-text\"1d2e3f";
+        const ANSWER_Q: &str = "LEAK\"question-answer\"4a5b6c";
+        const STDERR: &str = "LEAK\"cli-stderr\"7d8e9f";
+        const FAIL: &str = "LEAK\"cli-failure\"0a1b2d";
+        const GARBAGE: &str = "LEAK\"garbage-line\"3d4e5a";
+        const RENAME: &str = "LEAK\"session-name\"6b7c8d";
+        const PROJECT: &str = "PROJECTDIRLEAK-9e0f1a";
+        const HOST_SECRET: &str = "HOSTSECRET-leak-2b3c4d5e";
+        const MCP_ENV: &str = "LEAK\"mcp-env-value\"7f8a9b";
+        const SIGNIN_TEXT: &str = "PROMPTTEXT-leak-1c2d3e password:";
+        const SIGNIN_ANSWER: &str = "ANSWER\"leak\"4f5a6b7c";
+        const TRACE: &str = "u-leaktest00000001";
+        let markers = [
+            FIRST,
+            QUEUED,
+            FINAL,
+            ATT_CONTENT,
+            ATT_NAME,
+            SAY,
+            THINK,
+            TOOL_INPUT,
+            TOOL_RESULT,
+            GATE_INPUT,
+            DENY,
+            QUESTION,
+            ANSWER_Q,
+            STDERR,
+            FAIL,
+            GARBAGE,
+            RENAME,
+            PROJECT,
+            HOST_SECRET,
+            MCP_ENV,
+            SIGNIN_TEXT,
+            SIGNIN_ANSWER,
+        ];
+
+        let d = TempDir::new();
+        let sshd = Sshd::start(d.path());
+        let data = d.path().join("l");
+        let l = layout(&data);
+        let c = hub(&data, &[], &[]);
+        c.daemon_info(None).await.unwrap();
+        let mut fleet = c.fleet(None);
+        let box_id = HostId::new("box");
+        c.add_host(draft("Box", "box", sshd.kind(&sshd.key)))
+            .await
+            .unwrap();
+        until(&mut fleet, "box connected", |e| {
+            link_is(e, "box", LinkState::is_connected)
+        })
+        .await;
+        until(&mut fleet, "the machine learned", |e| {
+            matches!(e, FleetEvent::HostUpserted { host } if host.id.as_str() == "box" && host.machine.is_some())
+        })
+        .await;
+
+        // A host secret variable, through the host-environment method.
+        let saved = c
+            .set_host_env(HostEnvSettings {
+                host: box_id.clone(),
+                setup: String::new(),
+                vars: vec![HostVar {
+                    name: "LEAK_HOST_SECRET".into(),
+                    value: Some(HOST_SECRET.into()),
+                    secret: true,
+                }],
+                commands: Default::default(),
+                revision: String::new(),
+            })
+            .await
+            .unwrap();
+        assert!(saved.not_applied.is_none(), "{saved:?}");
+
+        // A sign-in prompt and its answer (the real askpass helper and methods).
+        let helper = super::signin::askpass(&data, SIGNIN_TEXT);
+        let p = super::signin::prompt(&mut fleet).await;
+        assert_eq!(p.prompt, SIGNIN_TEXT);
+        c.answer_auth(&HostId::new("hub"), p.id, SIGNIN_ANSWER)
+            .await
+            .unwrap();
+        let signed_in = super::signin::finished(helper).await;
+        assert_eq!(
+            String::from_utf8_lossy(&signed_in.stdout).trim_end(),
+            SIGNIN_ANSWER
+        );
+
+        // The session on the box: its project directory is named by a marker; its session layer
+        // has an MCP server whose env holds one; the CLI plays a script that touches every
+        // other channel.
+        let work = sshd.remote_home.join(PROJECT);
+        std::fs::create_dir_all(&work).unwrap();
+        let sc = Scenario::builder()
+            .turn(
+                Turn::builder()
+                    .think(THINK)
+                    .tool("Read", json!({ "file_path": TOOL_INPUT }))
+                    .result_if_allowed(TOOL_RESULT)
+                    .done()
+                    .stderr(STDERR)
+                    .garbage(GARBAGE)
+                    .tool("Bash", json!({ "command": GATE_INPUT }))
+                    .needs_permission()
+                    .result_if_denied("denied by the user")
+                    .done()
+                    .ask_question(QUESTION, &[("alpha", "the first"), ("beta", "the second")])
+                    .say(SAY)
+                    .wait_for_interrupt(),
+            )
+            .turn(Turn::when("final-prompt").fail(FAIL))
+            .build();
+        let mut req = marsad_proto::agentconfig::LaunchRequest::new("claude");
+        req.host = Some(box_id.clone());
+        req.cwd = Some(work.to_string_lossy().into_owned());
+        req.first_prompt = Some(FIRST.into());
+        req.overrides = OverrideLayer {
+            items: vec![ItemOverride {
+                kind: ConfigItemKind::McpServer,
+                name: "leaky".into(),
+                driver: None,
+                action: OverrideAction::Set {
+                    value: ItemValue::McpServer {
+                        server: McpTransport::Stdio {
+                            command: "cat".into(),
+                            args: vec![],
+                            env: [("LEAK_MCP_ENV".to_string(), MCP_ENV.to_string())].into(),
+                        },
+                    },
+                },
+            }],
+            env: scenario_env(d.path(), &sc),
+            ..OverrideLayer::default()
+        };
+        let trace = wasit_control::TraceId::new(TRACE).unwrap();
+        let launched: LaunchReply = c
+            .call_traced(None, methods::SESSIONS_LAUNCH, req, Some(trace.clone()))
+            .await
+            .unwrap();
+        let id = launched.id.clone();
+        let rt = c.runtime(Some(box_id.clone()));
+        let mut sub = rt.subscribe_session(&id, None);
+
+        // The first turn: a permission gate (denied, with words), a question (answered), then the
+        // assistant's text; the turn then waits.
+        let mut gates = 0;
+        loop {
+            let e = next_event(&mut sub).await;
+            if let SessionEventKind::Agent {
+                event: AgentEvent::GateRequested { gate },
+            } = &e.kind
+            {
+                let request_id = gate.request_id().to_string();
+                let command = match gate {
+                    GateRequest::Question { questions, .. } => Command::AnswerQuestion {
+                        request_id,
+                        answer: QuestionAnswer {
+                            answers: [(questions[0].id.clone(), vec![ANSWER_Q.to_string()])].into(),
+                        },
+                    },
+                    _ => Command::AnswerGate {
+                        request_id,
+                        decision: GateDecision::choose_with("deny", Some(DENY)),
+                    },
+                };
+                rt.command(&id, command).await.unwrap();
+                gates += 1;
+            }
+            if contains_any(&serde_json::to_string(&e.kind).unwrap(), SAY) {
+                break;
+            }
+        }
+        assert_eq!(gates, 2, "a permission gate and a question");
+
+        // A prompt while the turn runs, then an interrupt; a prompt with an attachment whose
+        // turn fails; a new name.
+        let prompting = rt
+            .clone()
+            .with_trace(wasit_control::TraceId::new("u-leaktest00000002").unwrap());
+        prompting
+            .command(&id, Command::prompt(QUEUED))
+            .await
+            .unwrap();
+        rt.command(&id, Command::Interrupt).await.unwrap();
+        let att = rt
+            .upload(&id, "upleak0001", ATT_NAME, ATT_CONTENT.as_bytes())
+            .await
+            .unwrap();
+        rt.command(
+            &id,
+            Command::Prompt {
+                text: FINAL.into(),
+                attachments: vec![att],
+            },
+        )
+        .await
+        .unwrap();
+        loop {
+            let e = next_event(&mut sub).await;
+            if contains_any(&serde_json::to_string(&e.kind).unwrap(), FAIL) {
+                break;
+            }
+        }
+        rt.rename(&id, Some(RENAME.into())).await.unwrap();
+        loop {
+            if rt.snapshot(&id).await.unwrap().phase == marsad_proto::runtime::Phase::Idle {
+                break;
+            }
+            let e = next_event(&mut sub).await;
+            let _ = e;
+        }
+        drop(sub);
+
+        // The export.
+        let e = export(&c, &data, ExportRequest::default()).await;
+        drop(fleet);
+        drop(rt);
+        drop(prompting);
+        drop(c);
+        stop(&data).await;
+
+        // ── positive: the channels were driven, the export holds what a root cause needs ──
+        let box_machines = sshd.remote_home.join(".marsad/machines");
+        let box_dir: PathBuf = std::fs::read_dir(&box_machines)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .next()
+            .expect("the box's machine directory");
+        let hub_dir = l.data.clone();
+        // Every marker is stored where it belongs: the session's journal on the box for what was
+        // said, done and asked, its `session.json` for its name and folder, its attachments, the
+        // hub's store for the secret and the layer. (The sign-in prompt and its answer live in
+        // memory only; they were seen above.)
+        let session_dir = box_dir.join("sessions").join(id.to_string());
+        let read_all = |dir: &Path| {
+            let mut fs = Vec::new();
+            files(dir, &mut fs);
+            fs.sort();
+            fs.iter()
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let journal = std::fs::read_to_string(session_dir.join("journal.ndjson")).unwrap();
+        let session_file = std::fs::read_to_string(session_dir.join("session.json")).unwrap();
+        let attachments = read_all(&session_dir.join("attachments"));
+        let store = read_all(&hub_dir.join("store"));
+        let stored: [(&str, &str, &str); 20] = [
+            ("the first prompt", FIRST, &journal),
+            ("the queued prompt", QUEUED, &journal),
+            ("the last prompt", FINAL, &journal),
+            ("an attachment's name", ATT_NAME, &journal),
+            ("an attachment's content", ATT_CONTENT, &attachments),
+            ("assistant text", SAY, &journal),
+            ("thinking", THINK, &journal),
+            ("a tool's input", TOOL_INPUT, &journal),
+            ("a tool's result", TOOL_RESULT, &journal),
+            ("a gated tool's input", GATE_INPUT, &journal),
+            ("a deny reason", DENY, &journal),
+            ("a question", QUESTION, &journal),
+            ("a question's answer", ANSWER_Q, &journal),
+            ("the CLI's stderr", STDERR, &journal),
+            ("a CLI failure", FAIL, &journal),
+            ("a garbage line", GARBAGE, &journal),
+            ("the session's name", RENAME, &session_file),
+            ("the project folder", PROJECT, &session_file),
+            ("a host secret", HOST_SECRET, &store),
+            ("an MCP server's env", MCP_ENV, &store),
+        ];
+        for (what, marker, place) in stored {
+            assert!(
+                contains_any(place, marker),
+                "{what} ({marker}) is not where it belongs: the channel was not driven"
+            );
+        }
+
+        // The manifest: both machines, their facts.
+        let m = e.manifest();
+        assert_eq!(m["hub_machine"], l.machine.as_str());
+        assert_eq!(
+            e.host("box")["machine"],
+            box_dir.file_name().unwrap().to_str().unwrap()
+        );
+        assert_eq!(e.host("hub")["machine"], l.machine.as_str());
+        // The hub's and the host's daemons.
+        let hub_log = e.section("host:hub", "daemon");
+        let box_log = e.section("host:box", "daemon");
+        assert_eq!(of_ev(&hub_log, "daemon.start").len(), 1);
+        assert_eq!(of_ev(&box_log, "daemon.start").len(), 1);
+        // The session's trail, on the host: the first prompt with the launch's trace, written and
+        // acknowledged, a phase with its cause, the queued prompt, the attachment.
+        let sid = id.to_string();
+        let trail = e.trail("host:box", &sid);
+        let kind = |k: &str| -> Vec<&&Value> { trail.iter().filter(|t| t["ev"] == k).collect() };
+        let applied = kind("input.applied");
+        assert!(
+            applied
+                .iter()
+                .any(|t| t["trace"] == TRACE && t["kind"] == "prompt"),
+            "{applied:#?}"
+        );
+        assert!(applied.iter().any(|t| t["trace"] == "u-leaktest00000002"));
+        assert!(
+            applied
+                .iter()
+                .any(|t| t["attachments"] == 1 && t["bytes"] == ATT_CONTENT.len()),
+            "{applied:#?}"
+        );
+        assert!(!kind("input.written").is_empty());
+        assert!(
+            !kind("input.acknowledged").is_empty(),
+            "{:?}",
+            trail
+                .iter()
+                .map(|t| t["ev"].as_str().unwrap())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            kind("phase").iter().any(|t| t["cause"].is_object()),
+            "{:#?}",
+            kind("phase")
+        );
+        assert!(!kind("gate.raised").is_empty() && !kind("process.stderr").is_empty());
+        // The hub recorded the launch and the request under the trace, and each sign-in step.
+        assert!(of_ev(&hub_log, "launch")
+            .iter()
+            .any(|r| r["trace"] == TRACE && r["host"] == "box" && r["outcome"] == "ok"));
+        assert!(of_ev(&hub_log, "rpc.traced")
+            .iter()
+            .any(|r| r["trace"] == TRACE));
+        assert_eq!(of_ev(&hub_log, "auth.prompt").len(), 1);
+        assert_eq!(of_ev(&hub_log, "auth.answered").len(), 1);
+        // The connection to the ssh host: the steps of the connect and the link's states.
+        for ev in ["boot.attempt", "boot.report", "boot.hello"] {
+            assert!(
+                of_ev(&hub_log, ev).iter().any(|r| r["host"] == "box"),
+                "{ev}"
+            );
+        }
+        assert!(of_ev(&hub_log, "link.attempt_end")
+            .iter()
+            .any(|r| r["link"] == "hosts:box" && r["outcome"] == "connected"));
+        assert!(of_ev(&hub_log, "link.state")
+            .iter()
+            .any(|r| r["link"] == "hosts:box" && r["to"] == "connected"));
+        // The box's shim log and its helper's records.
+        assert!(!e.section("host:box", &format!("shim:{sid}")).is_empty());
+        assert!(!e.section("host:box", "aux").is_empty());
+        assert_eq!(e.end()["complete"], true);
+
+        // ── negative: no marker in any file, in any form ──
+        let mut scanned: Vec<(String, Vec<u8>)> =
+            vec![("the export".into(), e.text.clone().into_bytes())];
+        for dir in [&box_dir, &hub_dir] {
+            let mut fs = Vec::new();
+            files(&dir.join("diag"), &mut fs);
+            for (path, bytes) in fs {
+                // An export of the hub's `diag/exports/` is read as the text it holds.
+                let bytes = if path.to_string_lossy().ends_with(".ndjson.gz") {
+                    marsad_agent::hub::export::gzip::gunzip(&bytes).unwrap()
+                } else {
+                    bytes
+                };
+                scanned.push((path.display().to_string(), bytes));
+            }
+            if let Ok(b) = std::fs::read(dir.join("marsad-agent.log")) {
+                scanned.push((dir.join("marsad-agent.log").display().to_string(), b));
+            }
+            let mut fs = Vec::new();
+            files(&dir.join("sessions"), &mut fs);
+            for (path, bytes) in fs {
+                let n = path.file_name().unwrap().to_string_lossy().into_owned();
+                if n.starts_with("shim.log") || n == "shim.stderr" {
+                    scanned.push((path.display().to_string(), bytes));
+                }
+            }
+        }
+        // The scan sees what it must: both machines' daemon logs, the shim's, the export.
+        let names: Vec<&str> = scanned.iter().map(|(n, _)| n.as_str()).collect();
+        for want in ["daemon.ndjson", "aux.ndjson", "shim.log", "the export"] {
+            assert!(
+                names.iter().any(|n| n.contains(want)),
+                "{want} among {names:?}"
+            );
+        }
+        assert!(
+            names
+                .iter()
+                .filter(|n| n.ends_with("daemon.ndjson"))
+                .count()
+                >= 2,
+            "{names:?}"
+        );
+        let mut leaks = Vec::new();
+        for (name, bytes) in &scanned {
+            for m in markers {
+                if let Some(form) = found_in(bytes, m) {
+                    leaks.push(format!("{m} ({form}) in {name}"));
+                }
+            }
+        }
+        assert!(leaks.is_empty(), "{leaks:#?}");
+    }
 }
 
 // ── a session feed that ends ─────────────────────────────────────────────────
@@ -1975,4 +2702,757 @@ async fn a_session_feed_that_ends_on_a_refusal_is_recorded() {
         assert_eq!(r["host"], "old");
     }
     link.stop().await;
+}
+
+// ── the diagnostics export ───────────────────────────────────────────────────
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+/// An export as the hub reported it and as its file holds it.
+mod exporting {
+    use marsad_client::{ClientError, MarsadClient};
+    use marsad_proto::export::{
+        ExportRequest, ExportStarted, ExportState, ExportStatus, ExportsEvent,
+    };
+    use marsad_proto::topics;
+
+    use super::*;
+
+    pub struct Export {
+        /// The last status the topic showed.
+        pub status: ExportStatus,
+        /// Every status of this export the topic showed, in order.
+        pub seen: Vec<ExportStatus>,
+        pub path: PathBuf,
+        /// The gunzipped file.
+        pub text: String,
+        /// Its lines (the exporter's own have a `line` key, the records of a section do not).
+        pub lines: Vec<Value>,
+    }
+
+    impl Export {
+        pub fn own(&self, kind: &str) -> Vec<&Value> {
+            self.lines.iter().filter(|l| l["line"] == kind).collect()
+        }
+
+        pub fn manifest(&self) -> &Value {
+            assert_eq!(self.lines[0]["line"], "manifest", "the first line");
+            &self.lines[0]
+        }
+
+        pub fn host(&self, id: &str) -> &Value {
+            self.manifest()["hosts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|h| h["id"] == id)
+                .unwrap_or_else(|| panic!("no host {id} in the manifest"))
+        }
+
+        pub fn end(&self) -> &Value {
+            let last = self.lines.last().unwrap();
+            assert_eq!(last["line"], "end", "the last line");
+            last
+        }
+
+        /// The result of `source` in the end line.
+        pub fn result(&self, source: &str) -> &Value {
+            self.end()["sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["source"] == source)
+                .unwrap_or_else(|| panic!("no result for {source}"))
+        }
+
+        /// The records that follow the section line `pred` selects, up to the next line of the
+        /// exporter's own.
+        pub fn records_of(&self, pred: impl Fn(&Value) -> bool) -> Vec<&Value> {
+            let Some(i) = self
+                .lines
+                .iter()
+                .position(|l| l.get("line").is_some() && pred(l))
+            else {
+                return Vec::new();
+            };
+            self.lines[i + 1..]
+                .iter()
+                .take_while(|l| l.get("line").is_none())
+                .collect()
+        }
+
+        /// The records of the section of `file` of `source` (one generation).
+        pub fn section(&self, source: &str, file: &str) -> Vec<&Value> {
+            self.records_of(|l| {
+                l["line"] == "section" && l["source"] == source && l["file"] == file
+            })
+        }
+
+        /// The entries of the trail of `session` on `source`.
+        pub fn trail(&self, source: &str, session: &str) -> Vec<&Value> {
+            self.records_of(|l| {
+                l["line"] == "trail" && l["source"] == source && l["session"] == session
+            })
+        }
+    }
+
+    pub async fn start(c: &MarsadClient, req: ExportRequest) -> Result<ExportStarted, ClientError> {
+        c.call_traced(None, methods::DIAGNOSTICS_EXPORT_START, req, None)
+            .await
+    }
+
+    /// Follows `id` on the topic until it ends, then reads its file.
+    pub async fn finish(
+        sub: &mut marsad_client::Subscription<Value>,
+        data: &Path,
+        id: &str,
+    ) -> Export {
+        let mut seen: Vec<ExportStatus> = Vec::new();
+        let status = loop {
+            let (_, v) = next(sub).await;
+            let statuses = match serde_json::from_value::<ExportsEvent>(v).unwrap() {
+                ExportsEvent::Reset { exports } => exports,
+                ExportsEvent::Upsert { export } => vec![export],
+            };
+            let mut ended = None;
+            for s in statuses.into_iter().filter(|s| s.id == id) {
+                if s.state != ExportState::Running {
+                    ended = Some(s.clone());
+                }
+                seen.push(s);
+            }
+            if let Some(s) = ended {
+                break s;
+            }
+        };
+        assert_eq!(status.state, ExportState::Done, "{status:#?}");
+        let file = status
+            .file
+            .clone()
+            .expect("a finished export names its file");
+        assert!(!file.contains(['/', '\\']), "{file}");
+        let path = layout(data).diag().join("exports").join(&file);
+        let gz = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert_eq!(status.bytes, Some(gz.len() as u64));
+        let text = String::from_utf8(
+            marsad_agent::hub::export::gzip::gunzip(&gz).expect("a well-formed gzip file"),
+        )
+        .unwrap();
+        let lines = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("not JSON ({e}): {l}")))
+            .collect();
+        Export {
+            status,
+            seen,
+            path,
+            text,
+            lines,
+        }
+    }
+
+    /// Starts an export and waits for its end.
+    pub async fn export(c: &MarsadClient, data: &Path, req: ExportRequest) -> Export {
+        let mut sub = c.subscribe_raw(None, topics::DIAGNOSTICS_EXPORTS, None);
+        let started = start(c, req).await.unwrap();
+        finish(&mut sub, data, &started.id).await
+    }
+}
+
+/// A valid app log with records of the desktop app (the shell writes the real one; the exporter
+/// only reads it).
+fn write_app_log(l: &Layout) {
+    let t = now_ms();
+    let mut text = json!({"diag_file":1,"gen":1,"b":"app0boot","src":"app","build":"test","pid":1,"opened_t":t})
+        .to_string();
+    for (seq, ev) in [(1, "app.start"), (2, "app.hub_link")] {
+        text.push('\n');
+        text.push_str(
+            &json!({"b":"app0boot","seq":seq,"t":t,"m":seq,"src":"app","lvl":"info","ev":ev})
+                .to_string(),
+        );
+    }
+    text.push('\n');
+    std::fs::create_dir_all(l.diag()).unwrap();
+    std::fs::write(l.diag().join("app.ndjson"), text).unwrap();
+}
+
+/// The hub alone: one export is one file; what it holds, what it must not hold, what a second
+/// start does, how many are kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_export_is_one_private_file_with_the_manifest_the_logs_and_the_trail() {
+    use exporting::*;
+    use marsad_client::ClientError;
+    use marsad_proto::export::{ExportRequest, ExportSourceState, EXPORTS_KEPT};
+    use marsad_proto::MarsadError;
+    const PROMPT: &str = "EXPORT\"prompt\"4c19e0";
+    const SAY: &str = "EXPORT\"say\"b27a63";
+    const STORE_MARKER: &str = "SENTINEL-store-layer-77c2";
+    const LOG_SENTINEL: &str = "SENTINEL-daemon-stderr-a81d";
+    const STDERR_SENTINEL: &str = "SENTINEL-shim-stderr-5e03";
+    let d = TempDir::new();
+    let data = d.path().join("d");
+    let l = layout(&data);
+    let work = d.path().join("export-project");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::create_dir_all(&l.data).unwrap();
+    std::fs::write(l.log(), format!("{LOG_SENTINEL}\n")).unwrap();
+
+    let sc = Scenario::builder().turn(Turn::builder().say(SAY)).build();
+    let c = client(&data);
+    // A stored document: the hub's store is not a diagnostics source.
+    c.set_layer(
+        marsad_proto::agentconfig::LayerScope::Global,
+        marsad_proto::agentconfig::OverrideLayer {
+            env: vec![("EXPORT_STORE_VAR".into(), STORE_MARKER.into())],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut req = LaunchRequest::new("claude");
+    req.cwd = Some(work.to_string_lossy().into_owned());
+    req.first_prompt = Some(PROMPT.into());
+    req.overrides.env = scenario_env(d.path(), &sc);
+    let id = c.launch(req).await.unwrap().id;
+    let rt = c.runtime(None);
+    let mut sub = rt.subscribe_session(&id, None);
+    loop {
+        if is_turn_completed(&next_event(&mut sub).await) {
+            break;
+        }
+    }
+    drop(sub);
+    // Files the export must never read: the shim's raw stderr, the daemon's stderr (above).
+    let session_dir = l.data.join("sessions").join(id.to_string());
+    std::fs::write(
+        session_dir.join("shim.stderr"),
+        format!("{STDERR_SENTINEL}\n"),
+    )
+    .unwrap();
+    write_app_log(&l);
+
+    // A window in the future or beyond a month is refused, not clamped.
+    for bad in [now_ms() + 3_600_000, now_ms() - 40 * 86_400_000] {
+        let e = start(
+            &c,
+            ExportRequest {
+                since_ms: Some(bad),
+                include_trails: true,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(e, ClientError::Marsad(MarsadError::InvalidRequest { .. })),
+            "{e:?}"
+        );
+    }
+
+    // Two starts at once: one export runs, the other is refused naming it.
+    let mut sub = c.subscribe_raw(None, marsad_proto::topics::DIAGNOSTICS_EXPORTS, None);
+    let (a, b) = tokio::join!(
+        start(&c, ExportRequest::default()),
+        start(&c, ExportRequest::default())
+    );
+    let (started, refused) = match (a, b) {
+        (Ok(s), Err(e)) | (Err(e), Ok(s)) => (s, e),
+        other => panic!("exactly one of two starts must run: {other:?}"),
+    };
+    let ClientError::Marsad(MarsadError::Conflict { message }) = &refused else {
+        panic!("{refused:?}");
+    };
+    assert!(message.contains(&started.id), "{message}");
+    let first = finish(&mut sub, &data, &started.id).await;
+
+    // The file: private, a real gzip file, the manifest first and the end line last.
+    #[cfg(unix)]
+    {
+        assert_eq!(mode(&first.path), 0o600);
+        assert_eq!(mode(first.path.parent().unwrap()), 0o700);
+        let t = std::process::Command::new("gzip")
+            .arg("-t")
+            .arg(&first.path)
+            .status()
+            .expect("gzip");
+        assert!(t.success(), "gzip -t");
+    }
+    assert!(first
+        .path
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .starts_with("marsad-diagnostics-hub-"));
+    let m = first.manifest();
+    assert_eq!(
+        (m["format"].as_u64(), m["mode"].as_str()),
+        (Some(1), Some("hub"))
+    );
+    assert_eq!(m["hub_host"], "hub");
+    assert_eq!(m["include_trails"], true);
+    assert_eq!(m["id"], first.status.id.as_str());
+    assert!(m["since"].as_u64().unwrap() < m["until"].as_u64().unwrap());
+    assert_eq!(m["hosts"].as_array().unwrap().len(), 1);
+    let hub = first.host("hub");
+    assert_eq!(
+        (
+            hub["kind"].as_str(),
+            hub["role"].as_str(),
+            hub["link"].as_str()
+        ),
+        (Some("local"), Some("hub"), Some("local"))
+    );
+    assert!(hub["build"].is_string() && hub["machine"].is_string());
+    assert!(
+        hub["clock_offset_ms"].as_i64().unwrap().abs() < 2000,
+        "{hub}"
+    );
+    assert!(hub["rtt_ms"].is_u64());
+    assert_eq!(hub["sessions"], 1);
+    assert_eq!(hub["sessions_in_window"], 1);
+    let drivers: Vec<&str> = hub["drivers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["driver"].as_str().unwrap())
+        .collect();
+    assert_eq!(drivers, ["claude", "codex", "opencode", "kilo"]);
+    assert_eq!(hub["env"]["fact"], "env");
+    assert!(hub["env"]["path"].as_array().is_some_and(|p| !p.is_empty()));
+    assert!(hub["failures"].as_array().unwrap().is_empty(), "{hub}");
+
+    // The sections: the app's log, the hub's own logs, the session's trail and shim log.
+    let app = first.section("app", "app");
+    assert_eq!(of_ev(&app, "app.start").len(), 1);
+    let daemon = first.section("host:hub", "daemon");
+    for ev in ["daemon.start", "daemon.ready"] {
+        assert_eq!(of_ev(&daemon, ev).len(), 1, "{ev}");
+    }
+    assert!(daemon
+        .iter()
+        .all(|r| r["src"] == "hub" || r["src"] == "daemon" || r.get("diag_file").is_some()));
+    let sid = id.to_string();
+    let trail = first.trail("host:hub", &sid);
+    let kinds: Vec<&str> = trail.iter().map(|e| e["ev"].as_str().unwrap()).collect();
+    for ev in ["input.applied", "input.written", "turn.completed", "phase"] {
+        assert!(kinds.contains(&ev), "{ev} in {kinds:?}");
+    }
+    let shim = first.section("host:hub", &format!("shim:{sid}"));
+    assert!(!of_ev(&shim, "shim.start").is_empty());
+    let end = first.end();
+    assert_eq!(end["complete"], true);
+    assert_eq!(end["skipped"], 0);
+    assert_eq!(first.result("app")["outcome"], "done");
+    assert_eq!(first.result("host:hub")["outcome"], "done");
+
+    // What it must never hold: the journal's content, the daemon's and the shim's raw stderr, the
+    // project's name, the store's documents. Its sections are the logs, never anything else.
+    for never in [
+        PROMPT,
+        SAY,
+        LOG_SENTINEL,
+        STDERR_SENTINEL,
+        "export-project",
+        STORE_MARKER,
+    ] {
+        assert!(
+            !contains_any(&first.text, never),
+            "{never} is in the export"
+        );
+    }
+    for s in first.own("section") {
+        let f = s["file"].as_str().unwrap();
+        assert!(
+            ["app", "daemon", "aux"].contains(&f) || f.starts_with("shim:"),
+            "a section of {f}"
+        );
+    }
+
+    // The topic showed it come about: the sources were all waiting, then each ended.
+    assert!(first.seen.iter().any(|s| s.sources.len() == 2
+        && s.sources
+            .iter()
+            .all(|x| x.state == ExportSourceState::Waiting)));
+    let last = &first.status;
+    assert_eq!(last.complete, Some(true));
+    assert!(last
+        .sources
+        .iter()
+        .all(|s| s.state == ExportSourceState::Done));
+
+    // A third export is a new one; only the newest are kept.
+    let mut ids = vec![first.status.id.clone()];
+    for _ in 0..EXPORTS_KEPT + 1 {
+        ids.push(export(&c, &data, ExportRequest::default()).await.status.id);
+    }
+    let unique: std::collections::BTreeSet<&String> = ids.iter().collect();
+    assert_eq!(unique.len(), ids.len(), "{ids:?}");
+    let kept: Vec<String> = std::fs::read_dir(first.path.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(kept.len(), EXPORTS_KEPT, "{kept:?}");
+    assert!(kept.iter().all(|n| n.ends_with(".ndjson.gz")), "{kept:?}");
+    assert!(
+        !kept.iter().any(|n| n.contains(&ids[0])),
+        "the oldest is gone"
+    );
+    assert!(kept.iter().any(|n| n.contains(ids.last().unwrap())));
+
+    // The hub recorded each export: its start, how each source ended, its end.
+    drop(c);
+    stop(&data).await;
+    let hub = records(&l.diag().join("daemon.ndjson"));
+    let starts: Vec<&Value> = of(&hub, "export.start");
+    assert_eq!(starts.len(), ids.len(), "{starts:#?}");
+    assert!(starts
+        .iter()
+        .all(|r| r["mode"] == "hub" && r["hosts"] == 1 && r["include_trails"] == true));
+    let first_id = first.status.id.as_str();
+    let done: Vec<&Value> = of(&hub, "export.done");
+    assert_eq!(done.len(), ids.len());
+    assert!(done
+        .iter()
+        .all(|r| r["complete"] == true && r["skipped"] == 0 && r.get("error").is_none()));
+    // One record per source and export (`app` and the hub's own computer), in the order they ended.
+    let sources: Vec<(&str, &str)> = of(&hub, "export.source")
+        .iter()
+        .take(2)
+        .map(|r| {
+            (
+                r["source"].as_str().unwrap(),
+                r["outcome"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(of(&hub, "export.source").len(), 2 * ids.len());
+    assert!(
+        sources.contains(&("app", "done")) && sources.contains(&("host", "done")),
+        "{sources:?}"
+    );
+    let hub_source = of(&hub, "export.source")
+        .into_iter()
+        .find(|r| r["source"] == "host")
+        .unwrap();
+    assert_eq!(hub_source["host"], "hub");
+    assert!(
+        hub_source["bytes"].as_u64().unwrap() > 0 && hub_source["sections"].as_u64().unwrap() >= 3
+    );
+    assert!(starts.iter().any(|r| r["id"] == first_id));
+}
+
+/// The records of `recs` of event `ev`.
+fn of_ev<'a>(recs: &[&'a Value], ev: &str) -> Vec<&'a Value> {
+    recs.iter().copied().filter(|r| r["ev"] == ev).collect()
+}
+
+/// A cap too small for any section: every section is listed as left out (with its size where it
+/// is known), nothing is silently truncated, and the file is still a whole export.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_export_over_its_cap_lists_what_it_left_out() {
+    use exporting::*;
+    use marsad_proto::export::{ExportRequest, ExportSourceState};
+    let d = TempDir::new();
+    let data = d.path().join("d");
+    let work = d.path().join("w");
+    std::fs::create_dir_all(&work).unwrap();
+    let mut cfg =
+        marsad_client::ClientConfig::new(&data, wasit_control::Hello::new("test", "gui", "gui"));
+    cfg.agent_bin = Some(agent());
+    cfg.serve_args = serve_args();
+    cfg.serve_args
+        .extend(["--export-cap-bytes".into(), "3000".into()]);
+    let c = marsad_client::MarsadClient::connect(cfg);
+    let mut req = LaunchRequest::new("claude");
+    req.cwd = Some(work.to_string_lossy().into_owned());
+    req.first_prompt = Some("hello".into());
+    let id = c.launch(req).await.unwrap().id;
+    let rt = c.runtime(None);
+    let mut sub = rt.subscribe_session(&id, None);
+    loop {
+        if is_turn_completed(&next_event(&mut sub).await) {
+            break;
+        }
+    }
+    let e = export(&c, &data, ExportRequest::default()).await;
+    assert_eq!(e.manifest()["cap_bytes"], 3000);
+    assert!(
+        e.own("section").is_empty() && e.own("trail").is_empty(),
+        "{:#?}",
+        e.lines
+    );
+    let left: Vec<(String, String)> = e
+        .own("skipped")
+        .iter()
+        .map(|s| {
+            assert_eq!(s["why"], "size_cap");
+            (
+                s["source"].as_str().unwrap().into(),
+                s["file"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    // The hub's own logs, the session's trail and its shim log: all named.
+    for want in [
+        "daemon".to_owned(),
+        format!("trail:{id}"),
+        format!("shim:{id}"),
+    ] {
+        assert!(
+            left.contains(&("host:hub".to_owned(), want.clone())),
+            "{want} in {left:?}"
+        );
+    }
+    assert!(e
+        .own("skipped")
+        .iter()
+        .any(|s| s["file"] == "daemon" && s["bytes"].as_u64().unwrap() > 0));
+    let end = e.end();
+    assert_eq!(end["complete"], false);
+    assert_eq!(end["skipped"].as_u64().unwrap() as usize, left.len());
+    assert_eq!(end["sections"], 0);
+    let r = e.result("host:hub");
+    assert_eq!(
+        (r["outcome"].as_str(), r["reason"].as_str()),
+        (Some("partial"), Some("size_cap"))
+    );
+    assert_eq!(e.status.complete, Some(false));
+    let hub = e
+        .status
+        .sources
+        .iter()
+        .find(|s| s.source == "host:hub")
+        .unwrap();
+    assert_eq!(hub.state, ExportSourceState::Partial);
+    assert!(hub.reason.as_deref().unwrap().contains("size_cap"));
+    drop(sub);
+    drop(rt);
+    drop(c);
+    stop(&data).await;
+}
+
+/// `marsad-agent diagnostics export`: through the hub when one serves, else this machine's files
+/// only, marked as such; bad options are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_command_line_export_asks_the_hub_or_reads_the_local_files() {
+    let d = TempDir::new();
+    let data = d.path().join("d");
+    let l = layout(&data);
+    let work = d.path().join("w");
+    std::fs::create_dir_all(&work).unwrap();
+    let out = d.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let cli = |args: &[&str]| {
+        let mut cmd = std::process::Command::new(agent());
+        cmd.arg("diagnostics")
+            .arg("export")
+            .arg("--data")
+            .arg(&data)
+            .args(args);
+        cmd
+    };
+    let read = |p: &Path| -> Vec<Value> {
+        let bytes = marsad_agent::hub::export::gzip::gunzip(&std::fs::read(p).unwrap()).unwrap();
+        String::from_utf8(bytes)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    };
+
+    let c = client(&data);
+    let mut req = LaunchRequest::new("claude");
+    req.cwd = Some(work.to_string_lossy().into_owned());
+    req.first_prompt = Some("hello".into());
+    let id = c.launch(req).await.unwrap().id;
+    let rt = c.runtime(None);
+    let mut sub = rt.subscribe_session(&id, None);
+    loop {
+        if is_turn_completed(&next_event(&mut sub).await) {
+            break;
+        }
+    }
+
+    // With the hub: the file the hub wrote, copied into the directory asked for.
+    let o = tokio::task::spawn_blocking({
+        let mut cmd = cli(&[
+            "--since",
+            "3d",
+            "--no-trails",
+            "--out",
+            out.to_str().unwrap(),
+        ]);
+        move || cmd.output().unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let copied = PathBuf::from(String::from_utf8_lossy(&o.stdout).trim());
+    assert_eq!(copied.parent().unwrap(), out);
+    let lines = read(&copied);
+    assert_eq!(lines[0]["mode"], "hub");
+    // `--no-trails`: the logs, not the sessions' trails.
+    assert_eq!(lines[0]["include_trails"], false);
+    assert!(lines.iter().all(|l| l["line"] != "trail"));
+    assert!(lines
+        .iter()
+        .any(|l| l["line"] == "section" && l["file"] == "daemon"));
+    let window = lines[0]["until"].as_u64().unwrap() - lines[0]["since"].as_u64().unwrap();
+    assert!(
+        (3 * 86_400_000..3 * 86_400_000 + 60_000).contains(&window),
+        "{window}"
+    );
+    assert!(String::from_utf8_lossy(&o.stderr).contains("host:hub: Done"));
+    assert!(std::fs::read_dir(l.diag().join("exports"))
+        .unwrap()
+        .flatten()
+        .any(|e| e.file_name() == copied.file_name().unwrap()));
+
+    // Without it: this machine's own files, without trails, and the manifest says so.
+    drop(sub);
+    drop(rt);
+    drop(c);
+    stop(&data).await;
+    let file = out.join("local.ndjson.gz");
+    let o = tokio::task::spawn_blocking({
+        let mut cmd = cli(&["--out", file.to_str().unwrap()]);
+        move || cmd.output().unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let lines = read(&file);
+    assert_eq!(lines[0]["line"], "manifest");
+    assert_eq!(lines[0]["mode"], "local_files");
+    assert_eq!(lines[0]["note"], "no_daemon");
+    assert_eq!(lines[0]["hosts"].as_array().unwrap().len(), 0);
+    let section_of = |file: &str| {
+        let i = lines
+            .iter()
+            .position(|l| l["line"] == "section" && l["source"] == "local" && l["file"] == file)
+            .unwrap_or_else(|| panic!("no {file} section"));
+        lines[i + 1..]
+            .iter()
+            .take_while(|l| l.get("line").is_none())
+            .collect::<Vec<_>>()
+    };
+    assert!(section_of("daemon")
+        .iter()
+        .any(|r| r["ev"] == "daemon.shutdown"));
+    assert!(section_of(&format!("shim:{id}"))
+        .iter()
+        .any(|r| r["ev"] == "shim.start"));
+    assert!(lines.iter().all(|l| l["line"] != "trail"));
+    let end = lines.last().unwrap();
+    assert_eq!(
+        (end["line"].as_str(), end["complete"].as_bool()),
+        (Some("end"), Some(true))
+    );
+
+    // A bad window is refused before anything is read.
+    let o = tokio::task::spawn_blocking({
+        let mut cmd = cli(&["--since", "2w"]);
+        move || cmd.output().unwrap()
+    })
+    .await
+    .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("is not a duration"));
+}
+
+/// The leak scan itself: it finds a marker in every form it can take, and nothing in plain text.
+#[test]
+fn the_leak_scan_finds_a_marker_in_every_form_it_can_take() {
+    use wasit_core::content::b64_encode;
+    let m = "LEAK\"probe\"1a2b3c4d5e";
+    assert_eq!(found_in(format!("x {m} y").as_bytes(), m), Some("raw"));
+    let once = forms(m)[1].clone();
+    assert_eq!(
+        found_in(format!("{{\"t\":\"{once}\"}}").as_bytes(), m),
+        Some("json-escaped")
+    );
+    let twice = forms(m)[2].clone();
+    assert_eq!(found_in(twice.as_bytes(), m), Some("json-escaped twice"));
+    // Inside a longer base64 text, at each of the three alignments.
+    for k in 0..3 {
+        let mut bytes = vec![b'q'; k];
+        bytes.extend_from_slice(m.as_bytes());
+        bytes.extend_from_slice(b"-and the rest of the text");
+        let text = format!("data:{}=", b64_encode(&bytes));
+        assert_eq!(
+            found_in(text.as_bytes(), m),
+            Some("base64"),
+            "alignment {k}"
+        );
+    }
+    // UTF-16LE, in a binary file.
+    let mut wide = vec![0u8, 1, 2];
+    wide.extend(m.encode_utf16().flat_map(u16::to_le_bytes));
+    assert_eq!(found_in(&wide, m), Some("utf-16le"));
+    // Nothing to find.
+    assert_eq!(found_in(b"LEAK probe 1a2b3c4d5e, \"probe\"", m), None);
+}
+
+/// A daemon that is not the hub has no export to ask for: the command line finds that out (the
+/// hub-only method is not served there) and exports the machine's own files, saying why.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_command_line_export_beside_a_daemon_that_is_not_a_hub_reads_its_files() {
+    let d = TempDir::new();
+    let data = d.path().join("d");
+    let mut child = tokio::process::Command::new(agent())
+        .arg("serve")
+        .arg("--data")
+        .arg(&data)
+        .args(serve_args())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    tokio::time::timeout(
+        T,
+        BufReader::new(child.stdout.take().unwrap()).read_line(&mut line),
+    )
+    .await
+    .expect("readiness line")
+    .unwrap();
+    let out = d.path().join("host.ndjson.gz");
+    let o = tokio::task::spawn_blocking({
+        let mut cmd = std::process::Command::new(agent());
+        cmd.args(["diagnostics", "export", "--data"])
+            .arg(&data)
+            .arg("--out")
+            .arg(&out);
+        move || cmd.output().unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let text = String::from_utf8(
+        marsad_agent::hub::export::gzip::gunzip(&std::fs::read(&out).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let lines: Vec<Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines[0]["mode"], "local_files");
+    assert_eq!(lines[0]["note"], "not_a_hub");
+    let i = lines
+        .iter()
+        .position(|l| l["line"] == "section" && l["source"] == "local" && l["file"] == "daemon")
+        .expect("the daemon's own log");
+    assert!(lines[i + 1..]
+        .iter()
+        .take_while(|l| l.get("line").is_none())
+        .any(|r| r["ev"] == "daemon.start" && r["hub"] == false));
+    stop(&data).await;
 }

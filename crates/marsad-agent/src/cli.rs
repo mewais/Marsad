@@ -12,7 +12,9 @@
 //! Options: `--driver-bin <driver>=<path>` and `--driver-env <driver>=<KEY>=<VALUE>`
 //! (repeatable) override a driver's binary / add environment; `--handshake-timeout-ms`,
 //! `--stop-grace-ms`, `--command-timeout-ms`, `--auth-prompt-timeout-ms` (hub: how long a
-//! sign-in prompt waits; default 120 s).
+//! sign-in prompt waits; default 120 s), `--export-cap-bytes` and `--export-host-budget-bytes`
+//! (hub: the size cap of a diagnostics export's compressed file, default 20 MiB, and the raw
+//! bytes one source contributes, default 16 MiB).
 //!
 //! Defaults: data root `~/.marsad` (Windows: `%LOCALAPPDATA%\Marsad`), which may be shared by
 //! several machines; this machine's durable data lives in `<data>/machines/<machine key>/` and
@@ -42,6 +44,10 @@ pub struct Options {
     pub command_timeout: Option<Duration>,
     /// How long a sign-in prompt waits for the user (hub).
     pub auth_prompt_timeout: Option<Duration>,
+    /// The cap of a diagnostics export's compressed file, in bytes (hub; default 20 MiB).
+    pub export_cap: Option<u64>,
+    /// Raw bytes one source contributes to a diagnostics export (hub; default 16 MiB).
+    pub export_host_budget: Option<u64>,
     /// `--panic-test <marker>`: the daemon panics, once its diagnostics run, with a message
     /// holding the marker (tests/diag_panic.rs; only in builds with the `panic-test` feature,
     /// which only this package's own dev-dependency turns on).
@@ -78,6 +84,7 @@ impl Options {
                     .map(Duration::from_millis)
                     .map_err(|e| format!("{flag}: {e}"))
             };
+            let bytes = |v: String| v.parse::<u64>().map_err(|e| format!("{flag}: {e}"));
             match flag.as_str() {
                 "--data" => data = Some(PathBuf::from(val()?)),
                 "--run-dir" => o.run_dir = Some(PathBuf::from(val()?)),
@@ -102,6 +109,8 @@ impl Options {
                 "--stop-grace-ms" => o.stop_grace = Some(ms(val()?)?),
                 "--command-timeout-ms" => o.command_timeout = Some(ms(val()?)?),
                 "--auth-prompt-timeout-ms" => o.auth_prompt_timeout = Some(ms(val()?)?),
+                "--export-cap-bytes" => o.export_cap = Some(bytes(val()?)?),
+                "--export-host-budget-bytes" => o.export_host_budget = Some(bytes(val()?)?),
                 #[cfg(feature = "panic-test")]
                 "--panic-test" => o.panic_test = Some(val()?),
                 other => return Err(format!("unknown option {other}")),

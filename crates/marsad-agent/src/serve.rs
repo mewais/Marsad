@@ -34,6 +34,8 @@ use crate::cli::{default_host_id, Options};
 use crate::diag::{self, emit};
 use crate::host::{pty::Ptys, HostServices};
 use crate::hub::auth::Prompts;
+use crate::hub::export::job::{HubFacts, Limits};
+use crate::hub::export::{ExportEnv, Exports};
 use crate::hub::fleet::Fleet;
 use crate::hub::gitwatch::GitWatch;
 use crate::hub::hosts::Registry;
@@ -175,7 +177,12 @@ pub async fn serve(o: Options) -> ExitCode {
         crate::migrate::run(&layout).await;
     }
     // The user's real environment (login shell), for everything this daemon starts.
-    let env = HostEnv::new(CaptureOptions::default());
+    // The setup file a csh/tcsh login is sourced from goes in this daemon's own private runtime
+    // directory, not in a generic one.
+    let env = HostEnv::new(CaptureOptions {
+        scratch_dir: Some(layout.run.clone()),
+        ..CaptureOptions::default()
+    });
     let phase = Instant::now();
     env.refresh().await;
     let env_ms = diag::ms(phase);
@@ -268,6 +275,12 @@ pub async fn serve(o: Options) -> ExitCode {
     if let Err(e) = local
         .register(ROUTES.iter().copied(), Arc::new(runtime))
         .and_then(|_| local.register(HOST_ROUTES.iter().copied(), Arc::new(host)))
+        .and_then(|_| {
+            local.register(
+                wasit_runtime::wire::DIAG_ROUTES.iter().copied(),
+                Arc::new(wasit_runtime::DiagService::new(manager.clone())),
+            )
+        })
         .and_then(|_| {
             local.register(
                 wasl_proto::ROUTES.iter().copied(),
@@ -485,6 +498,26 @@ async fn start_hub(
         &hub,
         local_id.clone(),
     );
+    let mut limits = Limits::default();
+    if let Some(cap) = o.export_cap {
+        limits.cap = cap;
+    }
+    if let Some(budget) = o.export_host_budget {
+        limits.host_budget = budget;
+    }
+    let exports = Exports::spawn(ExportEnv {
+        fleet: fleet.clone(),
+        link: link.clone(),
+        diag_dir: o.layout().diag(),
+        hub: HubFacts {
+            host_id: host_id.to_string(),
+            build: build.to_string(),
+            target: version::target().to_string(),
+            machine: o.layout().machine.clone(),
+            pid: std::process::id(),
+        },
+        limits,
+    });
     fleet.set_git_watch(git.clone()).await;
     let workstreams = Workstreams::start(store.clone(), link, fleet.clone(), local_id.clone())
         .await
@@ -505,6 +538,7 @@ async fn start_hub(
         workstreams,
         git,
         envs,
+        exports,
         spawn_lock: tokio::sync::Mutex::new(()),
     };
     let mut top = ServiceMux::new();
@@ -513,6 +547,7 @@ async fn start_hub(
             .iter()
             .chain(HOST_ROUTES)
             .chain(wasl_proto::ROUTES)
+            .chain(wasit_runtime::wire::DIAG_ROUTES)
             .copied(),
         routing,
     )
