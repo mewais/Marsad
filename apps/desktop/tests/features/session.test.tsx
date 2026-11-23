@@ -1,6 +1,8 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import type { DriverInventory, SessionSnapshot } from "../../src/bridge/wire";
+import { driverVersionState, sessionModesState, sessionModelsState, sessionVersionState } from "../../src/state";
 import { hold, renderApp, sessionByName, quietBackend } from "../helpers";
 
 async function open(name: string, backend = quietBackend()) {
@@ -65,5 +67,73 @@ describe("Session view", () => {
     // the scripted agent replies and the session finishes
     expect(await screen.findByText(/Nothing else needs your attention/, undefined, { timeout: 3000 })).toBeInTheDocument();
     void s;
+  });
+
+  it("shows loading… while live session models, modes, and version arrive asynchronously, and Not reported when unsupported or ended", async () => {
+    const snap = (over: Partial<SessionSnapshot> = {}): SessionSnapshot =>
+      ({
+        phase: { state: "starting" },
+        capabilities: { set_model: true, set_mode: true } as SessionSnapshot["capabilities"],
+        available_models: [],
+        available_modes: [],
+        cli_version: null,
+        native_session_id: null,
+        model: null,
+        turns_completed: 0,
+        turn: null,
+        ...over,
+      }) as SessionSnapshot;
+
+    // Live + capable + empty -> loading
+    expect(sessionModelsState(snap())).toBe("loading");
+    expect(sessionModesState(snap())).toBe("loading");
+    expect(sessionVersionState(snap())).toBe("loading");
+
+    // Stale (disconnected host) -> not_reported (nothing arriving over SSH right now)
+    expect(sessionModelsState(snap(), true)).toBe("not_reported");
+    expect(sessionModesState(snap(), true)).toBe("not_reported");
+    expect(sessionVersionState(snap(), true)).toBe("not_reported");
+
+    // Capability false -> not_reported even while live
+    expect(sessionModelsState(snap({ capabilities: { set_model: false, set_mode: false } as SessionSnapshot["capabilities"] }))).toBe("not_reported");
+    expect(sessionModesState(snap({ capabilities: { set_model: false, set_mode: false } as SessionSnapshot["capabilities"] }))).toBe("not_reported");
+
+    // Version after init arrived (idle + model/native_session_id reported without cli_version) -> not_reported
+    expect(sessionVersionState(snap({ phase: { state: "idle" }, model: "m1" }))).toBe("not_reported");
+    // Session ended -> not_reported
+    expect(sessionModelsState(snap({ phase: { state: "exited", code: 0 } }))).toBe("not_reported");
+
+    // Driver inventory version state
+    const drv = (over: Partial<DriverInventory> = {}): DriverInventory =>
+      ({ installed: false, version: null, refreshing: true, refreshed_at_ms: 0, probes: [], ...over }) as DriverInventory;
+    expect(driverVersionState(drv(), true)).toEqual({ kind: "loading" });
+    expect(driverVersionState(drv({ installed: true }), true)).toEqual({ kind: "loading" });
+    expect(driverVersionState(drv({ installed: true, refreshing: false, probes: [{ kind: "version", ok: true, duration_ms: 10 }] }), true)).toEqual({ kind: "not_reported" });
+    expect(driverVersionState(drv({ installed: true, version: "2.1.4" }), true)).toEqual({ kind: "ready", version: "2.1.4" });
+    expect(driverVersionState(drv({ refreshing: false, refreshed_at_ms: 100 }), true)).toEqual({ kind: "not_installed" });
+
+    // Rendered UI: live session with empty lists + capable -> Composer and ConfigTab show loading… instead of hiding/Not reported
+    const backend = quietBackend();
+    const s = sessionByName(backend, "docs-search-index");
+    backend.patchSession(s.host, s.id, { phase: { state: "starting" }, available_models: [], available_modes: [], cli_version: null, model: null, mode: null, native_session_id: null, turns_completed: 0 });
+    const user = userEvent.setup();
+    await open("docs-search-index", backend);
+    expect(screen.getByTestId("composer-modes-loading")).toHaveTextContent("loading…");
+    expect(screen.getByTestId("composer-models-loading")).toHaveTextContent("loading…");
+    expect(screen.getByTestId("session-version-loading")).toHaveTextContent("loading…");
+
+    await user.click(screen.getByRole("tab", { name: "Config" }));
+    expect(screen.getByRole("button", { name: "Model: Loading…" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mode: Loading…" })).toBeInTheDocument();
+
+    // Once capabilities say not supported, ConfigTab falls back to Not reported and Composer hides them
+    act(() => {
+      backend.patchSession(s.host, s.id, { capabilities: { ...s.snap.capabilities, set_model: false, set_mode: false } });
+    });
+    expect(await screen.findByRole("button", { name: "Model: Not reported" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mode: Not reported" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Activity" }));
+    expect(screen.queryByTestId("composer-modes-loading")).toBeNull();
+    expect(screen.queryByTestId("composer-models-loading")).toBeNull();
   });
 });

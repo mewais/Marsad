@@ -34,10 +34,11 @@
 /* Last known: the host is not reporting; the row says where the session was. */
 .ibx-item[data-stale] .ibx-row{opacity:.72}
 
-/* Hosts waiting for the user to sign in: compact rows above the sessions. */
-.hw{border-bottom:1px solid var(--needs-line);background:var(--needs-bg);padding-bottom:6px;flex:none}
-.hw .grp{padding-top:10px}
-.hw-row{display:flex;align-items:center;gap:12px;padding:3px 20px;min-height:32px}
-.hw-n{font-weight:600;font-size:13px;flex:none}
-.hw-w{flex:1;min-width:0;font-size:12px;color:var(--fg-2)}
-.hw-row .sp{flex:1}
+/* Disconnected hosts: one compact line above the sessions; error details live on the Hosts page. */
+.hw{display:flex;align-items:center;gap:8px;padding:5px 20px;border-bottom:1px solid var(--needs-line);background:var(--needs-bg);font-size:12px;line-height:1.4;flex:none}
+.hw-text{flex:1;min-width:0;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hw-text b{color:var(--fg);font-weight:600}
+.hw-acts{display:inline-flex;align-items:center;gap:6px;flex:none}
+.hw-acts .btn{height:22px;padding:0 8px;font-size:11.5px}
+.hw-link{flex:none;color:var(--accent);font-weight:500;white-space:nowrap}
+.hw-link:hover{text-decoration:underline}

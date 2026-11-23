@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionSnapshot } from "../../bridge/wire";
 import { splitKey } from "../../bridge/wire";
 import { errorMessage } from "../../bridge/api";
-import { continueState, notContinuableWords, useActions, useApi, usePending, useSessionReach, useSessionView } from "../../state";
+import { continueState, notContinuableWords, sessionModesState, sessionModelsState, useActions, useApi, usePending, useSessionReach, useSessionView } from "../../state";
 import { modelChoice } from "../../state/domain";
 import { Button, Icon, IconButton, Kbd, Select, useEscape } from "../../ui";
 import { formatBytes } from "../media/fetch";
@@ -35,7 +35,11 @@ export function PendingList({ files, input, onRemove }: { files: PendingFile[]; 
 export function Composer({ sessionKey, snap }: { sessionKey: string; snap: SessionSnapshot }) {
   const actions = useActions();
   const api = useApi();
-  const blocked = useSessionReach(useSessionView(sessionKey));
+  const view = useSessionView(sessionKey);
+  const blocked = useSessionReach(view);
+  const stale = !!view?.stale;
+  const modesState = sessionModesState(snap, stale);
+  const modelsState = sessionModelsState(snap, stale);
   // A launch that created this session but could not send the first message leaves it as a draft.
   const draft = useRef(peekDraft(sessionKey));
   useEffect(() => clearDraft(sessionKey), [sessionKey]);
@@ -175,19 +179,36 @@ export function Composer({ sessionKey, snap }: { sessionKey: string; snap: Sessi
           }}
         />
         <div className="comp-bar">
-          <IconButton icon="clip" label={attachHint} onClick={() => void attach()} disabled={!canAttach || !!blocked || !!noSend} />
-          <IconButton icon="slash" label="Slash commands" onClick={() => { recall.reset(); setMenuClosed(false); setText("/"); ta.current?.focus(); }} disabled={!snap.capabilities.slash_commands || !!noSend} />
-          {snap.available_modes.length ? (
-            <Select compact up label="Mode" blocked={blocked ?? setupBlock} leading={<Icon name="shield" size="xs" />} value={snap.mode ?? undefined} options={snap.available_modes.map((m) => ({ value: m.id, label: m.label, description: m.description }))}
-              onChange={(v) => void actions.command(sessionKey, { command: "set_mode", mode: v }, { failTitle: "Could not change the mode" })} />
-          ) : null}
-          {snap.available_models.length ? (
-            <Select compact up label="Model" blocked={blocked ?? setupBlock} leading={<Icon name="sparkle" size="xs" />} value={modelChoice(snap).value} options={modelChoice(snap).options}
-              onChange={(v) => void actions.command(sessionKey, { command: "set_model", model: v }, { failTitle: "Could not change the model" })} />
-          ) : null}
-          <span className="sp" />
-          {recall.paging ? <span className="faint fs115" role="status">Loading earlier prompts…</span> : <span className="faint fs115"><Kbd>Enter</Kbd> send · <Kbd>⇧ Enter</Kbd> new line · <Kbd>↑</Kbd> earlier prompts</span>}
-          <Button variant="primary" size="sm" icon="send" pending={sending} blocked={blocked} disabled={(!text.trim() && !files.length) || !!problem || !!noSend} onClick={() => void submit()}>Send</Button>
+          <div className="comp-tools">
+            <IconButton icon="clip" label={attachHint} onClick={() => void attach()} disabled={!canAttach || !!blocked || !!noSend} />
+            <IconButton icon="slash" label="Slash commands" onClick={() => { recall.reset(); setMenuClosed(false); setText("/"); ta.current?.focus(); }} disabled={!snap.capabilities.slash_commands || !!noSend} />
+            {modesState === "ready" ? (
+              <Select compact up label="Mode" blocked={blocked ?? setupBlock} leading={<Icon name="shield" size="xs" />} value={snap.mode ?? undefined} options={snap.available_modes.map((m) => ({ value: m.id, label: m.label, description: m.description }))}
+                onChange={(v) => void actions.command(sessionKey, { command: "set_mode", mode: v }, { failTitle: "Could not change the mode" })} />
+            ) : modesState === "loading" ? (
+              <span className="comp-loading" role="status" data-testid="composer-modes-loading"><Icon name="working" size="xs" spin />Mode: loading…</span>
+            ) : null}
+            {modelsState === "ready" ? (
+              <Select compact up label="Model" blocked={blocked ?? setupBlock} leading={<Icon name="sparkle" size="xs" />} value={modelChoice(snap).value} options={modelChoice(snap).options}
+                onChange={(v) => void actions.command(sessionKey, { command: "set_model", model: v }, { failTitle: "Could not change the model" })} />
+            ) : modelsState === "loading" ? (
+              <span className="comp-loading" role="status" data-testid="composer-models-loading"><Icon name="working" size="xs" spin />Model: loading…</span>
+            ) : null}
+          </div>
+          <div className="comp-tail">
+            {recall.paging ? (
+              <span className="faint fs115 comp-hint" role="status">Loading earlier prompts…</span>
+            ) : (
+              <span className="faint fs115 comp-hint">
+                <span className="comp-hint-p"><Kbd>Enter</Kbd> send</span>
+                <span aria-hidden="true">·</span>
+                <span className="comp-hint-p"><Kbd>⇧ Enter</Kbd> new line</span>
+                <span aria-hidden="true">·</span>
+                <span className="comp-hint-p"><Kbd>↑</Kbd> earlier prompts</span>
+              </span>
+            )}
+            <Button variant="primary" size="sm" icon="send" pending={sending} blocked={blocked} disabled={(!text.trim() && !files.length) || !!problem || !!noSend} onClick={() => void submit()}>Send</Button>
+          </div>
         </div>
       </div>
     </div>
