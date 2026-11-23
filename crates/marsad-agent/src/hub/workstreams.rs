@@ -45,6 +45,7 @@ use wasl_proto::{
 
 use super::fleet::Fleet;
 use super::ring::{self, Joined, Ring};
+use crate::hub_events;
 use crate::util::now_ms;
 
 const MAILBOX: usize = 1024;
@@ -408,11 +409,11 @@ impl Workstreams {
                                         return;
                                     }
                                 }
-                                Err(e) => tracing::error!(error = %e, "undecodable fleet event"),
+                                Err(e) => hub_events::fleet_event_undecodable(&e),
                             }
                         }
                     }
-                    Err(e) => tracing::warn!(error = %e, "cannot follow the fleet"),
+                    Err(e) => hub_events::fleet_follow_failed(&e),
                 }
                 failures = failures.saturating_add(1);
                 // Backoff schedule for a feed that keeps failing.
@@ -756,7 +757,7 @@ impl Actor {
         tokio::spawn(async move {
             let result = push_topology(&link, &host, &t).await;
             if let Err(e) = &result {
-                tracing::warn!(workstream = %t.workstream, host = %host, error = %e, "topology push failed");
+                hub_events::topology_push_failed(&t.workstream, &host, e);
             }
             // The actor may be gone (shutdown).
             let _ = tx
@@ -915,7 +916,7 @@ impl Actor {
                 let v = match item {
                     Ok((_, v)) => v,
                     Err(e) => {
-                        tracing::warn!(host = %host, topic, error = %e, "node feed ended");
+                        hub_events::node_feed_ended(&host, topic, &e);
                         return;
                     }
                 };
@@ -930,9 +931,7 @@ impl Actor {
                             return;
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(host = %host, topic, error = %e, "undecodable node event")
-                    }
+                    Err(e) => hub_events::node_event_undecodable(&host, topic, &e),
                 }
             }
         })
@@ -981,7 +980,7 @@ impl Actor {
             )
             .await;
         if let Err(err) = res {
-            tracing::error!(workstream = %id, error = %err, "cannot record an always-allow decision");
+            hub_events::always_allow_failed(&id, &err);
         }
     }
 
@@ -1144,7 +1143,7 @@ pub async fn push_topology(link: &Supervised, host: &HostId, t: &Topology) -> Re
         match r {
             Ok(_) => return Ok(()),
             Err(e) if e.is_retryable() && attempt < PUSH_ATTEMPTS => {
-                tracing::debug!(host = %host, error = %e, "topology push failed; retrying");
+                hub_events::topology_push_retry(host, &e);
                 // Backoff schedule.
                 tokio::time::sleep(delay).await;
                 delay = (delay * 2).min(Duration::from_secs(5));

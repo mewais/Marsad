@@ -187,7 +187,6 @@ impl Service for HostServices {
                 }
                 methods::DAEMON_INFO => ok(&self.info).map_err(rpc_to)?,
                 methods::DAEMON_SHUTDOWN => {
-                    tracing::info!("shutdown requested over the control protocol");
                     self.shutdown.cancel();
                     ok(Ack {}).map_err(rpc_to)?
                 }

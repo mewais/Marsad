@@ -23,6 +23,7 @@ pub mod cli;
 pub mod diag;
 pub mod host;
 pub mod hub;
+pub mod hub_events;
 pub mod migrate;
 pub mod serve;
 pub mod util;

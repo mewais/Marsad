@@ -34,6 +34,7 @@ use marsad_proto::methods;
 use wasit_control::{ClientOptions, ControlClient, Endpoint, Hello, InstanceLock, LockError};
 use wasit_shim::{ShimClient, ShimState};
 
+use crate::hub_events;
 use crate::version;
 
 /// A session without an exit record touched more recently than this is not claimed yet.
@@ -72,7 +73,7 @@ pub struct Report {
 pub async fn run(layout: &Layout) -> Report {
     let r = adopt(layout).await;
     if r != Report::default() {
-        tracing::info!(?r, "adopted the earlier flat data layout");
+        hub_events::migrate_adopted(&r);
     }
     r
 }
@@ -101,16 +102,13 @@ async fn adopt(layout: &Layout) -> Report {
     };
     if lock.is_none() && legacy_lock.exists() {
         report.foreign_daemon = true;
-        tracing::info!(
-            root = %root.display(),
-            "the earlier data layout here belongs to another machine's daemon; leaving it alone"
-        );
+        hub_events::migrate_foreign_daemon(root);
         return report;
     }
     // 2. Sessions.
     let target = layout.data.join("sessions");
     if let Err(e) = tokio::fs::create_dir_all(&target).await {
-        tracing::warn!(error = %e, "cannot create {}", target.display());
+        hub_events::migrate_sessions_dir_failed(&target, &e);
         return report;
     }
     if let Ok(mut rd) = tokio::fs::read_dir(&legacy_sessions).await {
@@ -146,7 +144,7 @@ async fn adopt(layout: &Layout) -> Report {
                         #[cfg(unix)]
                         if live {
                             if let Err(e) = tokio::fs::symlink(&to, &dir).await {
-                                tracing::warn!(session = %name, error = %e, "cannot link the old session path");
+                                hub_events::migrate_session_link_failed(&name, &e);
                             }
                             link_runtime(layout, &name, &to).await;
                         }
@@ -156,7 +154,7 @@ async fn adopt(layout: &Layout) -> Report {
                     }
                     // Another machine claimed it first, or it cannot move: leave it.
                     Err(e) => {
-                        tracing::warn!(session = %name, error = %e, "cannot claim legacy session");
+                        hub_events::migrate_session_claim_failed(&name, &e);
                         report.left.push(name);
                     }
                 }
@@ -175,7 +173,7 @@ async fn adopt(layout: &Layout) -> Report {
         let to = layout.data.join(d);
         if from.is_dir() && !to.exists() {
             if let Err(e) = tokio::fs::rename(&from, &to).await {
-                tracing::warn!(error = %e, "cannot move {}", from.display());
+                hub_events::migrate_move_failed(&from, &e);
             }
         }
     }
@@ -200,7 +198,7 @@ async fn take_legacy_lock(path: &Path) -> Option<InstanceLock> {
         Ok(l) => Some(l),
         Err(LockError::Held(_)) => None,
         Err(e) => {
-            tracing::warn!(error = %e, "cannot check the legacy daemon lock");
+            hub_events::migrate_legacy_lock_failed(&e);
             None
         }
     }
@@ -250,12 +248,12 @@ async fn claimable(dir: &Path) -> Option<bool> {
 async fn link_runtime(layout: &Layout, name: &str, data: &Path) {
     let run = layout.run.join("sessions").join(name);
     if let Err(e) = tokio::fs::create_dir_all(&run).await {
-        tracing::warn!(session = %name, error = %e, "cannot create {}", run.display());
+        hub_events::migrate_runtime_dir_failed(&name, &run, &e);
         return;
     }
     for f in [wasit_shim::LOCK_FILE, "ctl.sock"] {
         if let Err(e) = tokio::fs::symlink(data.join(f), run.join(f)).await {
-            tracing::warn!(session = %name, error = %e, "cannot link {f}");
+            hub_events::migrate_runtime_link_failed(&name, f, &e);
         }
     }
 }

@@ -45,6 +45,7 @@ use wasl_proto::{
 
 use super::workstreams;
 use super::HubServices;
+use crate::hub_events;
 
 /// Bound on one authority call through the in-process connection (a launch includes the CLI's
 /// start on the target host).
@@ -260,7 +261,7 @@ impl HubServices {
                     // Bounded: whatever is known by then counts.
                     let _ = tokio::time::timeout(RESOLVE, wait).await;
                 }
-                Err(e) => tracing::debug!(error = %e, "inventory topic unavailable"),
+                Err(e) => hub_events::inventory_unavailable(host, &e),
             }
         }
         Ok(r.drivers.into_iter().filter(|d| d.installed).collect())
@@ -677,7 +678,7 @@ impl HubServices {
             )
             .await;
         if let Err(e) = r {
-            tracing::info!(host = %s.host, session = %s.session, error = %e, "stopping a spawned session");
+            hub_events::spawned_session_stop_failed(&s.host, &s.session, &e);
         }
     }
 

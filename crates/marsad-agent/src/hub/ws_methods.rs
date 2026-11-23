@@ -18,6 +18,7 @@ use wasl_proto::{methods as wasl_methods, AgentId, EdgePolicy, TaskList, TaskVie
 
 use super::workstreams::{self, LaunchResult};
 use super::HubServices;
+use crate::hub_events;
 use crate::util::now_ms;
 
 /// Labels put on every session a workstream launches.
@@ -301,7 +302,7 @@ impl HubServices {
                         .on_host(ctx, &reply.host, rt_methods::SESSIONS_RENAME, rename)
                         .await;
                     if let Err(e) = done {
-                        tracing::warn!(node, error = %e, "cannot name the node's session");
+                        hub_events::node_name_failed(&node, &e);
                     }
                 }
                 (node.clone(), r)
@@ -325,7 +326,7 @@ impl HubServices {
                     recorded.push((node, Ok(s)));
                 }
                 Err(e) => {
-                    tracing::warn!(workstream = id, node, error = %e, "node launch failed");
+                    hub_events::node_launch_failed(&id, &node, &e);
                     outcomes.push(NodeLaunchOutcome {
                         node: node.clone(),
                         session: None,
@@ -341,11 +342,10 @@ impl HubServices {
         let pushes = ws.topology_hosts.iter().map(|h| {
             let t = t.clone();
             async move {
-                let r: Result<wasl_proto::TopologyApplied, MarsadError> = self
-                    .on_host(ctx, h, wasl_methods::TOPOLOGY_SET, t)
-                    .await;
+                let r: Result<wasl_proto::TopologyApplied, MarsadError> =
+                    self.on_host(ctx, h, wasl_methods::TOPOLOGY_SET, t).await;
                 if let Err(e) = r {
-                    tracing::warn!(workstream = id, host = %h, error = %e, "topology push at launch failed (it is retried)");
+                    hub_events::launch_topology_push_failed(&id, &h, &e);
                 }
             }
         });
@@ -371,7 +371,7 @@ impl HubServices {
                 )
                 .await;
             if let Err(e) = r {
-                tracing::warn!(workstream = id, node = %o.node, error = %e, "first prompt failed");
+                hub_events::first_prompt_failed(&id, &o.node, &e);
             }
         }
         Ok(LaunchWorkstreamReply {
