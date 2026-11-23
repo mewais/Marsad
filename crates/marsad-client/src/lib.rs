@@ -47,7 +47,7 @@ use serde::Serialize;
 use tokio::io::AsyncBufReadExt;
 use wasit_control::{
     connector, CallError, ClientOptions, ConnectError, ControlClient, Cursor, DurableOpts,
-    DurableSubscription, Endpoint, Hello, RequestOpts, Supervised, SupervisedOptions,
+    DurableSubscription, Endpoint, Hello, RequestOpts, Supervised, SupervisedOptions, TraceId,
 };
 use wasit_runtime::RuntimeClient;
 
@@ -329,7 +329,19 @@ impl MarsadClient {
         method: &str,
         params: P,
     ) -> Result<R, ClientError> {
-        let mut opts = RequestOpts::new(self.deadline);
+        self.call_traced(host, method, params, None).await
+    }
+
+    /// Any method, typed, carrying `trace` (the user intent the request serves; `None`: none).
+    /// Every hop that serves the request records it under that trace.
+    pub async fn call_traced<P: Serialize, R: DeserializeOwned>(
+        &self,
+        host: Option<&HostId>,
+        method: &str,
+        params: P,
+        trace: Option<TraceId>,
+    ) -> Result<R, ClientError> {
+        let mut opts = RequestOpts::new(self.deadline).trace(trace);
         opts.host = host.cloned();
         self.link
             .request(method, params, opts, self.wait_connected)

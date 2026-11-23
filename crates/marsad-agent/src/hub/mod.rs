@@ -15,6 +15,7 @@ mod ws_methods;
 pub mod wsl;
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -23,6 +24,7 @@ use marsad_proto::agentconfig::{
     LaunchReply, LaunchRequest, LayerScope, OverrideLayer, WorkstreamNodeRef,
 };
 use marsad_proto::daemon::DaemonInfo;
+use marsad_proto::diag::MarsadEvent;
 use marsad_proto::hosts::{
     AskpassReply, AskpassRequest, AuthAnswer, AuthCancel, HostDraft, HostEntry, HostEnvSettings,
     HostList, HostRef, LinkStates,
@@ -43,8 +45,12 @@ use serde::Serialize;
 use serde_json::Value;
 use wasit_control::{CallContext, CloseReason, Cursor, EventStream, RpcError, Service};
 use wasit_core::DriverRegistry;
-use wasit_runtime::wire::{methods as rt_methods, CreateSession, CreateSessionReply};
+use wasit_diag::{Code, Ident, ProjectPath};
+use wasit_runtime::wire::{
+    methods as rt_methods, CreateSession, CreateSessionReply, ResumeRequest,
+};
 
+use crate::diag;
 use crate::util::{now_ms, ok, params};
 use fleet::Fleet;
 use hosts::Registry;
@@ -115,6 +121,15 @@ impl AutomaticItems for AskUserMcp {
                 server: cfg.transport,
             },
         }]
+    }
+}
+
+/// The record's `resume` word for a launch request.
+fn resume_code(r: &ResumeRequest) -> Code {
+    match r {
+        ResumeRequest::New => Code::st("fresh"),
+        ResumeRequest::Latest => Code::st("continue"),
+        ResumeRequest::Resume { .. } => Code::st("resume"),
     }
 }
 
@@ -240,7 +255,56 @@ impl HubServices {
         ))
     }
 
+    /// `sessions.launch`, recorded once (`launch`) whether it succeeds or fails.
     async fn launch(
+        &self,
+        ctx: &CallContext,
+        r: LaunchRequest,
+    ) -> Result<LaunchReply, MarsadError> {
+        let started = Instant::now();
+        let host = Ident::new(
+            &r.host
+                .clone()
+                .unwrap_or_else(|| self.registry.local().id.clone())
+                .to_string(),
+        );
+        let driver = Ident::new(&r.driver.to_string());
+        let resume = resume_code(&r.resume);
+        let first_prompt = r.first_prompt.as_deref().is_some_and(|p| !p.is_empty());
+        let cwd = r.cwd.as_deref().map(ProjectPath::new);
+        let named = r.id.as_ref().map(|s| Ident::new(&s.to_string()));
+        let res = self.launch_session(ctx, r).await;
+        let (session, outcome, error) = match &res {
+            Ok(reply) => (
+                Some(Ident::new(&reply.id.to_string())),
+                Code::st("ok"),
+                None,
+            ),
+            Err(e) => {
+                let rpc = e.clone().into_rpc();
+                (
+                    named,
+                    Code::st("error"),
+                    Some(diag::foreign(&rpc.code, &rpc.message)),
+                )
+            }
+        };
+        diag::emit(MarsadEvent::Launch {
+            trace: ctx.trace.clone(),
+            host,
+            session,
+            driver,
+            resume,
+            first_prompt,
+            cwd,
+            ms: diag::ms(started),
+            outcome,
+            error,
+        });
+        res
+    }
+
+    async fn launch_session(
         &self,
         ctx: &CallContext,
         r: LaunchRequest,
