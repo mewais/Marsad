@@ -72,8 +72,11 @@ on Linux and macOS; on Windows it is `%LOCALAPPDATA%\Marsad\machines\<key>\diag\
 * `sessions/<id>/shim.log`, `.1`: the shim of one session
 * `marsad-agent.log`: the daemon's raw stderr (crash output), never exported
 
-**Export from the app:** not available in this build. The Settings → Diagnostics page has no
-export control yet.
+**Export from the app:** Settings → Diagnostics → "Export diagnostics". Choose a time window
+(Last 24 hours, Last 3 days or Last 7 days; Last 24 hours is selected at first), then click
+**Export**. The card lists each source (This app, This computer, each connected host) with its
+state, and counts the finished sources as the hub reports them. When the export is finished,
+click **Save…** and choose where the file goes. This does not need Developer mode.
 
 **Export from a terminal** (when the app will not start), as your own user:
 
