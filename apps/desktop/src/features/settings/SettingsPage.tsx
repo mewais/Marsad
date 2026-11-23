@@ -9,6 +9,7 @@ import { allShortcuts } from "../../shortcuts/catalog";
 import { prettyKey, shortcutStore } from "../../shortcuts/registry";
 import { DEVELOPER_MODE, linkView, useActions, useApi, useApp, useAppState, useHosts, usePending, useReach, type LoadKey } from "../../state";
 import { Button, Card, Icon, Kbd, Segmented, Select, type IconName } from "../../ui";
+import { ExportCard } from "../diagnostics/ExportCard";
 import "./settings.css";
 
 const SECTIONS: { id: string; label: string; icon: IconName }[] = [
@@ -208,9 +209,9 @@ function Diagnostics() {
   return (
     <>
       <div><h1 className="h1">Diagnostics</h1><div className="muted">What Marsad records about itself, and how to look at it.</div></div>
+      {/* Outside `Loaded`: it needs the hub, not the settings, and says why it cannot export when the hub is unreachable. */}
+      <ExportCard />
       <Loaded keys={["settings"]}>
-        {/* The "Export diagnostics" card belongs here, above Developer mode: a later change adds it. Nothing is drawn for it until it works. */}
-        <div data-slot="export-diagnostics" hidden />
         <Card className="setcard">
           <Toggle label="Developer mode" hint="Shows a Diagnostics tab on every session and a connection log on every host, with where each prompt went, how a session's state changed and why a host would not connect, as ids, sizes, timings and reasons and never your prompts, replies or files." on={developer} pending={pending} onChange={(v) => void change(v)} />
         </Card>

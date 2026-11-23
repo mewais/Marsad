@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { HostId, SessionKey } from "../../bridge/wire";
+import { clockFailure, measureClock, type ClockState } from "./clock";
 import { useActions, useApi, useApp, useAppState, usePending, type TailSlice, type TailSpec, type TrailSlice } from "../../state";
 
 /**
@@ -50,4 +51,27 @@ export function useReconnect(host?: HostId): { label: string; run: () => void; p
   if (hub !== "connected") return hub === "connecting" ? { label: "Reconnect", run: () => undefined, pending: true } : { label: "Reconnect to the local service", run: () => void actions.reconnectHub(), pending: false };
   if (host && hostDown) return { label: `Reconnect to ${hostName ?? host}`, run: () => void actions.run(pk, `Could not connect to ${hostName ?? host}`, () => api.hosts.reconnect(host)), pending: busy };
   return null;
+}
+
+/**
+ * The offset of `host`'s wall clock from this computer's, measured once when the panel opens (and
+ * again only if the host becomes readable again after it was not): `null` while `enabled` is false.
+ * Nothing is polled; the times the panel shows are corrected by it and stay marked approximate.
+ */
+export function useClockOffset(host: HostId, enabled: boolean): ClockState | null {
+  const api = useApi();
+  const [state, setState] = useState<ClockState | null>(null);
+  useEffect(() => {
+    if (!enabled) return setState(null);
+    let live = true;
+    setState({ state: "measuring" });
+    measureClock(api, host).then(
+      (offset) => live && setState({ state: "ready", offset }),
+      (e) => live && setState(clockFailure(e)),
+    );
+    return () => {
+      live = false;
+    };
+  }, [api, host, enabled]);
+  return state;
 }

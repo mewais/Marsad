@@ -71,3 +71,21 @@
 .dga-fail{border-top:1px solid var(--failed-line);padding-top:6px;display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--fg)}
 .dga-err{margin:0;padding:6px 8px;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r2);white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}
 @media (max-width:900px){.dg-top{grid-template-columns:1fr}.dg-copy{align-items:flex-start;text-align:left;max-width:none}}
+/* the export card of Settings */
+.dgx{gap:0}
+.dgx-note{margin:0;padding:12px 0 4px;line-height:1.5}
+.dgx-pick{display:flex;flex-direction:row;align-items:center;gap:12px;flex-wrap:wrap;margin:0;min-width:0;padding:12px 0;border:0;border-bottom:1px solid var(--line)}
+.dgx-pick .sp{flex:1}
+.dgx-body{display:flex;flex-direction:column;gap:10px;padding:12px 0}
+.dgx-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dgx-head .sp{flex:1}
+.dgx-src{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:var(--r3);background:var(--sunken)}
+.dgx-row{display:grid;grid-template-columns:minmax(120px,200px) minmax(110px,150px) 70px 1fr;gap:4px 12px;align-items:baseline;padding:6px 10px;border-bottom:1px solid var(--line);font-size:12.5px}
+.dgx-row:last-child{border-bottom:0}
+.dgx-st{display:inline-flex;align-items:center;gap:6px}
+.dgx-st.ok{color:var(--done)} .dgx-st.warn{color:var(--needs)} .dgx-st.bad{color:var(--failed)} .dgx-st.info{color:var(--working)} .dgx-st.plain{color:var(--fg-2)}
+.dgx-sz{text-align:right}
+.dgx-why{min-width:0;overflow-wrap:anywhere}
+.dgx-acts{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+@media (max-width:900px){.dgx-row{grid-template-columns:1fr auto}.dgx-why{grid-column:1/-1}}
+.dgx-cur{display:flex;flex-direction:column;gap:10px}

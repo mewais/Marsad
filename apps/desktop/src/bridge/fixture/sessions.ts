@@ -1,5 +1,5 @@
 import type { GateChoice, GateRequest, PlanEntry, SessionEvent, SessionSnapshot, Usage } from "../wire";
-import { driverDef } from "./catalog";
+import { type ConversationFacts, conversationFacts, driverDef } from "./catalog";
 import { buildTranscript, modelSplit } from "./transcripts";
 
 /** Fixture-only: the ~14 sessions of the mockup, as compact specs expanded into wire snapshots. */
@@ -149,7 +149,7 @@ export function buildSession(spec: Spec, now: number): Built {
     : { state: "idle" };
   const finishedAt = spec.kind === "done" || spec.kind === "idle" ? last : undefined;
   const planEntries: PlanEntry[] = plan;
-  const snap: SessionSnapshot = {
+  const facts: Omit<SessionSnapshot, keyof ConversationFacts> = {
     id,
     driver: spec.driver,
     cwd: fixtureCwd(spec),
@@ -187,5 +187,5 @@ export function buildSession(spec: Spec, now: number): Built {
     cursor: events[events.length - 1]?.cursor ?? 0,
     loaded: true,
   };
-  return { snap, events };
+  return { snap: { ...facts, ...conversationFacts(facts) }, events };
 }

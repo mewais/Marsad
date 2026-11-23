@@ -4,10 +4,12 @@ import type { DriverId } from "./DriverId";
 import type { ExitSummary } from "./ExitSummary";
 import type { ModelInfo } from "./ModelInfo";
 import type { ModelUsage } from "./ModelUsage";
+import type { NotContinuable } from "./NotContinuable";
 import type { PendingGate } from "./PendingGate";
 import type { Phase } from "./Phase";
 import type { PlanEntry } from "./PlanEntry";
 import type { PromptInput } from "./PromptInput";
+import type { ResumeCommand } from "./ResumeCommand";
 import type { SessionId } from "./SessionId";
 import type { SessionMode } from "./SessionMode";
 import type { SlashCommandInfo } from "./SlashCommandInfo";
@@ -33,7 +35,28 @@ prompt_input: PromptInput, phase: Phase,
 /**
  * Process generations so far (1 after create; +1 per continue).
  */
-generation: number, pid?: number | null, native_session_id?: string | null, 
+generation: number, pid?: number | null, 
+/**
+ * The agent's own id of the conversation, known from the session's creation when the agent
+ * accepts an id chosen by the runtime (or the session resumes one), else once the agent
+ * reports it.
+ */
+native_session_id?: string | null, 
+/**
+ * A new process generation can be started now (`sessions.continue`, or a prompt sent to the
+ * session, which continues it first). Decided by the runtime alone, from the driver's
+ * capabilities and the session's state; clients show what it says.
+ */
+continuable: boolean, 
+/**
+ * Why not, when `continuable` is `false`.
+ */
+not_continuable?: NotContinuable | null, 
+/**
+ * How the user opens this conversation in their own CLI, when the agent's storage holds it
+ * and the driver knows a command; clients only show or copy it.
+ */
+resume_command?: ResumeCommand | null, 
 /**
  * The first prompt, truncated.
  */

@@ -14,6 +14,8 @@ export interface PanelText {
   hostLog: readonly DiagRecord[] | null;
   /** When the text was made. */
   at: number;
+  /** What is known of the host's clock against this computer's (a sentence), when the host is another machine. */
+  clock?: string | null;
 }
 
 /**
@@ -26,6 +28,7 @@ export function panelText(p: PanelText): string {
   const out: string[] = [`Marsad session diagnostics, ${new Date(p.at).toISOString()}`, ""];
   for (const f of p.facts) out.push(`${f.k}: ${f.v ?? "not reported"}`);
   out.push("", "Prompts");
+  if (p.clock) out.push(`  Clock: ${p.clock}`);
   if (!p.prompts.length) out.push("  none seen");
   for (const r of p.prompts) {
     out.push(`  ${r.input !== null ? `#${r.input}` : "not recorded by the host"} ${r.kind}, ${r.chars} characters${r.attachments ? `, ${r.attachments} attachments, ${r.bytes} bytes` : ""}${r.trace ? `, trace ${r.trace}` : ", no trace id"}`);

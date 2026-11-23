@@ -154,7 +154,7 @@ export function SessionPage({ host, id, tab: tabParam }: { host: string; id: str
       </div>
       {tab !== "activity" ? (
         <div className="tabbody" role="tabpanel" aria-label={tabs.find((t) => t.id === tab)?.label}>
-          {tab === "changes" ? <ChangesTab sessionKey={key} /> : tab === "config" ? <ConfigTab sessionKey={key} snap={snap} /> : tab === "diagnostics" ? <ErrorBoundary variant="item" what="the diagnostics" resetKey={key}><SessionDiagnostics key={key} sessionKey={key} snap={snap} /></ErrorBoundary> : <TerminalTab key={key} sessionKey={key} />}
+          {tab === "changes" ? <ChangesTab sessionKey={key} /> : tab === "config" ? <ConfigTab sessionKey={key} snap={snap} /> : tab === "diagnostics" ? <ErrorBoundary variant="item" name="session_diagnostics" what="the diagnostics" resetKey={key}><SessionDiagnostics key={key} sessionKey={key} snap={snap} /></ErrorBoundary> : <TerminalTab key={key} sessionKey={key} />}
         </div>
       ) : (
         <div className="sd-body">

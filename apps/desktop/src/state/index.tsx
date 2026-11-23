@@ -10,6 +10,7 @@ import { createFeeds } from "./feeds";
 import { createAppStore, type AppState, type AppStore } from "./model";
 import { reachBlock, selectCounts, selectDeveloperMode, selectGroups, selectHost, selectHosts, selectStaleHosts, selectView, groupsEqual, type Counts, type Filters, type Groups } from "./selectors";
 import { createTails, createTrails, type Tails, type Trails } from "./diagnostics";
+import { createExports, type Exports } from "./exports";
 import { createTranscripts, type Transcripts } from "./transcript";
 import type { SessionView } from "./domain";
 import type { HostView } from "./hosts";
@@ -21,6 +22,7 @@ export * from "./domain";
 export * from "./actions";
 export * from "./debug";
 export * from "./hosts";
+export { currentExport } from "./exports";
 
 export interface AppContextValue {
   store: AppStore;
@@ -31,6 +33,8 @@ export interface AppContextValue {
   /** Developer mode's session trails and daemon log tails: subscribed only while a panel has them open. */
   trails: Trails;
   tails: Tails;
+  /** The diagnostics export of Settings: the hub's exports while the card is open, and its two acts. */
+  exports: Exports;
 }
 
 const Ctx = createContext<AppContextValue | null>(null);
@@ -50,6 +54,7 @@ export function createApp(backend: Backend, partial?: Partial<AppState>): AppCon
     transcripts: createTranscripts(store, api, feeds),
     trails: createTrails(store, api, feeds),
     tails: createTails(store, api, feeds),
+    exports: createExports(store, api, feeds, diag.log),
     dispose: controller.dispose,
   };
 }

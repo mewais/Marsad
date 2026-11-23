@@ -1,6 +1,6 @@
 import type { HubLinkInfo } from "../bridge/backend";
 import type { DriverDescriptor } from "../ui/DriverBadge";
-import type { DiagTailParams, DriverInventory, GitSummary, HostId, NotificationPrefs, SeenMark, SessionEvent, SessionKey, SessionSnapshot, TrailItem, UiEvent, WorkstreamView } from "../bridge/wire";
+import type { DiagTailParams, DriverInventory, ExportStatus, GitSummary, HostId, NotificationPrefs, SeenMark, SessionEvent, SessionKey, SessionSnapshot, TrailItem, UiEvent, WorkstreamView } from "../bridge/wire";
 import type { DiagRecord, TailKeep } from "../lib/diagRecord";
 import { createStore } from "../lib/store";
 import type { HostState } from "./hosts";
@@ -44,6 +44,25 @@ export interface TailSlice {
   trimmed: number;
   /** Lines the daemon sent that are not diagnostics records. */
   unreadable: number;
+}
+
+/** Where starting an export is. `awaiting`: the hub accepted it (its id) and has not reported it on the topic yet. */
+export type ExportStart = { state: "idle" } | { state: "starting" } | { state: "awaiting"; id: string } | { state: "refused"; reason: string };
+
+/** Saving a finished export where the user chooses: not an act of the hub, a copy the desktop shell makes. */
+export type ExportSave = { state: "saving" } | { state: "saved"; path: string } | { state: "cancelled" } | { state: "failed"; reason: string };
+
+/**
+ * The hub's diagnostics exports as the Settings card shows them; present only while the card is
+ * open. `waiting`: subscribed, nothing delivered yet (nothing is known, not even whether one runs).
+ */
+export interface ExportsSlice {
+  state: "waiting" | "live";
+  /** Every export the hub reports (a running one and the last finished ones), as it sent them. */
+  list: ExportStatus[];
+  start: ExportStart;
+  /** What became of each finished export's "Save…", by its file name. */
+  saves: Record<string, ExportSave>;
 }
 
 /** An event the app recorded of its own acts (`ui.*`), with when, by this computer's clock. */
@@ -117,6 +136,8 @@ export interface AppState {
   /** Session trails, tails of daemon logs: only what an open Diagnostics panel is subscribed to. */
   trails: Record<SessionKey, TrailSlice>;
   tails: Record<string, TailSlice>;
+  /** The diagnostics exports, while the Settings card has them open. */
+  exports: ExportsSlice | null;
 }
 
 export function initialState(partial: Partial<AppState> = {}): AppState {
@@ -145,6 +166,7 @@ export function initialState(partial: Partial<AppState> = {}): AppState {
     diagLog: { failed: 0 },
     trails: {},
     tails: {},
+    exports: null,
     ...partial,
   };
 }

@@ -6,8 +6,10 @@
 //!   export); everything else goes to the local daemon (the hub), which routes by `host`. A
 //!   `trace` (the id of the user action the request serves, `u-` + 16 hex) travels with the
 //!   request through the hub to the host that serves it, and every hop records it.
-//! * `rpc_subscribe(topic, host?, from?, channel)` → subscription id. Messages on the
-//!   channel are [`SubMessage`]s: every event with its cursor, and the daemon link's state
+//! * `rpc_subscribe(topic, host?, from?, params?, channel)` → subscription id (`params`: what the
+//!   topic takes, `diag.tail`'s filter, say; it goes to the daemon that serves the topic, and every
+//!   resubscribe carries it again).
+//!   Messages on the channel are [`SubMessage`]s: every event with its cursor, and the daemon link's state
 //!   whenever it changes. The subscription is durable: after a reconnect or a lagged close it
 //!   resumes from its last cursor natively, so the webview sees one continuous stream.
 //! * `rpc_unsubscribe(id)`.
@@ -196,18 +198,34 @@ fn host_arg(h: Option<String>) -> Option<HostId> {
     host(h)
 }
 
+/// The durable subscription `rpc_subscribe` makes: `topic` on `host`, from the cursor `from`,
+/// with the topic's `params` (absent: none).
+pub fn open_topic(
+    client: &MarsadClient,
+    host: Option<String>,
+    topic: String,
+    from: Option<Value>,
+    params: Option<Value>,
+) -> marsad_client::Subscription<Value> {
+    client.subscribe_raw_with(
+        host_arg(host).as_ref(),
+        topic,
+        cursor(from),
+        params.unwrap_or(Value::Null),
+    )
+}
+
 #[tauri::command]
 pub async fn rpc_subscribe(
     shell: State<'_, Shell>,
     topic: String,
     host: Option<String>,
     from: Option<Value>,
+    params: Option<Value>,
     channel: Channel<SubMessage>,
 ) -> Result<u64, BridgeError> {
     let id = shell.next.fetch_add(1, Ordering::Relaxed);
-    let mut sub = shell
-        .client
-        .subscribe_raw(host_arg(host).as_ref(), topic.clone(), cursor(from));
+    let mut sub = open_topic(&shell.client, host, topic.clone(), from, params);
     let mut link = shell.client.link().state();
     let task = tokio::spawn(async move {
         let mut last = link_word(&link.borrow_and_update());

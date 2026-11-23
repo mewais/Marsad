@@ -1,6 +1,7 @@
 import type { TrailItem } from "../../bridge/wire";
 import { fieldStr, type DiagRecord } from "../../lib/diagRecord";
 import type { AppEventRec } from "../../state";
+import type { ClockOffset } from "./clock";
 import { duration, errorWords, sizeWords, type Tone } from "./words";
 
 /**
@@ -16,7 +17,8 @@ import { duration, errorWords, sizeWords, type Tone } from "./words";
  * Time. Every step has the clock of the machine that wrote it: the app and the hub are this
  * computer, the rest are the session's host. Each time is shown relative to the first step seen;
  * a time from a different clock than that first step's is approximate (`approx`), because machines'
- * clocks are not synchronised. Steps are in the path's order, never sorted by time across machines.
+ * clocks are not synchronised. When the host's clock offset has been measured (`PromptSources.offset`),
+ * the host's times are first moved onto this computer's clock by it; they stay approximate. Steps are in the path's order, never sorted by time across machines.
  */
 
 export type StepId = "app" | "hub" | "host" | "recorded" | "queued" | "sent" | "written" | "acknowledged" | "turn" | "dropped" | "write_failed" | "refused" | "not_accepted";
@@ -39,6 +41,8 @@ export interface PathStep {
   rel?: number;
   /** `rel` crosses clocks of different machines: only approximately true. */
   approx?: boolean;
+  /** `t` was moved by the measured clock offset before `rel` was taken. */
+  corrected?: boolean;
 }
 
 export interface PromptRow {
@@ -68,6 +72,8 @@ export interface PromptSources {
   session: { host: string; id: string; hostName: string; local: boolean };
   /** Whether each daemon's log has been read yet; a leg whose log is not is pending, not "not seen". */
   loaded: { hub: boolean; host: boolean };
+  /** The host's wall clock minus this computer's, once measured; absent: the host's times are taken as they were written. */
+  offset?: ClockOffset | null;
 }
 
 type Applied = Extract<TrailItem, { ev: "input.applied" }>;
@@ -176,12 +182,15 @@ export function promptRows(src: PromptSources): PromptRow[] {
     const states = path.flatMap((s, i): PathStep[] => (s.state !== "not_seen" || i < lastSeen ? [s] : terminals.length ? [] : [{ ...s, state: "pending" as const }]));
     const steps = [...states, ...terminals];
 
-    // Times, relative to the first step seen; across machines only approximately.
+    // Times, relative to the first step seen; the host's are put on this computer's clock by the measured offset, and across machines they are still only approximate.
     const first = steps.find((s) => s.state === "seen" && s.t !== undefined);
+    const corrected = (s: PathStep) => s.clock !== "local" && !!src.offset;
+    const onOurClock = (s: PathStep) => s.t! - (corrected(s) ? src.offset!.offsetMs : 0);
     for (const s of steps) {
       if (s.state !== "seen" || s.t === undefined || !first || first.t === undefined) continue;
-      s.rel = s.t - first.t;
+      s.rel = onOurClock(s) - onOurClock(first);
       s.approx = s.clock !== first.clock;
+      if (corrected(s)) s.corrected = true;
     }
 
     const facts: { k: string; v: string }[] = [];

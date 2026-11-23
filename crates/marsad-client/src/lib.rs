@@ -357,11 +357,25 @@ impl MarsadClient {
         topic: String,
         from: Option<Cursor>,
     ) -> Subscription<T> {
+        self.subscribe_with(host, topic, from, serde_json::Value::Null)
+    }
+
+    /// Any topic, typed, with the parameters the topic takes (`Null`: none), the one place a
+    /// subscription is made. The daemon applies the parameters (a topic that takes none ignores
+    /// them) and every resubscribe, after a reconnect or a lag, carries them again.
+    fn subscribe_with<T>(
+        &self,
+        host: Option<&HostId>,
+        topic: String,
+        from: Option<Cursor>,
+        params: serde_json::Value,
+    ) -> Subscription<T> {
         Subscription {
             inner: self.link.subscribe_durable(
                 topic,
                 DurableOpts {
                     host: host.cloned(),
+                    params,
                     from,
                     ..DurableOpts::default()
                 },
@@ -828,7 +842,7 @@ impl MarsadClient {
         self.call(host, method, params).await
     }
 
-    /// Any topic, untyped and durable.
+    /// Any topic, untyped and durable, with no parameters.
     pub fn subscribe_raw(
         &self,
         host: Option<&HostId>,
@@ -836,6 +850,18 @@ impl MarsadClient {
         from: Option<Cursor>,
     ) -> Subscription<serde_json::Value> {
         self.subscribe(host, topic.into(), from)
+    }
+
+    /// Any topic, untyped and durable, with the parameters the topic takes (`diag.tail`'s
+    /// filter, say): they travel with the subscription to the daemon that serves it.
+    pub fn subscribe_raw_with(
+        &self,
+        host: Option<&HostId>,
+        topic: impl Into<String>,
+        from: Option<Cursor>,
+        params: serde_json::Value,
+    ) -> Subscription<serde_json::Value> {
+        self.subscribe_with(host, topic.into(), from, params)
     }
 
     // ── workstreams ─────────────────────────────────────────────────────────
