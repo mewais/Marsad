@@ -22,13 +22,14 @@ const OURS: &str = "ErrorInfo::ours(";
 const TEXT: &str = "DiagText::new(";
 
 /// Files allowed to call `DiagText::new(`: `marsad-agent/src/diag.rs`, the one place free text
-/// is made, with three kinds of text and no others:
-/// * `transport` and `shape` (`Origin::Transport`): what ssh, `wsl.exe` or a host's bootstrap
-///   printed, the reason a connect failed as the user is shown it, and the first 120
-///   characters of what a host printed before its report. Design §4.4 keeps these "bounded,
-///   scrubbed" (the scrubber masks every registered secret, project path and the home
-///   directory; token-shaped runs are redacted): the evidence for "the host would not
-///   connect". Called from `hub/provision.rs` only.
+/// is made, with two kinds of text and no others:
+/// * `shape` (`Origin::Transport`, through `transport`): the first 120 characters of what a
+///   host printed before its report (a banner). Design §4.4 keeps this "bounded, scrubbed" (the
+///   scrubber masks every registered secret, project path and the home directory; token-shaped
+///   runs are redacted): the evidence for "the host would not connect". Called from
+///   `hub/provision.rs` only. What a transport command said when a connect failed (ssh and wsl
+///   stderr, the reason as the user is shown it) is recorded through wasit-control's
+///   `ConnectDiag`, which owns that text.
 /// * `Reason` (`Origin::Own`): the same scrubbing for the words `serve` prints on stderr, so
 ///   that the line carries what the record carries.
 const TEXT_ALLOW: &[&str] = &["marsad-agent/src/diag.rs"];

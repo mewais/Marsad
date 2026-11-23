@@ -1601,7 +1601,7 @@ mod connect {
             .unwrap();
         // The state the UI shows: parked, with the helper's words.
         let (reason, problem) = parked(&mut fleet, "fake").await;
-        assert_eq!(problem, Some(CommandFailureKind::UnexpectedOutput));
+        assert_eq!(problem, Some(CommandFailureKind::HelperFailed));
         assert!(reason.contains(MARK), "{reason}");
         assert!(reason.contains("exit code 2"), "{reason}");
         drop(fleet);
@@ -1626,7 +1626,7 @@ mod connect {
         );
         let failed = step(&trail, "boot.failed");
         assert_eq!(failed["stage"], "hello");
-        assert_eq!(failed["kind"], "unexpected_output");
+        assert_eq!(failed["kind"], "helper_failed");
         assert_eq!(failed["exit"], 2);
         assert!(
             failed["stderr"].as_str().unwrap().contains(MARK),
