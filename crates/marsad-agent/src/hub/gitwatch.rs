@@ -21,6 +21,7 @@ use tokio::time::Instant;
 use wasit_control::{RequestOpts, Supervised};
 
 use super::fleet::Fleet;
+use crate::hub_events;
 use crate::util::now_ms;
 
 pub const MIN_INTERVAL: Duration = Duration::from_secs(4);
@@ -59,7 +60,7 @@ impl GitWatch {
         if let Err(e) = self.tx.try_send((host, cwd)) {
             // Only when 1024 touches are queued: the directory is being refreshed anyway soon,
             // and the next session change touches it again.
-            tracing::debug!(error = %e, "git watch queue full; touch dropped");
+            hub_events::git_touch_dropped(&e);
         }
     }
 }
@@ -130,7 +131,7 @@ async fn run(link: Supervised, fleet: Fleet, mut rx: mpsc::Receiver<Key>) {
                         }
                         fleet.git_summary(k.0, summary).await;
                     }
-                    Err(e) => tracing::error!(error = %e, "git summary task failed"),
+                    Err(e) => hub_events::git_summary_failed(&e),
                 }
             }
             _ = timer => {}

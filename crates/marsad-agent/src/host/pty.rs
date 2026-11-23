@@ -20,6 +20,8 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 use tokio::sync::{broadcast, mpsc};
 use wasit_control::{CloseReason, Cursor, EventStream};
 
+use crate::hub_events;
+
 /// Scrollback kept per terminal.
 pub const SCROLLBACK: usize = 256 * 1024;
 const INPUT_QUEUE: usize = 64;
@@ -273,7 +275,7 @@ impl Ptys {
         if lock(&p.scroll).exited.is_none() {
             // The shell may exit on its own at the same moment.
             if let Err(e) = lock(&p.killer).kill() {
-                tracing::debug!(error = %e, "kill pty child");
+                hub_events::pty_kill_failed(id, &e);
             }
         }
         Ok(())
@@ -363,7 +365,7 @@ fn spawn_writer(mut writer: Box<dyn Write + Send>, mut rx: mpsc::Receiver<Vec<u8
             }
         });
     if let Err(e) = spawned {
-        tracing::error!(error = %e, "cannot start a pty writer thread");
+        hub_events::pty_writer_failed(&e);
     }
 }
 
