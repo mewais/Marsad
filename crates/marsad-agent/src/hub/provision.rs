@@ -16,8 +16,11 @@
 //! supervisor passes in, and every failure says where it happened and why: the transport
 //! child's exit status and stderr tail for anything the remote side did (a refused install, a
 //! helper that cannot run), what the host printed instead of its report, and an attempt cut
-//! short by the supervisor leaves what it had seen. A helper that ended by itself right after
-//! the bootstrap said OK parks the link with its words instead of being retried for ever.
+//! short by the supervisor leaves what it had seen, and tells the supervisor the step it had
+//! reached (its link state then says where the attempt was, not only that it timed out). A
+//! failed handshake after the bootstrap said OK is explained by wasit-control from the transport
+//! child (`ChildHandle::explain_handshake_failure`): a helper that ended by itself parks the
+//! link with its words (`CommandFailureKind::HelperFailed`) instead of being retried for ever.
 //!
 //! [`AgentProvisioner`] handles what only the hello reveals (a daemon of another build still
 //! running): it marks the host so the next attempt sends `RESTART`.
@@ -45,9 +48,9 @@ use marsad_proto::HostId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use wasit_control::{
-    classify_command_failure, ClientOptions, CommandFailureKind, CommandSpec, CommandTransport,
-    ConnectError, ControlClient, HostSpec, LinkConnector, ProvisionError, ProvisionReason,
-    Provisioner,
+    classify_command_failure, Attempt, ClientOptions, CommandFailureKind, CommandSpec,
+    CommandTransport, ConnectDiag, ConnectError, ControlClient, HostSpec, LinkConnector,
+    ProvisionError, ProvisionReason, Provisioner, CLOSED_EXIT_WAIT,
 };
 use wasit_diag::{Bytes, Code, Ident, Ms};
 
@@ -323,33 +326,6 @@ impl BootReport {
     }
 }
 
-/// How long to wait for a transport child that must be about to exit (its stdout closed).
-const EXIT_WAIT: Duration = Duration::from_secs(5);
-
-/// ssh exits with the remote command's status, or with 255 when ssh itself failed.
-const SSH_OWN_FAILURE: i32 = 255;
-
-/// How the helper's end after `MARSAD-OK` is classified. The bootstrap `exec`s the helper, so
-/// the status of the transport command is the helper's own: an ssh host whose helper ended by
-/// itself (1 to 254) with nothing the classifier knows cannot be helped by retrying (a runtime
-/// directory it may not use, an argument it refuses): such a link is parked with the helper's
-/// words, not retried forever. ssh's own status (255) and a signal stay retryable, and whatever
-/// the classifier recognises (a refused exec, an unreachable network, a sign-in) keeps its kind.
-///
-/// `UnexpectedOutput` ("the host answered with something that is not the helper's protocol") is
-/// the nearest existing kind; a kind of its own for "the helper ran and failed" belongs in
-/// wasit-control's `CommandFailureKind`.
-fn helper_exit_kind(host: &HostKind, code: Option<i32>, stderr: &str) -> CommandFailureKind {
-    let kind = classify_command_failure(code, stderr);
-    let ended_itself = matches!(host, HostKind::Ssh { .. })
-        && code.is_some_and(|c| (1..SSH_OWN_FAILURE).contains(&c));
-    if kind == CommandFailureKind::Other && ended_itself {
-        CommandFailureKind::UnexpectedOutput
-    } else {
-        kind
-    }
-}
-
 /// How one attempt of the bootstrap is recorded (`boot.*`, design §5.3): every step carries the
 /// host and the attempt number the supervisor passed to the connector, which is what joins it
 /// to the supervisor's own `link.*` records of `hosts:<host>`.
@@ -359,7 +335,9 @@ fn helper_exit_kind(host: &HostKind, code: Option<i32>, stderr: &str) -> Command
 /// it did not finish, where it was, and what the host had printed so far.
 struct Trail {
     host: Ident,
-    n: u64,
+    /// The supervisor's attempt: its number joins every record, and the step the attempt has
+    /// reached is told to it (see [`Trail::reach`]).
+    attempt: Attempt,
     began: Instant,
     /// What the host printed before its report, as it arrives.
     seen: Seen,
@@ -374,10 +352,10 @@ struct Progress {
 }
 
 impl Trail {
-    fn new(host: &HostId, n: u64) -> Trail {
-        Trail {
+    fn new(host: &HostId, attempt: Attempt) -> Trail {
+        let trail = Trail {
             host: Ident::new(host.as_str()),
-            n,
+            attempt,
             began: Instant::now(),
             seen: Seen::default(),
             progress: Mutex::new(Progress {
@@ -385,16 +363,36 @@ impl Trail {
                 preamble_recorded: true,
                 finished: false,
             }),
-        }
+        };
+        trail.reach(BootStage::Prepare);
+        trail
+    }
+
+    /// The attempt's number, as every record carries it.
+    fn n(&self) -> u64 {
+        self.attempt.n()
+    }
+
+    /// The attempt is in `stage` now: kept for the record of a cancelled attempt, and told to the
+    /// supervisor in the words of the step, which it shows if its time runs out
+    /// ("connect timed out while <step>").
+    fn reach(&self, stage: BootStage) {
+        self.progress().stage = stage;
+        self.attempt.reached(match stage {
+            BootStage::Prepare => "preparing the connection",
+            BootStage::Spawn => "starting the transport command",
+            BootStage::Report => "waiting for the host's bootstrap report",
+            BootStage::Platform => "checking the host's platform",
+            BootStage::Helper => "locating the Marsad helper to install",
+            BootStage::Upload => "sending the Marsad helper to the host",
+            BootStage::Ok => "waiting for the host to confirm the helper",
+            BootStage::Hello => "waiting for the helper's hello",
+            BootStage::Check => "checking the host's identity",
+        });
     }
 
     fn progress(&self) -> std::sync::MutexGuard<'_, Progress> {
         locked(&self.progress)
-    }
-
-    /// The attempt is in `stage` now.
-    fn stage(&self, stage: BootStage) {
-        self.progress().stage = stage;
     }
 
     /// The attempt ended, with a result (a failure is recorded by [`Trail::failed`]).
@@ -409,9 +407,8 @@ impl Trail {
     /// A report is being waited for: what arrives from now on is a new preamble.
     fn expect_report(&self) {
         self.seen.take();
-        let mut p = self.progress();
-        p.stage = BootStage::Report;
-        p.preamble_recorded = false;
+        self.reach(BootStage::Report);
+        self.progress().preamble_recorded = false;
     }
 
     /// The read for the report ended: records and returns what the host printed before it (or
@@ -426,7 +423,7 @@ impl Trail {
     fn attempt(&self, shell: RemoteShell, entry: &HostEntry, armed: bool) {
         emit(MarsadEvent::BootAttempt {
             host: self.host.clone(),
-            n: self.n,
+            n: self.n(),
             shell: match shell {
                 RemoteShell::Posix => BootShell::Posix,
                 RemoteShell::PowerShell => BootShell::Powershell,
@@ -440,7 +437,7 @@ impl Trail {
     fn emit_preamble(&self, p: &Preamble) {
         emit(MarsadEvent::BootPreamble {
             host: self.host.clone(),
-            n: self.n,
+            n: self.n(),
             lines: p.lines,
             bytes: Bytes(p.bytes),
             shape: (p.lines > 0).then(|| diag::shape(p.text().trim())),
@@ -450,7 +447,7 @@ impl Trail {
     fn report(&self, r: &BootReport) {
         emit(MarsadEvent::BootReport {
             host: self.host.clone(),
-            n: self.n,
+            n: self.n(),
             os: Code::new(&r.os),
             arch: Code::new(&r.arch),
             installed: r.installed.as_ref().map(|v| Ident::new(&v.build)),
@@ -461,7 +458,7 @@ impl Trail {
     fn windows_retry(&self, why: WindowsRetryWhy) {
         emit(MarsadEvent::BootWindowsRetry {
             host: self.host.clone(),
-            n: self.n,
+            n: self.n(),
             why,
         });
     }
@@ -469,7 +466,7 @@ impl Trail {
     fn action(&self, action: HelperAction, bytes: Option<u64>, target: &str) {
         emit(MarsadEvent::BootActionChosen {
             host: self.host.clone(),
-            n: self.n,
+            n: self.n(),
             action,
             bytes: bytes.map(Bytes),
             target: Ident::new(target),
@@ -479,7 +476,7 @@ impl Trail {
     fn uploaded(&self, bytes: u64, took: Duration) {
         emit(MarsadEvent::BootUploaded {
             host: self.host.clone(),
-            n: self.n,
+            n: self.n(),
             bytes: Bytes(bytes),
             ms: Ms::of(took),
         });
@@ -488,7 +485,7 @@ impl Trail {
     fn ok(&self) {
         emit(MarsadEvent::BootOk {
             host: self.host.clone(),
-            n: self.n,
+            n: self.n(),
             ms: self.since(),
         });
     }
@@ -496,7 +493,7 @@ impl Trail {
     fn hello(&self, hello: &wasit_control::Hello, host: &HostId) {
         emit(MarsadEvent::BootHello {
             host: self.host.clone(),
-            n: self.n,
+            n: self.n(),
             build: Ident::new(&hello.build),
             host_id_matches: hello.host_id == *host,
             machine: hello.machine.as_deref().map(Ident::new),
@@ -504,52 +501,18 @@ impl Trail {
         });
     }
 
-    /// The attempt failed at `stage` with `e`. A failure of the transport command keeps its
-    /// kind, the child's exit status and the text the user is shown; any other failure its code
-    /// (and its text where the text is ours; what a host or a peer wrote keeps only a length).
+    /// The attempt failed at `stage` with `e`: recorded as wasit-control maps a connect error
+    /// to its record ([`ConnectDiag`]).
     fn failed(&self, stage: BootStage, e: &ConnectError) {
-        let (kind, exit, stderr, error) = match e {
-            ConnectError::Command {
-                kind,
-                exit_code,
-                stderr,
-            } => (
-                Some(Code::st(kind.code())),
-                *exit_code,
-                Some(diag::transport(stderr)),
-                None,
-            ),
-            ConnectError::Io(_) => (None, None, None, Some(diag::ours("io", e))),
-            ConnectError::Spawn(_) => (None, None, None, Some(diag::ours("spawn", e))),
-            ConnectError::Incompatible { .. } => {
-                (None, None, None, Some(diag::ours("incompatible", e)))
-            }
-            ConnectError::HandshakeTimeout => {
-                (None, None, None, Some(diag::ours("handshake_timeout", e)))
-            }
-            ConnectError::ClosedDuringHandshake => (
-                None,
-                None,
-                None,
-                Some(diag::ours("closed_during_handshake", e)),
-            ),
-            ConnectError::Timeout => (None, None, None, Some(diag::ours("timeout", e))),
-            ConnectError::Protocol(m) => (None, None, None, Some(diag::foreign("protocol", m))),
-            ConnectError::Refused(r) => (
-                None,
-                None,
-                None,
-                Some(diag::foreign(&format!("refused:{}", r.code), &r.message)),
-            ),
-        };
+        let d = ConnectDiag::of(e);
         emit(MarsadEvent::BootFailed {
             host: self.host.clone(),
-            n: self.n,
+            n: self.n(),
             stage,
-            kind,
-            exit,
-            stderr,
-            error,
+            kind: d.kind,
+            exit: d.exit,
+            stderr: d.stderr,
+            error: d.error,
         });
     }
 }
@@ -568,7 +531,7 @@ impl Drop for Trail {
         }
         emit(MarsadEvent::BootFailed {
             host: self.host.clone(),
-            n: self.n,
+            n: self.n(),
             stage,
             kind: None,
             exit: None,
@@ -719,7 +682,7 @@ impl BootstrapConnector {
         child: &wasit_control::ChildHandle,
         what: &str,
     ) -> ConnectError {
-        let exit = child.wait_exit(EXIT_WAIT).await;
+        let exit = child.wait_exit(CLOSED_EXIT_WAIT).await;
         let stderr = child.stderr_tail();
         let code = exit.and_then(|e| e.code);
         let mut kind = classify_command_failure(code, &stderr);
@@ -754,55 +717,6 @@ impl BootstrapConnector {
         }
     }
 
-    /// The control handshake with the helper failed after the bootstrap said `MARSAD-OK`: the
-    /// remote shell has handed the connection to the helper, so what the transport child says
-    /// (its exit status, its stderr tail) is the helper's own reason (a noexec home, a runtime
-    /// directory it may not use, an argument it refuses). The handshake's own error says only
-    /// that the stream closed.
-    ///
-    /// A peer that answered (an incompatible protocol, a goodbye) is passed through. A child
-    /// that is still running and silent leaves the handshake's error as it is. See
-    /// [`helper_exit_kind`] for how the ending is classified.
-    async fn helper_failed(
-        &self,
-        entry: &HostEntry,
-        child: &wasit_control::ChildHandle,
-        e: ConnectError,
-    ) -> ConnectError {
-        if matches!(
-            e,
-            ConnectError::Incompatible { .. } | ConnectError::Refused(_)
-        ) {
-            return e;
-        }
-        // The stream closed: the child is about to be reaped. After a timeout or garbage it is
-        // alive and there is nothing to wait for.
-        let closed = matches!(e, ConnectError::ClosedDuringHandshake | ConnectError::Io(_));
-        let exit = if closed {
-            child.wait_exit(EXIT_WAIT).await
-        } else {
-            child.exit()
-        };
-        let stderr = child.stderr_tail();
-        if exit.is_none() && stderr.is_empty() {
-            return e;
-        }
-        let code = exit.and_then(|x| x.code);
-        let kind = helper_exit_kind(&entry.kind, code, &stderr);
-        let ended = match exit {
-            Some(x) => format!("{e}; {x}"),
-            None => e.to_string(),
-        };
-        let detail = if stderr.is_empty() {
-            format!("The Marsad helper on this host did not complete the handshake ({ended})")
-        } else {
-            format!(
-                "The Marsad helper on this host did not complete the handshake ({ended}): {stderr}"
-            )
-        };
-        cmd_err(kind, code, detail)
-    }
-
     /// The host never printed the bootstrap's report: classify what it printed instead
     /// (stdout and stderr; wsl.exe prints its errors to stdout, in UTF-16LE).
     async fn no_bootstrap(
@@ -814,7 +728,7 @@ impl BootstrapConnector {
         why: Missing,
     ) -> ConnectError {
         let host = &entry.id;
-        let exit = child.wait_exit(EXIT_WAIT).await;
+        let exit = child.wait_exit(CLOSED_EXIT_WAIT).await;
         let stderr = child.stderr_tail();
         let code = exit.and_then(|e| e.code);
         let both = match (stdout.is_empty(), stderr.is_empty()) {
@@ -833,7 +747,7 @@ impl BootstrapConnector {
         let detail = match kind {
             CommandFailureKind::UnknownDistro => {
                 let distro = match &entry.kind {
-                    marsad_proto::hosts::HostKind::Wsl { distro } => distro.as_str(),
+                    HostKind::Wsl { distro } => distro.as_str(),
                     _ => "",
                 };
                 let list = super::wsl::distros().await;
@@ -901,7 +815,7 @@ impl LinkConnector for BootstrapConnector {
         &self,
         spec: &HostSpec,
         opts: ClientOptions,
-        attempt: u64,
+        attempt: Attempt,
     ) -> Result<ControlClient, ConnectError> {
         let trail = Trail::new(&spec.id, attempt);
         let result = self.run(spec, opts, &trail).await;
@@ -955,7 +869,7 @@ impl BootstrapConnector {
                 .ok_or_else(|| ConnectError::Spawn("the local host has no link".into()))
                 .map_err(at(BootStage::Prepare))?;
             // The transport's spawn and exit are recorded under this link and attempt.
-            let mut cmd = CommandSpec::new(argv).traced(spec.diag_link(), trail.n);
+            let mut cmd = CommandSpec::new(argv).traced(spec.diag_link(), &trail.attempt);
             cmd.env = vec![
                 (
                     "SSH_ASKPASS".into(),
@@ -972,7 +886,7 @@ impl BootstrapConnector {
             // Only a host that never connected (once connected, its platform is known).
             let first_posix = shell == RemoteShell::Posix
                 && entry.platform.is_none()
-                && matches!(entry.kind, marsad_proto::hosts::HostKind::Ssh { .. });
+                && matches!(entry.kind, HostKind::Ssh { .. });
             trail.expect_report();
             match read_boot_line(&mut io, &trail.seen).await {
                 BootRead::Report(line) => {
@@ -1019,7 +933,7 @@ impl BootstrapConnector {
             self.learn(Learned::Interactive { host: host.clone() })
                 .await;
         }
-        trail.stage(BootStage::Platform);
+        trail.reach(BootStage::Platform);
         let platform = platform_from(&report.os, &report.arch).ok_or_else(|| Failure {
             stage: BootStage::Platform,
             error: cmd_err(
@@ -1052,7 +966,7 @@ impl BootstrapConnector {
             } else {
                 (HelperAction::Run, b"RUN\n")
             };
-            trail.stage(BootStage::Ok);
+            trail.reach(BootStage::Ok);
             trail.action(action, None, &platform.target);
             if let Err(e) = io.write_all(line).await {
                 return Err(self
@@ -1066,7 +980,7 @@ impl BootstrapConnector {
                     .await);
             }
         } else {
-            trail.stage(BootStage::Helper);
+            trail.reach(BootStage::Helper);
             let file = self.artifact(&platform).map_err(at(BootStage::Helper))?;
             let local = |e: std::io::Error| Failure {
                 stage: BootStage::Helper,
@@ -1074,7 +988,7 @@ impl BootstrapConnector {
             };
             let mut f = tokio::fs::File::open(&file).await.map_err(local)?;
             let len = f.metadata().await.map_err(local)?.len();
-            trail.stage(BootStage::Upload);
+            trail.reach(BootStage::Upload);
             trail.action(HelperAction::Upload, Some(len), &platform.target);
             let began = Instant::now();
             let mut sent = 0u64;
@@ -1118,7 +1032,7 @@ impl BootstrapConnector {
         if let Some((len, took)) = uploaded {
             trail.uploaded(len, took);
         }
-        trail.stage(BootStage::Ok);
+        trail.reach(BootStage::Ok);
         match read_line(&mut io).await {
             Ok(Some(l)) if l == "MARSAD-OK" => {}
             Ok(Some(l)) => {
@@ -1142,19 +1056,21 @@ impl BootstrapConnector {
             }
         }
         trail.ok();
-        trail.stage(BootStage::Hello);
+        trail.reach(BootStage::Hello);
         let client = match ControlClient::connect(io, opts).await {
             Ok(c) => c,
             Err(e) => {
+                // The bootstrap said OK: the helper has the connection, and what the transport
+                // child says is the helper's own reason (wasit-control decides the kind).
                 return Err(Failure {
                     stage: BootStage::Hello,
-                    error: self.helper_failed(&entry, &child, e).await,
-                })
+                    error: child.explain_handshake_failure(e).await,
+                });
             }
         };
         let hello = client.connection().remote_hello().clone();
         trail.hello(&hello, &host);
-        trail.stage(BootStage::Check);
+        trail.reach(BootStage::Check);
         if let Some(m) = &hello.machine {
             let twin = self
                 .entries
@@ -1166,7 +1082,7 @@ impl BootstrapConnector {
             if let Some((twin_id, twin_name)) = twin {
                 emit(MarsadEvent::BootTwin {
                     host: trail.host.clone(),
-                    n: trail.n,
+                    n: trail.n(),
                     twin: Ident::new(twin_id.as_str()),
                 });
                 if hello.host_id != host {
@@ -1194,7 +1110,7 @@ impl BootstrapConnector {
             // restarts it as this host.
             emit(MarsadEvent::BootIdMismatch {
                 host: trail.host.clone(),
-                n: trail.n,
+                n: trail.n(),
                 theirs: Ident::new(theirs.as_str()),
             });
             self.restarts
@@ -1379,7 +1295,7 @@ mod tests {
         .unwrap();
         let (mut host_end, mut hub_end) = tokio::io::duplex(1024);
         {
-            let trail = Trail::new(&HostId::new("stuck"), 7);
+            let trail = Trail::new(&HostId::new("stuck"), Attempt::new(7));
             trail.expect_report();
             host_end
                 .write_all(b"Welcome\nsecond line\npartial banner")
@@ -1413,48 +1329,6 @@ mod tests {
         );
         assert_eq!(recs[1]["error"]["code"], "cancelled");
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_helper_that_ended_itself_after_the_bootstrap_is_not_retried() {
-        use CommandFailureKind as K;
-        let ssh = HostKind::Ssh {
-            target: "h".into(),
-            port: None,
-            identity_file: None,
-            options: vec![],
-        };
-        let wsl = HostKind::Wsl {
-            distro: "Ubuntu".into(),
-        };
-        // The helper's own non-zero status, nothing the classifier knows: it cannot heal.
-        assert_eq!(
-            helper_exit_kind(&ssh, Some(2), "bad argument"),
-            K::UnexpectedOutput
-        );
-        assert_eq!(helper_exit_kind(&ssh, Some(101), ""), K::UnexpectedOutput);
-        // ssh's own failure, a signal, a clean exit: the network or the peer may come back.
-        assert_eq!(
-            helper_exit_kind(&ssh, Some(255), "client_loop: send disconnect: Broken pipe"),
-            K::Other
-        );
-        assert_eq!(helper_exit_kind(&ssh, None, ""), K::Other);
-        assert_eq!(helper_exit_kind(&ssh, Some(0), ""), K::Other);
-        // What the classifier recognises keeps its kind.
-        assert_eq!(
-            helper_exit_kind(&ssh, Some(126), "Permission denied"),
-            K::PermissionDenied
-        );
-        assert_eq!(
-            helper_exit_kind(&ssh, Some(255), "Connection reset by peer"),
-            K::Unreachable
-        );
-        assert_eq!(
-            helper_exit_kind(&ssh, Some(255), "Permission denied (publickey)."),
-            K::AuthNeeded
-        );
-        // The exit-status contract is ssh's: other transports keep the classifier's answer.
-        assert_eq!(helper_exit_kind(&wsl, Some(2), "bad argument"), K::Other);
     }
 
     #[test]

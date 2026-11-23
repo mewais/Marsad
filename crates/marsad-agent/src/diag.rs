@@ -24,9 +24,10 @@
 //! Marsad's or Wasit's own error types (an OS reason, a path of Marsad's own files, a fixed
 //! message), never anything a session, a peer or a CLI wrote. Errors that might quote stored
 //! or journaled data (the Wasl node, the hub's store) go through [`foreign`] and keep only a
-//! code, a length and a fingerprint. What a transport command printed (ssh and wsl stderr,
-//! a host's banner) is the one other text that is kept, bounded and scrubbed of every
-//! registered secret ([`transport`], [`shape`]).
+//! code, a length and a fingerprint. What a host printed before its report (a banner) is the
+//! one other text that is kept, bounded and scrubbed of every registered secret ([`shape`]);
+//! what a transport command said when a connect failed is wasit-control's record
+//! (`wasit_control::ConnectDiag`).
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -224,11 +225,11 @@ pub fn foreign(code: &str, text: &str) -> ErrorInfo {
     ErrorInfo::foreign(Code::new(code), text)
 }
 
-/// What ssh, `wsl.exe` or a host's bootstrap printed (a stderr tail, the reason a connect failed
-/// as the user sees it): bounded and scrubbed of every registered secret and project path.
-/// The one text of a host or its transport that records keep; design §4.4. The one
-/// `DiagText::new(Origin::Transport, …)` call of this crate.
-pub fn transport(text: &str) -> DiagText {
+/// What a host printed (before its report): bounded and scrubbed of every registered secret and
+/// project path. The one `DiagText::new(Origin::Transport, …)` call of this crate; what a
+/// transport command said when a connect failed is recorded by wasit-control
+/// (`wasit_control::ConnectDiag`), not here.
+fn transport(text: &str) -> DiagText {
     DiagText::new(Origin::Transport, text)
 }
 
