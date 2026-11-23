@@ -347,6 +347,4 @@ async fn live_claude_spawns_an_opencode_worker() {
             && n.launch
                 .as_ref()
                 .is_some_and(|l| l.driver.as_str() == "opencode"))));
-    let pid = c.daemon_info(None).await.unwrap().pid;
-    stop_pid(pid);
 }

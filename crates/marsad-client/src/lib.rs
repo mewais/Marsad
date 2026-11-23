@@ -80,8 +80,15 @@ impl ClientError {
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
     pub data_dir: PathBuf,
-    /// Endpoint path (default: `marsad.sock` in this machine's runtime directory for
-    /// `data_dir`, see `marsad_proto::layout`).
+    /// The machine-local runtime directory of the daemon (its `marsad.sock`, the lock beside
+    /// it, its shims' endpoints). `None`: this machine's default for `data_dir`
+    /// (`$MARSAD_RUNTIME_DIR` or the platform's runtime base, see `marsad_proto::layout`).
+    /// Every path the client derives from the layout (the endpoint it dials, the daemon's log
+    /// it opens) and the `--run-dir` of a daemon it starts come from this one value, resolved
+    /// once by [`ClientConfig::layout`] (also when `None`, with `$MARSAD_RUNTIME_DIR`), so the
+    /// client and its daemon cannot disagree about where the daemon lives.
+    pub run_dir: Option<PathBuf>,
+    /// Endpoint path (default: `marsad.sock` in the runtime directory, see `run_dir`).
     pub socket: Option<PathBuf>,
     /// Start the daemon when nothing serves the endpoint.
     pub start_daemon: bool,
@@ -104,6 +111,7 @@ impl ClientConfig {
     pub fn new(data_dir: impl Into<PathBuf>, hello: Hello) -> Self {
         ClientConfig {
             data_dir: data_dir.into(),
+            run_dir: None,
             socket: None,
             start_daemon: true,
             agent_bin: None,
@@ -131,9 +139,10 @@ impl ClientConfig {
         }
     }
 
-    /// This machine's layout of `data_dir`.
+    /// This machine's layout of `data_dir` with the runtime directory of `run_dir`: the one
+    /// place the client computes it.
     pub fn layout(&self) -> std::io::Result<marsad_proto::layout::Layout> {
-        marsad_proto::layout::Layout::resolve(self.data_dir.clone(), None)
+        marsad_proto::layout::Layout::resolve(self.data_dir.clone(), self.run_dir.clone())
     }
 
     pub fn endpoint(&self) -> Endpoint {
@@ -178,7 +187,9 @@ async fn start_daemon(cfg: &ClientConfig) -> Result<(), ConnectError> {
     cmd.arg("serve")
         .arg("--hub")
         .arg("--data")
-        .arg(&cfg.data_dir);
+        .arg(&cfg.data_dir)
+        .arg("--run-dir")
+        .arg(&layout.run);
     if let Some(s) = &cfg.socket {
         cmd.arg("--socket").arg(s);
     }

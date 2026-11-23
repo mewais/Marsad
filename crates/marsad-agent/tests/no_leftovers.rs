@@ -6,8 +6,9 @@
 //! its client with a session, and an ssh host (a real sshd on localhost) with its daemon and a
 //! session — and panics in the middle; then it asserts that every process the scenario started
 //! has ended (including the ssh and sshd processes of the link), that its temporary directory
-//! is gone, and that no runtime directory of its data root is left in the machine's default
-//! place (`/tmp/marsad-<uid>/<tag>`, where the real installation's daemon lives). It checks
+//! is gone, and that no runtime directory of its data root was ever made in the machine's
+//! default place (`/tmp/marsad-<uid>/<tag>`, where the real installation's daemon lives: the
+//! client that starts the hub is told its runtime directory, inside the test's own). It checks
 //! only the processes and directories it started itself, named by their own reports.
 #![cfg(target_os = "linux")]
 
@@ -29,8 +30,8 @@ use wasit_fake_cli::scenario::Scenario;
 #[derive(Default)]
 struct Started {
     root: PathBuf,
-    /// The place the hub client's own layout puts its runtime directory when it is not told
-    /// another one.
+    /// The place the layout of the hub's data root puts the runtime directory when nobody names
+    /// another one: the hub's client is told its own, so nothing may be made here.
     default_run: PathBuf,
     /// A handle on each process, opened while it was alive.
     watches: Vec<(String, PidWatch)>,
@@ -193,26 +194,33 @@ async fn failing_scenario(started: Arc<Mutex<Started>>) {
     panic!("the test fails in the middle");
 }
 
-/// Where `Layout::resolve(root, None)` puts the runtime directory of `root`, without creating
-/// it: the formula is checked against the product on a root nobody uses.
-fn default_run_dir(root: &Path) -> PathBuf {
-    let tag = |r: &Path| {
-        wasit_runtime::machine::key_from_raw(&format!("root:{}", r.display()))[..8].to_string()
-    };
-    let base = wasit_runtime::machine::runtime_dir("marsad", None).unwrap();
-    let probe = std::env::temp_dir().join(format!("mrs-probe-{}", std::process::id()));
-    let actual = Layout::resolve(probe.clone(), None).unwrap().run;
-    assert_eq!(
-        actual,
-        base.join(tag(&probe)),
-        "the runtime directory formula changed"
-    );
-    std::fs::remove_dir(&actual).unwrap();
-    base.join(tag(root))
+/// [`default_run_dir`] is what the product's `Layout::resolve(root, None)` computes (without
+/// it, "nothing was made there" would hold of any wrong path). The base is pointed at a
+/// directory of the test's own, so that nothing is made in the machine's runtime directory
+/// to find out. This binary holds this one test, so nobody else reads the environment.
+fn the_default_place_is_the_products() {
+    let d = TempDir::new();
+    let key = marsad_proto::layout::RUNTIME_DIR_ENV;
+    let before = std::env::var_os(key);
+    std::env::set_var(key, d.path().join("base"));
+    for root in [d.path().join("a"), d.path().join("b").join("c")] {
+        let actual = Layout::resolve(root.clone(), None).unwrap().run;
+        assert_eq!(
+            actual,
+            default_run_dir(&root),
+            "the runtime directory formula changed"
+        );
+        assert!(actual.starts_with(d.path().join("base")));
+    }
+    match before {
+        Some(v) => std::env::set_var(key, v),
+        None => std::env::remove_var(key),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_failing_test_leaves_no_process_and_no_directory_behind() {
+    the_default_place_is_the_products();
     let started = Arc::new(Mutex::new(Started::default()));
     // On a task of its own, so that its panic unwinds its locals (the harness's drop runs)
     // while this test goes on.

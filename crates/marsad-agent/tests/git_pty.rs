@@ -121,8 +121,6 @@ async fn git_on_a_local_repo() {
     git_repo(&repo);
     let c = client(&d.path().join("d"));
     git_roundtrip(&c, None, &repo).await;
-    let pid = c.daemon_info(None).await.unwrap().pid;
-    stop_pid(pid);
 }
 
 // Commands whose typed text does not contain what they print, so the echo of the input is
@@ -253,6 +251,4 @@ async fn pty_echo_and_scrollback_replay() {
     }
     c.pty_close(None, &info.id).await.unwrap();
     assert!(c.pty_list(None).await.unwrap().is_empty());
-    let pid = c.daemon_info(None).await.unwrap().pid;
-    stop_pid(pid);
 }

@@ -229,11 +229,6 @@ fn kill_ssh(port: u16) {
     pkill(&format!("^ssh -T .*-p {port} "));
 }
 
-async fn stop_hub(c: &MarsadClient) {
-    let pid = c.daemon_info(None).await.unwrap().pid;
-    stop_pid(pid);
-}
-
 /// orchestrator (hub) → w1 (hub) and w2 (ssh host): launch, parallel delegation, handoff
 /// gates in the fleet and workstreams topics answered via `session.command` (allow once,
 /// always allow — persisted into the document and surviving a hub restart), the worker's
@@ -456,7 +451,6 @@ async fn three_nodes_across_local_and_ssh_host() {
         summary(&wait_done(&c, &hub, &task(&r, 0).id).await),
         "W2 done"
     );
-    stop_hub(&c).await;
 }
 
 /// A running standalone session joins a workstream live and takes a delegation; blocked
@@ -675,7 +669,6 @@ async fn live_join_blocked_pause_history_and_templates() {
     tokio::time::timeout(Duration::from_secs(30), fut)
         .await
         .expect("topology removed");
-    stop_hub(&c).await;
 }
 
 /// A template keeps the agents the user designed: agents spawned at runtime and their
@@ -780,5 +773,4 @@ async fn template_leaves_out_spawned_agents_and_session_identity() {
         .unwrap()
         .contains(pinned.as_str()));
     c.delete_template(&t.id).await.unwrap();
-    stop_hub(&c).await;
 }

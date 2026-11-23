@@ -374,7 +374,7 @@ async fn host_environment_settings_over_ssh_and_local() {
     // A restarted host daemon has no settings; the hub applies them when the link is back.
     let wanted = c.host_env(&box_id).await.unwrap().revision;
     let pid = c.daemon_info(Some(&box_id)).await.unwrap().pid;
-    stop_pid(pid);
+    stop_daemon(pid).await;
     until(&mut fleet, "box reconnecting", |e| {
         matches!(e, FleetEvent::Link { host, state } if host.as_str() == "box" && !state.is_connected())
     })
