@@ -120,7 +120,7 @@ export function EnvironmentSection({ hostId, hostName, windows, now }: { hostId:
           <div className="field">
             <label htmlFor={`setup-${hostId}`}>Setup commands <span className="faint optl">optional</span></label>
             <textarea id={`setup-${hostId}`} className="ta mono" rows={3} spellCheck={false} value={draft.setup}
-              placeholder={windows ? "$env:Path = \"C:\\tools\\bin;$env:Path\"" : "module load python/3.12\nexport PATH=\"$HOME/tools/bin:$PATH\""}
+              placeholder={windows ? "$env:Path = \"C:\\tools\\bin;$env:Path\"" : "module load python/3.12"}
               onChange={(e) => set((d) => ({ ...d, setup: e.target.value }))} />
             <span className="hint">Run by {shellWord} after your login environment, before agents, terminals and git start (30 s at most). What they leave in the environment is what those get.</span>
           </div>
