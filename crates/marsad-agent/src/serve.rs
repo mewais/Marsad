@@ -2,11 +2,17 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use marsad_proto::daemon::{DaemonInfo, Readiness};
+use marsad_proto::diag::{
+    AskpassOutcome, BridgeEndReason, BridgeOutcome, MarsadEvent, ReadinessFailure, ShutdownWhy,
+    StartFailure, StartStage, StopOutcome,
+};
 use marsad_proto::hosts::{HostEntry, HostKind};
+use marsad_proto::layout::Layout;
 use marsad_proto::{methods, HostId, HOST_ROUTES, HUB_ROUTES};
 use marsad_store::Store;
 use tokio_util::sync::CancellationToken;
@@ -16,6 +22,7 @@ use wasit_control::{
     SupervisedOptions, Uplink,
 };
 use wasit_core::DriverId;
+use wasit_diag::{HomePath, Ident};
 use wasit_runtime::environment::{CaptureOptions, HostEnv};
 use wasit_runtime::wire::ROUTES;
 use wasit_runtime::{
@@ -24,6 +31,7 @@ use wasit_runtime::{
 use wasl_node::{Node, NodeConfig, NodeService};
 
 use crate::cli::{default_host_id, Options};
+use crate::diag::{self, emit};
 use crate::host::{pty::Ptys, HostServices};
 use crate::hub::auth::Prompts;
 use crate::hub::fleet::Fleet;
@@ -68,48 +76,108 @@ fn runtime_config(o: &Options) -> Result<RuntimeConfig, String> {
     Ok(cfg)
 }
 
+/// `msg` on stderr (the daemon's raw crash output) and the exit status.
 fn fail(msg: impl std::fmt::Display, code: u8) -> ExitCode {
     eprintln!("marsad-agent: {msg}");
     ExitCode::from(code)
 }
 
+/// A startup step failed: the reason is recorded (`daemon.failed`, in the daemon's file once it
+/// holds its lock, else in the shared one) as well as printed.
+fn startup_failed(
+    stage: StartStage,
+    code: u8,
+    error: Option<wasit_diag::ErrorInfo>,
+    msg: impl std::fmt::Display,
+) -> ExitCode {
+    emit(MarsadEvent::DaemonFailed {
+        stage,
+        exit: i32::from(code),
+        error,
+    });
+    fail(msg, code)
+}
+
 pub async fn serve(o: Options) -> ExitCode {
+    let began = Instant::now();
     let layout = o.layout().clone();
     if let Err(e) = tokio::fs::create_dir_all(&layout.data).await {
-        return fail(format!("cannot create {}: {e}", layout.data.display()), 1);
+        return startup_failed(
+            StartStage::DataDir,
+            1,
+            Some(diag::io(&e)),
+            format!("cannot create {}: {e}", layout.data.display()),
+        );
     }
     let cfg = match runtime_config(&o) {
         Ok(c) => c,
-        Err(e) => return fail(e, 2),
+        Err(e) => {
+            return startup_failed(StartStage::Config, 2, Some(diag::ours("config", &e)), e);
+        }
     };
     let listener = match wasit_control::bind_local_exclusive(o.socket_path()).await {
         Ok(l) => l,
         Err(BindError::Lock(LockError::Held(p))) => {
+            // Still on the shared file: a daemon that lost the race never writes `daemon.ndjson`.
+            diag::announce();
+            emit(MarsadEvent::DaemonLockHeld {
+                lock: HomePath::new(&p),
+            });
             return fail(
                 format!("another daemon is running (lock {} is held)", p.display()),
                 EXIT_ALREADY_RUNNING,
-            )
+            );
         }
-        Err(e) => return fail(format!("cannot listen: {e}"), 1),
+        Err(e) => {
+            return startup_failed(
+                StartStage::Listen,
+                1,
+                Some(diag::ours("listen", &e)),
+                format!("cannot listen: {e}"),
+            );
+        }
     };
+    // This process is the machine's daemon: its records move to `daemon.ndjson`.
+    diag::promote_to_daemon();
+    diag::announce();
+    let build = version::build_id();
+    let host_id = o.host_id.clone().unwrap_or_else(default_host_id);
+    emit(MarsadEvent::DaemonStart {
+        hub: o.hub,
+        host_id: Ident::new(&host_id),
+        build: Ident::new(&build),
+        pid: std::process::id(),
+        machine: Ident::new(&layout.machine),
+        data: HomePath::new(&layout.data),
+        run_dir: HomePath::new(&layout.run),
+        socket: HomePath::new(&o.socket_path()),
+        free_text_logging: diag::developer(),
+    });
+    #[cfg(feature = "panic-test")]
+    if let Some(marker) = &o.panic_test {
+        panic!("daemon panic test: {marker}");
+    }
     // Holding this machine's lock: adopt what an earlier build left in the flat layout.
     if o.socket.is_none() {
         crate::migrate::run(&layout).await;
     }
     // The user's real environment (login shell), for everything this daemon starts.
     let env = HostEnv::new(CaptureOptions::default());
+    let phase = Instant::now();
     env.refresh().await;
+    let env_ms = diag::ms(phase);
     // The host's agent commands (set with its environment settings) for discovery and launches.
     let mut cfg = cfg;
     cfg.commands = env.commands();
-    let build = version::build_id();
-    let host_id = o.host_id.clone().unwrap_or_else(default_host_id);
     let discovery = Discovery::new(DiscoveryConfig::from_runtime(&cfg));
     let drivers = cfg.registry.clone();
     let manager = match SessionManager::new(cfg).await {
         Ok(m) => m,
-        Err(e) => return fail(e, 1),
+        Err(e) => {
+            return startup_failed(StartStage::Sessions, 1, Some(diag::ours("sessions", &e)), e);
+        }
     };
+    let phase = Instant::now();
     match manager.adopt_all().await {
         Ok(r) => {
             tracing::info!(
@@ -123,6 +191,8 @@ pub async fn serve(o: Options) -> ExitCode {
         }
         Err(e) => tracing::error!(error = %e, "cannot scan sessions"),
     }
+    let adopt_ms = diag::ms(phase);
+    let phase = Instant::now();
     let node = match Node::open(
         NodeConfig::new(host_id.clone(), layout.data.join("wasl")),
         manager.clone(),
@@ -130,12 +200,28 @@ pub async fn serve(o: Options) -> ExitCode {
     .await
     {
         Ok(n) => n,
-        Err(e) => return fail(format!("cannot open the Wasl node: {e}"), 1),
+        Err(e) => {
+            // The node's journal is Wasl's task data: only a code, a length and a fingerprint.
+            return startup_failed(
+                StartStage::Node,
+                1,
+                Some(diag::foreign(&e.code, &e.message)),
+                format!("cannot open the Wasl node: {e}"),
+            );
+        }
     };
+    let node_ms = diag::ms(phase);
     let shutdown = CancellationToken::new();
     let exe = match std::env::current_exe() {
         Ok(p) => p,
-        Err(e) => return fail(format!("cannot locate the daemon executable: {e}"), 1),
+        Err(e) => {
+            return startup_failed(
+                StartStage::Executable,
+                1,
+                Some(diag::io(&e)),
+                format!("cannot locate the daemon executable: {e}"),
+            );
+        }
     };
     let info = DaemonInfo {
         version: version::info(),
@@ -171,12 +257,14 @@ pub async fn serve(o: Options) -> ExitCode {
             )
         })
     {
-        return fail(e, 1);
+        return startup_failed(StartStage::Services, 1, Some(diag::ours("services", &e)), e);
     }
     let local: Arc<dyn Service> = Arc::new(local);
 
     let mut hub_handle: Option<Hub> = None;
+    let mut hub_ms = None;
     let top: Arc<dyn Service> = if o.hub {
+        let phase = Instant::now();
         match start_hub(
             &o,
             &host_id,
@@ -194,9 +282,13 @@ pub async fn serve(o: Options) -> ExitCode {
                 node.attach_uplink(Uplink::via_hub(hub.clone()));
                 node.set_supervisor_probe(Arc::new(|| true));
                 hub_handle = Some(hub);
+                hub_ms = Some(diag::ms(phase));
                 svc
             }
-            Err(e) => return fail(e, 1),
+            Err(e) => {
+                // Stored documents and the hub's other inputs may quote user data.
+                return startup_failed(StartStage::Hub, 1, Some(diag::foreign("hub", &e)), e);
+            }
         }
     } else {
         local
@@ -217,26 +309,74 @@ pub async fn serve(o: Options) -> ExitCode {
         endpoint: format!("{:?}", o.endpoint()),
         build,
     };
-    match serde_json::to_string(&ready) {
-        Ok(line) => println!("{line}"),
-        Err(e) => return fail(e, 1),
-    }
-    let code = tokio::select! {
+    let line = match serde_json::to_string(&ready) {
+        Ok(line) => line,
+        Err(e) => {
+            return startup_failed(
+                StartStage::Readiness,
+                1,
+                Some(diag::ours("readiness", &e)),
+                e,
+            );
+        }
+    };
+    // Whoever started this daemon may have given up and closed the pipe by now. The daemon is
+    // healthy and serves anyway: that starter finds it by connecting.
+    let line_written = match write_readiness(&line).await {
+        Ok(()) => true,
+        Err(e) => {
+            let why = if e.kind() == std::io::ErrorKind::BrokenPipe {
+                ReadinessFailure::PipeClosed
+            } else {
+                ReadinessFailure::WriteFailed
+            };
+            emit(MarsadEvent::DaemonReadinessUnwritten {
+                why,
+                error: diag::io(&e),
+            });
+            false
+        }
+    };
+    emit(MarsadEvent::DaemonReady {
+        total_ms: diag::ms(began),
+        env_ms,
+        adopt_ms,
+        node_ms,
+        hub_ms,
+        line_written,
+    });
+    let mut signal = None;
+    let mut error = None;
+    let (code, why) = tokio::select! {
         r = server.serve(listener) => match r {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => fail(format!("serve failed: {e}"), 1),
+            Ok(()) => (ExitCode::SUCCESS, ShutdownWhy::ServeEnded),
+            Err(e) => {
+                error = Some(diag::ours("serve", &e));
+                (fail(format!("serve failed: {e}"), 1), ShutdownWhy::ServeFailed)
+            }
         },
         what = termination() => {
             tracing::info!("{what}: shutting down (sessions keep running)");
-            ExitCode::SUCCESS
+            signal = Some(wasit_diag::Code::new(what));
+            (ExitCode::SUCCESS, ShutdownWhy::Signal)
         }
-        _ = shutdown.cancelled() => ExitCode::SUCCESS,
+        _ = shutdown.cancelled() => (ExitCode::SUCCESS, ShutdownWhy::Request),
     };
+    emit(MarsadEvent::DaemonShutdown { why, signal, error });
     server.shutdown(Duration::from_secs(2)).await;
     if let Some(h) = hub_handle {
         h.shutdown().await;
     }
     code
+}
+
+/// Writes the readiness line (one JSON line) to stdout. An error says the reader is gone (a
+/// closed pipe) or stdout is unusable; it is the caller's to record, never a panic.
+async fn write_readiness(line: &str) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let mut out = tokio::io::stdout();
+    out.write_all(format!("{line}\n").as_bytes()).await?;
+    out.flush().await
 }
 
 async fn start_hub(
@@ -267,6 +407,7 @@ async fn start_hub(
             .filter(|v| !v.is_empty())
             .map(|v| wasit_process::plain_path(&PathBuf::from(v))),
         socket: o.socket_path(),
+        diag_dir: o.layout().diag(),
     };
     let provisioner = AgentProvisioner {
         restarts,
@@ -416,79 +557,272 @@ async fn termination() -> &'static str {
     }
 }
 
+/// Where a bridge is in getting its daemon (set by the start closure, read when the bridge
+/// returns).
+const START_NOT_CALLED: u8 = 0;
+const START_RUNNING: u8 = 1;
+const START_DONE: u8 = 2;
+const START_FAILED: u8 = 3;
+/// Another daemon of this machine won the lock while the start was under way.
+const START_ANOTHER: u8 = 4;
+
+/// What a successful start came to.
+enum Started {
+    /// The daemon printed its readiness line.
+    Ready,
+    /// It exited because another daemon holds this machine's lock (the connect that follows
+    /// decides whether that one serves this endpoint).
+    AnotherWon,
+}
+
 pub async fn bridge(o: Options) -> ExitCode {
+    let began = Instant::now();
     let ep = o.endpoint();
     let raw = o.raw.clone();
-    let log = o.layout().log();
-    match wasit_control::bridge(
+    let layout = o.layout().clone();
+    emit(MarsadEvent::BridgeStart {
+        host_id: Ident::new(&o.host_id.clone().unwrap_or_else(default_host_id)),
+        pid: std::process::id(),
+        data: HomePath::new(&layout.data),
+    });
+    let start_state = Arc::new(AtomicU8::new(START_NOT_CALLED));
+    let state = start_state.clone();
+    let result = wasit_control::bridge(
         tokio::io::stdin(),
         tokio::io::stdout(),
         &ep,
-        move || start_detached(raw, log),
+        move || async move {
+            state.store(START_RUNNING, Ordering::Release);
+            let started = Instant::now();
+            match start_daemon_process(raw, &layout).await {
+                Ok(how) => {
+                    let (outcome, mark) = match how {
+                        Started::Ready => (BridgeOutcome::Started, START_DONE),
+                        Started::AnotherWon => (BridgeOutcome::Running, START_ANOTHER),
+                    };
+                    state.store(mark, Ordering::Release);
+                    emit(MarsadEvent::BridgeDaemon {
+                        outcome,
+                        ms: Some(diag::ms(started)),
+                        reason: None,
+                        exit: None,
+                        error: None,
+                    });
+                    Ok(())
+                }
+                Err(f) => {
+                    state.store(START_FAILED, Ordering::Release);
+                    emit(MarsadEvent::BridgeDaemon {
+                        outcome: BridgeOutcome::StartFailed,
+                        ms: Some(diag::ms(started)),
+                        reason: Some(f.reason),
+                        exit: f.exit,
+                        error: f.error,
+                    });
+                    Err(f.cause)
+                }
+            }
+        },
         wasit_control::BridgeOptions::default(),
     )
-    .await
-    {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => fail(format!("bridge: {e}"), 1),
+    .await;
+    let state = start_state.load(Ordering::Acquire);
+    match result {
+        Ok(()) => {
+            if state == START_NOT_CALLED {
+                // The first connect found a daemon (nothing earlier says so; when a start was
+                // tried, `bridge.daemon` already said how it came out).
+                emit(MarsadEvent::BridgeDaemon {
+                    outcome: BridgeOutcome::Running,
+                    ms: None,
+                    reason: None,
+                    exit: None,
+                    error: None,
+                });
+            }
+            emit(MarsadEvent::BridgeEnd {
+                reason: BridgeEndReason::Ended,
+                error: None,
+            });
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            let (reason, error) = match &e {
+                wasit_control::BridgeError::Io(io) => (BridgeEndReason::IoError, diag::io(io)),
+                wasit_control::BridgeError::Unavailable(_) => {
+                    (BridgeEndReason::NoDaemon, diag::ours("unavailable", &e))
+                }
+            };
+            if matches!(e, wasit_control::BridgeError::Unavailable(_)) {
+                match state {
+                    // The start closure already recorded why it failed.
+                    START_FAILED => {}
+                    // Its bound ran out while it was starting the daemon.
+                    START_RUNNING => emit(MarsadEvent::BridgeDaemon {
+                        outcome: BridgeOutcome::StartFailed,
+                        ms: Some(diag::ms(began)),
+                        reason: Some(StartFailure::TimedOut),
+                        exit: None,
+                        error: None,
+                    }),
+                    // Not serving (or not reachable): the endpoint could not be connected to.
+                    _ => emit(MarsadEvent::BridgeDaemon {
+                        outcome: BridgeOutcome::Unavailable,
+                        ms: Some(diag::ms(began)),
+                        reason: None,
+                        exit: None,
+                        error: Some(error.clone()),
+                    }),
+                }
+            } else if state == START_NOT_CALLED {
+                emit(MarsadEvent::BridgeDaemon {
+                    outcome: BridgeOutcome::Running,
+                    ms: None,
+                    reason: None,
+                    exit: None,
+                    error: None,
+                });
+            }
+            emit(MarsadEvent::BridgeEnd {
+                reason,
+                error: Some(error),
+            });
+            fail(format!("bridge: {e}"), 1)
+        }
+    }
+}
+
+/// Why starting a daemon failed: what is recorded, and the `io::Error` the bridge reports to
+/// the hub (its text is part of the goodbye frame and is unchanged).
+struct StartFailed {
+    reason: StartFailure,
+    exit: Option<i32>,
+    error: Option<wasit_diag::ErrorInfo>,
+    cause: std::io::Error,
+}
+
+impl StartFailed {
+    fn io(reason: StartFailure, cause: std::io::Error) -> Self {
+        StartFailed {
+            reason,
+            exit: None,
+            error: Some(diag::io(&cause)),
+            cause,
+        }
     }
 }
 
 /// Start `serve` detached with `args` and wait for its readiness line. A daemon that exits
 /// first is an error naming why (another instance holds this machine's lock, or see the log).
-pub async fn start_detached(args: Vec<String>, log_path: PathBuf) -> std::io::Result<()> {
+pub async fn start_detached(args: Vec<String>, layout: &Layout) -> std::io::Result<()> {
+    start_daemon_process(args, layout)
+        .await
+        .map(|_| ())
+        .map_err(|f| f.cause)
+}
+
+async fn start_daemon_process(args: Vec<String>, layout: &Layout) -> Result<Started, StartFailed> {
     use std::process::Stdio;
     use tokio::io::AsyncBufReadExt;
-    if let Some(d) = log_path.parent() {
-        tokio::fs::create_dir_all(d).await?;
-    }
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)?;
-    let exe = std::env::current_exe()?;
+    let opener = layout.clone();
+    // The daemon's stderr file: raw crash output, private, cut when large (`Layout::open_log`).
+    let log = match tokio::task::spawn_blocking(move || opener.open_log()).await {
+        Ok(Ok(f)) => f,
+        Ok(Err(e)) => return Err(StartFailed::io(StartFailure::LogOpenFailed, e)),
+        Err(e) => {
+            return Err(StartFailed::io(
+                StartFailure::LogOpenFailed,
+                std::io::Error::other(e),
+            ))
+        }
+    };
+    let log_path = layout.log();
+    let exe =
+        std::env::current_exe().map_err(|e| StartFailed::io(StartFailure::NoExecutable, e))?;
     let mut cmd = wasit_process::detached_command(exe);
     cmd.arg("serve")
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(log));
-    let mut child = wasit_process::spawn_detached(&mut cmd)?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| std::io::Error::other("no stdout"))?;
+    let mut child = wasit_process::spawn_detached(&mut cmd)
+        .map_err(|e| StartFailed::io(StartFailure::SpawnFailed, e))?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        StartFailed::io(StartFailure::NoStdout, std::io::Error::other("no stdout"))
+    })?;
     let mut line = String::new();
     tokio::io::BufReader::new(stdout)
         .read_line(&mut line)
-        .await?;
+        .await
+        .map_err(|e| StartFailed::io(StartFailure::ReadFailed, e))?;
     if !line.trim().is_empty() {
         drop(child);
-        return Ok(());
+        return Ok(Started::Ready);
     }
     // EOF without a readiness line: the daemon exited. Another instance on this machine that
     // won the lock is fine (the caller's connect decides); anything else is reported.
     let status = tokio::time::timeout(Duration::from_secs(10), child.wait()).await;
     match status {
-        Ok(Ok(s)) if s.code() == Some(EXIT_ALREADY_RUNNING as i32) => Ok(()),
-        Ok(Ok(s)) => Err(std::io::Error::other(format!(
-            "the daemon exited ({s}) before it was ready; see {}",
-            log_path.display()
-        ))),
-        Ok(Err(e)) => Err(e),
-        Err(_) => Err(std::io::Error::other(
-            "the daemon closed its readiness pipe but did not exit",
-        )),
+        Ok(Ok(s)) if s.code() == Some(EXIT_ALREADY_RUNNING as i32) => Ok(Started::AnotherWon),
+        Ok(Ok(s)) => Err(StartFailed {
+            reason: StartFailure::ExitedBeforeReady,
+            exit: s.code(),
+            error: None,
+            cause: std::io::Error::other(format!(
+                "the daemon exited ({s}) before it was ready; see {}",
+                log_path.display()
+            )),
+        }),
+        Ok(Err(e)) => Err(StartFailed::io(StartFailure::ReadFailed, e)),
+        Err(_) => Err(StartFailed {
+            reason: StartFailure::PipeClosedStillRunning,
+            exit: None,
+            error: None,
+            cause: std::io::Error::other("the daemon closed its readiness pipe but did not exit"),
+        }),
+    }
+}
+
+/// How `stop` ended, for the exit status and the record.
+struct Stopped {
+    code: ExitCode,
+    outcome: StopOutcome,
+    legacy: bool,
+    error: Option<wasit_diag::ErrorInfo>,
+}
+
+impl Stopped {
+    fn new(code: ExitCode, outcome: StopOutcome, legacy: bool) -> Self {
+        Stopped {
+            code,
+            outcome,
+            legacy,
+            error: None,
+        }
     }
 }
 
 /// `stop`: ask the daemon to exit and wait until its single-instance lock is free.
 pub async fn stop(o: Options) -> ExitCode {
+    let began = Instant::now();
+    let done = stop_daemon(&o).await;
+    emit(MarsadEvent::StopEnd {
+        outcome: done.outcome,
+        ms: diag::ms(began),
+        legacy: done.legacy,
+        error: done.error,
+    });
+    done.code
+}
+
+async fn stop_daemon(o: &Options) -> Stopped {
+    let mut legacy_stopped = false;
     if o.socket.is_none() {
         // A daemon of a build before the per-machine layout, on this machine.
         let legacy = wasit_control::local_endpoint(&o.layout().legacy_socket());
         if crate::migrate::stop_endpoint(&legacy).await {
             println!("stopped a daemon of an earlier build");
+            legacy_stopped = true;
         }
     }
     let ep: Endpoint = o.endpoint();
@@ -497,9 +831,19 @@ pub async fn stop(o: Options) -> ExitCode {
         Ok(c) => c,
         Err(wasit_control::ConnectError::Io(m)) => {
             println!("no daemon running ({m})");
-            return ExitCode::SUCCESS;
+            return Stopped::new(ExitCode::SUCCESS, StopOutcome::NotRunning, legacy_stopped);
         }
-        Err(e) => return fail(format!("cannot reach the daemon: {e}"), 1),
+        Err(e) => {
+            // What a peer wrote in a refusal is not recorded: code, length, fingerprint.
+            return Stopped {
+                error: Some(diag::foreign("connect", &e.to_string())),
+                ..Stopped::new(
+                    fail(format!("cannot reach the daemon: {e}"), 1),
+                    StopOutcome::Unreachable,
+                    legacy_stopped,
+                )
+            };
+        }
     };
     // The daemon may close the connection before answering; both mean it is going down.
     let _ = client
@@ -509,7 +853,11 @@ pub async fn stop(o: Options) -> ExitCode {
         .await
         .is_err()
     {
-        return fail("the daemon did not close the connection", 1);
+        return Stopped::new(
+            fail("the daemon did not close the connection", 1),
+            StopOutcome::NotClosed,
+            legacy_stopped,
+        );
     }
     let lock = wasit_control::lock_path_for(&o.socket_path());
     let mut delay = Duration::from_millis(2);
@@ -518,34 +866,60 @@ pub async fn stop(o: Options) -> ExitCode {
             Ok(l) => {
                 drop(l);
                 println!("stopped");
-                return ExitCode::SUCCESS;
+                return Stopped::new(ExitCode::SUCCESS, StopOutcome::Stopped, legacy_stopped);
             }
             Err(LockError::Held(_)) => {
                 // Backoff schedule while the process exits.
                 tokio::time::sleep(delay).await;
                 delay = (delay * 2).min(Duration::from_millis(500));
             }
-            Err(e) => return fail(e, 1),
+            Err(e) => {
+                return Stopped {
+                    error: Some(diag::ours("lock", &e)),
+                    ..Stopped::new(fail(&e, 1), StopOutcome::LockError, legacy_stopped)
+                };
+            }
         }
     }
-    fail("the daemon did not exit", 1)
+    Stopped::new(
+        fail("the daemon did not exit", 1),
+        StopOutcome::NotExited,
+        legacy_stopped,
+    )
 }
 
 /// The `SSH_ASKPASS` helper: forward `prompt` to the hub (which shows it to the user) and
 /// print the answer. Exit 1 on cancel, timeout or any failure (ssh then gives up that prompt).
+/// Its record names the host's id and the outcome; never the prompt, never the answer.
 pub async fn askpass(prompt: String) -> ExitCode {
     use crate::hub::provision::{ASKPASS_HOST_ENV, ASKPASS_SOCKET_ENV};
+    let began = Instant::now();
     let (Ok(host), Some(socket)) = (
         std::env::var(ASKPASS_HOST_ENV),
         std::env::var_os(ASKPASS_SOCKET_ENV),
     ) else {
+        emit(MarsadEvent::AskpassEnd {
+            host: None,
+            outcome: AskpassOutcome::NotAHubLink,
+            ms: diag::ms(began),
+            error: None,
+        });
         return fail("askpass: not started by a Marsad hub link", 1);
     };
+    let host_ident = Ident::new(&host);
     let ep = wasit_control::local_endpoint(std::path::Path::new(&socket));
     let opts = ClientOptions::new(Hello::new(version::build_id(), "marsad-askpass", "askpass"));
     let client = match ControlClient::connect_endpoint(&ep, opts).await {
         Ok(c) => c,
-        Err(e) => return fail(format!("askpass: cannot reach the hub: {e}"), 1),
+        Err(e) => {
+            emit(MarsadEvent::AskpassEnd {
+                host: Some(host_ident),
+                outcome: AskpassOutcome::Unreachable,
+                ms: diag::ms(began),
+                error: Some(diag::foreign("connect", &e.to_string())),
+            });
+            return fail(format!("askpass: cannot reach the hub: {e}"), 1);
+        }
     };
     let r: Result<marsad_proto::hosts::AskpassReply, _> = client
         .request(
@@ -559,9 +933,36 @@ pub async fn askpass(prompt: String) -> ExitCode {
         .await;
     match r {
         Ok(a) => {
+            emit(MarsadEvent::AskpassEnd {
+                host: Some(host_ident),
+                outcome: AskpassOutcome::Answered,
+                ms: diag::ms(began),
+                error: None,
+            });
             println!("{}", a.answer);
             ExitCode::SUCCESS
         }
-        Err(e) => fail(format!("askpass: {e}"), 1),
+        Err(e) => {
+            emit(MarsadEvent::AskpassEnd {
+                host: Some(host_ident),
+                outcome: AskpassOutcome::Refused,
+                ms: diag::ms(began),
+                error: Some(diag::foreign(call_code(&e), &e.to_string())),
+            });
+            fail(format!("askpass: {e}"), 1)
+        }
+    }
+}
+
+/// The machine word of a failed call (an RPC error's code, else the kind of failure).
+fn call_code(e: &wasit_control::CallError) -> &str {
+    use wasit_control::CallError;
+    match e {
+        CallError::Rpc(r) => &r.code,
+        CallError::Timeout => "timeout",
+        CallError::NotConnected => "not_connected",
+        CallError::ConnectionLost(_) => "connection_lost",
+        CallError::Encode(_) => "encode",
+        CallError::Decode(_) => "decode",
     }
 }

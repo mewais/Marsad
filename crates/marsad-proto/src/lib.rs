@@ -111,6 +111,7 @@
 pub mod agentconfig;
 pub mod ask;
 pub mod daemon;
+pub mod diag;
 pub mod fleet;
 pub mod fs;
 pub mod git;

@@ -291,10 +291,11 @@ async fn flat_layout_with_a_live_session_is_adopted() {
     if let Err(e) = rt.command(&sid, wasit_core::Command::prompt("go")).await {
         let snap = rt.snapshot(&sid).await;
         panic!(
-            "prompt: {e:?}\nsnapshot: {snap:?}\nshim log: {}\ndaemon log: {}",
+            "prompt: {e:?}\nsnapshot: {snap:?}\nshim log: {}\ndaemon log: {}\ndaemon diagnostics: {}",
             std::fs::read_to_string(layout.data.join("sessions").join(&id).join("shim.log"))
                 .unwrap_or_default(),
-            std::fs::read_to_string(layout.log()).unwrap_or_default()
+            std::fs::read_to_string(layout.log()).unwrap_or_default(),
+            std::fs::read_to_string(layout.diag().join("daemon.ndjson")).unwrap_or_default()
         );
     }
     tokio::time::timeout(Duration::from_secs(30), async {

@@ -51,6 +51,9 @@ pub const BIN_DIR_ENV: &str = "MARSAD_AGENT_BIN_DIR";
 pub const ASKPASS_HOST_ENV: &str = "MARSAD_ASKPASS_HOST";
 /// Set for the askpass helper: the hub's endpoint path.
 pub const ASKPASS_SOCKET_ENV: &str = "MARSAD_ASKPASS_SOCKET";
+/// Set for the askpass helper: the hub machine's diagnostics directory (the helper appends its
+/// one record to the shared `aux.ndjson` there).
+pub const ASKPASS_DIAG_ENV: &str = "MARSAD_ASKPASS_DIAG";
 
 /// Host entries shared between the hosts registry and the connector.
 pub type Entries = Arc<RwLock<HashMap<HostId, HostEntry>>>;
@@ -80,6 +83,8 @@ pub struct BootstrapConnector {
     pub bin_dir: Option<PathBuf>,
     /// The hub's endpoint path (for the askpass helper).
     pub socket: PathBuf,
+    /// This machine's diagnostics directory (for the askpass helper).
+    pub diag_dir: PathBuf,
 }
 
 fn cmd_err(
@@ -372,6 +377,7 @@ impl LinkConnector for BootstrapConnector {
                 ("DISPLAY".into(), ":0".into()),
                 (ASKPASS_HOST_ENV.into(), host.to_string()),
                 (ASKPASS_SOCKET_ENV.into(), self.socket.display().to_string()),
+                (ASKPASS_DIAG_ENV.into(), self.diag_dir.display().to_string()),
             ];
             let (mut io, child) = CommandTransport::spawn(&cmd)?;
             let child = Arc::new(child);

@@ -1,0 +1,88 @@
+//! What may reach a diagnostics record stays reviewable in the Marsad tree, as in Wasit
+//! (`wasit-diag/tests/value_sites.rs`): nothing in Marsad implements `DiagValue`/`DiagEvent` by
+//! hand or registers a field type, no code makes free text with `DiagText::new(`, and every
+//! `ErrorInfo::ours(` call (free text from any `Display`) is in the allow-list below. Adding
+//! one is a reviewed change here, with the reason why it is "not session content".
+
+use std::path::Path;
+
+use wasit_process::scan;
+
+/// Patterns that extend what may reach a log record. Marsad has no allowed file for these: its
+/// events are made of Wasit's value types.
+const PATTERNS: &[&str] = &[
+    "diag_value!",
+    "DiagValue for ",
+    "DiagEvent for ",
+    "Sealed for ",
+    "SealedEvent for ",
+    "DiagText::new(",
+];
+
+const OURS: &str = "ErrorInfo::ours(";
+
+/// Files allowed to call `ErrorInfo::ours(`, and what they pass:
+/// * `marsad-agent/src/diag.rs` (`diag::ours`, the only call): the `Display` of an error of
+///   Marsad's or Wasit's own making whose text names an operation and the OS's reason, or a
+///   path of Marsad's own files (the data directory, the runtime directory, the socket, the
+///   lock): the options error of `serve` (an unknown driver id from its own argv), the session
+///   manager's error, the control crate's bind/lock/serve errors, service registration
+///   conflicts, the serialization of the readiness line, and the bridge's "cannot reach the
+///   daemon at <endpoint>" message. The Wasl node's and the hub's errors, whose text may quote
+///   a journal or a stored document, and every error a peer wrote, use `diag::foreign`
+///   (code, length and fingerprint only).
+const OURS_ALLOW: &[&str] = &["marsad-agent/src/diag.rs"];
+
+#[test]
+fn field_types_and_free_text_only_in_reviewed_places() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let found = scan::find(&root, &[], |line| {
+        PATTERNS.iter().any(|p| scan::mentions(line, p))
+    });
+    assert!(
+        found.is_empty(),
+        "new diagnostics field types or free-text sites need review (allow-list in {}):\n{}",
+        file!(),
+        found.join("\n")
+    );
+}
+
+#[test]
+fn error_text_from_display_only_in_reviewed_places() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let found = scan::find(&root, OURS_ALLOW, |line| scan::mentions(line, OURS));
+    assert!(
+        found.is_empty(),
+        "new `ErrorInfo::ours` sites need review (allow-list in {}):\n{}",
+        file!(),
+        found.join("\n")
+    );
+}
+
+/// The allow-listed file really contains the call (so the allow-list cannot go stale).
+#[test]
+fn the_allow_list_is_live() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for f in OURS_ALLOW {
+        let path = root.join("crates").join(f);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.lines()
+                .any(|l| !l.trim_start().starts_with("//") && scan::mentions(l, OURS)),
+            "{f} no longer calls {OURS}: remove it from the allow-list"
+        );
+    }
+}
+
+#[test]
+fn the_scan_sees_each_pattern() {
+    for line in [
+        "wasit_diag::diag_value!(TraceId => Ident, |t| Ident::new(&t.0));",
+        "impl DiagValue for Prompt {",
+        "impl wasit_diag::DiagEvent for X {",
+        "let t = DiagText::new(Origin::Own, &e.to_string());",
+    ] {
+        assert!(PATTERNS.iter().any(|p| scan::mentions(line, p)), "{line}");
+    }
+    assert!(scan::mentions("ErrorInfo::ours(Code::st(\"x\"), e)", OURS));
+}

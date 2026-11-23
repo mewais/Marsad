@@ -1,0 +1,222 @@
+//! The agent's diagnostics wiring (design S4, §6.1, §6.3): which file each process role writes,
+//! the panic hook, the `tracing` bridge, and the one place where free error text is made.
+//!
+//! * `serve` / `serve --hub` ([`Role::Daemon`], [`Role::Hub`]) install a sink on the shared
+//!   `<data>/diag/aux.ndjson` and **promote** it to `daemon.ndjson` once the single-instance
+//!   lock is held ([`promote_to_daemon`]); a daemon that loses the race leaves its record in
+//!   the shared file and never touches `daemon.ndjson`. The daemon also keeps `aux.ndjson`
+//!   within bounds (rotates it when over [`AUX_ROTATE`]).
+//! * `bridge`, `stop` and the askpass helper ([`Role::Bridge`], [`Role::Stop`],
+//!   [`Role::Askpass`]) are short-lived: they append to `aux.ndjson` and end with
+//!   [`finish`], which waits (bounded) for their last record.
+//! * `shim` installs its own sink inside `wasit_shim` (its `shim.log`); `main` does not touch
+//!   diagnostics before handing over to it.
+//! * `mcp` / `ask-mcp` run inside an agent CLI and know no data directory: they get no sink,
+//!   only [`content_free_panic_hook`].
+//!
+//! **stderr.** No process writes formatted `tracing` text to a file by default: `tracing` is
+//! bridged to per-minute counts ([`init_tracing`]). `MARSAD_LOG=<level>` is the developer
+//! override: plain (no colour) `tracing` text on stderr and the default panic message. stderr
+//! of the daemon is `marsad-agent.log` (raw crash output; see `Layout::open_log`).
+//!
+//! **Free text.** The only `ErrorInfo::ours` call is in [`ours`] (pinned by
+//! `tests/diag_sites.rs`): callers pass the `Display` of Marsad's or Wasit's own error types
+//! (an OS reason, a path of Marsad's own files, a fixed message), never anything a session,
+//! a peer or a CLI wrote. Errors that might quote stored or journaled data (the Wasl node,
+//! the hub's store) go through [`foreign`] and keep only a code, a length and a fingerprint.
+
+use std::io::Write as _;
+use std::path::PathBuf;
+use std::time::Instant;
+
+use marsad_proto::diag::MarsadEvent;
+use marsad_proto::layout::{DIAG_AUX, DIAG_DAEMON};
+use tracing_subscriber::prelude::*;
+use wasit_diag::{Code, ErrorInfo, Ident, Ms, RotateShared, SinkConfig};
+
+use crate::version;
+
+/// The developer override: plain `tracing` text on stderr, and the default panic message.
+pub const DEV_ENV: &str = "MARSAD_LOG";
+
+/// A writer of the shared `aux.ndjson` skips (and counts) records once the file holds this much.
+pub const AUX_CAP: u64 = 4 << 20;
+/// The daemon rotates `aux.ndjson` when it holds more than this (one older generation is kept).
+pub const AUX_ROTATE: u64 = 1 << 20;
+/// `daemon.ndjson` is rotated before a record would take it past this size.
+pub const DAEMON_MAX_BYTES: u64 = 8 << 20;
+/// Older generations of `daemon.ndjson` kept (`.1` … `.3`: four files in all).
+pub const DAEMON_GENERATIONS: u32 = 3;
+/// The daemon's queue between emitters and its writer thread.
+const DAEMON_QUEUE: usize = 8192;
+
+/// The process roles that write diagnostics; the record's `src`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// `serve --hub`: the GUI machine's daemon.
+    Hub,
+    /// `serve`: a host daemon.
+    Daemon,
+    /// `bridge`: the remote end of a hub link.
+    Bridge,
+    /// `stop`.
+    Stop,
+    /// The `SSH_ASKPASS` helper.
+    Askpass,
+}
+
+impl Role {
+    /// The `src` of this role's records.
+    pub fn src(self) -> &'static str {
+        match self {
+            Role::Hub => "hub",
+            Role::Daemon => "daemon",
+            Role::Bridge => "bridge",
+            Role::Stop => "stop",
+            Role::Askpass => "askpass",
+        }
+    }
+
+    fn is_daemon(self) -> bool {
+        matches!(self, Role::Hub | Role::Daemon)
+    }
+}
+
+/// `MARSAD_LOG` is set (and not empty).
+pub fn developer() -> bool {
+    std::env::var_os(DEV_ENV).is_some_and(|v| !v.is_empty())
+}
+
+/// The sink config of `role` writing in `dir` (every role starts on the shared file).
+pub fn sink_config(role: Role, dir: PathBuf) -> SinkConfig {
+    let build = Ident::new(&version::build_id());
+    let mut cfg = SinkConfig::shared(Code::st(role.src()), build, dir, DIAG_AUX, AUX_CAP);
+    if role.is_daemon() {
+        cfg.max_bytes = DAEMON_MAX_BYTES;
+        cfg.generations = DAEMON_GENERATIONS;
+        cfg.queue = DAEMON_QUEUE;
+        cfg.rotate_shared = Some(RotateShared {
+            file: DIAG_AUX.to_owned(),
+            max_bytes: AUX_ROTATE,
+            generations: 1,
+        });
+    }
+    cfg
+}
+
+/// Installs this process's sink in `dir` (created, private, by the sink's writer thread), the
+/// panic hook, and, for a short-lived role, records `process.start`. A daemon announces itself
+/// after it holds its lock ([`announce`]). Returns at once; an install that fails says so on
+/// stderr (the only place left) and the process runs without diagnostics.
+pub fn start(role: Role, dir: PathBuf) {
+    match wasit_diag::install(sink_config(role, dir)) {
+        Ok(()) => {
+            if !role.is_daemon() {
+                wasit_diag::announce_process();
+            }
+        }
+        Err(e) => eprintln!("marsad-agent: no diagnostics: {e}"),
+    }
+    // Without a sink the hook records nothing and prints nothing: the payload of a panic can
+    // hold content and stderr is a file.
+    wasit_diag::install_panic_hook(developer());
+}
+
+/// A daemon that holds its lock: from the next record on, its records go to `daemon.ndjson`.
+pub fn promote_to_daemon() {
+    if let Err(e) = wasit_diag::promote(DIAG_DAEMON) {
+        eprintln!("marsad-agent: diagnostics stay in the shared file: {e}");
+    }
+}
+
+/// Records `process.start` (a daemon calls it after [`promote_to_daemon`], or when it lost the
+/// lock race).
+pub fn announce() {
+    wasit_diag::announce_process();
+}
+
+/// Records `event` (never waits).
+pub fn emit(event: MarsadEvent) {
+    wasit_diag::emit(&event);
+}
+
+/// Waits (bounded) until this process's records are written: the last thing a process does.
+pub fn finish() {
+    // A timeout or a writer that cannot write changes nothing for a process that is ending.
+    let _finished = wasit_diag::shutdown();
+}
+
+/// `tracing` is counted into the sink (`trace.counted` once a minute: target, level, count;
+/// never a message or a field). Its text goes nowhere unless `MARSAD_LOG` is set: then plain
+/// text (no colour codes) goes to stderr.
+pub fn init_tracing() {
+    let text = developer().then(|| {
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(std::io::stderr)
+            .with_filter(
+                tracing_subscriber::EnvFilter::try_from_env(DEV_ENV)
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+    });
+    // Only fails when a subscriber is already set.
+    let _ = tracing_subscriber::registry()
+        .with(wasit_diag::tracing_layer())
+        .with(text)
+        .try_init();
+}
+
+/// The panic hook of a process that has no sink (`mcp`, `ask-mcp`: they run inside an agent CLI
+/// and know no data directory): one line on stderr with where it happened and the kind and
+/// length of the payload, never the payload (it can hold a tool's arguments); nothing is
+/// written to any file. With `MARSAD_LOG` set the default message follows.
+pub fn content_free_panic_hook(what: &'static str) {
+    let previous = std::panic::take_hook();
+    let dev = developer();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info.payload();
+        let (kind, len) = if let Some(s) = payload.downcast_ref::<&'static str>() {
+            ("static str", s.chars().count())
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            ("string", s.chars().count())
+        } else {
+            ("other", 0)
+        };
+        let at = info.location().map_or_else(
+            || "an unknown place".to_owned(),
+            |l| format!("{}:{}:{}", l.file(), l.line(), l.column()),
+        );
+        // Not `eprintln!`: it panics when stderr is closed, and a panic inside the hook aborts.
+        let _printed = writeln!(
+            std::io::stderr(),
+            "marsad-agent {what}: panicked at {at} ({kind}, {len} chars)"
+        );
+        if dev {
+            previous(info);
+        }
+    }));
+}
+
+/// Milliseconds since `since`.
+pub fn ms(since: Instant) -> Ms {
+    Ms::of(since.elapsed())
+}
+
+/// An I/O error as a record field (its kind and OS error number, never the message).
+pub fn io(e: &std::io::Error) -> ErrorInfo {
+    ErrorInfo::io(e)
+}
+
+/// The `Display` of one of our own error types, as a record field (scrubbed, bounded). The one
+/// `ErrorInfo::ours` call of this crate: callers pass errors whose text names an operation and
+/// the OS's reason or a path of Marsad's own files, never what a session, a peer or a CLI
+/// wrote (see the module documentation).
+pub fn ours(code: &'static str, e: &impl std::fmt::Display) -> ErrorInfo {
+    ErrorInfo::ours(Code::st(code), e)
+}
+
+/// A text that may quote data (stored documents, journals, a peer): only a code, its length and
+/// a fingerprint are kept.
+pub fn foreign(code: &str, text: &str) -> ErrorInfo {
+    ErrorInfo::foreign(Code::new(code), text)
+}

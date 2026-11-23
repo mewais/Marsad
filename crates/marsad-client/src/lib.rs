@@ -163,10 +163,13 @@ async fn start_daemon(cfg: &ClientConfig) -> Result<(), ConnectError> {
     tokio::fs::create_dir_all(&layout.data)
         .await
         .map_err(|e| ConnectError::Spawn(format!("{}: {e}", layout.data.display())))?;
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(layout.log())
+    // The daemon's stderr: raw crash output only (no `tracing` text, no colour codes, unless a
+    // developer sets `MARSAD_LOG`), private, and cut when it grew past 1 MiB. Its diagnostics
+    // are the daemon's own files under `<data>/diag/`.
+    let opener = layout.clone();
+    let log = tokio::task::spawn_blocking(move || opener.open_log())
+        .await
+        .map_err(|e| ConnectError::Spawn(format!("daemon log: {e}")))?
         .map_err(|e| ConnectError::Spawn(format!("daemon log: {e}")))?;
     let bin = cfg.agent();
     let mut cmd = wasit_process::detached_command(&bin);

@@ -12,12 +12,19 @@ path = "src/lib.rs"
 name = "marsad-agent"
 path = "src/main.rs"
 
+[features]
+# `marsad-agent serve --panic-test <marker>`: panics with a message holding the marker once the
+# daemon's diagnostics are running. For tests/diag_panic.rs; enabled by this package's
+# dev-dependency on itself below, so no build for use has it.
+panic-test = []
+
 [dependencies]
 marsad-proto = { workspace = true }
 marsad-store = { workspace = true }
 wasit-core = { workspace = true }
 wasit-control = { workspace = true }
 wasit-process = { workspace = true }
+wasit-diag = { workspace = true }
 wasit-runtime = { workspace = true }
 wasit-shim = { workspace = true }
 wasl-proto = { workspace = true }
@@ -39,5 +46,6 @@ tokio-util = { version = "0.7", features = ["rt"] }
 miniz_oxide = "0.9.1"
 
 [dev-dependencies]
+marsad-agent = { path = ".", features = ["panic-test"] }
 marsad-client = { workspace = true }
 wasit-fake-cli = { workspace = true }

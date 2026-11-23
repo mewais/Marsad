@@ -42,6 +42,11 @@ pub struct Options {
     pub command_timeout: Option<Duration>,
     /// How long a sign-in prompt waits for the user (hub).
     pub auth_prompt_timeout: Option<Duration>,
+    /// `--panic-test <marker>`: the daemon panics, once its diagnostics run, with a message
+    /// holding the marker (tests/diag_panic.rs; only in builds with the `panic-test` feature,
+    /// which only this package's own dev-dependency turns on).
+    #[cfg(feature = "panic-test")]
+    pub panic_test: Option<String>,
     /// The options exactly as given (passed on when `bridge` starts `serve`).
     pub raw: Vec<String>,
 }
@@ -97,6 +102,8 @@ impl Options {
                 "--stop-grace-ms" => o.stop_grace = Some(ms(val()?)?),
                 "--command-timeout-ms" => o.command_timeout = Some(ms(val()?)?),
                 "--auth-prompt-timeout-ms" => o.auth_prompt_timeout = Some(ms(val()?)?),
+                #[cfg(feature = "panic-test")]
+                "--panic-test" => o.panic_test = Some(val()?),
                 other => return Err(format!("unknown option {other}")),
             }
         }

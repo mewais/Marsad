@@ -20,6 +20,7 @@
 
 pub mod askmcp;
 pub mod cli;
+pub mod diag;
 pub mod host;
 pub mod hub;
 pub mod migrate;

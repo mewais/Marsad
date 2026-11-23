@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::process::ExitCode;
 
+use marsad_agent::diag::{self, Role};
 use marsad_agent::{cli::Options, serve, version};
 
 fn usage() -> ExitCode {
@@ -21,7 +22,14 @@ fn main() -> ExitCode {
             Some("askpass") => prompt[1..].join(" "),
             _ => prompt.join(" "),
         };
-        return match tokio::runtime::Builder::new_current_thread()
+        // Its records go to the hub machine's shared file; a helper started without the
+        // directory (an older hub) has no sink and a content-free panic hook.
+        match std::env::var_os(marsad_agent::hub::provision::ASKPASS_DIAG_ENV) {
+            Some(dir) => diag::start(Role::Askpass, dir.into()),
+            None => diag::content_free_panic_hook("askpass"),
+        }
+        diag::init_tracing();
+        let code = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
         {
@@ -31,6 +39,8 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         };
+        diag::finish();
+        return code;
     }
     let mut args = std::env::args_os().skip(1);
     let Some(cmd) = args.next() else {
@@ -59,6 +69,8 @@ fn main() -> ExitCode {
         Some("mcp") => {
             // The Wasl MCP server an agent CLI launches (`--socket <daemon socket> --session
             // <id>`, injected into every session by the hub); it builds its own runtime.
+            // No sink (it knows no data directory): a panic prints where, never what.
+            diag::content_free_panic_hook("mcp");
             let rest: Result<Vec<String>, _> = args.map(|a| a.into_string()).collect();
             return match rest {
                 Ok(rest) => wasl_mcp::run(&rest),
@@ -71,6 +83,7 @@ fn main() -> ExitCode {
         Some("ask-mcp") => {
             // The `ask_user` MCP server (`--socket <daemon socket> --session <id>`), injected
             // by the hub into sessions whose CLI cannot ask the user itself.
+            diag::content_free_panic_hook("ask-mcp");
             let rest: Result<Vec<String>, _> = args.map(|a| a.into_string()).collect();
             return match rest {
                 Ok(rest) => marsad_agent::askmcp::run(&rest),
@@ -97,14 +110,16 @@ fn main() -> ExitCode {
             return usage();
         }
     };
-    // Only fails if a subscriber is already set.
-    let _ = tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("MARSAD_LOG")
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .try_init();
+    let role = match cmd.to_str() {
+        Some("serve") if opts.hub => Role::Hub,
+        Some("serve") => Role::Daemon,
+        Some("bridge") => Role::Bridge,
+        _ => Role::Stop,
+    };
+    // The sink first (a runtime that cannot start is then on record too); `tracing` is only
+    // counted unless `MARSAD_LOG` is set.
+    diag::start(role, opts.layout().diag());
+    diag::init_tracing();
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -112,13 +127,16 @@ fn main() -> ExitCode {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("marsad-agent: cannot start the runtime: {e}");
+            diag::finish();
             return ExitCode::from(1);
         }
     };
-    match cmd.to_str() {
+    let code = match cmd.to_str() {
         Some("serve") => rt.block_on(serve::serve(opts)),
         Some("bridge") => rt.block_on(serve::bridge(opts)),
         Some("stop") => rt.block_on(serve::stop(opts)),
         _ => usage(),
-    }
+    };
+    diag::finish();
+    code
 }
