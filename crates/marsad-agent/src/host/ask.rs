@@ -4,27 +4,57 @@
 //! The gate is an external gate of the runtime: journaled, shown and answered exactly like a
 //! question the CLI asked itself, and replayed after a daemon restart. The answer arrives as
 //! the session's `AnswerQuestion` input event. A retried request (same `request_id`, after the
-//! MCP server lost its connection) waits for the gate already raised. The gate is withdrawn
-//! when the user interrupts the asking turn (the interrupt itself: a CLI may wait for this
-//! tool call to return before it ends the turn), when that turn ends without an answer, and
-//! when the caller goes away. Turn ends and interrupts before the gate went up belong to
-//! earlier turns and are ignored.
+//! MCP server lost its connection) waits for the gate already raised.
+//!
+//! The gate belongs to the turn that asked: it is raised bound to that turn, and the session
+//! itself resolves it when the user interrupts the turn (at the interrupt, ahead of anything the
+//! CLI says: a CLI may wait for this tool call to return before it ends the turn) or the turn
+//! ends without an answer, with the runtime's `turn_interrupted` / `turn_ended` and the
+//! sentences given here. This module does not watch the turn: it only observes the gate's
+//! `GateResolved` and answers the tool call with what the reason says. What stays its own is the
+//! caller going away, for which it takes the gate down itself.
 
 use marsad_proto::ask::{AskUserReply, AskUserRequest};
 use marsad_proto::runtime::SessionEventKind;
 use marsad_proto::{AgentEvent, Command, MarsadError, SessionId};
-use wasit_core::{GateReason, GateRequest};
+use wasit_core::{GateReason, GateRequest, TurnBinding};
 use wasit_runtime::{SessionManager, StreamEnd};
 use wasl_proto::{End, EndCode};
 
-/// Withdraws the gate if the request is dropped before an answer: because the caller went away
-/// (unless `reason` was set to say otherwise first).
+/// What the tool call is told, and the gate says, when the asking turn is interrupted.
+const INTERRUPTED: &str = "the user interrupted the turn";
+/// The same when the asking turn ends without an answer.
+const TURN_ENDED: &str = "the turn ended before an answer";
+
+/// The gate lives as long as the turn that asked.
+fn turn_binding() -> TurnBinding {
+    TurnBinding::Turn {
+        interrupted: Some(INTERRUPTED.into()),
+        ended: Some(TURN_ENDED.into()),
+    }
+}
+
+/// What the tool call is told about a gate the session resolved without an answer: the reason's
+/// own sentence (this module worded the turn's endings when it raised the gate), else by code.
+fn withdrawn_text(reason: Option<&GateReason>) -> String {
+    match reason {
+        Some(GateReason {
+            detail: Some(detail),
+            ..
+        }) => detail.clone(),
+        Some(r) if r.code == GateReason::PROCESS_ENDED || r.code == GateReason::SESSION_STOPPED => {
+            "the session ended before an answer".into()
+        }
+        _ => "the question was withdrawn".into(),
+    }
+}
+
+/// Withdraws the gate if the request is dropped before an answer: because the caller went away.
 struct Withdraw {
     manager: SessionManager,
     session: SessionId,
     request_id: String,
     armed: bool,
-    reason: GateReason,
 }
 
 impl Drop for Withdraw {
@@ -32,12 +62,13 @@ impl Drop for Withdraw {
         if !self.armed {
             return;
         }
-        let (m, s, r, why) = (
+        let (m, s, r) = (
             self.manager.clone(),
             self.session.clone(),
             self.request_id.clone(),
-            self.reason.clone(),
         );
+        let why = End::new(EndCode::CallerGone)
+            .gate_reason("the ask_user call stopped waiting for the answer");
         if let Ok(h) = tokio::runtime::Handle::try_current() {
             h.spawn(async move {
                 let _ = m.resolve_gate(&s, &r, why).await;
@@ -74,25 +105,22 @@ pub async fn ask_user(
             q.id = "answer".into();
         }
         manager
-            .raise_gate(
+            .raise_gate_for_turn(
                 &session,
                 GateRequest::Question {
                     request_id: r.request_id.clone(),
                     questions: vec![q],
                 },
+                turn_binding(),
             )
             .await
             .map_err(|e| MarsadError::invalid(format!("cannot ask the user: {e}")))?;
     }
-    // Events before our gate's `GateRequested` belong to earlier turns.
-    let mut raised = pending;
     let mut guard = Withdraw {
         manager: manager.clone(),
         session: session.clone(),
         request_id: r.request_id.clone(),
         armed: true,
-        reason: End::new(EndCode::CallerGone)
-            .gate_reason("the ask_user call stopped waiting for the answer"),
     };
     let reply = 'outer: loop {
         let mut stream = match manager.subscribe(&session, from).await {
@@ -116,29 +144,13 @@ pub async fn ask_user(
                         cancelled: None,
                     };
                 }
+                // The session took the gate down (its turn was interrupted or ended, or the
+                // process ended) or someone else did: the call is over either way.
                 SessionEventKind::Agent {
-                    event: AgentEvent::GateResolved { request_id, .. },
+                    event: AgentEvent::GateResolved { request_id, reason },
                 } if request_id == r.request_id => {
                     guard.armed = false;
-                    break 'outer AskUserReply::cancelled("the question was withdrawn");
-                }
-                SessionEventKind::Agent {
-                    event: AgentEvent::GateRequested { gate },
-                } if gate.request_id() == r.request_id => raised = true,
-                SessionEventKind::Input {
-                    command: Command::Interrupt,
-                    ..
-                } if raised => {
-                    let why = "the user interrupted the turn";
-                    guard.reason = End::new(EndCode::TurnInterrupted).gate_reason(why);
-                    break 'outer AskUserReply::cancelled(why);
-                }
-                SessionEventKind::Agent {
-                    event: AgentEvent::TurnCompleted { .. },
-                } if raised => {
-                    let why = "the turn ended before an answer";
-                    guard.reason = End::new(EndCode::TurnEnded).gate_reason(why);
-                    break 'outer AskUserReply::cancelled(why);
+                    break 'outer AskUserReply::cancelled(withdrawn_text(reason.as_ref()));
                 }
                 SessionEventKind::Exited { .. } | SessionEventKind::Lost { .. } => {
                     guard.armed = false;
@@ -149,7 +161,7 @@ pub async fn ask_user(
         }
         break AskUserReply::cancelled("the session was deleted");
     };
-    // Dropping an armed guard takes the gate down (interrupted, or the turn ended unanswered).
+    // Dropping an armed guard takes the gate down: the caller stopped waiting.
     drop(guard);
     Ok(reply)
 }
