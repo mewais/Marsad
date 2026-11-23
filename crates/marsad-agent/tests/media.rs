@@ -209,7 +209,4 @@ async fn attachments_blobs_and_files_travel_over_the_ssh_link() {
     // The link stays healthy for other calls.
     assert!(c.hosts().await.unwrap().iter().any(|h| h.id == box_id));
     rt.delete(&id).await.unwrap();
-    if let Ok(i) = c.daemon_info(None).await {
-        stop_pid(i.pid);
-    }
 }

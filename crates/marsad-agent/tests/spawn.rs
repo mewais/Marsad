@@ -291,11 +291,6 @@ async fn connected(c: &MarsadClient, host: &HostId) {
         .expect("host connected");
 }
 
-async fn stop_hub(c: &MarsadClient) {
-    let pid = c.daemon_info(None).await.unwrap().pid;
-    stop_pid(pid);
-}
-
 /// orchestrator (hub host) spawns `calc` on the ssh host with a first task (allow once; the
 /// task's handoff still asks); `calc` (a remote node) spawns `helper` and the human extends
 /// "always allow" to handoffs; depth and count limits; a spawn whose gate waits through a hub
@@ -598,7 +593,6 @@ async fn spawn_across_local_and_ssh_host() {
         "exited",
         "the orchestrator was not spawned"
     );
-    stop_hub(&c).await;
 }
 
 /// A session in no workstream: the gate says approving creates "<name> + workers"; deny (with a
@@ -729,7 +723,6 @@ async fn spawn_from_a_standalone_session() {
         .expect_err("never");
     assert!(e.contains("turned off"), "{e}");
     let _ = SessionId::random();
-    stop_hub(&c).await;
 }
 
 /// The fake claude agent spawns a worker through its injected Wasl MCP tool (`spawn_agent` with a
@@ -824,7 +817,6 @@ async fn fake_agent_spawns_through_its_mcp_tools() {
     let all = c.workstreams().await.unwrap();
     assert_eq!(all.len(), 1);
     assert!(all[0].node("calc").unwrap().spawned_by.is_some());
-    stop_hub(&c).await;
 }
 
 /// A spawn gate raised from a turn (the agent's `spawn_agent` call blocks it) is withdrawn when
@@ -903,7 +895,6 @@ async fn spawn_gate_is_withdrawn_when_the_asking_turn_is_interrupted() {
     );
     assert!(c.workstreams().await.unwrap().is_empty());
     assert_eq!(rt.list().await.unwrap().len(), 1);
-    stop_hub(&c).await;
 }
 
 /// How a workstream's spawn requests ended is in its view, whoever asked and however it ended:
@@ -1049,5 +1040,4 @@ async fn the_workstream_view_lists_how_spawn_requests_ended() {
         })
         .await;
     assert_eq!(v.recent_spawns, before);
-    stop_hub(&c).await;
 }

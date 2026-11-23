@@ -2,7 +2,6 @@
 //! Shared harness: short temp dirs, the real `marsad-agent` and `wasit-fake-cli` binaries,
 //! clients, bounded waits, git repos, and a real sshd on localhost for remote hosts.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -87,8 +86,9 @@ pub fn kill_pid(pid: u32) {
 }
 
 /// Ask a daemon to stop (`SIGTERM`; Windows has no polite signal for a detached process, so
-/// it is killed there). A missing process is fine.
-pub fn stop_pid(pid: u32) {
+/// it is killed there). A missing process is fine. Tests use [`stop_daemon`], which also waits
+/// for the end.
+fn stop_pid(pid: u32) {
     #[cfg(unix)]
     let _ = std::process::Command::new("kill")
         .arg(pid.to_string())
@@ -98,15 +98,22 @@ pub fn stop_pid(pid: u32) {
     kill_pid(pid);
 }
 
-/// The data roots whose hub daemon a client starts ([`client_config`]). The product's client
-/// cannot be told a runtime directory, so such a daemon keeps it in the machine's default place
-/// (named by a hash of the data root's path, which holds the test process's id, so it is no
-/// one else's), which the harness removes with the test. Every other daemon of a test gets
-/// [`run_dir`].
-static CLIENT_ROOTS: std::sync::Mutex<BTreeSet<PathBuf>> = std::sync::Mutex::new(BTreeSet::new());
-
-fn client_roots() -> std::sync::MutexGuard<'static, BTreeSet<PathBuf>> {
-    CLIENT_ROOTS.lock().unwrap_or_else(|e| e.into_inner())
+/// Stops the daemon `pid` and returns when it is GONE: its endpoint and lock are released and
+/// nothing can reach it any more, so what a test does next (a client that starts the next hub,
+/// a call) can only meet its successor. The wait is the process's own end, a handle opened
+/// before the signal (a pidfd: it cannot be fooled by a recycled pid), bounded only to turn a
+/// hang into a failure. Where no such handle exists (not Linux) it is the kill of
+/// [`stop_pid`] that has to be complete when it returns. The one way tests stop a daemon: the
+/// hub ([`stop_hub`]), a host's daemon or a daemon the test started itself.
+pub async fn stop_daemon(pid: u32) {
+    let watch = wasit_fake_cli::harness::PidWatch::open(pid);
+    stop_pid(pid);
+    if let Some(w) = watch {
+        assert!(
+            w.exited(T).await,
+            "the daemon {pid} did not exit after it was asked to stop"
+        );
+    }
 }
 
 impl Drop for TempDir {
@@ -114,27 +121,9 @@ impl Drop for TempDir {
         if std::env::var_os("MARSAD_TEST_KEEP").is_some() {
             return;
         }
-        let client_runs: Vec<PathBuf> = {
-            let mut all = client_roots();
-            let mine: Vec<PathBuf> = all
-                .iter()
-                .filter(|root| root.starts_with(&self.0))
-                .cloned()
-                .collect();
-            all.retain(|root| !root.starts_with(&self.0));
-            mine.into_iter()
-                .filter_map(|root| Layout::resolve(root, None).ok())
-                .map(|l| l.run)
-                .collect()
-        };
-        // Daemons and session shims (with their CLIs) started anywhere below this directory, or
-        // in the default runtime directories of the hubs the clients started, outlive their
-        // starters on purpose: end them before their files go.
+        // Daemons and session shims (with their CLIs) started anywhere below this directory
+        // outlive their starters on purpose: end them before their files go.
         wasit_fake_cli::harness::stop_all_under(&self.0);
-        for run in &client_runs {
-            wasit_fake_cli::harness::stop_all_under(run);
-            let _ = std::fs::remove_dir_all(run);
-        }
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
@@ -178,12 +167,13 @@ pub fn serve_args() -> Vec<String> {
     v
 }
 
-/// The runtime directory of the daemon of `data`, unless a client starts it: inside the test's
-/// own [`TempDir`], so it goes with it, its socket paths stay short, and nothing lands in the
-/// machine's runtime directory, where the real installation's daemon lives. The tests give it to
-/// the daemons they start (`--run-dir`, [`data_args`]) and to the layouts they resolve
-/// ([`layout`]). (The "remote" machines get theirs from `MARSAD_RUNTIME_DIR` in their own login
-/// environment; a variable of the test process would be shared by parallel tests.)
+/// The runtime directory of the daemon of `data`: inside the test's own [`TempDir`], so it goes
+/// with it, its socket paths stay short, and nothing lands in the machine's runtime directory,
+/// where the real installation's daemon lives. The tests give it to the clients that start a hub
+/// ([`client_config`]), to the daemons they start (`--run-dir`, [`data_args`]) and to the layouts
+/// they resolve ([`layout`]). (The "remote" machines get theirs from `MARSAD_RUNTIME_DIR` in
+/// their own login environment; a variable of the test process would be shared by parallel
+/// tests.)
 pub fn run_dir(data: &Path) -> PathBuf {
     let temp = data
         .ancestors()
@@ -199,22 +189,23 @@ pub fn run_dir(data: &Path) -> PathBuf {
 }
 
 /// The options that say where the daemon of `data` keeps its files (`serve`, `bridge`, `stop`,
-/// `diagnostics export`): `--data <data>` and, unless a client starts it, `--run-dir`.
+/// `diagnostics export`): `--data <data>` and `--run-dir`.
 pub fn data_args(data: &Path) -> Vec<String> {
-    let mut v = vec!["--data".to_string(), data.display().to_string()];
-    if !client_roots().contains(data) {
-        v.extend(["--run-dir".into(), run_dir(data).display().to_string()]);
-    }
-    v
+    vec![
+        "--data".to_string(),
+        data.display().to_string(),
+        "--run-dir".into(),
+        run_dir(data).display().to_string(),
+    ]
 }
 
-/// A client that starts, on demand, the hub daemon of `data` (the daemon keeps its runtime
-/// directory in the machine's default place, see [`CLIENT_ROOTS`]) with the daemon binary of
-/// this build. The caller adds the daemon's options to `serve_args`.
+/// A client that starts, on demand, the hub daemon of `data` with the daemon binary of this
+/// build, its runtime directory [`run_dir`]. The caller adds the daemon's options to
+/// `serve_args`.
 pub fn client_config(data: impl AsRef<Path>, hello: Hello) -> ClientConfig {
     let data = data.as_ref();
-    client_roots().insert(data.to_path_buf());
     let mut cfg = ClientConfig::new(data, hello);
+    cfg.run_dir = Some(run_dir(data));
     cfg.agent_bin = Some(agent());
     cfg
 }
@@ -277,11 +268,16 @@ pub async fn prompt(f: &mut Subscription<FleetEvent>, host: &str) -> AuthPrompt 
     }
 }
 
-/// Stops the hub daemon `c` talks to (SIGTERM by its pid).
+/// Stops the hub daemon `c` talks to and returns when it is gone ([`stop_daemon`]): the next
+/// call of `c` (or of a client of the same data) reaches the hub its client starts after it,
+/// never this one on its way out. The single way a test restarts or ends a hub.
 pub async fn stop_hub(c: &MarsadClient) {
-    if let Ok(i) = c.daemon_info(None).await {
-        stop_pid(i.pid);
-    }
+    let pid = c
+        .daemon_info(None)
+        .await
+        .expect("the hub to stop answers")
+        .pid;
+    stop_daemon(pid).await;
 }
 
 /// Write a scenario next to `dir` and return the env that makes the fake CLI play it.
@@ -635,11 +631,25 @@ pub fn common_bin_rel() -> String {
     };
     format!(".marsad/bin/{os}-{}/marsad-agent", std::env::consts::ARCH)
 }
-/// The layout of `data` with its daemon's runtime directory ([`run_dir`], or the machine's
-/// default one for a daemon a client starts).
+
+/// The layout of `data` with its daemon's runtime directory ([`run_dir`]).
 pub fn layout(data: &Path) -> Layout {
-    let run = (!client_roots().contains(data)).then(|| run_dir(data));
-    Layout::resolve(data.to_path_buf(), run).unwrap()
+    Layout::resolve(data.to_path_buf(), Some(run_dir(data))).unwrap()
+}
+
+/// Where `Layout::resolve(root, None)` puts the runtime directory of the data root `root`: the
+/// place a daemon nobody told its runtime directory keeps its sockets, next to the real
+/// installation's. Only computed (the base directory is the machine's, which exists), never
+/// created, listed or touched; tests assert that it does not exist. The tag formula is checked
+/// against the product in `tests/no_leftovers.rs`.
+pub fn default_run_dir(root: &Path) -> PathBuf {
+    let base_env = std::env::var_os(marsad_proto::layout::RUNTIME_DIR_ENV)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    let base = wasit_runtime::machine::runtime_dir("marsad", base_env.as_deref()).unwrap();
+    let abs = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
+    let tag = wasit_runtime::machine::key_from_raw(&format!("root:{}", abs.display()));
+    base.join(&tag[..8])
 }
 
 /// Every line of an NDJSON diagnostics file, parsed (a line that is not JSON fails the test).

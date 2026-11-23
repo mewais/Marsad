@@ -180,7 +180,7 @@ async fn two_machines_sharing_a_home_keep_their_own_daemons_and_sessions() {
     assert_eq!(session_ids(&c, &hb).await, vec![sb.clone()]);
 
     // Restart A's daemon: it re-adopts its own session only (the shim kept running).
-    stop_pid(ia.pid);
+    stop_daemon(ia.pid).await;
     until(&mut fleet, "a dropped", |e| {
         link_is(e, "a", |s| !s.is_connected())
     })
@@ -230,12 +230,6 @@ async fn two_machines_sharing_a_home_keep_their_own_daemons_and_sessions() {
             .delete(&wasit_runtime::wire::SessionId::parse(s).unwrap())
             .await
             .unwrap();
-        if let Ok(i) = c.daemon_info(Some(h)).await {
-            stop_pid(i.pid);
-        }
-    }
-    if let Ok(i) = c.daemon_info(None).await {
-        stop_pid(i.pid);
     }
 }
 
@@ -308,9 +302,6 @@ async fn flat_layout_with_a_live_session_is_adopted() {
     .await
     .expect("the adopted session answers");
     rt.delete(&sid).await.unwrap();
-    if let Ok(i) = c.daemon_info(None).await {
-        stop_pid(i.pid);
-    }
 }
 
 /// A flat layout whose daemon runs on another machine (its lock is held, its socket does not
@@ -347,9 +338,6 @@ async fn foreign_flat_layout_is_left_alone() {
         .is_file());
     assert!(root.join("marsad.sock").exists());
     drop(lock);
-    if let Ok(i) = c.daemon_info(None).await {
-        stop_pid(i.pid);
-    }
     pkill(&format!("{}/sessions", root.display()));
 }
 

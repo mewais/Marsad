@@ -402,9 +402,6 @@ async fn wsl_host_end_to_end() {
     })
     .await;
     gate_round_trip(&c, &host).await;
-    if let Ok(i) = c.daemon_info(None).await {
-        stop_pid(i.pid);
-    }
 }
 
 /// A file created inside the distro is readable from Windows at the translated path, and the
@@ -515,9 +512,6 @@ async fn ssh_host_from_windows_end_to_end() {
 
     gate_round_trip(&c, &host).await;
 
-    if let Ok(i) = c.daemon_info(None).await {
-        stop_pid(i.pid);
-    }
     let _ = sshd.kill();
 }
 
@@ -839,8 +833,5 @@ async fn native_windows_host_over_ssh_end_to_end() {
     terminal_prints(&c, &host, d.path(), "echo [%PLAIN%]", "[plain-value]").await;
     terminal_prints(&c, &host, d.path(), "echo [%FROM_SETUP%]", "[grüße]").await;
 
-    stop_pid(info.pid);
-    if let Ok(i) = c.daemon_info(None).await {
-        stop_pid(i.pid);
-    }
+    stop_daemon(info.pid).await;
 }

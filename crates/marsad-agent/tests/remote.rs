@@ -195,7 +195,6 @@ async fn ssh_host_provision_fleet_git_and_link_drop() {
     })
     .await;
     rt.delete(&id).await.unwrap();
-    stop_hub(&c).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -357,7 +356,6 @@ async fn wrong_key_is_auth_needed_and_host_key_confirmation_goes_through_askpass
     assert!(std::fs::read_to_string(&kh)
         .unwrap()
         .contains("ssh-ed25519"));
-    stop_hub(&c).await;
 }
 
 const TEST_USER: &str = "marsadt";
@@ -518,7 +516,6 @@ async fn password_signin_wrong_answer_cancel_timeout_and_no_auto_reconnect() {
     })
     .await;
     c.remove_host(&id).await.unwrap();
-    stop_hub(&c).await;
     pkill(&format!("/home/{TEST_USER}/.marsad"));
 }
 
@@ -551,7 +548,6 @@ async fn key_plus_password_second_factor() {
     })
     .await;
     c.remove_host(&id).await.unwrap();
-    stop_hub(&c).await;
     pkill(&format!("/home/{TEST_USER}/.marsad"));
 }
 

@@ -7,6 +7,7 @@ mod common;
 use std::process::Stdio;
 
 use common::*;
+use marsad_client::MarsadClient;
 use marsad_proto::agentconfig::{
     ItemOverride, ItemValue, LaunchRequest, LayerScope, OverrideAction, OverrideLayer,
 };
@@ -15,7 +16,53 @@ use marsad_proto::store::{NotificationPrefs, RecentProject, SeenMark};
 use marsad_proto::{AgentEvent, Command, ConfigItemKind, GateDecision, HostId, McpTransport};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use wasit_control::Hello;
 use wasit_fake_cli::scenario::{Scenario, Turn};
+
+/// A client told its runtime directory starts its hub daemon there: the endpoint and the lock
+/// (and the endpoints of its shims) are inside it and nothing is made at the machine's default
+/// place for the data root; a second client with the same configuration reaches the same
+/// daemon.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_given_a_runtime_directory_keeps_its_daemon_there() {
+    let d = TempDir::new();
+    let data = d.path().join("d");
+    let work = d.path().join("w");
+    std::fs::create_dir_all(&work).unwrap();
+    let run = d.path().join("elsewhere");
+    let mut cfg = client_config(&data, Hello::new("test", "gui-test", "gui"));
+    cfg.run_dir = Some(run.clone());
+    cfg.serve_args = serve_args();
+    assert_eq!(cfg.socket_path(), run.join("marsad.sock"));
+    assert_eq!(cfg.layout().unwrap().run, run);
+
+    let c = MarsadClient::connect(cfg.clone());
+    let info = c.daemon_info(None).await.unwrap();
+    assert_eq!(info.socket, run.join("marsad.sock").display().to_string());
+    assert!(run.join("marsad.sock").exists());
+    assert!(run.join("marsad.sock.lock").exists());
+    // A session's shim keeps its endpoint there too.
+    let mut req = LaunchRequest::new("claude");
+    req.cwd = Some(work.to_string_lossy().into_owned());
+    req.overrides = OverrideLayer {
+        env: scenario_env(d.path(), &Scenario::default()),
+        ..OverrideLayer::default()
+    };
+    let id = c.launch(req).await.unwrap().id;
+    assert!(run
+        .join("sessions")
+        .join(id.as_str())
+        .join("ctl.sock")
+        .exists());
+
+    // The default place for this data root, and the harness's, were never made.
+    assert!(!default_run_dir(&data).exists());
+    assert!(!run_dir(&data).exists());
+
+    // Same configuration: the same daemon, not another one.
+    let again = MarsadClient::connect(cfg);
+    assert_eq!(again.daemon_info(None).await.unwrap().pid, info.pid);
+}
 
 #[tokio::test]
 async fn readiness_single_instance_version_mcp_and_stop() {
@@ -365,8 +412,6 @@ async fn launch_prompt_gate_answer_and_kill9_restart() {
         "{err:?}"
     );
     rt.delete(&id).await.unwrap();
-    let pid = c.daemon_info(None).await.unwrap().pid;
-    stop_pid(pid);
 }
 
 #[tokio::test]
@@ -424,8 +469,6 @@ async fn fs_and_base_config() {
         .unwrap();
     assert!(!base.refreshing);
     assert!(!base.errors.is_empty(), "{base:?}");
-    let pid = c.daemon_info(None).await.unwrap().pid;
-    stop_pid(pid);
 }
 
 /// `ask_user` (the MCP tool for CLIs that cannot ask themselves): injected only for drivers
@@ -530,8 +573,6 @@ async fn ask_user_injected_by_capability_and_round_trips() {
     assert_eq!(reply.answers, ["Postgres"]);
     assert_eq!(reply.cancelled, None);
     assert!(rt.snapshot(&id).await.unwrap().pending_gates.is_empty());
-    let pid = c.daemon_info(None).await.unwrap().pid;
-    stop_pid(pid);
 }
 
 /// `ask_user` while the user interrupts the asking turn: the fake OpenCode calls the injected
@@ -610,8 +651,6 @@ async fn ask_user_gate_is_withdrawn_when_the_turn_is_interrupted() {
     assert!(text.contains("interrupted"), "the tool's answer: {text}");
     assert_eq!(interrupted, Some(true));
     assert!(rt.snapshot(&id).await.unwrap().pending_gates.is_empty());
-    let pid = c.daemon_info(None).await.unwrap().pid;
-    stop_pid(pid);
 }
 
 /// `ask_user` while the asking turn ends on its own without an answer (the turn waits at a
@@ -724,8 +763,6 @@ async fn ask_user_gate_is_withdrawn_before_the_turn_that_ended_unanswered_comple
         Some("the turn ended before an answer")
     );
     assert!(rt.snapshot(&id).await.unwrap().pending_gates.is_empty());
-    let pid = c.daemon_info(None).await.unwrap().pid;
-    stop_pid(pid);
 }
 
 /// The name a launch gives is the session's display name: the hub passes it to the host, which
@@ -744,8 +781,6 @@ async fn launch_name_reaches_the_session_snapshot() {
     let snap = rt.snapshot(&launched.id).await.unwrap();
     assert_eq!(snap.display_name.as_deref(), Some("My named session"));
     rt.delete(&launched.id).await.unwrap();
-    let pid = c.daemon_info(None).await.unwrap().pid;
-    stop_pid(pid);
 }
 
 /// A launch remembers the directory the host used, not the text the user typed: a directory
@@ -768,6 +803,4 @@ async fn recent_project_is_the_host_normalised_directory() {
     assert_eq!(recent.len(), 1);
     assert_eq!(recent[0].path, canonical.to_string_lossy());
     assert_ne!(recent[0].path, typed);
-    let pid = c.daemon_info(None).await.unwrap().pid;
-    stop_pid(pid);
 }

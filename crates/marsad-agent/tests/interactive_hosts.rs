@@ -619,7 +619,6 @@ async fn a_dropped_passphrase_host_waits_for_the_user_and_one_click_brings_its_s
     })
     .await;
     g.rt.delete(&g.id).await.unwrap();
-    stop_hub(&r.c).await;
 }
 
 /// A hub that starts with a stored passphrase host does not ask for it: no attempt, no ssh, the
@@ -665,7 +664,6 @@ async fn a_hub_that_starts_with_a_passphrase_host_parks_it_without_an_ssh() {
     let p = prompt(&mut r.fleet, "pp").await;
     r.c.answer_auth(&r.id, p.id, PASSPHRASE).await.unwrap();
     until(&mut r.fleet, "pp connected", |e| connected(e, "pp")).await;
-    stop_hub(&r.c).await;
 }
 
 /// A host whose only question was ssh's confirmation of its key is not a host that needs the
@@ -740,7 +738,6 @@ async fn a_host_that_only_asked_to_trust_its_key_reconnects_on_its_own() {
             .unwrap()
             .interactive_auth
     );
-    stop_hub(&r.c).await;
 }
 
 /// A host marked as needing the user that later connects without asking anything (the user
@@ -803,7 +800,6 @@ async fn a_marked_host_that_connects_without_a_prompt_is_unmarked_and_reconnects
     let events = collect_until(&mut r.fleet, "pp connected again", |e| connected(e, "pp")).await;
     assert!(events.iter().any(|e| reconnecting(e, "pp")), "{events:?}");
     assert!(!events.iter().any(|e| asks_or_waits(e, "pp")), "{events:?}");
-    stop_hub(&r.c).await;
 }
 
 /// The user's click is spent when an attempt asks them something, not when it starts: an armed
@@ -862,7 +858,6 @@ async fn an_armed_attempt_that_never_reached_the_host_is_retried_armed_and_asks_
     let pid = r.link_pid().await;
     kill_pid(pid);
     until(&mut r.fleet, "pp parked again", |e| parked(e, "pp", true)).await;
-    stop_hub(&r.c).await;
 }
 
 /// A prompt belongs to its attempt. The attempt's ssh is killed while the user has not answered:
@@ -913,7 +908,6 @@ async fn a_prompt_of_an_ended_attempt_is_withdrawn_and_cannot_be_answered() {
     assert!(r.c.answer_auth(&id, p1.id, "x").await.is_err());
     r.c.answer_auth(&id, p2.id, PASSPHRASE).await.unwrap();
     until(&mut r.fleet, "pp connected", |e| connected(e, "pp")).await;
-    stop_hub(&r.c).await;
 }
 
 /// Removing a host takes its prompt off at once and refuses what is left of it.
@@ -949,7 +943,6 @@ async fn removing_a_host_withdraws_its_prompt() {
         FleetEvent::Reset { hosts } => assert!(hosts.iter().all(|h| h.host.id != id)),
         other => panic!("{other:?}"),
     }
-    stop_hub(&r.c).await;
 }
 
 /// The one click covers a sign-in that needs a second connection (the hub restarts the helper on
@@ -1005,5 +998,4 @@ async fn a_second_connection_within_one_sign_in_says_why_it_asks_again() {
     assert!(prompts[0]["repeat"].is_null());
     assert_eq!(prompts[1]["repeat"], "helper_restart");
     assert_eq!(evs(&r.tail.seen[..m], "pp", "boot.build_mismatch").len(), 1);
-    stop_hub(&r.c).await;
 }
