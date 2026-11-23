@@ -34,6 +34,11 @@
 .tool-h .nm{font-weight:600}
 .tool-h .arg{font-family:var(--f-mono);font-size:11.5px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
 .tool-h .res{font-size:11.5px;color:var(--fg-3);white-space:nowrap}
+.tool.run .nm{font-variant-numeric:tabular-nums}
+.run-b{border-top:1px solid var(--line);background:var(--sunken);padding:8px;display:flex;flex-direction:column;gap:8px}
+.msg-user[data-delivery="not_sent"]{border-style:dashed;border-color:var(--failed-line)}
+.msg-user[data-delivery="not_sent"]>.md,.msg-user[data-delivery="queued"]>.md{opacity:.75}
+.msg-state{margin-top:4px}
 .tool-b{border-top:1px solid var(--line);background:var(--sunken);padding:8px 10px;font-family:var(--f-mono);font-size:11.5px;color:var(--fg-2);white-space:pre;overflow:auto;line-height:1.55}
 .diff{font-family:var(--f-mono);font-size:11.5px;line-height:1.6;background:var(--sunken);overflow:auto}
 .diff .ln{display:grid;grid-template-columns:38px 38px 16px 1fr;white-space:pre}

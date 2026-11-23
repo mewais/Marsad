@@ -1,10 +1,20 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createStore, shallowEqual, useStore } from "../../src/lib/store";
 import { AppProvider, createApp, renderCounts, selectGroups, NO_FILTERS, useSessionView, useRenderProbe } from "../../src/state";
 import { InboxRow } from "../../src/features/inbox/InboxRow";
 import { memoryHistory, RouterProvider } from "../../src/router";
+import { applyFleet, applyWorkstreams } from "../../src/state/controller";
+import type { FleetEvent, WorkstreamsEvent } from "../../src/bridge/wire";
 import { quietBackend, sessionByName } from "../helpers";
+
+async function boot() {
+  localStorage.clear();
+  const backend = quietBackend();
+  const app = createApp(backend);
+  await waitFor(() => expect(Object.keys(app.store.get().sessions).length).toBe(15));
+  return { backend, app };
+}
 
 describe("store", () => {
   it("useStore re-renders only when the selected slice changes", () => {
@@ -24,14 +34,6 @@ describe("store", () => {
 });
 
 describe("session slices", () => {
-  async function boot() {
-    localStorage.clear();
-    const backend = quietBackend();
-    const app = createApp(backend);
-    await waitFor(() => expect(Object.keys(app.store.get().sessions).length).toBe(15));
-    return { backend, app };
-  }
-
   it("loads all hosts, keyed by hostId/sessionId, and learns drivers from drivers.inventory", async () => {
     const { app } = await boot();
     const keys = Object.keys(app.store.get().sessions);
@@ -58,9 +60,10 @@ describe("session slices", () => {
     await act(async () => new Promise((r) => setTimeout(r, 10)));
     const ra = renderCounts.get(`row:${a.key}`)!;
     const rb = renderCounts.get(`row:${b.key}`)!;
-    // The host publishes a new snapshot for b only.
+    // The host publishes a new snapshot for b only: its agent was working and is interrupted. (A prompt to a
+    // busy agent is only queued, which changes nothing a row shows.)
     await act(async () => {
-      await backend.request("session.command", { id: b.id, command: { command: "prompt", text: "go on" } }, { host: b.host });
+      await backend.request("session.command", { id: b.id, command: { command: "interrupt" } }, { host: b.host });
       await new Promise((r) => setTimeout(r, 20));
     });
     expect(renderCounts.get(`row:${b.key}`)!).toBeGreaterThan(rb);
@@ -106,5 +109,35 @@ describe("session slices", () => {
     act(() => app.store.set((s) => ({ ...s, lookedAt: s.lookedAt + 1 })));
     expect(renders).toBe(1);
     expect(screen.getByText(/./)).toBeInTheDocument();
+  });
+});
+
+describe("events of a kind this build does not know", () => {
+  it("a fleet event of an unknown kind leaves the state untouched and warns once per kind", async () => {
+    const { app } = await boot();
+    const before = app.store.get();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const odd = { kind: "from_the_future", host: "x1" } as unknown as FleetEvent;
+    expect(applyFleet(before, odd)).toBe(before);
+    expect(applyFleet(before, odd)).toBe(before);
+    expect(applyFleet(before, { kind: "another_one" } as unknown as FleetEvent)).toBe(before);
+    expect(applyFleet(before, undefined as unknown as FleetEvent)).toBe(before);
+    expect(warn.mock.calls.map((c) => c[0])).toEqual([expect.stringContaining('"from_the_future"'), expect.stringContaining('"another_one"'), expect.stringContaining('"undefined"')]);
+    expect(Object.values(before.sessions).every((x) => x !== undefined)).toBe(true);
+    // A workstreams event of an unknown kind is not mistaken for a removal.
+    expect(applyWorkstreams(before, { kind: "renamed", id: "x" } as unknown as WorkstreamsEvent)).toBe(before);
+    warn.mockRestore();
+  });
+
+  it("the store keeps working when the hub sends one", async () => {
+    const { app, backend } = await boot();
+    const n = Object.keys(app.store.get().sessions).length;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // Straight through the subscription the app uses.
+    const sub = (backend as unknown as { fleetSubs: Set<(e: unknown) => void> }).fleetSubs;
+    await act(async () => sub.forEach((f) => f({ kind: "never_heard_of_it" })));
+    expect(Object.keys(app.store.get().sessions)).toHaveLength(n);
+    expect(app.store.get().hostOrder.every((h) => app.store.get().hosts[h] !== undefined)).toBe(true);
+    warn.mockRestore();
   });
 });

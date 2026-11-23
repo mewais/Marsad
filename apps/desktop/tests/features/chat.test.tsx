@@ -135,7 +135,7 @@ describe("copy buttons", () => {
     if (execCommand) Object.defineProperty(document, "execCommand", execCommand);
     else delete (document as { execCommand?: unknown }).execCommand;
   });
-  const user: Item = { kind: "user", key: "1", text: "Do **this**:\n- a\n- b\n\n`x`", queued: false, attachments: [] };
+  const user: Item = { kind: "user", key: "1", text: "Do **this**:\n- a\n- b\n\n`x`", delivery: { state: "sent" }, attachments: [] };
   const ai: Item = { kind: "assistant", key: "2", text: "Here is `cfg.name` and\n\n```sh\nnpm test -- --run\n```\n\n- one\n- two" };
 
   it("copies the user's prompt as typed (the markdown source, not the rendered text)", async () => {

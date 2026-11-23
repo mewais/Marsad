@@ -25,9 +25,13 @@ describe("Session view", () => {
     const grep = screen.getByRole("button", { name: /Grep/ });
     await user.click(grep);
     expect(document.querySelector(".tool-b")?.textContent).toContain("routes/login.ts:22");
+    // The Edit and the failing Bash that follow the subagent are one run of tool calls: open it first.
+    const run = screen.getByRole("button", { name: /2 tool calls.*1 failed/ });
+    expect(run).toHaveAttribute("aria-expanded", "false");
+    await user.click(run);
     await user.click(screen.getByRole("button", { name: /Edit apps\/api\/src\/server.ts/ }));
     expect(screen.getByTestId("tool-diff")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Bash.*failed/ })).toBeInTheDocument();
+    expect(within(document.querySelector(".run-b") as HTMLElement).getByRole("button", { name: /Bash.*failed/ })).toBeInTheDocument();
     expect(screen.getByText(/Question from Claude Code/)).toBeInTheDocument();
     expect(screen.getByText(/Permission needed · Bash/)).toBeInTheDocument();
     expect(screen.getByText("Waiting for you · 1 permission, 1 question")).toBeInTheDocument();

@@ -10,7 +10,7 @@ import { Gate } from "../gates/Gate";
 import { Composer } from "./Composer";
 import { MediaCtx } from "../media/Parts";
 import { TranscriptItem } from "./TranscriptView";
-import { buildItems } from "./transcript";
+import { useTranscriptRows } from "./useTranscriptRows";
 import { ChangesTab } from "./tabs/ChangesTab";
 import { ConfigTab } from "./tabs/ConfigTab";
 import { TerminalTab } from "./tabs/TerminalTab";
@@ -43,7 +43,7 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
   const loaded = useAppState((s) => s.fleetReady);
   useTranscriptOpen(key);
   const slice = useAppState((s) => s.transcripts[key]);
-  const items = useMemo(() => buildItems(slice?.events ?? []), [slice?.events]);
+  const items = useTranscriptRows(key, slice?.events);
   const media = useMemo(() => ({ host, session: id, localFiles: !!hostLink?.localFiles, distro: hostLink?.distro ?? null, windows: hostLink?.os === "windows" }), [host, id, hostLink?.localFiles, hostLink?.distro, hostLink?.os]);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);

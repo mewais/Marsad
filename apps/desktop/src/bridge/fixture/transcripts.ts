@@ -24,7 +24,7 @@ class Builder {
   }
   prompt(text: string, attachments: Attachment[] = []) {
     const c: Command = { command: "prompt", text, attachments };
-    return this.push({ kind: "input", command: c, status: { status: "sent" } });
+    return this.push({ kind: "input", input: this.seq, command: c, status: { status: "sent" } });
   }
   tool(name: string, call_id: string, input: JsonValue, ok: boolean, result: JsonValue, dt = 3000, parts: ContentPart[] = []) {
     this.agent({ type: "tool_call_started", name, call_id, input, is_subagent: false }, dt);
@@ -69,7 +69,7 @@ function genericTranscript(b: Builder, spec: Spec, rounds: number) {
   if (spec.kind === "failed") {
     b.tool("Bash", "bfail", { command: "pnpm test" }, false, spec.line);
     b.agent({ type: "assistant_delta", text: `The run failed: ${spec.line}`, message_id: "mf" });
-    b.push({ kind: "phase", phase: { state: "failed", reason: spec.line } });
+    b.push({ kind: "phase", phase: { state: "failed", reason: spec.line }, cause: { kind: "other" } });
   } else if (spec.kind === "done" || spec.kind === "idle") {
     b.agent({ type: "assistant_delta", text: spec.line, message_id: "mdone" }, 3000);
     const usage = { input_tokens: Math.round(spec.cost * 170_000), output_tokens: Math.round(spec.cost * 15_000), cache_read_tokens: Math.round(spec.cost * 120_000), cache_creation_tokens: Math.round(spec.cost * 9_000), cost_usd: spec.cost };

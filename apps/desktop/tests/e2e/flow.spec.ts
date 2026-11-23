@@ -22,6 +22,16 @@ test("inbox to answered gate to session to prompt", async ({ page }) => {
   const box = page.getByRole("textbox", { name: "Message" });
   await box.fill("also add a rollback note");
   await box.press("Enter");
+  // The agent is waiting on its questions, so it takes nothing new yet: the message is there, no reply is.
   await expect(page.locator(".msg-user", { hasText: "also add a rollback note" })).toBeVisible();
+
+  // An idle agent runs a prompt at once and answers.
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: /Inbox/ }).click();
+  await page.getByRole("searchbox", { name: "Filter sessions" }).fill("docs-search");
+  await list.getByRole("button", { name: "docs-search-index" }).click();
+  await expect(page.getByRole("heading", { name: "docs-search-index" })).toBeVisible();
+  await page.getByRole("textbox", { name: "Message" }).fill("add a sitemap");
+  await page.getByRole("textbox", { name: "Message" }).press("Enter");
+  await expect(page.locator(".msg-user", { hasText: "add a sitemap" })).toBeVisible();
   await expect(page.getByText(/Nothing else needs your attention/)).toBeVisible({ timeout: 10_000 });
 });

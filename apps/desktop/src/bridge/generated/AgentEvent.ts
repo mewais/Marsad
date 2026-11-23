@@ -3,6 +3,8 @@ import type { CompactionInfo } from "./CompactionInfo";
 import type { ContentPart } from "./ContentPart";
 import type { EndReason } from "./EndReason";
 import type { GateRequest } from "./GateRequest";
+import type { InputDropReason } from "./InputDropReason";
+import type { InputId } from "./InputId";
 import type { McpServerInfo } from "./McpServerInfo";
 import type { ModelInfo } from "./ModelInfo";
 import type { ModelUsage } from "./ModelUsage";
@@ -53,7 +55,21 @@ cli_version?: string, } | { "type": "turn_started",
 /**
  * Native turn id (codex only).
  */
-native_turn_id?: string | null, } | { "type": "turn_completed", 
+native_turn_id?: string | null, 
+/**
+ * The input (prompt / slash command) the turn runs for; `None` when the turn is not
+ * one of ours or the driver cannot tell.
+ */
+input?: InputId | null, } | { "type": "input_sent", input: InputId, } | { "type": "input_acknowledged", input: InputId, 
+/**
+ * The input joined a turn that was already running instead of starting its own.
+ */
+steered?: boolean, } | { "type": "input_dropped", input: InputId, reason: InputDropReason, 
+/**
+ * Why, in words, when there is more to say than the reason (an encode error, the CLI's
+ * refusal).
+ */
+error?: string | null, } | { "type": "turn_completed", 
 /**
  * `None` = normal success.
  */

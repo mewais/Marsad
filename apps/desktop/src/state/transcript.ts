@@ -12,6 +12,8 @@ const PAGE = 60;
  */
 export function createTranscripts(store: AppStore, api: Api) {
   const live = new Map<SessionKey, { n: number; off: () => void }>();
+  /** An older page being fetched, so a second request for the same page waits for it instead of returning early. */
+  const earlier = new Map<SessionKey, Promise<void>>();
 
   const blank: TranscriptSlice = { events: [], hasMore: false, loading: false };
   const patch = (key: SessionKey, p: Partial<TranscriptSlice>) =>
@@ -68,20 +70,29 @@ export function createTranscripts(store: AppStore, api: Api) {
       return () => release(key);
     },
     release,
-    async loadEarlier(key: SessionKey) {
+    /** Fetch the page before the oldest loaded event; resolves when it is in the store (or failed: see `error`). */
+    loadEarlier(key: SessionKey): Promise<void> {
+      const pending = earlier.get(key);
+      if (pending) return pending;
       const { host, id } = splitKey(key);
       const cur = store.get().transcripts[key];
-      if (!cur || cur.loading || !cur.hasMore || !cur.events.length) return;
+      if (!cur || cur.loading || !cur.hasMore || !cur.events.length) return Promise.resolve();
       patch(key, { loading: true });
-      try {
-        const page = await api.history(host, { id, before: cur.events[0].cursor, limit: PAGE });
-        store.set((s) => {
-          const t = s.transcripts[key];
-          return { ...s, transcripts: { ...s.transcripts, [key]: { ...t, events: [...page.events, ...t.events], hasMore: page.has_more, loading: false } } };
-        });
-      } catch (e) {
-        patch(key, { loading: false, error: errorMessage(e) });
-      }
+      const p = (async () => {
+        try {
+          const page = await api.history(host, { id, before: cur.events[0].cursor, limit: PAGE });
+          store.set((s) => {
+            const t = s.transcripts[key];
+            return { ...s, transcripts: { ...s.transcripts, [key]: { ...t, events: [...page.events, ...t.events], hasMore: page.has_more, loading: false } } };
+          });
+        } catch (e) {
+          patch(key, { loading: false, error: errorMessage(e) });
+        } finally {
+          earlier.delete(key);
+        }
+      })();
+      earlier.set(key, p);
+      return p;
     },
   };
 }
