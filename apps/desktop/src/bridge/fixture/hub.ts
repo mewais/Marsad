@@ -4,7 +4,8 @@ import type {
 } from "../wire";
 import { methods as M } from "../wire";
 import { layerAt, mergeEffective, sameScope, seedLayers } from "./config";
-import { type ConversationFacts, conversationFacts, driverDef, type FixtureHost } from "./catalog";
+import { type ConversationFacts, conversationFacts, driverDef, resumable, type FixtureHost } from "./catalog";
+import { emptyGaps, NO_EARLIER, sourceOf } from "./earlier";
 import { err } from "./runtime";
 import { expand, fsExists } from "./fs";
 import { FixtureWorkstreams } from "./workstreams";
@@ -177,19 +178,37 @@ export class FixtureHub {
     return path;
   }
 
+  /**
+   * "Continue most recent" is resolved by the host at create, from the agent's own list of the folder's conversations (the one touched
+   * last); a folder with none refuses (`nothing_to_continue`), through the hub as an `upstream` error like every host call of a launch.
+   */
+  private latestIn(host: string, driver: string, folder: string): string {
+    const found = resumable(driver, folder, this.core.now()).sort((a, b) => b.modified_ms - a.modified_ms)[0];
+    if (found) return found.id;
+    const message = `there is no earlier conversation to continue in ${folder}`;
+    throw err("upstream", `sessions.create on ${host}: ${message}`, {
+      marsad_error: "upstream",
+      message: `sessions.create on ${host}: ${message}`,
+      cause: { code: "nothing_to_continue", message, data: { error: "nothing_to_continue", message } },
+    });
+  }
+
   launch(r: LaunchRequest): LaunchReply {
     const host = r.host ?? "x1";
-    if (r.cwd) this.folder(host, r.cwd);
+    const folder = r.cwd ? this.folder(host, r.cwd) : null;
+    const native = r.resume.kind === "resume" ? r.resume.native_session_id : r.resume.kind === "latest" ? this.latestIn(host, r.driver, folder ?? "") : null;
     const effective = this.effective({ host, driver: r.driver, project: r.cwd, workstream: r.workstream, overrides: r.overrides });
     const d = driverDef(r.driver);
     const id = `fxnew${String(this.n++).padStart(7, "a")}`.slice(0, 12);
     const now = this.core.now();
     const fresh: Omit<SessionSnapshot, keyof ConversationFacts> = {
       id, driver: r.driver, cwd: r.cwd, labels: r.labels, created_at_ms: now, command: this.core.agentCommand(host, r.driver), capabilities: d.capabilities, prompt_input: d.prompt_input, phase: { state: "starting" }, generation: 1, pid: 5000 + this.n,
-      native_session_id: r.resume.kind === "resume" ? r.resume.native_session_id : null, title: (r.first_prompt ?? "").slice(0, 80) || null, cli_version: d.version,
+      native_session_id: native, title: (r.first_prompt ?? "").slice(0, 80) || null, cli_version: d.version,
       display_name: r.name?.trim() || null, model: r.model ?? d.models.find((m) => m.is_default)?.id ?? null, mode: r.mode ?? d.modes[0]?.id ?? null, available_models: d.models, available_modes: d.modes,
       slash_commands: d.slash, pending_gates: [], turn: null, last_turn: null, turns_completed: 0, usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: 0 },
       live_usage: null, context_pct: 4, subagents: [], tasks: [], background_running: 0, plan: [], last_activity_ms: now, exit: null, stderr_tail: [], cursor: 0, loaded: true,
+      // A resumed conversation's earlier messages come with it, as the agent delivers them.
+      earlier: native && d.capabilities.earlier_history !== "none" ? { ...NO_EARLIER, state: { kind: "loading" }, source: sourceOf(d.capabilities.earlier_history), gaps: emptyGaps() } : NO_EARLIER,
     };
     const snap: SessionSnapshot = { ...fresh, ...conversationFacts(fresh) };
     if (r.overrides.items.length || r.overrides.env.length) this.layers.push({ scope: { scope: "session", host, session: id }, layer: r.overrides });

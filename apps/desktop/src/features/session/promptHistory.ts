@@ -1,17 +1,21 @@
 import type { SessionEvent } from "../../bridge/wire";
 
 /**
- * The prompts of a session as the daemon journaled them (its `input` events of kind prompt, the first
- * prompt included), oldest first. Only prompts the agent accepted (sent or queued) count, an attachment-only
- * prompt has no text to bring back, and the same prompt twice in a row is one entry.
+ * The prompts of a conversation, oldest first: those of its earlier history (the user messages of a resumed conversation, as the
+ * agent's own records hold them) and then the session's own as the daemon journaled them (its `input` events of kind prompt, the first
+ * prompt included). Of the session's own only prompts the agent accepted (sent or queued) count; an attachment-only prompt has no
+ * text to bring back, and the same prompt twice in a row is one entry.
  */
-export function promptsOf(events: readonly SessionEvent[]): string[] {
+export function promptsOf(events: readonly SessionEvent[], earlier: readonly SessionEvent[] = []): string[] {
   const out: string[] = [];
+  const add = (text: string) => {
+    if (text.trim() && out[out.length - 1] !== text) out.push(text);
+  };
+  for (const e of earlier) if (e.kind === "agent" && e.event?.type === "history" && e.event.event.type === "user_message") add(e.event.event.text);
   for (const e of events) {
     if (e.kind !== "input" || e.command.command !== "prompt") continue;
     if (e.status.status !== "sent" && e.status.status !== "queued") continue;
-    const text = e.command.text;
-    if (text.trim() && out[out.length - 1] !== text) out.push(text);
+    add(e.command.text);
   }
   return out;
 }

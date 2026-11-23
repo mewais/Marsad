@@ -86,4 +86,40 @@ to: string, cause: TrailCause,
 /**
  * Why a process failed or was lost, in the runtime's own words.
  */
-reason?: string | null, } | { "ev": "process.exited", code?: number | null, signal?: number | null, } | { "ev": "process.lost", reason: string, } | { "ev": "runtime.notice", code: string, } | { "ev": "anomaly", kind: string, first: string, });
+reason?: string | null, } | { "ev": "process.exited", code?: number | null, signal?: number | null, } | { "ev": "process.lost", reason: string, } | { "ev": "runtime.notice", code: string, } | { "ev": "anomaly", kind: string, first: string, } | { "ev": "earlier.history", 
+/**
+ * `loading`, `loaded` or `unavailable`.
+ */
+state: string, 
+/**
+ * History items in the journal so far.
+ */
+items: number, 
+/**
+ * Messages not shown: older than the import window.
+ */
+omitted: number, shortened: number, 
+/**
+ * Lines of the agent's file that were not records.
+ */
+unreadable: number, 
+/**
+ * Records of kinds the driver does not know.
+ */
+unrecognised: number, 
+/**
+ * Everything the agent's history holds is shown (`loaded` only).
+ */
+complete: boolean, 
+/**
+ * The process ended before all of it arrived.
+ */
+interrupted: boolean, 
+/**
+ * `agent_replay` or `agent_storage`.
+ */
+source?: string | null, 
+/**
+ * Why it is unavailable (`source_missing`, `format_not_understood`, …).
+ */
+reason?: string | null, });

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
-import { useApp } from "../../state";
+import { hasOlder, useApp } from "../../state";
 import { mayStepBack, mayStepForward, newer, older, promptsOf, type Browse } from "./promptHistory";
 
 /**
@@ -8,7 +8,8 @@ import { mayStepBack, mayStepForward, newer, older, promptsOf, type Browse } fro
  * (a recalled one-line prompt may be walked from anywhere, see `mayStepBack`).
  * The unsent draft is stashed on the first step back and restored when the walk comes back to it; any
  * edit ends the walk and makes the text the draft. Prompts older than what the transcript has loaded are
- * paged in on demand, in the background: the box stays editable meanwhile.
+ * paged in on demand, in the background: the box stays editable meanwhile. The session's own prompts are followed by
+ * those of the conversation before it (a resumed conversation's earlier history), paged the same way.
  */
 export function usePromptRecall(sessionKey: string, text: string, setText: (t: string) => void, box: RefObject<HTMLTextAreaElement | null>) {
   const { store, transcripts } = useApp();
@@ -38,7 +39,14 @@ export function usePromptRecall(sessionKey: string, text: string, setText: (t: s
     caret.current = null;
   }, [text, browse, box]);
 
-  const prompts = () => promptsOf(store.get().transcripts[sessionKey]?.events ?? []);
+  const prompts = () => {
+    const slice = store.get().transcripts[sessionKey];
+    return promptsOf(slice?.events ?? [], slice?.earlier.events ?? []);
+  };
+  const loaded = () => {
+    const slice = store.get().transcripts[sessionKey];
+    return (slice?.events.length ?? 0) + (slice?.earlier.events.length ?? 0);
+  };
   const show = (to: Browse | null, value: string, where: "start" | "end") => {
     caret.current = where;
     setBrowse(to);
@@ -50,14 +58,13 @@ export function usePromptRecall(sessionKey: string, text: string, setText: (t: s
     setPaging(true);
     try {
       for (;;) {
-        const slice = store.get().transcripts[sessionKey];
-        if (!slice?.hasMore) return;
-        const had = slice.events.length;
+        if (!hasOlder(store.get().transcripts[sessionKey])) return;
+        const had = loaded();
         await transcripts.loadEarlier(sessionKey);
         if (walk.current !== mine) return;
         const step = older(prompts(), from, draft);
         if (step !== "end") return show(step.browse, step.text, "start");
-        if ((store.get().transcripts[sessionKey]?.events.length ?? had) === had) return; // nothing came: stop asking
+        if (loaded() === had) return; // nothing came: stop asking
       }
     } finally {
       if (walk.current === mine) setPaging(false);
@@ -77,7 +84,7 @@ export function usePromptRecall(sessionKey: string, text: string, setText: (t: s
       if (step !== "end") {
         walk.current++;
         show(step.browse, step.text, "start");
-      } else if (store.get().transcripts[sessionKey]?.hasMore) void pageBack(browse, browse ? browse.draft : text);
+      } else if (hasOlder(store.get().transcripts[sessionKey])) void pageBack(browse, browse ? browse.draft : text);
       else return false;
       e.preventDefault();
       return true;

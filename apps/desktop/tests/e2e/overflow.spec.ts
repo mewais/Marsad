@@ -5,6 +5,8 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 const SHOTS = process.env.MARSAD_SHOTS;
 const FX = "?live=0&latency=10&speed=0.3&long=1";
 const S7 = "fxedcbbvaihv";
+/** The resumed sessions of `?earlier=1`: its earlier messages all here, still arriving (with the gaps it ends with), and unavailable. */
+const RESUMED = { complete: "fxsrqp2xe4tz", loading: "fx7655imjlu4", unavailable: "fxnmlkwbn2v7" };
 
 async function go(page: Page, hash: string) {
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
@@ -86,6 +88,19 @@ for (const width of [1024, 1440]) {
       // An agent on the host with the long name, branch and versions.
       await page.getByTestId("graph-canvas").getByText("pdf-renderer-worker").first().click();
       await noSideways(page, page.getByRole("complementary", { name: "Agent" }), `workstream-agent-${width}`);
+    });
+
+    test("a resumed conversation's transcript: the earlier part, its notices and the divider fit", async ({ page }) => {
+      await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+      for (const [name, id] of Object.entries(RESUMED)) {
+        await page.goto(`/${FX}&earlier=1#/session/x1/${id}`);
+        const transcript = page.locator(".transcript");
+        await expect(page.getByTestId("earlier-divider")).toBeVisible();
+        if (name === "complete") await expect(page.getByTestId("earlier-part").getByText(/The invoice totals are off by a cent/)).toBeVisible();
+        if (name === "loading") await expect(page.getByTestId("earlier-joint")).toContainText("Loading the earlier conversation");
+        if (name === "unavailable") await expect(page.getByTestId("earlier-joint")).toContainText("could not be found");
+        await noSideways(page, transcript, `resumed-${name}-${width}`);
+      }
     });
 
     test("new session dialog", async ({ page }) => {

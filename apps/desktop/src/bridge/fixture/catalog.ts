@@ -4,7 +4,7 @@ import type { ConfigItem, DriverCapabilities, PromptInput, DriverInventory, Host
 
 const caps = (over: Partial<DriverCapabilities> = {}): DriverCapabilities => ({
   interrupt: true, set_model: true, set_mode: true, slash_commands: true, permission_gates: true, questions: true, plan_gate: true,
-  usage: true, cost: true, resume: true, continue_latest: true, streaming_output: false, prompt_while_busy: "queued_by_cli", stop_task: false, ...over,
+  usage: true, cost: true, resume: true, continue_latest: true, streaming_output: false, prompt_while_busy: "queued_by_cli", stop_task: false, earlier_history: "wire", ...over,
 });
 
 /** What each real driver reports (Wasit descriptors). */
@@ -36,7 +36,7 @@ const mcp = (name: string, scope: string, path: string, command: string, args: s
 
 export const DRIVERS: DriverDef[] = [
   {
-    id: "claude", display_name: "Claude Code", binary: "claude", capabilities: caps({ stop_task: true }), prompt_input: promptInput("path_reference"), version: "2.1.4",
+    id: "claude", display_name: "Claude Code", binary: "claude", capabilities: caps({ stop_task: true, earlier_history: "storage" }), prompt_input: promptInput("path_reference"), version: "2.1.4",
     models: [m("claude-sonnet-4.5", true, "claude-sonnet-4.5", "Balanced"), m("claude-opus-4.1", false, "claude-opus-4.1", "Most capable"), m("claude-haiku-4.5", false, "claude-haiku-4.5", "Fast")],
     modes: [
       { id: "default", label: "Default", description: "Ask before edits and commands" },
@@ -152,6 +152,8 @@ export const FIXTURE_HOSTS: FixtureHost[] = [
 
 /** Sessions each CLI has on disk for a project (some started in a terminal, some by Marsad). */
 export function resumable(driver: string, project: string, now: number): ResumableSession[] {
+  // A folder that exists and has never had a conversation in it.
+  if (/\/scratch\/?$/.test(project)) return [];
   const h = 3_600_000;
   const rows: [string, string, number][] = driver === "claude"
     ? [["Refactor invoice totals rounding", "native-7", 2 * h], ["Fix Stripe webhook idempotency", "c-term-1", 26 * h], ["", "c-term-2", 50 * h],

@@ -26,6 +26,13 @@ export function clockTime(ms: number): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+/** A moment of a conversation from some other day: "Nov 20, 14:02" (with the year when it is not this one). */
+export function dayTime(ms: number, now = Date.now()): string {
+  const d = new Date(ms);
+  const month = d.toLocaleDateString("en-US", { month: "short" });
+  return `${month} ${d.getDate()}${d.getFullYear() === new Date(now).getFullYear() ? "" : `, ${d.getFullYear()}`}, ${clockTime(ms)}`;
+}
+
 export function compactNumber(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
   if (n >= 1000) return Math.round(n / 1000) + "k";

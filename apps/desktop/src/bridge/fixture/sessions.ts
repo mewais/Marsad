@@ -1,5 +1,6 @@
 import type { GateChoice, GateRequest, PlanEntry, SessionEvent, SessionSnapshot, Usage } from "../wire";
 import { type ConversationFacts, conversationFacts, driverDef } from "./catalog";
+import { NO_EARLIER, type BuiltEarlier, type EarlierKind } from "./earlier";
 import { buildTranscript, modelSplit } from "./transcripts";
 import { foldWork } from "./work";
 
@@ -27,6 +28,8 @@ export interface Spec {
   longHistory?: boolean;
   /** Fixture: it is working only because tasks run in the background (no turn is open). */
   backgroundOnly?: boolean;
+  /** Fixture: the session resumed a conversation, and its earlier history is complete, still arriving, or cannot be had (see `earlier.ts`). */
+  earlier?: EarlierKind;
 }
 
 /** What wasit-claude offers for a `can_use_tool` request (neutral labels; see wasit-core `GateChoice`). */
@@ -138,6 +141,9 @@ const usage = (cost: number): Usage => ({
 export interface Built {
   snap: SessionSnapshot;
   events: SessionEvent[];
+  /** The conversation's earlier history (history items, apart from the events) and what is still to arrive of it. */
+  earlier: SessionEvent[];
+  earlierPlan?: BuiltEarlier["plan"];
 }
 
 /** How the last turn in `events` ended (the snapshot's `last_turn`). */
@@ -153,7 +159,7 @@ export function buildSession(spec: Spec, now: number): Built {
   const drv = driverDef(spec.driver);
   const id = fixtureId(spec.n);
   const last = now - spec.agoMin * 60_000;
-  const { events, pending, plan } = buildTranscript(spec, id, now);
+  const { events, pending, plan, earlier } = buildTranscript(spec, id, now);
   // What the session's events say about its subagents and background tasks, as the daemon's snapshot would.
   const work = foldWork(events);
   const phase: SessionSnapshot["phase"] =
@@ -201,6 +207,7 @@ export function buildSession(spec: Spec, now: number): Built {
     stderr_tail: spec.kind === "failed" ? [spec.line] : [],
     cursor: events[events.length - 1]?.cursor ?? 0,
     loaded: true,
+    earlier: earlier?.info ?? NO_EARLIER,
   };
-  return { snap: { ...facts, ...conversationFacts(facts) }, events };
+  return { snap: { ...facts, ...conversationFacts(facts) }, events, earlier: earlier?.items ?? [], earlierPlan: earlier?.plan };
 }

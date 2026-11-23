@@ -165,6 +165,34 @@ function appliedWords(e: Extract<TrailEntry, { ev: "input.applied" }>): string {
   return `${head} — #${e.input}, ${STATUS[e.status] ?? e.status}${e.reason ? ` (${errorWords(e.reason)})` : ""}`;
 }
 
+const EARLIER_SOURCE: Record<string, string> = { agent_storage: "read from the agent's own storage", agent_replay: "replayed by the agent over its protocol" };
+const EARLIER_REASON: Record<string, string> = {
+  not_offered: "the agent does not give out its history",
+  source_missing: "the agent's file for the conversation does not exist",
+  source_unreadable: "the agent's file could not be read",
+  too_large: "the agent's file is larger than the limit",
+  format_not_understood: "nothing in the agent's file is in a format Marsad knows",
+  failed: "the import failed",
+};
+
+/** The earlier history of a resumed conversation moved: how far it is, what it leaves out, where it comes from. */
+function earlierWords(e: Extract<TrailEntry, { ev: "earlier.history" }>): string {
+  const from = e.source ? `, ${EARLIER_SOURCE[e.source] ?? e.source}` : "";
+  const left = [e.omitted > 0 && `${e.omitted} older omitted`, e.shortened > 0 && `${e.shortened} shortened`, e.unreadable > 0 && `${e.unreadable} unreadable`, e.unrecognised > 0 && `${e.unrecognised} not understood`, e.interrupted && "interrupted"].filter(Boolean);
+  switch (e.state) {
+    case "loading":
+      return `Earlier history is loading: ${plural(e.items, "item")} so far${from}`;
+    case "loaded":
+      return `Earlier history loaded: ${plural(e.items, "item")} (${e.complete ? "complete" : `with gaps${left.length ? `: ${left.join(", ")}` : ""}`})${from}`;
+    case "unavailable":
+      return `Earlier history is not available${e.reason ? ` — ${EARLIER_REASON[e.reason] ?? e.reason}` : ""}${e.items > 0 ? `; ${plural(e.items, "item")} arrived first` : ""}${from}`;
+    case "none":
+      return "There is no earlier history";
+    default:
+      return say(`The earlier history is in the state ${e.state}`, ` (${plural(e.items, "item")})`, from);
+  }
+}
+
 /** The sentence of one trail entry. The only place that words a `TrailEntry`. */
 export function trailWords(e: TrailEntry): string {
   switch (e.ev) {
@@ -239,6 +267,8 @@ export function trailWords(e: TrailEntry): string {
       return `The host lost the process — ${e.reason}`;
     case "runtime.notice":
       return NOTICE[e.code] ?? `The runtime noted something (${e.code})`;
+    case "earlier.history":
+      return earlierWords(e);
     case "anomaly":
       return e.kind === "activity_while_idle" ? `The agent produced output after its turn had ended (first: ${e.first})` : `Something did not fit the session's state (${e.kind}, first: ${e.first})`;
     default: {
@@ -262,6 +292,8 @@ export function trailTone(e: TrailEntry): Tone {
     case "agent.unknown":
     case "gate.raised":
       return "warn";
+    case "earlier.history":
+      return e.state === "unavailable" || (e.state === "loaded" && !e.complete) ? "warn" : "plain";
     case "phase":
       return e.to === "failed" || e.to === "lost" ? "bad" : e.to === "needs_you" ? "warn" : "plain";
     case "process.exited":

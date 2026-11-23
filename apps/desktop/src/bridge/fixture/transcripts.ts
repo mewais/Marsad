@@ -4,6 +4,7 @@ import { BLOB_CHART, chartPng, MEDIA_SPEC, SKETCH_ATTACHMENT } from "./media";
 
 /** A session event without its cursor and time (distributes over the kinds). */
 export type SessionEventKind = SessionEvent extends infer E ? (E extends unknown ? Omit<E, "cursor" | "t"> : never) : never;
+import { earlierScript, itemsAt, type BuiltEarlier } from "./earlier";
 import type { Spec } from "./sessions";
 
 /** Fixture-only: scripted transcripts. Cursors follow wire.rs (`seq << 16 | index`). */
@@ -52,11 +53,14 @@ export function modelSplit(driver: string, usage: Usage, cost: number): Record<s
   } : undefined;
 }
 
-export function buildTranscript(spec: Spec, sessionId: string, now: number): { events: SessionEvent[]; pending: PendingGate[]; plan: PlanEntry[] } {
+export function buildTranscript(spec: Spec, sessionId: string, now: number): { events: SessionEvent[]; pending: PendingGate[]; plan: PlanEntry[]; earlier?: BuiltEarlier } {
   const start = now - Math.max(spec.agoMin, 1) * MIN - 20 * MIN;
   const b = new Builder(start);
   b.push({ kind: "spawned", generation: 1, pid: 1000 + spec.n, argv: [spec.driver] }, 0);
   b.agent({ type: "session_init", model: undefined, cwd: `~/src/${spec.proj}`, cli_version: "fixture" }, 200);
+  // A resumed conversation's earlier history: it is from before this session (yesterday), and its items are not among the events.
+  const script = earlierScript(spec, now - 25 * 3_600_000);
+  const earlierEvent = script ? b.push({ kind: "earlier", earlier: script.info }, 100) : undefined;
   const plan: PlanEntry[] = [];
   if (spec.n === 7) richAuthTranscript(b, plan);
   else if (spec.n === MEDIA_SPEC.n) mediaTranscript(b, sessionId);
@@ -75,7 +79,8 @@ export function buildTranscript(spec: Spec, sessionId: string, now: number): { e
     return { gate, raised_at_ms: ev.t, cursor: ev.cursor };
   });
   void sessionId;
-  return { events: b.events, pending, plan };
+  const earlier = script && earlierEvent ? { info: script.info, items: itemsAt(earlierEvent.cursor, earlierEvent.t, script.items), plan: script.plan } : undefined;
+  return { events: b.events, pending, plan, earlier };
 }
 
 function genericTranscript(b: Builder, spec: Spec, rounds: number) {

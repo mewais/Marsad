@@ -71,3 +71,5 @@
 .ns-prompt .comp-msg{padding:0 10px 8px}
 .recent.owned{align-items:flex-start}
 .recent.owned .tx{white-space:normal;line-height:1.45}
+
+.recent.owned.bad{border-color:var(--failed-line)}

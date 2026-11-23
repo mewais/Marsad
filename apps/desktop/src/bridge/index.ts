@@ -1,6 +1,7 @@
 import type { Backend } from "./backend";
 import { FixtureBackend } from "./fixture/FixtureBackend";
 import { applyBackground } from "./fixture/background";
+import { applyEarlier } from "./fixture/earlier";
 import { applyLongStrings } from "./fixture/long";
 import { applyMedia } from "./fixture/media";
 import { TauriBackend } from "./tauri";
@@ -20,6 +21,8 @@ export function createBackend(search = typeof location !== "undefined" ? locatio
   if (q.get("media") === "1") applyMedia();
   // ?background=1 adds a session that works in the background (subagents and a shell command that outlive its turn).
   if (q.get("background") === "1") applyBackground();
+  // ?earlier=1 adds three resumed sessions: one whose earlier messages arrived whole, one still receiving them, one whose history cannot be had.
+  if (q.get("earlier") === "1") applyEarlier();
   const backend = new FixtureBackend({
     live: q.get("live") !== "0",
     latencyMs: q.has("latency") ? Number(q.get("latency")) : undefined,
