@@ -10,7 +10,8 @@
 //! [`crate::layout::Layout::diag`]: the daemon's `daemon.ndjson`, and the shared `aux.ndjson`
 //! that short-lived processes append to ([`crate::layout::DIAG_AUX`]).
 
-use wasit_diag::{Code, ErrorInfo, HomePath, Ident, Ms};
+use wasit_control::TraceId;
+use wasit_diag::{Code, ErrorInfo, HomePath, Ident, Ms, ProjectPath};
 
 wasit_diag::diag_enum! {
     /// The step of `serve`'s startup that failed (the process then exits).
@@ -235,6 +236,26 @@ wasit_diag::diag_events! {
             host: Option<Ident>,
             outcome: AskpassOutcome,
             ms: Ms,
+            error: Option<ErrorInfo>,
+        },
+        /// The hub's `sessions.launch` ended, success or failure. `trace`: the request's trace
+        /// id, when it had one. `session`: the session launched or resumed (on a failure, the id
+        /// the request named, when it named one). `resume`: `fresh`, `continue` or `resume`.
+        /// `first_prompt`: the request carried a first prompt (its text is never recorded).
+        /// `cwd`: the project directory the request named (hashed). `outcome`: `ok` or `error`;
+        /// `error` on a failure is the RPC error's code and a fingerprint of its text, never the
+        /// text itself (the message can quote the request).
+        #[diag(ev = "launch")]
+        Launch {
+            trace: Option<TraceId>,
+            host: Ident,
+            session: Option<Ident>,
+            driver: Ident,
+            resume: Code,
+            first_prompt: bool,
+            cwd: Option<ProjectPath>,
+            ms: Ms,
+            outcome: Code,
             error: Option<ErrorInfo>,
         },
     }

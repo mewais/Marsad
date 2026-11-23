@@ -9,10 +9,10 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use common::*;
-use marsad_proto::agentconfig::LaunchRequest;
+use marsad_proto::agentconfig::{LaunchReply, LaunchRequest};
 use marsad_proto::layout::Layout;
 use marsad_proto::runtime::{SessionEvent, SessionEventKind};
-use marsad_proto::{AgentEvent, Command};
+use marsad_proto::{methods, AgentEvent, Command};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use wasit_fake_cli::scenario::{Scenario, Turn};
@@ -712,5 +712,91 @@ async fn no_session_content_reaches_any_diagnostic_file() {
     {
         assert_eq!(mode(&l.diag()), 0o700);
         assert_eq!(mode(&l.log()), 0o600);
+    }
+}
+
+// ── traces ───────────────────────────────────────────────────────────────────
+
+/// A `sessions.launch` sent with a trace id through the client: the hub records the launch
+/// under that trace (`launch`) and the request it served (`rpc.traced`); the session's first
+/// prompt is an input carrying the trace; and the prompt's marker is in no diagnostic file.
+#[tokio::test]
+async fn a_traced_launch_is_recorded_under_its_trace_without_its_prompt() {
+    const TRACE: &str = "u-0123456789abcdef";
+    const PROMPT: &str = "TRACED-PROMPT-MARKER-6d20a9";
+    let d = TempDir::new();
+    let data = d.path().join("d");
+    let l = layout(&data);
+    let work = d.path().join("traced-project");
+    std::fs::create_dir_all(&work).unwrap();
+
+    let c = client(&data); // starts the daemon on demand, the way the GUI does
+    let mut req = LaunchRequest::new("claude");
+    req.cwd = Some(work.to_string_lossy().into_owned());
+    req.first_prompt = Some(PROMPT.into());
+    let trace = wasit_control::TraceId::new(TRACE).unwrap();
+    let launched: LaunchReply = c
+        .call_traced(None, methods::SESSIONS_LAUNCH, req, Some(trace))
+        .await
+        .unwrap();
+    let id = launched.id.clone();
+
+    // The first prompt is an input of the session, carrying the launch's trace.
+    let rt = c.runtime(None);
+    let mut sub = rt.subscribe_session(&id, None);
+    loop {
+        let e = next_event(&mut sub).await;
+        if matches!(&e.kind, SessionEventKind::Input { trace: Some(t), .. } if t.as_str() == TRACE)
+        {
+            let text = serde_json::to_string(&e.kind).unwrap();
+            assert!(
+                text.contains(PROMPT),
+                "the input is the first prompt: {text}"
+            );
+            break;
+        }
+    }
+    drop(sub);
+    drop(rt);
+    drop(c);
+    stop(&data).await;
+
+    let daemon = records(&l.diag().join("daemon.ndjson"));
+    // The launch, once, under its trace, with what it did.
+    let launches: Vec<_> = of(&daemon, "launch")
+        .into_iter()
+        .filter(|r| r["trace"] == TRACE)
+        .collect();
+    assert_eq!(launches.len(), 1, "{daemon:#?}");
+    let lr = launches[0];
+    assert_eq!(lr["src"], "hub");
+    assert_eq!(lr["outcome"], "ok");
+    assert_eq!(lr["session"], id.as_str());
+    assert_eq!(lr["host"], "hub");
+    assert_eq!(lr["driver"], "claude");
+    assert_eq!(lr["resume"], "fresh");
+    assert_eq!(lr["first_prompt"], true);
+    assert!(lr["cwd"]["hash"].is_string(), "{lr}");
+    assert!(!lr.to_string().contains("traced-project"), "{lr}");
+    assert!(lr["ms"].is_u64());
+    assert!(lr.get("error").is_none(), "{lr}");
+    // The request the hub served under the trace.
+    assert!(
+        of(&daemon, "rpc.traced")
+            .iter()
+            .any(|r| r["trace"] == TRACE && r["method"] == "sessions.launch"),
+        "{daemon:#?}"
+    );
+
+    // The marker of the prompt is in no diagnostic file, nor in any other file under `diag/`.
+    let mut all = Vec::new();
+    files(&l.diag(), &mut all);
+    assert!(all.iter().any(|(p, _)| p.ends_with("daemon.ndjson")));
+    for (path, bytes) in &all {
+        assert!(
+            !contains_any(&String::from_utf8_lossy(bytes), PROMPT),
+            "marker in {}",
+            path.display()
+        );
     }
 }
