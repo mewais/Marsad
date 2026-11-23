@@ -59,8 +59,11 @@ The `marsad-agent` command takes `--data <dir>` instead. The helper cache on thi
 ## Diagnostics and logs
 
 Diagnostics are typed records of starts, stops, connection and session state, failures with
-their codes, and sizes and timings. Free text is never written: text from the OS or another
-program, which can name paths, users and hosts, is kept only as its length and a fingerprint.
+their codes, and sizes and timings. Prompt text, agent replies, tool input and output, file
+contents and secrets are never written, and project folders appear only as a hash. An error
+message from an agent CLI is kept only as a code, its length and a fingerprint. What `ssh` or
+a host printed when a connection failed is kept, shortened, with registered secrets and
+project paths masked.
 
 Files under `<root>/machines/<key>/` (the diagnostics directory is private, `0700` and `0600`
 on Linux and macOS; on Windows it is `%LOCALAPPDATA%\Marsad\machines\<key>\diag\`):
