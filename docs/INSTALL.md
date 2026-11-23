@@ -40,13 +40,54 @@ with the maintainer's Apple credentials open normally.
 
 ## Where data lives
 
-| OS | Hub data (hosts, store, daemon log, socket) |
+| OS | Data root |
 |---|---|
 | Linux, macOS | `~/.marsad` |
 | Windows | `%LOCALAPPDATA%\Marsad` |
 
-Override with the `MARSAD_DATA` environment variable. On remote hosts the helper is stored at
-`~/.marsad/bin/marsad-agent`.
+This machine's durable data is in `<root>/machines/<key>/` (sessions, hub store, Wasl journal,
+diagnostics). The key comes from the OS machine id; `MARSAD_MACHINE_KEY` overrides it. The root
+may be a home directory shared by several machines. Sockets and locks live in a machine-local
+runtime directory, not under the root.
+
+The desktop app takes its data root from the `MARSAD_DATA` environment variable when it is set.
+The `marsad-agent` command takes `--data <dir>` instead. The helper cache on this machine is
+`<root>/bin/<os>-<arch>/`. On a remote host the helper is uploaded to
+`~/.marsad/bin/<os>-<arch>/marsad-agent`, where `<os>-<arch>` comes from `uname -s` and
+`uname -m`.
+
+## Diagnostics and logs
+
+Diagnostics are typed records of starts, stops, connection and session state, failures with
+their codes, and sizes and timings. Free text is never written: text from the OS or another
+program, which can name paths, users and hosts, is kept only as its length and a fingerprint.
+
+Files under `<root>/machines/<key>/` (the diagnostics directory is private, `0700` and `0600`
+on Linux and macOS; on Windows it is `%LOCALAPPDATA%\Marsad\machines\<key>\diag\`):
+
+* `diag/app.ndjson`, `.1`, `.2`: the desktop app
+* `diag/daemon.ndjson`, `.1` to `.3`: the background daemon
+* `diag/aux.ndjson`, `.1`: short-lived processes (bridge, `stop`, askpass)
+* `diag/exports/`: exports made by the hub
+* `sessions/<id>/shim.log`, `.1`: the shim of one session
+* `marsad-agent.log`: the daemon's raw stderr (crash output), never exported
+
+**Export from the app:** not available in this build. The Settings → Diagnostics page has no
+export control yet.
+
+**Export from a terminal** (when the app will not start), as your own user:
+
+    marsad-agent diagnostics export --since 24h
+
+This writes `marsad-diagnostics-<host>-<id>.ndjson.gz` to the current directory and prints its
+path. `--since` takes `s`, `m`, `h` or `d` (default `24h`, at most 31 days); `--out <path>`,
+`--no-trails` and `--data <dir>` are optional. Without a running daemon it exports this
+machine's own files. This page does not say where the installers place `marsad-agent`; if the
+command is not found, use its full path.
+
+**Developer mode** (Settings → Diagnostics) adds a Diagnostics tab to each session and a
+connection log to each host. `MARSAD_LOG=<level>` in the environment separately writes plain
+`tracing` text to stderr.
 
 ## Uninstall
 

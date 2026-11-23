@@ -15,7 +15,7 @@ Marsad-specific decisions.
 | `marsad-client` | Typed client of the local daemon over a supervised link; starts the daemon on demand. |
 | `marsad-fake-cli` | Test support only: builds Wasit's fake agent CLI into this workspace's target dir. |
 
-`apps/desktop` (Tauri + React) is outside the Rust workspace and is being rebuilt separately.
+`apps/desktop` is built and shipped: `src-tauri` is a thin Tauri v2 shell over `marsad-client` (its own cargo package, not a workspace member), `src` is the React/TypeScript UI, and the release workflow builds its installers.
 
 ## Files on a machine (shared homes)
 
@@ -102,3 +102,57 @@ provenance `automatic`) come from `hub::AutomaticItems` providers.
 
 JSON documents rather than sqlite: tiny data, human-inspectable, no native dependency for the
 cross-compiled targets; one writer task gives serialisable writes without locks.
+
+## Diagnostics
+
+Rules for events, fields and files are in Wasit `ARCHITECTURE.md` §9 "Diagnostics
+(`wasit-diag`)"; this section only says where Marsad applies them.
+
+**Declaring sites** (`wasit_diag::diag_events!` / `diag_enum!` / `diag_data!`):
+`marsad-proto/src/diag.rs` (`MarsadEvent`, `UiEvent` for the webview, `AppEvent` for the shell);
+`marsad-proto/src/export.rs` (`ExportLine`, the export file's wire format);
+`marsad-agent/src/hub_events.rs` (`HubEvent`) and `hub/fleet_events.rs` (`FleetDiagEvent`);
+`marsad-client/src/diag.rs` (`ClientEvent`); `marsad-store/src/diag.rs` (`StoreEvent`);
+Wasit's `wasit-shim/src/diag.rs` (`ShimEvent`) and `wasit-runtime/src/diag.rs`.
+
+**Sinks and files** (under `<data>/machines/<key>/`, see `marsad-proto/src/layout.rs`):
+
+* The daemon (`serve`) promotes `diag/aux.ndjson` to `diag/daemon.ndjson` after it takes the
+  lock (`marsad-agent/src/diag.rs:130`). Short-lived roles (`Bridge`, `Stop`, `Askpass`, and a
+  daemon that loses the lock race) append to `aux.ndjson`.
+* The desktop shell writes `diag/app.ndjson` (`apps/desktop/src-tauri/src/diag.rs`). The webview
+  writes only through `diag_log`, which validates each event with `UiEvent::from_wire` and
+  refuses the rest as `app.failed`.
+* Each session's shim writes `sessions/<id>/shim.log` (and `shim.stderr`).
+* `tracing` is counted into the sink (`trace.counted`) and printed as text only with
+  `MARSAD_LOG` set (`marsad-agent/src/diag.rs:153-176`).
+* `marsad-agent.log` is raw stderr only; it is never a record and never exported.
+
+**Host logs.** A host's sink files are read through `wasit_runtime::DiagService`: `diag.sources`,
+`diag.read`, and topic `diag.tail`, on `DIAG_ROUTES` (`["diag."]`). It is mounted in
+`marsad-agent/src/serve.rs` (about lines 286-291 and 558). The hub routes `diag.` by host
+(`marsad-proto/src/lib.rs`, about line 428). Only files the sink itself lists can be read.
+
+**Export.** The hub's `Exports` actor (`marsad-agent/src/hub/export/mod.rs`) runs one export at a
+time. Its job task (`job.rs`) collects each connected host's sources, and `gzip.rs` writes
+`diag/exports/marsad-diagnostics-<host>-<id>.ndjson.gz`. Start is `diagnostics.export.start`;
+progress is topic `diagnostics.exports` (`ExportsEvent`). Limits in `job.rs` `Limits::default`:
+24 h window by default (31 d maximum), 20 MiB total, 16 MiB per host, 30 s per call, 180 s per
+host, and the newest 3 finished exports are kept. The CLI `marsad-agent diagnostics export`
+(`export_cli.rs`) uses the same job through the daemon, or `local_files` mode when there is no
+hub.
+
+**Trace id.** The webview makes `u-` plus 16 hex digits (`apps/desktop/src/bridge/api.ts:7-8`).
+It is passed through `invoke("rpc", …)` to `bridge.rs` `call_traced`, to
+`marsad-client/src/lib.rs` `call_traced` (carried in `RequestOpts`), to the hub's
+`RoutingService`, which forwards `ctx.trace` (`wasit-control/src/hub.rs`). The session manager's
+`command_traced` (`wasit-runtime/src/manager.rs`) journals it with the command as an `Intent`
+(`wasit-runtime/src/diag.rs`), and it is shown on the session's `input` event.
+
+**Source-scan tests.** `marsad-agent/tests/diag_sites.rs` scans the source tree with
+`wasit_process::scan` for the declaration and free-text patterns. Two tests pin free text:
+`error_text_from_display_only_in_reviewed_places` (`ErrorInfo::ours(` only in
+`marsad-agent/src/diag.rs`) and `free_text_from_a_transport_only_in_reviewed_places`
+(`DiagText::new(` only in the reviewed places). `field_types_and_free_text_only_in_reviewed_places`
+pins where field types are declared, and `the_allow_lists_are_live` and `the_scan_sees_each_pattern`
+check the scanner itself.
