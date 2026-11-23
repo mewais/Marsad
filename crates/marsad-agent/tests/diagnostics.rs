@@ -17,25 +17,6 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use wasit_fake_cli::scenario::{Scenario, Turn};
 
-fn layout(data: &Path) -> Layout {
-    Layout::resolve(data.to_path_buf(), None).unwrap()
-}
-
-/// Every line of an NDJSON diagnostics file, parsed (a line that is not JSON fails the test).
-fn records(path: &Path) -> Vec<Value> {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    text.lines()
-        .map(|l| {
-            serde_json::from_str(l)
-                .unwrap_or_else(|e| panic!("{}: not JSON ({e}): {l:?}", path.display()))
-        })
-        .collect()
-}
-
-fn of<'a>(recs: &'a [Value], ev: &str) -> Vec<&'a Value> {
-    recs.iter().filter(|r| r["ev"] == ev).collect()
-}
-
 fn one<'a>(recs: &'a [Value], ev: &str) -> &'a Value {
     let found = of(recs, ev);
     assert_eq!(found.len(), 1, "expected one `{ev}` in {recs:#?}");
@@ -79,26 +60,6 @@ async fn start_daemon(data: &Path, envs: &[(&str, &str)], stderr: Stdio) -> toki
     let ready: marsad_proto::daemon::Readiness = serde_json::from_str(line.trim()).unwrap();
     assert!(ready.ready);
     child
-}
-
-async fn stop(data: &Path) -> std::process::Output {
-    let out = tokio::time::timeout(
-        T,
-        tokio::process::Command::new(agent())
-            .arg("stop")
-            .arg("--data")
-            .arg(data)
-            .output(),
-    )
-    .await
-    .expect("stop ended")
-    .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    out
 }
 
 #[tokio::test]
@@ -438,21 +399,6 @@ async fn a_closed_readiness_pipe_does_not_end_the_daemon() {
 
 const PANIC_MARKER: &str = "PANIC-CONTENT-MARKER-4e7a";
 
-/// Every file under `dir`, with its bytes.
-fn files(dir: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            files(&p, out);
-        } else if let Ok(b) = std::fs::read(&p) {
-            out.push((p, b));
-        }
-    }
-}
-
 /// A panic in the daemon leaves `diag.panic` (location, kind and length of the payload) and
 /// nothing of its message: not in the diagnostics files, not in `marsad-agent.log`. The daemon
 /// is started the way a remote one is, by `bridge`, so its stderr is the real log file.
@@ -521,58 +467,6 @@ async fn the_developer_override_prints_a_panic_message_to_the_log_only() {
 
 // ── the first leak test ──────────────────────────────────────────────────────
 
-/// A marker is raw, JSON-escaped once and JSON-escaped twice (a CLI's JSON line travels inside
-/// the journal's JSON).
-fn forms(marker: &str) -> Vec<String> {
-    let esc = |s: &str| {
-        let q = serde_json::to_string(s).unwrap();
-        q[1..q.len() - 1].to_string()
-    };
-    let once = esc(marker);
-    let twice = esc(&once);
-    vec![marker.to_string(), once, twice]
-}
-
-/// How `marker` can show in bytes: raw, JSON-escaped once or twice, base64 (at each of the three
-/// alignments it can have inside a longer base64 text) and UTF-16LE. `Some(form)` of the first
-/// that is in `bytes`.
-fn found_in(bytes: &[u8], marker: &str) -> Option<&'static str> {
-    use wasit_core::content::b64_encode;
-    let text = String::from_utf8_lossy(bytes);
-    let f = forms(marker);
-    for (form, needle) in [
-        ("raw", &f[0]),
-        ("json-escaped", &f[1]),
-        ("json-escaped twice", &f[2]),
-    ] {
-        if text.contains(needle.as_str()) {
-            return Some(form);
-        }
-    }
-    for k in 0..3 {
-        let mut padded = vec![0u8; k];
-        padded.extend_from_slice(marker.as_bytes());
-        let enc = b64_encode(&padded);
-        let part = &enc[[0, 2, 3][k]..enc.len() - 4];
-        assert!(
-            part.len() >= 8,
-            "a marker too short to look for in base64: {marker}"
-        );
-        if text.contains(part) {
-            return Some("base64");
-        }
-    }
-    let wide: Vec<u8> = marker.encode_utf16().flat_map(u16::to_le_bytes).collect();
-    bytes
-        .windows(wide.len())
-        .any(|w| w == wide.as_slice())
-        .then_some("utf-16le")
-}
-
-fn contains_any(haystack: &str, marker: &str) -> bool {
-    forms(marker).iter().any(|f| haystack.contains(f.as_str()))
-}
-
 async fn next_event(sub: &mut wasit_runtime::TypedSubscription<SessionEvent>) -> SessionEvent {
     match tokio::time::timeout(T, sub.next()).await {
         Ok(Some(Ok((_, e)))) => e,
@@ -581,15 +475,6 @@ async fn next_event(sub: &mut wasit_runtime::TypedSubscription<SessionEvent>) ->
             other.map(|o| o.map(|r| r.map(|(c, _)| c)))
         ),
     }
-}
-
-fn is_turn_completed(e: &SessionEvent) -> bool {
-    matches!(
-        &e.kind,
-        SessionEventKind::Agent {
-            event: AgentEvent::TurnCompleted { .. }
-        }
-    )
 }
 
 /// A local session driven with a unique marker through every content channel — the prompt, the
@@ -1063,38 +948,6 @@ async fn a_sign_in_prompt_nobody_answers_times_out_on_record() {
         (e[0]["ev"].as_str(), e[0]["why"].as_str()),
         (Some("auth.cancelled"), Some("timeout"))
     );
-}
-
-/// The files that must never hold a marker: everything under `<data>/diag/`, the daemon's
-/// stderr file and every shim log, each marker raw, JSON-escaped once and twice. `at_least`
-/// diagnostics files must exist (so the scan cannot pass on nothing).
-fn assert_no_markers(l: &Layout, markers: &[&str], at_least: usize) {
-    let mut scanned = Vec::new();
-    files(&l.diag(), &mut scanned);
-    assert!(scanned.len() >= at_least, "{scanned:?}");
-    if let Ok(b) = std::fs::read(l.data.join("marsad-agent.log")) {
-        scanned.push((l.data.join("marsad-agent.log"), b));
-    }
-    if let Ok(rd) = std::fs::read_dir(l.data.join("sessions")) {
-        for e in rd.flatten() {
-            for f in std::fs::read_dir(e.path()).into_iter().flatten().flatten() {
-                let n = f.file_name().to_string_lossy().into_owned();
-                if n.starts_with("shim.log") || n == "shim.stderr" {
-                    scanned.push((f.path(), std::fs::read(f.path()).unwrap()));
-                }
-            }
-        }
-    }
-    for (path, bytes) in &scanned {
-        let text = String::from_utf8_lossy(bytes);
-        for m in markers {
-            assert!(
-                !contains_any(&text, m),
-                "marker {m} found in {}:\n{text}",
-                path.display()
-            );
-        }
-    }
 }
 
 // ── a startup failure's stderr ───────────────────────────────────────────────
@@ -2711,157 +2564,6 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64
-}
-
-/// An export as the hub reported it and as its file holds it.
-mod exporting {
-    use marsad_client::{ClientError, MarsadClient};
-    use marsad_proto::export::{
-        ExportRequest, ExportStarted, ExportState, ExportStatus, ExportsEvent,
-    };
-    use marsad_proto::topics;
-
-    use super::*;
-
-    pub struct Export {
-        /// The last status the topic showed.
-        pub status: ExportStatus,
-        /// Every status of this export the topic showed, in order.
-        pub seen: Vec<ExportStatus>,
-        pub path: PathBuf,
-        /// The gunzipped file.
-        pub text: String,
-        /// Its lines (the exporter's own have a `line` key, the records of a section do not).
-        pub lines: Vec<Value>,
-    }
-
-    impl Export {
-        pub fn own(&self, kind: &str) -> Vec<&Value> {
-            self.lines.iter().filter(|l| l["line"] == kind).collect()
-        }
-
-        pub fn manifest(&self) -> &Value {
-            assert_eq!(self.lines[0]["line"], "manifest", "the first line");
-            &self.lines[0]
-        }
-
-        pub fn host(&self, id: &str) -> &Value {
-            self.manifest()["hosts"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|h| h["id"] == id)
-                .unwrap_or_else(|| panic!("no host {id} in the manifest"))
-        }
-
-        pub fn end(&self) -> &Value {
-            let last = self.lines.last().unwrap();
-            assert_eq!(last["line"], "end", "the last line");
-            last
-        }
-
-        /// The result of `source` in the end line.
-        pub fn result(&self, source: &str) -> &Value {
-            self.end()["sources"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|r| r["source"] == source)
-                .unwrap_or_else(|| panic!("no result for {source}"))
-        }
-
-        /// The records that follow the section line `pred` selects, up to the next line of the
-        /// exporter's own.
-        pub fn records_of(&self, pred: impl Fn(&Value) -> bool) -> Vec<&Value> {
-            let Some(i) = self
-                .lines
-                .iter()
-                .position(|l| l.get("line").is_some() && pred(l))
-            else {
-                return Vec::new();
-            };
-            self.lines[i + 1..]
-                .iter()
-                .take_while(|l| l.get("line").is_none())
-                .collect()
-        }
-
-        /// The records of the section of `file` of `source` (one generation).
-        pub fn section(&self, source: &str, file: &str) -> Vec<&Value> {
-            self.records_of(|l| {
-                l["line"] == "section" && l["source"] == source && l["file"] == file
-            })
-        }
-
-        /// The entries of the trail of `session` on `source`.
-        pub fn trail(&self, source: &str, session: &str) -> Vec<&Value> {
-            self.records_of(|l| {
-                l["line"] == "trail" && l["source"] == source && l["session"] == session
-            })
-        }
-    }
-
-    pub async fn start(c: &MarsadClient, req: ExportRequest) -> Result<ExportStarted, ClientError> {
-        c.call_traced(None, methods::DIAGNOSTICS_EXPORT_START, req, None)
-            .await
-    }
-
-    /// Follows `id` on the topic until it ends, then reads its file.
-    pub async fn finish(
-        sub: &mut marsad_client::Subscription<Value>,
-        data: &Path,
-        id: &str,
-    ) -> Export {
-        let mut seen: Vec<ExportStatus> = Vec::new();
-        let status = loop {
-            let (_, v) = next(sub).await;
-            let statuses = match serde_json::from_value::<ExportsEvent>(v).unwrap() {
-                ExportsEvent::Reset { exports } => exports,
-                ExportsEvent::Upsert { export } => vec![export],
-            };
-            let mut ended = None;
-            for s in statuses.into_iter().filter(|s| s.id == id) {
-                if s.state != ExportState::Running {
-                    ended = Some(s.clone());
-                }
-                seen.push(s);
-            }
-            if let Some(s) = ended {
-                break s;
-            }
-        };
-        assert_eq!(status.state, ExportState::Done, "{status:#?}");
-        let file = status
-            .file
-            .clone()
-            .expect("a finished export names its file");
-        assert!(!file.contains(['/', '\\']), "{file}");
-        let path = layout(data).diag().join("exports").join(&file);
-        let gz = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        assert_eq!(status.bytes, Some(gz.len() as u64));
-        let text = String::from_utf8(
-            marsad_agent::hub::export::gzip::gunzip(&gz).expect("a well-formed gzip file"),
-        )
-        .unwrap();
-        let lines = text
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("not JSON ({e}): {l}")))
-            .collect();
-        Export {
-            status,
-            seen,
-            path,
-            text,
-            lines,
-        }
-    }
-
-    /// Starts an export and waits for its end.
-    pub async fn export(c: &MarsadClient, data: &Path, req: ExportRequest) -> Export {
-        let mut sub = c.subscribe_raw(None, topics::DIAGNOSTICS_EXPORTS, None);
-        let started = start(c, req).await.unwrap();
-        finish(&mut sub, data, &started.id).await
-    }
 }
 
 /// A valid app log with records of the desktop app (the shell writes the real one; the exporter

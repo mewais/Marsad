@@ -4,7 +4,7 @@
 //!
 //! Opt-in: `MARSAD_LIVE=1 cargo test -p marsad-agent --test live_workstream -- --ignored
 //! --nocapture`. Needs `claude` (authenticated), `opencode` and `kilo` on PATH and network
-//! access; without `MARSAD_LIVE=1` it reports itself skipped.
+//! access; without `MARSAD_LIVE=1` it fails, saying how to run it.
 #![cfg(unix)]
 
 mod common;
@@ -43,8 +43,7 @@ fn node(id: &str, driver: &str, model: &str, cwd: &std::path::Path) -> Workstrea
 #[ignore]
 async fn live_claude_orchestrates_opencode_and_kilo() {
     if !enabled() {
-        eprintln!("skipped: set MARSAD_LIVE=1");
-        return;
+        panic!("{}", live_hint("live_workstream"));
     }
     let d = TempDir::new();
     let mut cfg = marsad_client::ClientConfig::new(
@@ -228,8 +227,7 @@ async fn live_claude_orchestrates_opencode_and_kilo() {
 #[ignore]
 async fn live_claude_spawns_an_opencode_worker() {
     if !enabled() {
-        eprintln!("skipped: set MARSAD_LIVE=1");
-        return;
+        panic!("{}", live_hint("live_workstream"));
     }
     let d = TempDir::new();
     let mut cfg = marsad_client::ClientConfig::new(
