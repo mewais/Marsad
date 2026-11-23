@@ -7,6 +7,12 @@ import type { Unsupported } from "./Unsupported";
  */
 export type CreateSessionReply = { id: SessionId, 
 /**
+ * The working directory as the host normalised it (`~` expanded, canonical): what the
+ * session runs in and its snapshot reports; clients that remember project folders store
+ * this one.
+ */
+cwd?: string | null, 
+/**
  * Config items the driver could not honour (the launch did not fail).
  */
 unsupported: Array<Unsupported>, };

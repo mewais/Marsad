@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo } from "react";
 import { createBackend, type Backend } from "./bridge";
 import { Placeholder } from "./features/Placeholder";
 import { InboxPage } from "./features/inbox/InboxPage";
@@ -14,7 +14,7 @@ import { hashHistory, RouterProvider, sessionPath, useNavigate, useRoute, type H
 import { AppShell } from "./shell/AppShell";
 import { installShortcuts } from "./shortcuts/registry";
 import { AppProvider, createApp } from "./state";
-import { ErrorBoundary, IconSprite } from "./ui";
+import { ErrorBoundary, IconSprite, RenderErrorReport } from "./ui";
 
 /** The desktop shell's `navigate` event (a notification brought the app forward). */
 function ShellNavigate({ backend }: { backend: Backend }) {
@@ -28,7 +28,7 @@ function Routes() {
   const r = useRoute();
   const nav = useNavigate();
   return (
-    <ErrorBoundary variant="page" what="this page" resetKey={JSON.stringify(r)} secondary={r.name === "inbox" ? undefined : { label: "Back to the Inbox", run: () => nav("/inbox") }}>
+    <ErrorBoundary variant="page" name={`page.${r.name}`} what="this page" resetKey={JSON.stringify(r)} secondary={r.name === "inbox" ? undefined : { label: "Back to the Inbox", run: () => nav("/inbox") }}>
       <Page />
     </ErrorBoundary>
   );
@@ -61,22 +61,26 @@ export function App({ backend, history }: { backend?: Backend; history?: History
   const hist = useMemo(() => history ?? hashHistory(), [history]);
   useEffect(() => installShortcuts(), []);
   useEffect(() => app.dispose, [app]);
+  // A boundary that catches a render failure has it recorded in the app's log, by the boundary's name.
+  const report = useCallback((component: string) => app.actions.record({ ev: "ui.render_error", component }), [app]);
   // Read-only view of the state for the end-to-end suite and for debugging in the webview.
   useEffect(() => {
     (window as unknown as { __marsad?: unknown }).__marsad = { state: () => app.store.get() };
   }, [app]);
   return (
-    // The last resort: whatever fails outside a page or a list row (the shell itself) must not leave a blank window.
-    <ErrorBoundary variant="app" what="the window">
-      <AppProvider value={app}>
-        <RouterProvider history={hist}>
-          <IconSprite />
-          <ShellNavigate backend={app.backend} />
-          <AppShell>
-            <Routes />
-          </AppShell>
-        </RouterProvider>
-      </AppProvider>
-    </ErrorBoundary>
+    <AppProvider value={app}>
+      <RenderErrorReport.Provider value={report}>
+        {/* The last resort: whatever fails outside a page or a list row (the shell itself) must not leave a blank window. */}
+        <ErrorBoundary variant="app" name="app" what="the window">
+          <RouterProvider history={hist}>
+            <IconSprite />
+            <ShellNavigate backend={app.backend} />
+            <AppShell>
+              <Routes />
+            </AppShell>
+          </RouterProvider>
+        </ErrorBoundary>
+      </RenderErrorReport.Provider>
+    </AppProvider>
   );
 }

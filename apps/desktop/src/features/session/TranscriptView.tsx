@@ -236,7 +236,7 @@ const TranscriptItemView = memo(function TranscriptItemView({ item, driver }: { 
  */
 export const TranscriptItem = memo(function TranscriptItem({ item, driver }: { item: RowItem; driver?: DriverDescriptor }) {
   return (
-    <ErrorBoundary variant="item" what="this entry" resetKey={item}>
+    <ErrorBoundary variant="item" name="transcript_entry" what="this entry" resetKey={item}>
       <TranscriptItemView item={item} driver={driver} />
     </ErrorBoundary>
   );

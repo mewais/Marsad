@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountApp } from "../helpers";
 
@@ -22,5 +22,10 @@ describe("the app-level boundary", () => {
     expect(fallback).toHaveTextContent("title bar blew up");
     expect(fallback).toHaveTextContent("Your sessions keep running");
     expect(screen.getByRole("button", { name: "Reload the window" })).toBeInTheDocument();
+  });
+
+  it("is reported to the app's log too, as the window", async () => {
+    const { backend } = mountApp("/inbox");
+    await waitFor(() => expect(backend.diagEvents).toContainEqual({ ev: "ui.render_error", component: "app" }));
   });
 });

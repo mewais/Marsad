@@ -9,7 +9,12 @@ import type { WorkstreamNodeRef } from "./WorkstreamNodeRef";
 /**
  * `sessions.launch` (hub): create a session with the effective config.
  */
-export type LaunchRequest = { host?: HostId | null, driver: DriverId, cwd?: string | null, model?: string | null, mode?: string | null, first_prompt?: string | null, resume: ResumeRequest, labels: { [key in string]: string }, workstream?: WorkstreamNodeRef | null, 
+export type LaunchRequest = { host?: HostId | null, driver: DriverId, cwd?: string | null, model?: string | null, mode?: string | null, first_prompt?: string | null, 
+/**
+ * The session's display name, set at creation; the host tells the agent where the agent
+ * supports naming a conversation.
+ */
+name?: string | null, resume: ResumeRequest, labels: { [key in string]: string }, workstream?: WorkstreamNodeRef | null, 
 /**
  * The session's own layer; stored under `LayerScope::Session` once created.
  */

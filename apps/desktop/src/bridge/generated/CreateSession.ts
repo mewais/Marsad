@@ -13,4 +13,10 @@ export type CreateSession = { driver: DriverId,
  * session's own configuration, such as an MCP server that needs to know which session it
  * serves). Refused when taken.
  */
-id?: SessionId | null, cwd?: string | null, model?: string | null, mode?: string | null, first_prompt?: string | null, resume: ResumeRequest, config: AgentConfig, labels: { [key in string]: string }, };
+id?: SessionId | null, cwd?: string | null, model?: string | null, mode?: string | null, first_prompt?: string | null, resume: ResumeRequest, config: AgentConfig, labels: { [key in string]: string }, 
+/**
+ * The session's name: its display name exactly as `sessions.rename` would set it (trimmed,
+ * bounded; blank is none), and, where the agent's CLI can name its own conversation when it
+ * starts one, the conversation's title in the agent's own storage.
+ */
+name?: string | null, };
