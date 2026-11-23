@@ -358,6 +358,7 @@ impl HubServices {
         create.model = r.model;
         create.mode = r.mode;
         create.first_prompt = r.first_prompt;
+        create.name = r.name;
         create.resume = r.resume;
         create.labels = r.labels;
         create.config = eff.agent_config();
@@ -375,11 +376,17 @@ impl HubServices {
                 )
                 .await?;
         }
-        if let Some(cwd) = r.cwd {
+        // Remember the directory the host actually used (`~` expanded, canonical); the request's
+        // text is only the fallback when the host reported none.
+        let used_cwd = reply
+            .cwd
+            .filter(|c| !c.trim().is_empty())
+            .or_else(|| r.cwd.clone());
+        if let Some(path) = used_cwd {
             self.store
                 .add_recent(RecentProject {
                     host: host.clone(),
-                    path: cwd,
+                    path,
                     last_used_ms: 0,
                 })
                 .await?;
