@@ -225,11 +225,12 @@ pub fn foreign(code: &str, text: &str) -> ErrorInfo {
     ErrorInfo::foreign(Code::new(code), text)
 }
 
-/// What a host printed (before its report): bounded and scrubbed of every registered secret and
-/// project path. The one `DiagText::new(Origin::Transport, …)` call of this crate; what a
-/// transport command said when a connect failed is recorded by wasit-control
-/// (`wasit_control::ConnectDiag`), not here.
-fn transport(text: &str) -> DiagText {
+/// Transport text, bounded and scrubbed of every registered secret and project path: what a
+/// host printed before its report (`shape`), and a link's last error as the link layer states
+/// it, for the manifest of a diagnostics export. The one `DiagText::new(Origin::Transport, …)`
+/// call of this crate; what a transport command said when a connect failed is recorded by
+/// wasit-control (`wasit_control::ConnectDiag`), not here.
+pub(crate) fn transport(text: &str) -> DiagText {
     DiagText::new(Origin::Transport, text)
 }
 

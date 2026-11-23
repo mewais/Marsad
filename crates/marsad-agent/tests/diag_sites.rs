@@ -36,7 +36,8 @@ const TEXT: &str = "DiagText::new(";
 ///   host printed before its report (a banner). Design §4.4 keeps this "bounded, scrubbed" (the
 ///   scrubber masks every registered secret, project path and the home directory; token-shaped
 ///   runs are redacted): the evidence for "the host would not connect". Called from
-///   `hub/provision.rs` only. What a transport command said when a connect failed (ssh and wsl
+///   `hub/provision.rs`; and, through `transport` directly, a link's last error as the link
+///   layer states it, for the export manifest (`hub/export`). What a transport command said when a connect failed (ssh and wsl
 ///   stderr, the reason as the user is shown it) is recorded through wasit-control's
 ///   `ConnectDiag`, which owns that text.
 /// * `Reason` (`Origin::Own`): the same scrubbing for the words `serve` prints on stderr, so
