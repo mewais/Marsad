@@ -2,10 +2,8 @@ import type { ResumeCommand, SessionSnapshot } from "../../bridge/wire";
 import { commandLine } from "../../lib/commandLine";
 import { clockTime, compactNumber, money } from "../../lib/format";
 import { useDriver } from "../../state";
-import { CopyButton, Icon } from "../../ui";
+import { CopyButton } from "../../ui";
 import { usageSummary } from "./usage";
-
-const subagentState = (s: SessionSnapshot["subagents"][number]) => (s.running ? "Running" : s.ok === false ? "Failed" : "Finished");
 
 /**
  * How to open this conversation in the user's own program: the command the daemon gave (its `argv`, quoted for reading and
@@ -28,7 +26,7 @@ function OwnTerminal({ cmd }: { cmd: ResumeCommand }) {
 
 /**
  * The session sidebar's facts: model, mode, cost, context window, tokens and cache, cost per
- * model, subagents. Everything comes from the snapshot, so it is as live as the snapshot is.
+ * model. Everything comes from the snapshot, so it is as live as the snapshot is.
  */
 export function SessionFacts({ snap }: { snap: SessionSnapshot }) {
   const drv = useDriver(snap.driver);
@@ -75,20 +73,6 @@ export function SessionFacts({ snap }: { snap: SessionSnapshot }) {
               </div>
             ))}
           </dl>
-        </div>
-      ) : null}
-      {snap.subagents.length ? (
-        <div>
-          <h4>Subagents · {snap.subagents.length}</h4>
-          <div className="hist" data-testid="side-subagents">
-            {snap.subagents.map((s) => (
-              <div key={s.call_id} className="h" title={[s.model, s.description].filter(Boolean).join(" · ") || undefined}>
-                <Icon name={s.running ? "working" : s.ok === false ? "failed" : "done"} size="sm" spin={s.running} className={s.running ? "c-working" : s.ok === false ? "c-failed" : "c-done"} />
-                <span className="ell">{s.name}</span>
-                <span className="w">{subagentState(s)}</span>
-              </div>
-            ))}
-          </div>
         </div>
       ) : null}
       {snap.resume_command ? <OwnTerminal cmd={snap.resume_command} /> : null}

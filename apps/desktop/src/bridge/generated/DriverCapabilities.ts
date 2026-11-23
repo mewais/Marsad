@@ -56,4 +56,8 @@ streaming_output: boolean,
 /**
  * Semantics of a prompt sent during a running turn.
  */
-prompt_while_busy: BusyPrompt, };
+prompt_while_busy: BusyPrompt, 
+/**
+ * `Command::StopTask` stops a background task the CLI reports.
+ */
+stop_task: boolean, };

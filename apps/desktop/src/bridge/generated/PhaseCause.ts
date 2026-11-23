@@ -2,11 +2,12 @@
 import type { EndReason } from "./EndReason";
 import type { GateClearing } from "./GateClearing";
 import type { InputId } from "./InputId";
+import type { TurnTrigger } from "./TurnTrigger";
 
 /**
  * What made the phase change (the last fact of the journal record that decided the new phase).
  */
-export type PhaseCause = { "kind": "spawned", generation: number, } | { "kind": "handshake_done" } | { "kind": "turn_started", input?: InputId | null, } | { "kind": "turn_completed", end_reason?: EndReason | null, interrupted: boolean, } | { "kind": "gate_raised", request_id: string, external: boolean, } | { "kind": "gate_cleared", request_id: string, how: GateClearing, } | { "kind": "exited", code?: number | null, signal?: number | null, 
+export type PhaseCause = { "kind": "spawned", generation: number, } | { "kind": "handshake_done" } | { "kind": "turn_started", input?: InputId | null, trigger: TurnTrigger, } | { "kind": "task_started", task_id: string, } | { "kind": "task_ended", task_id: string, } | { "kind": "turn_completed", end_reason?: EndReason | null, interrupted: boolean, } | { "kind": "gate_raised", request_id: string, external: boolean, } | { "kind": "gate_cleared", request_id: string, how: GateClearing, } | { "kind": "exited", code?: number | null, signal?: number | null, 
 /**
  * A stop was requested before the exit.
  */

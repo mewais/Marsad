@@ -55,12 +55,17 @@ reason?: { code: string, text?: string, len?: number, fp?: string, os?: number }
 /**
  * `interrupted`, `shutdown`, `unencodable`, `refused` or `process_ended`.
  */
-reason: string, error?: { code: string, text?: string, len?: number, fp?: string, os?: number } | null, } | { "ev": "turn.started", input?: number | null, native_turn_id?: string | null, } | { "ev": "turn.completed", interrupted: boolean, num_turns: number, input_tokens: number, output_tokens: number, cost_usd_micros: number, reply_chars: number, end_reason?: string | null, 
+reason: string, error?: { code: string, text?: string, len?: number, fp?: string, os?: number } | null, } | { "ev": "turn.started", trigger: string, input?: number | null, native_turn_id?: string | null, } | { "ev": "turn.completed", interrupted: boolean, num_turns: number, input_tokens: number, output_tokens: number, cost_usd_micros: number, reply_chars: number, end_reason?: string | null, 
+/**
+ * Why the agent ran the turn it started by itself, as it said (the `kind` of its
+ * origin word).
+ */
+origin?: string | null, 
 /**
  * Length and fingerprint of the failure the CLI reported (only when the turn
  * ended in an execution error).
  */
-error?: { code: string, text?: string, len?: number, fp?: string, os?: number } | null, } | { "ev": "tool.started", call_id: string, name: string, subagent: boolean, } | { "ev": "tool.finished", call_id: string, ok: boolean, } | { "ev": "gate.raised", request_id: string, 
+error?: { code: string, text?: string, len?: number, fp?: string, os?: number } | null, } | { "ev": "tool.started", call_id: string, name: string, subagent: boolean, scope?: string | null, } | { "ev": "tool.finished", call_id: string, ok: boolean, scope?: string | null, } | { "ev": "task.started", task_id: string, background: boolean, kind?: string | null, call_id?: string | null, } | { "ev": "task.progress", task_id: string, tool?: string | null, total_tokens?: number | null, tool_uses?: number | null, duration_ms?: number | null, } | { "ev": "task.updated", task_id: string, status?: string | null, } | { "ev": "task.ended", task_id: string, ok: boolean, summary_chars: number, status?: string | null, call_id?: string | null, total_tokens?: number | null, duration_ms?: number | null, } | { "ev": "background.tasks", running: number, } | { "ev": "gate.raised", request_id: string, 
 /**
  * `permission`, `plan`, `question`, `handoff` or `spawn`.
  */

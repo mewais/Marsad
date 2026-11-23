@@ -23,7 +23,7 @@ const states = (r: ReturnType<typeof promptRows>[number]) => Object.fromEntries(
 
 describe("the path of a prompt", () => {
   it("a prompt that went all the way: every step seen, times relative to the first, other machines' clocks marked approximate", () => {
-    const trail = [applied(T0 + 5_010, 3), item(T0 + 5_020, { ev: "input.written", input: 3 }), item(T0 + 5_300, { ev: "input.acknowledged", input: 3, steered: false }), item(T0 + 5_310, { ev: "turn.started", input: 3 })];
+    const trail = [applied(T0 + 5_010, 3), item(T0 + 5_020, { ev: "input.written", input: 3 }), item(T0 + 5_300, { ev: "input.acknowledged", input: 3, steered: false }), item(T0 + 5_310, { ev: "turn.started", trigger: "input", input: 3 })];
     const [row] = promptRows(
       base({
         trail,
@@ -40,6 +40,18 @@ describe("the path of a prompt", () => {
     expect(row.steps[0].detail).toBe("answered ok in 41 ms");
     expect(row.steps[1].detail).toBe("session.command · ok · 40 ms");
     expect(row).toMatchObject({ input: 3, trace: T, kind: "prompt", chars: 40, key: "input:3" });
+  });
+
+  it("a turn the agent started by itself is no prompt's turn, whatever input the entry carries; the turn of an input still is", () => {
+    const own = item(T0 + 6_000, { ev: "turn.started", trigger: "agent" });
+    const [row] = promptRows(base({ trail: [applied(T0, 3), item(T0 + 5, { ev: "input.written", input: 3 }), own], app: [app(T0 - 50, prompt())] }));
+    expect(row.steps.map((x) => x.id)).not.toContain("turn");
+    // Even an entry that wrongly names an input does not make the agent's own turn a prompt's.
+    const wrong = item(T0 + 6_100, { ev: "turn.started", trigger: "agent", input: 3 });
+    expect(promptRows(base({ trail: [applied(T0, 3), wrong] }))[0].steps.map((x) => x.id)).not.toContain("turn");
+    expect(promptRows(base({ trail: [applied(T0, 3), item(T0 + 6_200, { ev: "turn.started", trigger: "input", input: 3 })] }))[0].steps.map((x) => x.id)).toContain("turn");
+    // And a prompt answered by nothing is not given the agent's later turn.
+    expect(promptRows(base({ trail: [applied(T0, 3), item(T0 + 6_000, { ev: "turn.started", trigger: "unreported" })] }))[0].steps.map((x) => x.id)).not.toContain("turn");
   });
 
   it("on the local host the hub is the host: no host step, every time exact", () => {

@@ -14,6 +14,7 @@ import type { SessionId } from "./SessionId";
 import type { SessionMode } from "./SessionMode";
 import type { SlashCommandInfo } from "./SlashCommandInfo";
 import type { SubagentInfo } from "./SubagentInfo";
+import type { TaskInfo } from "./TaskInfo";
 import type { TurnInfo } from "./TurnInfo";
 import type { TurnOutcome } from "./TurnOutcome";
 import type { Usage } from "./Usage";
@@ -76,7 +77,16 @@ usage_by_model?: { [key in string]: ModelUsage },
 /**
  * The latest live usage report (meaning per driver: see `AgentEvent::UsageUpdate`).
  */
-live_usage?: Usage | null, context_pct?: number | null, subagents: Array<SubagentInfo>, plan: Array<PlanEntry>, 
+live_usage?: Usage | null, context_pct?: number | null, subagents: Array<SubagentInfo>, 
+/**
+ * The tasks the agent runs or ran (subagents, shell commands), newest last, bounded.
+ */
+tasks: Array<TaskInfo>, 
+/**
+ * How many tasks run in the background right now. While it is above zero the phase is
+ * `working`, with or without a `turn`.
+ */
+background_running: number, plan: Array<PlanEntry>, 
 /**
  * Journal time of the last CLI output or user input (ms since the Unix epoch).
  */

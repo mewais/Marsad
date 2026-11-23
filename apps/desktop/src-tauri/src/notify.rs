@@ -2,6 +2,28 @@
 //! a session that starts needing you, fails, or finishes its work, and a remote host whose
 //! link is lost. Pure: [`Tracker::apply`] turns fleet events into [`Note`]s; the watcher
 //! filters them by the stored preferences and shows them.
+//!
+//! When a session has *finished* (decided by [`verdict`], from the snapshots alone, no timer).
+//! The engine's phase is `working` while a turn is open **or** a background task runs, so a
+//! session that reads `idle` has no turn and no background task. A turn that ends while
+//! background work continues therefore raises nothing (the phase never left `working`). From a
+//! busy phase to a quiet one:
+//!
+//! | before                        | now      | note                                              |
+//! |-------------------------------|----------|---------------------------------------------------|
+//! | working, a turn open          | idle     | "finished" (none when the turn was interrupted)   |
+//! | working, no turn (background) | idle     | none: see below                                   |
+//! | starting                      | idle     | none (the handshake is not work)                  |
+//! | working / starting            | exited   | "ended" (none when an exit was requested)         |
+//!
+//! What the events cannot tell: after the last background task ends the session reads `idle`,
+//! and the agent usually starts a turn of its own a few milliseconds later; its completion is
+//! then the real end and raises the one "finished" note. The agent gives no advance signal, so
+//! nothing here can distinguish that gap from "the agent will not continue": in the second case
+//! no "finished" note is raised at all. To close it the engine would have to say, per ended
+//! task, whether the agent will report back (e.g. a snapshot count of ended tasks whose result
+//! the agent has not yet turned over to the model, or the agent's own session-idle report):
+//! `idle` with that count at zero would be the true end.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -66,6 +88,50 @@ fn state(s: &SessionSnapshot) -> State {
     }
 }
 
+/// What the tracker remembers of a session between snapshots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Seen {
+    state: State,
+    /// A turn was open (`snapshot.turn`): a busy session without one only has background work (or is starting).
+    turn_open: bool,
+}
+
+impl Seen {
+    fn of(s: &SessionSnapshot) -> Self {
+        Seen {
+            state: state(s),
+            turn_open: s.turn.is_some(),
+        }
+    }
+}
+
+/// How a session's work ended, when it did (see the module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    /// A turn completed and nothing else runs.
+    Finished,
+    /// The process exited by itself while working.
+    Ended,
+}
+
+/// The note for a session that was `before` and now is `now`, when work ended: pure.
+fn verdict(before: Seen, now: &SessionSnapshot) -> Option<Verdict> {
+    if before.state != State::Busy {
+        return None;
+    }
+    match state(now) {
+        State::Waiting if before.turn_open => {
+            let interrupted = now.last_turn.as_ref().is_some_and(|t| t.was_interrupted);
+            (!interrupted).then_some(Verdict::Finished)
+        }
+        State::Done => {
+            let requested = now.exit.as_ref().is_some_and(|e| e.requested);
+            (!requested).then_some(Verdict::Ended)
+        }
+        _ => None,
+    }
+}
+
 fn label(s: &SessionSnapshot) -> String {
     s.display_name
         .clone()
@@ -87,7 +153,7 @@ fn label(s: &SessionSnapshot) -> String {
 /// See the module docs.
 #[derive(Default)]
 pub struct Tracker {
-    sessions: HashMap<(HostId, SessionId), State>,
+    sessions: HashMap<(HostId, SessionId), Seen>,
     connected: HashMap<HostId, bool>,
     names: BTreeMap<HostId, String>,
     /// Sessions currently needing an answer (for the tray).
@@ -116,10 +182,10 @@ impl Tracker {
         }
     }
 
-    fn set(&mut self, host: &HostId, s: &SessionSnapshot) -> Option<State> {
+    fn set(&mut self, host: &HostId, s: &SessionSnapshot) -> Option<Seen> {
         let key = (host.clone(), s.id.clone());
-        let now = state(s);
-        if now == State::NeedsYou {
+        let now = Seen::of(s);
+        if now.state == State::NeedsYou {
             self.needs_you.insert(key.clone(), ());
         } else {
             self.needs_you.remove(&key);
@@ -130,7 +196,7 @@ impl Tracker {
     fn session(&mut self, host: &HostId, s: &SessionSnapshot) -> Option<Note> {
         let before = self.set(host, s)?;
         let now = state(s);
-        if before == now {
+        if before.state == now {
             return None;
         }
         let where_ = self.host_name(host);
@@ -141,10 +207,11 @@ impl Tracker {
                 where_,
             ),
             State::Failed => (Kind::Failed, format!("{} failed", label(s)), where_),
-            State::Waiting | State::Done if before == State::Busy => {
-                (Kind::Finished, format!("{} finished", label(s)), where_)
-            }
-            _ => return None,
+            State::Waiting | State::Done => match verdict(before, s)? {
+                Verdict::Finished => (Kind::Finished, format!("{} finished", label(s)), where_),
+                Verdict::Ended => (Kind::Finished, format!("{} ended", label(s)), where_),
+            },
+            State::Busy => return None,
         };
         Some(Note {
             kind,
@@ -212,7 +279,8 @@ mod tests {
     use marsad_proto::runtime::Phase;
     use marsad_proto::LinkState;
 
-    fn snap(phase: Phase) -> SessionSnapshot {
+    /// A snapshot in `phase`; `extra` overrides or adds top-level fields (`turn`, `last_turn`, `exit` ...).
+    fn snap_with(phase: Phase, extra: serde_json::Value) -> SessionSnapshot {
         let caps: serde_json::Map<String, serde_json::Value> = [
             "interrupt",
             "set_model",
@@ -226,23 +294,61 @@ mod tests {
             "resume",
             "continue_latest",
             "streaming_output",
+            "stop_task",
         ]
         .iter()
         .map(|k| (k.to_string(), serde_json::Value::Bool(false)))
         .chain([("prompt_while_busy".to_string(), "queued_by_cli".into())])
         .collect();
-        serde_json::from_value(serde_json::json!({
+        let mut v = serde_json::json!({
             "id": "aaaaaaaaaaaa", "driver": "claude", "created_at_ms": 0,
             "capabilities": caps, "phase": phase, "generation": 1,
             "turns_completed": 0, "usage": {"input_tokens":0,"output_tokens":0,
             "cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":0.0},
             "last_activity_ms": 0, "cursor": 0, "loaded": true
-        }))
-        .expect("snapshot")
+        });
+        v.as_object_mut()
+            .expect("object")
+            .extend(extra.as_object().expect("object").clone());
+        serde_json::from_value(v).expect("snapshot")
     }
 
-    #[test]
-    fn transitions_become_notes() {
+    fn snap(phase: Phase) -> SessionSnapshot {
+        snap_with(phase, serde_json::json!({}))
+    }
+
+    /// A turn that started for `trigger` (`input` or `agent`).
+    fn turn(trigger: &str) -> serde_json::Value {
+        serde_json::json!({"started_at_ms": 1, "trigger": trigger, "tool_calls": 0})
+    }
+
+    /// Working with a turn open.
+    fn working_turn(trigger: &str) -> SessionSnapshot {
+        snap_with(Phase::Working, serde_json::json!({ "turn": turn(trigger) }))
+    }
+
+    /// Working with no turn: only a background task runs.
+    fn working_background() -> SessionSnapshot {
+        snap_with(Phase::Working, serde_json::json!({"background_running": 1}))
+    }
+
+    /// Idle after a turn that ended (`interrupted` or not).
+    fn idle_after_turn(interrupted: bool) -> SessionSnapshot {
+        snap_with(
+            Phase::Idle,
+            serde_json::json!({"last_turn": {"ended_at_ms": 2, "was_interrupted": interrupted, "num_turns": 1}}),
+        )
+    }
+
+    fn exited(requested: bool) -> SessionSnapshot {
+        snap_with(
+            Phase::Exited { code: Some(0) },
+            serde_json::json!({"exit": {"code": 0, "at_ms": 3, "requested": requested}}),
+        )
+    }
+
+    /// A tracker that knows one host with one session in `first`.
+    fn tracker(first: SessionSnapshot) -> (Tracker, HostId) {
         let h = HostId::new("box");
         let mut t = Tracker::default();
         t.apply(&FleetEvent::Reset {
@@ -261,27 +367,122 @@ mod tests {
                     state: LinkState::Connecting,
                 },
                 sessions_live: true,
-                sessions: vec![snap(Phase::Working)],
+                sessions: vec![first],
                 auth_prompt: None,
                 git: Vec::new(),
             }],
         });
+        (t, h)
+    }
+
+    fn feed(t: &mut Tracker, h: &HostId, s: SessionSnapshot) -> Vec<Note> {
+        t.apply(&FleetEvent::SessionUpserted {
+            host: h.clone(),
+            session: Box::new(s),
+        })
+    }
+
+    fn pure(before: &SessionSnapshot, now: &SessionSnapshot) -> Option<Verdict> {
+        verdict(Seen::of(before), now)
+    }
+
+    #[test]
+    fn a_completed_turn_is_finished() {
+        assert_eq!(
+            pure(&working_turn("input"), &idle_after_turn(false)),
+            Some(Verdict::Finished)
+        );
+    }
+
+    #[test]
+    fn an_interrupted_turn_is_not_finished() {
+        assert_eq!(pure(&working_turn("input"), &idle_after_turn(true)), None);
+    }
+
+    #[test]
+    fn the_end_of_background_work_alone_is_not_finished() {
+        // The agent usually starts a turn of its own next; that turn's completion is the end.
+        assert_eq!(pure(&working_background(), &idle_after_turn(false)), None);
+    }
+
+    #[test]
+    fn the_handshake_is_not_finished() {
+        assert_eq!(pure(&snap(Phase::Starting), &snap(Phase::Idle)), None);
+    }
+
+    #[test]
+    fn exits_end_the_work_unless_requested() {
+        assert_eq!(pure(&working_turn("input"), &exited(true)), None);
+        assert_eq!(
+            pure(&working_turn("input"), &exited(false)),
+            Some(Verdict::Ended)
+        );
+        assert_eq!(pure(&working_background(), &exited(true)), None);
+    }
+
+    #[test]
+    fn nothing_is_decided_from_a_quiet_session() {
+        assert_eq!(pure(&snap(Phase::Idle), &working_turn("input")), None);
+        assert_eq!(pure(&snap(Phase::Idle), &snap(Phase::Idle)), None);
+    }
+
+    /// The whole story of a backgrounded subagent: one note, at the real end.
+    #[test]
+    fn background_work_and_the_turn_after_it_notify_once() {
+        let (mut t, h) = tracker(snap(Phase::Idle));
+        let mut notes = Vec::new();
+        // A prompt starts a turn; a subagent starts in the background.
+        notes.extend(feed(&mut t, &h, working_turn("input")));
+        let both = snap_with(
+            Phase::Working,
+            serde_json::json!({"turn": turn("input"), "background_running": 1}),
+        );
+        notes.extend(feed(&mut t, &h, both));
+        // The turn ends while the subagent runs: the phase stays working.
+        notes.extend(feed(&mut t, &h, working_background()));
+        // The last background task ends: idle, no turn (the gap).
+        notes.extend(feed(&mut t, &h, idle_after_turn(false)));
+        // The agent starts a turn of its own and completes it.
+        notes.extend(feed(&mut t, &h, working_turn("agent")));
+        notes.extend(feed(&mut t, &h, idle_after_turn(false)));
+        let kinds: Vec<_> = notes.iter().map(|n| n.kind).collect();
+        assert_eq!(kinds, vec![Kind::Finished]);
+        assert!(notes[0].title.ends_with("finished"));
+    }
+
+    #[test]
+    fn notes_say_ended_for_an_unrequested_exit_and_nothing_for_a_requested_one() {
+        let (mut t, h) = tracker(working_turn("input"));
+        let n = feed(&mut t, &h, exited(false));
+        assert_eq!(n.len(), 1);
+        assert!(n[0].title.ends_with("ended"), "{}", n[0].title);
+        let (mut t, h) = tracker(working_turn("input"));
+        assert!(feed(&mut t, &h, exited(true)).is_empty());
+        let (mut t, h) = tracker(working_turn("input"));
+        assert!(feed(&mut t, &h, idle_after_turn(true)).is_empty());
+        let (mut t, h) = tracker(snap(Phase::Starting));
+        assert!(feed(&mut t, &h, snap(Phase::Idle)).is_empty());
+    }
+
+    #[test]
+    fn transitions_become_notes() {
+        let (mut t, h) = tracker(working_turn("input"));
         let up = |p| FleetEvent::SessionUpserted {
             host: h.clone(),
-            session: Box::new(snap(p)),
+            session: Box::new(p),
         };
-        let n = t.apply(&up(Phase::NeedsYou));
+        let n = t.apply(&up(snap(Phase::NeedsYou)));
         assert_eq!(n[0].kind, Kind::NeedsYou);
         assert_eq!(t.attention(), 1);
-        assert!(t.apply(&up(Phase::NeedsYou)).is_empty(), "no repeat");
-        assert!(t.apply(&up(Phase::Working)).is_empty());
+        assert!(t.apply(&up(snap(Phase::NeedsYou))).is_empty(), "no repeat");
+        assert!(t.apply(&up(working_turn("input"))).is_empty());
         assert_eq!(t.attention(), 0);
-        assert_eq!(t.apply(&up(Phase::Idle))[0].kind, Kind::Finished);
+        assert_eq!(t.apply(&up(idle_after_turn(false)))[0].kind, Kind::Finished);
         let failed = Phase::Failed {
             reason: "x".into(),
             stderr_tail: vec![],
         };
-        assert_eq!(t.apply(&up(failed))[0].kind, Kind::Failed);
+        assert_eq!(t.apply(&up(snap(failed)))[0].kind, Kind::Failed);
         assert!(t
             .apply(&FleetEvent::Link {
                 host: h.clone(),

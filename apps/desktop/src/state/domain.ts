@@ -28,6 +28,8 @@ export interface SessionView {
   gates: PendingGate[];
   /** The daemon's verdict on continuing the session (see `continueState`). */
   cont: ContinueState;
+  /** Background tasks running while no turn is open (the session is Working only because of them); 0 otherwise. */
+  backgroundOnly: number;
   /**
    * What this view shows is the last the app knew, not live: the app lost its link to the local
    * daemon, or the session's host is not connected / has not delivered its list over the current
@@ -78,20 +80,42 @@ export function notContinuableWords(why: NotContinuable): string {
 }
 
 /**
- * Whether Interrupt does anything: the agent can be interrupted and a turn is starting or running
- * (or waiting for a decision, which an interrupt declines). The one rule for the button.
+ * How many background tasks keep the session Working while no turn is open (the daemon: Working with no `turn`
+ * and `background_running` above zero); 0 whenever a turn is open or nothing runs in the background.
+ */
+export const backgroundOnly = (s: Pick<SessionSnapshot, "phase" | "turn" | "background_running">): number => (s.phase.state === "working" && !s.turn ? s.background_running : 0);
+
+/** "Working in the background: 2 tasks" (the session is working and no turn is open). */
+export const backgroundWords = (n: number): string => `Working in the background: ${n} task${n === 1 ? "" : "s"}`;
+
+/**
+ * Whether Interrupt does anything. The daemon stops the running turn (a turn the agent started by itself too), declining
+ * pending requests, or with no turn open the background tasks; so it applies while the session is starting, working
+ * (a turn, or background work alone) or waiting for a decision. The one rule for the button.
  */
 export function canInterrupt(s: Pick<SessionSnapshot, "capabilities" | "phase">): boolean {
   return s.capabilities.interrupt && (s.phase.state === "starting" || s.phase.state === "working" || s.phase.state === "needs_you");
 }
 
+/** What Interrupt will do, as the tooltip says it: what the daemon stops depends on whether a turn is open. */
+export function interruptWords(s: Pick<SessionSnapshot, "phase" | "turn" | "background_running">): string {
+  const n = s.background_running;
+  const tasks = `${n} background task${n === 1 ? "" : "s"}`;
+  const bg = backgroundOnly(s);
+  if (bg) return `No turn is running. Stop the ${tasks}; the agent stays open.`;
+  if (n > 0) return `Cancel the current turn; the agent stays open and the ${tasks} keep${n === 1 ? "s" : ""} running.`;
+  return "Cancel the current turn; the agent keeps running";
+}
+
 /**
- * Whether Esc interrupts: a turn is running and the session is not waiting on the user. Esc must
- * never deny a pending request by accident (interrupting a session that waits for a decision
- * declines it), so only the button interrupts then.
+ * Whether Esc interrupts: a turn is running and the session is not waiting on the user. Esc must never
+ * deny a pending request by accident (interrupting a session that waits for a decision declines it), and it
+ * must never end background work by accident either: with no turn open the daemon's interrupt stops the
+ * background tasks, which is far from what a key pressed to stop talking would be expected to do, so then
+ * only the button (whose tooltip says so) does.
  */
-export function escapeInterrupts(s: Pick<SessionSnapshot, "capabilities" | "phase">): boolean {
-  return s.capabilities.interrupt && s.phase.state === "working";
+export function escapeInterrupts(s: Pick<SessionSnapshot, "capabilities" | "phase" | "turn">): boolean {
+  return s.capabilities.interrupt && s.phase.state === "working" && !!s.turn;
 }
 
 /** The word for a session whose phase is more specific than its status ("Starting" while the agent's process comes up), else `undefined`: the status label stands. */
@@ -128,6 +152,7 @@ export function sessionLine(s: SessionSnapshot): string {
       return s.phase.reason;
     case "working":
     case "starting":
+      if (backgroundOnly(s)) return backgroundWords(s.background_running);
       return s.plan.find((p) => p.status === "in_progress")?.content ?? (s.turn?.current_tool ? `Running ${s.turn.current_tool}` : s.turn?.last_tool ? `Ran ${s.turn.last_tool}${s.turn.tool_calls > 1 ? ` · ${s.turn.tool_calls} steps` : ""}` : s.turn?.prompt ?? "Working");
     default:
       return s.last_turn?.reply ?? (s.phase.state === "exited" ? "Session ended" : "Idle");
@@ -174,6 +199,7 @@ export function buildView(host: HostId, s: SessionSnapshot, mark: SeenMark | und
     unseen,
     gates: s.pending_gates,
     cont: continueState(s),
+    backgroundOnly: backgroundOnly(s),
     stale,
   };
 }

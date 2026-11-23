@@ -40,7 +40,7 @@ function Page() {
     case "inbox":
       return <InboxPage />;
     case "session":
-      return <SessionPage key={`${r.host}/${r.id}`} host={r.host} id={r.id} tab={r.tab} />;
+      return <SessionPage key={`${r.host}/${r.id}`} host={r.host} id={r.id} tab={r.tab} sub={r.sub} />;
     case "workstreams":
       return <WorkstreamsPage />;
     case "workstream":

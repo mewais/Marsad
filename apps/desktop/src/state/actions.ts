@@ -42,6 +42,8 @@ export interface Actions {
   record(event: UiEvent): void;
   /** Cancel the session's current turn; the agent keeps running (the `interrupt` command). */
   interrupt(key: SessionKey): Promise<boolean>;
+  /** Stop one background task or subagent the agent runs, by the agent's task id (the `stop_task` command). */
+  stopTask(key: SessionKey, taskId: string): Promise<boolean>;
   /** Shut the agent's process down and keep the session (`sessions.stop`). */
   endSession(key: SessionKey): Promise<boolean>;
   /** Start a new process for an ended session, with its earlier transcript (`sessions.continue`). */
@@ -68,6 +70,7 @@ export function isGateWithdrawn(e: unknown): boolean {
 
 /** Pending-flag keys of the session actions (the buttons that start them show their state). */
 export const interruptPendingKey = (key: SessionKey) => `cmd:${key}:interrupt`;
+export const stopTaskPendingKey = (key: SessionKey, taskId: string) => `cmd:${key}:stop_task:${taskId}`;
 export const endPendingKey = (key: SessionKey) => `end:${key}`;
 export const continuePendingKey = (key: SessionKey) => `continue:${key}`;
 export const gatePendingKey = (key: SessionKey, requestId: string) => `gate:${key}:${requestId}`;
@@ -164,6 +167,7 @@ export function createActions(store: AppStore, api: Api, controller: Controller,
     trace,
     record: diag.log,
     interrupt: (key) => command(key, { command: "interrupt" }, { failTitle: "Could not interrupt the session" }),
+    stopTask: (key, taskId) => command(key, { command: "stop_task", task_id: taskId }, { pendingKey: stopTaskPendingKey(key, taskId), failTitle: "Could not stop the task" }),
     endSession: (key) => {
       const { host, id } = splitKey(key);
       return ok(run(endPendingKey(key), "Could not end the session", () => {

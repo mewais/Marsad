@@ -104,7 +104,8 @@ export function promptRows(src: PromptSources): PromptRow[] {
     else if (it.ev === "input.acknowledged") slot(it.input).acknowledged = it;
     else if (it.ev === "input.dropped") slot(it.input).dropped = it;
     else if (it.ev === "input.write_failed" && typeof it.input === "number") slot(it.input).write_failed = it;
-    else if (it.ev === "turn.started" && typeof it.input === "number") slot(it.input).turn = it;
+    // A turn the agent started by itself answers no prompt (the daemon gives it no input); only a turn that ran for an input is that input's.
+    else if (it.ev === "turn.started" && it.trigger !== "agent" && typeof it.input === "number") slot(it.input).turn = it;
   }
   const applied = src.trail.filter(isPrompt);
 

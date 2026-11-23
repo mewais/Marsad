@@ -91,7 +91,11 @@ export function causeWords(c: Cause): string {
     case "handshake_done":
       return "the agent finished starting up";
     case "turn_started":
-      return say("a turn started", typeof c.input === "number" && ` for input #${c.input}`);
+      return turnStartWords("a turn started", c.trigger, c.input, "the agent started a turn on its own");
+    case "task_started":
+      return `a background task started (${c.task_id})`;
+    case "task_ended":
+      return `background task ${c.task_id} ended`;
     case "turn_completed":
       return c.interrupted ? "the turn was interrupted" : say("the turn ended", c.end_reason && ` (${END_REASON[c.end_reason] ?? c.end_reason})`);
     case "gate_raised":
@@ -136,6 +140,12 @@ const NOTICE: Record<string, string> = {
 };
 const RESUME: Record<string, string> = { fresh: "a new conversation", continue: "continuing the latest conversation", resume: "resuming a conversation" };
 
+/** What started a turn: one of our inputs, the agent itself, or the agent did not say. `own` is the sentence for a turn the agent started by itself. */
+function turnStartWords(plainStart: string, trigger: string | undefined, input: number | null | undefined, own: string, tail = ""): string {
+  if (trigger === "agent") return `${own}${tail}`;
+  return say(plainStart, typeof input === "number" && ` for input #${input}`, trigger === "unreported" && typeof input !== "number" && " (the agent did not say what started it)", tail);
+}
+
 const input = (n: number | null | undefined) => (typeof n === "number" ? `input #${n}` : "an input");
 const Input = (n: number | null | undefined) => `${input(n)[0].toUpperCase()}${input(n).slice(1)}`;
 
@@ -177,19 +187,30 @@ export function trailWords(e: TrailEntry): string {
     case "input.dropped":
       return say(`${Input(e.input)} will never reach the agent — ${DROP[e.reason] ?? e.reason}`, e.error && ` (${errorWords(e.error)})`);
     case "turn.started":
-      return say("A turn started", typeof e.input === "number" && ` for input #${e.input}`, e.native_turn_id && ` (turn ${e.native_turn_id})`);
+      return turnStartWords("A turn started", e.trigger, e.input, "The agent started a turn on its own", e.native_turn_id ? ` (turn ${e.native_turn_id})` : "");
     case "turn.completed":
       return say(
         e.interrupted ? "The turn was interrupted" : e.end_reason ? `The turn ended (${END_REASON[e.end_reason] ?? e.end_reason})` : "The turn ended",
         `: ${plural(e.num_turns, "turn")}, ${e.input_tokens} tokens in, ${e.output_tokens} out`,
         e.cost_usd_micros > 0 && `, $${(e.cost_usd_micros / 1e6).toFixed(4)}`,
         `, a reply of ${plural(e.reply_chars, "character")}`,
+        e.origin && `, run on the agent's own initiative (${e.origin})`,
         e.error && ` — ${errorWords(e.error)}`,
       );
     case "tool.started":
-      return `Tool ${e.name} started${e.subagent ? " (a subagent)" : ""} — call ${e.call_id}`;
+      return `Tool ${e.name} started${e.subagent ? " (a subagent)" : ""} — call ${e.call_id}${e.scope ? `, made by the subagent of call ${e.scope}` : ""}`;
     case "tool.finished":
-      return `Tool call ${e.call_id} ${e.ok ? "finished" : "failed"}`;
+      return `Tool call ${e.call_id} ${e.ok ? "finished" : "failed"}${e.scope ? ` (made by the subagent of call ${e.scope})` : ""}`;
+    case "task.started":
+      return say(`${e.background ? "A background task" : "A task"} started — ${e.task_id}`, e.kind && ` (${e.kind})`, e.call_id && `, spawned by call ${e.call_id}`);
+    case "task.progress":
+      return say(`Task ${e.task_id} reported progress`, e.tool && `: last tool ${e.tool}`, typeof e.tool_uses === "number" && `, ${plural(e.tool_uses, "tool use")}`, typeof e.total_tokens === "number" && `, ${e.total_tokens} tokens`, typeof e.duration_ms === "number" && ` in ${duration(e.duration_ms)}`);
+    case "task.updated":
+      return `Task ${e.task_id} reported the status ${e.status ?? "(none)"}`;
+    case "task.ended":
+      return say(`Task ${e.task_id} ended ${e.ok ? "successfully" : "without success"}`, e.status && ` (${e.status})`, e.call_id && `, spawned by call ${e.call_id}`, typeof e.total_tokens === "number" && `, ${e.total_tokens} tokens`, typeof e.duration_ms === "number" && ` in ${duration(e.duration_ms)}`, e.summary_chars > 0 && `, a summary of ${plural(e.summary_chars, "character")}`);
+    case "background.tasks":
+      return e.running > 0 ? `The agent lists ${plural(e.running, "background task")} as running` : "The agent lists no background tasks as running";
     case "gate.raised":
       return say(`Waiting for you — the agent asked for a ${e.gate_type} decision`, e.tool && ` on ${e.tool}`, e.choices > 0 && ` (${plural(e.choices, "choice")})`, ` — request ${e.request_id}`);
     case "gate.resolved":
@@ -247,6 +268,8 @@ export function trailTone(e: TrailEntry): Tone {
       return e.code === 0 || e.code === undefined || e.code === null ? "plain" : "bad";
     case "turn.completed":
       return e.error ? "bad" : "plain";
+    case "task.ended":
+      return e.ok ? "plain" : "warn";
     case "input.applied":
       return e.status === "sent" || e.status === "queued" ? "plain" : "bad";
     case "input.acknowledged":

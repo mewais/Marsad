@@ -30,7 +30,8 @@ export function memoryHistory(initial = "/inbox"): History {
 
 export type Route =
   | { name: "inbox" }
-  | { name: "session"; host: string; id: string; tab: string }
+  /** `sub`: the call id of a subagent whose transcript is open (Activity only). */
+  | { name: "session"; host: string; id: string; tab: string; sub?: string }
   | { name: "workstreams"; q: Record<string, string> }
   | { name: "workstream"; id: string; q: Record<string, string> }
   | { name: "hosts"; q: Record<string, string> }
@@ -46,7 +47,10 @@ export function parseRoute(path: string): Route {
     case "inbox":
       return { name: "inbox" };
     case "session":
-      if (seg[1] && seg[2]) return { name: "session", host: decodeURIComponent(seg[1]), id: decodeURIComponent(seg[2]), tab: new URLSearchParams(qs).get("tab") ?? "activity" };
+      if (seg[1] && seg[2]) {
+        const q = new URLSearchParams(qs);
+        return { name: "session", host: decodeURIComponent(seg[1]), id: decodeURIComponent(seg[2]), tab: q.get("tab") ?? "activity", ...(q.get("sub") ? { sub: q.get("sub")! } : {}) };
+      }
       return { name: "notfound", path };
     case "workstreams":
       if (seg[1]) return { name: "workstream", id: decodeURIComponent(seg[1]), q: Object.fromEntries(new URLSearchParams(qs)) };
@@ -62,8 +66,14 @@ export function parseRoute(path: string): Route {
 
 export const workstreamPath = (id: string, q?: Record<string, string>) => `/workstreams/${encodeURIComponent(id)}${q ? `?${new URLSearchParams(q)}` : ""}`;
 
-export const sessionPath = (host: string, id: string, tab?: string) =>
-  `/session/${encodeURIComponent(host)}/${encodeURIComponent(id)}${tab && tab !== "activity" ? `?tab=${tab}` : ""}`;
+/** A session's address: a section of it (Activity when none), or a subagent's transcript (`sub`: its call id). */
+export const sessionPath = (host: string, id: string, tab?: string, sub?: string) => {
+  const q = new URLSearchParams();
+  if (tab && tab !== "activity") q.set("tab", tab);
+  else if (sub) q.set("sub", sub);
+  const qs = q.toString();
+  return `/session/${encodeURIComponent(host)}/${encodeURIComponent(id)}${qs ? `?${qs}` : ""}`;
+};
 
 const Ctx = createContext<History | null>(null);
 

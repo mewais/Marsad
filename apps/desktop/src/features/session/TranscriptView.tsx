@@ -1,4 +1,4 @@
-import { memo, useMemo, useState, type ReactNode } from "react";
+import { memo, useContext, useMemo, useState, type ReactNode } from "react";
 import { Code, Tokens, useHighlighted } from "../highlight/Code";
 import { languageFromName } from "../highlight/lang";
 import { CopyButton, DriverBadge, ErrorBoundary, Icon, StatusPill, type DriverDescriptor } from "../../ui";
@@ -7,6 +7,12 @@ import { AttachmentsView, PartsView } from "../media/Parts";
 import { useMediaScope } from "../media/Parts";
 import { parsePathRefs } from "../media/pathRefs";
 import { FileRefs, toolFileRefs } from "../media/refs";
+import type { SubagentInfo } from "../../bridge/wire";
+import { Link, sessionPath } from "../../router";
+import { useAppState } from "../../state";
+import { Elapsed, StopTask } from "./SessionWork";
+import { taskState } from "./tasks";
+import { TranscriptCtx, type TranscriptScopeInfo } from "./transcriptContext";
 import { deliveryNote, resultText, toolArg, type Item, type ToolItem } from "./transcript";
 import type { RowItem, ToolRunItem } from "./toolRuns";
 
@@ -134,16 +140,38 @@ const ToolRun = memo(function ToolRun({ item }: { item: ToolRunItem }) {
   );
 });
 
+const sameInfo = (a: SubagentInfo | undefined, b: SubagentInfo | undefined) => a === b || JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The entry point into a subagent: the tool call that spawned it, with the subagent's state as the daemon reports it
+ * (running until the agent says its task ended, however long ago the tool call returned), its tool calls and how long it
+ * ran, and the way to its own transcript. A row outside a session (no daemon facts) shows only the call.
+ */
 function Subagent({ item }: { item: ToolItem }) {
-  const i = item.input as { description?: string; subagent_type?: string };
+  const scope = useContext(TranscriptCtx);
+  return scope ? <LiveSubagent item={item} scope={scope} /> : <SubagentCard item={item} />;
+}
+
+function LiveSubagent({ item, scope }: { item: ToolItem; scope: TranscriptScopeInfo }) {
+  const info = useAppState((s) => s.sessions[scope.key]?.subagents.find((x) => x.call_id === item.callId), sameInfo);
+  return <SubagentCard item={item} info={info} scope={scope} />;
+}
+
+function SubagentCard({ item, info, scope }: { item: ToolItem; info?: SubagentInfo; scope?: TranscriptScopeInfo }) {
+  const i = (item.input ?? {}) as { description?: string; subagent_type?: string };
+  const st = info ? taskState(info) : undefined;
+  const label = i.description ?? toolArg(item.input);
   return (
-    <div className="subag" data-testid="subagent">
+    <div className="subag" data-testid="subagent" data-running={info?.running ? "" : undefined}>
       <div className="subag-h">
         <Icon name="sub" size="sm" />
-        <b>Subagent · {i.subagent_type ?? item.name}</b>
-        <span className="muted">“{i.description ?? toolArg(item.input)}”</span>
+        <b>Subagent · {info?.subagent_type ?? i.subagent_type ?? item.name}</b>
+        <span className="muted">“{label}”</span>
         <span className="flex1" />
-        <StatusPill status={item.done ? (item.ok === false ? "failed" : "done") : "working"} label={item.done ? (item.ok === false ? "Failed" : "Finished") : "Running"} />
+        {st ? <StatusPill status={st.tone} label={st.word} /> : null}
+        {info ? <span className="faint" data-testid="subagent-meta">{info.tool_calls} tool call{info.tool_calls === 1 ? "" : "s"} · <Elapsed t={info} /></span> : null}
+        {scope && info?.running && info.task_id ? <StopTask sessionKey={scope.key} taskId={info.task_id} what={`subagent ${label}`} /> : null}
+        {scope ? <Link className="btn sm ghost" to={sessionPath(scope.host, scope.id, undefined, item.callId)} data-testid="subagent-open"><Icon name="chevr" size="xs" />Open transcript</Link> : null}
       </div>
       {item.done && typeof item.result === "string" ? <Markdown text={item.result} /> : null}
     </div>
