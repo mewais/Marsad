@@ -288,17 +288,23 @@ export function errorMessage(e: unknown): string {
   return String(e);
 }
 
-/** The runtime's code for a working directory it refused (`RuntimeError::WorkingDirectory`). */
+/** The runtime's codes (`wasit-runtime` `wire.rs` `codes`) for a working directory it refused and for a folder with no conversation to continue. */
 const BAD_WORKING_DIRECTORY = "bad_working_directory";
+const NOTHING_TO_CONTINUE = "nothing_to_continue";
 
 /**
- * The daemon's own message when a request was refused because of its working directory (it names
- * the path as the user typed it), else `null`. The hub relays a host's refusal inside an
+ * The daemon's own message when a request failed with the runtime's `code`, else `null`. The hub relays a host's refusal inside an
  * `upstream` error (`data.cause`), so both shapes are read.
  */
-export function workingDirectoryRefusal(e: unknown): string | null {
+function runtimeRefusal(e: unknown, code: string): string | null {
   const r = e as Partial<W.RpcError> | undefined;
-  if (r?.code === BAD_WORKING_DIRECTORY) return r.message ?? null;
+  if (r?.code === code) return r.message ?? null;
   const data = r?.data as { marsad_error?: string; cause?: Partial<W.RpcError> } | null | undefined;
-  return data?.marsad_error === "upstream" && data.cause?.code === BAD_WORKING_DIRECTORY ? data.cause.message ?? null : null;
+  return data?.marsad_error === "upstream" && data.cause?.code === code ? data.cause.message ?? null : null;
 }
+
+/** The daemon's message when a request was refused because of its working directory (it names the path as the user typed it), else `null`. */
+export const workingDirectoryRefusal = (e: unknown): string | null => runtimeRefusal(e, BAD_WORKING_DIRECTORY);
+
+/** The daemon's message when "continue the most recent conversation" found none in the folder (nothing was created), else `null`. */
+export const nothingToContinue = (e: unknown): string | null => runtimeRefusal(e, NOTHING_TO_CONTINUE);

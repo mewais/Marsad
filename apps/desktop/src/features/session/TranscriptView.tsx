@@ -2,6 +2,7 @@ import { memo, useContext, useMemo, useState, type ReactNode } from "react";
 import { Code, Tokens, useHighlighted } from "../highlight/Code";
 import { languageFromName } from "../highlight/lang";
 import { CopyButton, DriverBadge, ErrorBoundary, Icon, StatusPill, type DriverDescriptor } from "../../ui";
+import { dayTime } from "../../lib/format";
 import { Markdown } from "./Markdown";
 import { AttachmentsView, PartsView } from "../media/Parts";
 import { useMediaScope } from "../media/Parts";
@@ -224,6 +225,7 @@ const TranscriptItemView = memo(function TranscriptItemView({ item, driver }: { 
         <div className="msg-user" data-delivery={item.delivery.state}>
           {item.text ? <Markdown text={item.text} variant="user" /> : null}
           <Delivery item={item} />
+          {item.at !== undefined ? <div className="msg-time faint" data-testid="msg-time">{dayTime(item.at)}</div> : null}
           <AttachmentsView attachments={item.attachments} />
           {item.text ? <CopyButton className="msg-copy" text={item.text} label="Copy prompt" /> : null}
         </div>
@@ -231,7 +233,7 @@ const TranscriptItemView = memo(function TranscriptItemView({ item, driver }: { 
     case "assistant":
       return (
         <div className="msg-ai">
-          <div className="who">{driver ? <DriverBadge driver={driver} compact /> : null} {driver?.displayName ?? "Agent"}</div>
+          <div className="who">{driver ? <DriverBadge driver={driver} compact /> : null} {driver?.displayName ?? "Agent"}{item.at !== undefined ? <span data-testid="msg-time">· {dayTime(item.at)}</span> : null}</div>
           <Markdown text={item.text} />
           <MentionedFiles text={item.text} />
           <CopyButton className="msg-copy" text={item.text} label="Copy response" />

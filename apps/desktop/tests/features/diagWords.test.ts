@@ -42,6 +42,7 @@ const SAMPLES: { [K in TrailEntry["ev"]]: [Extract<TrailEntry, { ev: K }>, strin
   "process.lost": [{ ev: "process.lost", reason: "the shim vanished" }, "The host lost the process — the shim vanished"],
   "runtime.notice": [{ ev: "runtime.notice", code: "stop_requested" }, "A graceful stop was requested"],
   anomaly: [{ ev: "anomaly", kind: "activity_while_idle", first: "tool_call_started" }, "The agent produced output after its turn had ended (first: tool_call_started)"],
+  "earlier.history": [{ ev: "earlier.history", state: "loaded", items: 140, omitted: 0, shortened: 0, unreadable: 0, unrecognised: 0, complete: true, interrupted: false, source: "agent_storage" }, "Earlier history loaded: 140 items (complete), read from the agent's own storage"],
 };
 
 describe("trail words", () => {
@@ -326,4 +327,29 @@ describe("formatters", () => {
   });
   it("sizes", () => expect([0, 1023, 1024, 15_000, 4_300_000, 52_428_800].map(sizeWords)).toEqual(["0 B", "1023 B", "1.0 KB", "15 KB", "4.1 MB", "50 MB"]));
   it("clock times have milliseconds", () => expect(clockMs(1_700_000_000_007)).toMatch(/^\d\d:\d\d:\d\d\.007$/));
+});
+
+describe("trail words: the earlier history of a resumed conversation", () => {
+  const e = (over: Partial<Extract<TrailEntry, { ev: "earlier.history" }>>): TrailEntry => ({ ev: "earlier.history", state: "loaded", items: 140, omitted: 0, shortened: 0, unreadable: 0, unrecognised: 0, complete: true, interrupted: false, ...over });
+
+  it.each<[string, Partial<Extract<TrailEntry, { ev: "earlier.history" }>>, string]>([
+    ["loading", { state: "loading", items: 40, source: "agent_storage" }, "Earlier history is loading: 40 items so far, read from the agent's own storage"],
+    ["loaded complete", { state: "loaded", items: 1 }, "Earlier history loaded: 1 item (complete)"],
+    ["loaded with gaps", { state: "loaded", complete: false, omitted: 120, shortened: 2, unreadable: 1, unrecognised: 3, source: "agent_replay" }, "Earlier history loaded: 140 items (with gaps: 120 older omitted, 2 shortened, 1 unreadable, 3 not understood), replayed by the agent over its protocol"],
+    ["interrupted", { state: "loaded", complete: false, interrupted: true }, "Earlier history loaded: 140 items (with gaps: interrupted)"],
+    ["unavailable", { state: "unavailable", items: 0, reason: "source_missing", source: "agent_storage" }, "Earlier history is not available — the agent's file for the conversation does not exist, read from the agent's own storage"],
+    ["unavailable after some", { state: "unavailable", items: 12, reason: "failed" }, "Earlier history is not available — the import failed; 12 items arrived first"],
+    ["unavailable for a reason this build does not know", { state: "unavailable", items: 0, reason: "from_the_future" }, "Earlier history is not available — from_the_future"],
+    ["none", { state: "none", items: 0 }, "There is no earlier history"],
+    ["a state this build does not know", { state: "paused", items: 5 }, "The earlier history is in the state paused (5 items)"],
+  ])("%s", (_name, over, words) => {
+    expect(trailWords(e(over))).toBe(words);
+  });
+
+  it("is plain unless something is missing or it cannot come", () => {
+    expect(trailTone(e({ state: "loading" }))).toBe("plain");
+    expect(trailTone(e({}))).toBe("plain");
+    expect(trailTone(e({ complete: false, omitted: 3 }))).toBe("warn");
+    expect(trailTone(e({ state: "unavailable", reason: "too_large" }))).toBe("warn");
+  });
 });

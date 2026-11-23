@@ -12,6 +12,7 @@ import type {
 import { methods as M, topics as T } from "../wire";
 import pkg from "../../../package.json";
 import { DRIVERS, FIXTURE_HOSTS, driverDef, inventoryFor, type FixtureHost } from "./catalog";
+import { advanceEarlier, failEarlier, historyRounds, journalEarlier, type HistoryItem } from "./earlier";
 import { FixtureExports } from "./exports";
 import { FixtureLog, scriptedTrail, seedHost, seedHub, trailOf } from "./diagnostics";
 import { fsExists, fsHome, fsList } from "./fs";
@@ -128,8 +129,11 @@ export class FixtureBackend implements Backend {
       this.hosts.set(d.entry.id, { def: d, prompt: null, sessions: new Map() });
     }
     for (const spec of o.specs ?? SPECS) {
-      const { snap, events } = buildSession(spec, now);
-      this.hosts.get(spec.host)!.sessions.set(snap.id, { snap, events, subs: new Set(), host: spec.host });
+      const { snap, events, earlier, earlierPlan } = buildSession(spec, now);
+      const entry: Entry = { snap, events, subs: new Set(), host: spec.host, ...(snap.earlier.state.kind !== "none" ? { earlier, earlierPlan } : {}) };
+      this.hosts.get(spec.host)!.sessions.set(snap.id, entry);
+      // A live fixture goes on importing the history that is still arriving, a record at a time.
+      if (earlierPlan && this.opts.live) this.arrive(entry);
       if (spec.n === MEDIA_SPEC.n) this.files.seed(snap.id, snap.cwd ?? "");
       this.trees.set(`${spec.host}/${snap.id}`, buildTree(spec));
       const script = scriptedTrail(spec.n, events);
@@ -407,7 +411,9 @@ export class FixtureBackend implements Backend {
         const r = p as HistoryRequest;
         // The daemon's filter: everything, the session's own transcript, or one subagent's; `before` and `has_more` are within the scope.
         const scope = r.scope ?? { kind: "all" };
-        const all = this.entry(host, r).events.filter((e) => (r.before == null || e.cursor < r.before) && historyAdmits(scope, e));
+        // `earlier: true` pages the conversation's earlier history instead of the session's own events; the cursors of neither are comparable.
+        const entry = this.entry(host, r);
+        const all = (r.earlier ? entry.earlier ?? [] : entry.events).filter((e) => (r.before == null || e.cursor < r.before) && historyAdmits(scope, e));
         const events = all.slice(Math.max(0, all.length - r.limit));
         return { events, has_more: all.length > events.length };
       }
@@ -830,7 +836,19 @@ export class FixtureBackend implements Backend {
     // Like the daemon: the first prompt is journaled with the start, before the agent says anything.
     const input = first ? this.sim.firstPrompt(e, first, this.requestTrace) : undefined;
     this.publish(e);
+    // A resumed conversation's earlier messages arrive after the start: one record, then the end of the import.
+    if (snap.earlier.state.kind === "loading") {
+      e.earlierPlan = { chunks: [historyRounds(4, this.opts.now() - 26 * 3_600_000)], final: (info) => ({ ...info, state: { kind: "loaded", complete: true } }) };
+      this.arrive(e);
+    }
     this.later(300 * this.opts.speed, () => (first ? this.sim.startTurn(e, first, input) : this.sim.ready(e)));
+  }
+
+  /** The next record of a history that is still arriving comes in a moment, and the one after that (a live fixture). */
+  private arrive(e: Entry) {
+    this.later(1800 * this.opts.speed, () => {
+      if (advanceEarlier(this.sim, e)) this.arrive(e);
+    });
   }
 
   private later(ms: number, fn: () => void) {
@@ -910,6 +928,23 @@ export class FixtureBackend implements Backend {
       /** A turn started by a prompt, as the daemon runs it (it ends by itself unless `finish` is called). */
       startTurn: (prompt: string) => sim.startTurn(e, prompt),
       finishTurn: (reply: string) => sim.finishTurn(e, reply),
+    };
+  }
+
+  /**
+   * The conversation's earlier history of a session, as the engine brings it (tests, demos): `step` takes the next record of a history
+   * that is arriving (the last step is the end, with what was left out), `fail` ends it with a reason, `add` brings some items of
+   * your own with the state it ends in (the snapshot follows from what the journal holds, like the daemon's).
+   */
+  earlier(hostId: HostId, sessionId: string) {
+    const e = this.hosts.get(hostId)!.sessions.get(sessionId)!;
+    const sim = this.sim;
+    return {
+      step: () => advanceEarlier(sim, e),
+      fail: (reason: Parameters<typeof failEarlier>[2]) => failEarlier(sim, e, reason),
+      add: (items: HistoryItem[], next?: Parameters<typeof journalEarlier>[3]) => journalEarlier(sim, e, items, next),
+      /** The history items the journal holds so far. */
+      items: () => e.earlier ?? [],
     };
   }
 

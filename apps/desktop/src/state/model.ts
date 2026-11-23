@@ -5,14 +5,27 @@ import type { DiagRecord, TailKeep } from "../lib/diagRecord";
 import { createStore } from "../lib/store";
 import type { HostState } from "./hosts";
 
-export interface TranscriptSlice {
-  /** Oldest first; contiguous from `events[0]` to the live edge. */
+/** One list of a transcript's events as loaded here. */
+export interface EventList {
+  /** Oldest first; contiguous from `events[0]` to the newest the list holds. */
   events: SessionEvent[];
   /** Older events exist on the host. */
   hasMore: boolean;
   loading: boolean;
   error?: string;
 }
+
+/**
+ * A transcript is two lists, never merged: what the session itself did (`events`, with the live edge), and above it the
+ * conversation's earlier history a resumed session brought along (`earlier`: the history items, in the conversation's order).
+ * The daemon keeps them apart (their cursors are not comparable); so does the store.
+ */
+export interface TranscriptSlice extends EventList {
+  earlier: EventList;
+}
+
+/** Older events exist above what a transcript shows: in the session's own events, or (once those are all here) in the earlier history. */
+export const hasOlder = (s: TranscriptSlice | undefined): boolean => !!s && (s.hasMore || s.earlier.hasMore);
 
 /** A session's trail as loaded here (Developer mode's Diagnostics tab); present only while that panel is open. */
 export interface TrailSlice {

@@ -3,4 +3,4 @@
 /**
  * A failed runtime operation.
  */
-export type RuntimeError = { "error": "session_not_found", "message": string } | { "error": "unknown_driver", "message": string } | { "error": "invalid_request", "message": string } | { "error": "invalid_state", "message": string } | { "error": "unsupported", "message": string } | { "error": "spawn", "message": string } | { "error": "io", "message": string } | { "error": "busy", "message": string } | { "error": "timeout", "message": string } | { "error": "working_directory", "message": string };
+export type RuntimeError = { "error": "session_not_found", "message": string } | { "error": "unknown_driver", "message": string } | { "error": "invalid_request", "message": string } | { "error": "invalid_state", "message": string } | { "error": "unsupported", "message": string } | { "error": "spawn", "message": string } | { "error": "io", "message": string } | { "error": "busy", "message": string } | { "error": "timeout", "message": string } | { "error": "working_directory", "message": string } | { "error": "nothing_to_continue", "message": string };

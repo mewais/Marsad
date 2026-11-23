@@ -3,6 +3,7 @@ import type { AgentEvent } from "./AgentEvent";
 import type { AnomalyKind } from "./AnomalyKind";
 import type { Command } from "./Command";
 import type { CommandStatus } from "./CommandStatus";
+import type { EarlierHistory } from "./EarlierHistory";
 import type { InputId } from "./InputId";
 import type { NoticeCode } from "./NoticeCode";
 import type { Phase } from "./Phase";
@@ -41,4 +42,4 @@ input: InputId, command: Command, status: CommandStatus,
  * The trace id of the request that carried the command, when it had one (a first
  * prompt takes the one of the request that started the session).
  */
-trace?: TraceId | null, } | { "kind": "written", input: InputId, } | { "kind": "write_failed", input?: InputId | null, error: string, } | { "kind": "stderr", text: string, } | { "kind": "phase", phase: Phase, cause: PhaseCause, } | { "kind": "anomaly", anomaly: AnomalyKind, first: string, } | { "kind": "exited", code?: number | null, signal?: number | null, } | { "kind": "lost", reason: string, } | { "kind": "notice", message: string, code: NoticeCode, });
+trace?: TraceId | null, } | { "kind": "written", input: InputId, } | { "kind": "write_failed", input?: InputId | null, error: string, } | { "kind": "stderr", text: string, } | { "kind": "phase", phase: Phase, cause: PhaseCause, } | { "kind": "anomaly", anomaly: AnomalyKind, first: string, } | { "kind": "exited", code?: number | null, signal?: number | null, } | { "kind": "lost", reason: string, } | { "kind": "notice", message: string, code: NoticeCode, } | { "kind": "earlier", earlier: EarlierHistory, });

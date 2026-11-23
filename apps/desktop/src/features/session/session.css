@@ -39,6 +39,17 @@
 .msg-user[data-delivery="not_sent"]{border-style:dashed;border-color:var(--failed-line)}
 .msg-user[data-delivery="not_sent"]>.md,.msg-user[data-delivery="queued"]>.md{opacity:.75}
 .msg-state{margin-top:4px}
+/* A resumed conversation's earlier history: the transcript's upper part, a little quieter than the session's own (no coloured bubbles, answers in the secondary text colour), then a divider. */
+.hist-part{display:flex;flex-direction:column;gap:12px}
+.hist-part .msg-ai{color:var(--fg-2)}
+.hist-part .msg-user{background:var(--surface);color:var(--fg-2)}
+.msg-time{margin-top:4px;font-size:11px;text-align:right}
+.hist-note{display:flex;align-items:flex-start;gap:8px;font-size:12px;line-height:1.45;color:var(--fg-3)}
+.hist-note>.i{flex:none;margin-top:2px}
+.hist-note>div{min-width:0;flex:1}
+.hist-note[data-tone="unavailable"],.hist-note[data-tone="interrupted"]{color:var(--needs)}
+.hist-sep{display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--fg-3)}
+.hist-sep::before,.hist-sep::after{content:"";flex:1;height:1px;background:var(--line)}
 .tool-b{border-top:1px solid var(--line);background:var(--sunken);padding:8px 10px;font-family:var(--f-mono);font-size:11.5px;color:var(--fg-2);white-space:pre;overflow:auto;line-height:1.55}
 .diff{font-family:var(--f-mono);font-size:11.5px;line-height:1.6;background:var(--sunken);overflow:auto}
 .diff .ln{display:grid;grid-template-columns:38px 38px 16px 1fr;white-space:pre}

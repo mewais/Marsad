@@ -10,4 +10,13 @@ export type HistoryRequest = { id: SessionId, before?: number | null, limit: num
 /**
  * Which events: everything (default), the session's own transcript, or one subagent's.
  */
-scope?: HistoryScope, };
+scope?: HistoryScope, 
+/**
+ * Page the conversation's *earlier* history instead of the session's own events: the items
+ * ([`wasit_core::AgentEvent::History`]) the journal holds of the conversation before this
+ * session, oldest first, with the same `before` / `limit` / `has_more` and the same
+ * `scope` filters (applied to the events inside the history items). Their cursors are
+ * journal cursors like any other (greater than the live events shown before the history
+ * arrived): render them above the live transcript, in cursor order among themselves.
+ */
+earlier?: boolean, };

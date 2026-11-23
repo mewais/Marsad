@@ -137,6 +137,15 @@ export function projectEvent(events: readonly SessionEvent[], i: number): TrailI
     case "notice":
       out.push({ ev: "runtime.notice", code: ev.code });
       break;
+    case "earlier": {
+      // One content-free entry per move of the earlier history (`trail.rs`): the state, the counts, the source and the reason.
+      const e = ev.earlier;
+      out.push(nonNull({
+        ev: "earlier.history" as const, state: e.state.kind, items: e.items, omitted: e.gaps.omitted, shortened: e.gaps.shortened, unreadable: e.gaps.unreadable, unrecognised: e.gaps.unrecognised,
+        complete: e.state.kind === "loaded" && e.state.complete, interrupted: e.gaps.interrupted, source: e.source, reason: e.state.kind === "unavailable" ? e.state.reason.kind : undefined,
+      }));
+      break;
+    }
     case "agent":
       out.push(...projectAgent(events, i));
       break;

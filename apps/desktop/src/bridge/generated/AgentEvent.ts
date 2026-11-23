@@ -112,7 +112,11 @@ reply?: string | null,
  * Why the agent ran this turn when it started it by itself and says why (claude
  * `result.origin`); `None` for a turn of ours and for agents that do not say.
  */
-origin?: TurnOrigin | null, } | { "type": "assistant_delta", text: string, message_id?: string | null, } | { "type": "assistant_content", parts: Array<ContentPart>, message_id?: string | null, } | { "type": "user_content", parts: Array<ContentPart>, } | { "type": "thinking_delta", text: string, message_id?: string | null, } | { "type": "tool_call_started", name: string, call_id: string, input: JsonValue, 
+origin?: TurnOrigin | null, } | { "type": "assistant_delta", text: string, message_id?: string | null, } | { "type": "assistant_content", parts: Array<ContentPart>, message_id?: string | null, } | { "type": "user_content", parts: Array<ContentPart>, } | { "type": "user_message", text: string, } | { "type": "history", 
+/**
+ * Milliseconds since the Unix epoch, when the agent's storage records when it happened.
+ */
+at_ms?: number | null, event: AgentEvent, } | { "type": "thinking_delta", text: string, message_id?: string | null, } | { "type": "tool_call_started", name: string, call_id: string, input: JsonValue, 
 /**
  * The call starts a subagent (claude `Task`/`Agent`, ACP `task`).
  */

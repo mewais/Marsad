@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DriverInventory, EffectiveConfig, PromptInput, RecentProject } from "../../bridge/wire";
-import { errorMessage, workingDirectoryRefusal } from "../../bridge/api";
+import { errorMessage, nothingToContinue, workingDirectoryRefusal } from "../../bridge/api";
 import { sessionKey } from "../../bridge/wire";
 import { batchProblem, fromFile, fromPicked, promptFiles, revalidate, type PendingFile } from "../session/attachments";
 import { PendingList } from "../session/Composer";
@@ -48,6 +48,8 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
   const [q, setQ] = useState("");
   // The host refused the project folder: its message, shown next to the field until the folder is edited.
   const [cwdError, setCwdError] = useState<string | null>(null);
+  // The host found no conversation to continue in the folder: its message, with where it was asked (it stops being said once any of that changes).
+  const [noConversation, setNoConversation] = useState<{ message: string; host: string; driver: string; cwd: string } | null>(null);
   const [eff, setEff] = useState<EffectiveConfig | null>(null);
   const set = (p: Partial<NewSessionForm>) => setF((x) => ({ ...x, ...p }));
   // Attachments of the first message: limits come from the chosen driver's descriptor on the chosen host.
@@ -107,6 +109,7 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
     setF({ ...blank(host), driver: preset?.driver ?? "", cwd: preset?.cwd ?? "" });
     setQ("");
     setCwdError(null);
+    setNoConversation(null);
     setFiles([]);
     setDropped([]);
     setStep(null);
@@ -159,8 +162,14 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
   const problem = validate(f, inv, hostUp, target) || problemFiles || "";
   const reach = useReach(f.host);
   const pk = "launch";
-  // The host refused the folder: say so next to the field (and keep the dialog as it is). Any other failure is a toast.
+  // The host refused the folder: say so next to the field (and keep the dialog as it is). A folder with no conversation to continue is said
+  // next to the choice of what to continue. Any other failure is a toast.
   const refused = (e: unknown) => {
+    const none = nothingToContinue(e);
+    if (none !== null) {
+      setNoConversation({ message: none || "There is no conversation to continue in this folder.", host: f.host, driver: f.driver, cwd: f.cwd });
+      return true;
+    }
     const why = workingDirectoryRefusal(e);
     if (why) setCwdError(why);
     return why !== null;
@@ -173,6 +182,7 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
       return;
     }
     setCwdError(null);
+    setNoConversation(null);
     if (target.kind === "blocked") return; // `problem` says why
     if (target.kind !== "launch") return resume(target);
     if (files.length && canAttach) {
@@ -222,6 +232,7 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
   const pending = useAppState((s) => !!s.pending[pk]) || !!step;
   const stepText = !step ? "" : step.step === "creating" ? "Starting the session…" : step.step === "sending" ? "Sending your message…" : `Uploading ${step.name} (${step.index} of ${step.total}) · ${Math.round((step.done / Math.max(1, step.size)) * 100)}%`;
 
+  const nothing = noConversation && f.start === "continue" && f.latest && noConversation.host === f.host && noConversation.driver === f.driver && noConversation.cwd === f.cwd ? noConversation.message : null;
   const changed = eff?.items.filter((i) => i.state !== "inherited").length ?? 0;
   const auto = eff?.items.filter((i) => i.state === "automatic").length ?? 0;
   const verb = onAdd ? "Add to design" : target.kind === "open" ? "Open session" : f.start === "continue" ? "Continue session" : "Start session";
@@ -281,6 +292,13 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
                     <div className="faint">{latest ? <>{latest.title || "(no title)"} · {agoLong(latest.modified_ms)}</> : `whatever ${inv.display_name} last ran in this folder`}</div>
                   </div>
                   <Button size="sm" onClick={() => set({ latest: true, resumeId: "" })} aria-pressed={f.latest}>{f.latest ? "Selected" : "Continue"}</Button>
+                </div>
+              ) : null}
+              {nothing ? (
+                <div className="recent owned bad" role="alert" data-testid="ns-nothing">
+                  <Icon name="warn" size="sm" />
+                  <div className="tx">{nothing}</div>
+                  <Button size="sm" onClick={() => set({ start: "new", latest: false, resumeId: "" })}>Start a new conversation instead</Button>
                 </div>
               ) : null}
               <div className="field">

@@ -14,7 +14,8 @@ export type NotSentCause = InputDropReason | Exclude<CommandStatus["status"], "s
  */
 export type Delivery = { state: "sent" } | { state: "queued" } | { state: "not_sent"; cause: NotSentCause; detail?: string };
 
-export type UserItem = { kind: "user"; key: string; input?: InputId; text: string; delivery: Delivery; attachments: Attachment[] };
+/** `at`: when the conversation says it happened (an item of the earlier history; a live item is shown without a time). */
+export type UserItem = { kind: "user"; key: string; input?: InputId; text: string; delivery: Delivery; attachments: Attachment[]; at?: number };
 export type ThinkingItem = { kind: "thinking"; key: string; text: string };
 export type ToolItem = { kind: "tool"; key: string; callId: string; name: string; input: unknown; subagent: boolean; done: boolean; ok?: boolean; result?: unknown; status?: string; parts: ContentPart[] };
 /** `warn`: the agent or its provider says something to watch (a rate limit), not a failure. */
@@ -26,7 +27,7 @@ export type NoticeItem = { kind: "notice"; key: string; text: string; tone: "inf
  */
 export type Item =
   | UserItem
-  | { kind: "assistant"; key: string; text: string }
+  | { kind: "assistant"; key: string; text: string; at?: number }
   /** Non-text content: an image or file the agent showed, or one the CLI reported in a user message. */
   | { kind: "media"; key: string; role: "assistant" | "user"; parts: ContentPart[] }
   | ThinkingItem
@@ -85,7 +86,18 @@ interface State {
   dirty: boolean;
   /** Whose transcript this is: the events of any other scope are not in it. */
   scope: TranscriptScope;
+  /** Which list of the transcript: the session's own events, or the conversation's earlier history (items wrapped in `history`). */
+  part: Part;
 }
+
+/** The two lists a transcript is made of; each is folded by its own fold, never together. */
+export type Part = "live" | "earlier";
+
+/**
+ * What an item of the earlier history may hold (the daemon's contract: the per-message events). Nothing else in a history item
+ * touches the transcript: history never changes a phase, a gate, a task or a subagent.
+ */
+const HISTORY_EVENTS = new Set<string>(["assistant_delta", "assistant_content", "thinking_delta", "user_message", "user_content", "tool_call_started", "tool_call_updated", "tool_call_finished", "compaction", "notice"]);
 
 interface TaskFacts {
   kind: string;
@@ -93,7 +105,7 @@ interface TaskFacts {
   background: boolean;
 }
 
-const blank = (scope: TranscriptScope): State => ({ items: [], tools: new Map(), users: new Map(), commands: new Map(), gates: new Map(), tasks: new Map(), runs: new Map(), selfTurn: undefined, lastMsg: undefined, count: 0, dirty: false, scope });
+const blank = (scope: TranscriptScope, part: Part): State => ({ items: [], tools: new Map(), users: new Map(), commands: new Map(), gates: new Map(), tasks: new Map(), runs: new Map(), selfTurn: undefined, lastMsg: undefined, count: 0, dirty: false, scope, part });
 
 const push = (st: State, item: Item) => {
   st.items.push(item);
@@ -107,9 +119,9 @@ const replace = (st: State, i: number, item: Item) => {
 /** A real input id (`0` means "unknown", an event from a peer that predates ids). */
 const inputId = (id: unknown): InputId | undefined => (typeof id === "number" && id > 0 ? id : undefined);
 
-function userItem(st: State, key: string, input: InputId | undefined, text: string, delivery: Delivery, attachments: Attachment[]) {
+function userItem(st: State, key: string, input: InputId | undefined, text: string, delivery: Delivery, attachments: Attachment[], at?: number) {
   if (input) st.users.set(input, st.items.length);
-  push(st, { kind: "user", key, input, text, delivery, attachments });
+  push(st, { kind: "user", key, input, text, delivery, attachments, at });
 }
 
 const sameDelivery = (a: Delivery, b: Delivery) => a === b || (a.state === "not_sent" && b.state === "not_sent" && a.cause === b.cause && a.detail === b.detail);
@@ -131,6 +143,8 @@ function apply(st: State, e: SessionEvent) {
   if (!admits(st.scope, e)) return;
   const key = String(e.cursor);
   const items = st.items;
+  // The earlier list holds history items only (agent events); the live list holds none of them.
+  if (st.part === "earlier" && e.kind !== "agent") return;
   switch (e.kind) {
     case "input": {
       const c = e.command;
@@ -162,15 +176,27 @@ function apply(st: State, e: SessionEvent) {
       return;
   }
   if (!e.event) return;
+  // An item of the earlier history is the event it holds, with the time the conversation gives for it.
+  const history = e.event.type === "history";
+  if (history !== (st.part === "earlier")) return;
+  const at = e.event.type === "history" ? e.event.at_ms ?? undefined : undefined;
+  const inner = e.event.type === "history" ? e.event.event : e.event;
   // A subagent's own lines arrive wrapped in their scope: in its transcript they are the transcript.
-  const a = e.event.type === "scoped" ? e.event.event : e.event;
+  const a = inner.type === "scoped" ? inner.event : inner;
+  if (history && !HISTORY_EVENTS.has(a.type)) return;
   switch (a.type) {
+    case "user_message":
+      // Only ever inside an item of the earlier history: a prompt of this session is an `input` event.
+      if (!history) return;
+      userItem(st, key, undefined, a.text, SENT, NO_ATTACHMENTS, at);
+      st.lastMsg = undefined;
+      return;
     case "assistant_delta":
     case "thinking_delta": {
       const kind = a.type === "assistant_delta" ? "assistant" : "thinking";
       const prev = items[items.length - 1];
       if (prev && prev.kind === kind && (a.message_id === undefined || a.message_id === st.lastMsg)) replace(st, items.length - 1, { ...prev, text: prev.text + a.text });
-      else push(st, { kind, key, text: a.text });
+      else push(st, kind === "assistant" ? { kind, key, text: a.text, at } : { kind, key, text: a.text });
       st.lastMsg = a.message_id ?? undefined;
       return;
     }
@@ -262,7 +288,8 @@ function apply(st: State, e: SessionEvent) {
       notice(st, key, a.message, "info");
       return;
     case "compaction":
-      notice(st, key, compactionWords(a.info, e.t), "info");
+      // The time of a compaction in the earlier history is the conversation's own (never when it was imported); absent, none is said.
+      notice(st, key, compactionWords(a.info, st.part === "earlier" ? at : e.t), "info");
       return;
     case "rate_limit_notice":
       notice(st, key, rateLimitWords(a.info), "warn");
@@ -276,9 +303,9 @@ function apply(st: State, e: SessionEvent) {
   }
 }
 
-/** The agent compacted its context: how much it dropped, and when. */
-export function compactionWords(c: CompactionInfo, at: number): string {
-  return `History compacted at ${clockTime(at)} (${c.trigger}): ${compactNumber(c.pre_tokens)} → ${compactNumber(c.post_tokens)} tokens in ${(c.duration_ms / 1000).toFixed(1)}s · ${compactNumber(c.cumulative_dropped_tokens)} dropped so far`;
+/** The agent compacted its context: how much it dropped, and when (when known). */
+export function compactionWords(c: CompactionInfo, at: number | undefined): string {
+  return `History compacted${at === undefined ? "" : ` at ${clockTime(at)}`} (${c.trigger}): ${compactNumber(c.pre_tokens)} → ${compactNumber(c.post_tokens)} tokens in ${(c.duration_ms / 1000).toFixed(1)}s · ${compactNumber(c.cumulative_dropped_tokens)} dropped so far`;
 }
 
 /** The provider's rate-limit status, and when it resets. */
@@ -345,8 +372,8 @@ export interface TranscriptFold {
   update(events: readonly SessionEvent[]): readonly Item[];
 }
 
-export function createTranscriptFold(scope: TranscriptScope = MAIN): TranscriptFold {
-  let st = blank(scope);
+export function createTranscriptFold(scope: TranscriptScope = MAIN, part: Part = "live"): TranscriptFold {
+  let st = blank(scope, part);
   let seen: readonly SessionEvent[] = [];
   let out: readonly Item[] = [];
   return {
@@ -358,7 +385,7 @@ export function createTranscriptFold(scope: TranscriptScope = MAIN): TranscriptF
       let before: readonly Item[] | null = null;
       if (!extended) {
         before = out;
-        st = blank(scope);
+        st = blank(scope, part);
         from = 0;
       }
       for (let i = from; i < events.length; i++) apply(st, events[i]);
@@ -382,8 +409,8 @@ export function createTranscriptFold(scope: TranscriptScope = MAIN): TranscriptF
 }
 
 /** Fold wire events into renderable transcript items (deltas merge, tool calls join by call_id). */
-export function buildItems(events: readonly SessionEvent[], scope: TranscriptScope = MAIN): readonly Item[] {
-  return createTranscriptFold(scope).update(events);
+export function buildItems(events: readonly SessionEvent[], scope: TranscriptScope = MAIN, part: Part = "live"): readonly Item[] {
+  return createTranscriptFold(scope, part).update(events);
 }
 
 /** Short one-line summary of a tool's input (file, command, pattern ...). */

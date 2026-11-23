@@ -1,6 +1,7 @@
 import type { AgentEvent, Command, CommandReply, GateReason, GateRequest, HostId, InputDropReason, InputId, NotContinuable, PhaseCause, RpcError, Scope, SessionEvent, SessionSnapshot, TrailItem, TurnOrigin } from "../wire";
 import { conversationFacts } from "./catalog";
 import { projectEvent } from "./diagnostics";
+import type { BuiltEarlier } from "./earlier";
 import type { SessionEventKind } from "./transcripts";
 import { endAllWork, reduceWork } from "./work";
 
@@ -9,6 +10,10 @@ import { endAllWork, reduceWork } from "./work";
 export interface Entry {
   snap: SessionSnapshot;
   events: SessionEvent[];
+  /** The conversation's earlier history: the history items journaled so far, apart from `events` (`session.history {earlier: true}`). */
+  earlier?: SessionEvent[];
+  /** What is still to arrive of it, when it is arriving (a scripted session; `earlier.ts`). */
+  earlierPlan?: BuiltEarlier["plan"];
   subs: Set<(e: unknown) => void>;
   /** Open `session.trail:<id>` subscriptions: each new event's trail entries go to them. */
   trailSubs?: Set<(item: TrailItem) => void>;

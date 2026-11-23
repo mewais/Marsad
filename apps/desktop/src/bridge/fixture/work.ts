@@ -156,7 +156,8 @@ export function foldWork(events: readonly SessionEvent[]): Work {
 /** `HistoryScope::admits` of the daemon (`wasit-runtime` `wire.rs`): which events a history page of `scope` holds. */
 export function historyAdmits(scope: HistoryScope, e: SessionEvent): boolean {
   if (e.kind !== "agent") return scope.kind !== "subagent";
-  const a = e.event;
+  // An item of the earlier history is filtered by what it holds.
+  const a = e.event.type === "history" ? e.event.event : e.event;
   if (scope.kind === "all") return true;
   if (scope.kind === "main") return a.type !== "scoped";
   if (a.type === "scoped") return a.scope.call_id === scope.call_id;

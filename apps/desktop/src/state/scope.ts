@@ -20,7 +20,8 @@ export const scopeKey = (key: SessionKey, scope: TranscriptScope): string => (sc
  */
 export function admits(scope: TranscriptScope, e: SessionEvent): boolean {
   if (e.kind !== "agent") return scope.kind === "main";
-  const a = e.event;
+  // An item of the conversation's earlier history is filtered by what it holds, as the daemon does.
+  const a = e.event?.type === "history" ? e.event.event : e.event;
   // An agent record with no event (a shape this build does not know) is the session's own, never a subagent's.
   if (!a) return scope.kind === "main";
   if (scope.kind === "main") return a.type !== "scoped";
