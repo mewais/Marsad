@@ -5,6 +5,7 @@ import { FixtureBackend } from "../../src/bridge/fixture/FixtureBackend";
 import { arrange, labelSize, layoutGraph, totalCrossings, totalLabelOverlaps, type LayoutInput } from "../../src/features/workstreams/layout";
 import { crossings, route } from "../../src/features/workstreams/route";
 import { checklist, edgeLabel, summary } from "../../src/features/workstreams/model";
+import { createApi } from "../../src/bridge/api";
 import type { WorkstreamView } from "../../src/bridge/wire";
 import { quietBackend, renderApp } from "../helpers";
 
@@ -220,5 +221,24 @@ describe("spawning workers", () => {
     await user.type(max, "3");
     await user.tab();
     await waitFor(() => expect(lastUpdate(r.backend)).toMatchObject({ workstream: { spawn: { max_agents: 3 } } }));
+  });
+});
+
+describe("saving a workstream as a template", () => {
+  it("keeps the designed agents, their connections and the spawn settings, and leaves out what was spawned at run time", async () => {
+    const b = new FixtureBackend({ live: false, latencyMs: 0, speed: 0 });
+    // ws-ci: `lead` is designed; `repro` was spawned by it at run time, and the connection to it touches `repro`.
+    const before = b.hub.ws.docs.get("ws-ci")!;
+    expect(before.nodes.map((n) => [n.id, !!n.spawned_by])).toEqual([["lead", false], ["repro", true]]);
+    expect(before.spawn.allowed_hosts).toEqual(["win"]);
+
+    const t = await createApi(b).ws.saveTemplate({ workstream: "ws-ci" });
+
+    expect(t.nodes.map((n) => n.id)).toEqual(["lead"]);
+    expect(t.edges).toEqual([]);
+    expect(t.spawn).toEqual(before.spawn);
+    const lead = b.snapshot("hz", before.nodes[0].session!.session);
+    expect(t.nodes[0].launch).toEqual({ host: "hz", driver: lead.driver, cwd: lead.cwd ?? null, model: lead.model ?? null, mode: null, resume: { kind: "new" }, session_id: null });
+    expect(t.nodes.every((n) => n.session == null && n.spawned_by == null && n.spawn_request == null)).toBe(true);
   });
 });

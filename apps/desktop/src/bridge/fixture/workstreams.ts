@@ -1,7 +1,7 @@
 import type {
-  EndCode, GateReason, GateRequest, SpawnGateView, SpawnOutcomeView, SpawnSettings,
+  EndCode, GateReason, GateRequest, NodeLaunch, SpawnGateView, SpawnOutcomeView, SpawnSettings,
   AddNode, Connect, EdgeHistoryRequest, EdgeRef, EdgeView, FromTemplate, HandoffGateView, LaunchReply, LaunchRequest, NodeRef, SaveTemplate, SessionSnapshot,
-  TaskView, TemplateRef, Workstream, WorkstreamDraft, WorkstreamNode, WorkstreamRef, WorkstreamTemplate, WorkstreamUpdate, WorkstreamView, WorkstreamsEvent,
+  TaskView, TemplateRef, Workstream, WorkstreamDraft, WorkstreamEdge, WorkstreamNode, WorkstreamRef, WorkstreamTemplate, WorkstreamUpdate, WorkstreamView, WorkstreamsEvent,
 } from "../wire";
 import { methods as M } from "../wire";
 import { err } from "./runtime";
@@ -89,6 +89,14 @@ export class FixtureWorkstreams {
     this.templates = seedTemplates(now);
     this.tasks = seedTasks(now);
     this.spawns.set("ws-ci", [{ request_id: "fx-repro", node: "lead", host: "hz", session: fixtureId(5), name: "ci-repro-windows", ended_ms: now - 40 * 60_000, end: { code: "launched" } }]);
+  }
+
+  /** The launch spec a template keeps for `n`: its own, or one read from its session (the hub takes the CLI, cwd and model); never a session id or a conversation to resume. */
+  private templateLaunch(n: WorkstreamNode): NodeLaunch {
+    if (n.launch) return { ...n.launch, session_id: null, resume: { kind: "new" } };
+    const snap = n.session ? this.core.session(n.session.host, n.session.session) : undefined;
+    if (!n.session || !snap) throw err("invalid_params", `node ${n.id} has no launch spec and its session is not known; cannot template it`);
+    return { host: n.session.host, driver: snap.driver, cwd: snap.cwd ?? null, model: snap.model ?? null, mode: null, resume: { kind: "new" }, session_id: null };
   }
 
   private aid(w: Workstream, nodeId: string): string | null {
@@ -292,7 +300,15 @@ export class FixtureWorkstreams {
       case M.WS_SAVE_TEMPLATE: {
         const r = p as SaveTemplate;
         const w = this.get(r.workstream);
-        const t: WorkstreamTemplate = { id: `tpl-${w.id}-${this.templates.length}`, schema: 1, name: r.name ?? w.name, description: r.description ?? w.description, nodes: w.nodes.map((n) => ({ ...n, session: null })), edges: w.edges, limits: w.limits, spawn: SPAWN_DEFAULT, layout: w.layout, created_at_ms: now };
+        // As the hub builds it (`ws_save_template`): the designed agents only, with the connections between them;
+        // the workstream's own spawn settings and limits; no session identity.
+        const designed = w.nodes.filter((n) => !n.spawned_by && !n.spawn_request);
+        const kept = new Set(designed.map((n) => n.id));
+        const nodes = designed.map((n): WorkstreamNode => ({ ...n, session: null, spawned_by: null, spawn_request: null, launch: this.templateLaunch(n) }));
+        // "Always allow" decided while running is about those sessions: the template keeps it as "ask".
+        const edges = w.edges.filter((e) => kept.has(e.from) && kept.has(e.to)).map((e): WorkstreamEdge => ({ ...e, policy: e.policy === "always_allow" ? "ask" : e.policy }));
+        const layout = Object.fromEntries(Object.entries(w.layout ?? {}).filter(([id]) => kept.has(id)));
+        const t: WorkstreamTemplate = { id: `tpl-${w.id}-${this.templates.length}`, schema: 1, name: r.name ?? w.name, description: r.description ?? w.description, nodes, edges, limits: w.limits, spawn: w.spawn, layout, created_at_ms: now };
         this.templates.push(t);
         return t;
       }
