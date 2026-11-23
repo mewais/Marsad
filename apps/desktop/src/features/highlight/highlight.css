@@ -19,3 +19,8 @@ pre.hl.ln .hl-l::before { content: attr(data-ln); position: absolute; left: 0; w
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 700; }
 .hljs-subst { color: var(--fg); }
+/* A block with a copy button in its corner: quiet until the block is hovered or something in it has focus. */
+.code-wrap { position: relative; }
+.iconbtn.code-copy { position: absolute; top: 4px; right: 12px; width: 22px; height: 22px; background: var(--raised); border-color: var(--line-2); opacity: 0; }
+.code-wrap:hover .iconbtn.code-copy, .code-wrap:focus-within .iconbtn.code-copy, .iconbtn.code-copy[data-state="copied"], .iconbtn.code-copy[data-state="failed"] { opacity: 1; }
+@media (hover: none) { .iconbtn.code-copy { opacity: 1; } }

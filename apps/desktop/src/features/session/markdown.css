@@ -13,10 +13,16 @@
 .md li.task-list-item{list-style:none}
 .md a{color:var(--accent)}
 .md .pv-link{color:var(--accent);text-decoration:underline dotted;cursor:default}
-.md code.md-ic{font:.9em var(--f-mono);background:var(--sunken);border:1px solid var(--line);border-radius:var(--r1);padding:.05em .35em}
+.md code.md-ic{font:.9em var(--f-mono);background:var(--sunken);border:1px solid var(--line);border-radius:var(--r1);padding:.05em .35em;position:relative}
+/* Inline code copies on click: the copy cursor and an accent border are the only cue, the result shows as a small note above. */
+.md code.md-ic[role=button]{cursor:copy}
+.md code.md-ic[role=button]:hover{border-color:var(--accent)}
+.md code.md-ic[role=button]:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.md code.md-ic .tip{font:500 11.5px/1.4 var(--f-ui);color:var(--fg)}
 .md-code{position:relative;margin:.6em 0;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r2);padding:8px 10px}
 .md-code pre.hl{overflow:auto;max-width:100%}
-.md-lang{position:absolute;top:3px;right:8px;font:10.5px var(--f-mono);color:var(--fg-3);text-transform:lowercase;pointer-events:none}
+.md-code .iconbtn.code-copy{top:-5px;right:-7px}
+.md-lang{position:absolute;top:3px;right:34px;font:10.5px var(--f-mono);color:var(--fg-3);text-transform:lowercase;pointer-events:none}
 .md-table{overflow:auto;max-width:100%;margin:.6em 0}
 .md table{border-collapse:collapse;font-size:.95em}
 .md th,.md td{border:1px solid var(--line);padding:4px 9px;text-align:left;vertical-align:top}

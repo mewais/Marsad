@@ -7,8 +7,7 @@ import { Button, Icon, IconButton, Kbd, Select } from "../../ui";
 import { formatBytes } from "../media/fetch";
 import { batchProblem, fromFile, fromPicked, handling, upload, type PendingFile } from "./attachments";
 import { clearDraft, peekDraft } from "./draft";
-
-const inShell = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+import { inShell } from "../../lib/shell";
 
 /** Pending attachments: thumbnails or chips, each with its tooltip and a remove button. */
 export function PendingList({ files, input, onRemove }: { files: PendingFile[]; input: SessionSnapshot["prompt_input"]; onRemove: (k: string) => void }) {

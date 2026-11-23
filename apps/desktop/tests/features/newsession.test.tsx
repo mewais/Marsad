@@ -48,6 +48,26 @@ describe("new session: dialog", () => {
     await waitFor(() => expect(history.store.get()).toMatch(/^\/session\/x1\//));
   });
 
+  it("Esc on the open model menu closes only the menu: the dialog and the typed message stay; the next Esc closes the dialog", async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    await user.keyboard("n");
+    const dlg = await screen.findByRole("dialog", { name: "New session" });
+    await waitFor(() => expect(within(dlg).getByLabelText("Project folder")).toHaveValue("~/src/ledgerline"));
+    await user.type(within(dlg).getByLabelText(/First message/), "Add a health check");
+    const model = await within(dlg).findByRole("button", { name: /^Model: / });
+    await waitFor(() => expect(model).not.toHaveAccessibleName("Model: Reported after start"));
+    await user.click(model);
+    const list = await screen.findByRole("listbox", { name: "Model" });
+    expect(within(list).getAllByRole("option").length).toBeGreaterThan(1);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox", { name: "Model" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "New session" })).toBeInTheDocument();
+    expect(within(dlg).getByLabelText(/First message/)).toHaveValue("Add a health check");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New session" })).toBeNull());
+  });
+
   it("continues an existing CLI session picked from the list", async () => {
     const user = userEvent.setup();
     const { backend } = await renderApp();

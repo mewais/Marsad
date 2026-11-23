@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { AUTO_MAX_BYTES, HL_MAX_BYTES, HL_MAX_LINES, languageFromName, languageFromTag } from "./lang";
+import { CopyButton } from "../../ui/CopyButton";
 import { plainLines, type Line } from "./tokens";
 import "./highlight.css";
 
@@ -73,17 +74,19 @@ export interface CodeProps {
   focusLine?: number | null;
   className?: string;
   testId?: string;
+  /** A copy button in the block's corner (shown on hover / focus); copies `text` exactly. */
+  copyable?: boolean;
 }
 
 /** Plain-text-safe, highlighted code with optional line numbers and soft wrap. */
-export const Code = memo(function Code({ text, lang, name, mime, lineNumbers = false, wrap = false, focusLine, className, testId }: CodeProps) {
+export const Code = memo(function Code({ text, lang, name, mime, lineNumbers = false, wrap = false, focusLine, className, testId, copyable }: CodeProps) {
   const resolved = (lang !== undefined && lang !== null ? languageFromTag(lang) : null) ?? (name ? languageFromName(name, mime) : null);
   const { lines, lang: used, skipped } = useHighlighted(text, resolved);
   const ref = useRef<HTMLPreElement>(null);
   useEffect(() => {
     if (focusLine) ref.current?.querySelector(`[data-ln="${focusLine}"]`)?.scrollIntoView({ block: "center" });
   }, [focusLine, text]);
-  return (
+  const block = (
     <>
       {skipped === "large" ? <div className="faint fs12 hl-note">Large file: syntax colouring is off.</div> : null}
       <pre ref={ref} className={`hl${lineNumbers ? " ln" : ""}${wrap ? " wrap" : ""}${className ? ` ${className}` : ""}`} data-testid={testId} data-lang={used ?? ""}>
@@ -95,5 +98,13 @@ export const Code = memo(function Code({ text, lang, name, mime, lineNumbers = f
         ))}
       </pre>
     </>
+  );
+  return copyable ? (
+    <div className="code-wrap">
+      {block}
+      <CopyButton className="code-copy" text={text} label="Copy code" />
+    </div>
+  ) : (
+    block
   );
 });

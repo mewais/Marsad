@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { NodePosition, WorkstreamView } from "../../bridge/wire";
 import { linkView, osWord, useAppState, useHost } from "../../state";
-import { Button, ConnState, Icon, hostIcon } from "../../ui";
+import { Button, ConnState, Icon, hostIcon, useEscape } from "../../ui";
 import { GraphNode, NODE_H, NODE_W } from "./GraphNode";
 import { arrange, labelSize, layoutGraph, type Laid, type LayoutInput } from "./layout";
 import { edgeLabel, POLICY } from "./model";
@@ -70,6 +70,7 @@ export function Canvas({ view, design, lanesFor, sel, onSelect, onConnect, onMov
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shape]);
 
+  useEscape(!!drag || !!move, () => (setDrag(null), setMove(null)));
   useEffect(() => {
     if (!drag && !move) return;
     const toCanvas = (e: PointerEvent) => {
@@ -94,14 +95,11 @@ export function Canvas({ view, design, lanesFor, sel, onSelect, onConnect, onMov
         setMove(null);
       }
     };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && (setDrag(null), setMove(null));
     window.addEventListener("pointermove", onMoveEv);
     window.addEventListener("pointerup", onUp);
-    window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("pointermove", onMoveEv);
       window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("keydown", onKey);
     };
   }, [drag, move, zoom, laid, nodeHost, onConnect, onMove]);
 

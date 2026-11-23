@@ -1,5 +1,6 @@
 export * from "./Icon";
 export * from "./Button";
+export * from "./CopyButton";
 export * from "./Kbd";
 export * from "./StatusPill";
 export * from "./status";
@@ -8,6 +9,7 @@ export * from "./HostChip";
 export * from "./Segmented";
 export * from "./Tabs";
 export * from "./Menu";
+export * from "./escape";
 export * from "./Popover";
 export * from "./Dialog";
 export * from "./ToastRegion";

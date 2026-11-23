@@ -47,6 +47,8 @@ export function useApp(): AppContextValue {
 }
 
 export const useApi = (): Api => useApp().api;
+/** The api when rendered inside the app, null for a bare component tree (tests, previews). */
+export const useOptionalApi = (): Api | null => useContext(Ctx)?.api ?? null;
 
 export function useAppState<T>(select: (s: AppState) => T, eq?: (a: T, b: T) => boolean): T {
   return useStore(useApp().store, select, eq);
