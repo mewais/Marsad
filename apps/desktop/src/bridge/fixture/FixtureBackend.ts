@@ -1,4 +1,5 @@
-import type { Backend, HubLinkInfo, RequestOptions, SubscribeOptions, SubscriptionEnd, Unsubscribe } from "../backend";
+import type { Backend, HubLinkInfo, RequestOptions, SubscribeOptions, SubscriptionEnd, UiEvent, Unsubscribe } from "../backend";
+import type { ExportSaved } from "../api";
 import type {
   AttachmentPut,
   FileReadRequest,
@@ -57,7 +58,11 @@ export class FixtureBackend implements Backend {
   private interval: ReturnType<typeof setInterval> | undefined;
   private tickN = 0;
   private promptN = 1;
-  private reqLog: { method: string; params: unknown; host?: HostId }[] = [];
+  private reqLog: { method: string; params: unknown; host?: HostId; trace?: string }[] = [];
+  /** Every diagnostics event the UI recorded (`diagLog`), in order (tests). */
+  readonly diagEvents: UiEvent[] = [];
+  /** What `desktop.export_save` answers (tests set `{ saved: false }` for a cancelled dialog). */
+  exportSaveAnswer: (id: string) => ExportSaved = (id) => ({ path: `/home/me/Downloads/${id}` });
   readonly sim: SessionSim;
   readonly envs: FixtureHostEnvs;
   private invSubs = new Map<HostId, Set<(e: unknown) => void>>();
@@ -121,7 +126,7 @@ export class FixtureBackend implements Backend {
   // ── Backend ───────────────────────────────────────────────────────────────
 
   request<T>(method: string, params?: unknown, opts: RequestOptions = {}): Promise<T> {
-    this.reqLog.push({ method, params, host: opts.host });
+    this.reqLog.push({ method, params, host: opts.host, ...(opts.trace ? { trace: opts.trace } : {}) });
     return new Promise<T>((resolve, reject) => {
       this.later(this.opts.latencyMs, () => {
         try {
@@ -172,6 +177,10 @@ export class FixtureBackend implements Backend {
     entry.subs.add(onEvent);
     if (Number.isFinite(from)) this.deliver(() => entry.subs.has(onEvent) && entry.events.filter((e) => e.cursor > from).forEach((e) => onEvent(e)));
     return () => entry.subs.delete(onEvent);
+  }
+
+  async diagLog(events: readonly UiEvent[]): Promise<void> {
+    this.diagEvents.push(...structuredClone([...events]));
   }
 
   watchHubLink(cb: (l: HubLinkInfo) => void): Unsubscribe {
@@ -329,6 +338,7 @@ export class FixtureBackend implements Backend {
   private hubRequest(method: string, p: unknown): unknown {
     // The desktop shell's window background: a browser tab can always show alpha (CSS only).
     if (method === "desktop.window_surface") return { transparent: (p as { translucent: boolean }).translucent, effect: null };
+    if (method === "desktop.export_save") return this.exportSaveAnswer((p as { id: string }).id);
     if (method === M.FLEET_GIT_REFRESH) {
       const r = p as GitRefresh;
       const e = [...(this.hosts.get(r.host)?.sessions.values() ?? [])].find((x) => x.snap.cwd === r.cwd);

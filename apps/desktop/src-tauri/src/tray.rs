@@ -67,6 +67,6 @@ pub fn set_attention(app: &AppHandle, n: usize) {
         .and_then(|_| t.icon.set_tooltip(Some(&tooltip)))
         .and_then(|_| t.icon.set_title(title.as_deref()));
     if let Err(e) = r {
-        tracing::warn!(error = %e, "cannot update the tray");
+        crate::diag::failed("tray_update", &e);
     }
 }

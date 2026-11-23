@@ -18,6 +18,16 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// The kind as a diagnostics word.
+    pub fn code(self) -> &'static str {
+        match self {
+            Kind::NeedsYou => "needs_you",
+            Kind::Failed => "failed",
+            Kind::Finished => "finished",
+            Kind::HostLost => "host_lost",
+        }
+    }
+
     pub fn enabled(self, p: &NotificationPrefs) -> bool {
         match self {
             Kind::NeedsYou => p.needs_you,

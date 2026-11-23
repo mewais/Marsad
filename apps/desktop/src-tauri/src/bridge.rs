@@ -1,9 +1,11 @@
 //! The generic bridges the webview uses (see `apps/desktop/src/bridge/tauri.ts`):
 //!
-//! * `rpc(method, params, host?)` → result, or a typed error `{code, message, data?}` (the
-//!   daemon's `RpcError`; `data` is the typed `MarsadError` when there is one). Methods under
-//!   `desktop.` are answered natively (open a link/path, reveal, pick a folder); everything
-//!   else goes to the local daemon (the hub), which routes by `host`.
+//! * `rpc(method, params, host?, trace?)` → result, or a typed error `{code, message, data?}`
+//!   (the daemon's `RpcError`; `data` is the typed `MarsadError` when there is one). Methods
+//!   under `desktop.` are answered natively (open a link/path, reveal, pick a folder, save an
+//!   export); everything else goes to the local daemon (the hub), which routes by `host`. A
+//!   `trace` (the id of the user action the request serves, `u-` + 16 hex) travels with the
+//!   request through the hub to the host that serves it, and every hop records it.
 //! * `rpc_subscribe(topic, host?, from?, channel)` → subscription id. Messages on the
 //!   channel are [`SubMessage`]s: every event with its cursor, and the daemon link's state
 //!   whenever it changes. The subscription is durable: after a reconnect or a lagged close it
@@ -26,7 +28,7 @@ use serde_json::{json, Value};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 use tokio::sync::watch;
-use wasit_control::{CallError, Cursor, LinkState};
+use wasit_control::{CallError, Cursor, LinkState, TraceId};
 
 use crate::connection::ConnectionState;
 
@@ -151,22 +153,43 @@ fn cursor(from: Option<Value>) -> Option<Cursor> {
     }
 }
 
+/// The `trace` argument of `rpc`: absent, or a valid trace id (anything else is the webview's
+/// bug and is refused, not dropped: a trace that silently went missing would break the trail).
+fn trace_arg(trace: Option<String>) -> Result<Option<TraceId>, BridgeError> {
+    trace
+        .map(|t| TraceId::new(&t))
+        .transpose()
+        .map_err(|e| BridgeError::new("invalid_params", e.to_string()))
+}
+
+/// Sends `method` to the daemon (the hub) for `host`, carrying `trace`.
+pub async fn forward(
+    client: &MarsadClient,
+    method: &str,
+    params: Value,
+    host: Option<HostId>,
+    trace: Option<TraceId>,
+) -> Result<Value, BridgeError> {
+    Ok(client
+        .call_traced(host.as_ref(), method, params, trace)
+        .await?)
+}
+
 #[tauri::command]
 pub async fn rpc(
     shell: State<'_, Shell>,
     method: String,
     params: Option<Value>,
     host: Option<String>,
+    trace: Option<String>,
 ) -> Result<Value, BridgeError> {
     let params = params.unwrap_or(Value::Null);
+    let trace = trace_arg(trace)?;
     if let Some(m) = method.strip_prefix("desktop.") {
+        // Native methods are answered here: there is no hop to trace.
         return crate::native::call(&shell.app, m, params).await;
     }
-    let host = host_arg(host);
-    Ok(shell
-        .client
-        .call_raw(host.as_ref(), &method, params)
-        .await?)
+    forward(&shell.client, &method, params, host_arg(host), trace).await
 }
 
 fn host_arg(h: Option<String>) -> Option<HostId> {
@@ -296,5 +319,26 @@ mod tests {
         assert_eq!(e.code, "timeout");
         assert_eq!(link_word(&LinkState::Connecting), "connecting");
         assert_eq!(host(Some(String::new())), None);
+    }
+
+    #[test]
+    fn the_trace_argument_is_absent_or_a_trace_id() {
+        assert_eq!(trace_arg(None), Ok(None));
+        let t = trace_arg(Some("u-0123456789abcdef".into()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(t.as_str(), "u-0123456789abcdef");
+        // Anything else is refused, with a message that does not repeat what was sent.
+        for bad in [
+            "",
+            "short",
+            "has space in it",
+            "a/b/c/d/e/f/g",
+            &"x".repeat(41),
+        ] {
+            let e = trace_arg(Some(bad.into())).unwrap_err();
+            assert_eq!(e.code, "invalid_params", "{bad:?}");
+            assert!(bad.is_empty() || !e.message.contains(bad), "{bad:?}");
+        }
     }
 }

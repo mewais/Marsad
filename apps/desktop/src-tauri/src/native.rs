@@ -1,7 +1,8 @@
 //! Native-only `desktop.*` methods of the `rpc` bridge: open a link or path with the OS,
 //! reveal a path in the file manager, pick a folder, set the window background (`surface`),
-//! pick files to attach and read them (only files the user picked), and save downloads into
-//! the Downloads folder (only files this shell created there).
+//! pick files to attach and read them (only files the user picked), save downloads into
+//! the Downloads folder (only files this shell created there), and save an exported
+//! diagnostics file where the user says (`export_save`).
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -144,11 +145,288 @@ pub async fn call(app: &AppHandle, method: &str, p: Value) -> Result<Value, Brid
             files::download_begin(&dir, &a.name).await
         }
         "download_chunk" => files::download_chunk(args(p)?).await,
+        "export_save" => exports::save(app, args(p)?).await,
         "window_surface" => crate::surface::window_surface(app, args(p)?).await,
         other => Err(BridgeError::new(
             "method_not_found",
             format!("unknown method `desktop.{other}`"),
         )),
+    }
+}
+
+/// `desktop.export_save`: copy an export the hub made to where the user chooses.
+mod exports {
+    use std::future::Future;
+    use std::path::{Path, PathBuf};
+
+    use serde::Deserialize;
+    use serde_json::{json, Value};
+    use tauri::{AppHandle, Manager};
+    use tauri_plugin_dialog::DialogExt;
+    use tokio::sync::oneshot;
+
+    use crate::bridge::BridgeError;
+    use crate::diag::ExportsDir;
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct SaveArgs {
+        /// The export's file name in `<data>/diag/exports/` (the hub's `diagnostics.exports`
+        /// topic names it).
+        id: String,
+    }
+
+    fn io(e: impl std::fmt::Display) -> BridgeError {
+        BridgeError::new("io", e.to_string())
+    }
+
+    /// `id` as a plain file name: letters, digits, `.`, `_` and `-`, starting with a letter or
+    /// a digit, at most 200 bytes. No separator, no `..`, no drive or stream (`:`), no absolute
+    /// path, no hidden file. The hub names an export with nothing else.
+    fn file_name(id: &str) -> Result<&str, BridgeError> {
+        let plain = !id.is_empty()
+            && id.len() <= 200
+            && id.starts_with(|c: char| c.is_ascii_alphanumeric())
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+        if plain {
+            Ok(id)
+        } else {
+            Err(BridgeError::new(
+                "invalid_params",
+                "an export is named by a plain file name",
+            ))
+        }
+    }
+
+    /// The export `id` in `exports` (`<data>/diag/exports`): a regular file there, nothing else
+    /// (not a directory, not a link to somewhere else).
+    pub async fn source(exports: &Path, id: &str) -> Result<PathBuf, BridgeError> {
+        let path = exports.join(file_name(id)?);
+        match tokio::fs::symlink_metadata(&path).await {
+            Ok(m) if m.file_type().is_file() => Ok(path),
+            Ok(_) => Err(BridgeError::new("not_found", "no such export")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(BridgeError::new("not_found", "no such export"))
+            }
+            Err(e) => Err(io(e)),
+        }
+    }
+
+    /// Saves export `id` of `exports` where `choose` says: `choose(default_dir, file_name)`
+    /// shows the Save dialog (the one native call, kept out of here so this is testable) and
+    /// answers the file the user picked, or `None` when they cancelled. Answers `{path}` of the
+    /// copy, or `{saved: false}`.
+    pub async fn save_with<F, Fut>(
+        exports: &Path,
+        id: &str,
+        default_dir: Option<PathBuf>,
+        choose: F,
+    ) -> Result<Value, BridgeError>
+    where
+        F: FnOnce(Option<PathBuf>, String) -> Fut,
+        Fut: Future<Output = Result<Option<PathBuf>, BridgeError>>,
+    {
+        let from = source(exports, id).await?;
+        let Some(to) = choose(default_dir, id.to_owned()).await? else {
+            return Ok(json!({ "saved": false }));
+        };
+        // The user may have picked the export itself: copying a file onto itself empties it.
+        if tokio::fs::canonicalize(&to).await.ok() == tokio::fs::canonicalize(&from).await.ok()
+            && tokio::fs::try_exists(&to).await.map_err(io)?
+        {
+            return Err(BridgeError::new(
+                "invalid_params",
+                "choose a place other than the export itself",
+            ));
+        }
+        tokio::fs::copy(&from, &to).await.map_err(io)?;
+        Ok(json!({ "path": to.to_string_lossy() }))
+    }
+
+    /// The Save dialog, defaulting to `dir` and `name`; `None` when the user cancels.
+    async fn ask(
+        app: &AppHandle,
+        dir: Option<PathBuf>,
+        name: String,
+    ) -> Result<Option<PathBuf>, BridgeError> {
+        let mut d = app.dialog().file().set_file_name(name);
+        if let Some(dir) = dir {
+            d = d.set_directory(dir);
+        }
+        let (tx, rx) = oneshot::channel();
+        // The dialog answers on its own thread; nothing waits here but this future.
+        d.save_file(move |f| {
+            // The caller may have gone away.
+            let _ = tx.send(f);
+        });
+        let picked = rx
+            .await
+            .map_err(|_| BridgeError::new("io", "the save dialog went away"))?;
+        picked.map(|f| f.into_path().map_err(io)).transpose()
+    }
+
+    pub async fn save(app: &AppHandle, a: SaveArgs) -> Result<Value, BridgeError> {
+        let exports = app
+            .try_state::<ExportsDir>()
+            .and_then(|d| d.0.clone())
+            .ok_or_else(|| BridgeError::new("io", "this machine's data directory is unknown"))?;
+        let downloads = app
+            .path()
+            .download_dir()
+            .or_else(|_| app.path().temp_dir())
+            .ok();
+        save_with(&exports, &a.id, downloads, |dir, name| ask(app, dir, name)).await
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn scratch(name: &str) -> PathBuf {
+            let dir =
+                std::env::temp_dir().join(format!("marsad-export-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("exports")).unwrap();
+            dir
+        }
+
+        #[tokio::test]
+        async fn only_a_plain_file_name_names_an_export() {
+            let dir = scratch("confine");
+            let exports = dir.join("exports");
+            std::fs::write(exports.join("ok-1.ndjson.gz"), b"x").unwrap();
+            // A secret next to the exports directory, and one far from it.
+            std::fs::write(dir.join("secret.txt"), b"s").unwrap();
+            let outside = dir.join("secret.txt").to_string_lossy().into_owned();
+            for id in [
+                "",
+                ".",
+                "..",
+                "../secret.txt",
+                "..\\secret.txt",
+                "sub/ok-1.ndjson.gz",
+                "sub\\ok-1.ndjson.gz",
+                "/etc/passwd",
+                "C:\\Windows\\win.ini",
+                "C:win.ini",
+                "ok-1.ndjson.gz:stream",
+                ".hidden",
+                "ok 1",
+                "ok-1.ndjson.gz\0",
+                "ok\n",
+                "é",
+                &"a".repeat(201),
+                outside.as_str(),
+            ] {
+                let r = source(&exports, id).await;
+                assert_eq!(
+                    r.as_ref().map_err(|e| e.code.as_str()),
+                    Err("invalid_params"),
+                    "{id:?} -> {r:?}"
+                );
+            }
+            assert_eq!(
+                source(&exports, "ok-1.ndjson.gz").await.unwrap(),
+                exports.join("ok-1.ndjson.gz")
+            );
+            // Plain, but not there (or not a file): not found, never another path.
+            for id in ["missing.ndjson.gz", "adir"] {
+                std::fs::create_dir_all(exports.join("adir")).unwrap();
+                assert_eq!(
+                    source(&exports, id).await.unwrap_err().code,
+                    "not_found",
+                    "{id}"
+                );
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn a_link_out_of_the_exports_directory_is_not_an_export() {
+            let dir = scratch("link");
+            std::fs::write(dir.join("secret.txt"), b"s").unwrap();
+            std::os::unix::fs::symlink(dir.join("secret.txt"), dir.join("exports").join("l.gz"))
+                .unwrap();
+            assert_eq!(
+                source(&dir.join("exports"), "l.gz").await.unwrap_err().code,
+                "not_found"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[tokio::test]
+        async fn the_chosen_place_gets_a_copy_and_a_cancel_copies_nothing() {
+            let dir = scratch("copy");
+            let exports = dir.join("exports");
+            std::fs::write(exports.join("e.ndjson.gz"), b"the export").unwrap();
+            let dest = dir.join("saved.ndjson.gz");
+            let target = dest.clone();
+            let downloads = Some(dir.join("Downloads"));
+            let seen = std::sync::Mutex::new(None);
+            let r = save_with(&exports, "e.ndjson.gz", downloads.clone(), |d, n| {
+                *seen.lock().unwrap() = Some((d, n));
+                async move { Ok(Some(target)) }
+            })
+            .await
+            .unwrap();
+            // The dialog was offered the Downloads folder and the export's own name.
+            assert_eq!(
+                seen.into_inner().unwrap(),
+                Some((downloads.clone(), "e.ndjson.gz".to_string()))
+            );
+            assert_eq!(r, json!({ "path": dest.to_string_lossy() }));
+            assert_eq!(std::fs::read(&dest).unwrap(), b"the export");
+            assert_eq!(
+                std::fs::read(exports.join("e.ndjson.gz")).unwrap(),
+                b"the export"
+            );
+
+            let none = dir.join("none.gz");
+            let r = save_with(&exports, "e.ndjson.gz", downloads.clone(), |_, _| async {
+                Ok(None)
+            })
+            .await
+            .unwrap();
+            assert_eq!(r, json!({ "saved": false }));
+            assert!(!none.exists());
+
+            // Picking the export itself would empty it: refused, the file is untouched.
+            let own = exports.join("e.ndjson.gz");
+            let e = save_with(&exports, "e.ndjson.gz", downloads, |_, _| async move {
+                Ok(Some(own))
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(e.code, "invalid_params");
+            assert_eq!(
+                std::fs::read(exports.join("e.ndjson.gz")).unwrap(),
+                b"the export"
+            );
+
+            // The dialog is never reached for an id that is not an export.
+            let reached = std::sync::atomic::AtomicBool::new(false);
+            let e = save_with(&exports, "../x", None, |_, _| {
+                reached.store(true, std::sync::atomic::Ordering::SeqCst);
+                async { Ok(None) }
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(e.code, "invalid_params");
+            assert!(!reached.load(std::sync::atomic::Ordering::SeqCst));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn arguments_are_exactly_an_id() {
+            assert!(serde_json::from_value::<SaveArgs>(json!({"id": "a.gz"})).is_ok());
+            assert!(
+                serde_json::from_value::<SaveArgs>(json!({"id": "a.gz", "path": "/x"})).is_err()
+            );
+            assert!(serde_json::from_value::<SaveArgs>(json!({})).is_err());
+        }
     }
 }
 

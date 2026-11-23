@@ -63,7 +63,7 @@ impl ConnectionState {
 
 /// What a link state adds to its word: when the next attempt is due (relative, in
 /// milliseconds) and why it is not up.
-fn link_detail(state: &LinkState) -> (Option<u64>, Option<String>) {
+pub(crate) fn link_detail(state: &LinkState) -> (Option<u64>, Option<String>) {
     match state {
         LinkState::Reconnecting {
             next_at,
@@ -131,8 +131,7 @@ mod tests {
             failed.daemon_error.as_deref(),
             Some("cannot start marsad-agent")
         );
-        let json =
-            serde_json::to_value(&ConnectionState::new(&LinkState::Connecting, &[])).unwrap();
+        let json = serde_json::to_value(ConnectionState::new(&LinkState::Connecting, &[])).unwrap();
         assert!(json.get("daemon_error").is_none());
     }
 }

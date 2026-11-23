@@ -10,6 +10,7 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use marsad_proto::diag::AppEvent;
 use marsad_proto::fleet::{FleetEvent, FleetHost};
 use marsad_proto::store::NotificationPrefs;
 use marsad_proto::{methods, HostId, SessionId};
@@ -17,9 +18,11 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use wasit_control::LinkState;
+use wasit_diag::{Code, ErrorInfo};
 
 use crate::bridge::Shell;
 use crate::connection::ConnectionState;
+use crate::diag;
 use crate::notify::{Note, Tracker};
 
 /// How long a notification's session stays the target of "bring the app forward".
@@ -60,7 +63,7 @@ pub fn bring_forward(app: &AppHandle) {
             .and_then(|_| w.unminimize())
             .and_then(|_| w.set_focus())
         {
-            tracing::warn!(error = %e, "cannot bring the window forward");
+            diag::failed("bring_forward", &e);
         }
     }
     navigate_pending(app);
@@ -69,7 +72,7 @@ pub fn bring_forward(app: &AppHandle) {
 pub fn navigate_pending(app: &AppHandle) {
     if let Some(n) = app.state::<FocusTarget>().take() {
         if let Err(e) = app.emit("navigate", &n) {
-            tracing::warn!(error = %e, "cannot send navigate");
+            diag::failed("navigate", &e);
         }
     }
 }
@@ -85,7 +88,7 @@ fn publish(app: &AppHandle, shell: &Shell, next: ConnectionState) {
     });
     if changed {
         if let Err(e) = app.emit("connection", &next) {
-            tracing::warn!(error = %e, "cannot send the connection state");
+            diag::failed("connection_event", &e);
         }
     }
 }
@@ -106,11 +109,11 @@ async fn show(app: &AppHandle, shell: &Shell, notes: Vec<Note>) {
     {
         Ok(Ok(p)) => p,
         Ok(Err(e)) => {
-            tracing::warn!(error = %e, "undecodable notification preferences; using defaults");
+            diag::failed("notification_prefs", &e);
             NotificationPrefs::default()
         }
         Err(e) => {
-            tracing::warn!(error = %e, "cannot read notification preferences; using defaults");
+            diag::failed("notification_prefs", &e);
             NotificationPrefs::default()
         }
     };
@@ -148,7 +151,8 @@ async fn show(app: &AppHandle, shell: &Shell, notes: Vec<Note>) {
             None
         };
         record(&n, suppressed);
-        if suppressed.is_some() {
+        if let Some(why) = suppressed {
+            diag::emit(notification(&n, why));
             continue;
         }
         if let Some(s) = &n.session {
@@ -157,15 +161,24 @@ async fn show(app: &AppHandle, shell: &Shell, notes: Vec<Note>) {
                 session: s.clone(),
             });
         }
-        if let Err(e) = app
+        match app
             .notification()
             .builder()
             .title(&n.title)
             .body(&n.body)
             .show()
         {
-            tracing::warn!(error = %e, "cannot show a notification");
+            Ok(()) => diag::emit(notification(&n, "shown")),
+            Err(e) => diag::failed("notification", &e),
         }
+    }
+}
+
+/// What was decided about a notification (never its title or body: they name sessions).
+fn notification(n: &Note, outcome: &'static str) -> AppEvent {
+    AppEvent::Notification {
+        kind: Code::st(n.kind.code()),
+        outcome: Code::st(outcome),
     }
 }
 
@@ -189,7 +202,7 @@ fn record(n: &Note, suppressed: Option<&str>) {
         .open(&path)
         .and_then(|mut f| writeln!(f, "{line}"));
     if let Err(e) = r {
-        tracing::warn!(error = %e, "cannot write the notification log");
+        diag::failed("notification_log", &e);
     }
 }
 
@@ -201,6 +214,7 @@ pub async fn run(app: AppHandle) {
     let mut tracker = Tracker::default();
     let mut hosts: Vec<FleetHost> = Vec::new();
     let mut daemon: LinkState = link.borrow_and_update().clone();
+    diag::emit(diag::hub_link(&daemon));
     // The webview reads `connection_state` at start: it must not see the placeholder while
     // the link is already up (or already failed).
     publish(&app, &shell, ConnectionState::new(&daemon, &hosts));
@@ -210,10 +224,14 @@ pub async fn run(app: AppHandle) {
                 let ev = match item {
                     Some(Ok((_, ev))) => ev,
                     Some(Err(e)) => {
-                        tracing::error!(error = %e, "the fleet subscription failed");
+                        // From here on no notification, no tray count, no host link updates.
+                        ended("fleet_failed", Some(diag::foreign(&e.to_string())));
                         return;
                     }
-                    None => return,
+                    None => {
+                        ended("fleet_closed", None);
+                        return;
+                    }
                 };
                 apply(&mut hosts, &ev);
                 let notes = tracker.apply(&ev);
@@ -223,13 +241,24 @@ pub async fn run(app: AppHandle) {
             }
             changed = link.changed() => {
                 if changed.is_err() {
+                    ended("link_closed", None);
                     return;
                 }
                 daemon = link.borrow_and_update().clone();
+                diag::emit(diag::hub_link(&daemon));
                 publish(&app, &shell, ConnectionState::new(&daemon, &hosts));
             }
         }
     }
+}
+
+/// The watcher stopped for good: nothing updates the tray, the notifications or the host links
+/// any more, so the app log must say so (`app.watcher_ended`).
+fn ended(reason: &'static str, error: Option<ErrorInfo>) {
+    diag::emit(AppEvent::WatcherEnded {
+        reason: Code::st(reason),
+        error,
+    });
 }
 
 /// Keep the host list (with links) current.

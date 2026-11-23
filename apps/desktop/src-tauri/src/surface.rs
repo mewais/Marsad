@@ -46,6 +46,11 @@ pub async fn window_surface(app: &AppHandle, a: SurfaceArgs) -> Result<Value, Br
     let r = rx
         .await
         .map_err(|_| BridgeError::new("io", "the window went away"))?;
+    crate::diag::emit(marsad_proto::diag::AppEvent::Surface {
+        translucent: a.translucent,
+        transparent: r.transparent,
+        effect: r.effect.map(wasit_diag::Code::st),
+    });
     serde_json::to_value(r).map_err(|e| BridgeError::new("io", e.to_string()))
 }
 
@@ -78,7 +83,6 @@ fn apply(w: &tauri::WebviewWindow, translucent: bool) -> SurfaceResult {
     } else {
         None
     };
-    tracing::info!(?effect, "window surface: translucent");
     SurfaceResult {
         transparent: true,
         effect,
