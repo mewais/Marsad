@@ -110,7 +110,7 @@ async fn attachments_blobs_and_files_travel_over_the_ssh_link() {
     let mut sub = rt.subscribe_session(&id, None);
     loop {
         let e = event(&mut sub).await;
-        if matches!(&e.kind, SessionEventKind::Phase { phase } if phase.name() == "idle") {
+        if matches!(&e.kind, SessionEventKind::Phase { phase, .. } if phase.name() == "idle") {
             break;
         }
     }

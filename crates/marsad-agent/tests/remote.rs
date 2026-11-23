@@ -182,7 +182,8 @@ async fn ssh_host_provision_fleet_git_and_link_drop() {
     let mut seen = Vec::new();
     loop {
         let e = session_event(&mut sub).await;
-        let idle = matches!(&e.kind, SessionEventKind::Phase { phase } if phase.name() == "idle");
+        let idle =
+            matches!(&e.kind, SessionEventKind::Phase { phase, .. } if phase.name() == "idle");
         seen.push(e);
         if idle {
             break;

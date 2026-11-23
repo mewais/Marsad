@@ -199,7 +199,7 @@ async fn next_event(sub: &mut wasit_runtime::TypedSubscription<SessionEvent>) ->
 }
 
 fn is_phase(e: &SessionEvent, name: &str) -> bool {
-    matches!(&e.kind, SessionEventKind::Phase { phase } if phase.name() == name)
+    matches!(&e.kind, SessionEventKind::Phase { phase, .. } if phase.name() == name)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

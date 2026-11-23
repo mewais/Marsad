@@ -252,7 +252,7 @@ async fn gate_round_trip(c: &MarsadClient, host: &HostId) {
     let mut sub = rt.subscribe_session(&id, None);
     loop {
         let e = session_event(&mut sub).await;
-        if matches!(&e.kind, SessionEventKind::Phase { phase } if phase.name() == "idle") {
+        if matches!(&e.kind, SessionEventKind::Phase { phase, .. } if phase.name() == "idle") {
             break;
         }
     }
