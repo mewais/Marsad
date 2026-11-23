@@ -18,17 +18,17 @@ license = "Apache-2.0"
 [workspace.dependencies]
 # Wasit (driver + session-runtime library), pinned by branch. Local development overrides
 # these with the sibling checkout through an untracked `.cargo/config.toml` (see README).
-wasit-core = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
-wasit-control = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
-wasit-runtime = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
-wasit-shim = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
-wasit-fake-cli = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
-wasit-process = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
+wasit-core = { git = "https://github.com/mewais/Wasit", branch = "session-flows" }
+wasit-control = { git = "https://github.com/mewais/Wasit", branch = "session-flows" }
+wasit-runtime = { git = "https://github.com/mewais/Wasit", branch = "session-flows" }
+wasit-shim = { git = "https://github.com/mewais/Wasit", branch = "session-flows" }
+wasit-fake-cli = { git = "https://github.com/mewais/Wasit", branch = "session-flows" }
+wasit-process = { git = "https://github.com/mewais/Wasit", branch = "session-flows" }
 # Wasl (agent-to-agent layer), pinned by branch; it depends on the same Wasit git source, so one
 # copy of Wasit is resolved. Local development patches it to `../Wasl` the same way.
-wasl-proto = { git = "https://github.com/mewais/Wasl", branch = "claude/awesome-euler-r7x45r" }
-wasl-node = { git = "https://github.com/mewais/Wasl", branch = "claude/awesome-euler-r7x45r" }
-wasl-mcp = { git = "https://github.com/mewais/Wasl", branch = "claude/awesome-euler-r7x45r" }
+wasl-proto = { git = "https://github.com/mewais/Wasl", branch = "session-flows" }
+wasl-node = { git = "https://github.com/mewais/Wasl", branch = "session-flows" }
+wasl-mcp = { git = "https://github.com/mewais/Wasl", branch = "session-flows" }
 
 marsad-proto = { path = "crates/marsad-proto" }
 marsad-store = { path = "crates/marsad-store" }

@@ -34,8 +34,8 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 marsad-client = { path = "../../../crates/marsad-client" }
 marsad-proto = { path = "../../../crates/marsad-proto" }
-wasit-control = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
-wasit-process = { git = "https://github.com/mewais/Wasit", branch = "claude/awesome-euler-r7x45r" }
+wasit-control = { git = "https://github.com/mewais/Wasit", branch = "session-flows" }
+wasit-process = { git = "https://github.com/mewais/Wasit", branch = "session-flows" }
 tokio = { version = "1", features = ["sync", "time", "macros", "fs", "io-util", "rt"] }
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
