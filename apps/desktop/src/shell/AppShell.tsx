@@ -13,6 +13,7 @@ import { useStore } from "../lib/store";
 import { CommandPalette } from "./CommandPalette";
 import { ConnectionBanner } from "./ConnectionBanner";
 import { Rail } from "./Rail";
+import { SignInStrip } from "./SignInStrip";
 import { ShortcutHelp } from "./ShortcutHelp";
 import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
@@ -88,6 +89,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <Rail />
         <main className="main" id="main">
           <ConnectionBanner />
+          <SignInStrip />
           {children}
         </main>
       </div>

@@ -52,6 +52,12 @@ export interface Actions {
   /** Record that the human looked at these sessions. Takes effect when the daemon confirms it. */
   markSeen(keys: SessionKey[]): void;
   markAllSeen(): void;
+  /**
+   * Ask the hub to connect a host now (`hosts.reconnect`; pending under `reconnectPendingKey`). For a host
+   * that needs the user at sign-in this is the one click that starts the sign-in: the hub arms one attempt
+   * and the host's questions follow. Resolves true when the hub took the request; its refusal is shown.
+   */
+  reconnectHost(id: HostId, name: string): Promise<boolean>;
   /** Connect to the local daemon again now (the app's own link). */
   reconnectHub(): Promise<void>;
   /** Start the subscriptions that ended again. */
@@ -73,6 +79,7 @@ export const interruptPendingKey = (key: SessionKey) => `cmd:${key}:interrupt`;
 export const stopTaskPendingKey = (key: SessionKey, taskId: string) => `cmd:${key}:stop_task:${taskId}`;
 export const endPendingKey = (key: SessionKey) => `end:${key}`;
 export const continuePendingKey = (key: SessionKey) => `continue:${key}`;
+export const reconnectPendingKey = (host: HostId) => `reconnect:${host}`;
 export const gatePendingKey = (key: SessionKey, requestId: string) => `gate:${key}:${requestId}`;
 
 /**
@@ -211,6 +218,7 @@ export function createActions(store: AppStore, api: Api, controller: Controller,
         return r;
       });
     },
+    reconnectHost: (id, name) => ok(run(reconnectPendingKey(id), `Could not connect to ${name}`, () => api.hosts.reconnect(id))),
     reconnectHub: async () => {
       // The shell's answer is the link changing; a failure to even ask is the only thing to report here.
       try {

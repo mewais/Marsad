@@ -148,3 +148,17 @@ describe("TauriBackend: subscriptions", () => {
     expect(shell.calls).toContainEqual({ cmd: "rpc_unsubscribe", args: { id: 7 } });
   });
 });
+
+describe("the shell's navigate event", () => {
+  it("carries a session, or only a host when the notification was about the host", async () => {
+    const seen: unknown[] = [];
+    const off = new TauriBackend().onNavigate((t) => seen.push(t));
+    await settle();
+    const fire = shell.listeners.get("navigate")!;
+    fire({ payload: { host: "gpu", session: "s-1" } });
+    fire({ payload: { host: "gpu" } });
+    expect(seen).toEqual([{ host: "gpu", session: "s-1" }, { host: "gpu" }]);
+    off();
+    expect(shell.listeners.has("navigate")).toBe(false);
+  });
+});

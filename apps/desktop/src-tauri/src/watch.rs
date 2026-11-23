@@ -1,11 +1,12 @@
 //! The shell's own fleet subscription: connection state for the webview (`connection`
 //! event), OS notifications filtered by the stored preferences, the tray's attention count,
-//! and "clicking a notification focuses that session".
+//! and "clicking a notification focuses what it was about".
 //!
 //! Click handling: desktop notification APIs do not report clicks uniformly, but clicking
 //! one brings the app forward (focus, a second launch caught by single-instance, or the tray).
-//! The last notified session is remembered for a few minutes; when the window is brought
-//! forward in that time the webview gets a `navigate` event `{host, session}` for it.
+//! The last notified target (a session, or just a host: the one that waits for a sign-in, the
+//! one that was lost) is remembered for a few minutes; when the window is brought forward in
+//! that time the webview gets a `navigate` event `{host, session?}` for it.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -25,17 +26,18 @@ use crate::connection::ConnectionState;
 use crate::diag;
 use crate::notify::{Note, Tracker};
 
-/// How long a notification's session stays the target of "bring the app forward".
+/// How long a notification's target stays the target of "bring the app forward".
 const FOCUS_WINDOW: Duration = Duration::from_secs(300);
 
-/// Payload of the `navigate` event.
-#[derive(Debug, Clone, Serialize)]
+/// Payload of the `navigate` event: a session of `host`, or (no `session`) the host itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Navigate {
     pub host: HostId,
-    pub session: SessionId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<SessionId>,
 }
 
-/// The session the last notification was about.
+/// What the last notification was about.
 #[derive(Default)]
 pub struct FocusTarget(Mutex<Option<(Navigate, Instant)>>);
 
@@ -55,7 +57,7 @@ impl FocusTarget {
     }
 }
 
-/// Show and focus the main window; navigate to the last notified session if any.
+/// Show and focus the main window; navigate to what the last notification was about, if recent.
 pub fn bring_forward(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         if let Err(e) = w
@@ -155,12 +157,10 @@ async fn show(app: &AppHandle, shell: &Shell, notes: Vec<Note>) {
             diag::emit(notification(&n, why));
             continue;
         }
-        if let Some(s) = &n.session {
-            app.state::<FocusTarget>().set(Navigate {
-                host: n.host.clone(),
-                session: s.clone(),
-            });
-        }
+        app.state::<FocusTarget>().set(Navigate {
+            host: n.host.clone(),
+            session: n.session.clone(),
+        });
         match app
             .notification()
             .builder()
@@ -290,5 +290,48 @@ fn apply(hosts: &mut Vec<FleetHost>, ev: &FleetEvent) {
         }
         // Sessions are not part of the connection state.
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_host_target_carries_no_session_and_a_session_target_does() {
+        let host = Navigate {
+            host: HostId::new("gpu"),
+            session: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&host).expect("json"),
+            serde_json::json!({"host": "gpu"})
+        );
+        let id = SessionId::random();
+        let session = Navigate {
+            host: HostId::new("gpu"),
+            session: Some(id.clone()),
+        };
+        assert_eq!(
+            serde_json::to_value(&session).expect("json"),
+            serde_json::json!({"host": "gpu", "session": id})
+        );
+    }
+
+    #[test]
+    fn the_last_notification_is_the_target_once() {
+        let t = FocusTarget::default();
+        assert_eq!(t.take(), None);
+        let n = Navigate {
+            host: HostId::new("gpu"),
+            session: None,
+        };
+        t.set(n.clone());
+        assert_eq!(t.take(), Some(n));
+        assert_eq!(
+            t.take(),
+            None,
+            "bringing the window forward again goes nowhere"
+        );
     }
 }

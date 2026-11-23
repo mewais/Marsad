@@ -52,14 +52,20 @@ describe("settings", () => {
     expect(document.documentElement.hasAttribute("data-surface")).toBe(false);
   });
 
-  it("notifications: the four event switches write store.notifications.set; sound and do-not-disturb are settings", async () => {
+  it("notifications: the five event switches write store.notifications.set; sound and do-not-disturb are settings", async () => {
     const user = userEvent.setup();
     const { backend } = await settings("notifications");
     const sw = await screen.findByRole("switch", { name: /A session finished/ });
     expect(sw).toHaveAttribute("aria-checked", "true");
     await user.click(sw);
-    await waitFor(() => expect(backend.requests.find((r) => r.method === "store.notifications.set")?.params).toEqual({ needs_you: true, failed: true, finished: false, host_lost: true }));
+    await waitFor(() => expect(backend.requests.find((r) => r.method === "store.notifications.set")?.params).toEqual({ needs_you: true, failed: true, finished: false, host_lost: true, sign_in_needed: true }));
     expect(sw).toHaveAttribute("aria-checked", "false");
+    // A host that needs you to sign in has its own switch (on by default); it changes only that key.
+    const signIn = screen.getByRole("switch", { name: "A host needs you to sign in" });
+    expect(signIn).toHaveAttribute("aria-checked", "true");
+    await user.click(signIn);
+    await waitFor(() => expect(backend.requests.filter((r) => r.method === "store.notifications.set").slice(-1)[0]?.params).toEqual({ needs_you: true, failed: true, finished: false, host_lost: true, sign_in_needed: false }));
+    await waitFor(() => expect(signIn).toHaveAttribute("aria-checked", "false"));
     await user.click(screen.getByRole("switch", { name: "Do not disturb" }));
     await waitFor(() => expect(backend.requests.some((r) => r.method === "store.settings.set" && (r.params as { key: string }).key === "notify.dnd")).toBe(true));
   });
@@ -182,7 +188,7 @@ describe("settings are what the hub has", () => {
     await user.click(finished);
     await waitFor(() => expect(h.pending()).toBe(1));
     expect(finished).toHaveAttribute("aria-checked", "true");
-    // All four are busy: a second change now would send a stale copy of the other choices.
+    // Every switch is busy: a second change now would send a stale copy of the other choices.
     expect(failed).toBeDisabled();
     act(() => h.reject({ code: "internal", message: "no space" }));
     expect(await screen.findByText("no space")).toBeInTheDocument();

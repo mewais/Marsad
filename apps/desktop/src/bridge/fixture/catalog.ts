@@ -145,7 +145,7 @@ export const FIXTURE_HOSTS: FixtureHost[] = [
   { entry: { id: "win", name: "win-build", kind: { kind: "ssh", target: "build@win-build.lan", port: 22 }, platform: { os: "windows", arch: "x86_64", target: "x86_64-pc-windows-msvc" }, created_at_ms: t0, interactive_auth: false, local_files: false },
     link: { state: "reconnecting", attempt: 3, next_at: { secs_since_epoch: 0, nanos_since_epoch: 0 }, last_error: "connection reset by peer" }, drivers: { claude: "2.1.2", kilo: "7.8.27" } },
   { entry: { id: "gpu", name: "gpu-box", kind: { kind: "ssh", target: "ml@10.0.4.21", port: 22 }, platform: linux, created_at_ms: t0, interactive_auth: true, local_files: false },
-    link: { state: "auth_needed", problem: "auth_needed", detail: "This host asks for a password and a one-time code. Connect when you are ready to sign in." }, drivers: { claude: "2.0.9", codex: "0.51.1" } },
+    link: { state: "auth_needed", problem: "auth_needed", detail: "this host signs in interactively: connect to sign in", held: true }, drivers: { claude: "2.0.9", codex: "0.51.1" } },
   { entry: { id: "pi", name: "pi-runner", kind: { kind: "ssh", target: "pi@pi-runner.lan" }, platform: { os: "linux", arch: "aarch64", target: "aarch64-unknown-linux-gnu" }, created_at_ms: t0, interactive_auth: false, local_files: false },
     link: { state: "provisioning", reason: { kind: "build_mismatch", expected: "0.7.3", found: "0.7.1" } }, drivers: { opencode: "1.3.0" } },
 ];

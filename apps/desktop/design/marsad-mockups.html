@@ -547,6 +547,24 @@ table.t td.r,table.t th.r{text-align:right;font-variant-numeric:tabular-nums}
 .hlist{overflow:auto;padding:12px 20px}
 .hrow{display:grid;grid-template-columns:26px minmax(150px,1.2fr) minmax(150px,1fr) 70px minmax(140px,1fr);gap:12px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r3);margin-bottom:8px;background:var(--surface);cursor:pointer}
 .hrow.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
+/* A host that needs the user at sign-in: the strip, the Inbox group, the sign-in dialog. */
+.banner{display:flex;align-items:center;gap:10px;padding:8px 20px;border-bottom:1px solid var(--line);font-size:12.5px;line-height:1.45;flex:none;flex-wrap:wrap}
+.banner .bt{flex:1;min-width:240px}
+.banner.warn{background:var(--needs-bg);border-color:var(--needs-line);color:var(--needs)}
+.banner .bt span{color:var(--fg-2)}
+.hw{border-bottom:1px solid var(--needs-line);background:var(--needs-bg);padding-bottom:6px;flex:none}
+.hw .grp{padding-top:10px}
+.hw-row{display:flex;align-items:center;gap:12px;padding:3px 20px;min-height:32px}
+.hw-n{font-weight:600;font-size:13px;flex:none}
+.hw-w{flex:1;min-width:0;font-size:12px;color:var(--fg-2)}
+.hrow .hst{display:flex;flex-direction:column;gap:2px;align-items:flex-start}
+.authp{display:flex;flex-direction:column;gap:10px}
+.authp-text{margin:0;font-family:var(--f-mono);font-size:12.5px;white-space:pre-wrap;word-break:break-word;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r2);padding:10px 12px;color:var(--fg)}
+.authp-input{height:34px;border:1px solid var(--line-2);border-radius:var(--r2);background:var(--sunken);color:var(--fg);padding:0 10px;font:inherit;font-family:var(--f-mono)}
+.authp-queue,.authp-again{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;padding:8px 10px;border:1px solid var(--needs-line);border-radius:var(--r2);background:var(--needs-bg);color:var(--fg)}
+.authp-queue .i,.authp-again .i{color:var(--needs);flex:none;margin-top:1px}
+.authp-retry{display:flex;gap:8px;align-items:center;font-size:12.5px}
+
 .hrow .hn{font-weight:600;display:flex;flex-direction:column;gap:1px}
 .hrow .hn small{font-weight:400;color:var(--fg-3);font-size:11.5px}
 .clis{display:flex;gap:4px;flex-wrap:wrap}
@@ -828,7 +846,7 @@ table.t td.r,table.t th.r{text-align:right;font-variant-numeric:tabular-nums}
       <div class="brand"><svg class="i lg c-accent"><use href="#i-dome"/></svg>Marsad <span class="ar" lang="ar">مرصد</span></div>
       <div class="cmdk"><svg class="i sm"><use href="#i-search"/></svg><span>Search sessions, hosts, commands</span><kbd>Ctrl K</kbd></div>
       <div class="tb-right">
-        <button class="iconbtn" title="Notifications" data-go="notify"><svg class="i"><use href="#i-bell"/></svg><span class="dotn">6</span></button>
+        <button class="iconbtn" title="Notifications" data-go="notify"><svg class="i"><use href="#i-bell"/></svg><span class="dotn">7</span></button>
         <div class="split" id="split">
           <button class="btn primary sm" data-go="new:s"><svg class="i sm"><use href="#i-plus"/></svg>New session <kbd>N</kbd></button>
           <button class="btn primary sm caret" id="split-caret" aria-haspopup="menu" aria-expanded="false" title="More ways to start"><svg class="i sm"><use href="#i-chev"/></svg></button>
@@ -844,7 +862,7 @@ table.t td.r,table.t th.r{text-align:right;font-variant-numeric:tabular-nums}
       <nav class="rail" id="rail">
         <a data-go="home"><svg class="i lg"><use href="#i-inbox"/></svg>Inbox<span class="badge">4</span></a>
         <a data-go="workstreams:list"><svg class="i lg"><use href="#i-graph"/></svg>Workstreams</a>
-        <a data-go="hosts"><svg class="i lg"><use href="#i-server"/></svg>Hosts</a>
+        <a data-go="hosts"><svg class="i lg"><use href="#i-server"/></svg>Hosts<span class="badge" aria-label="1 host needs you to sign in">1</span></a>
         <a data-go="config"><svg class="i lg"><use href="#i-layers"/></svg>Config</a>
         <span class="sp"></span>
         <a data-go="notify"><svg class="i lg"><use href="#i-gear"/></svg>Settings</a>
@@ -855,6 +873,7 @@ table.t td.r,table.t th.r{text-align:right;font-variant-numeric:tabular-nums}
       <span class="sb-item"><span class="conn ok"><span class="pip"></span></span>thinkpad-x1</span>
       <span class="sb-item"><span class="conn ok"><span class="pip"></span></span>hetzner-ax41</span>
       <span class="sb-item c-needs"><svg class="i xs"><use href="#i-refresh"/></svg>win-build reconnecting in 4s</span>
+      <span class="sb-item c-needs" data-go="hosts:h"><svg class="i xs"><use href="#i-key"/></svg>gpu-box · needs you to sign in</span>
       <span class="sp"></span>
       <span class="sb-item"><svg class="i xs"><use href="#i-failed"/></svg>2 failed</span>
       <span class="sb-item tnum">Today $18.47 · 14 sessions</span>
@@ -936,7 +955,7 @@ const SCREENS=[
  {id:'graph',n:4,label:'Workstream',short:'Graph',vars:[['run','Running'],['spawn','Spawning'],['design','Design']]},
  {id:'new',n:5,label:'New session',short:'New',vars:[['s','New session'],['w','Add agent'],['c','Continue · Marsad session'],['f','Folder refused']]},
  {id:'config',n:6,label:'Agent config',short:'Config'},
- {id:'hosts',n:7,label:'Hosts',short:'Hosts',vars:[['a','Host list'],['b','Add host']]},
+ {id:'hosts',n:7,label:'Hosts',short:'Hosts',vars:[['a','Host list'],['b','Add host'],['h','Needs you to sign in'],['q','Sign-in · asking'],['r','Sign-in · asks again'],['w','Sign-in · withdrawn']]},
  {id:'gates',n:8,label:'Gates + alerts',short:'Gates',vars:[['a','Gate review'],['b','Notifications']]},
  {id:'diag',n:9,label:'Diagnostics',short:'Diag',vars:[['s','Settings'],['x','Export · running'],['y','Export · done'],['z','Export · failed'],['u','Export · hub down'],['p','Session · this computer'],['r','Session · remote'],['h','Host · connect failed'],['l','Host · local']]},
 ];
@@ -959,6 +978,10 @@ const CAPTIONS={
  'config':'Marsad shows what each agent CLI already has, read-only, then layers your overrides on top. Only the Wasl connector is added by Marsad itself.',
  'hosts-a':'Every machine with its connection state in words, installed CLIs and versions, and what runs there.',
  'hosts-b':'Add-host flow: connect over SSH, install the helper, detect CLIs.',
+ 'hosts-h':'A host that needs you at sign-in (each connect asks for a password, a code or a push approval) is not reconnected by Marsad: it waits, and says so. The chip says it needs you, the card says why it dropped (when the hub says) and that Marsad will not retry on its own, and the one action is Sign in. Its sessions stay listed as last known and keep running there. The same click is in the strip above every other page, at the top of the Inbox, and in the host row. Nothing is sent to the host until you click.',
+ 'hosts-q':'The sign-in dialog cannot be dismissed by Esc or by a click outside: it ends only with Sign in (or Yes / No / Continue for those questions) or the explicit Cancel sign-in, which says what it does. Several hosts asking at once are asked one at a time, oldest first; the dialog says which host this question is for and how many are waiting. Every answer is sent with its question\'s id.',
+ 'hosts-r':'A second approval within one sign-in says so, in words, before you answer, and why Marsad had to reconnect (updating the helper, a different host identity, switching to the shell Windows hosts need).',
+ 'hosts-w':'When the daemon withdraws the question on screen (its attempt ended), the dialog says so; it never silently puts another host\'s question under your cursor, and nothing you typed is sent anywhere. Next question shows the following host.',
  'gates-a':'Full gate review. Permission, edit and plan choices mirror the agent; handoffs use Marsad\'s three fixed choices. Toasts bottom-right are the error surface.',
  'gates-b':'Settings collapsed into six sections. Notifications are one table: event by channel.',
  'diag-s':'Settings → Diagnostics. The export card is always there, with Developer mode on or off: one file with the logs of this app, this computer and the hosts you are connected to, for a window of 24 hours, 3 or 7 days. Developer mode below it only changes what Marsad shows (the logs are always written).',
@@ -1082,7 +1105,7 @@ function ibxRow(s){
 }
 function homeA(){
   const groups=[['needs','Needs you','Answer here or press Enter to open'],['failed','Failed',''],['done','Finished, not seen yet','<button class="btn sm ghost">Mark all seen</button>'],['working','Working',''],['idle','Idle',''],['ended','Ended','']];
-  return homeHeader(`<button class="btn sm ghost">${I('i-eye','xs')}Mark all seen</button>`)+homeToolbar()+
+  return homeHeader(`<button class="btn sm ghost">${I('i-eye','xs')}Mark all seen</button>`)+homeToolbar()+hostsWaiting()+
   `<div class="ibx"><div class="ibx-head"><span>Status</span><span>Session</span><span class="drvh">Driver</span><span>Host</span><span>Project · branch</span><span class="r">Last</span><span class="r">Cost</span></div>`+
   groups.map(([st,label,act])=>{const L=S.filter(s=>s.st===st);
     return `<div class="grp c-${st}">${stIcon(st,'sm')}${label}<span class="cnt">${L.length}</span><span class="gline"></span>${act?`<span class="gact">${act}</span>`:''}</div>`+L.map(ibxRow).join('');}).join('')+
@@ -1673,14 +1696,14 @@ const HL=[
  {k:'x1',n:'thinkpad-x1',os:'Ubuntu 24.04 · x86_64',where:'Local',c:['ok','Connected'],sub:'helper v0.7.3 · 2ms',s:6,cli:[['CC','2.1.4'],['CX','0.58.0'],['OC','1.3.2']]},
  {k:'hz',n:'hetzner-ax41',os:'Debian 12 · x86_64',where:'dev@95.217.40.12:22',c:['ok','Connected'],sub:'helper v0.7.3 · 38ms',s:6,cli:[['CC','2.1.4'],['CX','0.58.0'],['OC','1.3.2']]},
  {k:'win',n:'win-build',os:'Windows 11 Pro · x64',where:'build@win-build.lan:22',c:['warn','Reconnecting in 4s'],sub:'lost 15:38 · attempt 3 of 10',s:4,cli:[['CC','2.1.2'],['KC','7.8.27']]},
- {k:'gpu',n:'gpu-box',os:'Ubuntu 22.04 · x86_64',where:'ml@10.0.4.21:22',c:['bad','Auth needed'],sub:'key rejected at 09:14',s:0,cli:[['CC','2.0.9'],['CX','0.51.1']]},
+ {k:'gpu',n:'gpu-box',os:'Ubuntu 22.04 · x86_64',where:'ml@10.0.4.21:22',c:['warn','Needs you to sign in'],sub:'dropped: connection reset by peer',held:1,s:2,cli:[['CC','2.0.9'],['CX','0.51.1']]},
  {k:'pi',n:'pi-runner',os:'Raspberry Pi OS · arm64',where:'pi@pi-runner.lan:22',c:['info','Helper updating'],sub:'0.7.1 → 0.7.3 · 64%',s:0,cli:[['OC','1.3.0']]},
 ];
 function hostsList(sel){
   return `<div class="hlist">${HL.map(h=>`<div class="hrow ${h.k===sel?'on':''}">
    <span>${I(h.k==='x1'?'i-laptop':h.k==='win'?'i-monitor':'i-server','lg')}</span>
    <span class="hn">${h.n}<small>${h.os}</small></span>
-   <span style="display:flex;flex-direction:column;gap:2px">${conn(h.c[0],h.c[1])}<span class="faint" style="font-size:11px">${h.sub}</span></span>
+   <span class="hst">${conn(h.c[0],h.c[1])}<span class="faint" style="font-size:11px">${h.sub}</span>${h.held?`<button class="btn sm primary" style="margin-top:2px">${I('i-key','xs')}Sign in</button>`:''}</span>
    <span style="font-size:12px"><b class="tnum">${h.s}</b> <span class="faint">sessions</span></span>
    <span class="clis">${h.cli.map(c=>`<span class="tag"><b class="mono" style="font-size:10px">${c[0]}</b> ${c[1]}</span>`).join('')}</span></div>`).join('')}</div>`;
 }
@@ -1713,6 +1736,30 @@ function hostsB(){
    <div class="dlg-f"><button class="btn ghost">Back</button><span class="sp"></span><button class="btn" data-v-go="a">Cancel</button><button class="btn primary" disabled style="opacity:.6">Next: detect agents</button></div></div></div>`;
 }
 
+
+const HELD_Q=(dlgBody,foot)=>`<div class="scrim"><div class="dlg" role="dialog" aria-modal="true" aria-label="Sign in to gpu-box" style="width:min(480px,100%)">
+   <div class="dlg-h"><span class="h2">Sign in to gpu-box</span><span class="sp"></span></div>
+   <div class="dlg-b"><div class="authp">${dlgBody}</div></div><div class="dlg-f">${foot}</div></div></div>`;
+function hostsHeld(){
+  return `<div class="ph"><h1 class="h1">Hosts</h1><span class="muted" style="font-size:12.5px">5 machines · 3 connected</span><span class="sp"></span><button class="btn sm">${I('i-refresh','xs')}Check all</button><button class="btn sm primary">${I('i-plus','xs')}Add host</button></div>
+  <div class="hs">${hostsList('gpu')}
+   <aside class="hd"><div style="display:flex;align-items:center;gap:10px">${I('i-server','lg')}<div><div class="h2">gpu-box</div><div class="faint" style="font-size:12px">Linux · x86_64 · SSH</div></div><span class="sp" style="flex:1"></span>${conn('warn','Needs you to sign in')}</div>
+    <div class="gate"><div class="gate-h">${I('i-key','sm')}Needs you to sign in</div>
+     <div style="font-size:12.5px">The connection to gpu-box dropped: connection reset by peer. Marsad will not reconnect it on its own: signing in needs you.</div>
+     <div class="faint" style="font-size:12px">Every attempt asks you for something (a password, a code or an approval on your phone), so it waits for your click.</div>
+     <div class="acts"><button class="btn sm primary">${I('i-key','xs')}Sign in</button></div></div>
+    <div><h4 class="eyebrow" style="margin:0 0 8px">Connection</h4><dl class="kvl"><dt>Address</dt><dd class="mono">ml@10.0.4.21:22</dd><dt>Status</dt><dd>dropped: connection reset by peer</dd><dt>Sign-in</dt><dd>Interactive (asks each time)</dd></dl></div>
+    <div><h4 class="eyebrow" style="margin:0 0 8px">Sessions here</h4><div class="small faint" style="font-size:12px;margin-bottom:4px">Its 2 sessions keep running there and reattach once you sign in.</div><div class="hist"><div class="h"><span class="faint">${I('i-working','sm')}</span><span>train-embedding-sweep</span><span class="w lk" style="color:var(--fg-3)">Working · last known</span></div><div class="h"><span class="faint">${I('i-idle','sm')}</span><span>eval-harness</span><span class="w lk" style="color:var(--fg-3)">Idle · last known</span></div></div></div>
+   </aside></div>`;
+}
+function signInDialog(kind){
+  const queue=`<div class="authp-queue" role="status">${I('i-key','sm')}<span>1 more host is waiting after this one: pi-runner. They are asked one at a time, oldest first.</span></div>`;
+  const again=kind==='r'?`<div class="authp-again" role="note">${I('i-refresh','sm')}The host asks again because Marsad had to reconnect after updating its helper there.</div>`:'';
+  const cancelNote=`<p class="faint" style="font-size:12px;margin:0">Cancel sign-in ends this attempt. gpu-box does not reconnect on its own, so you will have to click Sign in again to try again.</p>`;
+  if(kind==='w') return HELD_Q(`<div class="authp-retry c-needs">${I('i-warn','sm')}The question from gpu-box was withdrawn.</div><p style="margin:0">Its sign-in attempt ended before you answered, so nothing you typed was used and nothing was sent. If gpu-box still needs you, sign in again from the Hosts page.</p>${queue.replace(' after this one','')}`,`<span class="sp"></span><button class="btn primary">Show the next question</button>`);
+  return HELD_Q(`${queue}${again}<div class="eyebrow">gpu-box asks</div><pre class="authp-text">ml@10.0.4.21's password:</pre><input class="authp-input" type="password" value="••••••••" aria-label="Password or passphrase"><p class="faint" style="font-size:12px;margin:0">Marsad passes your answer to ssh on this machine and does not store it.</p>${cancelNote}`,`<span class="faint" style="font-size:12px">Gives up in 1m 48s</span><span class="sp"></span><button class="btn">Cancel sign-in</button><button class="btn primary">Sign in</button>`);
+}
+function hostsSignIn(kind){ return hostsHeld().replace('<div class="gate">','<div class="gate" style="opacity:.9">')+signInDialog(kind); }
 /* ================= SCREEN: GATES + NOTIFICATIONS ================= */
 function toasts(){
   return `<div class="toasts" aria-live="polite">
@@ -1782,7 +1829,7 @@ function gateOverlay(t){
 function gatesA(){ return homeA()+gateOverlay(state.gtab).replace('class="scrim"','class="scrim left"')+toasts(); }
 function gatesB(){
   const nav=[['General','i-gear'],['Appearance','i-eye'],['Notifications','i-bell'],['Keyboard','i-slash'],['Hosts','i-server'],['Agents','i-layers']];
-  const ev=[['Needs you: permission or question','i-needs','needs',[1,1,1,1]],['Handoff waiting','i-handoff','needs',[1,1,0,1]],['Failed','i-failed','failed',[1,1,1,1]],['Finished','i-done','done',[1,0,0,1]],['Host lost connection','i-refresh','needs',[1,1,0,0]],['Host back online','i-server','done',[1,0,0,0]],['Spend cap reached','i-coin','needs',[1,1,0,1]],['Working (progress)','i-working','working',[0,0,0,0]]];
+  const ev=[['Needs you: permission or question','i-needs','needs',[1,1,1,1]],['Handoff waiting','i-handoff','needs',[1,1,0,1]],['Failed','i-failed','failed',[1,1,1,1]],['Finished','i-done','done',[1,0,0,1]],['Host lost connection','i-refresh','needs',[1,1,0,0]],['A host needs you to sign in','i-key','needs',[1,1,0,1]],['Host back online','i-server','done',[1,0,0,0]],['Spend cap reached','i-coin','needs',[1,1,0,1]],['Working (progress)','i-working','working',[0,0,0,0]]];
   return `<div class="set"><nav class="setnav"><div class="eyebrow" style="padding:0 8px 6px">Settings</div>${nav.map(([l,ic])=>`<div class="lr-item ${l==='Notifications'?'on':''}">${I(ic,'sm')}${l}</div>`).join('')}</nav>
   <div class="setbody"><div><h1 class="h1">Notifications</h1><div class="muted" style="margin-top:4px">Choose which events reach you and how. Errors always show in the inbox, whatever you pick here.</div></div>
    <div class="card" style="overflow:hidden"><table class="t nt"><thead><tr><th>Event</th><th class="c">In-app toast</th><th class="c">Desktop notification</th><th class="c">Sound</th><th class="c">Tray badge</th></tr></thead><tbody>
@@ -1900,6 +1947,15 @@ function diagScreen(v){
   return v==='s'?diagSettings('idle'):v==='x'?diagSettings('running'):v==='y'?diagSettings('done'):v==='z'?diagSettings('failed'):v==='u'?diagSettings('down'):v==='p'?diagSessionLocal():v==='r'?diagSessionRemote():diagHost(v==='l');
 }
 
+/* ================= HOSTS THAT NEED YOU: strip and Inbox group ================= */
+function signInStrip(){
+  return `<section class="banner warn" aria-label="Hosts waiting for you">${I('i-key','sm')}<div class="bt"><b>gpu-box needs you to sign in.</b> <span>The connection to gpu-box dropped: connection reset by peer. Marsad will not reconnect it on its own: signing in needs you. Its 2 sessions keep running there and reattach once you sign in.</span></div><button class="btn sm primary" data-go="hosts:h">${I('i-key','xs')}Sign in</button></section>`;
+}
+function hostsWaiting(){
+  return `<section class="hw" aria-label="Hosts waiting for you"><div class="grp c-needs">${I('i-key','sm')}Hosts waiting for you<span class="cnt">1</span><span class="gline"></span><span class="gact">Marsad will not reconnect these on its own: signing in needs you</span></div>
+   <div class="hw-row"><span class="hw-n">gpu-box</span><span class="hw-w">The connection to gpu-box dropped: connection reset by peer. Its 2 sessions keep running there and reattach once you sign in.</span><button class="btn sm primary">${I('i-key','xs')}Sign in</button></div></section>`;
+}
+
 /* ================= RENDER ================= */
 function render(){
   const m=document.getElementById('main');
@@ -1911,9 +1967,10 @@ function render(){
   else if(sc==='graph') html=v==='design'?designScreen():graphScreen();
   else if(sc==='new') html=newScreen();
   else if(sc==='config') html=configScreen();
-  else if(sc==='hosts') html=v==='a'?hostsA():hostsB();
+  else if(sc==='hosts') html=v==='a'?hostsA():v==='b'?hostsB():v==='h'?hostsHeld():hostsSignIn(v);
   else if(sc==='gates') html=v==='a'?gatesA():gatesB();
   else if(sc==='diag') html=diagScreen(v);
+  if(sc!=='home'&&sc!=='hosts') html=signInStrip()+html;
   m.innerHTML=html;
   document.getElementById('overlay').innerHTML=state.gateOpen?`<div style="position:absolute;inset:40px 0 26px 78px;z-index:40">${gateOverlay(state.gateOpen)}</div>`:'';
   const tr=m.querySelector('.transcript'); if(tr) tr.scrollTop=tr.scrollHeight;

@@ -1,7 +1,25 @@
 //! Which fleet changes deserve an OS notification (the single notifier, ARCHITECTURE §7):
-//! a session that starts needing you, fails, or finishes its work, and a remote host whose
-//! link is lost. Pure: [`Tracker::apply`] turns fleet events into [`Note`]s; the watcher
-//! filters them by the stored preferences and shows them.
+//! a session that starts needing you, fails, or finishes its work, a remote host whose link is
+//! lost, and a remote host that waits for the user to sign in. Pure: [`Tracker::apply`] turns
+//! fleet events into [`Note`]s; the watcher filters them by the stored preferences and shows
+//! them.
+//!
+//! What a host's link change deserves ([`link_verdict`]; `was` is whether the host's previous
+//! link was connected, `-` = never seen by this tracker, i.e. first sight at app start):
+//!
+//! | was       | now                                  | note                                           |
+//! |-----------|--------------------------------------|------------------------------------------------|
+//! | connected | `auth_needed`, `held`                | "needs you to sign in" (the hub will not retry) |
+//! | -         | `auth_needed`, `held`                | "needs you to sign in" (first sight)           |
+//! | not up    | `auth_needed`, `held`                | none: already announced, or the user just tried |
+//! | any       | `auth_needed`, not `held`            | none from `-`/not up; "lost" from connected     |
+//! | connected | `reconnecting`/`connecting`/…        | "lost", saying Marsad is reconnecting          |
+//! | connected | `failed`/`incompatible`/`stopped`    | "lost", saying Marsad does not retry on its own |
+//!
+//! So a host that stays held raises one note; a new one needs it to be connected again and
+//! dropped again. A user cancelling their own attempt gives `held: false`: nothing. The
+//! tracker's memory of "was connected" survives a `Reset` (a re-subscription), so a repeated
+//! snapshot of the same held link is not a second announcement.
 //!
 //! When a session has *finished* (decided by [`verdict`], from the snapshots alone, no timer).
 //! The engine's phase is `working` while a turn is open **or** a background task runs, so a
@@ -25,11 +43,11 @@
 //! the agent has not yet turned over to the model, or the agent's own session-idle report):
 //! `idle` with that count at zero would be the true end.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use marsad_proto::fleet::{FleetEvent, FleetHost, FleetLink};
 use marsad_proto::store::NotificationPrefs;
-use marsad_proto::{HostId, SessionId, SessionSnapshot};
+use marsad_proto::{HostId, LinkState, SessionId, SessionSnapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -37,6 +55,8 @@ pub enum Kind {
     Failed,
     Finished,
     HostLost,
+    /// A host waits for the user at sign-in (`auth_needed`, `held`).
+    SignInNeeded,
 }
 
 impl Kind {
@@ -47,6 +67,7 @@ impl Kind {
             Kind::Failed => "failed",
             Kind::Finished => "finished",
             Kind::HostLost => "host_lost",
+            Kind::SignInNeeded => "sign_in_needed",
         }
     }
 
@@ -56,6 +77,7 @@ impl Kind {
             Kind::Failed => p.failed,
             Kind::Finished => p.finished,
             Kind::HostLost => p.host_lost,
+            Kind::SignInNeeded => p.sign_in_needed,
         }
     }
 }
@@ -64,6 +86,7 @@ impl Kind {
 pub struct Note {
     pub kind: Kind,
     pub host: HostId,
+    /// The session the note is about; none: it is about the host (clicking it opens the host).
     pub session: Option<SessionId>,
     pub title: String,
     pub body: String,
@@ -132,6 +155,78 @@ fn verdict(before: Seen, now: &SessionSnapshot) -> Option<Verdict> {
     }
 }
 
+/// What a host's link change deserves, when anything (see the module docs): pure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinkVerdict {
+    /// The host waits for the user at sign-in; the hub does not retry it.
+    SignIn,
+    /// A connected host dropped; `retrying`: the hub is reconnecting it by itself.
+    Lost { retrying: bool },
+}
+
+fn link_verdict(was_connected: Option<bool>, now: &LinkState) -> Option<LinkVerdict> {
+    if matches!(now, LinkState::AuthNeeded { held: true, .. }) {
+        return matches!(was_connected, None | Some(true)).then_some(LinkVerdict::SignIn);
+    }
+    if was_connected == Some(true) && !now.is_connected() {
+        let retrying = matches!(
+            now,
+            LinkState::Reconnecting { .. } | LinkState::Connecting | LinkState::Provisioning { .. }
+        );
+        return Some(LinkVerdict::Lost { retrying });
+    }
+    None
+}
+
+/// How many things wait for the user, for the tray: sessions that need an answer and hosts
+/// that wait for a sign-in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Attention {
+    pub sessions: usize,
+    pub hosts: usize,
+}
+
+impl Attention {
+    pub fn total(self) -> usize {
+        self.sessions + self.hosts
+    }
+
+    /// The tray's line: what waits, in words ("Nothing needs you" when nothing does).
+    pub fn words(self) -> String {
+        let plural = |n: usize, one: &str, many: &str| {
+            if n == 1 {
+                one.to_string()
+            } else {
+                many.to_string()
+            }
+        };
+        let sessions = (self.sessions > 0).then(|| {
+            format!(
+                "{} {}",
+                self.sessions,
+                plural(self.sessions, "session needs you", "sessions need you")
+            )
+        });
+        let hosts = (self.hosts > 0).then(|| {
+            format!(
+                "{} {}",
+                self.hosts,
+                plural(
+                    self.hosts,
+                    "host needs you to sign in",
+                    "hosts need you to sign in"
+                )
+            )
+        });
+        match (sessions, hosts) {
+            (None, None) => "Nothing needs you".to_string(),
+            (Some(s), None) => s,
+            (None, Some(h)) => h,
+            (Some(s), Some(h)) => format!("{s} · {h}"),
+        }
+    }
+}
+
 fn label(s: &SessionSnapshot) -> String {
     s.display_name
         .clone()
@@ -154,32 +249,76 @@ fn label(s: &SessionSnapshot) -> String {
 #[derive(Default)]
 pub struct Tracker {
     sessions: HashMap<(HostId, SessionId), Seen>,
+    /// Whether each remote host's link was connected at its last report.
     connected: HashMap<HostId, bool>,
+    /// Remote hosts whose link is `auth_needed` with `held`: they wait for a sign-in.
+    waiting: BTreeSet<HostId>,
     names: BTreeMap<HostId, String>,
     /// Sessions currently needing an answer (for the tray).
     needs_you: HashMap<(HostId, SessionId), ()>,
 }
 
 impl Tracker {
-    /// How many sessions need an answer.
-    pub fn attention(&self) -> usize {
-        self.needs_you.len()
+    /// What waits for the user now.
+    pub fn attention(&self) -> Attention {
+        Attention {
+            sessions: self.needs_you.len(),
+            hosts: self.waiting.len(),
+        }
     }
 
     fn host_name(&self, h: &HostId) -> String {
         self.names.get(h).cloned().unwrap_or_else(|| h.to_string())
     }
 
-    fn baseline(&mut self, host: &FleetHost) {
+    /// Take in a host of a `Reset`: no note for its sessions, but its link is judged against
+    /// what was known of it before (`was`), so a first sight at app start of a host that waits
+    /// for a sign-in is announced and a repeated snapshot of the same wait is not.
+    fn baseline(&mut self, host: &FleetHost, was: Option<bool>) -> Option<Note> {
         self.names
             .insert(host.host.id.clone(), host.host.name.clone());
-        if let FleetLink::Remote { state } = &host.link {
-            self.connected
-                .insert(host.host.id.clone(), state.is_connected());
-        }
         for s in &host.sessions {
             self.set(&host.host.id, s);
         }
+        match &host.link {
+            FleetLink::Remote { state } => self.link(&host.host.id, state, was),
+            FleetLink::Local => None,
+        }
+    }
+
+    /// A remote host's link reports `state`; `was`: whether it was connected before.
+    fn link(&mut self, host: &HostId, state: &LinkState, was: Option<bool>) -> Option<Note> {
+        self.connected.insert(host.clone(), state.is_connected());
+        if matches!(state, LinkState::AuthNeeded { held: true, .. }) {
+            self.waiting.insert(host.clone());
+        } else {
+            self.waiting.remove(host);
+        }
+        let name = self.host_name(host);
+        let (kind, title, body) = match link_verdict(was, state)? {
+            LinkVerdict::SignIn => (
+                Kind::SignInNeeded,
+                format!("{name} needs you to sign in"),
+                "Sessions there keep running. Marsad does not reconnect it without you.".to_string(),
+            ),
+            LinkVerdict::Lost { retrying: true } => (
+                Kind::HostLost,
+                format!("Lost the connection to {name}"),
+                "Sessions keep running there; Marsad is reconnecting.".to_string(),
+            ),
+            LinkVerdict::Lost { retrying: false } => (
+                Kind::HostLost,
+                format!("Lost the connection to {name}"),
+                "Sessions keep running there. Marsad does not retry this on its own; open Hosts to connect it.".to_string(),
+            ),
+        };
+        Some(Note {
+            kind,
+            host: host.clone(),
+            session: None,
+            title,
+            body,
+        })
     }
 
     fn set(&mut self, host: &HostId, s: &SessionSnapshot) -> Option<Seen> {
@@ -227,9 +366,10 @@ impl Tracker {
         let mut out = Vec::new();
         match ev {
             FleetEvent::Reset { hosts } => {
+                let known = std::mem::take(&mut self.connected);
                 *self = Tracker::default();
                 for h in hosts {
-                    self.baseline(h);
+                    out.extend(self.baseline(h, known.get(&h.host.id).copied()));
                 }
             }
             FleetEvent::HostUpserted { host } => {
@@ -237,21 +377,13 @@ impl Tracker {
             }
             FleetEvent::HostRemoved { id } => {
                 self.connected.remove(id);
+                self.waiting.remove(id);
                 self.sessions.retain(|(h, _), _| h != id);
                 self.needs_you.retain(|(h, _), _| h != id);
             }
             FleetEvent::Link { host, state } => {
-                let up = state.is_connected();
-                let was = self.connected.insert(host.clone(), up);
-                if was == Some(true) && !up {
-                    out.push(Note {
-                        kind: Kind::HostLost,
-                        host: host.clone(),
-                        session: None,
-                        title: format!("Lost the connection to {}", self.host_name(host)),
-                        body: "Sessions keep running there; Marsad reconnects when it can.".into(),
-                    });
-                }
+                let was = self.connected.get(host).copied();
+                out.extend(self.link(host, state, was));
             }
             FleetEvent::Sessions { host, sessions } => {
                 for s in sessions {
@@ -347,32 +479,39 @@ mod tests {
         )
     }
 
+    /// The host "Box" with `link` and `sessions`.
+    fn fleet_host(link: FleetLink, sessions: Vec<SessionSnapshot>) -> FleetHost {
+        FleetHost {
+            host: HostEntry {
+                id: HostId::new("box"),
+                name: "Box".into(),
+                kind: HostKind::Wsl { distro: "x".into() },
+                platform: None,
+                created_at_ms: 0,
+                interactive_auth: false,
+                local_files: false,
+                machine: None,
+            },
+            link,
+            sessions_live: true,
+            sessions,
+            auth_prompt: None,
+            git: Vec::new(),
+        }
+    }
+
     /// A tracker that knows one host with one session in `first`.
     fn tracker(first: SessionSnapshot) -> (Tracker, HostId) {
-        let h = HostId::new("box");
         let mut t = Tracker::default();
         t.apply(&FleetEvent::Reset {
-            hosts: vec![FleetHost {
-                host: HostEntry {
-                    id: h.clone(),
-                    name: "Box".into(),
-                    kind: HostKind::Wsl { distro: "x".into() },
-                    platform: None,
-                    created_at_ms: 0,
-                    interactive_auth: false,
-                    local_files: false,
-                    machine: None,
-                },
-                link: FleetLink::Remote {
+            hosts: vec![fleet_host(
+                FleetLink::Remote {
                     state: LinkState::Connecting,
                 },
-                sessions_live: true,
-                sessions: vec![first],
-                auth_prompt: None,
-                git: Vec::new(),
-            }],
+                vec![first],
+            )],
         });
-        (t, h)
+        (t, HostId::new("box"))
     }
 
     fn feed(t: &mut Tracker, h: &HostId, s: SessionSnapshot) -> Vec<Note> {
@@ -473,10 +612,10 @@ mod tests {
         };
         let n = t.apply(&up(snap(Phase::NeedsYou)));
         assert_eq!(n[0].kind, Kind::NeedsYou);
-        assert_eq!(t.attention(), 1);
+        assert_eq!(t.attention().sessions, 1);
         assert!(t.apply(&up(snap(Phase::NeedsYou))).is_empty(), "no repeat");
         assert!(t.apply(&up(working_turn("input"))).is_empty());
-        assert_eq!(t.attention(), 0);
+        assert_eq!(t.attention().sessions, 0);
         assert_eq!(t.apply(&up(idle_after_turn(false)))[0].kind, Kind::Finished);
         let failed = Phase::Failed {
             reason: "x".into(),
@@ -513,5 +652,210 @@ mod tests {
         };
         assert!(!Kind::Finished.enabled(&p));
         assert!(Kind::HostLost.enabled(&p));
+    }
+
+    fn connected() -> LinkState {
+        serde_json::from_value(serde_json::json!({
+            "state": "connected",
+            "hello": {"protocol": {"major": 1, "minor": 0}, "build": "b", "host_id": "box", "role": "daemon"}
+        }))
+        .expect("link state")
+    }
+
+    /// `auth_needed`; `held`: parked without an attempt because the user must ask for it.
+    fn auth_needed(held: bool, cause: Option<&str>) -> LinkState {
+        serde_json::from_value(serde_json::json!({
+            "state": "auth_needed", "problem": "auth_needed",
+            "detail": "connect to sign in", "held": held, "cause": cause,
+        }))
+        .expect("link state")
+    }
+
+    fn reconnecting() -> LinkState {
+        serde_json::from_value(serde_json::json!({
+            "state": "reconnecting", "attempt": 1, "last_error": "reset",
+            "next_at": {"secs_since_epoch": 0, "nanos_since_epoch": 0},
+        }))
+        .expect("link state")
+    }
+
+    fn link(h: &HostId, state: LinkState) -> FleetEvent {
+        FleetEvent::Link {
+            host: h.clone(),
+            state,
+        }
+    }
+
+    fn reset_with(state: LinkState) -> FleetEvent {
+        FleetEvent::Reset {
+            hosts: vec![fleet_host(FleetLink::Remote { state }, Vec::new())],
+        }
+    }
+
+    #[test]
+    fn the_link_verdict_table() {
+        use LinkVerdict::*;
+        let held = auth_needed(true, Some("reset"));
+        // Into held: from connected, or first sight; never from a link that was not up.
+        assert_eq!(link_verdict(Some(true), &held), Some(SignIn));
+        assert_eq!(link_verdict(None, &held), Some(SignIn));
+        assert_eq!(link_verdict(Some(false), &held), None);
+        // Not held (the user cancelled, a key was refused): no sign-in note.
+        let cancelled = auth_needed(false, None);
+        assert_eq!(link_verdict(None, &cancelled), None);
+        assert_eq!(link_verdict(Some(false), &cancelled), None);
+        assert_eq!(
+            link_verdict(Some(true), &cancelled),
+            Some(Lost { retrying: false })
+        );
+        // A drop the hub retries says so; one it parks says that too.
+        assert_eq!(
+            link_verdict(Some(true), &reconnecting()),
+            Some(Lost { retrying: true })
+        );
+        let failed = LinkState::Failed {
+            reason: "x".into(),
+            problem: None,
+        };
+        assert_eq!(
+            link_verdict(Some(true), &failed),
+            Some(Lost { retrying: false })
+        );
+        assert_eq!(link_verdict(None, &failed), None);
+        assert_eq!(link_verdict(Some(true), &connected()), None);
+    }
+
+    #[test]
+    fn a_connected_host_that_is_held_raises_one_sign_in_note_and_no_lost_note() {
+        let (mut t, h) = tracker(snap(Phase::Idle));
+        t.apply(&link(&h, connected()));
+        let n = t.apply(&link(
+            &h,
+            auth_needed(true, Some("connection reset by peer")),
+        ));
+        assert_eq!(n.len(), 1, "{n:?}");
+        assert_eq!(n[0].kind, Kind::SignInNeeded);
+        assert_eq!(n[0].title, "Box needs you to sign in");
+        assert_eq!(n[0].host, h);
+        assert_eq!(n[0].session, None, "it opens the host, not a session");
+        assert!(!n[0].body.contains("reconnects when it can"));
+        assert_eq!(t.attention().hosts, 1);
+        // Still held (the hub says it again): nothing more.
+        assert!(t.apply(&link(&h, auth_needed(true, None))).is_empty());
+        assert_eq!(t.attention().hosts, 1);
+    }
+
+    #[test]
+    fn a_new_sign_in_note_needs_the_host_connected_again_and_dropped_again() {
+        let (mut t, h) = tracker(snap(Phase::Idle));
+        t.apply(&link(&h, connected()));
+        assert_eq!(t.apply(&link(&h, auth_needed(true, None))).len(), 1);
+        // The user clicks: the attempt runs; it fails and the host is held again: no new note.
+        assert!(t.apply(&link(&h, LinkState::Connecting)).is_empty());
+        assert_eq!(
+            t.attention().hosts,
+            0,
+            "an attempt is running: nobody waits"
+        );
+        assert!(t.apply(&link(&h, auth_needed(true, None))).is_empty());
+        // Cancelled: not held, so no note and nothing waits.
+        assert!(t.apply(&link(&h, LinkState::Connecting)).is_empty());
+        assert!(t.apply(&link(&h, auth_needed(false, None))).is_empty());
+        assert_eq!(t.attention().hosts, 0);
+        // Connected, then dropped again: one more.
+        t.apply(&link(&h, connected()));
+        let again = t.apply(&link(&h, auth_needed(true, Some("closed"))));
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].kind, Kind::SignInNeeded);
+    }
+
+    #[test]
+    fn first_sight_at_app_start_announces_a_held_host_once_across_resets() {
+        let mut t = Tracker::default();
+        let first = t.apply(&reset_with(auth_needed(true, None)));
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].kind, Kind::SignInNeeded);
+        assert_eq!(t.attention().hosts, 1);
+        // The app's subscription starts over and the host is still held: not announced again.
+        assert!(t.apply(&reset_with(auth_needed(true, None))).is_empty());
+        assert_eq!(t.attention().hosts, 1);
+        // A host that is only unreachable at start says nothing.
+        let mut t = Tracker::default();
+        assert!(t.apply(&reset_with(reconnecting())).is_empty());
+        // One that dropped into held while the subscription was away is announced.
+        let mut t = Tracker::default();
+        t.apply(&reset_with(connected()));
+        assert_eq!(t.apply(&reset_with(auth_needed(true, None))).len(), 1);
+    }
+
+    #[test]
+    fn removing_a_held_host_clears_the_wait() {
+        let mut t = Tracker::default();
+        t.apply(&reset_with(auth_needed(true, None)));
+        t.apply(&FleetEvent::HostRemoved {
+            id: HostId::new("box"),
+        });
+        assert_eq!(t.attention(), Attention::default());
+    }
+
+    #[test]
+    fn a_host_the_hub_reconnects_says_so_and_one_it_does_not_retry_says_that() {
+        let (mut t, h) = tracker(snap(Phase::Idle));
+        t.apply(&link(&h, connected()));
+        let n = t.apply(&link(&h, reconnecting()));
+        assert_eq!(n[0].kind, Kind::HostLost);
+        assert_eq!(
+            n[0].body,
+            "Sessions keep running there; Marsad is reconnecting."
+        );
+        t.apply(&link(&h, connected()));
+        let n = t.apply(&link(
+            &h,
+            LinkState::Failed {
+                reason: "gone".into(),
+                problem: None,
+            },
+        ));
+        assert_eq!(n[0].kind, Kind::HostLost);
+        assert!(
+            n[0].body.contains("does not retry this on its own"),
+            "{}",
+            n[0].body
+        );
+        assert!(!n[0].body.contains("reconnects when it can"));
+    }
+
+    #[test]
+    fn the_sign_in_note_follows_its_own_preference() {
+        let off = NotificationPrefs {
+            sign_in_needed: false,
+            ..NotificationPrefs::default()
+        };
+        assert!(!Kind::SignInNeeded.enabled(&off));
+        assert!(Kind::HostLost.enabled(&off));
+        assert!(Kind::SignInNeeded.enabled(&NotificationPrefs::default()));
+        assert_eq!(Kind::SignInNeeded.code(), "sign_in_needed");
+    }
+
+    #[test]
+    fn the_tray_line_says_what_waits() {
+        let words = |sessions, hosts| Attention { sessions, hosts }.words();
+        assert_eq!(words(0, 0), "Nothing needs you");
+        assert_eq!(words(1, 0), "1 session needs you");
+        assert_eq!(words(3, 0), "3 sessions need you");
+        assert_eq!(words(0, 1), "1 host needs you to sign in");
+        assert_eq!(words(0, 2), "2 hosts need you to sign in");
+        assert_eq!(
+            words(2, 1),
+            "2 sessions need you · 1 host needs you to sign in"
+        );
+        assert_eq!(
+            Attention {
+                sessions: 2,
+                hosts: 1
+            }
+            .total(),
+            3
+        );
     }
 }

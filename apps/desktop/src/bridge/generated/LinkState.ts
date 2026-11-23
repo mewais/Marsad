@@ -7,7 +7,20 @@ import type { ProvisionReason } from "./ProvisionReason";
 /**
  * State of a supervised link (§4.1).
  */
-export type LinkState = { "state": "connecting" } | { "state": "provisioning", reason: ProvisionReason, } | { "state": "connected", hello: Hello, } | { "state": "reconnecting", attempt: number, next_at: { secs_since_epoch: number, nanos_since_epoch: number }, last_error: string, } | { "state": "auth_needed", problem: CommandFailureKind, detail: string, } | { "state": "incompatible", ours: ProtocolVersion, theirs: ProtocolVersion, } | { "state": "failed", reason: string, 
+export type LinkState = { "state": "connecting" } | { "state": "provisioning", reason: ProvisionReason, } | { "state": "connected", hello: Hello, } | { "state": "reconnecting", attempt: number, next_at: { secs_since_epoch: number, nanos_since_epoch: number }, last_error: string, } | { "state": "auth_needed", problem: CommandFailureKind, detail: string, 
+/**
+ * Why the link was not connected when it was parked: the reason the connection dropped
+ * (or the last attempt failed), in the supervisor's words. Kept beside `detail`, never
+ * replaced by it. `None` when the link had not been up (or tried) before.
+ */
+cause?: string, 
+/**
+ * The link was parked without an attempt because [`SupervisorHooks::hold`] said a
+ * person must ask for the next one, not because an attempt failed: the next attempt
+ * is the person's click ([`Supervised::reconnect_now`]), and it will ask them
+ * something. `detail` is the hook's words.
+ */
+held?: boolean, } | { "state": "incompatible", ours: ProtocolVersion, theirs: ProtocolVersion, } | { "state": "failed", reason: string, 
 /**
  * What kind of problem, when known (lets a UI word it and say what to do).
  */

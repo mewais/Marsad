@@ -8,6 +8,7 @@ import { Button, EmptyState, Icon, Kbd, STATUS, STATUS_ORDER, VirtualList, type 
 import { filterStore, filtersActive, resetFilters } from "../common/filters";
 import { HomeHeader, HomeToolbar } from "../common/HomeChrome";
 import { InboxRow } from "./InboxRow";
+import { WaitingHosts } from "./WaitingHosts";
 import "./inbox.css";
 
 /** The group's icon animates only while some session in it is live: last-known sessions are not activity. */
@@ -78,6 +79,7 @@ export function InboxPage() {
     <>
       <HomeHeader />
       <HomeToolbar />
+      <WaitingHosts />
       <div className="ibx-head" aria-hidden="true">
         <span>Status</span><span>Session</span><span className="drvh">Driver</span><span>Host</span><span>Project · branch</span><span className="r">Last</span><span className="r">Cost</span>
       </div>

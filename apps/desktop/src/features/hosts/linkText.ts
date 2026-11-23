@@ -14,7 +14,7 @@ export function linkSub(link: HostLink, now = Date.now()): string {
     case "provisioning":
       return l.reason.kind === "build_mismatch" ? `${l.reason.found} → ${l.reason.expected}` : l.reason.kind === "command_not_found" ? "first connection" : "protocol update";
     case "auth_needed":
-      return l.detail;
+      return l.held && l.cause ? `dropped: ${l.cause}` : l.detail;
     case "failed":
       return l.reason;
     default:

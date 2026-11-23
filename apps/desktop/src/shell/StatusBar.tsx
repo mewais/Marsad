@@ -1,7 +1,7 @@
 import { linkView, useAppState, useCounts, useHosts } from "../state";
 import { money } from "../lib/format";
 import { ConnState, Icon } from "../ui";
-import { useNavigate } from "../router";
+import { hostPath, useNavigate } from "../router";
 
 export function StatusBar({ onHelp }: { onHelp: () => void }) {
   const hosts = useHosts();
@@ -18,8 +18,8 @@ export function StatusBar({ onHelp }: { onHelp: () => void }) {
             {h.name}
           </span>
         ) : (
-          <button type="button" key={h.id} className={`sb-item ${l.tone === "bad" ? "c-failed" : l.tone === "info" ? "c-working" : "c-needs"}`} data-link={l.key} onClick={() => nav(`/hosts?h=${encodeURIComponent(h.id)}`)}>
-            <Icon name={l.tone === "bad" ? "warn" : "refresh"} size="xs" />
+          <button type="button" key={h.id} className={`sb-item ${l.tone === "bad" ? "c-failed" : l.tone === "info" ? "c-working" : "c-needs"}`} data-link={l.key} data-held={l.held ? "" : undefined} onClick={() => nav(hostPath(h.id))}>
+            <Icon name={l.held ? "key" : l.tone === "bad" ? "warn" : "refresh"} size="xs" />
             {h.name} · {l.word.toLowerCase()}
           </button>
         );

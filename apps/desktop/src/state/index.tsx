@@ -8,13 +8,14 @@ import { connectStore } from "./controller";
 import { createDiagLog, createTracer, withRpcOutcomes } from "./diaglog";
 import { createFeeds } from "./feeds";
 import { createAppStore, type AppState, type AppStore } from "./model";
-import { reachBlock, selectCounts, selectDeveloperMode, selectGroups, selectHost, selectHosts, selectStaleHosts, selectView, groupsEqual, type Counts, type Filters, type Groups } from "./selectors";
+import { reachBlock, selectCounts, selectSignInQueue, selectWaitingHosts, selectDeveloperMode, selectGroups, selectHost, selectHosts, selectStaleHosts, selectView, groupsEqual, type Counts, type Filters, type Groups } from "./selectors";
 import { createTails, createTrails, type Tails, type Trails } from "./diagnostics";
 import { createExports, type Exports } from "./exports";
 import { createTranscripts, type Transcripts } from "./transcript";
 import { MAIN, subagentScope, type TranscriptScope } from "./scope";
 import type { SessionView } from "./domain";
 import type { HostView } from "./hosts";
+import { sameSignInQueue, sameWaitingHosts, type SignInQuestion, type WaitingHost } from "./signin";
 import type { DriverDescriptor } from "../ui/DriverBadge";
 
 export * from "./model";
@@ -24,6 +25,7 @@ export * from "./scope";
 export * from "./actions";
 export * from "./debug";
 export * from "./hosts";
+export * from "./signin";
 export { currentExport } from "./exports";
 
 export interface AppContextValue {
@@ -101,6 +103,10 @@ export function useSessionReach(v: Pick<SessionView, "host" | "stale"> | undefin
   const reach = useReach(v?.host);
   return reach ?? (v?.stale ? "This is the last known state of the session; wait for its host to report." : null);
 }
+/** Hosts that wait for the user to sign in (the hub's `held` link), oldest fleet order first. */
+export const useWaitingHosts = (): WaitingHost[] => useAppState(selectWaitingHosts, sameWaitingHosts);
+/** Sign-in questions waiting for the user, oldest first. */
+export const useSignInQueue = (): SignInQuestion[] => useAppState(selectSignInQueue, sameSignInQueue);
 /** Hosts whose data is last-known rather than live. */
 export function useStaleHosts(): ReadonlySet<HostId> {
   const key = useAppState(selectStaleHosts);

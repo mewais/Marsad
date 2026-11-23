@@ -317,7 +317,16 @@ const CLOSED: Record<string, string> = {
   local: "this side closed it",
 };
 const WHY: Record<string, string> = { mingw_sh: "a POSIX shell answered on Windows", no_report: "the first try gave no report" };
-const PROMPT_CANCEL: Record<string, string> = { user: "you cancelled it", timeout: "it timed out", superseded: "a newer prompt replaced it", helper_gone: "the ssh helper went away" };
+const PROMPT_CANCEL: Record<string, string> = { user: "you cancelled it", timeout: "it timed out", superseded: "a newer prompt replaced it", helper_gone: "the ssh helper went away", attempt_ended: "the connect attempt it belonged to ended" };
+/** Why a prompt is a second approval within one sign-in (`auth.prompt.repeat`). */
+const PROMPT_REPEAT: Record<string, string> = { helper_restart: "the helper on the host was updated and restarted", id_restart: "the host's daemon was restarted under this host's id", windows_shell: "the host was connected again as a Windows machine" };
+/** What a connect attempt taught the registry (`hosts.learned.what`). */
+const LEARNED: Record<string, string> = {
+  platform: "platform",
+  machine: "machine identity",
+  interactive: "sign-in: it asks you for something each time, so Marsad does not reconnect it on its own",
+  not_interactive: "sign-in: it no longer asks you for anything, so Marsad reconnects it on its own again",
+};
 const BRIDGE: Record<string, string> = { running: "found the daemon already running", started: "started the daemon", start_failed: "could not start the daemon", unavailable: "could not reach the daemon" };
 const SHUTDOWN: Record<string, string> = { signal: "a signal", request: "a request to stop", serve_ended: "it stopped serving", serve_failed: "serving failed" };
 
@@ -354,11 +363,12 @@ const RECORD_WORDS: Record<string, (f: F) => string> = {
   "boot.id_mismatch": (f) => `The machine answered as host ${str(f, "theirs") ?? "?"}, not as this one`,
   "boot.build_mismatch": (f) => `The helper is build ${str(f, "found") ?? "?"}; ${str(f, "expected") ?? "?"} is expected`,
   // Sign-in, host registry, host settings, session feed
-  "auth.prompt": (f) => `Sign-in prompt ${f.prompt ?? "?"} (${str(f, "kind") ?? "?"}), attempt ${f.attempt ?? "?"}`,
+  "auth.prompt": (f) => say(`Sign-in prompt ${f.prompt ?? "?"} (${str(f, "kind") ?? "?"}), attempt ${f.attempt ?? "?"}`, str(f, "repeat") && `, a second approval within the same sign-in: ${PROMPT_REPEAT[str(f, "repeat")!] ?? str(f, "repeat")}`),
   "auth.answered": (f) => `Sign-in prompt ${f.prompt ?? "?"} was answered after ${ms(f)}`,
   "auth.cancelled": (f) => `Sign-in prompt ${f.prompt ?? "?"} was cancelled: ${PROMPT_CANCEL[str(f, "why") ?? ""] ?? str(f, "why") ?? "?"}`,
   "hosts.changed": (f) => say(`Host ${str(f, "op") ?? "changed"} (${str(f, "kind") ?? "?"}`, str(f, "target_kind") && `, target ${str(f, "target_kind")}`, ")"),
-  "hosts.learned": (f) => `Learned the host's ${str(f, "what") ?? "?"}`,
+  "hosts.learned": (f) => `Learned the host's ${LEARNED[str(f, "what") ?? ""] ?? str(f, "what") ?? "?"}`,
+  "hosts.held": (f) => `${str(f, "host") ?? "A host"} needs you at sign-in, so the hub did not connect it: it waits for you to ask (no automatic retry)`,
   "hosts.failed": (f) => `The host registry failed at ${str(f, "op") ?? "?"}${tail(err(f))}`,
   "hostenv.apply": (f) => say(`Host settings ${str(f, "outcome") ?? "?"}`, str(f, "revision") && ` (revision ${str(f, "revision")})`, ` in ${ms(f)}`, f.setup_ok === false && ", the setup commands failed", tail(err(f))),
   "fleet.feed": (f) => `The session feed of ${str(f, "host") ?? "a host"} ${str(f, "event") ?? "changed"}${tail(err(f))}`,
@@ -417,6 +427,7 @@ export function recordTone(r: DiagRecord): Tone {
   if (r.ev === "rpc.traced" && f.outcome !== "ok") return "bad";
   if (r.ev === "link.attempt_end") return f.outcome === "connected" ? "ok" : "bad";
   if (r.ev === "boot.ok" || r.ev === "boot.hello" || r.ev === "auth.answered") return "ok";
+  if (r.ev === "hosts.held") return "warn";
   if (r.ev === "link.state") return f.to === "connected" ? "ok" : f.to === "failed" || f.to === "auth_needed" || f.to === "incompatible" ? "bad" : "plain";
   if (r.lvl === "warn") return "warn";
   return "plain";
