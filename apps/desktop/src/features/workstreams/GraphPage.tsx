@@ -3,7 +3,7 @@ import type { DriverInventory, NodePosition, WorkstreamNode } from "../../bridge
 import { clockTime, money } from "../../lib/format";
 import { Link, useNavigate } from "../../router";
 import { useShortcut } from "../../shortcuts/useShortcut";
-import { linkView, useActions, useApi, useAppState, useHosts, usePending } from "../../state";
+import { linkView, useActions, useApi, useAppState, useHosts, usePending, useReach, useStaleHosts } from "../../state";
 import { Button, EmptyState, Icon, toast } from "../../ui";
 import { NewSessionDialog } from "../newsession/NewSessionDialog";
 import { launchRequest, type NewSessionForm } from "../newsession/model";
@@ -18,6 +18,8 @@ export function GraphPage({ id }: { id: string }) {
   const v = useAppState((s) => s.workstreams[id]);
   const loaded = useAppState((s) => s.workstreamsLoaded);
   const hosts = useHosts();
+  const stale = useStaleHosts();
+  const reach = useReach();
   const api = useApi();
   const actions = useActions();
   const nav = useNavigate();
@@ -38,7 +40,7 @@ export function GraphPage({ id }: { id: string }) {
 
   if (!v) return loaded ? <div className="placeholder"><EmptyState icon="graph" title="Workstream not found" action={<Button size="sm" onClick={() => nav("/workstreams")}>All workstreams</Button>}>It may have been deleted.</EmptyState></div> : <div className="placeholder faint">Loading…</div>;
   const w = v.workstream;
-  const s = summary(v);
+  const s = summary(v, (h) => stale.has(h));
 
   const onConnect = (from: string, to: string) => {
     if (w.edges.some((e) => e.from === from && e.to === to)) return setSel({ kind: "edge", from, to });
@@ -70,8 +72,8 @@ export function GraphPage({ id }: { id: string }) {
         <span className="muted small">{design ? `Draft saved ${clockTime(w.updated_at_ms)} · nothing is running yet` : `${s.sessions} session${s.sessions === 1 ? "" : "s"} · ${s.hosts.length} host${s.hosts.length === 1 ? "" : "s"} · ${money(s.cost)} · started ${clockTime(w.created_at_ms)}`}</span>
         <span className="sp" />
         <Button size="sm" icon="plus" kbd={design ? "A" : undefined} onClick={() => setAdding({})}>Add agent</Button>
-        {design ? <><Button size="sm" onClick={saveDraft}>Save as draft</Button><Button size="sm" variant="primary" icon="send" pending={launching} disabled={!w.nodes.length} onClick={() => void launch()}>Launch</Button></>
-          : w.state !== "archived" ? <Button size="sm" icon={w.state === "paused" ? "send" : "pause"} onClick={pauseResume}>{w.state === "paused" ? "Resume" : "Pause all"}</Button> : null}
+        {design ? <><Button size="sm" blocked={reach} onClick={saveDraft}>Save as draft</Button><Button size="sm" variant="primary" icon="send" blocked={reach} pending={launching} disabled={!w.nodes.length} onClick={() => void launch()}>Launch</Button></>
+          : w.state !== "archived" ? <Button size="sm" icon={w.state === "paused" ? "send" : "pause"} blocked={reach} onClick={pauseResume}>{w.state === "paused" ? "Resume" : "Pause all"}</Button> : null}
       </div>
       <div className="gx">
         <Canvas view={v} design={design} lanesFor={lanesFor} sel={sel} onSelect={setSel} onConnect={onConnect} onMove={onMove} onAddOn={(host) => setAdding({ host })} />

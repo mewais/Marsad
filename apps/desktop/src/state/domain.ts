@@ -26,6 +26,12 @@ export interface SessionView {
   stat: { files: number; added: number; removed: number } | null;
   unseen: boolean;
   gates: PendingGate[];
+  /**
+   * What this view shows is the last the app knew, not live: the app lost its link to the local
+   * daemon, or the session's host is not connected / has not delivered its list over the current
+   * link. Its status then says where the session was, not what it is doing.
+   */
+  stale: boolean;
 }
 
 export const keyOf = (host: HostId, s: SessionSnapshot): SessionKey => sessionKey(host, s.id);
@@ -85,7 +91,7 @@ export function diffStat(g: GitSummary | null | undefined): SessionView["stat"] 
   return st;
 }
 
-export function buildView(host: HostId, s: SessionSnapshot, mark: SeenMark | undefined, git: GitSummary | null | undefined, workstream: string): SessionView {
+export function buildView(host: HostId, s: SessionSnapshot, mark: SeenMark | undefined, git: GitSummary | null | undefined, workstream: string, stale = false): SessionView {
   const unseen = isUnseenFinish(s, mark);
   return {
     key: keyOf(host, s),
@@ -104,6 +110,7 @@ export function buildView(host: HostId, s: SessionSnapshot, mark: SeenMark | und
     stat: diffStat(git),
     unseen,
     gates: s.pending_gates,
+    stale,
   };
 }
 

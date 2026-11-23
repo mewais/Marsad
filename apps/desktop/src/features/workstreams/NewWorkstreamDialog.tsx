@@ -101,7 +101,7 @@ export function NewWorkstreamDialog({ open, onClose }: { open: boolean; onClose:
                   {free.slice(0, 40).map((v) => (
                     <label key={v.key} className={`hp${picked.has(v.key) ? " on" : ""}`}>
                       <input type="checkbox" checked={picked.has(v.key)} onChange={() => toggle(v.key)} />
-                      <DriverBadge driver={drivers[v.driver] ?? makeDriver(v.driver)} compact /><b>{v.name}</b><span className="faint">{hostsMap[v.host]?.entry.name ?? v.host}</span><span className="sp" /><span className={`c-${v.status} small`}>{STATUS[v.status].label}</span>
+                      <DriverBadge driver={drivers[v.driver] ?? makeDriver(v.driver)} compact /><b>{v.name}</b><span className="faint">{hostsMap[v.host]?.entry.name ?? v.host}</span><span className="sp" /><span className={`${v.stale ? "faint" : `c-${v.status}`} small`}>{STATUS[v.status].label}{v.stale ? " · last known" : ""}</span>
                     </label>
                   ))}
                   {free.length === 0 ? <span className="faint small hp">No sessions match.</span> : null}

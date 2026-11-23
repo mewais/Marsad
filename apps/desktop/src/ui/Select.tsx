@@ -28,6 +28,8 @@ export interface SelectProps {
   buttonClass?: string;
   /** Text shown in the closed button instead of the selected label. */
   display?: string;
+  /** Why it cannot be changed now: the control is off and says why on hover. */
+  blocked?: string | null;
 }
 
 /** Room between `el` and the edges of everything that clips it (scroll containers, the window). */
@@ -47,7 +49,7 @@ function roomAround(el: HTMLElement): { above: number; below: number } {
 }
 
 /** Select / combobox: button opens a listbox; typing filters; Up/Down/Enter/Esc. */
-export function Select({ label, value, options, onChange, placeholder = "Select…", searchable, className = "", up, compact, leading, buttonClass, display }: SelectProps) {
+export function Select({ label, value, options, onChange, placeholder = "Select…", searchable, className = "", up, compact, leading, buttonClass, display, blocked }: SelectProps) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -121,6 +123,8 @@ export function Select({ label, value, options, onChange, placeholder = "Select�
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? id : undefined}
+        disabled={!!blocked}
+        title={blocked || undefined}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={(e) => {
           if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {

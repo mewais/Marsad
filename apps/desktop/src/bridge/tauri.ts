@@ -1,4 +1,4 @@
-import type { Backend, RequestOptions, SubscribeOptions, Unsubscribe } from "./backend";
+import type { Backend, HubLinkInfo, RequestOptions, SubscribeOptions, SubscriptionEnd, Unsubscribe } from "./backend";
 
 /**
  * What the shell sends on a subscription's channel (src-tauri/src/bridge.rs `SubMessage`):
@@ -9,6 +9,18 @@ type SubMessage =
   | { type: "event"; cursor: string; payload: unknown }
   | { type: "link"; state: "connected" | "connecting" | "reconnecting" | "offline" }
   | { type: "end"; error?: { code: string; message: string; data?: unknown } };
+
+/** `connection_state` and the `connection` event (src-tauri/src/connection.rs `ConnectionState`; the host list is not used here). */
+interface ConnectionState {
+  daemon: HubLinkInfo["state"];
+  daemon_error?: string;
+}
+
+const hubLink = (c: ConnectionState): HubLinkInfo => ({ state: c.daemon, ...(c.daemon_error ? { error: c.daemon_error } : {}) });
+
+/** What a rejected `invoke` carries: the shell's `BridgeError`, or a bare message. */
+const asEnd = (e: unknown): NonNullable<SubscriptionEnd> =>
+  e && typeof e === "object" && "message" in e ? (e as NonNullable<SubscriptionEnd>) : { code: "transport", message: String(e) };
 
 /**
  * Real backend: the two primitives mapped onto the Tauri shell (`rpc`, `rpc_subscribe`,
@@ -35,19 +47,65 @@ export class TauriBackend implements Backend {
     };
   }
 
-  subscribe(topic: string, opts: SubscribeOptions, onEvent: (e: unknown) => void): Unsubscribe {
+  /** The link to the local daemon: the shell's `connection` events, with `connection_state` as the starting point. */
+  watchHubLink(cb: (link: HubLinkInfo) => void): Unsubscribe {
+    let stop: (() => void) | undefined;
+    let cancelled = false;
+    void (async () => {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const { listen } = await import("@tauri-apps/api/event");
+      // Listen first: an event that arrives while the state is being read is newer than the read.
+      let changed = false;
+      const un = await listen<ConnectionState>("connection", (e) => {
+        changed = true;
+        if (!cancelled) cb(hubLink(e.payload));
+      });
+      stop = un;
+      if (cancelled) return un();
+      try {
+        const now = await invoke<ConnectionState>("connection_state");
+        if (!changed && !cancelled) cb(hubLink(now));
+      } catch (e) {
+        if (!changed && !cancelled) cb({ state: "offline", error: asEnd(e).message });
+      }
+    })();
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }
+
+  async appVersion(): Promise<string> {
+    const { getVersion } = await import("@tauri-apps/api/app");
+    return getVersion();
+  }
+
+  async reconnectHub(): Promise<void> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("reconnect_daemon");
+  }
+
+  subscribe(topic: string, opts: SubscribeOptions, onEvent: (e: unknown) => void, onEnd?: (end: SubscriptionEnd) => void): Unsubscribe {
     let stop: (() => void) | undefined;
     let cancelled = false;
     void (async () => {
       const { Channel, invoke } = await import("@tauri-apps/api/core");
       const channel = new Channel<SubMessage>();
       channel.onmessage = (m) => {
+        if (cancelled) return;
         if (m.type === "event") onEvent(m.payload);
+        else if (m.type === "end") onEnd?.(m.error ?? null);
+        // `link` messages: the app's link is followed through `watchHubLink`.
       };
       const from = opts.from == null ? null : String(opts.from);
-      const id = await invoke<number>("rpc_subscribe", { topic, host: opts.host ?? null, from, channel });
-      stop = () => void invoke("rpc_unsubscribe", { id });
-      if (cancelled) stop();
+      try {
+        const id = await invoke<number>("rpc_subscribe", { topic, host: opts.host ?? null, from, channel });
+        stop = () => void invoke("rpc_unsubscribe", { id }).catch(() => undefined);
+        if (cancelled) stop();
+      } catch (e) {
+        // The shell could not even start it: that is an end too, never a silent one.
+        if (!cancelled) onEnd?.(asEnd(e));
+      }
     })();
     return () => {
       cancelled = true;

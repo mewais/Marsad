@@ -9,7 +9,7 @@
 //!   `$MARSAD_DATA` overrides the data directory, `$MARSAD_DAEMON_ARGS` (whitespace-separated)
 //!   adds `serve` options — both for development and tests.
 //! * The webview gets exactly the generic bridges of [`bridge`]: `rpc`, `rpc_subscribe`,
-//!   `rpc_unsubscribe`, `connection_state` (+ the `connection` event). No per-feature
+//!   `rpc_unsubscribe`, `connection_state` (+ the `connection` event), `reconnect_daemon`. No per-feature
 //!   commands; `desktop.*` methods of `rpc` are the native extras (open/reveal/pick folder).
 //! * Native: OS notifications from the fleet and the stored preferences ([`watch`]), a tray
 //!   item with the attention count ([`tray`]), single instance, window state persistence.
@@ -127,6 +127,7 @@ pub fn run() {
             bridge::rpc_subscribe,
             bridge::rpc_unsubscribe,
             bridge::connection_state,
+            bridge::reconnect_daemon,
             smoke::smoke_report,
         ])
         .build(tauri::generate_context!());

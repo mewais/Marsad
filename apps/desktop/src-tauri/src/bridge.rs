@@ -10,6 +10,7 @@
 //!   resumes from its last cursor natively, so the webview sees one continuous stream.
 //! * `rpc_unsubscribe(id)`.
 //! * `connection_state()` → [`ConnectionState`] (also pushed as the `connection` event).
+//! * `reconnect_daemon()`: connect to the local daemon again now.
 //!
 //! Every command is async and holds no lock across an await (the subscription table is a
 //! std mutex taken only for inserts/removals).
@@ -242,6 +243,14 @@ pub async fn rpc_unsubscribe(shell: State<'_, Shell>, id: u64) -> Result<(), Bri
 #[tauri::command]
 pub async fn connection_state(shell: State<'_, Shell>) -> Result<ConnectionState, BridgeError> {
     Ok(shell.connection.borrow().clone())
+}
+
+/// Connect to the local daemon again now: skips the backoff and the parked state of a link
+/// that gave up (the app's "Try again" when the daemon could not be started or reached).
+#[tauri::command]
+pub async fn reconnect_daemon(shell: State<'_, Shell>) -> Result<(), BridgeError> {
+    shell.client.link().reconnect_now();
+    Ok(())
 }
 
 /// Arguments of `desktop.open` / `desktop.reveal`.

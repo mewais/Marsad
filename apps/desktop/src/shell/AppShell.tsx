@@ -11,6 +11,7 @@ import { applyTheme, loadTheme } from "../lib/theme";
 import { applySurface, clampStrength, loadSurface, surfaceSupport } from "../lib/surface";
 import { useStore } from "../lib/store";
 import { CommandPalette } from "./CommandPalette";
+import { ConnectionBanner } from "./ConnectionBanner";
 import { Rail } from "./Rail";
 import { ShortcutHelp } from "./ShortcutHelp";
 import { StatusBar } from "./StatusBar";
@@ -43,7 +44,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       // Only a translucent answer says anything about what the window can show.
       if (live) surfaceSupport.set(surface === "translucent" ? sup : null);
       return sup;
-    });
+    }, { local: true });
     return () => {
       live = false;
     };
@@ -86,6 +87,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="body">
         <Rail />
         <main className="main" id="main">
+          <ConnectionBanner />
           {children}
         </main>
       </div>

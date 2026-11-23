@@ -1,21 +1,28 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "../../lib/store";
-import { useAppState, useCounts, useActions, type Counts } from "../../state";
+import { useAppState, useCounts, useActions, usePending, useReach, type Counts } from "../../state";
 import { Button, Icon, SearchField, Select, type SelectOption } from "../../ui";
 import { PageHeader } from "../../shell/PageHeader";
 import { clockTime } from "../../lib/format";
 import { filterStore, filtersActive, resetFilters, setFilters } from "./filters";
 import { STATUS, STATUS_ORDER } from "../../ui";
 
+/** Live sessions only: sessions whose host is not reporting are counted apart, as last known. */
 export function HomeSummary({ counts }: { counts: Counts }) {
   const lookedAt = useAppState((s) => s.lookedAt);
+  const ready = useAppState((s) => s.fleetReady);
+  // Nothing has been reported yet: zeros would claim there is nothing to see.
+  if (!ready) return <span className="muted">Waiting for the first report from the local service…</span>;
+  // No marker yet (or markers not loaded): there is no time to say.
+  const since = lookedAt > 0 ? ` since you looked at ${clockTime(lookedAt)}` : "";
   return (
     <>
       <span className="c-needs"><Icon name="needs" size="sm" /> <b>{counts.needs}</b> need you</span>
       <span className="c-failed"><Icon name="failed" size="sm" /> <b>{counts.failed}</b> failed</span>
-      <span className="c-done"><Icon name="done" size="sm" /> <b>{counts.done}</b> finished since you looked at {clockTime(lookedAt)}</span>
+      <span className="c-done"><Icon name="done" size="sm" /> <b>{counts.done}</b> finished{since}</span>
       <span className="c-working"><Icon name="working" size="sm" spin /> <b>{counts.working}</b> working</span>
       <span className="muted"><Icon name="idle" size="sm" /> {counts.idle} idle</span>
+      {counts.stale ? <span className="lk" data-testid="summary-stale" title="Their hosts are not reporting, so they are not counted above"><Icon name="clock" size="sm" /> <b>{counts.stale}</b> last known</span> : null}
     </>
   );
 }
@@ -23,13 +30,15 @@ export function HomeSummary({ counts }: { counts: Counts }) {
 export function HomeHeader() {
   const counts = useCounts();
   const actions = useActions();
+  const blocked = useReach();
+  const marking = !!usePending("seen:all");
   return (
     <PageHeader
       title="Inbox"
       subtitle="All sessions, including those in workstreams"
       summary={<HomeSummary counts={counts} />}
       actions={
-        <Button size="sm" variant="ghost" icon="eye" onClick={() => actions.markAllSeen()}>Mark all seen</Button>
+        <Button size="sm" variant="ghost" icon="eye" blocked={blocked} pending={marking} onClick={() => actions.markAllSeen()}>Mark all seen</Button>
       }
     />
   );

@@ -1,20 +1,21 @@
 import { permissionShort } from "../../lib/gatewords";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { clockTime, compactNumber, money } from "../../lib/format";
+import { money } from "../../lib/format";
 import { Link, sessionPath, useNavigate } from "../../router";
 import { useShortcut } from "../../shortcuts/useShortcut";
-import { selectView, useActions, useApi, useApp, useAppState, useDriver, useHost, useSessionView, useTranscriptOpen } from "../../state";
+import { selectView, useActions, useApi, useApp, useAppState, useDriver, useHost, useSessionReach, useSessionView, useTranscriptOpen } from "../../state";
 import { Button, ConfirmDialog, ConnState, DriverBadge, EmptyState, HostChip, Icon, IconButton, Skeleton, StatusPill, Tabs, useEscape } from "../../ui";
 import { toast } from "../../ui/toast";
 import { Gate } from "../gates/Gate";
 import { Composer } from "./Composer";
 import { MediaCtx } from "../media/Parts";
 import { TranscriptItem } from "./TranscriptView";
+import { SessionFacts } from "./SessionFacts";
 import { useTranscriptRows } from "./useTranscriptRows";
+import { usageSummary } from "./usage";
 import { ChangesTab } from "./tabs/ChangesTab";
 import { ConfigTab } from "./tabs/ConfigTab";
 import { TerminalTab } from "./tabs/TerminalTab";
-import { UsageTab } from "./tabs/UsageTab";
 import "./session.css";
 import "./tabs/tabs.css";
 
@@ -22,7 +23,6 @@ const TABS = [
   { id: "activity", label: "Activity" },
   { id: "changes", label: "Changes" },
   { id: "config", label: "Config" },
-  { id: "usage", label: "Usage" },
   { id: "terminal", label: "Terminal" },
 ];
 
@@ -31,11 +31,14 @@ function gateSummary(kinds: string[]): string {
   return [c("permission", "permission"), c("question", "question"), c("plan", "plan"), c("handoff", "handoff"), c("spawn", "spawn request")].filter(Boolean).join(", ");
 }
 
-export function SessionPage({ host, id, tab }: { host: string; id: string; tab: string }) {
+export function SessionPage({ host, id, tab: tabParam }: { host: string; id: string; tab: string }) {
+  // An address that names a section this version does not have (an old `?tab=usage` link) opens the first one.
+  const tab = TABS.some((t) => t.id === tabParam) ? tabParam : "activity";
   const key = `${host}/${id}`;
   const v = useSessionView(key);
   const snap = useAppState((s) => s.sessions[key]);
   const hostLink = useHost(host);
+  const reach = useSessionReach(v);
   const drv = useDriver(v?.driver ?? "");
   const nav = useNavigate();
   const actions = useActions();
@@ -65,10 +68,11 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
       nav("/inbox");
     }
   };
-  // Looking at a finished session counts as seeing it.
+  // Looking at a finished session counts as seeing it (once the host is reporting it live).
   useEffect(() => {
-    if (selectView(store.get(), key)?.status === "done") actions.markSeen([key]);
-  }, [key, v?.status, store, actions]);
+    const view = selectView(store.get(), key);
+    if (view?.status === "done" && !view.stale) actions.markSeen([key]);
+  }, [key, v?.status, v?.stale, store, actions]);
   useEffect(() => {
     const el = scroller.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
@@ -98,8 +102,7 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
   const gates = snap.pending_gates;
   const plan = snap.plan;
   const doneN = plan.filter((p) => p.status === "completed").length;
-  const u = snap.usage;
-  const cachePct = u.input_tokens + u.cache_read_tokens ? Math.round((u.cache_read_tokens / (u.input_tokens + u.cache_read_tokens)) * 100) : 0;
+  const usage = usageSummary(snap);
   const mins = Math.max(1, Math.round((Date.now() - snap.created_at_ms) / 60000));
   const pillLabel = v.status === "needs" && gates.length ? `Waiting for you · ${gateSummary(gates.map((g) => g.gate.gate_type))}` : undefined;
   const live = snap.phase.state === "working" || snap.phase.state === "starting" || snap.phase.state === "needs_you";
@@ -121,14 +124,14 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
           ) : (
             <h1 className="h1" title={snap.display_name ? `First prompt: ${snap.title ?? ""}` : undefined}>{v.name}</h1>
           )}
-          {renaming == null ? <IconButton icon="edit" label="Rename session" onClick={() => setRenaming(snap.display_name ?? "")} /> : null}
-          <StatusPill status={v.status} label={pillLabel} />
+          {renaming == null ? <IconButton icon="edit" label="Rename session" disabled={!!reach} title={reach ?? "Rename session"} onClick={() => setRenaming(snap.display_name ?? "")} /> : null}
+          <StatusPill status={v.status} label={pillLabel} stale={v.stale} />{v.stale ? <span className="lk">last known</span> : null}
           <span className="flex1" />
-          <Button size="sm" icon="pause" disabled={!live || !snap.capabilities.interrupt} onClick={() => void actions.stop(key)}>Interrupt</Button>
+          <Button size="sm" icon="pause" blocked={reach} disabled={!live || !snap.capabilities.interrupt} onClick={() => void actions.stop(key)}>Interrupt</Button>
           {snap.phase.state === "exited" || snap.phase.state === "failed" || snap.phase.state === "lost" ? (
-            <Button size="sm" variant="ghost" icon="x" onClick={() => setConfirmDelete(true)}>Delete</Button>
+            <Button size="sm" variant="ghost" icon="x" blocked={reach} onClick={() => setConfirmDelete(true)}>Delete</Button>
           ) : (
-            <Button size="sm" icon="stop" onClick={() => void actions.stopSession(key)}>Stop</Button>
+            <Button size="sm" icon="stop" blocked={reach} onClick={() => void actions.stopSession(key)}>Stop</Button>
           )}
         </div>
         <div className="sd-meta">
@@ -136,16 +139,17 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
           {hostLink ? <span className="kv"><HostChip host={hostLink} /><ConnState host={hostLink} /></span> : null}
           {snap.cwd ? <span className="kv"><Icon name="folder" size="sm" /><span className="mono">{snap.cwd}</span></span> : null}
           {v.branch ? <span className="kv"><Icon name="branch" size="sm" /><span className="mono">{v.branch}</span></span> : null}
-          {snap.context_pct != null ? (
-            <span className="kv ctx">Context <span className="bar"><i style={{ width: `${Math.round(snap.context_pct)}%` }} /></span><span className="tnum">{Math.round(snap.context_pct)}%</span></span>
+          {usage.contextPct != null ? (
+            <span className="kv ctx">Context <span className="bar"><i style={{ width: `${Math.round(usage.contextPct)}%` }} /></span><span className="tnum">{Math.round(usage.contextPct)}%</span></span>
           ) : null}
-          <span className="kv"><Icon name="coin" size="sm" /><span className="tnum">{money(u.cost_usd)}</span><span className="faint">· {mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`}</span></span>
+          <span className="kv"><Icon name="coin" size="sm" /><span className="tnum">{usage.reportsCost ? money(usage.cost) : "n/a"}</span><span className="faint">· {mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`}</span></span>
         </div>
+        {v.stale ? <div className="banner warn sd-stale" role="status" data-testid="stale-note"><Icon name="clock" size="sm" /><div className="bt"><b>Last known state.</b> <span>{reach}</span></div></div> : null}
         <Tabs tabs={TABS} value={tab} label="Session sections" onChange={(t) => nav(sessionPath(host, id, t))} />
       </div>
       {tab !== "activity" ? (
         <div className="tabbody" role="tabpanel" aria-label={TABS.find((t) => t.id === tab)?.label}>
-          {tab === "changes" ? <ChangesTab sessionKey={key} /> : tab === "config" ? <ConfigTab sessionKey={key} snap={snap} /> : tab === "usage" ? <UsageTab sessionKey={key} snap={snap} /> : <TerminalTab key={key} sessionKey={key} />}
+          {tab === "changes" ? <ChangesTab sessionKey={key} /> : tab === "config" ? <ConfigTab sessionKey={key} snap={snap} /> : <TerminalTab key={key} sessionKey={key} />}
         </div>
       ) : (
         <div className="sd-body">
@@ -196,16 +200,7 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
                 </div>
               </div>
             ) : null}
-            <div>
-              <h4>Session</h4>
-              <dl className="kvl">
-                <dt>Model</dt><dd className="mono">{snap.model ?? "n/a"}</dd>
-                <dt>Mode</dt><dd>{snap.available_modes.find((m) => m.id === snap.mode)?.label ?? snap.mode ?? "n/a"}</dd>
-                <dt>Tokens in / out</dt><dd>{compactNumber(u.input_tokens)} / {compactNumber(u.output_tokens)}</dd>
-                <dt>Cache hits</dt><dd>{cachePct}%</dd>
-                <dt>Started</dt><dd>{clockTime(snap.created_at_ms)}</dd>
-              </dl>
-            </div>
+            <SessionFacts snap={snap} />
           </aside>
         </div>
       )}

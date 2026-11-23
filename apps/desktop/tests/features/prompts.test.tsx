@@ -277,13 +277,26 @@ describe("composer: Up and Down recall earlier prompts", () => {
   it("typing stays possible while older prompts are being fetched, and an edit cancels the walk", async () => {
     const user = userEvent.setup();
     const { box, backend } = await primed(14);
+    // The real signal that a background load is over: the request for the older page settling.
+    const olderPages: Promise<unknown>[] = [];
+    const request = backend.request.bind(backend);
+    backend.request = (<T,>(method: string, params?: unknown, opts?: object) => {
+      const r = request<T>(method, params, opts);
+      if (method === "session.history" && (params as { before?: number }).before !== undefined) olderPages.push(r.then(() => undefined, () => undefined));
+      return r;
+    }) as typeof backend.request;
     await user.click(box);
-    for (let i = 14; i >= 1 && !backend.requests.some((r) => r.method === "session.history" && (r.params as { before?: number }).before !== undefined); i--) await user.keyboard("{ArrowUp}");
+    for (let i = 14; i >= 1 && !olderPages.length; i--) await user.keyboard("{ArrowUp}");
+    expect(olderPages.length).toBeGreaterThan(0);
     // Whatever page the walk is on, typing now makes the text the draft and ends the walk.
     await user.keyboard("{End} ok");
     expect(box.value.endsWith(" ok")).toBe(true);
     const typed = box.value;
-    await new Promise((r) => setTimeout(r, 50));
+    // Let the cancelled load finish (its reply arrives and React settles), then check it did not touch the box.
+    await act(async () => {
+      await Promise.all(olderPages);
+    });
     expect(box.value).toBe(typed);
+    expect(screen.queryByText("Loading earlier prompts…")).toBeNull();
   });
 });

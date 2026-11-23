@@ -3,12 +3,29 @@ import type { SessionKey } from "../../bridge/wire";
 import { useStore } from "../../lib/store";
 import { sessionPath, useNavigate } from "../../router";
 import { useShortcut } from "../../shortcuts/useShortcut";
-import { useActions, useAppState, useGroups, useApp, selectView } from "../../state";
+import { hubView, type HubLink, useActions, useAppState, useGroups, useApp, useReach, selectView } from "../../state";
 import { Button, EmptyState, Icon, Kbd, STATUS, STATUS_ORDER, VirtualList, type StatusKey, type VirtualListHandle } from "../../ui";
 import { filterStore, filtersActive, resetFilters } from "../common/filters";
 import { HomeHeader, HomeToolbar } from "../common/HomeChrome";
 import { InboxRow } from "./InboxRow";
 import "./inbox.css";
+
+/** The group's icon animates only while some session in it is live: last-known sessions are not activity. */
+function GroupIcon({ status, keys }: { status: StatusKey; keys: SessionKey[] }) {
+  const live = useAppState((s) => keys.some((k) => !selectView(s, k)?.stale));
+  return <Icon name={STATUS[status].icon} size="sm" spin={status === "working" && live} />;
+}
+
+/** The list is empty because nothing has arrived yet: say what it is waiting for, and why when it is not coming. */
+function Waiting({ hub, fleetError, onRetry }: { hub: HubLink; fleetError?: string; onRetry: () => void }) {
+  if (hub.state !== "connected") {
+    const v = hubView(hub);
+    const title = hub.state === "connecting" ? "Connecting to the local service" : hub.state === "reconnecting" ? "Reconnecting to the local service" : "Cannot reach the local service";
+    return <EmptyState icon={v.tone === "info" ? "working" : v.tone === "bad" ? "failed" : "refresh"} title={title}>{v.detail}</EmptyState>;
+  }
+  if (fleetError) return <EmptyState icon="failed" title="Could not load your sessions" action={<Button size="sm" onClick={onRetry}>Try again</Button>}>{fleetError}</EmptyState>;
+  return <EmptyState icon="working" title="Connecting to your hosts">Sessions appear as each host answers.</EmptyState>;
+}
 
 type Entry = { type: "group"; status: StatusKey; count: number } | { type: "row"; key: SessionKey };
 
@@ -19,6 +36,9 @@ export function InboxPage() {
   const actions = useActions();
   const { store } = useApp();
   const loaded = useAppState((s) => s.fleetReady);
+  const hub = useAppState((s) => s.hub);
+  const fleetError = useAppState((s) => s.feedErrors.fleet);
+  const blocked = useReach();
   const list = useRef<VirtualListHandle>(null);
   const [selected, setSelected] = useState<SessionKey | null>(null);
 
@@ -63,7 +83,7 @@ export function InboxPage() {
       </div>
       {entries.length === 0 ? (
         <div className="ibx">
-          {loading ? <EmptyState icon="working" title="Connecting to your hosts">Sessions appear as each host answers.</EmptyState>
+          {loading ? <Waiting hub={hub} fleetError={fleetError} onRetry={actions.retryLive} />
             : filtersActive(f) ? <EmptyState icon="filter" title="No session matches" action={<Button size="sm" onClick={resetFilters}>Clear filters</Button>}>Nothing fits the current filters.</EmptyState>
             : <EmptyState icon="inbox" title="No sessions yet">Start a session on any host and it shows up here.</EmptyState>}
         </div>
@@ -79,12 +99,12 @@ export function InboxPage() {
           renderItem={(e) =>
             e.type === "group" ? (
               <div className={`grp c-${e.status}`} role="presentation">
-                <Icon name={STATUS[e.status].icon} size="sm" spin={e.status === "working"} />
+                <GroupIcon status={e.status} keys={groups[e.status]} />
                 {STATUS[e.status].group}
                 <span className="cnt">{e.count}</span>
                 <span className="gline" />
                 {e.status === "needs" ? <span className="gact">Answer here or press Enter to open</span> : null}
-                {e.status === "done" ? <Button size="sm" variant="ghost" onClick={() => actions.markSeen(groups.done)}>Mark all seen</Button> : null}
+                {e.status === "done" ? <Button size="sm" variant="ghost" blocked={blocked} onClick={() => actions.markSeen(groups.done)}>Mark all seen</Button> : null}
               </div>
             ) : (
               <InboxRow sessionKey={e.key} selected={e.key === selected} onSelect={setSelected} onOpen={open} />

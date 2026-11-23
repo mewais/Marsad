@@ -16,9 +16,10 @@ use marsad_proto::{methods, HostId, SessionId};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
+use wasit_control::LinkState;
 
-use crate::bridge::{link_word, Shell};
-use crate::connection::{host_link, ConnectionState};
+use crate::bridge::Shell;
+use crate::connection::ConnectionState;
 use crate::notify::{Note, Tracker};
 
 /// How long a notification's session stays the target of "bring the app forward".
@@ -199,7 +200,10 @@ pub async fn run(app: AppHandle) {
     let mut link = shell.client.link().state();
     let mut tracker = Tracker::default();
     let mut hosts: Vec<FleetHost> = Vec::new();
-    let mut daemon = link_word(&link.borrow_and_update());
+    let mut daemon: LinkState = link.borrow_and_update().clone();
+    // The webview reads `connection_state` at start: it must not see the placeholder while
+    // the link is already up (or already failed).
+    publish(&app, &shell, ConnectionState::new(&daemon, &hosts));
     loop {
         tokio::select! {
             item = sub.next() => {
@@ -214,15 +218,15 @@ pub async fn run(app: AppHandle) {
                 apply(&mut hosts, &ev);
                 let notes = tracker.apply(&ev);
                 crate::tray::set_attention(&app, tracker.attention());
-                publish(&app, &shell, ConnectionState { daemon, hosts: hosts.iter().map(host_link).collect() });
+                publish(&app, &shell, ConnectionState::new(&daemon, &hosts));
                 show(&app, &shell, notes).await;
             }
             changed = link.changed() => {
                 if changed.is_err() {
                     return;
                 }
-                daemon = link_word(&link.borrow_and_update());
-                publish(&app, &shell, ConnectionState { daemon, hosts: hosts.iter().map(host_link).collect() });
+                daemon = link.borrow_and_update().clone();
+                publish(&app, &shell, ConnectionState::new(&daemon, &hosts));
             }
         }
     }

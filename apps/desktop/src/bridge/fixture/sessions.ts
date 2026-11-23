@@ -1,6 +1,6 @@
 import type { GateChoice, GateRequest, PlanEntry, SessionEvent, SessionSnapshot, Usage } from "../wire";
 import { driverDef } from "./catalog";
-import { buildTranscript } from "./transcripts";
+import { buildTranscript, modelSplit } from "./transcripts";
 
 /** Fixture-only: the ~14 sessions of the mockup, as compact specs expanded into wire snapshots. */
 
@@ -177,6 +177,7 @@ export function buildSession(spec: Spec, now: number): Built {
       : spec.kind === "failed" ? { ended_at_ms: last, was_interrupted: false, num_turns: 2, end_reason: "execution_error", reply: spec.line } : undefined,
     turns_completed: spec.kind === "working" ? 1 : 3,
     usage: usage(spec.cost),
+    usage_by_model: modelSplit(spec.driver, usage(spec.cost), spec.cost),
     context_pct: Math.min(90, 12 + spec.n * 3),
     subagents: spec.n === 7 ? [{ call_id: "c-sub", name: "Explore", description: "List routes that depend on session shape", started_at_ms: now - 500_000, running: false, ok: true }] : [],
     plan: spec.kind === "working" ? [...planEntries.slice(0, 1), { content: spec.line, priority: "medium", status: "in_progress" }] : planEntries,

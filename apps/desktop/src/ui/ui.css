@@ -27,6 +27,9 @@ kbd{font-family:var(--f-mono);font-size:10.5px;padding:1px 5px;border-radius:4px
 .st.working{color:var(--working);background:var(--working-bg);border-color:var(--working-line)}
 .st.idle{color:var(--idle);background:var(--idle-bg);border-color:transparent}
 .st.plain{background:transparent;border-color:transparent;padding:0;height:auto}
+/* Last known: where the session was, not what it is doing. */
+.st.stale{color:var(--fg-3);background:transparent;border:1px dashed var(--line-2);font-weight:500}
+.lk{font-size:11px;color:var(--fg-3);font-style:italic}
 .c-needs{color:var(--needs)} .c-failed{color:var(--failed)} .c-done{color:var(--done)} .c-working{color:var(--working)} .c-idle{color:var(--idle)} .c-accent{color:var(--accent)}
 
 .drv{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:12px;color:var(--fg-2)}
@@ -174,10 +177,6 @@ table.t td.r,table.t th.r{text-align:right;font-variant-numeric:tabular-nums}
 .prov.x{color:var(--failed);border-color:var(--failed-line)}
 .prov.wasl{color:var(--accent-fg);background:var(--accent);border-color:var(--accent)}
 .prov.chipbtn{cursor:pointer;color:var(--fg);background:var(--raised)} .prov.chipbtn:hover{border-color:var(--accent);color:var(--accent)} .prov.chipbtn:disabled{opacity:.5;cursor:default}
-.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
-.tile{padding:12px 14px;display:flex;flex-direction:column;gap:2px}
-.tile .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
-.tile .k{font-size:11.5px;color:var(--fg-3)}
 .note{display:flex;gap:8px;align-items:flex-start;font-size:11.5px;color:var(--fg-2);padding:9px 10px;border:1px solid var(--line);border-radius:var(--r2);background:var(--win);line-height:1.45}
 .note .i{color:var(--fg-3);margin-top:1px;flex:none}
 .steps{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--fg-3)}
@@ -211,3 +210,7 @@ table.t td.r,table.t th.r{text-align:right;font-variant-numeric:tabular-nums}
 /* Copy: icon button states (a check only after the write succeeded, a warning when it failed). */
 .copybtn[data-state="copied"]{color:var(--done)}
 .copybtn[data-state="failed"]{color:var(--failed)}
+/* Render failures: what failed, and a way to draw it again. */
+.boundary-app{height:100%;display:grid;place-items:center;padding:24px;background:var(--win);color:var(--fg)}
+.boundary-item{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 10px;border:1px solid var(--failed-line);border-radius:var(--r2);background:var(--failed-bg)}
+.boundary-acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:8px}

@@ -44,7 +44,7 @@ export function HandoffGate({ view, pg, density, active, expanded, onActivate }:
   const hg = usePermissionGate(view, pg);
   const [payload, setPayload] = useState(false);
   const g = pg.gate;
-  const buttons = (keys: boolean) => <ChoiceButtons choices={hg.set.choices} busy={hg.busy} onChoose={(c) => hg.choose(c)} keys={keys} />;
+  const buttons = (keys: boolean) => <ChoiceButtons choices={hg.set.choices} busy={hg.busy} blocked={hg.blocked} onChoose={(c) => hg.choose(c)} keys={keys} />;
   const details = detailsText(g.details);
   const payloadBox = payload ? <div className="payload" data-testid="handoff-payload"><span><b>Mode</b> {g.mode}</span>{details ? <span className="mono">{details}</span> : null}</div> : null;
   const keysOn = active;

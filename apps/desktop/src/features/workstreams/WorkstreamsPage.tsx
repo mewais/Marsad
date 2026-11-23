@@ -5,7 +5,7 @@ import { agoLong, money } from "../../lib/format";
 import { useNavigate, workstreamPath } from "../../router";
 import { openNewWorkstream } from "../../shell/dialogs";
 import { PageHeader } from "../../shell/PageHeader";
-import { useActions, useApi, useAppState, useHost } from "../../state";
+import { useActions, useApi, useAppState, useHost, useStaleHosts } from "../../state";
 import { Button, EmptyState, HostChip, Icon, Skeleton } from "../../ui";
 import { summary } from "./model";
 import "./workstreams.css";
@@ -20,7 +20,8 @@ function Row({ id }: { id: string }) {
   const nav = useNavigate();
   if (!v) return null;
   const w = v.workstream;
-  const s = summary(v);
+  const stale = useStaleHosts();
+  const s = summary(v, (h) => stale.has(h));
   const go = () => nav(workstreamPath(w.id));
   return (
     <div className="wsrow" role="link" tabIndex={0} data-ws={w.id} onClick={go} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), go())} aria-label={`${w.name}: ${s.parts.map((p) => p.text).join(", ")}`}>

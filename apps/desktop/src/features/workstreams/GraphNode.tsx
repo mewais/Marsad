@@ -1,7 +1,7 @@
 import { memo } from "react";
 import type { WorkstreamNode, WorkstreamView } from "../../bridge/wire";
 import { basename, money } from "../../lib/format";
-import { useAppState } from "../../state";
+import { useAppState, useStaleHosts } from "../../state";
 import { DriverBadge, Icon, STATUS, makeDriver } from "../../ui";
 import type { Rect } from "./route";
 import { nodeName, nodeStatus, taskWords } from "./model";
@@ -27,7 +27,8 @@ export const GraphNode = memo(function GraphNode({ view, node, rect, design, sel
   const snap = nv?.session ?? null;
   const driverId = snap?.driver ?? node.launch?.driver ?? "";
   const drv = useAppState((s) => s.drivers[driverId]) ?? makeDriver(driverId || "?");
-  const st = nodeStatus(nv, snap);
+  const staleHosts = useStaleHosts();
+  const st = nodeStatus(nv, snap, !!nv && staleHosts.has(nv.host));
   const incoming = view.edges.filter((e) => e.to === node.id).flatMap((e) => e.in_flight);
   const outgoing = view.edges.filter((e) => e.from === node.id).flatMap((e) => e.in_flight);
   const task = incoming[0];
@@ -53,7 +54,7 @@ export const GraphNode = memo(function GraphNode({ view, node, rect, design, sel
       ) : (
         <>
           <div className="row">
-            {meta ? <span className={`st ${st.status}`}><Icon name={meta.icon} size="sm" spin={st.status === "working"} />{st.word}</span> : <span className="st idle"><Icon name={st.status === "launching" ? "working" : "idle"} size="sm" spin={st.status === "launching"} />{st.word}</span>}
+            {meta ? <span className={`st ${st.status}${st.stale ? " stale" : ""}`}><Icon name={meta.icon} size="sm" spin={st.status === "working" && !st.stale} />{st.word}</span> : <span className="st idle"><Icon name={st.status === "launching" ? "working" : "idle"} size="sm" spin={st.status === "launching"} />{st.word}</span>}
             <span className="sp" />
             <span className="tnum">{money(snap?.usage.cost_usd ?? 0)}</span>
           </div>

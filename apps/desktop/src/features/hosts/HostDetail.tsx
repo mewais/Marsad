@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { WslDistros } from "../../bridge/wire";
 import { useNavigate, sessionPath } from "../../router";
-import { linkView, osWord, sameMachineAs, useActions, useSessionView, useApi, useAppState, usePending, type HostView } from "../../state";
+import { linkView, osWord, sameMachineAs, useActions, useReach, useSessionView, useApi, useAppState, usePending, type HostView } from "../../state";
 import { Button, ConfirmDialog, ConnState, DriverBadge, Icon, STATUS, Wrap, hostIcon, makeDriver, useNow } from "../../ui";
 import { address, linkSub } from "./linkText";
 import { WslDistroPicker, defaultDistro } from "./WslDistroPicker";
@@ -24,6 +24,9 @@ export function HostDetail({ host }: { host: HostView }) {
   const lv = linkView(host.link, host.authPrompt, now);
   const st = host.link.link === "remote" ? host.link.state : null;
   const reconnect = () => void actions.run(reconnectPk, `Could not connect to ${host.name}`, () => api.hosts.reconnect(host.id));
+  const reach = useReach();
+  // The local host is reached through the app's own link to the local daemon, not through the hub.
+  const hub = host.link.link === "local" ? host.link.hub : undefined;
   const remove = async () => {
     const ok = await actions.run(`remove:${host.id}`, `Could not remove ${host.name}`, () => api.hosts.remove(host.id));
     setConfirm(false);
@@ -32,17 +35,25 @@ export function HostDetail({ host }: { host: HostView }) {
   const k = entry?.kind;
 
   let card: React.ReactNode = null;
-  if (host.authPrompt) {
+  if (hub && hub.state !== "connected") {
+    card = (
+      <div className={`gate ${hub.state === "offline" ? "bad" : hub.state === "connecting" ? "info" : ""}`}>
+        <div className="gate-h"><Icon name={hub.state === "connecting" ? "working" : hub.state === "offline" ? "failed" : "refresh"} size="sm" spin={hub.state === "connecting"} />{hub.state === "connecting" ? "Connecting to the local service" : hub.state === "reconnecting" ? "Lost the local service; reconnecting" : "Cannot reach the local service"}</div>
+        <div className="small">{hub.error ? `${hub.error}. ` : ""}Everything Marsad shows is the last known state until the service is back.{hub.state === "offline" ? " Marsad does not retry this on its own." : ""}</div>
+        {hub.state === "connecting" ? null : <div className="acts"><Button size="sm" icon="refresh" onClick={() => void actions.reconnectHub()}>{hub.state === "offline" ? "Try again" : "Try again now"}</Button></div>}
+      </div>
+    );
+  } else if (host.authPrompt) {
     card = <div className="gate"><div className="gate-h"><Icon name="key" size="sm" />Waiting for you to sign in</div><div className="small">{host.name} asked for {host.authPrompt.kind === "secret" ? "a password" : host.authPrompt.kind === "code" ? "a one-time code" : host.authPrompt.kind === "confirm" ? "a yes or no" : "approval"}. The sign-in dialog is open.</div></div>;
   } else if (st?.state === "auth_needed") {
     card = (
       <div className="gate bad"><div className="gate-h"><Icon name="key" size="sm" />{lv.word}</div><div className="small">{st.detail}</div>
-        <div className="acts"><Button size="sm" variant="primary" icon="key" pending={busy} onClick={reconnect}>Connect</Button><span className="faint small">You may be asked for a password or code.</span></div></div>
+        <div className="acts"><Button size="sm" variant="primary" icon="key" pending={busy} blocked={reach} onClick={reconnect}>Connect</Button><span className="faint small">You may be asked for a password or code.</span></div></div>
     );
   } else if (st?.state === "reconnecting") {
     card = (
       <div className="gate"><div className="gate-h"><Icon name="refresh" size="sm" />{lv.detail}</div><div className="small">The connection dropped ({st.last_error}). Sessions keep running on the machine; Marsad catches up on their output when it reconnects. Attempt {st.attempt}.</div>
-        <div className="acts"><Button size="sm" icon="refresh" pending={busy} onClick={reconnect}>Retry now</Button></div></div>
+        <div className="acts"><Button size="sm" icon="refresh" pending={busy} blocked={reach} onClick={reconnect}>Retry now</Button></div></div>
     );
   } else if (st?.state === "provisioning" || st?.state === "connecting") {
     card = (
@@ -53,7 +64,7 @@ export function HostDetail({ host }: { host: HostView }) {
   } else if (st?.state === "failed" && st.problem === "unknown_distro" && entry?.kind.kind === "wsl") {
     card = <div className="gate bad"><div className="gate-h"><Icon name="failed" size="sm" />{lv.word}</div><div className="small">{lv.detail}</div><FixDistro hostId={host.id} hostName={host.name} /></div>;
   } else if (st && (st.state === "failed" || st.state === "incompatible" || st.state === "stopped")) {
-    card = <div className="gate bad"><div className="gate-h"><Icon name="failed" size="sm" />{lv.word}</div><div className="small">{lv.detail}</div><div className="acts"><Button size="sm" icon="refresh" pending={busy} onClick={reconnect}>Try again</Button>{st.state === "failed" ? <span className="faint small">Marsad does not retry this on its own.</span> : null}</div></div>;
+    card = <div className="gate bad"><div className="gate-h"><Icon name="failed" size="sm" />{lv.word}</div><div className="small">{lv.detail}</div><div className="acts"><Button size="sm" icon="refresh" pending={busy} blocked={reach} onClick={reconnect}>Try again</Button>{st.state === "failed" ? <span className="faint small">Marsad does not retry this on its own.</span> : null}</div></div>;
   }
 
   return (
@@ -80,7 +91,7 @@ export function HostDetail({ host }: { host: HostView }) {
             ))}
           </tbody></table>
         )}
-        {lv.connected ? <Button size="sm" variant="ghost" icon="refresh" className="mt6" onClick={() => void actions.run(`refresh:${host.id}`, "Could not refresh the agents", () => api.refreshDrivers(host.id))}>Re-detect agents</Button> : null}
+        {lv.connected ? <Button size="sm" variant="ghost" icon="refresh" className="mt6" blocked={reach} onClick={() => void actions.run(`refresh:${host.id}`, "Could not refresh the agents", () => api.refreshDrivers(host.id))}>Re-detect agents</Button> : null}
       </div>
       {lv.connected ? <EnvironmentSection hostId={host.id} hostName={host.name} windows={entry?.platform?.os === "windows"} now={now} /> : null}
       <div>
@@ -89,7 +100,7 @@ export function HostDetail({ host }: { host: HostView }) {
           {keys ? keys.split("|").map((key) => <SessionLine key={key} sessionKey={key} />) : <div className="faint small">No sessions on this host.</div>}
         </div>
       </div>
-      {!host.local ? <div className="hd-foot"><Button size="sm" variant="ghost" icon="x" onClick={() => setConfirm(true)}>Remove host</Button></div> : null}
+      {!host.local ? <div className="hd-foot"><Button size="sm" variant="ghost" icon="x" blocked={reach} onClick={() => setConfirm(true)}>Remove host</Button></div> : null}
       <ConfirmDialog open={confirm} title={`Remove ${host.name}?`} confirmLabel="Remove host" danger onConfirm={() => void remove()} onClose={() => setConfirm(false)}>
         <p>Marsad stops connecting to {host.name}. Sessions already running there keep running; you can add the host again later.</p>
       </ConfirmDialog>
@@ -103,7 +114,7 @@ function SessionLine({ sessionKey }: { sessionKey: string }) {
   if (!v) return null;
   return (
     <button type="button" className="h hbtn" onClick={() => nav(sessionPath(v.host, v.id))}>
-      <span className={`c-${v.status}`}><Icon name={STATUS[v.status].icon} size="sm" spin={v.status === "working"} /></span><span className="ell">{v.name}</span><span className={`w c-${v.status}`}>{STATUS[v.status].label}</span>
+      <span className={v.stale ? "faint" : `c-${v.status}`}><Icon name={STATUS[v.status].icon} size="sm" spin={v.status === "working" && !v.stale} /></span><span className="ell">{v.name}</span><span className={v.stale ? "w lk" : `w c-${v.status}`}>{STATUS[v.status].label}{v.stale ? " · last known" : ""}</span>
     </button>
   );
 }

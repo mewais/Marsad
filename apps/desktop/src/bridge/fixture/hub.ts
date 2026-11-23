@@ -20,6 +20,8 @@ export interface HubCore {
   cancelAuth(a: AuthCancel): void;
   createSession(host: string, snap: SessionSnapshot, firstPrompt: string | null): void;
   session(host: string, id: string): SessionSnapshot | undefined;
+  /** Every session on every host. */
+  allSessions(): { host: string; snap: SessionSnapshot }[];
   /** The host's agent command for `driver` in effect, if any. */
   agentCommand(host: string, driver: string): string | null;
   emitWorkstreams(e: WorkstreamsEvent): void;
@@ -117,8 +119,11 @@ export class FixtureHub {
         this.seen = [...this.seen.filter((x) => !(x.host === m.host && x.session === m.session)), m];
         return {};
       }
-      case M.STORE_SEEN_MARK_ALL:
+      case M.STORE_SEEN_MARK_ALL: {
+        const at_ms = c.now();
+        this.seen = c.allSessions().map(({ host, snap }) => ({ host, session: snap.id, cursor: snap.cursor, at_ms }));
         return { markers: this.seen };
+      }
       case M.STORE_RECENT_LIST:
         return { projects: this.recent };
       case M.STORE_RECENT_ADD: {

@@ -1,4 +1,4 @@
-import { linkView, useCounts, useHosts } from "../state";
+import { linkView, useAppState, useCounts, useHosts } from "../state";
 import { money } from "../lib/format";
 import { ConnState, Icon } from "../ui";
 import { useNavigate } from "../router";
@@ -6,6 +6,7 @@ import { useNavigate } from "../router";
 export function StatusBar({ onHelp }: { onHelp: () => void }) {
   const hosts = useHosts();
   const counts = useCounts();
+  const ready = useAppState((s) => s.fleetReady);
   const nav = useNavigate();
   return (
     <footer className="statusbar" aria-label="Status">
@@ -31,7 +32,7 @@ export function StatusBar({ onHelp }: { onHelp: () => void }) {
         </span>
       ) : null}
       <span className="sb-item tnum">
-        Today {money(counts.todayCost)} · {counts.todaySessions} sessions
+        {ready ? `Today ${money(counts.todayCost)} · ${counts.todaySessions} sessions` : "Today: not reported yet"}
       </span>
       <button type="button" className="sb-item" onClick={onHelp}>
         <kbd>?</kbd> Shortcuts

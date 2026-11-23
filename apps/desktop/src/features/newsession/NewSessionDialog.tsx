@@ -9,7 +9,7 @@ import { agoLong } from "../../lib/format";
 import { inShell } from "../../lib/shell";
 import { useNavigate, sessionPath } from "../../router";
 import { useShortcut } from "../../shortcuts/useShortcut";
-import { linkView, modelOptions, useActions, useApi, useAppState, useHosts } from "../../state";
+import { linkView, modelOptions, useActions, useApi, useAppState, useHosts, useReach } from "../../state";
 import { Button, Dialog, Icon, Kbd, SearchField, Segmented, Select, toast } from "../../ui";
 import type { NewSessionPreset } from "../../shell/dialogs";
 import { defaultsFor, launchRequest, mostRecent, resumeRows, validate, type NewSessionForm } from "./model";
@@ -94,7 +94,7 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
     });
   const attach = async () => {
     if (!inShell()) return fileInput.current?.click();
-    const r = await actions.run("ns-pick", "Could not open the file picker", () => api.desktop.pickFiles("Attach files"));
+    const r = await actions.run("ns-pick", "Could not open the file picker", () => api.desktop.pickFiles("Attach files"), { local: true });
     if (r) addFiles(r.files.map((x) => fromPicked(api, x)));
   };
 
@@ -149,9 +149,10 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
   }, [api, open, f.host, f.driver, f.cwd, inv?.installed]);
 
   const problem = validate(f, inv, hostUp) || problemFiles || "";
+  const reach = useReach(f.host);
   const pk = "launch";
   const submit = async () => {
-    if (problem || !inv) return;
+    if (problem || reach || !inv) return;
     if (onAdd) {
       onAdd(f, inv);
       onClose();
@@ -194,10 +195,10 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
     <Dialog open={open} onClose={onClose} title={title} subtitle={subtitle} width={960} className="nsdlg"
       footer={
         <>
-          <span className="faint ns-problem" role="status">{stepText || problem || (onAdd ? "The Wasl connector will be added automatically." : "")}</span>
+          <span className="faint ns-problem" role="status">{stepText || problem || reach || (onAdd ? "The Wasl connector will be added automatically." : "")}</span>
           <span className="sp" />
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" icon={onAdd ? "plus" : f.start === "continue" ? "refresh" : "send"} disabled={!!problem} pending={pending} onClick={() => void submit()}>
+          <Button variant="primary" icon={onAdd ? "plus" : f.start === "continue" ? "refresh" : "send"} disabled={!!problem} blocked={reach} pending={pending} onClick={() => void submit()}>
             {verb} {onAdd ? null : <Kbd>Ctrl Enter</Kbd>}
           </Button>
         </>
