@@ -40,6 +40,7 @@
 //! | [`methods::HOSTS_IMPORT_SUGGESTIONS`] | — | [`hosts::ImportSuggestions`] |
 //! | [`methods::HOSTS_WSL_DISTROS`] | — | [`hosts::WslDistros`] |
 //! | [`methods::HOSTS_RECONNECT`] | [`hosts::HostRef`] | [`Ack`] |
+//! | [`methods::HOSTS_SIGNOUT`] | [`hosts::HostRef`] | [`Ack`] |
 //! | [`methods::HOSTS_AUTH_ANSWER`] | [`hosts::AuthAnswer`] | [`Ack`] |
 //! | [`methods::HOSTS_AUTH_CANCEL`] | [`hosts::AuthCancel`] | [`Ack`] |
 //! | [`methods::HOSTS_ASKPASS`] (internal) | [`hosts::AskpassRequest`] | [`hosts::AskpassReply`] |
@@ -191,6 +192,9 @@ pub mod methods {
     pub const HOSTS_WSL_DISTROS: &str = "hosts.wsl_distros";
     /// Connect now (also the explicit "Connect" for a host that signs in interactively).
     pub const HOSTS_RECONNECT: &str = "hosts.reconnect";
+    /// End the shared ssh connection of a host (Linux and macOS hubs): its link drops and it
+    /// waits for the user to sign in again.
+    pub const HOSTS_SIGNOUT: &str = "hosts.signout";
     pub const HOSTS_AUTH_ANSWER: &str = "hosts.auth_answer";
     pub const HOSTS_AUTH_CANCEL: &str = "hosts.auth_cancel";
     /// Internal: the `SSH_ASKPASS` helper waits here for the user's answer.

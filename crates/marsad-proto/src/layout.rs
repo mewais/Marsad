@@ -17,6 +17,8 @@
 //! <run>/                                   machine-local runtime dir (0700, owner-checked):
 //!     marsad.sock, marsad.sock.lock        daemon endpoint + single-instance lock
 //!     sessions/<id>/{ctl.sock, shim.lock}  each shim's endpoint + liveness lock
+//!     ssh/<16 hex>, ssh/<16 hex>.log       hub only: the control socket of a host's shared ssh
+//!                                          connection (it outlives the daemon) and its log
 //! ```
 //!
 //! `<key>` is [`wasit_runtime::machine::machine_key`]; `<run>` is
@@ -88,6 +90,12 @@ impl Layout {
     /// The daemon endpoint path (on Windows the path its named pipe derives from).
     pub fn socket(&self) -> PathBuf {
         self.run.join("marsad.sock")
+    }
+
+    /// Where the hub keeps the control sockets (and their logs) of its shared ssh connections:
+    /// `<run>/ssh`, one socket per ssh host, named by a hash of the host's id and route.
+    pub fn ssh_dir(&self) -> PathBuf {
+        self.run.join("ssh")
     }
 
     /// The daemon's stderr file: raw crash output (and `MARSAD_LOG` developer text), never

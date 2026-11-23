@@ -2,7 +2,7 @@ import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { hostKindOf } from "../../src/features/hosts/AddHostDialog";
-import { quietBackend, renderApp } from "../helpers";
+import { hold, quietBackend, renderApp } from "../helpers";
 import { sameMachineAs } from "../../src/state/hosts";
 
 async function hostsPage(path = "/hosts") {
@@ -111,6 +111,74 @@ describe("hosts", () => {
     await waitFor(() => expect(backend.requests.find((x) => x.method === "hosts.update")?.params).toMatchObject({ kind: { kind: "wsl", distro: "Debian" } }));
     await waitFor(() => expect(backend.requests.some((x) => x.method === "hosts.reconnect")).toBe(true));
   });
+  describe("sign out of a shared ssh connection", () => {
+    const requests = (b: { requests: { method: string; params?: unknown }[] }, m: string) => b.requests.filter((r) => r.method === m);
+
+    it("a connected host that has one offers Sign out: the dialog says what happens, the hub is asked once, the host then waits for the user and is not reconnected by itself", async () => {
+      const user = userEvent.setup();
+      const { backend } = await hostsPage("/hosts?h=hz");
+      const panel = await screen.findByRole("complementary", { name: "hetzner-ax41 details" });
+      expect(await within(panel).findByText("Kept open and shared, until you sign out or it ends")).toBeInTheDocument();
+      await user.click(within(panel).getByRole("button", { name: "Sign out" }));
+      const dlg = await screen.findByRole("dialog", { name: "Sign out of hetzner-ax41?" });
+      expect(dlg).toHaveTextContent("Marsad closes the connection it keeps open to hetzner-ax41. Sessions already running there keep running, and Marsad will not reconnect until you sign in again.");
+      // Nothing is asked until the user confirms.
+      expect(requests(backend, "hosts.signout")).toEqual([]);
+      await user.click(within(dlg).getByRole("button", { name: "Sign out" }));
+      await waitFor(() => expect(requests(backend, "hosts.signout")).toHaveLength(1));
+      expect(requests(backend, "hosts.signout")[0].params).toEqual({ id: "hz" });
+      // The hub parks it (a key host too): the card says it was the user's act, and offers the one click.
+      const held = await within(panel).findByTestId("host-held");
+      expect(held).toHaveTextContent("Needs you to sign in");
+      expect(within(panel).getByTestId("held-detail")).toHaveTextContent("You signed out of this host: connect it to sign in again.");
+      expect(held).toHaveTextContent("Marsad will not reconnect it on its own");
+      expect(within(panel).queryByRole("button", { name: "Sign out" })).toBeNull();
+      expect(requests(backend, "hosts.reconnect")).toEqual([]);
+      // One click signs it in again.
+      await user.click(within(held).getByRole("button", { name: "Sign in" }));
+      await waitFor(() => expect(requests(backend, "hosts.reconnect")).toHaveLength(1));
+      expect(await within(panel).findByRole("button", { name: "Sign out" }, { timeout: 4000 })).toBeInTheDocument();
+    });
+
+    it("a host the hub says has no shared connection (a Windows hub) and the local host offer no Sign out", async () => {
+      const { backend } = await hostsPage("/hosts?h=hz");
+      let panel = await screen.findByRole("complementary", { name: "hetzner-ax41 details" });
+      await within(panel).findByRole("button", { name: "Sign out" });
+      // The decision is the hub's: the same host, its entry saying there is no shared connection.
+      const entry = (await backend.request<{ hosts: { id: string }[] }>("hosts.list")).hosts.find((h) => h.id === "hz")!;
+      await act(async () => {
+        await backend.request("hosts.update", { ...entry, shared_connection: false });
+      });
+      await waitFor(() => expect(within(panel).queryByRole("button", { name: "Sign out" })).toBeNull());
+      expect(within(panel).queryByText(/Kept open and shared/)).toBeNull();
+      expect(within(panel).getByRole("button", { name: "Remove host" })).toBeInTheDocument();
+      // The local host never has one.
+      cleanup();
+      await hostsPage("/hosts?h=x1");
+      panel = await screen.findByRole("complementary", { name: "thinkpad-x1 details" });
+      expect(within(panel).queryByRole("button", { name: "Sign out" })).toBeNull();
+    });
+
+    it("a host that is not connected has no connection to sign out of", async () => {
+      await hostsPage("/hosts?h=win");
+      const panel = await screen.findByRole("complementary", { name: "win-build details" });
+      expect(within(panel).queryByRole("button", { name: "Sign out" })).toBeNull();
+    });
+
+    it("the hub's refusal is shown", async () => {
+      const user = userEvent.setup();
+      const { backend } = await hostsPage("/hosts?h=hz");
+      const panel = await screen.findByRole("complementary", { name: "hetzner-ax41 details" });
+      const h = hold(backend, "hosts.signout");
+      await user.click(await within(panel).findByRole("button", { name: "Sign out" }));
+      await user.click(within(await screen.findByRole("dialog", { name: "Sign out of hetzner-ax41?" })).getByRole("button", { name: "Sign out" }));
+      await waitFor(() => expect(h.pending()).toBe(1));
+      act(() => h.reject({ code: "invalid_params", message: "this host has no shared ssh connection to sign out of" }));
+      expect(await screen.findByText("Could not sign out of hetzner-ax41")).toBeInTheDocument();
+      expect(screen.getByText("this host has no shared ssh connection to sign out of")).toBeInTheDocument();
+    });
+  });
+
   it("names hosts that reach the same machine (same machine key)", () => {
     const e = (id: string, machine?: string) => ({ entry: { id, name: id.toUpperCase(), machine } as never });
     const hosts = { a: e("a", "m1"), a2: e("a2", "m1"), b: e("b", "m2"), c: e("c") };

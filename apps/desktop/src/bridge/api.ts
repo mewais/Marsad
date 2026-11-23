@@ -60,6 +60,7 @@ export interface MethodMap {
   [M.HOSTS_IMPORT_SUGGESTIONS]: [void, W.ImportSuggestions];
   [M.HOSTS_WSL_DISTROS]: [void, W.WslDistros];
   [M.HOSTS_RECONNECT]: [W.HostRef, W.Ack];
+  [M.HOSTS_SIGNOUT]: [W.HostRef, W.Ack];
   [M.HOSTS_AUTH_ANSWER]: [W.AuthAnswer, W.Ack];
   [M.HOSTS_AUTH_CANCEL]: [W.AuthCancel, W.Ack];
   [M.HOSTS_ENVIRONMENT_GET]: [W.HostRef, W.HostEnvSettings];
@@ -198,6 +199,8 @@ export function createApi(b: Backend) {
       importSuggestions: () => call(b, M.HOSTS_IMPORT_SUGGESTIONS, undefined),
       wslDistros: () => call(b, M.HOSTS_WSL_DISTROS, undefined),
       reconnect: (id: W.HostId) => call(b, M.HOSTS_RECONNECT, { id }),
+      /** End the host's shared ssh connection (Linux and macOS hubs): its link drops and it waits for the user to sign in again. */
+      signOut: (id: W.HostId) => call(b, M.HOSTS_SIGNOUT, { id }),
       authAnswer: (a: W.AuthAnswer) => call(b, M.HOSTS_AUTH_ANSWER, a),
       authCancel: (a: W.AuthCancel) => call(b, M.HOSTS_AUTH_CANCEL, a),
       /** Setup commands, variables and agent commands of a host (secret values left out). */

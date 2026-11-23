@@ -1088,6 +1088,15 @@ mod connect {
         attempt.iter().map(|r| r["ev"].as_str().unwrap()).collect()
     }
 
+    /// The shared connection's records (`ssh.*`) of attempt `n` of `host`, in order (the ones the
+    /// supervisor's question made before the attempt carry no attempt number).
+    fn ssh_steps<'a>(recs: &'a [Value], host: &str, n: u64) -> Vec<&'a Value> {
+        recs.iter()
+            .filter(|r| r["src"] == "hub" && r["host"] == host && r["n"] == n)
+            .filter(|r| r["ev"].as_str().unwrap_or("").starts_with("ssh."))
+            .collect()
+    }
+
     /// The numbers of the attempts of `host` that ended with `outcome`.
     fn ended_with(recs: &[Value], host: &str, outcome: &str) -> Vec<u64> {
         let link = format!("hosts:{host}");
@@ -1271,8 +1280,28 @@ mod connect {
             .into_iter()
             .filter(|r| r["link"] == "hosts:box" && r["n"] == n)
             .collect();
-        assert_eq!(spawned.len(), 1);
-        assert_eq!(spawned[0]["program"], "ssh");
+        // Two ssh commands: the sign-in step that opened the host's shared connection, and the
+        // link step that rode it (before the shared connection there was one command).
+        assert_eq!(spawned.len(), 2, "{spawned:#?}");
+        assert!(spawned.iter().all(|s| s["program"] == "ssh"));
+        // The shared connection's own steps, in order: none was open, the sign-in step opened
+        // one (nobody was asked: a key), and it was found open afterwards.
+        let ssh = ssh_steps(&hub, "box", n);
+        let words: Vec<(&str, Option<&str>)> = ssh
+            .iter()
+            .map(|r| (r["ev"].as_str().unwrap(), r["state"].as_str()))
+            .collect();
+        assert_eq!(
+            words,
+            [
+                ("ssh.master_check", Some("absent")),
+                ("ssh.signin_started", None),
+                ("ssh.master_check", Some("alive")),
+                ("ssh.signin_done", None),
+            ],
+            "{ssh:#?}"
+        );
+        assert_eq!(ssh[3]["asked"], 0);
 
         // The registry: the host was added (its target only by shape), the connect taught it the
         // platform and the machine, its session feed started, and its environment was applied.
@@ -1315,8 +1344,8 @@ mod connect {
         );
     }
 
-    /// A wrong key: the attempt ends in the report stage with ssh's words, classified as a
-    /// sign-in problem, and the link parks in `auth_needed`. There is no prompt (key sign-in).
+    /// A wrong key: the attempt ends in the sign-in stage (the step that opens the shared
+    /// connection) with ssh's words, classified as a sign-in problem, and the link parks in `auth_needed`. There is no prompt (key sign-in).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_wrong_key_is_recorded_as_an_auth_failure_without_a_prompt() {
         let d = TempDir::new();
@@ -1348,19 +1377,28 @@ mod connect {
         let parked = ended_with(&hub, "bad", "park");
         assert_eq!(parked, [1]);
         let trail = attempt(&hub, "bad", 1);
+        // The wrong key fails the sign-in step that opens the shared connection, before any
+        // link step ran: no preamble (before the shared connection it failed in the one
+        // command, after its preamble record).
         assert_eq!(
             evs(&trail),
             [
                 "link.attempt_begin",
                 "boot.attempt",
-                "boot.preamble",
                 "boot.failed",
                 "link.attempt_end"
             ]
         );
+        assert_eq!(step(&trail, "boot.failed")["stage"], "sign_in");
+        let ssh: Vec<&str> = ssh_steps(&hub, "bad", 1)
+            .iter()
+            .map(|r| r["ev"].as_str().unwrap())
+            .collect();
+        assert_eq!(ssh, ["ssh.master_check", "ssh.signin_started"]);
         let failed = step(&trail, "boot.failed");
         assert_eq!(failed["lvl"], "warn");
-        assert_eq!(failed["stage"], "report");
+        // (Before the shared connection: `report`, the one command's first step.)
+        assert_eq!(failed["stage"], "sign_in");
         assert_eq!(failed["kind"], "auth_needed");
         assert_eq!(failed["exit"], 255);
         assert!(failed["stderr"]
@@ -1435,7 +1473,9 @@ mod connect {
         assert!(!first.is_empty());
         let trail = attempt(&hub, "gone", first[0]);
         let failed = step(&trail, "boot.failed");
-        assert_eq!(failed["stage"], "report");
+        // (Before the shared connection this failed at `report`, the one command's first step;
+        // now it is the sign-in step that cannot reach the host.)
+        assert_eq!(failed["stage"], "sign_in");
         assert_eq!(failed["kind"], "unreachable");
         assert!(failed["stderr"]
             .as_str()

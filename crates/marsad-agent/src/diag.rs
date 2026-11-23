@@ -27,7 +27,10 @@
 //! code, a length and a fingerprint. What a host printed before its report (a banner) is the
 //! one other text that is kept, bounded and scrubbed of every registered secret ([`shape`]);
 //! what a transport command said when a connect failed is wasit-control's record
-//! (`wasit_control::ConnectDiag`).
+//! (`wasit_control::ConnectDiag`). The same transport text ([`transport`]) carries what the
+//! hub's own local ssh questions to a shared connection said (`ssh -O check` / `-O exit` stderr)
+//! and the last lines of a shared connection's log when it was found ended (`ssh.master_*`, see
+//! `hub/master.rs`): ssh's words, scrubbed and bounded, as any ssh text; no new free-text path.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -232,7 +235,8 @@ pub fn foreign(code: &str, text: &str) -> ErrorInfo {
 
 /// Transport text, bounded and scrubbed of every registered secret and project path: what a
 /// host printed before its report (`shape`), and a link's last error as the link layer states
-/// it, for the manifest of a diagnostics export. The one `DiagText::new(Origin::Transport, …)`
+/// it, for the manifest of a diagnostics export, and ssh's words about a shared connection (the
+/// tail of its log, the stderr of `ssh -O`). The one `DiagText::new(Origin::Transport, …)`
 /// call of this crate; what a transport command said when a connect failed is recorded by
 /// wasit-control (`wasit_control::ConnectDiag`), not here.
 pub(crate) fn transport(text: &str) -> DiagText {

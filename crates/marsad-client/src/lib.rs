@@ -661,6 +661,15 @@ impl MarsadClient {
         Ok(())
     }
 
+    /// Sign out of a host: end its shared ssh connection (Linux and macOS hubs). Its link drops
+    /// and the host waits for the user to connect it again.
+    pub async fn sign_out_host(&self, id: &HostId) -> Result<(), ClientError> {
+        let _: Ack = self
+            .call(None, methods::HOSTS_SIGNOUT, HostRef { id: id.clone() })
+            .await?;
+        Ok(())
+    }
+
     /// Answer a sign-in prompt (the answer goes to ssh only; never logged or stored).
     pub async fn answer_auth(
         &self,

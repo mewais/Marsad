@@ -5,7 +5,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use marsad_proto::diag::{HostChange, HostShape, HostsOp, LearnedWord, MarsadEvent};
+use marsad_proto::diag::{
+    HostChange, HostShape, HostsOp, LearnedWord, MarsadEvent, MasterExitOutcome, MasterExitWhy,
+};
 use marsad_proto::fleet::FleetLink;
 use marsad_proto::hosts::{HostDraft, HostEntry, HostKind, ImportSuggestions};
 use marsad_proto::{HostId, LinkState, MarsadError};
@@ -17,6 +19,7 @@ use wasit_diag::Ident;
 
 use super::auth::Prompts;
 use super::fleet::Fleet;
+use super::master::Masters;
 use super::provision::{Entries, Learned};
 use super::transport::{bootstrap_argv, RemoteShell};
 use crate::diag::{self, emit};
@@ -58,6 +61,9 @@ struct Inner {
     entries: Entries,
     local: HostEntry,
     prompts: Prompts,
+    /// The shared ssh connections: ended with their host (removed, or its route edited) or at
+    /// the user's sign-out.
+    masters: Masters,
     feeds: Mutex<HashMap<HostId, JoinHandle<()>>>,
     /// Held across every read-modify-write of a stored entry (`update`, `learned`): an edit and
     /// something a connect learned at the same time cannot overwrite each other.
@@ -79,17 +85,32 @@ fn slug(name: &str) -> String {
     }
 }
 
+/// What a [`Registry`] is made of: the pieces the hub builds before it.
+pub struct RegistryParts {
+    pub store: Store,
+    pub hub: Hub,
+    pub fleet: Fleet,
+    pub entries: Entries,
+    pub local: HostEntry,
+    pub prompts: Prompts,
+    pub masters: Masters,
+}
+
 impl Registry {
     /// Load the stored hosts, start their links and feeds, and consume platform updates.
     pub async fn start(
-        store: Store,
-        hub: Hub,
-        fleet: Fleet,
-        entries: Entries,
-        local: HostEntry,
-        prompts: Prompts,
+        parts: RegistryParts,
         mut learned: mpsc::Receiver<Learned>,
     ) -> Result<Registry, MarsadError> {
+        let RegistryParts {
+            store,
+            hub,
+            fleet,
+            entries,
+            local,
+            prompts,
+            masters,
+        } = parts;
         let r = Registry {
             inner: Arc::new(Inner {
                 store,
@@ -98,6 +119,7 @@ impl Registry {
                 entries,
                 local,
                 prompts,
+                masters,
                 feeds: Mutex::new(HashMap::new()),
                 edits: tokio::sync::Mutex::new(()),
             }),
@@ -252,6 +274,7 @@ impl Registry {
             created_at_ms: now_ms(),
             interactive_auth: false,
             local_files: false,
+            shared_connection: false,
             machine: None,
         };
         let mut entry = entry;
@@ -292,6 +315,9 @@ impl Registry {
         if entry.kind != old.kind {
             self.unlink(&entry.id).await;
             self.inner.prompts.forget(&entry.id);
+            // The old route's shared connection ends (the new route has its own socket and
+            // signs in on its own).
+            self.end_shared(&old, MasterExitWhy::Retargeted).await;
             self.link(entry.clone()).await?;
         } else {
             self.inner
@@ -324,6 +350,9 @@ impl Registry {
         self.unlink(id).await;
         // After the link (its attempt ended with it): no prompt, no click is left for the host.
         self.inner.prompts.forget(id);
+        if let Some(entry) = &removed {
+            self.end_shared(entry, MasterExitWhy::Removed).await;
+        }
         self.inner
             .entries
             .write()
@@ -345,6 +374,8 @@ impl Registry {
                 what: format!("link to {id}"),
             });
         }
+        // Asking to connect is asking to sign in again, after a sign-out too.
+        self.inner.masters.set_signed_out(id, false);
         self.inner.prompts.arm(id);
         if self.inner.hub.reconnect_now(id) {
             Ok(())
@@ -355,6 +386,51 @@ impl Registry {
                 what: format!("link to {id}"),
             })
         }
+    }
+
+    /// Ends the shared ssh connection of `entry` (if it has one) and forgets what was known of
+    /// it. Every outcome is on record ([`Masters::exit`]).
+    async fn end_shared(&self, entry: &HostEntry, why: MasterExitWhy) {
+        if Masters::applies(entry) {
+            self.inner.masters.exit(entry, why).await;
+        }
+        self.inner.masters.forget(&entry.id);
+    }
+
+    /// Sign out of a host's shared ssh connection: it ends, the link that rode it drops, and the
+    /// host waits for the user to sign in again (`hosts.reconnect`); nothing reconnects it on
+    /// its own, a host with a key included. A link that did not ride the connection is dropped
+    /// too.
+    pub async fn signout(&self, id: &HostId) -> Result<(), MarsadError> {
+        let entry = self.get(id).ok_or_else(|| MarsadError::NotFound {
+            what: format!("host {id}"),
+        })?;
+        if !Masters::applies(&entry) {
+            return Err(MarsadError::invalid(
+                "this host has no shared ssh connection to sign out of",
+            ));
+        }
+        if self.inner.hub.link(id).is_none() {
+            return Err(MarsadError::NotFound {
+                what: format!("link to {id}"),
+            });
+        }
+        // First the user's word, so that nothing started in between signs in again; a prompt
+        // or click of the host is void.
+        self.inner.prompts.forget(id);
+        self.inner.masters.set_signed_out(id, true);
+        let ended = self
+            .inner
+            .masters
+            .exit(&entry, MasterExitWhy::SignedOut)
+            .await;
+        // The link that rode the connection drops by itself, and the supervisor then asks
+        // whether the host must wait: it must. One that did not ride a connection (there was
+        // none to end) is dropped here, to the same question.
+        if ended != MasterExitOutcome::Ended {
+            self.inner.hub.reconnect_now(id);
+        }
+        Ok(())
     }
 
     async fn learned(&self, l: Learned) -> Result<(), MarsadError> {

@@ -40,6 +40,11 @@ const TEXT: &str = "DiagText::new(";
 ///   layer states it, for the export manifest (`hub/export`). What a transport command said when a connect failed (ssh and wsl
 ///   stderr, the reason as the user is shown it) is recorded through wasit-control's
 ///   `ConnectDiag`, which owns that text.
+///   The shared ssh connection's records (`ssh.master_check`, `ssh.master_ended`,
+///   `ssh.master_exit`, `hub/master.rs`) use the same `transport` function for what ssh said (the
+///   last lines of the connection's log, the stderr of `ssh -O check|exit`): ssh's own words
+///   about a connection, the same kind of text as a connect failure's stderr, scrubbed and
+///   bounded the same way; they add no site to this list.
 /// * `Reason` (`Origin::Own`): the same scrubbing for the words `serve` prints on stderr, so
 ///   that the line carries what the record carries.
 /// * `host_note` (`Origin::HostShell`, first line only) and `host_path` (`Origin::Own`): what a

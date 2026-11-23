@@ -118,6 +118,22 @@ example 32-bit ARM or RISC-V) are refused with a clear message instead of retryi
 default preselected); the helper is installed in that distribution's default user's home
 (`~/.marsad/bin`). The WSL choice only appears when Marsad runs on Windows and `wsl.exe` exists.
 
+**One shared SSH connection (Linux and macOS).** On Linux and macOS Marsad keeps one
+authenticated SSH connection open per SSH host and runs everything for that host over it, so
+restarting the app or its background service does not ask you to sign in again. It stays open
+until you choose *Sign out* on the host, remove the host or change how it is reached (its
+target, port, key or options), or the connection itself dies (the network drops, the server
+closes it); only then is a password, code or approval asked for again, and a host that needs you
+to sign in waits for your click. It is not ended when Marsad stops, so a stopped Marsad leaves
+it open. Its control socket and log are in the runtime directory, in `ssh/` (for example
+`/run/user/<uid>/marsad/<8 hex>/ssh/<16 hex>`, and `…<16 hex>.log`, which holds what ssh wrote
+when the connection ended, kept to what the last connection wrote); `ssh -O exit` on the socket
+ends it too. In plain words: while it is open, programs running as your own local user can
+reach that host without signing in again, which is the same trust as an ssh-agent; the owner
+of this installation accepted that trade-off. A server that refuses extra sessions on one
+connection (`MaxSessions 1`) cannot be used this way. Windows' SSH client cannot share a
+connection, so on Windows every connection signs in on its own and there is no *Sign out*.
+
 A host that cannot work as configured (unknown WSL distribution, no helper for its platform,
 a shell that prints something before the bootstrap, a helper the host refuses to execute)
 shows what is wrong and waits for *Try again*; only dropped connections retry on their own.

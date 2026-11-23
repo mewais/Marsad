@@ -490,6 +490,7 @@ mod tests {
                 created_at_ms: 0,
                 interactive_auth: false,
                 local_files: false,
+                shared_connection: false,
                 machine: None,
             },
             link,

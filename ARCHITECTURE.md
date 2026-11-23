@@ -93,18 +93,44 @@ agents are a later round (`hub::workstreams::Workstreams::edit` is the extension
 
 ## Links to remote hosts (deviates from Wasit ARCHITECTURE §4.1 by owner decision)
 
-* One ssh (or `wsl.exe`) invocation per connect attempt does probe, upload-if-needed and
+* On a Windows hub (and for `wsl.exe`) one ssh invocation per connect attempt does probe,
+  upload-if-needed and `bridge`, with `ControlMaster=no ControlPath=none` so a user's ssh
+  configuration cannot put it on a shared connection. On a Linux or macOS hub every ssh host
+  has ONE shared connection (`hub/master.rs`, `hub/transport.rs` `SshRoute`), opened by the
+  attempt's sign-in step and ridden by every link step: per attempt, (a) `ssh -O check` on the
+  host's control socket (`<run>/ssh/<16 hex of host id + route>`, local, no network; a socket
+  left by a killed master is removed); (b) with none open, a host that needs the user at login
+  (or that the user signed out of) and no click is parked as `auth_needed`/`held` without
+  starting ssh, anything else runs the sign-in step `ssh -M -N -f -o ControlMaster=yes -o
+  ControlPersist=yes -E <socket>.log` with the askpass helper, where every prompt of the attempt
+  happens and whose exit with status 0 (ssh detached once authenticated) is the signal that the
+  connection is open; its failure is classified from its exit status and the log, as the one
+  command was; (c) the link step is the bootstrap below with `ControlMaster=no
+  BatchMode=yes` on the same socket: it can never prompt (with no master it connects directly
+  for a key host and fails without asking for a host that needs the user). The connection is ssh's
+  own detached process (`ControlPersist=yes`) and outlives the hub daemon; it ends at sign-out
+  (`hosts.signout`), host removal or an edit of the host's route (`ssh -O exit`), or when it
+  dies (the reason is the tail of its log, in the trail `ssh.*` and in the wait's words). So a
+  link that drops while its connection lives reconnects by itself even for a host that needs
+  the user, a restarted hub finds the connection with `-O check` and reconnects silently, and a
+  restart attempt rides it (no second prompt). Human time is the prompts' (each bounded by the
+  prompt timeout), machine time ssh's `ConnectTimeout`; the whole attempt keeps the
+  supervisor's one bound. The wire carries `HostEntry.shared_connection` (derived by the hub,
+  false on Windows) so the UI offers *Sign out* only where it works.
+* The bootstrap of one connect attempt does probe, upload-if-needed and
   `bridge`: a bootstrap prints `MARSAD-BOOT <os> <arch> <installed build>`, takes `RUN`,
   `RESTART` or `UPLOAD <n>` + n bytes, installs atomically, stops the old daemon, answers
   `MARSAD-OK` and execs `marsad-agent bridge`. A running daemon of another build (seen in the
   hello) is restarted by the next attempt (wasit-control's `Provisioner` hook).
-* No `BatchMode`. ssh runs with `SSH_ASKPASS=<marsad-agent>` and `SSH_ASKPASS_REQUIRE=force`;
+* No `BatchMode` on the step that may prompt (the whole command on a Windows hub, the sign-in
+  step elsewhere). ssh runs with `SSH_ASKPASS=<marsad-agent>` and `SSH_ASKPASS_REQUIRE=force`;
   every prompt (password, passphrase, OTP, keyboard-interactive, host key) is published as the
   host's `auth_prompt` in the `fleet` topic and answered with `hosts.auth_answer` /
   `hosts.auth_cancel`, or times out (`--auth-prompt-timeout-ms`). Answers are never logged or
   stored. Prompt state lives in Marsad (`FleetHost.auth_prompt`), next to Wasit's `LinkState`.
 * A host that has needed an interactive answer (`HostEntry.interactive_auth`) never
-  reconnects on its own: a dropped link parks in `auth_needed` until `hosts.reconnect`.
+  starts a sign-in on its own: when no shared connection is open (always, on a Windows hub), a
+  dropped link parks in `auth_needed` until `hosts.reconnect`.
   Key/agent hosts reconnect with backoff. Sessions are held by shims and catch up from cursors.
 * Binaries: the running executable for its own target triple, else
   `$MARSAD_AGENT_BIN_DIR/<triple>/marsad-agent[.exe]`.

@@ -38,7 +38,7 @@ use crate::hub::export::job::{HubFacts, Limits};
 use crate::hub::export::{ExportEnv, Exports};
 use crate::hub::fleet::Fleet;
 use crate::hub::gitwatch::GitWatch;
-use crate::hub::hosts::Registry;
+use crate::hub::hosts::{Registry, RegistryParts};
 use crate::hub::provision::{AgentProvisioner, BootstrapConnector, BIN_DIR_ENV};
 use crate::hub::workstreams::Workstreams;
 use crate::hub::{AskUserMcp, HubServices, WaslMcp};
@@ -447,11 +447,15 @@ async fn start_hub(
     let prompt_timeout = o.auth_prompt_timeout.unwrap_or(Duration::from_secs(120));
     let prompts = Prompts::new(fleet.clone(), prompt_timeout);
     let restarts = Arc::new(std::sync::Mutex::new(Default::default()));
+    // The shared ssh connections of the hub's ssh hosts live in `<run>/ssh` and outlive this
+    // daemon (ssh owns them); this only finds them again.
+    let masters = crate::hub::master::Masters::new(o.layout().ssh_dir());
     let connector = BootstrapConnector {
         entries: entries.clone(),
         learned: ltx,
         prompts: prompts.clone(),
         restarts: restarts.clone(),
+        masters: masters.clone(),
         own: version::info(),
         bin_dir: std::env::var_os(BIN_DIR_ENV)
             .filter(|v| !v.is_empty())
@@ -462,6 +466,7 @@ async fn start_hub(
     let provisioner = AgentProvisioner {
         restarts,
         prompts: prompts.clone(),
+        entries: entries.clone(),
     };
     let mut hcfg =
         HubConfig::new(Hello::new(build, host_id, "hub").with_machine(o.layout().machine.clone()));
@@ -485,15 +490,19 @@ async fn start_hub(
         created_at_ms: 0,
         interactive_auth: false,
         local_files: true,
+        shared_connection: false,
         machine: Some(o.layout().machine.clone()),
     };
     let registry = Registry::start(
-        store.clone(),
-        hub.clone(),
-        fleet.clone(),
-        entries,
-        local_entry,
-        prompts.clone(),
+        RegistryParts {
+            store: store.clone(),
+            hub: hub.clone(),
+            fleet: fleet.clone(),
+            entries,
+            local: local_entry,
+            prompts: prompts.clone(),
+            masters,
+        },
         lrx,
     )
     .await

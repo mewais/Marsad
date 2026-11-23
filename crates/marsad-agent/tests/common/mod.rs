@@ -125,8 +125,128 @@ impl Drop for TempDir {
         // Daemons and session shims (with their CLIs) started anywhere below this directory
         // outlive their starters on purpose: end them before their files go.
         wasit_fake_cli::harness::stop_all_under(&self.0);
+        // The shared ssh connections of the hubs below this directory outlive their hubs on
+        // purpose (ssh owns them): ask each to end, so that a failing test leaves none either.
+        // After the hubs: a hub that is still running signs a key host in again at once.
+        #[cfg(unix)]
+        end_masters_under(&self.0);
+        // A hub that was stopped after its host's daemon had lost its link reconnected the host
+        // first, which started a new daemon there: the second pass finds that one (the hubs are
+        // gone now, so nothing starts another).
+        wasit_fake_cli::harness::stop_all_under(&self.0);
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+/// The control sockets of shared ssh connections (`<run>/ssh/<16 hex>`, see
+/// `marsad_agent::hub::master`) below `root`.
+#[cfg(unix)]
+fn master_sockets_under(root: &Path, out: &mut Vec<PathBuf>) {
+    use std::os::unix::fs::FileTypeExt;
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let Ok(t) = e.file_type() else { continue };
+        let p = e.path();
+        if t.is_dir() {
+            master_sockets_under(&p, out);
+        } else if t.is_socket()
+            && p.parent()
+                .and_then(|d| d.file_name())
+                .is_some_and(|n| n == "ssh")
+        {
+            out.push(p);
+        }
+    }
+}
+
+/// Ends every shared ssh connection below `root` with `ssh -O exit` on its own socket (and, when
+/// that does not end it, kills the process `-O check` named). Never panics: it runs in `Drop`.
+#[cfg(unix)]
+fn end_masters_under(root: &Path) {
+    let mut socks = Vec::new();
+    master_sockets_under(root, &mut socks);
+    for sock in socks {
+        let pid = master_pid(&sock);
+        let ended = master_exit(&sock);
+        if let Some(pid) = pid {
+            // Only the process of this very socket, by its pid.
+            if let Some(w) = wasit_fake_cli::harness::PidWatch::open(pid) {
+                let gone = std::thread::scope(|s| {
+                    s.spawn(|| {
+                        tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .map(|rt| rt.block_on(w.exited(Duration::from_secs(10))))
+                            .unwrap_or(false)
+                    })
+                    .join()
+                    .unwrap_or(false)
+                });
+                if !gone {
+                    kill_pid(pid);
+                    eprintln!(
+                        "a shared ssh connection of a test did not end with -O exit (ended: {ended}): killed pid {pid}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The pid of the master listening on `socket` (`ssh -O check`), `None` when none answers. A
+/// local command: it only talks to the socket.
+#[cfg(unix)]
+pub fn master_pid(socket: &Path) -> Option<u32> {
+    let out = std::process::Command::new("ssh")
+        .args(["-F", "/dev/null", "-O", "check", "-o"])
+        .arg(format!("ControlPath={}", socket.display()))
+        .args(["--", "test"])
+        .env("LC_ALL", "C")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stderr).into_owned();
+    text.split("pid=")
+        .nth(1)?
+        .trim_end_matches([')', '\r', '\n', ' '])
+        .parse()
+        .ok()
+}
+
+/// Asks the master on `socket` to end (`ssh -O exit`); whether it said it would.
+#[cfg(unix)]
+pub fn master_exit(socket: &Path) -> bool {
+    std::process::Command::new("ssh")
+        .args(["-F", "/dev/null", "-O", "exit", "-o"])
+        .arg(format!("ControlPath={}", socket.display()))
+        .args(["--", "test"])
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// The control socket the hub of `data` uses for the ssh host `id` of route `kind`: the
+/// product's own naming (`marsad_agent::hub::transport::control_socket`) in the hub's runtime
+/// directory.
+#[cfg(unix)]
+pub fn master_socket(data: &Path, id: &str, kind: &marsad_proto::hosts::HostKind) -> PathBuf {
+    marsad_agent::hub::transport::control_socket(&layout(data).ssh_dir(), id, kind)
+}
+
+/// Ends the master on `socket` by killing its process (what a lost connection or a crash does:
+/// it says nothing and leaves its socket behind) and returns when it is gone.
+#[cfg(unix)]
+pub async fn kill_master(socket: &Path) -> u32 {
+    let pid = master_pid(socket).expect("a shared connection is open on the socket");
+    let watch = wasit_fake_cli::harness::PidWatch::open(pid);
+    kill_pid(pid);
+    if let Some(w) = watch {
+        assert!(w.exited(T).await, "the master {pid} did not end");
+    }
+    pid
 }
 
 pub fn agent() -> PathBuf {
@@ -566,6 +686,38 @@ mod sshd {
             self.dir.join("run")
         }
 
+        /// Every process that serves a connection of this sshd (its descendants: the
+        /// privileged monitor and the process of the user, one pair per connection), found by
+        /// the parent of each. The test's own processes; nothing else is looked at.
+        pub fn connection_pids(&self) -> Vec<u32> {
+            let mut all: Vec<(u32, u32)> = Vec::new();
+            for e in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+                let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else {
+                    continue;
+                };
+                let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else {
+                    continue;
+                };
+                // `pid (comm) state ppid …`; the name may hold anything, so after the last ')'.
+                let ppid = stat
+                    .rsplit_once(')')
+                    .and_then(|(_, rest)| rest.split_whitespace().nth(1))
+                    .and_then(|p| p.parse::<u32>().ok());
+                if let Some(ppid) = ppid {
+                    all.push((pid, ppid));
+                }
+            }
+            let mut found = vec![self.pid()];
+            let mut i = 0;
+            while i < found.len() {
+                let parent = found[i];
+                found.extend(all.iter().filter(|(_, pp)| *pp == parent).map(|(p, _)| *p));
+                i += 1;
+            }
+            found.remove(0);
+            found
+        }
+
         /// The pid of the listener (it must be running).
         pub fn pid(&self) -> u32 {
             self.child.as_ref().expect("sshd is running").id()
@@ -665,6 +817,33 @@ mod sshd {
 #[cfg(unix)]
 #[allow(unused_imports)]
 pub use sshd::*;
+
+/// Processes of a test that are stopped (`SIGSTOP`): continued and killed, by their pids, when
+/// this is dropped, a failing test's too (a stopped process never ends by itself).
+#[cfg(unix)]
+pub struct Frozen(pub Vec<u32>);
+
+#[cfg(unix)]
+impl Frozen {
+    /// Stops each of `pids` (the test's own processes).
+    pub fn stop(pids: Vec<u32>) -> Frozen {
+        for p in &pids {
+            let _ = std::process::Command::new("kill")
+                .args(["-STOP", &p.to_string()])
+                .status();
+        }
+        Frozen(pids)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Frozen {
+    fn drop(&mut self) {
+        for p in &self.0 {
+            kill_pid(*p);
+        }
+    }
+}
 
 /// Where the bootstrap installs the helper under the remote home (POSIX hosts).
 #[allow(dead_code)]

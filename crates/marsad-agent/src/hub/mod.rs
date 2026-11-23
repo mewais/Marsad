@@ -8,6 +8,7 @@ mod fleet_events;
 pub mod gitwatch;
 pub mod hostenv;
 pub mod hosts;
+pub mod master;
 pub mod provision;
 pub mod ring;
 pub mod spawn;
@@ -457,6 +458,11 @@ impl HubServices {
             methods::HOSTS_RECONNECT => {
                 let r: HostRef = params(p).map_err(dec)?;
                 self.registry.reconnect(&r.id)?;
+                enc(ok(Ack {}))
+            }
+            methods::HOSTS_SIGNOUT => {
+                let r: HostRef = params(p).map_err(dec)?;
+                self.registry.signout(&r.id).await?;
                 enc(ok(Ack {}))
             }
             methods::HOSTS_AUTH_ANSWER => {

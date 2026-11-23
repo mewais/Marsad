@@ -11,8 +11,10 @@ export type HostEntry = { id: HostId, name: string, kind: HostKind, platform?: H
  * The host needs the user at login: the last connect that reached it asked the user for
  * something other than a host-key confirmation (a password, a one-time code, a key
  * passphrase; see [`PromptKind::needs_user`]). Such a link never reconnects on its own,
- * since every attempt would spend a code or fire a push: after a drop, and at the hub's
- * start, it waits in `auth_needed` (`held`) for an explicit `hosts.reconnect`. Learned by
+ * since every sign-in would spend a code or fire a push: when no shared connection to it is
+ * open (`shared_connection`; on a hub without shared connections always), after a drop and
+ * at the hub's start it waits in `auth_needed` (`held`) for an explicit `hosts.reconnect`.
+ * Learned by
  * the hub from each successful sign-in, and un-learned by one that asked for nothing.
  */
 interactive_auth: boolean, 
@@ -22,6 +24,14 @@ interactive_auth: boolean,
  * ([`HostEntry::derive_local_files`]); the UI decides open / reveal / download from it.
  */
 local_files: boolean, 
+/**
+ * The hub keeps one authenticated ssh connection open to this host and every link of it
+ * rides that connection (Linux and macOS hubs, ssh hosts): the user signs in once, the
+ * connection survives the hub's restarts, and `hosts.signout` ends it. Derived by the hub
+ * ([`HostEntry::derive_local_files`]); a Windows hub's ssh client cannot share a
+ * connection, so there it is `false` and the UI offers no sign-out.
+ */
+shared_connection: boolean, 
 /**
  * Key of the machine the host's daemon runs on (from its hello; the hub's own for the
  * local host). Two hosts with the same key are the same machine.

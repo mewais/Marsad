@@ -51,8 +51,10 @@ pub struct HostEntry {
     /// The host needs the user at login: the last connect that reached it asked the user for
     /// something other than a host-key confirmation (a password, a one-time code, a key
     /// passphrase; see [`PromptKind::needs_user`]). Such a link never reconnects on its own,
-    /// since every attempt would spend a code or fire a push: after a drop, and at the hub's
-    /// start, it waits in `auth_needed` (`held`) for an explicit `hosts.reconnect`. Learned by
+    /// since every sign-in would spend a code or fire a push: when no shared connection to it is
+    /// open (`shared_connection`; on a hub without shared connections always), after a drop and
+    /// at the hub's start it waits in `auth_needed` (`held`) for an explicit `hosts.reconnect`.
+    /// Learned by
     /// the hub from each successful sign-in, and un-learned by one that asked for nothing.
     #[serde(default)]
     pub interactive_auth: bool,
@@ -61,6 +63,13 @@ pub struct HostEntry {
     /// ([`HostEntry::derive_local_files`]); the UI decides open / reveal / download from it.
     #[serde(default)]
     pub local_files: bool,
+    /// The hub keeps one authenticated ssh connection open to this host and every link of it
+    /// rides that connection (Linux and macOS hubs, ssh hosts): the user signs in once, the
+    /// connection survives the hub's restarts, and `hosts.signout` ends it. Derived by the hub
+    /// ([`HostEntry::derive_local_files`]); a Windows hub's ssh client cannot share a
+    /// connection, so there it is `false` and the UI offers no sign-out.
+    #[serde(default)]
+    pub shared_connection: bool,
     /// Key of the machine the host's daemon runs on (from its hello; the hub's own for the
     /// local host). Two hosts with the same key are the same machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,9 +98,17 @@ impl HostEntry {
         }
     }
 
-    /// Set `local_files` for the machine this hub runs on.
+    /// Whether a hub running on Windows (`hub_windows`) or elsewhere keeps a shared ssh
+    /// connection for a host of this kind.
+    pub fn connection_shared(kind: &HostKind, hub_windows: bool) -> bool {
+        matches!(kind, HostKind::Ssh { .. }) && !hub_windows
+    }
+
+    /// Set what is derived from the machine this hub runs on: `local_files` and
+    /// `shared_connection`.
     pub fn derive_local_files(&mut self) {
         self.local_files = Self::files_reachable(&self.kind, cfg!(windows));
+        self.shared_connection = Self::connection_shared(&self.kind, cfg!(windows));
     }
 }
 
@@ -560,5 +577,40 @@ mod local_files_tests {
         assert!(HostEntry::files_reachable(&wsl, true));
         assert!(!HostEntry::files_reachable(&wsl, false));
         assert!(!HostEntry::files_reachable(&ssh, true));
+    }
+}
+
+#[cfg(test)]
+mod shared_connection_tests {
+    use super::*;
+
+    /// Only an ssh host on a hub whose ssh client can share a connection (not Windows) has one:
+    /// the fact the app reads to offer *Sign out*, decided by the hub and not by the app's OS.
+    #[test]
+    fn only_an_ssh_host_on_a_hub_that_can_share_has_a_shared_connection() {
+        let ssh = HostKind::Ssh {
+            target: "me@box".into(),
+            port: None,
+            identity_file: None,
+            options: vec![],
+        };
+        let wsl = HostKind::Wsl { distro: "d".into() };
+        assert!(HostEntry::connection_shared(&ssh, false));
+        assert!(!HostEntry::connection_shared(&ssh, true), "a Windows hub");
+        assert!(!HostEntry::connection_shared(&wsl, false));
+        assert!(!HostEntry::connection_shared(&HostKind::Local, false));
+        let mut e = HostEntry {
+            id: "h".into(),
+            name: "h".into(),
+            kind: ssh,
+            platform: None,
+            created_at_ms: 0,
+            interactive_auth: false,
+            local_files: false,
+            shared_connection: false,
+            machine: None,
+        };
+        e.derive_local_files();
+        assert_eq!(e.shared_connection, !cfg!(windows));
     }
 }

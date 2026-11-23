@@ -179,14 +179,19 @@ authenticated ssh connection. This round's code was not run on Windows or macOS 
   position, otherwise only at the start/end of the text — a rule the owner accepted).
 - Hosts: csh, tcsh and bsd-csh run setup commands in the user's own shell and syntax, from a private file
   (Wasit `wasit-runtime/src/environment.rs`); a csh user must write csh. ssh keep-alive was already there
-  (`hub/transport.rs`: `ServerAliveInterval=15`, `ServerAliveCountMax=3`, `ConnectTimeout=15`,
-  `ControlMaster=no`). A host that needed interactive or multi-factor login and dropped is held: no ssh is
-  started, a notification (preference `sign_in_needed`) and one Sign in click start one attempt; its
-  sessions keep running (`hub/auth.rs`, `hub/fleet.rs`, `wasit-control` `supervised.rs` hold hook,
-  `src-tauri/src/notify.rs`, `state/signin.ts`; test `marsad-agent/tests/interactive_hosts.rs`). A host
-  needs the user when a connect asked anything besides ssh's own host-key confirmation. **Not done:** reuse of one
-  authenticated ssh connection on Linux/macOS (needs a lifetime choice and has a security trade-off; a
-  Windows hub gains nothing; measured design in `investigation/hosts.md` §H4) — waits for the owner.
+  (`hub/transport.rs`: `ServerAliveInterval=15`, `ServerAliveCountMax=3`, `ConnectTimeout=15`).
+  **Shared ssh connection (Linux/macOS hubs, ssh hosts):** one authenticated connection per host, opened by the
+  attempt's sign-in step (`ssh -M -N -f`, `ControlPersist=yes`, where every prompt happens) and ridden by the
+  link step (`BatchMode=yes`, can never prompt); it is ssh's own process and outlives the hub daemon, so a
+  restarted hub or app reconnects without asking; it ends at *Sign out* (`hosts.signout`), host removal, an
+  edit of the host's route, or when it dies (`hub/master.rs`, `hub/transport.rs`, `hub/provision.rs`; owner's
+  decisions: forever, key hosts too, security trade-off accepted; a Windows hub keeps one command per attempt
+  with `ControlPath=none`). A host that needed interactive or multi-factor login and whose shared connection is
+  gone is held: no ssh is started, a notification (preference `sign_in_needed`) and one Sign in click start
+  one attempt; its sessions keep running and reattach (`hub/auth.rs`, `hub/fleet.rs`, `wasit-control`
+  `supervised.rs` hold hook (now async), `src-tauri/src/notify.rs`, `state/signin.ts`; tests
+  `marsad-agent/tests/interactive_hosts.rs`). A host needs the user when a connect asked anything besides
+  ssh's own host-key confirmation.
 - "Allow and remember": each thing a choice will also apply is listed under the buttons before the
   click (`GateChoice.effects`, Wasit `d103a5e`; `features/gates/parts.tsx`).
 - Workstreams: why a spawn request went away is shown (Wasl's `EndCode` in `wasl-proto/src/end.rs`, topic
@@ -718,10 +723,9 @@ Two scripts live OUTSIDE the repos, on the development box, in `/work/mewais/Mar
 - Session-flows round, open:
   - **B4 (a prompt after a finished turn never arrived) is not established.** Only the owner's real CLI can
     show it; ask for a diagnostics export (Settings → Diagnostics) and read the session's prompt path.
-  - **Reusing one authenticated ssh connection on Linux/macOS is not done**, waiting for the owner's choice
-    of lifetime and the security trade-off (`hub/transport.rs` still passes `ControlMaster=no`); a Windows
-    hub gains nothing from it. Every connect starts a new ssh, so a host that needs interactive login asks
-    again after the app or its daemon restarts.
+  - **Shared ssh connection:** not verified on macOS (socket path bound computed, not measured), with
+    `ProxyJump` hosts (measured by hand in the investigation, no test), or against servers with `MaxSessions 1`.
+    A signed-out key host connects again by itself at the next hub start (the sign-out is not stored).
   - In the app, "queued" means a prompt still held by Marsad's driver and not yet written to the agent; one
     written to an agent that queues prompts itself shows as sent, and the app has no separate mark for
     "written but not yet acknowledged by the agent" (`features/session/transcript.ts`; the acknowledgement is

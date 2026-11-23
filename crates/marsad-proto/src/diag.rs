@@ -189,6 +189,10 @@ wasit_diag::diag_enum! {
         Prepare,
         /// The transport command (`ssh`, `wsl.exe`) could not be started.
         Spawn,
+        /// The sign-in step of a shared ssh connection (`ssh -M -N -f`, where every prompt
+        /// happens) did not end with an open connection: wrong or cancelled answer, host key,
+        /// network. The record carries what ssh said, as for any transport command.
+        SignIn,
         /// The host never printed the bootstrap's report (sign-in, network, WSL, foreign
         /// output instead).
         Report,
@@ -313,6 +317,49 @@ wasit_diag::diag_enum! {
         Learn,
         /// Handing a learned fact to the registry (it is gone).
         RegistryGone,
+        /// Preparing or cleaning up a shared ssh connection's files (its directory, its log, a
+        /// stale socket); the error is the I/O error.
+        SharedConnection,
+    }
+}
+
+wasit_diag::diag_enum! {
+    /// What `ssh -O check` found at a host's control socket.
+    pub enum MasterState {
+        /// A shared connection is open and answered.
+        Alive,
+        /// There is no socket: no shared connection exists.
+        Absent,
+        /// A socket is left but nothing listens (the connection's process was killed); the hub
+        /// removes the file.
+        Stale,
+        /// The check itself failed or did not answer (the text is ssh's).
+        Unanswered,
+    }
+}
+
+wasit_diag::diag_enum! {
+    /// Why the hub ended a host's shared ssh connection.
+    pub enum MasterExitWhy {
+        /// The host was removed.
+        Removed,
+        /// The host's target, port, key or options changed: the new route has its own
+        /// connection.
+        Retargeted,
+        /// The user signed out of the host.
+        SignedOut,
+    }
+}
+
+wasit_diag::diag_enum! {
+    /// How `ssh -O exit` ended.
+    pub enum MasterExitOutcome {
+        /// The connection was asked to end.
+        Ended,
+        /// There was no connection (no socket, or nothing listening).
+        NoMaster,
+        /// The request failed (see `exit` and `stderr`).
+        Failed,
     }
 }
 
@@ -620,6 +667,52 @@ wasit_diag::diag_events! {
         /// Another host entry is the same machine (same machine key); this attempt fails.
         #[diag(ev = "boot.twin", lvl = warn, budget = 120)]
         BootTwin { host: Ident, n: u64, twin: Ident },
+        // ── a host's shared ssh connection (Linux and macOS hubs) ──
+
+        /// The hub looked for the shared connection of `host` (`ssh -O check`: local, no
+        /// network). `n`: the connect attempt that asked, absent when the link's supervisor
+        /// asked whether the host must wait for the user. `error`: what ssh said when it did not
+        /// answer (scrubbed, bounded).
+        #[diag(ev = "ssh.master_check", budget = 300)]
+        SshMasterCheck {
+            host: Ident,
+            n: Option<u64>,
+            state: MasterState,
+            ms: Ms,
+            error: Option<DiagText>,
+        },
+        /// The sign-in step of attempt `n` began: ssh starts the shared connection and asks the
+        /// user whatever the host asks.
+        #[diag(ev = "ssh.signin_started", budget = 300)]
+        SshSignInStarted { host: Ident, n: u64, armed: bool },
+        /// The sign-in step ended with an open shared connection after `ms`; `asked`: how many
+        /// prompts it raised. (A failed step is `boot.failed` at stage `sign_in`.)
+        #[diag(ev = "ssh.signin_done", budget = 300)]
+        SshSignInDone {
+            host: Ident,
+            n: u64,
+            asked: u32,
+            ms: Ms,
+        },
+        /// The shared connection of `host` was seen to have ended. `reason`: the tail of the
+        /// connection's own log (what ssh wrote when it ended: e.g. a keep-alive timeout),
+        /// scrubbed and bounded; absent when ssh wrote nothing (killed, signed out, closed by
+        /// the other end).
+        #[diag(ev = "ssh.master_ended", lvl = warn, budget = 300)]
+        SshMasterEnded {
+            host: Ident,
+            n: Option<u64>,
+            reason: Option<DiagText>,
+        },
+        /// The hub asked the shared connection of `host` to end (`ssh -O exit`).
+        #[diag(ev = "ssh.master_exit", budget = 300)]
+        SshMasterExit {
+            host: Ident,
+            why: MasterExitWhy,
+            outcome: MasterExitOutcome,
+            exit: Option<i32>,
+            stderr: Option<DiagText>,
+        },
         /// The host's daemon runs under another id than this host's; the next attempt
         /// restarts it under this one.
         #[diag(ev = "boot.id_mismatch", budget = 120)]
@@ -679,8 +772,9 @@ wasit_diag::diag_events! {
         #[diag(ev = "hosts.learned", budget = 300)]
         HostsLearned { host: Ident, what: LearnedWord },
         /// The hub did not start a connect attempt of `host` because it needs the user at login
-        /// (and the user has not asked): its link is parked as `auth_needed` (`held`) until
-        /// `hosts.reconnect`. Recorded each time the link's supervisor asked and was told so (at
+        /// and no shared ssh connection is open that would carry the attempt without a sign-in,
+        /// or because the user signed out of it (and the user has not asked): its link is
+        /// parked as `auth_needed` (`held`) until `hosts.reconnect`. Recorded each time the link's supervisor asked and was told so (at
         /// the hub's start, after a drop, after a failure that came after the user was asked).
         #[diag(ev = "hosts.held", budget = 300)]
         HostsHeld { host: Ident },

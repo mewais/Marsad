@@ -6,6 +6,13 @@
 //! the same way a password is (an entry through askpass), and what the hub does with it does
 //! not depend on which. The password and second-factor tests that need root stay in
 //! `remote.rs`.
+//!
+//! Every ssh host has ONE shared connection (a "master", `hub/master.rs`) that every command of
+//! the host rides, so what ends a host's wait for the user is the connection, not the link:
+//! "the network is lost" in these tests means the connection dies ([`Rig::drop_network`]); a link
+//! that drops while its connection lives reconnects by itself (the last tests of this file). The
+//! shared connection's own behaviour (restarts, sign-out, removal, the reason it ended) is
+//! tested at the end of the file.
 #![cfg(target_os = "linux")]
 
 mod common;
@@ -17,7 +24,7 @@ use common::*;
 use marsad_client::{MarsadClient, Subscription};
 use marsad_proto::agentconfig::{LaunchRequest, OverrideLayer};
 use marsad_proto::fleet::{FleetEvent, FleetLink};
-use marsad_proto::hosts::{HostDraft, HostKind, PromptKind, SignInRepeat};
+use marsad_proto::hosts::{HostDraft, HostKind, PromptKind};
 use marsad_proto::runtime::{SessionEvent, SessionEventKind};
 use marsad_proto::{AgentEvent, Command, CommandFailureKind, GateDecision, HostId, LinkState};
 use serde_json::{json, Value};
@@ -262,6 +269,8 @@ struct Rig {
     tail: Tail,
     id: HostId,
     markers: u32,
+    /// The route of the host once added (its shared connection's socket is named by it).
+    kind: Option<HostKind>,
     /// Last: what the rig started goes before the directory it lives in.
     d: TempDir,
 }
@@ -289,10 +298,12 @@ impl Rig {
             tail,
             id: HostId::new("pp"),
             markers: 0,
+            kind: None,
         }
     }
 
     async fn add(&mut self, kind: HostKind) {
+        self.kind = Some(kind.clone());
         self.c
             .add_host(HostDraft {
                 name: "pp".into(),
@@ -301,6 +312,34 @@ impl Rig {
             })
             .await
             .unwrap();
+    }
+
+    /// The control socket of the host's shared connection, named as the hub names it.
+    fn master(&self) -> PathBuf {
+        master_socket(
+            &self.data,
+            self.id.as_str(),
+            self.kind.as_ref().expect("the host was added"),
+        )
+    }
+
+    /// The network to the host is lost: the shared connection dies without a word (its process
+    /// is killed and its socket left behind, as a lost network or a crash leaves it), and with it
+    /// the link that rode it. Returns when the connection is gone, so that what the hub does
+    /// next can only find it gone.
+    async fn drop_network(&mut self) {
+        kill_master(&self.master()).await;
+    }
+
+    /// How many times ssh asked a helper for an answer so far, over every hub of this data (the
+    /// helper records each call in the shared diagnostics file).
+    fn askpass_calls(&self) -> usize {
+        let path = layout(&self.data).diag().join("aux.ndjson");
+        std::fs::read_to_string(path).map_or(0, |t| {
+            t.lines()
+                .filter(|l| l.contains("\"ev\":\"askpass.end\""))
+                .count()
+        })
     }
 
     /// The first connect: ssh asks for the passphrase, the user answers, the host connects, and
@@ -350,6 +389,12 @@ impl Rig {
     /// The hub is stopped and started again over the same data (the host's own daemon is not
     /// touched). The new fleet subscription has not read its snapshot.
     async fn restart_hub(self) -> Rig {
+        self.restart_hub_with(false).await
+    }
+
+    /// As [`Rig::restart_hub`]; `lose_connection`: the shared connection dies while the hub is
+    /// down.
+    async fn restart_hub_with(self, lose_connection: bool) -> Rig {
         let Rig {
             d,
             sshd,
@@ -360,11 +405,16 @@ impl Rig {
             tail,
             id,
             markers,
+            kind,
         } = self;
         drop(fleet);
         drop(tail);
         drop(c);
         stop(&data).await;
+        if lose_connection {
+            let sock = master_socket(&data, id.as_str(), kind.as_ref().unwrap());
+            kill_master(&sock).await;
+        }
         let c = hub_client(&data, &[]);
         let fleet = c.fleet(None);
         let tail = Tail::open(&c);
@@ -378,6 +428,7 @@ impl Rig {
             tail,
             id,
             markers,
+            kind,
         }
     }
 
@@ -474,7 +525,8 @@ async fn launch_gated(r: &Rig) -> Gated {
 // ── the tests ────────────────────────────────────────────────────────────────
 
 /// The whole story of the owner's change for one host. The passphrase is asked at the first
-/// connect and the host is marked. Its ssh dies: the link parks as "sign-in needed" at once
+/// connect and the host is marked. The network is lost (its shared connection dies, and the link
+/// that rode it): the link parks as "sign-in needed" at once
 /// (never "reconnecting"), keeping the drop's own reason next to the fact that it waits for the
 /// user, and no ssh is started (the hub's records, in order, up to a later record of its own
 /// show none). A fresh subscriber sees the same state. One click asks exactly once, connects
@@ -491,10 +543,10 @@ async fn a_dropped_passphrase_host_waits_for_the_user_and_one_click_brings_its_s
     })
     .await;
 
-    // The link drops.
-    let pid = r.link_pid().await;
+    // The network is lost: the connection the link rides dies, and the link with it.
+    r.marker().await;
     let from = r.tail.seen.len();
-    kill_pid(pid);
+    r.drop_network().await;
     let ev = until(
         &mut r.fleet,
         "the next link state of pp",
@@ -521,6 +573,10 @@ async fn a_dropped_passphrase_host_waits_for_the_user_and_one_click_brings_its_s
     assert_eq!(problem, CommandFailureKind::AuthNeeded);
     let cause = cause.expect("the drop's own reason is kept");
     assert!(!cause.is_empty());
+    assert!(
+        detail.contains("shared connection") && detail.contains("ended"),
+        "the wait says the shared connection ended: {detail:?}"
+    );
     assert!(
         !cause.contains(&detail) && !detail.contains(&cause),
         "the cause is not overwritten by the generic text: {cause:?} / {detail:?}"
@@ -621,14 +677,16 @@ async fn a_dropped_passphrase_host_waits_for_the_user_and_one_click_brings_its_s
     g.rt.delete(&g.id).await.unwrap();
 }
 
-/// A hub that starts with a stored passphrase host does not ask for it: no attempt, no ssh, the
-/// link is parked at once with the same published state as after a drop (there is no drop to
-/// quote), and one click connects it.
+/// A hub that starts with a stored passphrase host whose shared connection is gone (it died while
+/// the hub was down) does not ask for it: no attempt, no ssh, the link is parked at once with the
+/// same published state as after a drop (there is no drop to quote), and one click connects it.
+/// (A hub that finds the connection open reconnects without asking: see
+/// `a_hub_restart_finds_the_open_connection_and_reconnects_without_a_prompt`.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_hub_that_starts_with_a_passphrase_host_parks_it_without_an_ssh() {
     let mut r = Rig::new().await;
     r.sign_in().await;
-    let mut r = r.restart_hub().await;
+    let mut r = r.restart_hub_with(true).await;
     let state = until_link(&mut r.fleet, "pp", |s| {
         matches!(s, LinkState::AuthNeeded { .. })
     })
@@ -700,10 +758,11 @@ async fn a_host_that_only_asked_to_trust_its_key_reconnects_on_its_own() {
     r.c.answer_auth(&r.id, p.id, "yes").await.unwrap();
     until(&mut r.fleet, "pp connected", |e| connected(e, "pp")).await;
 
-    // Its ssh dies: it reconnects by itself, through "reconnecting", asking nobody.
-    let pid = r.link_pid().await;
+    // The network is lost: it reconnects by itself, through "reconnecting", asking nobody (it
+    // opens a new shared connection, with no prompt: its host key is known now).
+    r.marker().await;
     let from = r.tail.seen.len();
-    kill_pid(pid);
+    r.drop_network().await;
     let events = collect_until(&mut r.fleet, "pp connected again", |e| connected(e, "pp")).await;
     assert!(events.iter().any(|e| reconnecting(e, "pp")), "{events:?}");
     assert!(
@@ -748,8 +807,7 @@ async fn a_marked_host_that_connects_without_a_prompt_is_unmarked_and_reconnects
     let mut r = Rig::new().await;
     r.sign_in().await;
     let id = r.id.clone();
-    let pid = r.link_pid().await;
-    kill_pid(pid);
+    r.drop_network().await;
     until(&mut r.fleet, "pp parked", |e| parked(e, "pp", true)).await;
 
     // The user removes the passphrase from the key (the public key, and so the host's
@@ -794,9 +852,8 @@ async fn a_marked_host_that_connects_without_a_prompt_is_unmarked_and_reconnects
         "cleared after it was set: {learned:?}"
     );
 
-    // Its next drop is an ordinary one.
-    let pid = r.link_pid().await;
-    kill_pid(pid);
+    // Its next loss of the network is an ordinary one.
+    r.drop_network().await;
     let events = collect_until(&mut r.fleet, "pp connected again", |e| connected(e, "pp")).await;
     assert!(events.iter().any(|e| reconnecting(e, "pp")), "{events:?}");
     assert!(!events.iter().any(|e| asks_or_waits(e, "pp")), "{events:?}");
@@ -812,8 +869,7 @@ async fn an_armed_attempt_that_never_reached_the_host_is_retried_armed_and_asks_
     let mut r = Rig::new().await;
     r.sign_in().await;
     let id = r.id.clone();
-    let pid = r.link_pid().await;
-    kill_pid(pid);
+    r.drop_network().await;
     until(&mut r.fleet, "pp parked", |e| parked(e, "pp", true)).await;
     let m = r.marker().await;
 
@@ -854,9 +910,8 @@ async fn an_armed_attempt_that_never_reached_the_host_is_retried_armed_and_asks_
         1,
         "asked once in all"
     );
-    // Spent: the next drop waits for the user again.
-    let pid = r.link_pid().await;
-    kill_pid(pid);
+    // Spent: the next loss of the network waits for the user again.
+    r.drop_network().await;
     until(&mut r.fleet, "pp parked again", |e| parked(e, "pp", true)).await;
 }
 
@@ -869,19 +924,24 @@ async fn a_prompt_of_an_ended_attempt_is_withdrawn_and_cannot_be_answered() {
     let mut r = Rig::new().await;
     r.sign_in().await;
     let id = r.id.clone();
-    let pid = r.link_pid().await;
-    kill_pid(pid);
+    r.drop_network().await;
     until(&mut r.fleet, "pp parked", |e| parked(e, "pp", true)).await;
 
     r.c.reconnect_host(&id).await.unwrap();
     let p1 = prompt(&mut r.fleet, "pp").await;
-    // The attempt dies under it.
+    // The attempt dies under it (its sign-in step is the ssh that asked).
     let pid = r.link_pid().await;
     kill_pid(pid);
-    until(
+    // The prompt is taken off, and the attempt that failed after asking parks the link (this time
+    // because it failed): the fleet reports the two in either order, the prompt's end by its own
+    // task and the link's state by the supervisor's.
+    until_all(
         &mut r.fleet,
-        "the prompt withdrawn",
-        |e| matches!(e, FleetEvent::AuthPrompt { host, prompt: None } if *host == id),
+        "the prompt withdrawn and pp parked after the failure",
+        &[
+            &|e| matches!(e, FleetEvent::AuthPrompt { host, prompt: None } if *host == id),
+            &|e| parked(e, "pp", false),
+        ],
     )
     .await;
     assert!(
@@ -895,11 +955,6 @@ async fn a_prompt_of_an_ended_attempt_is_withdrawn_and_cannot_be_answered() {
         })
         .await;
     assert_eq!(r.tail.seen[end]["why"], "attempt_ended");
-    // The attempt failed after asking: the link waits, and this time because it failed.
-    until(&mut r.fleet, "pp parked after the failure", |e| {
-        parked(e, "pp", false)
-    })
-    .await;
 
     // The next click asks again, and its prompt is its own.
     r.c.reconnect_host(&id).await.unwrap();
@@ -916,8 +971,7 @@ async fn removing_a_host_withdraws_its_prompt() {
     let mut r = Rig::new().await;
     r.sign_in().await;
     let id = r.id.clone();
-    let pid = r.link_pid().await;
-    kill_pid(pid);
+    r.drop_network().await;
     until(&mut r.fleet, "pp parked", |e| parked(e, "pp", true)).await;
     r.c.reconnect_host(&id).await.unwrap();
     let p = prompt(&mut r.fleet, "pp").await;
@@ -945,11 +999,12 @@ async fn removing_a_host_withdraws_its_prompt() {
     }
 }
 
-/// The one click covers a sign-in that needs a second connection (the hub restarts the helper on
-/// the host after the first connect showed it runs another build): the second prompt comes
-/// without a second click, and says why it is a second one.
+/// The one click covers the restart of a helper that runs another build: its second connect
+/// attempt rides the shared connection the first one opened, so the user is asked once, with no
+/// second prompt (a hub without a shared connection asks again, and says why: the `repeat` of the
+/// prompt, covered in `auth.rs`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_second_connection_within_one_sign_in_says_why_it_asks_again() {
+async fn a_helper_restart_within_one_sign_in_rides_the_shared_connection_and_asks_nothing_more() {
     let mut r = Rig::new().await;
     // The host already has our binary installed, but a daemon claiming another build runs.
     let bin = r.sshd.installed_agent();
@@ -978,13 +1033,8 @@ async fn a_second_connection_within_one_sign_in_says_why_it_asks_again() {
     let p1 = prompt(&mut r.fleet, "pp").await;
     assert_eq!(p1.repeat, None);
     r.c.answer_auth(&r.id, p1.id, PASSPHRASE).await.unwrap();
-    // No click in between: the hub connects again to restart the helper, and the user is asked
-    // again, told why.
-    let p2 = prompt(&mut r.fleet, "pp").await;
-    assert_ne!(p2.id, p1.id);
-    assert_eq!(p2.repeat, Some(SignInRepeat::HelperRestart));
-    assert_eq!(p2.attempt, 1, "a new connection, not a wrong answer");
-    r.c.answer_auth(&r.id, p2.id, PASSPHRASE).await.unwrap();
+    // No second prompt: the restart attempt rides the connection the first one opened (a
+    // second prompt would have to arrive before the host connects).
     until(&mut r.fleet, "pp connected", |e| connected(e, "pp")).await;
     let st = tokio::time::timeout(T, old.wait())
         .await
@@ -993,9 +1043,454 @@ async fn a_second_connection_within_one_sign_in_says_why_it_asks_again() {
     assert!(st.success());
 
     let m = r.marker().await;
-    let prompts = evs(&r.tail.seen[..m], "pp", "auth.prompt");
-    assert_eq!(prompts.len(), 2, "{prompts:#?}");
+    let all = &r.tail.seen[..m];
+    let prompts = evs(all, "pp", "auth.prompt");
+    assert_eq!(prompts.len(), 1, "{prompts:#?}");
     assert!(prompts[0]["repeat"].is_null());
-    assert_eq!(prompts[1]["repeat"], "helper_restart");
+    assert_eq!(r.askpass_calls(), 1, "ssh asked the helper once in all");
+    // Two attempts (the first saw the old build), one sign-in step, one shared connection.
+    assert!(evs(all, "pp", "boot.attempt").len() >= 2);
+    assert_eq!(evs(all, "pp", "ssh.signin_started").len(), 1, "{all:#?}");
     assert_eq!(evs(&r.tail.seen[..m], "pp", "boot.build_mismatch").len(), 1);
+}
+
+// ── the shared connection ────────────────────────────────────────────────────
+
+use wasit_fake_cli::harness::PidWatch;
+
+impl Rig {
+    /// Adds the host as a key host (no passphrase: nobody is ever asked) and waits for it.
+    async fn connect_key_host(&mut self) {
+        self.add(self.sshd.kind(&self.sshd.key)).await;
+        until(&mut self.fleet, "pp connected", |e| connected(e, "pp")).await;
+    }
+
+    /// The pid of the process that holds the host's shared connection.
+    fn master_pid(&self) -> u32 {
+        master_pid(&self.master()).expect("the shared connection is open")
+    }
+
+    /// Records of `ev` about the host made after `from` and before a record made now.
+    async fn window(&mut self, from: usize) -> Vec<Value> {
+        let m = self.marker().await;
+        self.tail.seen[from..m].to_vec()
+    }
+}
+
+/// Waits for `pid` to end (a pidfd: the process's own end, not a schedule).
+async fn gone(pid: u32) {
+    if let Some(w) = PidWatch::open(pid) {
+        assert!(w.exited(T).await, "process {pid} did not end");
+    }
+}
+
+/// THE ask. The passphrase is asked once; the hub daemon is stopped and started again (the
+/// shared connection is ssh's, and outlives it): the host connects again with no prompt, no
+/// sign-in step and no wait for the user, over the very same connection, and the session that
+/// waited for a gate before the restart is reachable and finishes its turn with no gap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hub_restart_finds_the_open_connection_and_reconnects_without_a_prompt() {
+    let mut r = Rig::new().await;
+    r.sign_in().await;
+    assert_eq!(r.askpass_calls(), 1);
+    let pid = r.master_pid();
+    let id = r.id.clone();
+    let g = launch_gated(&r).await;
+    until(&mut r.fleet, "the session in the fleet", |e| {
+        matches!(e, FleetEvent::SessionUpserted { host, session } if *host == id && session.id == g.id && session.phase.name() == "needs_you")
+    })
+    .await;
+    let seen = g.seen.clone();
+    let gid = g.id.clone();
+    let request_id = g.request_id.clone();
+    drop(g);
+
+    let mut r = r.restart_hub().await;
+    // Everything the fleet says until the host is connected: nobody is asked, nothing waits.
+    let events = collect_until(&mut r.fleet, "pp connected", |e| {
+        connected(e, "pp")
+            || matches!(e, FleetEvent::Reset { hosts } if hosts.iter().any(|h| h.host.id.as_str() == "pp" && matches!(&h.link, FleetLink::Remote { state } if state.is_connected())))
+    })
+    .await;
+    assert!(
+        !events.iter().any(|e| asks_or_waits(e, "pp")),
+        "nobody is asked and nothing waits: {events:?}"
+    );
+    assert_eq!(r.master_pid(), pid, "the very same connection");
+    assert_eq!(r.askpass_calls(), 1, "no further askpass call");
+    let m = r.marker().await;
+    let all = &r.tail.seen[..m];
+    assert_eq!(evs(all, "pp", "auth.prompt").len(), 0, "{all:#?}");
+    assert_eq!(evs(all, "pp", "ssh.signin_started").len(), 0);
+    assert_eq!(evs(all, "pp", "hosts.held").len(), 0);
+    let checks = evs(all, "pp", "ssh.master_check");
+    assert!(
+        checks.iter().any(|c| c["state"] == "alive"),
+        "the hub asked the connection: {checks:#?}"
+    );
+    let attempts = evs(all, "pp", "boot.attempt");
+    assert!(!attempts.is_empty());
+    assert!(
+        attempts
+            .iter()
+            .all(|a| a["interactive"] == true && a["armed"] == false),
+        "an interactive host, tried without anybody's click: {attempts:#?}"
+    );
+
+    // The session is reachable again through the new hub and finishes with no gap.
+    let rt = r.c.runtime(Some(r.id.clone()));
+    rt.command(
+        &gid,
+        Command::AnswerGate {
+            request_id,
+            decision: GateDecision::choose("allow"),
+        },
+    )
+    .await
+    .unwrap();
+    let mut sub = rt.subscribe_session(&gid, None);
+    loop {
+        let e = session_event(&mut sub).await;
+        if matches!(
+            &e.kind,
+            SessionEventKind::Agent {
+                event: AgentEvent::TurnCompleted { .. }
+            }
+        ) {
+            break;
+        }
+    }
+    let page = rt.history(&gid, None, 2000).await.unwrap();
+    assert_eq!(
+        &page.events[..seen.len()],
+        &seen[..],
+        "no gap, no duplicate across the hub's restart"
+    );
+    rt.delete(&gid).await.unwrap();
+}
+
+/// How a test ends a shared connection while the host is connected.
+#[derive(Clone, Copy)]
+enum End {
+    /// Its owner asks it to (`ssh -O exit`): it leaves no socket and says nothing.
+    Asked,
+    /// It is killed (a crash, a lost network): it leaves its socket behind and says nothing.
+    Killed,
+}
+
+/// A connection that ends while the host is connected: the link drops and the host waits for the
+/// user, with no prompt, saying that the shared connection ended; one Sign in click asks exactly
+/// once and the host connects again.
+async fn the_connection_ends(how: End) {
+    let mut r = Rig::new().await;
+    r.sign_in().await;
+    let id = r.id.clone();
+    let calls = r.askpass_calls();
+    r.marker().await;
+    let from = r.tail.seen.len();
+    match how {
+        End::Asked => {
+            let pid = r.master_pid();
+            assert!(master_exit(&r.master()), "ssh -O exit");
+            gone(pid).await;
+        }
+        End::Killed => {
+            kill_master(&r.master()).await;
+        }
+    }
+    let state = until_link(&mut r.fleet, "pp", |s| {
+        matches!(s, LinkState::AuthNeeded { .. })
+    })
+    .await;
+    let LinkState::AuthNeeded {
+        detail,
+        cause,
+        held,
+        ..
+    } = state
+    else {
+        unreachable!()
+    };
+    assert!(held, "it waits for the user; no attempt failed");
+    assert!(
+        detail.contains("shared connection") && detail.contains("ended"),
+        "{detail:?}"
+    );
+    assert!(
+        cause.is_some_and(|c| !c.is_empty()),
+        "the drop's own reason is kept"
+    );
+    assert_eq!(r.askpass_calls(), calls, "nobody was asked");
+    let window = r.window(from).await;
+    none_of(
+        &window,
+        "pp",
+        &["boot.attempt", "auth.prompt", "ssh.signin_started"],
+    );
+    let ended = evs(&window, "pp", "ssh.master_ended");
+    assert_eq!(ended.len(), 1, "{window:#?}");
+    assert!(
+        ended[0]["n"].is_null(),
+        "found by the supervisor's question"
+    );
+    let found = evs(&window, "pp", "ssh.master_check");
+    // A connection asked to end removes its socket as it goes (`absent`), or has not quite when the
+    // hub looks (`stale`: nothing listens any more); a killed one leaves its socket behind.
+    let want: &[&str] = match how {
+        End::Asked => &["absent", "stale"],
+        End::Killed => &["stale"],
+    };
+    assert!(
+        found
+            .iter()
+            .any(|c| want.contains(&c["state"].as_str().unwrap_or(""))),
+        "{want:?}: {found:#?}"
+    );
+
+    // One click: one sign-in step, one prompt, connected.
+    r.c.reconnect_host(&id).await.unwrap();
+    let p = prompt(&mut r.fleet, "pp").await;
+    assert_eq!((p.kind, p.attempt, p.repeat), (PromptKind::Secret, 1, None));
+    r.c.answer_auth(&id, p.id, PASSPHRASE).await.unwrap();
+    until(&mut r.fleet, "pp connected again", |e| connected(e, "pp")).await;
+    assert_eq!(r.askpass_calls(), calls + 1, "exactly one more");
+    let window = r.window(from).await;
+    assert_eq!(evs(&window, "pp", "auth.prompt").len(), 1);
+    assert_eq!(evs(&window, "pp", "ssh.signin_started").len(), 1);
+    let done = evs(&window, "pp", "ssh.signin_done");
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0]["asked"], 1);
+    assert!(
+        master_pid(&r.master()).is_some(),
+        "a connection is open again"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_connection_ended_by_its_owner_parks_the_host_and_one_click_asks_exactly_once() {
+    the_connection_ends(End::Asked).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_killed_connection_parks_the_host_and_one_click_asks_exactly_once() {
+    the_connection_ends(End::Killed).await;
+}
+
+/// A connection that dies because the network does not answer (every process of the host's sshd
+/// stops, so nothing ever arrives): ssh's own keep-alive ends it (15 s × 3 of silence) and writes
+/// why into the connection's log; the hub reads that, shows it in the words of the wait for the
+/// user, and records it in the trail (scrubbed, bounded). No prompt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_connection_that_times_out_says_why_in_the_wait_and_the_trail() {
+    let mut r = Rig::new().await;
+    r.sign_in().await;
+    let calls = r.askpass_calls();
+    r.marker().await;
+    let from = r.tail.seen.len();
+    let _frozen = Frozen::stop(r.sshd.connection_pids());
+    let state = until_link(&mut r.fleet, "pp", |s| {
+        matches!(s, LinkState::AuthNeeded { .. })
+    })
+    .await;
+    let LinkState::AuthNeeded {
+        detail,
+        held,
+        cause,
+        problem,
+    } = state
+    else {
+        unreachable!()
+    };
+    // The link's own silence limit (45 s) and ssh's keep-alive (15 s x 3) end about together: the
+    // supervisor either asks the connection first (held) or an attempt that rode it for a
+    // moment fails when it ends. Either way the wait says what ssh wrote.
+    let _ = (held, &problem, &cause);
+    assert!(
+        detail.contains("not responding"),
+        "ssh's own reason is in the words: {detail:?}"
+    );
+    assert_eq!(r.askpass_calls(), calls);
+    let window = r.window(from).await;
+    let ended = evs(&window, "pp", "ssh.master_ended");
+    assert_eq!(ended.len(), 1, "{window:#?}");
+    let reason = ended[0]["reason"].as_str().expect("a reason");
+    assert!(reason.contains("not responding"), "{reason:?}");
+    assert!(reason.chars().count() <= 400 + 1, "bounded: {reason:?}");
+    none_of(&window, "pp", &["auth.prompt", "ssh.signin_started"]);
+}
+
+/// A link that drops while its shared connection stays open (the remote daemon crashed, the
+/// bridge ended: here the riding ssh is killed) reconnects by itself, with no prompt and no
+/// sign-in, although the host needs the user at login: no factor is needed to ride a connection
+/// that is open.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_link_drop_with_an_open_connection_reconnects_by_itself_even_for_a_passphrase_host() {
+    let mut r = Rig::new().await;
+    r.sign_in().await;
+    let calls = r.askpass_calls();
+    let master = r.master_pid();
+    let link = r.link_pid().await;
+    assert_ne!(link, master);
+    let from = r.tail.seen.len();
+    kill_pid(link);
+    let events = collect_until(&mut r.fleet, "pp connected again", |e| connected(e, "pp")).await;
+    assert!(events.iter().any(|e| reconnecting(e, "pp")), "{events:?}");
+    assert!(
+        !events.iter().any(|e| asks_or_waits(e, "pp")),
+        "nobody is asked and nothing waits: {events:?}"
+    );
+    assert_eq!(r.askpass_calls(), calls);
+    assert_eq!(r.master_pid(), master, "the same connection carries it");
+    let window = r.window(from).await;
+    none_of(
+        &window,
+        "pp",
+        &["hosts.held", "auth.prompt", "ssh.signin_started"],
+    );
+    let attempts = evs(&window, "pp", "boot.attempt");
+    assert!(!attempts.is_empty());
+    assert!(attempts
+        .iter()
+        .all(|a| a["interactive"] == true && a["armed"] == false));
+    assert!(evs(&window, "pp", "ssh.master_check")
+        .iter()
+        .any(|c| c["state"] == "alive"));
+}
+
+/// A key host gets a shared connection too, and keeps it across a restart of the hub: the same
+/// process carries the new hub's link, whose attempt opens nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_key_host_gets_a_shared_connection_and_keeps_it_across_a_hub_restart() {
+    let mut r = Rig::new().await;
+    r.connect_key_host().await;
+    let sock = r.master();
+    let pid = r.master_pid();
+    assert_eq!(r.askpass_calls(), 0, "a key host is asked nothing");
+    // The socket is private to the user, in the runtime directory's own `ssh` directory.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = sock.parent().unwrap();
+        assert_eq!(dir.file_name().unwrap(), "ssh");
+        assert_eq!(
+            std::fs::metadata(dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+    let mut r = r.restart_hub().await;
+    until_link(&mut r.fleet, "pp", LinkState::is_connected).await;
+    assert_eq!(r.master_pid(), pid, "the connection of the first hub");
+    let m = r.marker().await;
+    let all = &r.tail.seen[..m];
+    assert_eq!(evs(all, "pp", "ssh.signin_started").len(), 0, "{all:#?}");
+    assert!(evs(all, "pp", "ssh.master_check")
+        .iter()
+        .any(|c| c["state"] == "alive"));
+    let hosts = r.c.hosts().await.unwrap();
+    let e = hosts.iter().find(|h| h.id == r.id).unwrap();
+    assert!(e.shared_connection, "the hub says the host has one");
+}
+
+/// Removing a host ends its shared connection (the socket and its log are gone); editing its route
+/// ends the old one and the new route has its own: another socket, another process. Both are
+/// on record, and the link of the edited host is connected again over the new connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn removing_a_host_ends_its_connection_and_an_edited_route_gets_a_new_one() {
+    let mut r = Rig::new().await;
+    r.connect_key_host().await;
+    let id = r.id.clone();
+    let (sock1, pid1) = (r.master(), r.master_pid());
+    let from = r.tail.seen.len();
+
+    // An edit of the route (an ssh option).
+    let mut e =
+        r.c.hosts()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|h| h.id == id)
+            .unwrap();
+    let HostKind::Ssh { options, .. } = &mut e.kind else {
+        unreachable!()
+    };
+    options.push("LogLevel=ERROR".into());
+    r.kind = Some(e.kind.clone());
+    r.c.update_host(e).await.unwrap();
+    gone(pid1).await;
+    assert!(master_pid(&sock1).is_none(), "the old connection is gone");
+    assert!(!sock1.exists(), "and its socket");
+    assert!(!marsad_agent::hub::transport::master_log(&sock1).exists());
+    until(&mut r.fleet, "pp connected again", |e| connected(e, "pp")).await;
+    let (sock2, pid2) = (r.master(), r.master_pid());
+    assert_ne!(sock1, sock2);
+    assert_ne!(pid1, pid2);
+
+    // Removing the host.
+    r.c.remove_host(&id).await.unwrap();
+    gone(pid2).await;
+    assert!(master_pid(&sock2).is_none());
+    assert!(!sock2.exists());
+    assert!(!marsad_agent::hub::transport::master_log(&sock2).exists());
+    let end = r
+        .tail
+        .until("the removal", |x| {
+            x["ev"] == "hosts.changed" && x["host"] == "pp" && x["op"] == "removed"
+        })
+        .await;
+    let window = r.tail.seen[from..=end].to_vec();
+    let exits = evs(&window, "pp", "ssh.master_exit");
+    let words: Vec<(&str, &str)> = exits
+        .iter()
+        .map(|x| (x["why"].as_str().unwrap(), x["outcome"].as_str().unwrap()))
+        .collect();
+    assert_eq!(words, [("retargeted", "ended"), ("removed", "ended")]);
+}
+
+/// Signing out ends the connection, the link drops and the host waits for the user, key host or
+/// not, and is not tried again by itself: no attempt, no ssh, until the user connects it; then it
+/// signs in again over a new connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn signing_out_ends_the_connection_and_the_host_waits_and_is_not_retried() {
+    let mut r = Rig::new().await;
+    r.connect_key_host().await;
+    let id = r.id.clone();
+    let (sock, pid) = (r.master(), r.master_pid());
+    r.marker().await;
+    let from = r.tail.seen.len();
+
+    r.c.sign_out_host(&id).await.unwrap();
+    gone(pid).await;
+    let state = until_link(&mut r.fleet, "pp", |s| {
+        matches!(s, LinkState::AuthNeeded { .. })
+    })
+    .await;
+    let LinkState::AuthNeeded { detail, held, .. } = state else {
+        unreachable!()
+    };
+    assert!(held && detail.contains("signed out"), "{held} {detail:?}");
+    assert!(master_pid(&sock).is_none());
+    assert!(!sock.exists());
+    let window = r.window(from).await;
+    none_of(
+        &window,
+        "pp",
+        &["boot.attempt", "transport.spawned", "link.attempt_begin"],
+    );
+    let exits = evs(&window, "pp", "ssh.master_exit");
+    assert_eq!(exits.len(), 1, "{window:#?}");
+    assert_eq!(
+        (&exits[0]["why"], &exits[0]["outcome"]),
+        (&json!("signed_out"), &json!("ended"))
+    );
+    assert_eq!(evs(&window, "pp", "hosts.held").len(), 1);
+
+    // Not an ssh host, or not a host: refused.
+    assert!(r.c.sign_out_host(&HostId::new("hub")).await.is_err());
+    assert!(r.c.sign_out_host(&HostId::new("nobody")).await.is_err());
+
+    // The user connects it again: a new connection, a new sign-in step.
+    r.c.reconnect_host(&id).await.unwrap();
+    until(&mut r.fleet, "pp connected again", |e| connected(e, "pp")).await;
+    assert_ne!(r.master_pid(), pid);
+    let window = r.window(from).await;
+    assert_eq!(evs(&window, "pp", "ssh.signin_started").len(), 1);
 }

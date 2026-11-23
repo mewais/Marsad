@@ -352,11 +352,16 @@ const WHY: Record<string, string> = { mingw_sh: "a POSIX shell answered on Windo
 const PROMPT_CANCEL: Record<string, string> = { user: "you cancelled it", timeout: "it timed out", superseded: "a newer prompt replaced it", helper_gone: "the ssh helper went away", attempt_ended: "the connect attempt it belonged to ended" };
 /** Why a prompt is a second approval within one sign-in (`auth.prompt.repeat`). */
 const PROMPT_REPEAT: Record<string, string> = { helper_restart: "the helper on the host was updated and restarted", id_restart: "the host's daemon was restarted under this host's id", windows_shell: "the host was connected again as a Windows machine" };
+/** What `ssh -O check` found (`ssh.master_check.state`). */
+const MASTER_STATE: Record<string, string> = { alive: "it is open", absent: "none is open", stale: "none is open (its socket was left behind and removed)", unanswered: "it did not answer" };
+/** Why the hub ended a shared connection (`ssh.master_exit.why`) and how it went (`outcome`). */
+const MASTER_EXIT_WHY: Record<string, string> = { removed: "the host was removed", retargeted: "the host's route was edited", signed_out: "you signed out" };
+const MASTER_EXIT_OUTCOME: Record<string, string> = { ended: "it ended", no_master: "there was none", failed: "the request failed" };
 /** What a connect attempt taught the registry (`hosts.learned.what`). */
 const LEARNED: Record<string, string> = {
   platform: "platform",
   machine: "machine identity",
-  interactive: "sign-in: it asks you for something each time, so Marsad does not reconnect it on its own",
+  interactive: "sign-in: it asks you for something, so Marsad does not reconnect it on its own unless its shared connection is still open",
   not_interactive: "sign-in: it no longer asks you for anything, so Marsad reconnects it on its own again",
 };
 const BRIDGE: Record<string, string> = { running: "found the daemon already running", started: "started the daemon", start_failed: "could not start the daemon", unavailable: "could not reach the daemon" };
@@ -391,6 +396,12 @@ const RECORD_WORDS: Record<string, (f: F) => string> = {
   "boot.ok": (f) => `The helper started on the host in ${ms(f)}`,
   "boot.hello": (f) => say(`The helper answered (build ${str(f, "build") ?? "?"}) in ${ms(f)}`, f.host_id_matches === false && ", but under another host id", str(f, "machine") && `, machine ${str(f, "machine")}`),
   "boot.failed": (f) => say(`Bootstrap failed at ${str(f, "stage") ?? "?"}`, str(f, "kind") && ` (${str(f, "kind")})`, exit(f) && `, ${exit(f)}`, tail(str(f, "stderr") ?? ""), tail(err(f))),
+  // The shared ssh connection of a host (Linux and macOS hubs)
+  "ssh.master_check": (f) => say(`Looked for the shared ssh connection of ${str(f, "host") ?? "a host"}: ${MASTER_STATE[str(f, "state") ?? ""] ?? str(f, "state") ?? "?"}`, typeof f.n === "number" && ` (attempt ${f.n})`, tail(str(f, "error") ?? "")),
+  "ssh.signin_started": (f) => say(`Signing in to ${str(f, "host") ?? "a host"}: opening its shared ssh connection (${at(f)}`, flag(f, "armed") && ", you asked for it", ")"),
+  "ssh.signin_done": (f) => `The shared ssh connection of ${str(f, "host") ?? "a host"} is open after ${ms(f)} (${num(nm(f, "asked"), "prompt") || "no prompts"})`,
+  "ssh.master_ended": (f) => say(`The shared ssh connection of ${str(f, "host") ?? "a host"} has ended`, tail(str(f, "reason") ?? "")),
+  "ssh.master_exit": (f) => say(`Ended the shared ssh connection of ${str(f, "host") ?? "a host"} (${MASTER_EXIT_WHY[str(f, "why") ?? ""] ?? str(f, "why") ?? "?"}): ${MASTER_EXIT_OUTCOME[str(f, "outcome") ?? ""] ?? str(f, "outcome") ?? "?"}`, exit(f) && `, ${exit(f)}`, tail(str(f, "stderr") ?? "")),
   "boot.twin": (f) => `This host reaches the same machine as ${str(f, "twin") ?? "another host"}`,
   "boot.id_mismatch": (f) => `The machine answered as host ${str(f, "theirs") ?? "?"}, not as this one`,
   "boot.build_mismatch": (f) => `The helper is build ${str(f, "found") ?? "?"}; ${str(f, "expected") ?? "?"} is expected`,

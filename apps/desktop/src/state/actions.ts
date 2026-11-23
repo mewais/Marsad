@@ -58,6 +58,12 @@ export interface Actions {
    * and the host's questions follow. Resolves true when the hub took the request; its refusal is shown.
    */
   reconnectHost(id: HostId, name: string): Promise<boolean>;
+  /**
+   * Sign out of a host (`hosts.signout`; pending under `signOutPendingKey`): the hub ends the shared ssh
+   * connection it keeps open to it, the link drops and the host waits for the user to sign in again. Only
+   * offered for a host whose entry says it has such a connection. Resolves true when the hub took the request.
+   */
+  signOutHost(id: HostId, name: string): Promise<boolean>;
   /** Connect to the local daemon again now (the app's own link). */
   reconnectHub(): Promise<void>;
   /** Start the subscriptions that ended again. */
@@ -80,6 +86,7 @@ export const stopTaskPendingKey = (key: SessionKey, taskId: string) => `cmd:${ke
 export const endPendingKey = (key: SessionKey) => `end:${key}`;
 export const continuePendingKey = (key: SessionKey) => `continue:${key}`;
 export const reconnectPendingKey = (host: HostId) => `reconnect:${host}`;
+export const signOutPendingKey = (host: HostId) => `signout:${host}`;
 export const gatePendingKey = (key: SessionKey, requestId: string) => `gate:${key}:${requestId}`;
 
 /**
@@ -219,6 +226,7 @@ export function createActions(store: AppStore, api: Api, controller: Controller,
       });
     },
     reconnectHost: (id, name) => ok(run(reconnectPendingKey(id), `Could not connect to ${name}`, () => api.hosts.reconnect(id))),
+    signOutHost: (id, name) => ok(run(signOutPendingKey(id), `Could not sign out of ${name}`, () => api.hosts.signOut(id))),
     reconnectHub: async () => {
       // The shell's answer is the link changing; a failure to even ask is the only thing to report here.
       try {

@@ -2,7 +2,9 @@
 //! and the remote bootstrap that runs on it.
 //!
 //! One connection per connect attempt does everything, so a user who signs in interactively
-//! does so once: the bootstrap reports `MARSAD-BOOT <os> <arch> <installed --version|none>`,
+//! does so once (on a Linux or macOS hub that connection is the host's shared one, see
+//! [`SshRoute`]: the attempt's sign-in step opens it and the bootstrap, a link step, rides it):
+//! the bootstrap reports `MARSAD-BOOT <os> <arch> <installed --version|none>`,
 //! then reads one command line from stdin — `RUN`, `RESTART` (stop the running daemon) or
 //! `UPLOAD <n>` followed by exactly `n` bytes of binary (written to `marsad-agent.new`, checked
 //! to be exactly `n` bytes long — `head -c` ends cleanly on a short input, so a truncated upload
@@ -15,27 +17,97 @@
 //! sends nothing after the command until it has read `MARSAD-OK`, so nothing the protocol
 //! needs is consumed early.
 
+use std::path::{Path, PathBuf};
+
 use base64::Engine;
 use marsad_proto::hosts::{HostEntry, HostKind, HostPlatform};
 
-/// ssh options always passed: detect dead links, bounded TCP connect, no multiplexing (not
-/// available on Windows OpenSSH; never required). No `BatchMode`: prompts go to the
-/// `SSH_ASKPASS` helper instead.
+/// ssh options always passed: detect dead links and bound the TCP connect. No `BatchMode` by
+/// default: prompts go to the `SSH_ASKPASS` helper instead.
 pub fn ssh_base_options() -> Vec<String> {
     [
         "ServerAliveInterval=15",
         "ServerAliveCountMax=3",
         "ConnectTimeout=15",
-        "ControlMaster=no",
     ]
     .iter()
     .flat_map(|o| ["-o".to_string(), o.to_string()])
     .collect()
 }
 
-/// The argv prefix that runs one remote command (appended as the last element). `None` for
+/// How an ssh command of a host relates to the host's shared connection (Linux and macOS hubs;
+/// see [`SshRoute`]).
+///
+/// One authenticated connection, the "master", is kept open per ssh host; every command that
+/// talks to the host rides it, so the user signs in once and a restart of the hub or the app
+/// does not ask again. Only the [`SshRoute::SignIn`] step may prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SshRoute<'a> {
+    /// No shared connection (a Windows hub: its ssh client cannot multiplex). The command is the
+    /// whole connect attempt and may prompt. `ControlPath=none` keeps a user's ssh
+    /// configuration from putting it on a connection of its own.
+    Plain,
+    /// The sign-in step: ssh authenticates (every prompt of the attempt happens here), becomes
+    /// the master listening on `control`, detaches into the background and exits with status 0.
+    /// That exit is the signal that the connection is open. Its messages go to `<control>.log`
+    /// (`-E`), because the detached process keeps writing there for as long as it lives.
+    SignIn { control: &'a Path },
+    /// A link step: the bootstrap rides the master at `control`. `BatchMode=yes`: it can never
+    /// prompt. When no master is there it connects directly (a key host) or fails without
+    /// asking (a host that needs the user).
+    Link { control: &'a Path },
+}
+
+/// The log of the shared connection whose socket is `control`.
+pub fn master_log(control: &Path) -> PathBuf {
+    let mut os = control.as_os_str().to_owned();
+    os.push(".log");
+    PathBuf::from(os)
+}
+
+/// A path as an ssh option value: `%` is ssh's own escape in `ControlPath`.
+fn control_option(control: &Path) -> String {
+    format!(
+        "ControlPath={}",
+        control.display().to_string().replace('%', "%%")
+    )
+}
+
+/// The connection options of an ssh host that every ssh command about it carries, so that its
+/// `Match` blocks evaluate as they do for the connection itself.
+fn ssh_host_options(
+    port: &Option<u16>,
+    identity_file: &Option<String>,
+    options: &[String],
+) -> Vec<String> {
+    let mut argv = Vec::new();
+    if let Some(p) = port {
+        argv.extend(["-p".to_string(), p.to_string()]);
+    }
+    if let Some(i) = identity_file {
+        argv.extend([
+            "-i".to_string(),
+            i.clone(),
+            "-o".to_string(),
+            "IdentitiesOnly=yes".to_string(),
+        ]);
+    }
+    for o in options {
+        argv.extend(["-o".to_string(), o.clone()]);
+    }
+    argv
+}
+
+/// The argv prefix that runs one remote command (appended as the last element), by the same
+/// route a connect attempt without a shared connection uses ([`SshRoute::Plain`]). `None` for
 /// the local host.
 pub fn transport_prefix(kind: &HostKind) -> Option<Vec<String>> {
+    transport_prefix_via(kind, SshRoute::Plain)
+}
+
+/// The argv prefix of the ssh command of `route` for `kind` (for a WSL host, whatever the
+/// route: it has no ssh). `None` for the local host.
+pub fn transport_prefix_via(kind: &HostKind, route: SshRoute<'_>) -> Option<Vec<String>> {
     match kind {
         HostKind::Local => None,
         HostKind::Ssh {
@@ -44,22 +116,32 @@ pub fn transport_prefix(kind: &HostKind) -> Option<Vec<String>> {
             identity_file,
             options,
         } => {
-            let mut argv = vec!["ssh".to_string(), "-T".to_string()];
+            let mut argv = vec!["ssh".to_string()];
+            match route {
+                SshRoute::Plain | SshRoute::Link { .. } => argv.push("-T".to_string()),
+                SshRoute::SignIn { .. } => {}
+            }
             argv.extend(ssh_base_options());
-            if let Some(p) = port {
-                argv.extend(["-p".to_string(), p.to_string()]);
+            let o = |s: String| ["-o".to_string(), s];
+            match route {
+                SshRoute::Plain => {
+                    argv.extend(o("ControlMaster=no".into()));
+                    argv.extend(o("ControlPath=none".into()));
+                }
+                SshRoute::Link { control } => {
+                    argv.extend(o("ControlMaster=no".into()));
+                    argv.extend(o(control_option(control)));
+                    argv.extend(o("BatchMode=yes".into()));
+                }
+                SshRoute::SignIn { control } => {
+                    argv.extend(["-M".to_string(), "-N".to_string(), "-f".to_string()]);
+                    argv.extend(o("ControlMaster=yes".into()));
+                    argv.extend(o(control_option(control)));
+                    argv.extend(o("ControlPersist=yes".into()));
+                    argv.extend(["-E".to_string(), master_log(control).display().to_string()]);
+                }
             }
-            if let Some(i) = identity_file {
-                argv.extend([
-                    "-i".to_string(),
-                    i.clone(),
-                    "-o".to_string(),
-                    "IdentitiesOnly=yes".to_string(),
-                ]);
-            }
-            for o in options {
-                argv.extend(["-o".to_string(), o.clone()]);
-            }
+            argv.extend(ssh_host_options(port, identity_file, options));
             argv.push("--".to_string());
             argv.push(target.clone());
             Some(argv)
@@ -81,6 +163,82 @@ pub fn transport_prefix(kind: &HostKind) -> Option<Vec<String>> {
             "-lc".to_string(),
         ]),
     }
+}
+
+/// What `ssh -O <what>` asks the master at `control` (local: it talks to the socket only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MasterCommand {
+    /// Is a master listening (`Master running (pid=<n>)`, status 0)?
+    Check,
+    /// End the master (and with it every command riding it).
+    Exit,
+}
+
+/// The argv of `ssh -O check|exit` for an ssh host (`None` for any other kind).
+pub fn master_command_argv(
+    kind: &HostKind,
+    control: &Path,
+    what: MasterCommand,
+) -> Option<Vec<String>> {
+    let HostKind::Ssh {
+        target,
+        port,
+        identity_file,
+        options,
+    } = kind
+    else {
+        return None;
+    };
+    let mut argv = vec![
+        "ssh".to_string(),
+        "-O".to_string(),
+        match what {
+            MasterCommand::Check => "check".to_string(),
+            MasterCommand::Exit => "exit".to_string(),
+        },
+        "-o".to_string(),
+        control_option(control),
+    ];
+    argv.extend(ssh_host_options(port, identity_file, options));
+    argv.push("--".to_string());
+    argv.push(target.clone());
+    Some(argv)
+}
+
+/// The bytes a platform allows in a Unix socket path, terminator included (`sun_path`): 108 on
+/// Linux, 104 on macOS and the BSDs.
+pub const fn socket_path_limit() -> usize {
+    if cfg!(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd"
+    )) {
+        104
+    } else {
+        108
+    }
+}
+
+/// What ssh appends to a control path while it creates the socket (`.` and 16 random
+/// characters): it binds `<path>.<16 random>` first and renames it into place, and refuses a
+/// path for which that does not fit.
+pub const SOCKET_TEMP_SUFFIX: usize = 17;
+
+/// Whether ssh can create a control socket at `path` on a platform whose socket paths have
+/// room for `limit` bytes (terminator included).
+pub fn control_path_fits(path: &Path, limit: usize) -> bool {
+    path.as_os_str().len() + SOCKET_TEMP_SUFFIX < limit
+}
+
+/// The control socket of the shared connection of a host: `<dir>/<16 hex>`, the hex being a
+/// hash of the host's id and everything about its route (target, port, key, options). Not ssh's
+/// `%C` (40 hex): the shorter name leaves room under the platform's socket path limit
+/// ([`control_path_fits`]), and a host whose route is edited has a new name, so that it can
+/// never ride the old connection.
+pub fn control_socket(dir: &Path, id: &str, kind: &HostKind) -> PathBuf {
+    let route = serde_json::to_string(kind).unwrap_or_default();
+    let name = wasit_runtime::machine::key_from_raw(&format!("ssh-master:{id}:{route}"));
+    dir.join(name)
 }
 
 /// The POSIX bootstrap (no single quotes inside: it is wrapped in `sh -c '…'`).
@@ -211,13 +369,27 @@ pub fn native_windows_sign(printed: &str) -> bool {
             .any(|p| os.starts_with(p))
 }
 
-/// Full argv of one connect attempt: transport + the bootstrap for `shell`.
-/// `None` for the local host, or a host id that is not [`safe_host_id`].
+/// Full argv of one connect attempt without a shared connection: transport + the bootstrap for
+/// `shell`. `None` for the local host, or a host id that is not [`safe_host_id`].
 pub fn bootstrap_argv(entry: &HostEntry, shell: RemoteShell) -> Option<Vec<String>> {
-    let mut argv = transport_prefix(&entry.kind)?;
+    bootstrap_argv_via(entry, shell, SshRoute::Plain)
+}
+
+/// Full argv of one link step or connect attempt by `route`: the transport of the route + the
+/// bootstrap for `shell`. For [`SshRoute::SignIn`] there is no remote command (the sign-in
+/// step runs none). `None` for the local host, or a host id that is not [`safe_host_id`].
+pub fn bootstrap_argv_via(
+    entry: &HostEntry,
+    shell: RemoteShell,
+    route: SshRoute<'_>,
+) -> Option<Vec<String>> {
+    let mut argv = transport_prefix_via(&entry.kind, route)?;
     let id = entry.id.as_str();
     if !safe_host_id(id) {
         return None;
+    }
+    if matches!(route, SshRoute::SignIn { .. }) {
+        return Some(argv);
     }
     match (&entry.kind, shell) {
         (HostKind::Wsl { .. }, _) => argv.push(posix_bootstrap(id)),
@@ -307,6 +479,7 @@ mod tests {
             created_at_ms: 0,
             interactive_auth: false,
             local_files: false,
+            shared_connection: false,
             machine: None,
         }
     }
@@ -319,12 +492,16 @@ mod tests {
             identity_file: Some("/k".into()),
             options: vec!["UserKnownHostsFile=/kh".into()],
         });
+        // Without a shared connection (a Windows hub): the whole attempt in one command that may
+        // prompt, and a user's ssh configuration cannot put it on a connection of its own.
         let a = bootstrap_argv(&e, RemoteShell::for_entry(&e)).unwrap();
         assert_eq!(a[0], "ssh");
         for o in [
             "ServerAliveInterval=15",
             "IdentitiesOnly=yes",
             "UserKnownHostsFile=/kh",
+            "ControlMaster=no",
+            "ControlPath=none",
         ] {
             assert!(a.iter().any(|x| x == o), "{o} in {a:?}");
         }
@@ -332,6 +509,75 @@ mod tests {
         assert_eq!(a[a.len() - 2], "me@box");
         assert!(a.last().unwrap().starts_with("sh -c 'b="));
         assert!(!POSIX_BOOTSTRAP.contains('\''));
+        // The sign-in step of a shared connection (only this step may prompt): no BatchMode,
+        // no remote command, the keep-alive of the connection that will live on, and the master
+        // detached (`-f`), kept for ever (`ControlPersist=yes`), logging next to its socket.
+        let ctl = Path::new("/run/m/ssh/0123456789abcdef");
+        let sign =
+            bootstrap_argv_via(&e, RemoteShell::Posix, SshRoute::SignIn { control: ctl }).unwrap();
+        assert_eq!(&sign[..2], ["ssh", "-o"], "{sign:?}");
+        for o in [
+            "ServerAliveInterval=15",
+            "ServerAliveCountMax=3",
+            "ConnectTimeout=15",
+            "ControlMaster=yes",
+            "ControlPath=/run/m/ssh/0123456789abcdef",
+            "ControlPersist=yes",
+            "IdentitiesOnly=yes",
+            "UserKnownHostsFile=/kh",
+            "-M",
+            "-N",
+            "-f",
+            "-E",
+            "/run/m/ssh/0123456789abcdef.log",
+        ] {
+            assert!(sign.iter().any(|x| x == o), "{o} in {sign:?}");
+        }
+        assert!(!sign.iter().any(|x| x.starts_with("BatchMode")), "{sign:?}");
+        assert!(!sign.iter().any(|x| x == "-T"), "{sign:?}");
+        assert_eq!(
+            sign[sign.len() - 2..],
+            ["--", "me@box"],
+            "no remote command"
+        );
+        // A link step rides the master and can never prompt.
+        let link =
+            bootstrap_argv_via(&e, RemoteShell::Posix, SshRoute::Link { control: ctl }).unwrap();
+        for o in [
+            "-T",
+            "BatchMode=yes",
+            "ControlMaster=no",
+            "ControlPath=/run/m/ssh/0123456789abcdef",
+            "ServerAliveInterval=15",
+            "IdentitiesOnly=yes",
+            "-p",
+            "2222",
+        ] {
+            assert!(link.iter().any(|x| x == o), "{o} in {link:?}");
+        }
+        assert_eq!(link[link.len() - 2], "me@box");
+        assert!(link.last().unwrap().starts_with("sh -c 'b="));
+        assert!(!link.iter().any(|x| x == "-M" || x == "-f" || x == "-E"));
+        // The questions asked of the master are local and carry no remote command either.
+        for (what, word) in [
+            (MasterCommand::Check, "check"),
+            (MasterCommand::Exit, "exit"),
+        ] {
+            let q = master_command_argv(&e.kind, ctl, what).unwrap();
+            assert_eq!(&q[..3], ["ssh", "-O", word]);
+            assert!(q
+                .iter()
+                .any(|x| x == "ControlPath=/run/m/ssh/0123456789abcdef"));
+            assert_eq!(q[q.len() - 2..], ["--", "me@box"]);
+        }
+        assert!(master_command_argv(&HostKind::Local, ctl, MasterCommand::Check).is_none());
+        // `%` is ssh's escape in a ControlPath.
+        let odd = Path::new("/run/100%/ssh/x");
+        let q = master_command_argv(&e.kind, odd, MasterCommand::Check).unwrap();
+        assert!(
+            q.iter().any(|x| x == "ControlPath=/run/100%%/ssh/x"),
+            "{q:?}"
+        );
         let w = entry(HostKind::Wsl {
             distro: "Ubuntu".into(),
         });
@@ -466,5 +712,90 @@ mod tests {
             triple_platform("aarch64-apple-darwin"),
             ("macos", "aarch64".into())
         );
+    }
+
+    /// ssh binds `<control path>.<16 random>` before it moves the socket into place and refuses a
+    /// path that does not leave room for that under the platform's socket path limit. The socket
+    /// name is 16 hex characters, not ssh's 40-hex `%C`; the shapes of the runtime directories
+    /// the product picks (Linux `/run/user/<uid>/marsad/<8 hex>`, `/tmp/marsad-<uid>/<8 hex>`;
+    /// macOS the per-user temporary directory `/var/folders/xx/<28>/T`, 49 characters with its
+    /// trailing slash) fit with the room ssh needs.
+    #[test]
+    fn the_control_socket_path_leaves_room_for_ssh_on_linux_and_macos() {
+        let k = HostKind::Ssh {
+            target: "me@box".into(),
+            port: None,
+            identity_file: None,
+            options: vec![],
+        };
+        let linux_dirs = [
+            "/run/user/4294967295/marsad/0123abcd/ssh",
+            "/tmp/marsad-4294967295/0123abcd/ssh",
+        ];
+        let macos_dir = format!(
+            "/var/folders/zz/{}/T/marsad/0123abcd/ssh",
+            "zyxvpxvq6csfxvn_n0000000000000"
+        );
+        for dir in linux_dirs {
+            let p = control_socket(Path::new(dir), "any-host", &k);
+            assert_eq!(p.file_name().unwrap().len(), 16, "{p:?}");
+            assert!(
+                control_path_fits(&p, 108),
+                "{} bytes: {p:?}",
+                p.as_os_str().len()
+            );
+            assert!(control_path_fits(&p, 104), "also fits macOS: {p:?}");
+        }
+        let p = control_socket(Path::new(&macos_dir), "any-host", &k);
+        assert!(p.as_os_str().len() <= 86, "{p:?}");
+        assert!(
+            control_path_fits(&p, 104),
+            "{} + {SOCKET_TEMP_SUFFIX} bytes: {p:?}",
+            p.as_os_str().len()
+        );
+        // The bound is exact: 90 bytes fit Linux (90 + 17 + the terminator = 108), 91 do not;
+        // 86 fit macOS, 87 do not.
+        let at = |n: usize| PathBuf::from("/".to_string() + &"x".repeat(n - 1));
+        assert!(control_path_fits(&at(90), 108) && !control_path_fits(&at(91), 108));
+        assert!(control_path_fits(&at(86), 104) && !control_path_fits(&at(87), 104));
+        // ssh's own `%C` name would not have fitted the macOS shape.
+        assert!(
+            !control_path_fits(
+                &Path::new(&macos_dir).join("0123456789012345678901234567890123456789"),
+                104
+            ),
+            "the reason for a name of our own"
+        );
+        assert_eq!(
+            socket_path_limit(),
+            if cfg!(target_os = "macos") { 104 } else { 108 }
+        );
+    }
+
+    /// The socket name follows the host's id and every part of its route: an edited target,
+    /// port, key or option is another name, so that it never rides the old connection.
+    #[test]
+    fn the_control_socket_name_follows_the_host_and_its_route() {
+        let dir = Path::new("/run/m/ssh");
+        let ssh = |t: &str, port: Option<u16>, key: Option<&str>, opts: &[&str]| HostKind::Ssh {
+            target: t.into(),
+            port,
+            identity_file: key.map(Into::into),
+            options: opts.iter().map(|o| o.to_string()).collect(),
+        };
+        let base = ssh("me@box", Some(22), Some("/k"), &["A=1"]);
+        let same = control_socket(dir, "h", &base);
+        assert_eq!(same, control_socket(dir, "h", &base.clone()));
+        for other in [
+            control_socket(dir, "h2", &base),
+            control_socket(dir, "h", &ssh("you@box", Some(22), Some("/k"), &["A=1"])),
+            control_socket(dir, "h", &ssh("me@box", Some(23), Some("/k"), &["A=1"])),
+            control_socket(dir, "h", &ssh("me@box", Some(22), Some("/k2"), &["A=1"])),
+            control_socket(dir, "h", &ssh("me@box", Some(22), Some("/k"), &["A=2"])),
+            control_socket(dir, "h", &ssh("me@box", Some(22), None, &["A=1"])),
+        ] {
+            assert_ne!(other, same);
+        }
+        assert_eq!(master_log(&same).file_name().unwrap().len(), 16 + 4);
     }
 }

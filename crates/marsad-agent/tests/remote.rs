@@ -3,7 +3,8 @@
 //! host with a link drop and no lost session events, git on the remote host, `auth_needed`
 //! for a wrong key, unknown host key confirmation through askpass, and (as root, opt-in)
 //! password / password-as-second-factor sign-in with wrong answer, cancel, timeout and no
-//! automatic reconnect after an interactive link drops.
+//! automatic reconnect after the network to an interactive host is lost (its shared connection
+//! dies).
 #![cfg(target_os = "linux")]
 
 mod common;
@@ -20,8 +21,11 @@ use marsad_proto::{AgentEvent, Command, CommandFailureKind, GateDecision, HostId
 use serde_json::json;
 use wasit_fake_cli::scenario::{Scenario, Turn};
 
-fn kill_ssh(port: u16) {
-    pkill(&format!("^ssh -T .*-p {port} "));
+/// The network to a host is lost: the shared connection of the host `id` of route `kind` dies
+/// without a word (its process is killed, its socket is left behind), and the link that rode it
+/// ends with it.
+async fn lose_network(data: &Path, id: &str, kind: &HostKind) {
+    kill_master(&master_socket(data, id, kind)).await;
 }
 
 async fn session_event(sub: &mut wasit_runtime::TypedSubscription<SessionEvent>) -> SessionEvent {
@@ -152,8 +156,14 @@ async fn ssh_host_provision_fleet_git_and_link_drop() {
     })
     .await;
 
-    // Drop the link (kill ssh): key auth reconnects on its own; nothing is lost.
-    kill_ssh(sshd.port);
+    // The network is lost (the shared connection dies, and the link with it): key auth
+    // reconnects on its own, over a new connection; nothing is lost.
+    let old_master = master_pid(&master_socket(
+        &d.path().join("l"),
+        "box",
+        &sshd.kind(&sshd.key),
+    ));
+    lose_network(&d.path().join("l"), "box", &sshd.kind(&sshd.key)).await;
     until(&mut fleet, "box reconnecting", |e| {
         link_is(e, "box", |s| !s.is_connected())
     })
@@ -162,6 +172,15 @@ async fn ssh_host_provision_fleet_git_and_link_drop() {
         link_is(e, "box", LinkState::is_connected)
     })
     .await;
+    let new_master = master_pid(&master_socket(
+        &d.path().join("l"),
+        "box",
+        &sshd.kind(&sshd.key),
+    ));
+    assert!(
+        new_master.is_some() && new_master != old_master,
+        "a new shared connection carries the link: {old_master:?} -> {new_master:?}"
+    );
     rt.command(
         &id,
         Command::AnswerGate {
@@ -463,8 +482,8 @@ async fn password_signin_wrong_answer_cancel_timeout_and_no_auto_reconnect() {
             .interactive_auth
     );
 
-    // The link drops: no automatic reconnect, no new prompt — it waits for "Connect".
-    kill_ssh(sshd.port);
+    // The network is lost: no automatic reconnect, no new prompt — it waits for "Connect".
+    lose_network(&d.path().join("l"), "pw", &user_kind(&sshd, None)).await;
     until(&mut fleet, "auth needed after the drop", |e| {
         link_is(e, "pw", |s| matches!(s, LinkState::AuthNeeded { .. }))
     })
@@ -563,6 +582,7 @@ async fn bootstrap_with(sshd: &Sshd, input: Vec<u8>) -> std::process::Output {
         created_at_ms: 0,
         interactive_auth: false,
         local_files: false,
+        shared_connection: false,
         machine: None,
     };
     let argv = marsad_agent::hub::transport::bootstrap_argv(
@@ -636,4 +656,105 @@ async fn the_bootstrap_installs_only_a_complete_upload() {
     assert!(lines[0].starts_with("MARSAD-BOOT "));
     assert_eq!(&lines[1..], ["MARSAD-OK", "PAYLOAD-RAN"]);
     assert_eq!(std::fs::read(sshd.installed_agent()).unwrap(), payload);
+}
+
+/// A link step is the bootstrap command riding a shared connection with `BatchMode=yes`. When the
+/// connection is not there (it died between the hub's look and the step): a key host connects
+/// directly, and a host that needs the user (here a passphrase) fails without asking anybody:
+/// the helper that would ask is never called.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_link_step_without_a_connection_connects_a_key_and_never_asks_for_a_passphrase() {
+    use marsad_agent::hub::transport::{bootstrap_argv_via, RemoteShell, SshRoute};
+    let d = TempDir::new();
+    let sshd = Sshd::start(d.path());
+    let pp_key = sshd.passphrase_key("pp-secret");
+    let asked = d.path().join("asked");
+    let helper = d.path().join("askpass.sh");
+    std::fs::write(
+        &helper,
+        format!(
+            "#!/bin/sh\necho \"$1\" >> {}\necho pp-secret\n",
+            asked.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let control = d.path().join("ssh").join("none-here");
+    let run = |kind: HostKind| {
+        let helper = helper.clone();
+        let control = control.clone();
+        async move {
+            let entry = marsad_proto::hosts::HostEntry {
+                id: HostId::new("t"),
+                name: "t".into(),
+                kind,
+                platform: None,
+                created_at_ms: 0,
+                interactive_auth: false,
+                local_files: false,
+                shared_connection: true,
+                machine: None,
+            };
+            let argv = bootstrap_argv_via(
+                &entry,
+                RemoteShell::Posix,
+                SshRoute::Link { control: &control },
+            )
+            .unwrap();
+            let mut child = tokio::process::Command::new(&argv[0])
+                .args(&argv[1..])
+                .env("SSH_ASKPASS", &helper)
+                .env("SSH_ASKPASS_REQUIRE", "force")
+                .env("DISPLAY", ":0")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let _ = child.stdin.take();
+            tokio::time::timeout(T, child.wait_with_output())
+                .await
+                .expect("the link step ended")
+                .unwrap()
+        }
+    };
+    // A key host: no connection to ride, so it connects by itself (and reports).
+    let out = run(sshd.kind(&sshd.key)).await;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.starts_with("MARSAD-BOOT "),
+        "{stdout} / {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // A passphrase host: refused, nobody asked.
+    let HostKind::Ssh {
+        target,
+        port,
+        identity_file: _,
+        mut options,
+    } = sshd.kind(&pp_key)
+    else {
+        unreachable!()
+    };
+    options.extend(["IdentityAgent=none".into(), "AddKeysToAgent=no".into()]);
+    let out = run(HostKind::Ssh {
+        target,
+        port,
+        identity_file: Some(pp_key.display().to_string()),
+        options,
+    })
+    .await;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(255), "{stderr}");
+    assert!(stderr.contains("Permission denied"), "{stderr}");
+    assert!(out.stdout.is_empty());
+    assert!(
+        !asked.exists(),
+        "the helper was asked: {:?}",
+        std::fs::read_to_string(&asked)
+    );
 }

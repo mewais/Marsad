@@ -45,10 +45,14 @@ interface HostRec {
   cause?: string;
   /** The next successful sign-in is followed by a second one, for this reason (see `repeatNext`). */
   repeat?: SignInRepeat;
+  /** The user signed out: the hub does not connect the host again until they ask, a key host included. */
+  signedOut?: boolean;
 }
 
 /** The hub's words for a link it parks until the user asks (`SupervisorHooks::hold`). */
-const HELD_DETAIL = "this host signs in interactively: connect to sign in";
+const HELD_DETAIL = "this host asks you to sign in and no shared connection to it is open: connect it to sign in";
+/** The same after the user signed out of the host's shared connection. */
+const SIGNED_OUT_DETAIL = "you signed out of this host: connect it to sign in again";
 
 const connected = (id: string): LinkState => ({ state: "connected", hello: { protocol: { major: 1, minor: 0 }, build: "fixture", host_id: id, role: "daemon", features: [] } });
 const nextAt = (ms: number) => ({ secs_since_epoch: Math.floor(ms / 1000), nanos_since_epoch: (ms % 1000) * 1e6 });
@@ -148,6 +152,7 @@ export class FixtureBackend implements Backend {
       removeHost: (id) => this.removeHost(id),
       updateHost: (e) => this.updateHost(e),
       reconnect: (id) => this.reconnect(id),
+      signOut: (id) => this.signOut(id),
       answerAuth: (a) => this.answerAuth(a),
       cancelAuth: (a) => this.cancelAuth(a),
       createSession: (host, snap, first) => this.createSession(host, snap, first),
@@ -724,10 +729,25 @@ export class FixtureBackend implements Backend {
     const h = this.hosts.get(id);
     if (!h) throw err("not_found", `No host ${id}`);
     if (!h.def.link) return;
+    h.signedOut = false;
     this.setLink(id, { state: "connecting" });
     if (h.def.entry.interactive_auth) {
       this.later(300 * this.opts.speed, () => this.setAuthPrompt(id, { prompt: this.passwordPrompt(h), kind: "secret", attempt: 1 }));
     } else this.later(800 * this.opts.speed, () => this.setLink(id, connected(id)));
+  }
+
+  /**
+   * `hosts.signout`: the hub ends the shared connection of a host that has one; its link drops and it waits for the user, a key host
+   * included, until they connect it again.
+   */
+  private signOut(id: HostId) {
+    const h = this.hosts.get(id);
+    if (!h) throw err("not_found", `No host ${id}`);
+    if (!h.def.entry.shared_connection) throw err("invalid_params", "this host has no shared ssh connection to sign out of");
+    h.signedOut = true;
+    h.cause = undefined;
+    this.setAuthPrompt(id, null);
+    this.setLink(id, { state: "auth_needed", problem: "auth_needed", detail: SIGNED_OUT_DETAIL, held: true });
   }
 
   private passwordPrompt(h: HostRec): string {

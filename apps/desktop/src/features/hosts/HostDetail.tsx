@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { WslDistros } from "../../bridge/wire";
 import { useNavigate, sessionPath } from "../../router";
-import { askWords, backgroundWords, droppedWords, keepRunningWords, linkView, NO_RETRY_WORDS, osWord, reconnectPendingKey, sameMachineAs, useActions, useDeveloperMode, useReach, useSessionView, useApi, useAppState, usePending, useSignInQueue, type HostView } from "../../state";
+import { askWords, backgroundWords, droppedWords, keepRunningWords, linkView, NO_RETRY_WORDS, osWord, reconnectPendingKey, sameMachineAs, signOutPendingKey, useActions, useDeveloperMode, useReach, useSessionView, useApi, useAppState, usePending, useSignInQueue, type HostView } from "../../state";
 import { Button, ConfirmDialog, ConnState, DriverBadge, ErrorBoundary, Icon, STATUS, Wrap, hostIcon, makeDriver, useNow } from "../../ui";
 import { address, linkSub } from "./linkText";
 import { SignInButton } from "./SignInButton";
@@ -20,7 +20,9 @@ export function HostDetail({ host }: { host: HostView }) {
   const drivers = useAppState((s) => s.drivers);
   const twins = useAppState((s) => sameMachineAs(s.hosts, host.id).join(", "));
   const [confirm, setConfirm] = useState(false);
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
   const busy = !!usePending(reconnectPendingKey(host.id));
+  const signingOut = !!usePending(signOutPendingKey(host.id));
   const queue = useSignInQueue();
   const now = useNow(true);
   const lv = linkView(host.link, host.authPrompt, now);
@@ -56,7 +58,12 @@ export function HostDetail({ host }: { host: HostView }) {
     card = (
       <div className="gate" data-testid="host-held"><div className="gate-h"><Icon name="key" size="sm" />Needs you to sign in</div>
         <div className="small">{droppedWords(host.name, st.cause)} {NO_RETRY_WORDS}</div>
-        <div className="small faint">Every attempt asks you for something (a password, a code or an approval on your phone), so it waits for your click.</div>
+        {host.sharedConnection
+          ? <>
+              <div className="small" data-testid="held-detail">{st.detail.replace(/[.\s]+$/, "").replace(/^./, (c) => c.toUpperCase())}.</div>
+              <div className="small faint">Signing in asks you for something (a password, a code or an approval on your phone), so it waits for your click. Once you have signed in, Marsad keeps the connection open and reconnects without asking until you sign out or the connection ends.</div>
+            </>
+          : <div className="small faint">Every attempt asks you for something (a password, a code or an approval on your phone), so it waits for your click.</div>}
         <div className="acts"><SignInButton host={host} /></div></div>
     );
   } else if (st?.state === "auth_needed") {
@@ -93,7 +100,8 @@ export function HostDetail({ host }: { host: HostView }) {
           {k?.kind === "ssh" ? <><dt>Key</dt><dd className="mono"><Wrap text={k.identity_file ?? "ssh default"} /></dd>{k.options?.length ? <><dt>Options</dt><dd className="mono"><Wrap text={k.options.join(" ")} /></dd></> : null}</> : null}
           <dt>Platform</dt><dd className="mono">{entry?.platform?.target ?? "not probed yet"}</dd>
           <dt>Status</dt><dd>{linkSub(host.link, now)}</dd>
-          <dt>Sign-in</dt><dd>{host.interactiveAuth || host.authPrompt ? "Interactive (asks each time)" : host.local ? "Not needed" : "Key or agent"}</dd>
+          <dt>Sign-in</dt><dd>{host.interactiveAuth || host.authPrompt ? (host.sharedConnection ? "Interactive (asks when it signs in; the connection then stays open)" : "Interactive (asks each time)") : host.local ? "Not needed" : "Key or agent"}</dd>
+          {host.sharedConnection && lv.connected ? <><dt>Connection</dt><dd>Kept open and shared, until you sign out or it ends</dd></> : null}
         </dl>
       </div>
       <div>
@@ -116,7 +124,15 @@ export function HostDetail({ host }: { host: HostView }) {
         </div>
       </div>
       {developer ? <ErrorBoundary variant="item" name="host_diagnostics" what="the diagnostics" resetKey={host.id}><HostDiagnostics host={host} /></ErrorBoundary> : null}
-      {!host.local ? <div className="hd-foot"><Button size="sm" variant="ghost" icon="x" blocked={reach} onClick={() => setConfirm(true)}>Remove host</Button></div> : null}
+      {!host.local ? (
+        <div className="hd-foot">
+          {host.sharedConnection && lv.connected ? <Button size="sm" variant="ghost" icon="key" pending={signingOut} blocked={reach} onClick={() => setConfirmSignOut(true)}>Sign out</Button> : null}
+          <Button size="sm" variant="ghost" icon="x" blocked={reach} onClick={() => setConfirm(true)}>Remove host</Button>
+        </div>
+      ) : null}
+      <ConfirmDialog open={confirmSignOut} title={`Sign out of ${host.name}?`} confirmLabel="Sign out" onConfirm={() => { setConfirmSignOut(false); void actions.signOutHost(host.id, host.name); }} onClose={() => setConfirmSignOut(false)}>
+        <p>Marsad closes the connection it keeps open to {host.name}. Sessions already running there keep running, and Marsad will not reconnect until you sign in again.</p>
+      </ConfirmDialog>
       <ConfirmDialog open={confirm} title={`Remove ${host.name}?`} confirmLabel="Remove host" danger onConfirm={() => void remove()} onClose={() => setConfirm(false)}>
         <p>Marsad stops connecting to {host.name}. Sessions already running there keep running; you can add the host again later.</p>
       </ConfirmDialog>

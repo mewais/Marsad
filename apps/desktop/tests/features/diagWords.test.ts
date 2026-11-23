@@ -191,6 +191,11 @@ const RECORDS: Record<string, [Record<string, unknown>, string]> = {
   "boot.ok": [{ host: "hz", n: 1, ms: 38 }, "The helper started on the host in 38 ms"],
   "boot.hello": [{ host: "hz", n: 1, build: "0.7.3", host_id_matches: false, machine: "m-1", ms: 44 }, "The helper answered (build 0.7.3) in 44 ms, but under another host id, machine m-1"],
   "boot.failed": [{ host: "gpu", n: 1, stage: "hello", kind: "unreachable", exit: 255, stderr: "ssh: connect to host gpu port 22: Connection timed out", error: { code: "unreachable", text: "could not reach the host" } }, "Bootstrap failed at hello (unreachable), exit code 255 — ssh: connect to host gpu port 22: Connection timed out — unreachable: could not reach the host"],
+  "ssh.master_check": [{ host: "gpu", n: 3, state: "stale", ms: 4 }, "Looked for the shared ssh connection of gpu: none is open (its socket was left behind and removed) (attempt 3)"],
+  "ssh.signin_started": [{ host: "gpu", n: 3, armed: true }, "Signing in to gpu: opening its shared ssh connection (attempt 3, you asked for it)"],
+  "ssh.signin_done": [{ host: "gpu", n: 3, asked: 1, ms: 5200 }, "The shared ssh connection of gpu is open after 5.2 s (1 prompt)"],
+  "ssh.master_ended": [{ host: "gpu", reason: "Timeout, server 10.0.4.21 not responding." }, "The shared ssh connection of gpu has ended — Timeout, server 10.0.4.21 not responding."],
+  "ssh.master_exit": [{ host: "gpu", why: "signed_out", outcome: "ended", exit: 0 }, "Ended the shared ssh connection of gpu (you signed out): it ended, exit code 0"],
   "boot.twin": [{ host: "a", n: 1, twin: "b" }, "This host reaches the same machine as b"],
   "boot.id_mismatch": [{ host: "a", n: 1, theirs: "z" }, "The machine answered as host z, not as this one"],
   "boot.build_mismatch": [{ host: "pi", expected: "0.7.3", found: "0.7.1" }, "The helper is build 0.7.1; 0.7.3 is expected"],
@@ -267,7 +272,7 @@ describe("log record words", () => {
     expect(prompt("windows_shell")).toContain("the host was connected again as a Windows machine");
     expect(prompt("something_new")).toContain("a second approval within the same sign-in: something_new");
     const learned = (what: string) => recordWords(rec("hosts.learned", { host: "gpu", what }));
-    expect(learned("interactive")).toBe("Learned the host's sign-in: it asks you for something each time, so Marsad does not reconnect it on its own");
+    expect(learned("interactive")).toBe("Learned the host's sign-in: it asks you for something, so Marsad does not reconnect it on its own unless its shared connection is still open");
     expect(learned("not_interactive")).toBe("Learned the host's sign-in: it no longer asks you for anything, so Marsad reconnects it on its own again");
     expect(learned("machine")).toBe("Learned the host's machine identity");
     expect(learned("brand_new")).toBe("Learned the host's brand_new");

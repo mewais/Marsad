@@ -18,6 +18,7 @@ export interface HubCore {
   removeHost(id: string): void;
   updateHost(entry: HostEntry): HostEntry;
   reconnect(id: string): void;
+  signOut(id: string): void;
   answerAuth(a: AuthAnswer): void;
   cancelAuth(a: AuthCancel): void;
   createSession(host: string, snap: SessionSnapshot, firstPrompt: string | null): void;
@@ -55,7 +56,7 @@ export class FixtureHub {
         if (!d.name.trim()) throw err("invalid_params", "A host needs a name.");
         const id = d.id ?? d.name.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
         if (c.hostDefs().some((h) => h.entry.id === id)) throw err("invalid_params", `A host with id “${id}” already exists.`);
-        const entry: HostEntry = { id, name: d.name, kind: d.kind, platform: null, created_at_ms: c.now(), interactive_auth: false, local_files: d.kind.kind === "wsl" };
+        const entry: HostEntry = { id, name: d.name, kind: d.kind, platform: null, created_at_ms: c.now(), interactive_auth: false, local_files: d.kind.kind === "wsl", shared_connection: d.kind.kind === "ssh" };
         c.addHost({ entry, link: { state: "connecting" }, drivers: { claude: "2.1.4", codex: "0.58.0" } });
         return entry;
       }
@@ -66,6 +67,9 @@ export class FixtureHub {
         return {};
       case M.HOSTS_RECONNECT:
         c.reconnect((p as HostRef).id);
+        return {};
+      case M.HOSTS_SIGNOUT:
+        c.signOut((p as HostRef).id);
         return {};
       case M.HOSTS_AUTH_ANSWER:
         c.answerAuth(p as AuthAnswer);

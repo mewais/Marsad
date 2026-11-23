@@ -1,5 +1,8 @@
 //! Connecting to and provisioning a host over ONE command per attempt (ARCHITECTURE §4.1,
-//! with the owner's interactive-auth rule).
+//! with the owner's interactive-auth rule). An ssh host on a Linux or macOS hub has a shared
+//! connection ([`super::master`]): that command is the link step, riding the connection, and
+//! the attempt first looks for it and, if none is open and signing in is allowed, opens it in
+//! a sign-in step where every prompt happens ([`BootstrapConnector::shared_connection`]).
 //!
 //! [`BootstrapConnector`] (the hub's `LinkConnector`) runs `<transport> <bootstrap>` (see
 //! [`super::transport`]) with `SSH_ASKPASS` pointing at this binary, reads the bootstrap's
@@ -13,7 +16,9 @@
 //! on the connector's own account: the link's supervisor asks [`BootstrapConnector::hold`]
 //! before every attempt it would start by itself, and a host that needs the user and has not
 //! been asked for (`hosts.reconnect` arms the next attempt) is parked in `auth_needed` instead,
-//! so a dropped link, a hub start or a retry never fires a prompt or a push on its own. The
+//! so a dropped link, a hub start or a retry never fires a prompt or a push on its own, unless
+//! the host's shared connection is still open: then nothing needs asking and the link
+//! reconnects by itself. The
 //! click is spent when an attempt asks the user something or connects, not when it starts: an
 //! attempt that fails before the host answered (no network) asked nobody anything, and the link
 //! goes on trying, armed. The fact is learned and un-learned here, once per successful sign-in
@@ -41,7 +46,7 @@
 //! saying what to do.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -62,8 +67,10 @@ use wasit_control::{
 use wasit_diag::{Bytes, Code, Ident, Ms};
 
 use super::auth::{Prompts, SignInAttempt};
+use super::master::{Check, Masters};
 use super::transport::{
-    bootstrap_argv, helper_target, native_windows_sign, platform_from, triple_platform, RemoteShell,
+    bootstrap_argv_via, helper_target, native_windows_sign, platform_from, triple_platform,
+    RemoteShell, SshRoute,
 };
 use crate::diag::{self, emit};
 
@@ -119,6 +126,8 @@ pub struct BootstrapConnector {
     pub learned: mpsc::Sender<Learned>,
     pub prompts: Prompts,
     pub restarts: Restarts,
+    /// The shared ssh connections of ssh hosts (a Windows hub has none, see [`Masters`]).
+    pub masters: Masters,
     pub own: VersionInfo,
     pub bin_dir: Option<PathBuf>,
     /// The hub's endpoint path (for the askpass helper).
@@ -395,6 +404,7 @@ impl Trail {
         self.attempt.reached(match stage {
             BootStage::Prepare => "preparing the connection",
             BootStage::Spawn => "starting the transport command",
+            BootStage::SignIn => "signing in to the host (opening the shared ssh connection)",
             BootStage::Report => "waiting for the host's bootstrap report",
             BootStage::Platform => "checking the host's platform",
             BootStage::Helper => "locating the Marsad helper to install",
@@ -823,28 +833,72 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-/// What the supervisor is told when a link must wait for the user (`auth_needed`, `held`).
+/// What the supervisor is told when a link must wait for the user (`auth_needed`, `held`), for
+/// a host reached by one command per attempt (a Windows hub).
 const HELD_DETAIL: &str =
     "this host asks you to sign in each time it connects: connect it to sign in";
+
+/// The same, for a host with a shared connection, when none is open and nothing says why.
+const HELD_NO_MASTER: &str =
+    "this host asks you to sign in and no shared connection to it is open: connect it to sign in";
+
+/// The user signed out of the host's shared connection.
+const SIGNED_OUT_DETAIL: &str = "you signed out of this host: connect it to sign in again";
+
+impl BootstrapConnector {
+    /// Why `entry` waits for the user, in words.
+    fn held_detail(&self, entry: &HostEntry) -> String {
+        if !Masters::applies(entry) {
+            return HELD_DETAIL.to_owned();
+        }
+        if self.masters.signed_out(&entry.id) {
+            return SIGNED_OUT_DETAIL.to_owned();
+        }
+        match self.masters.ended_words(&entry.id) {
+            Some(ended) => format!("{ended}: connect to sign in again"),
+            None => HELD_NO_MASTER.to_owned(),
+        }
+    }
+}
 
 #[async_trait]
 impl LinkConnector for BootstrapConnector {
     /// The one place that decides a link must not be tried on its own: the host needs the user at
-    /// login ([`HostEntry::interactive_auth`]) and the user has not asked for this attempt.
-    fn hold(&self, spec: &HostSpec) -> Option<String> {
-        let needs_user = self
+    /// login ([`HostEntry::interactive_auth`]) or they signed out of it, no shared connection is
+    /// open that would carry the attempt without a sign-in, and the user has not asked for this
+    /// attempt. For a host with a shared connection that is asked of the connection itself (a
+    /// local `ssh -O check`): a link that dropped while its connection stayed open reconnects on
+    /// its own, whatever the host needs at login.
+    async fn hold(&self, spec: &HostSpec) -> Option<String> {
+        let entry = self
             .entries
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .get(&spec.id)
-            .is_some_and(|e| e.interactive_auth);
-        if !needs_user || self.prompts.armed(&spec.id) {
+            .cloned()?;
+        if self.prompts.armed(&spec.id) {
+            return None;
+        }
+        if Masters::applies(&entry) {
+            if self.masters.signed_out(&spec.id) {
+                // The user's own word: no look at the connection is needed.
+            } else {
+                // A path that cannot be made is the attempt's to report.
+                let control = self.masters.path(&entry).ok()?;
+                if self.masters.check(&entry, &control, None).await == Check::Alive {
+                    return None;
+                }
+                if !entry.interactive_auth {
+                    return None;
+                }
+            }
+        } else if !entry.interactive_auth {
             return None;
         }
         emit(MarsadEvent::HostsHeld {
             host: Ident::new(spec.id.as_str()),
         });
-        Some(HELD_DETAIL.to_owned())
+        Some(self.held_detail(&entry))
     }
 
     async fn connect(
@@ -888,6 +942,17 @@ impl BootstrapConnector {
         // say so.
         let repeat = locked(&self.restarts).get(&host).copied();
         let signin = self.prompts.begin_attempt(&host, repeat);
+        // An ssh host on a Linux or macOS hub has one shared connection: opened here, once,
+        // with every prompt of the attempt (the sign-in step); every command after it rides it
+        // and can never ask. Anywhere else the one command below does it all.
+        let control = if Masters::applies(&entry) {
+            Some(
+                self.shared_connection(spec, &entry, &exe, trail, &signin)
+                    .await?,
+            )
+        } else {
+            None
+        };
         // A host never connected is tried with `sh`. One that turns out to be native Windows
         // is asked again at once with PowerShell (its platform is then learned): its `sh` is a
         // Windows port that reports MINGW/MSYS/CYGWIN, or the remote command ran but printed no
@@ -896,23 +961,16 @@ impl BootstrapConnector {
         // keeps the POSIX attempt's error).
         let mut posix_failed: Option<ConnectError> = None;
         let (mut io, child, report) = loop {
-            let argv = bootstrap_argv(&entry, shell)
+            let route = match &control {
+                Some(c) => SshRoute::Link { control: &c.0 },
+                None => SshRoute::Plain,
+            };
+            let argv = bootstrap_argv_via(&entry, shell, route)
                 .ok_or_else(|| ConnectError::Spawn("the local host has no link".into()))
                 .map_err(at(BootStage::Prepare))?;
             // The transport's spawn and exit are recorded under this link and attempt.
             let mut cmd = CommandSpec::new(argv).traced(spec.diag_link(), &trail.attempt);
-            cmd.env = vec![
-                (
-                    "SSH_ASKPASS".into(),
-                    wasit_process::plain_path(&exe).display().to_string(),
-                ),
-                ("SSH_ASKPASS_REQUIRE".into(), "force".into()),
-                ("DISPLAY".into(), ":0".into()),
-                (ASKPASS_HOST_ENV.into(), host.to_string()),
-                (ASKPASS_ATTEMPT_ENV.into(), signin.tag().to_string()),
-                (ASKPASS_SOCKET_ENV.into(), self.socket.display().to_string()),
-                (ASKPASS_DIAG_ENV.into(), self.diag_dir.display().to_string()),
-            ];
+            cmd.env = self.askpass_env(&exe, &host, &signin);
             let (mut io, child) = CommandTransport::spawn(&cmd).map_err(at(BootStage::Spawn))?;
             let child = Arc::new(child);
             // Only a host that never connected (once connected, its platform is known).
@@ -928,8 +986,11 @@ impl BootstrapConnector {
                     if first_posix && native_windows_sign(&report.os) {
                         trail.windows_retry(WindowsRetryWhy::MingwSh);
                         shell = RemoteShell::PowerShell;
-                        // Another connection: the user may be asked again, and is told why.
-                        signin.again(SignInRepeat::WindowsShell);
+                        // Another connection: the user may be asked again, and is told why
+                        // (not over a shared connection: it is the same one).
+                        if control.is_none() {
+                            signin.again(SignInRepeat::WindowsShell);
+                        }
                         continue;
                     }
                     break (io, child, report);
@@ -946,11 +1007,38 @@ impl BootstrapConnector {
                             why,
                         )
                         .await;
+                    // A link step that was refused without being asked anything found no
+                    // connection to ride: say so (the host needs the user to open one again).
+                    let err = match (&control, err) {
+                        (
+                            Some((path, _)),
+                            ConnectError::Command {
+                                kind: CommandFailureKind::AuthNeeded,
+                                exit_code,
+                                stderr,
+                            },
+                        ) => {
+                            // The connection is looked at again: if it ended, why is told.
+                            self.masters.check(&entry, path, Some(trail.n())).await;
+                            let ended = self.masters.ended_words(&host).unwrap_or_else(|| {
+                                "the shared connection to this host ended before this attempt could use it"
+                                    .to_owned()
+                            });
+                            cmd_err(
+                                CommandFailureKind::AuthNeeded,
+                                exit_code,
+                                format!("{ended}; ssh said: {stderr}"),
+                            )
+                        }
+                        (_, err) => err,
+                    };
                     if first_posix && remote_command_ran(&err) {
                         trail.windows_retry(WindowsRetryWhy::NoReport);
                         posix_failed = Some(err);
                         shell = RemoteShell::PowerShell;
-                        signin.again(SignInRepeat::WindowsShell);
+                        if control.is_none() {
+                            signin.again(SignInRepeat::WindowsShell);
+                        }
                         continue;
                     }
                     return Err(Failure {
@@ -973,17 +1061,12 @@ impl BootstrapConnector {
         };
         // The host answered and the sign-in worked. Whether it needs the user at login is a
         // fact of this sign-in: what it asked, nothing more (a host-key confirmation is not the
-        // user's at login). Learned when it is true, un-learned when it stopped being true.
-        match (signin.needed_user(), entry.interactive_auth) {
-            (true, false) => {
-                self.learn(Learned::Interactive { host: host.clone() })
-                    .await
-            }
-            (false, true) => {
-                self.learn(Learned::NotInteractive { host: host.clone() })
-                    .await
-            }
-            _ => {}
+        // user's at login). Learned when it is true, un-learned when it stopped being true. With
+        // a shared connection the sign-in was the step that opened it, and was learned from
+        // there; an attempt that only rode a connection learns nothing (nobody was asked, and
+        // that says nothing about the next sign-in).
+        if control.is_none() {
+            self.learn_login(&entry, &signin).await;
         }
         trail.reach(BootStage::Platform);
         let platform = platform_from(&report.os, &report.arch).ok_or_else(|| Failure {
@@ -1162,8 +1245,12 @@ impl BootstrapConnector {
                 theirs: Ident::new(theirs.as_str()),
             });
             locked(&self.restarts).insert(host.clone(), SignInRepeat::IdRestart);
-            // The user's sign-in is not over: the restart attempt is part of it.
-            self.prompts.arm(&host);
+            // The user's sign-in is not over: the restart attempt is part of it. (A shared
+            // connection carries the restart attempt without asking anything: nothing is armed,
+            // so that one that has ended meanwhile cannot make this attempt ask unrequested.)
+            if control.is_none() {
+                self.prompts.arm(&host);
+            }
             return Err(Failure {
                 stage: BootStage::Check,
                 error: ConnectError::Protocol(format!(
@@ -1179,10 +1266,197 @@ impl BootstrapConnector {
     }
 }
 
+impl BootstrapConnector {
+    /// The environment of an ssh command that may ask the user: `SSH_ASKPASS` is this binary.
+    fn askpass_env(
+        &self,
+        exe: &Path,
+        host: &HostId,
+        signin: &SignInAttempt,
+    ) -> Vec<(String, String)> {
+        vec![
+            (
+                "SSH_ASKPASS".into(),
+                wasit_process::plain_path(exe).display().to_string(),
+            ),
+            ("SSH_ASKPASS_REQUIRE".into(), "force".into()),
+            ("DISPLAY".into(), ":0".into()),
+            (ASKPASS_HOST_ENV.into(), host.to_string()),
+            (ASKPASS_ATTEMPT_ENV.into(), signin.tag().to_string()),
+            (ASKPASS_SOCKET_ENV.into(), self.socket.display().to_string()),
+            (ASKPASS_DIAG_ENV.into(), self.diag_dir.display().to_string()),
+        ]
+    }
+
+    /// What this sign-in asked decides whether the host needs the user at login: learned when it
+    /// is true, un-learned when it stopped being true.
+    async fn learn_login(&self, entry: &HostEntry, signin: &SignInAttempt) {
+        match (signin.needed_user(), entry.interactive_auth) {
+            (true, false) => {
+                self.learn(Learned::Interactive {
+                    host: entry.id.clone(),
+                })
+                .await
+            }
+            (false, true) => {
+                self.learn(Learned::NotInteractive {
+                    host: entry.id.clone(),
+                })
+                .await
+            }
+            _ => {}
+        }
+    }
+
+    /// The shared connection of `entry` for this attempt, with the control socket path and
+    /// whether this attempt opened it:
+    ///
+    /// 1. `ssh -O check` on the host's socket (local, no network).
+    /// 2. If it is open, that is all: the attempt rides it.
+    /// 3. If not, and the host needs the user at login (or they signed out) and they have not
+    ///    asked for this attempt, the attempt fails as "needs the user" without starting
+    ///    anything, whatever happened between the supervisor's question ([`hold`]) and now.
+    /// 4. Otherwise the sign-in step: `ssh -M -N -f` with the askpass helper, where every prompt
+    ///    of the attempt happens. It ends, with status 0, when ssh has authenticated and left
+    ///    the connection open in the background: that exit is the signal (nothing is polled or
+    ///    waited for). A failure is classified from its exit status and what ssh said, as the
+    ///    one command of a host without a shared connection is. Its human time is the prompts'
+    ///    (each bounded by the hub's prompt timeout) and its machine time ssh's own
+    ///    `ConnectTimeout`; the attempt as a whole is bounded by the supervisor, as ever.
+    ///
+    /// [`hold`]: LinkConnector::hold
+    async fn shared_connection(
+        &self,
+        spec: &HostSpec,
+        entry: &HostEntry,
+        exe: &Path,
+        trail: &Trail,
+        signin: &SignInAttempt,
+    ) -> Result<(PathBuf, bool), Failure> {
+        let host = &entry.id;
+        let control = self
+            .masters
+            .path(entry)
+            .map_err(ConnectError::Spawn)
+            .map_err(at(BootStage::Prepare))?;
+        self.masters
+            .prepare()
+            .await
+            .map_err(|e| {
+                ConnectError::Spawn(format!(
+                    "cannot prepare the directory of the shared ssh connections: {e}"
+                ))
+            })
+            .map_err(at(BootStage::Prepare))?;
+        match self.masters.check(entry, &control, Some(trail.n())).await {
+            Check::Alive => return Ok((control, false)),
+            Check::Unanswered(words) => {
+                return Err(Failure {
+                    stage: BootStage::Prepare,
+                    error: cmd_err(
+                        CommandFailureKind::Other,
+                        None,
+                        format!("the shared connection to this host did not answer: {words}"),
+                    ),
+                })
+            }
+            Check::Absent => {}
+        }
+        let armed = self.prompts.armed(host);
+        if !armed && (entry.interactive_auth || self.masters.signed_out(host)) {
+            return Err(Failure {
+                stage: BootStage::Prepare,
+                error: cmd_err(
+                    CommandFailureKind::AuthNeeded,
+                    None,
+                    self.held_detail(entry),
+                ),
+            });
+        }
+
+        trail.reach(BootStage::SignIn);
+        self.masters.begin_signin(entry, &control).await;
+        emit(MarsadEvent::SshSignInStarted {
+            host: trail.host.clone(),
+            n: trail.n(),
+            armed,
+        });
+        let began = Instant::now();
+        let argv = bootstrap_argv_via(
+            entry,
+            RemoteShell::Posix,
+            SshRoute::SignIn { control: &control },
+        )
+        .ok_or_else(|| ConnectError::Spawn("the local host has no link".into()))
+        .map_err(at(BootStage::Prepare))?;
+        let mut cmd = CommandSpec::new(argv).traced(spec.diag_link(), &trail.attempt);
+        cmd.env = self.askpass_env(exe, host, signin);
+        let (_io, child) = CommandTransport::spawn(&cmd).map_err(at(BootStage::Spawn))?;
+        let exit = child.wait_exit_unbounded().await;
+        let code = exit.and_then(|e| e.code);
+        if code != Some(0) {
+            // With `-E` ssh's own messages go to the connection's log, not to its stderr.
+            let log = self.masters.signin_failure_text(&control).await;
+            let said = child.stderr_tail();
+            let text = [said.as_str(), log.as_str()]
+                .iter()
+                .filter(|t| !t.is_empty())
+                .copied()
+                .collect::<Vec<_>>()
+                .join("\n");
+            let mut kind = classify_command_failure(code, &text);
+            if signin.asked() > 0 && kind == CommandFailureKind::Other {
+                // A cancelled or timed-out prompt makes ssh give up without a recognisable
+                // message.
+                kind = CommandFailureKind::AuthNeeded;
+            }
+            let detail = if text.is_empty() {
+                format!("signing in to the host failed (exit {code:?})")
+            } else {
+                text
+            };
+            return Err(Failure {
+                stage: BootStage::SignIn,
+                error: cmd_err(kind, code, detail),
+            });
+        }
+        // The exit says ssh authenticated; ask the socket whether it is the connection that
+        // stayed (ssh goes on without sharing when it cannot listen on the socket).
+        if self.masters.check(entry, &control, Some(trail.n())).await != Check::Alive {
+            let why = self.masters.signin_failure_text(&control).await;
+            return Err(Failure {
+                stage: BootStage::SignIn,
+                error: cmd_err(
+                    CommandFailureKind::Other,
+                    code,
+                    if why.is_empty() {
+                        "ssh signed in but left no shared connection open".to_owned()
+                    } else {
+                        format!("ssh signed in but left no shared connection open: {why}")
+                    },
+                ),
+            });
+        }
+        self.masters.signed_in(host);
+        emit(MarsadEvent::SshSignInDone {
+            host: trail.host.clone(),
+            n: trail.n(),
+            asked: signin.asked(),
+            ms: diag::ms(began),
+        });
+        // The host answered and the user's sign-in worked: what it asked is learned now, and
+        // the click that allowed it is spent.
+        self.learn_login(entry, signin).await;
+        self.prompts.disarm(host);
+        Ok((control, true))
+    }
+}
+
 /// Handles a running daemon of another build (seen in its hello): the next attempt restarts it.
 pub struct AgentProvisioner {
     pub restarts: Restarts,
     pub prompts: Prompts,
+    pub entries: Entries,
 }
 
 #[async_trait]
@@ -1200,8 +1474,18 @@ impl Provisioner for AgentProvisioner {
             });
         }
         locked(&self.restarts).insert(host.id.clone(), SignInRepeat::HelperRestart);
-        // The user just signed in for this link; the restart attempt is part of that.
-        self.prompts.arm(&host.id);
+        // The user just signed in for this link; the restart attempt is part of that. Over a
+        // shared connection it rides that connection and asks nothing, so nothing is armed
+        // (a connection that has ended meanwhile must not make it ask unrequested).
+        let shared = self
+            .entries
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&host.id)
+            .is_some_and(Masters::applies);
+        if !shared {
+            self.prompts.arm(&host.id);
+        }
         Ok(())
     }
 }

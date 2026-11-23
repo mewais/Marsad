@@ -110,6 +110,8 @@ export interface HostView {
   local: boolean;
   /** Files of this host are directly reachable from this machine (decided by the hub). */
   localFiles: boolean;
+  /** The hub keeps one authenticated ssh connection open to this host (Linux and macOS hubs): it can be signed out of. Decided by the hub, never by the app's own OS. */
+  sharedConnection: boolean;
   /** WSL distro name, for path translation. */
   distro: string | null;
   kind: HostEntry["kind"];
@@ -134,6 +136,7 @@ export function hostView(h: HostState, hub: HubLink, live: boolean): HostView {
     name: h.entry.name,
     local: k.kind === "local",
     localFiles: h.entry.local_files,
+    sharedConnection: h.entry.shared_connection,
     distro: k.kind === "wsl" ? k.distro : null,
     kind: k,
     os: h.entry.platform?.os,
