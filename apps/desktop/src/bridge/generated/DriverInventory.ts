@@ -3,6 +3,7 @@ import type { ConfigItem } from "./ConfigItem";
 import type { DriverCapabilities } from "./DriverCapabilities";
 import type { DriverId } from "./DriverId";
 import type { ModelInfo } from "./ModelInfo";
+import type { NotListed } from "./NotListed";
 import type { ProbeReport } from "./ProbeReport";
 import type { ResumableSession } from "./ResumableSession";
 import type { SessionMode } from "./SessionMode";
@@ -27,6 +28,13 @@ warning?: string | null, binary_path?: string | null,
  * Why the driver is unusable here (e.g. the binary was not found).
  */
 error?: string | null, version?: string | null, models: Array<ModelInfo>, modes: Array<SessionMode>, sessions: Array<ResumableSession>, 
+/**
+ * How many items the lists above leave out: more than their maximum
+ * ([`wasit_core::limits`]), or than fit in an inventory's size budget
+ * ([`crate::discovery::ENTRY_BYTES`]). `None` = every list is whole. Text that was cut
+ * ends with [`wasit_core::bounds::CUT`].
+ */
+not_listed?: NotListed | null, 
 /**
  * What the CLI itself has configured on this host for `project` (MCP servers, skills,
  * plugins, commands, agents), each with its source.

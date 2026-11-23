@@ -303,7 +303,7 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
               ) : null}
               <div className="field">
                 <SearchField placeholder="Search title or first prompt" aria-label="Search sessions" value={q} onChange={(e) => setQ(e.target.value)} />
-                <span className="hint">{inv ? `${inv.sessions.length} ${inv.display_name} session${inv.sessions.length === 1 ? "" : "s"} in ${f.cwd || "this folder"} on ${host?.name}, including ones started in a terminal` : ""}</span>
+                <span className="hint">{inv ? `${inv.sessions.length} ${inv.display_name} session${inv.sessions.length === 1 ? "" : "s"} in ${f.cwd || "this folder"} on ${host?.name}, including ones started in a terminal${inv.not_listed?.sessions ? `; ${inv.not_listed.sessions} older ones are not listed` : ""}` : ""}</span>
                 {loading && !inv?.sessions.length ? <div className="faint">Looking for sessions…</div> : <ResumeList rows={rows} value={f.latest ? "" : f.resumeId} onChange={(resumeId) => set({ resumeId, latest: false })} />}
                 {owner ? (
                   <div className="recent owned" role="status" data-testid="ns-owner">

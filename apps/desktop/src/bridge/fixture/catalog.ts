@@ -172,6 +172,8 @@ export function inventoryFor(host: FixtureHost, project: string | null, now: num
       version: version ?? null,
       models: version ? d.models : [], modes: version ? d.modes : [],
       sessions: version && project ? resumable(d.id, project, now) : [],
+      // A folder with a long history: the engine lists the newest and says how many it left out.
+      ...(version && project && d.id === "claude" && /\/archive\/?$/.test(project) ? { not_listed: { sessions: 340, config: 0, models: 0, modes: 0 } } : {}),
       config: version ? d.config : [], project, refreshing: false,
       probes: version ? [{ kind: "version", ok: true, duration_ms: 41 }, { kind: "models", ok: true, duration_ms: 230 }, { kind: "sessions", ok: true, duration_ms: 88 }] : [{ kind: "version", ok: false, error: "not installed", duration_ms: 3 }],
       refreshed_at_ms: now - 4 * 60_000,
