@@ -8,6 +8,7 @@ import type { NoticeCode } from "./NoticeCode";
 import type { Phase } from "./Phase";
 import type { PhaseCause } from "./PhaseCause";
 import type { StartResume } from "./StartResume";
+import type { TraceId } from "./TraceId";
 
 /**
  * One session event. `cursor = journal_seq << 16 | index` (index within the events derived
@@ -27,8 +28,17 @@ resume_id?: string | null, model?: string | null, mode?: string | null,
 /**
  * The first prompt journaled with the start (its `input` event follows).
  */
-first_input?: InputId | null, } | { "kind": "agent", event: AgentEvent, } | { "kind": "input", 
+first_input?: InputId | null, 
+/**
+ * The trace id of the request that started the session, when it had one.
+ */
+trace?: TraceId | null, } | { "kind": "agent", event: AgentEvent, } | { "kind": "input", 
 /**
  * Its identity: the journal seq of the note that carried it.
  */
-input: InputId, command: Command, status: CommandStatus, } | { "kind": "written", input: InputId, } | { "kind": "write_failed", input?: InputId | null, error: string, } | { "kind": "stderr", text: string, } | { "kind": "phase", phase: Phase, cause: PhaseCause, } | { "kind": "anomaly", anomaly: AnomalyKind, first: string, } | { "kind": "exited", code?: number | null, signal?: number | null, } | { "kind": "lost", reason: string, } | { "kind": "notice", message: string, code: NoticeCode, });
+input: InputId, command: Command, status: CommandStatus, 
+/**
+ * The trace id of the request that carried the command, when it had one (a first
+ * prompt takes the one of the request that started the session).
+ */
+trace?: TraceId | null, } | { "kind": "written", input: InputId, } | { "kind": "write_failed", input?: InputId | null, error: string, } | { "kind": "stderr", text: string, } | { "kind": "phase", phase: Phase, cause: PhaseCause, } | { "kind": "anomaly", anomaly: AnomalyKind, first: string, } | { "kind": "exited", code?: number | null, signal?: number | null, } | { "kind": "lost", reason: string, } | { "kind": "notice", message: string, code: NoticeCode, });

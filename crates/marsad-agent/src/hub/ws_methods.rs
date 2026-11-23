@@ -465,6 +465,7 @@ impl HubServices {
             nodes,
             edges,
             limits: ws.limits.clone(),
+            spawn: ws.spawn.clone(),
             layout,
             created_at_ms: now_ms(),
         };
@@ -481,6 +482,7 @@ impl HubServices {
         ws.description = t.description;
         ws.edges = t.edges;
         ws.limits = t.limits;
+        ws.spawn = t.spawn;
         ws.layout = t.layout;
         ws.template = Some(t.id);
         // Every node starts fresh, whatever the stored template says (older templates may

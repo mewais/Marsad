@@ -41,7 +41,7 @@ function seedDocs(now: number): Workstream[] {
 }
 
 function seedTemplates(now: number): WorkstreamTemplate[] {
-  const t = (id: string, name: string, description: string, nodes: WorkstreamNode[], edges: WorkstreamTemplate["edges"]): WorkstreamTemplate => ({ id, schema: 1, name, description, nodes, edges, limits, layout: {}, created_at_ms: now - 9 * 86_400_000 });
+  const t = (id: string, name: string, description: string, nodes: WorkstreamNode[], edges: WorkstreamTemplate["edges"]): WorkstreamTemplate => ({ id, schema: 1, name, description, nodes, edges, limits, spawn: SPAWN_DEFAULT, layout: {}, created_at_ms: now - 9 * 86_400_000 });
   const l = (driver: string, host = "x1") => ({ host, driver, cwd: "~/src/project" });
   return [
     t("tpl-orch", "Orchestrator + 2 workers", "1 Claude Code lead, 2 workers on any hosts · ask each time", [node("lead", "lead", "x1", null, l("claude")), node("w1", "worker-1", "hz", null, l("codex", "hz")), node("w2", "worker-2", "hz", null, l("opencode", "hz"))],
@@ -261,7 +261,7 @@ export class FixtureWorkstreams {
       case M.WS_SAVE_TEMPLATE: {
         const r = p as SaveTemplate;
         const w = this.get(r.workstream);
-        const t: WorkstreamTemplate = { id: `tpl-${w.id}-${this.templates.length}`, schema: 1, name: r.name ?? w.name, description: r.description ?? w.description, nodes: w.nodes.map((n) => ({ ...n, session: null })), edges: w.edges, limits: w.limits, layout: w.layout, created_at_ms: now };
+        const t: WorkstreamTemplate = { id: `tpl-${w.id}-${this.templates.length}`, schema: 1, name: r.name ?? w.name, description: r.description ?? w.description, nodes: w.nodes.map((n) => ({ ...n, session: null })), edges: w.edges, limits: w.limits, spawn: SPAWN_DEFAULT, layout: w.layout, created_at_ms: now };
         this.templates.push(t);
         return t;
       }

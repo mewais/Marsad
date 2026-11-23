@@ -333,6 +333,9 @@ pub struct WorkstreamTemplate {
     pub nodes: Vec<WorkstreamNode>,
     pub edges: Vec<WorkstreamEdge>,
     pub limits: Limits,
+    /// Whether and how the agents of a workstream made from it may spawn workers.
+    #[serde(default)]
+    pub spawn: SpawnSettings,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub layout: BTreeMap<String, NodePosition>,
     pub created_at_ms: u64,
@@ -628,4 +631,37 @@ pub enum WorkstreamsEvent {
     Removed {
         id: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Templates stored before they carried spawn settings have no `spawn` key; they must
+    /// still load, with the default settings.
+    #[test]
+    fn template_without_spawn_key_loads_with_default_spawn() {
+        let t = WorkstreamTemplate {
+            id: "old".into(),
+            schema: SCHEMA,
+            name: "Old".into(),
+            description: String::new(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            limits: Limits::default(),
+            spawn: SpawnSettings {
+                policy: SpawnPolicy::Never,
+                ..SpawnSettings::default()
+            },
+            layout: BTreeMap::new(),
+            created_at_ms: 1,
+        };
+        let mut json = serde_json::to_value(&t).unwrap();
+        let obj = json.as_object_mut().unwrap();
+        assert!(obj.remove("spawn").is_some(), "the key is written today");
+
+        let back: WorkstreamTemplate = serde_json::from_value(json).unwrap();
+        assert_eq!(back.spawn, SpawnSettings::default());
+        assert_eq!(back.id, "old");
+    }
 }

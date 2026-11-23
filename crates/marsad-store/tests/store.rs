@@ -164,6 +164,7 @@ async fn second_open_is_refused_and_semantics_hold() {
         nodes: vec![],
         edges: vec![],
         limits: Default::default(),
+        spawn: Default::default(),
         layout: Default::default(),
         created_at_ms: 1,
     };
