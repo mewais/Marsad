@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useEscape } from "./escape";
 
 export interface PopoverTriggerProps {
   "aria-haspopup": "menu" | "listbox" | "dialog";
@@ -42,19 +43,10 @@ export function Popover({ trigger, children, haspopup = "dialog", className = ""
     const onDown = (e: MouseEvent) => {
       if (wrap.current && !wrap.current.contains(e.target as Node)) set(false);
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        close();
-      }
-    };
     document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey, true);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey, true);
-    };
-  }, [open, close, set]);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open, set]);
+  useEscape(open, close);
 
   return (
     <div ref={wrap} className="relwrap">

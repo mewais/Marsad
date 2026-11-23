@@ -32,6 +32,7 @@ export const ICON_PATHS = {
   send: '<path d="M4 12 20 4l-5 16-3-7Z"/><path d="m12 13 8-9"/>',
   slash: '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="m14.5 7-5 10"/>',
   clip: '<path d="m20 11.5-8 8a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"/>',
+  copy: '<rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2"/><path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5"/>',
   dots: '<path d="M6 12h.01M12 12h.01M18 12h.01" stroke-width="3"/>',
   pause: '<path d="M9 6v12M15 6v12"/>',
   stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/>',

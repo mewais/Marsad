@@ -1,7 +1,7 @@
 import { memo, useMemo, useState, type ReactNode } from "react";
 import { Code, Tokens, useHighlighted } from "../highlight/Code";
 import { languageFromName } from "../highlight/lang";
-import { DriverBadge, Icon, StatusPill, type DriverDescriptor } from "../../ui";
+import { CopyButton, DriverBadge, Icon, StatusPill, type DriverDescriptor } from "../../ui";
 import { Markdown } from "./Markdown";
 import { AttachmentsView, PartsView } from "../media/Parts";
 import { useMediaScope } from "../media/Parts";
@@ -50,12 +50,12 @@ function ToolBody({ item }: { item: Extract<Item, { kind: "tool" }> }) {
   if (typeof i?.old_string === "string" && typeof i.new_string === "string") return <EditDiff oldText={i.old_string} newText={i.new_string} file={file} />;
   const text = resultText(item.result);
   // A file a tool writes is shown by its extension; a shell command as shell.
-  const written = typeof i?.content === "string" && file ? <Code text={i.content} name={file} lineNumbers className="tool-code" testId="tool-write" /> : null;
-  const command = typeof i?.command === "string" ? <Code text={i.command} lang="bash" className="tool-code" testId="tool-command" /> : null;
+  const written = typeof i?.content === "string" && file ? <Code text={i.content} name={file} lineNumbers className="tool-code" testId="tool-write" copyable /> : null;
+  const command = typeof i?.command === "string" ? <Code text={i.command} lang="bash" className="tool-code" testId="tool-command" copyable /> : null;
   let result: ReactNode;
   if (!text) result = <div className="tool-b">{item.done ? (item.parts.length ? "" : "(no output)") : "Running…"}</div>;
   else if (looksLikeDiff(text)) result = <DiffText text={text} />;
-  else if (/^\s*[[{]/.test(text) && text.length < 200_000 && isJson(text)) result = <Code text={text} lang="json" className="tool-code" testId="tool-json" />;
+  else if (/^\s*[[{]/.test(text) && text.length < 200_000 && isJson(text)) result = <Code text={text} lang="json" className="tool-code" testId="tool-json" copyable />;
   else result = <div className="tool-b">{text}</div>;
   return <>{command}{written}{result}</>;
 }
@@ -139,9 +139,10 @@ export const TranscriptItem = memo(function TranscriptItem({ item, driver }: { i
     case "user":
       return (
         <div className="msg-user">
-          {item.text}
-          {item.queued ? <span className="faint"> · queued</span> : null}
+          {item.text ? <Markdown text={item.text} variant="user" /> : null}
+          {item.queued ? <div className="faint fs12">queued</div> : null}
           <AttachmentsView attachments={item.attachments} />
+          {item.text ? <CopyButton className="msg-copy" text={item.text} label="Copy prompt" /> : null}
         </div>
       );
     case "assistant":
@@ -150,6 +151,7 @@ export const TranscriptItem = memo(function TranscriptItem({ item, driver }: { i
           <div className="who">{driver ? <DriverBadge driver={driver} compact /> : null} {driver?.displayName ?? "Agent"}</div>
           <Markdown text={item.text} />
           <MentionedFiles text={item.text} />
+          <CopyButton className="msg-copy" text={item.text} label="Copy response" />
         </div>
       );
     case "media":

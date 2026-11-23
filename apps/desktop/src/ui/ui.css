@@ -114,11 +114,20 @@ h1,h2,h3{margin:0;text-wrap:balance}
 .field>label,.field>.lbl{font-size:12px;font-weight:600;color:var(--fg)}
 .field .err{font-size:11.5px;color:var(--failed)}
 .combo{position:relative}
-.combo-list{position:absolute;z-index:45;left:0;right:0;top:calc(100% + 4px);max-height:240px;overflow:auto;background:var(--raised);border:1px solid var(--line-2);border-radius:var(--r3);box-shadow:var(--shadow);padding:4px}
-.combo-opt{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--r2);font-size:12.5px;cursor:pointer}
+/* Option list: as wide as its content (never narrower than the trigger or 220px), capped at 420px.
+   `overflow-wrap:normal` undoes the `anywhere` inherited from .dlg/.side, which would let flex/grid items
+   collapse to one character. Label on one line (ellipsis), description under it (wraps at spaces). */
+.combo-list{position:absolute;z-index:45;left:0;top:calc(100% + 4px);min-width:max(100%,220px);width:max-content;max-width:min(420px,calc(100vw - 32px));max-height:240px;overflow:hidden auto;overflow-wrap:normal;background:var(--raised);border:1px solid var(--line-2);border-radius:var(--r3);box-shadow:var(--shadow);padding:4px}
+.combo-list.up{top:auto;bottom:calc(100% + 4px)}
+.combo-opt{display:grid;grid-template-columns:12px minmax(0,1fr);column-gap:8px;align-items:start;padding:6px 8px;border-radius:var(--r2);font-size:12.5px;cursor:pointer}
+.combo-opt>.i,.combo-opt>.w12{margin-top:3px}
 .combo-opt[aria-selected="true"]{background:var(--accent-bg)}
-.combo-opt .d{color:var(--fg-3);font-size:11.5px;margin-left:auto}
+.combo-t{display:flex;flex-direction:column;gap:1px;min-width:0}
+.combo-l{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.combo-l.mono{font-weight:500}
+.combo-opt .d{color:var(--fg-3);font-size:11.5px;line-height:1.4;overflow-wrap:break-word}
 .selbox{width:100%;text-align:left}
+.selbox>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .check-row{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;cursor:pointer}
 .check-row input{position:absolute;opacity:0;width:0;height:0}
 .check-row input:focus-visible+.cb,.check-row input:focus-visible+.rad-dot{outline:2px solid var(--accent);outline-offset:2px}
@@ -199,3 +208,6 @@ table.t td.r,table.t th.r{text-align:right;font-variant-numeric:tabular-nums}
 .code-block{white-space:pre-wrap;display:block;padding:6px 8px}
 .col10{display:flex;flex-direction:column;gap:10px} .mt3{margin-top:3px}
 .wrap{overflow-wrap:anywhere;white-space:normal;min-width:0}
+/* Copy: icon button states (a check only after the write succeeded, a warning when it failed). */
+.copybtn[data-state="copied"]{color:var(--done)}
+.copybtn[data-state="failed"]{color:var(--failed)}

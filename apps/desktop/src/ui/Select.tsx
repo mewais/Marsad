@@ -1,10 +1,13 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
+import { useEscape } from "./escape";
 
 export interface SelectOption {
   value: string;
   label: string;
   description?: string;
+  /** The label is an identifier (a model id): set in the mono face. */
+  mono?: boolean;
 }
 
 export interface SelectProps {
@@ -27,6 +30,22 @@ export interface SelectProps {
   display?: string;
 }
 
+/** Room between `el` and the edges of everything that clips it (scroll containers, the window). */
+function roomAround(el: HTMLElement): { above: number; below: number } {
+  const r = el.getBoundingClientRect();
+  let top = 0;
+  let bottom = window.innerHeight;
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const o = getComputedStyle(p).overflowY;
+    if (o !== "visible") {
+      const b = p.getBoundingClientRect();
+      top = Math.max(top, b.top);
+      bottom = Math.min(bottom, b.bottom);
+    }
+  }
+  return { above: r.top - top, below: bottom - r.bottom };
+}
+
 /** Select / combobox: button opens a listbox; typing filters; Up/Down/Enter/Esc. */
 export function Select({ label, value, options, onChange, placeholder = "Selectâ€¦", searchable, className = "", up, compact, leading, buttonClass, display }: SelectProps) {
   const [open, setOpen] = useState(false);
@@ -36,12 +55,26 @@ export function Select({ label, value, options, onChange, placeholder = "Selectâ
   const wrap = useRef<HTMLDivElement>(null);
   const btn = useRef<HTMLButtonElement>(null);
   const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  // Opens on the side that has room: a menu near the bottom of a scrolling dialog must not be cut off.
+  const [flip, setFlip] = useState(false);
   const canSearch = searchable ?? options.length > 7;
   const shown = useMemo(() => {
     const n = q.trim().toLowerCase();
     return n ? options.filter((o) => (o.label + " " + (o.description ?? "") + " " + o.value).toLowerCase().includes(n)) : options;
   }, [options, q]);
   const current = options.find((o) => o.value === value);
+  useLayoutEffect(() => {
+    if (!open || !wrap.current || !list.current) return setFlip(false);
+    const { above, below } = roomAround(wrap.current);
+    const need = list.current.offsetHeight + 4;
+    const room = up ? above : below;
+    setFlip(room < need && (up ? below : above) > room);
+  }, [open, up]);
+  useEscape(open, () => {
+    setOpen(false);
+    btn.current?.focus();
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -75,10 +108,6 @@ export function Select({ label, value, options, onChange, placeholder = "Selectâ
     } else if (e.key === "Enter") {
       e.preventDefault();
       choose(shown[active]);
-    } else if (e.key === "Escape") {
-      e.stopPropagation();
-      setOpen(false);
-      btn.current?.focus();
     }
   };
 
@@ -105,7 +134,7 @@ export function Select({ label, value, options, onChange, placeholder = "Selectâ
         <Icon name="chev" size={compact ? "xs" : "sm"} />
       </button>
       {open ? (
-        <div className="combo-list" style={up ? { top: "auto", bottom: "calc(100% + 4px)", minWidth: 220 } : { minWidth: 220 }} onKeyDown={onKey}>
+        <div ref={list} className={`combo-list${!!up !== flip ? " up" : ""}`} onKeyDown={onKey}>
           {canSearch ? (
             <input
               ref={input}
@@ -137,8 +166,10 @@ export function Select({ label, value, options, onChange, placeholder = "Selectâ
                 onClick={() => choose(o)}
               >
                 {o.value === value ? <Icon name="check" size="xs" /> : <span className="w12" />}
-                <span>{o.label}</span>
-                {o.description ? <span className="d">{o.description}</span> : null}
+                <span className="combo-t">
+                  <span className={`combo-l${o.mono ? " mono" : ""}`} title={o.label}>{o.label}</span>
+                  {o.description ? <span className="d">{o.description}</span> : null}
+                </span>
               </div>
             ))}
           </div>

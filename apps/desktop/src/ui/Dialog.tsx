@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Button, IconButton } from "./Button";
+import { useEscape } from "./escape";
 
 const FOCUSABLE =
   'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
@@ -22,18 +23,25 @@ export interface DialogProps {
   headerExtra?: React.ReactNode;
   /** Dialog width in px (max; shrinks with the window). */
   width?: number;
+  /** Esc and a click on the scrim do not close it, and there is no close button: it ends only through its own actions. */
+  persistent?: boolean;
 }
 
 /**
- * Modal dialog: role=dialog + aria-modal, focus moves in and is trapped, Esc and scrim click close,
- * focus returns to the opener. The body scrolls inside the dialog (max-height 100%), so short
+ * Modal dialog: role=dialog + aria-modal, focus moves in and is trapped, Esc and scrim click close
+ * (unless `persistent`; Esc goes through the shared escape stack, so anything opened on top of the
+ * dialog gets the first Esc), focus returns to the opener. The body scrolls inside the dialog (max-height 100%), so short
  * windows never push the footer off-screen.
  */
-export function Dialog({ open, onClose, title, children, footer, bare, className = "", initialFocus, subtitle, headerExtra, width }: DialogProps) {
+export function Dialog({ open, onClose, title, children, footer, bare, className = "", initialFocus, subtitle, headerExtra, width, persistent }: DialogProps) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  // A persistent dialog still owns Esc (and swallows it) so nothing underneath reacts to it.
+  useEscape(open, () => {
+    if (!persistent) closeRef.current();
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -41,11 +49,7 @@ export function Dialog({ open, onClose, title, children, footer, bare, className
     const el = ref.current!;
     (initialFocus?.current ?? el.querySelector<HTMLElement>(FOCUSABLE) ?? el).focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        e.preventDefault();
-        closeRef.current();
-      } else if (e.key === "Tab") {
+      if (e.key === "Tab") {
         const f = Array.from(el.querySelectorAll<HTMLElement>(FOCUSABLE));
         if (f.length === 0) {
           e.preventDefault();
@@ -75,7 +79,7 @@ export function Dialog({ open, onClose, title, children, footer, bare, className
     <div
       className="scrim"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget && !persistent) onClose();
       }}
     >
       <div ref={ref} className={`dlg ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} style={width ? { width: `min(${width}px, 100%)` } : undefined}>
@@ -89,7 +93,7 @@ export function Dialog({ open, onClose, title, children, footer, bare, className
             {subtitle ? <span className="faint dlg-sub">{subtitle}</span> : null}
             {headerExtra}
             <span className="sp" />
-            <IconButton icon="x" label="Close" onClick={onClose} />
+            {persistent ? null : <IconButton icon="x" label="Close" onClick={onClose} />}
           </div>
         )}
         <div className="dlg-b">{children}</div>

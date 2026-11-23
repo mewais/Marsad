@@ -6,9 +6,10 @@ import { PendingList } from "../session/Composer";
 import { setDraft } from "../session/draft";
 import { launchWithAttachments, type Step } from "./launch";
 import { agoLong } from "../../lib/format";
+import { inShell } from "../../lib/shell";
 import { useNavigate, sessionPath } from "../../router";
 import { useShortcut } from "../../shortcuts/useShortcut";
-import { linkView, useActions, useApi, useAppState, useHosts } from "../../state";
+import { linkView, modelOptions, useActions, useApi, useAppState, useHosts } from "../../state";
 import { Button, Dialog, Icon, Kbd, SearchField, Segmented, Select, toast } from "../../ui";
 import type { NewSessionPreset } from "../../shell/dialogs";
 import { defaultsFor, launchRequest, mostRecent, resumeRows, validate, type NewSessionForm } from "./model";
@@ -92,7 +93,7 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
       return fs.filter((x) => x.key !== k);
     });
   const attach = async () => {
-    if (!("__TAURI_INTERNALS__" in window)) return fileInput.current?.click();
+    if (!inShell()) return fileInput.current?.click();
     const r = await actions.run("ns-pick", "Could not open the file picker", () => api.desktop.pickFiles("Attach files"));
     if (r) addFiles(r.files.map((x) => fromPicked(api, x)));
   };
@@ -208,7 +209,7 @@ export function NewSessionDialog({ open, preset, onClose, onAdd, newOnly, title 
           <ProjectField host={f.host} value={f.cwd} onChange={(cwd) => set({ cwd, resumeId: "" })} recent={recent} />
           <div className="two">
             <div className="field"><span className="lbl">Model</span>
-              <Select label="Model" value={f.model || undefined} placeholder={inv?.models.length ? "Select…" : "Reported after start"} options={(inv?.models ?? []).map((m) => ({ value: m.id, label: m.display_name || m.id, description: m.description }))} onChange={(model) => set({ model })} />
+              <Select label="Model" value={f.model || undefined} placeholder={inv?.models.length ? "Select…" : "Reported after start"} options={modelOptions(inv?.models ?? [])} onChange={(model) => set({ model })} />
             </div>
             <div className="field"><span className="lbl">Mode</span>
               <Select label="Mode" value={f.mode || undefined} placeholder={inv?.modes.length ? "Select…" : "Reported after start"} options={(inv?.modes ?? []).map((m) => ({ value: m.id, label: m.label, description: m.description }))} onChange={(mode) => set({ mode })} />

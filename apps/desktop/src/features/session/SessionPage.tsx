@@ -4,7 +4,7 @@ import { clockTime, compactNumber, money } from "../../lib/format";
 import { Link, sessionPath, useNavigate } from "../../router";
 import { useShortcut } from "../../shortcuts/useShortcut";
 import { selectView, useActions, useApi, useApp, useAppState, useDriver, useHost, useSessionView, useTranscriptOpen } from "../../state";
-import { Button, ConfirmDialog, ConnState, DriverBadge, EmptyState, HostChip, Icon, IconButton, Skeleton, StatusPill, Tabs } from "../../ui";
+import { Button, ConfirmDialog, ConnState, DriverBadge, EmptyState, HostChip, Icon, IconButton, Skeleton, StatusPill, Tabs, useEscape } from "../../ui";
 import { toast } from "../../ui/toast";
 import { Gate } from "../gates/Gate";
 import { Composer } from "./Composer";
@@ -84,6 +84,7 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
     ro.observe(inner);
     return () => ro.disconnect();
   }, [slice !== undefined, tab]);
+  useEscape(renaming != null, () => setRenaming(null));
   useShortcut({ id: "session-back", keys: ["escape"], title: "Back to the Inbox", group: "Session", run: () => nav("/inbox") });
 
   if (!snap || !v) {
@@ -116,7 +117,7 @@ export function SessionPage({ host, id, tab }: { host: string; id: string; tab: 
         <div className="sd-title">
           {renaming != null ? (
             <input className="h1 rename" aria-label="Session name" autoFocus value={renaming} placeholder={snap.title ?? id} onChange={(e) => setRenaming(e.target.value)} onBlur={saveName}
-              onKeyDown={(e) => { if (e.key === "Enter") saveName(); else if (e.key === "Escape") { e.stopPropagation(); setRenaming(null); } }} />
+              onKeyDown={(e) => { if (e.key === "Enter") saveName(); }} />
           ) : (
             <h1 className="h1" title={snap.display_name ? `First prompt: ${snap.title ?? ""}` : undefined}>{v.name}</h1>
           )}
