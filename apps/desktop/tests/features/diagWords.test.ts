@@ -18,10 +18,15 @@ const SAMPLES: { [K in TrailEntry["ev"]]: [Extract<TrailEntry, { ev: K }>, strin
   "input.write_failed": [{ ev: "input.write_failed", input: 5, error: { code: "stdin_write", text: "write to child stdin: broken pipe" } }, "Writing to the agent failed for input #5 — stdin_write: write to child stdin: broken pipe"],
   "input.acknowledged": [{ ev: "input.acknowledged", input: 5, steered: true }, "The agent acknowledged input #5 (steered into the running turn)"],
   "input.dropped": [{ ev: "input.dropped", input: 5, reason: "interrupted" }, "Input #5 will never reach the agent — it was interrupted while it waited"],
-  "turn.started": [{ ev: "turn.started", input: 5, native_turn_id: "t-9" }, "A turn started for input #5 (turn t-9)"],
+  "turn.started": [{ ev: "turn.started", trigger: "input", input: 5, native_turn_id: "t-9" }, "A turn started for input #5 (turn t-9)"],
   "turn.completed": [{ ev: "turn.completed", interrupted: false, num_turns: 3, input_tokens: 1200, output_tokens: 340, cost_usd_micros: 41_000, reply_chars: 900, end_reason: "max_turns" }, "The turn ended (the turn limit was reached): 3 turns, 1200 tokens in, 340 out, $0.0410, a reply of 900 characters"],
   "tool.started": [{ ev: "tool.started", call_id: "c1", name: "Read", subagent: false }, "Tool Read started — call c1"],
   "tool.finished": [{ ev: "tool.finished", call_id: "c1", ok: false }, "Tool call c1 failed"],
+  "task.started": [{ ev: "task.started", task_id: "t1", background: true, kind: "local_agent", call_id: "c9" }, "A background task started — t1 (local_agent), spawned by call c9"],
+  "task.progress": [{ ev: "task.progress", task_id: "t1", tool: "Read", total_tokens: 900, tool_uses: 3, duration_ms: 14_000 }, "Task t1 reported progress: last tool Read, 3 tool uses, 900 tokens in 14 s"],
+  "task.updated": [{ ev: "task.updated", task_id: "t1", status: "completed" }, "Task t1 reported the status completed"],
+  "task.ended": [{ ev: "task.ended", task_id: "t1", ok: true, summary_chars: 62, status: "completed", call_id: "c9", total_tokens: 1100, duration_ms: 19_000 }, "Task t1 ended successfully (completed), spawned by call c9, 1100 tokens in 19 s, a summary of 62 characters"],
+  "background.tasks": [{ ev: "background.tasks", running: 2 }, "The agent lists 2 background tasks as running"],
   "gate.raised": [{ ev: "gate.raised", request_id: "p-1", gate_type: "permission", choices: 3, tool: "Bash" }, "Waiting for you — the agent asked for a permission decision on Bash (3 choices) — request p-1"],
   "gate.resolved": [{ ev: "gate.resolved", request_id: "p-1", reason: "withdrawn" }, "Request p-1 is no longer pending (withdrawn)"],
   "agent.model": [{ ev: "agent.model", model: "m2" }, "The model is now m2"],
@@ -44,23 +49,36 @@ describe("trail words", () => {
     expect(trailWords(entry as TrailEntry)).toBe(words);
   });
 
-  it("every phase cause has its words", () => {
-    const causes: [Parameters<typeof causeWords>[0], string][] = [
-      [{ kind: "spawned", generation: 2 }, "the process (generation 2) was started"],
-      [{ kind: "handshake_done" }, "the agent finished starting up"],
-      [{ kind: "turn_started", input: 4 }, "a turn started for input #4"],
-      [{ kind: "turn_started" }, "a turn started"],
-      [{ kind: "turn_completed", interrupted: true }, "the turn was interrupted"],
-      [{ kind: "turn_completed", interrupted: false, end_reason: "execution_error" }, "the turn ended (the agent reported an error)"],
-      [{ kind: "gate_raised", request_id: "p-1", external: false }, "a request is waiting for your decision (p-1)"],
-      [{ kind: "gate_raised", request_id: "w-1", external: true }, "a request from outside the agent is waiting for your decision (w-1)"],
-      [{ kind: "gate_cleared", request_id: "p-1", how: "answered" }, "request p-1 is no longer pending (you answered it)"],
-      [{ kind: "exited", requested: true, handshake_timeout: false, code: 0, signal: null }, "the process exited with code 0 after a stop was requested"],
-      [{ kind: "exited", requested: false, handshake_timeout: true, code: null, signal: 9 }, "the process exited on signal 9 (the startup deadline had passed)"],
-      [{ kind: "lost" }, "the host lost track of the process"],
-      [{ kind: "other" }, "no more specific cause was recorded"],
-    ];
-    for (const [c, w] of causes) expect(causeWords(c)).toBe(w);
+  it("every phase cause has its words (adding a cause to the wire types fails the build until it is listed here)", () => {
+    type Cause = Parameters<typeof causeWords>[0];
+    const causes: { [K in Cause["kind"]]: [Extract<Cause, { kind: K }>, string][] } = {
+      spawned: [[{ kind: "spawned", generation: 2 }, "the process (generation 2) was started"]],
+      handshake_done: [[{ kind: "handshake_done" }, "the agent finished starting up"]],
+      turn_started: [
+        [{ kind: "turn_started", trigger: "input", input: 4 }, "a turn started for input #4"],
+        [{ kind: "turn_started", trigger: "input" }, "a turn started"],
+        [{ kind: "turn_started", trigger: "agent" }, "the agent started a turn on its own"],
+        [{ kind: "turn_started", trigger: "unreported" }, "a turn started (the agent did not say what started it)"],
+      ],
+      task_started: [[{ kind: "task_started", task_id: "t1" }, "a background task started (t1)"]],
+      task_ended: [[{ kind: "task_ended", task_id: "t1" }, "background task t1 ended"]],
+      turn_completed: [
+        [{ kind: "turn_completed", interrupted: true }, "the turn was interrupted"],
+        [{ kind: "turn_completed", interrupted: false, end_reason: "execution_error" }, "the turn ended (the agent reported an error)"],
+      ],
+      gate_raised: [
+        [{ kind: "gate_raised", request_id: "p-1", external: false }, "a request is waiting for your decision (p-1)"],
+        [{ kind: "gate_raised", request_id: "w-1", external: true }, "a request from outside the agent is waiting for your decision (w-1)"],
+      ],
+      gate_cleared: [[{ kind: "gate_cleared", request_id: "p-1", how: "answered" }, "request p-1 is no longer pending (you answered it)"]],
+      exited: [
+        [{ kind: "exited", requested: true, handshake_timeout: false, code: 0, signal: null }, "the process exited with code 0 after a stop was requested"],
+        [{ kind: "exited", requested: false, handshake_timeout: true, code: null, signal: 9 }, "the process exited on signal 9 (the startup deadline had passed)"],
+      ],
+      lost: [[{ kind: "lost" }, "the host lost track of the process"]],
+      other: [[{ kind: "other" }, "no more specific cause was recorded"]],
+    };
+    for (const samples of Object.values(causes)) for (const [c, w] of samples as [Cause, string][]) expect(causeWords(c)).toBe(w);
   });
 
   it("the phase sentence says what the owner reads: the state and why", () => {
@@ -127,6 +145,8 @@ describe("trail words", () => {
     expect(trailTone(SAMPLES["input.dropped"][0])).toBe("bad");
     expect(trailTone(SAMPLES["input.write_failed"][0])).toBe("bad");
     expect(trailTone(SAMPLES.anomaly[0])).toBe("warn");
+    expect(trailTone(SAMPLES["task.ended"][0])).toBe("plain");
+    expect(trailTone({ ...SAMPLES["task.ended"][0], ok: false })).toBe("warn");
     expect(trailTone(SAMPLES["gate.raised"][0])).toBe("warn");
     expect(trailTone(SAMPLES["input.acknowledged"][0])).toBe("ok");
     expect(trailTone(SAMPLES["process.exited"][0])).toBe("bad");

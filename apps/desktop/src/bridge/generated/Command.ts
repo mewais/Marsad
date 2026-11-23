@@ -11,4 +11,4 @@ export type Command = { "command": "prompt", text: string,
  * Files sent with the prompt (uploaded first); see
  * [`DriverDescriptor::prompt_input`](crate::DriverDescriptor::prompt_input).
  */
-attachments?: Array<Attachment>, } | { "command": "answer_gate", request_id: string, decision: GateDecision, } | { "command": "answer_question", request_id: string, answer: QuestionAnswer, } | { "command": "interrupt" } | { "command": "set_model", model: string, } | { "command": "set_mode", mode: string, } | { "command": "run_slash", name: string, args: string, } | { "command": "shutdown" };
+attachments?: Array<Attachment>, } | { "command": "answer_gate", request_id: string, decision: GateDecision, } | { "command": "answer_question", request_id: string, answer: QuestionAnswer, } | { "command": "interrupt" } | { "command": "set_model", model: string, } | { "command": "set_mode", mode: string, } | { "command": "run_slash", name: string, args: string, } | { "command": "stop_task", task_id: string, } | { "command": "shutdown" };

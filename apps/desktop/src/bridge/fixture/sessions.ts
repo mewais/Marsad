@@ -1,6 +1,7 @@
 import type { GateChoice, GateRequest, PlanEntry, SessionEvent, SessionSnapshot, Usage } from "../wire";
 import { type ConversationFacts, conversationFacts, driverDef } from "./catalog";
 import { buildTranscript, modelSplit } from "./transcripts";
+import { foldWork } from "./work";
 
 /** Fixture-only: the ~14 sessions of the mockup, as compact specs expanded into wire snapshots. */
 
@@ -24,6 +25,8 @@ export interface Spec {
   gates?: GateRequest[];
   /** Fixture: the session has a long history (paging demo). */
   longHistory?: boolean;
+  /** Fixture: it is working only because tasks run in the background (no turn is open). */
+  backgroundOnly?: boolean;
 }
 
 /** What wasit-claude offers for a `can_use_tool` request (neutral labels; see wasit-core `GateChoice`). */
@@ -137,11 +140,22 @@ export interface Built {
   events: SessionEvent[];
 }
 
+/** How the last turn in `events` ended (the snapshot's `last_turn`). */
+function lastTurnOf(events: SessionEvent[]): SessionSnapshot["last_turn"] {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind === "agent" && e.event.type === "turn_completed") return { ended_at_ms: e.t, was_interrupted: e.event.was_interrupted, num_turns: e.event.num_turns, reply: e.event.reply, origin: e.event.origin };
+  }
+  return undefined;
+}
+
 export function buildSession(spec: Spec, now: number): Built {
   const drv = driverDef(spec.driver);
   const id = fixtureId(spec.n);
   const last = now - spec.agoMin * 60_000;
   const { events, pending, plan } = buildTranscript(spec, id, now);
+  // What the session's events say about its subagents and background tasks, as the daemon's snapshot would.
+  const work = foldWork(events);
   const phase: SessionSnapshot["phase"] =
     spec.kind === "needs" ? { state: "needs_you" }
     : spec.kind === "failed" ? { state: "failed", reason: spec.line, stderr_tail: [spec.line] }
@@ -169,18 +183,19 @@ export function buildSession(spec: Spec, now: number): Built {
     available_modes: drv.modes,
     slash_commands: drv.slash,
     pending_gates: pending,
-    turn: spec.kind === "working" || spec.kind === "needs"
-      ? { started_at_ms: now - 600_000, prompt: spec.name, tool_calls: 9 + spec.n, last_tool: spec.kind === "working" ? "Edit" : "Bash" }
+    turn: !spec.backgroundOnly && (spec.kind === "working" || spec.kind === "needs")
+      ? { started_at_ms: now - 600_000, trigger: "input" as const, prompt: spec.name, tool_calls: 9 + spec.n, last_tool: spec.kind === "working" ? "Edit" : "Bash" }
       : undefined,
-    last_turn: finishedAt
+    last_turn: spec.backgroundOnly ? lastTurnOf(events)
+      : finishedAt
       ? { ended_at_ms: finishedAt, was_interrupted: false, num_turns: 3, reply: spec.line }
       : spec.kind === "failed" ? { ended_at_ms: last, was_interrupted: false, num_turns: 2, end_reason: "execution_error", reply: spec.line } : undefined,
     turns_completed: spec.kind === "working" ? 1 : 3,
     usage: usage(spec.cost),
     usage_by_model: modelSplit(spec.driver, usage(spec.cost), spec.cost),
     context_pct: Math.min(90, 12 + spec.n * 3),
-    subagents: spec.n === 7 ? [{ call_id: "c-sub", name: "Explore", description: "List routes that depend on session shape", started_at_ms: now - 500_000, running: false, ok: true }] : [],
-    plan: spec.kind === "working" ? [...planEntries.slice(0, 1), { content: spec.line, priority: "medium", status: "in_progress" }] : planEntries,
+    ...work,
+    plan: spec.kind === "working" && !spec.backgroundOnly ? [...planEntries.slice(0, 1), { content: spec.line, priority: "medium", status: "in_progress" }] : planEntries,
     last_activity_ms: last,
     exit: undefined,
     stderr_tail: spec.kind === "failed" ? [spec.line] : [],

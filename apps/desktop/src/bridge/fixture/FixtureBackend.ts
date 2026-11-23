@@ -21,6 +21,7 @@ import { err, SessionSim, type Entry } from "./runtime";
 import { FixtureFiles, MEDIA_SPEC } from "./media";
 import { buildSession, fixtureId, SPAWN_CHOICES, SPECS, type Spec } from "./sessions";
 import { SPAWN_REQUEST } from "./workstreams";
+import { historyAdmits } from "./work";
 
 export interface FixtureOptions {
   /** Background chatter (timers): live tool calls, reconnect countdown, a session finishing. Default true. */
@@ -374,7 +375,9 @@ export class FixtureBackend implements Backend {
         return this.entry(host, p as SessionRef).snap;
       case M.SESSION_HISTORY: {
         const r = p as HistoryRequest;
-        const all = this.entry(host, r).events.filter((e) => r.before == null || e.cursor < r.before);
+        // The daemon's filter: everything, the session's own transcript, or one subagent's; `before` and `has_more` are within the scope.
+        const scope = r.scope ?? { kind: "all" };
+        const all = this.entry(host, r).events.filter((e) => (r.before == null || e.cursor < r.before) && historyAdmits(scope, e));
         const events = all.slice(Math.max(0, all.length - r.limit));
         return { events, has_more: all.length > events.length };
       }
@@ -758,6 +761,26 @@ export class FixtureBackend implements Backend {
   /** Change facts of a session (tests): it is republished, with its conversation facts (`continuable`, `resume_command`) recomputed as the runtime does. */
   patchSession(hostId: HostId, sessionId: string, p: Partial<SessionSnapshot>) {
     this.sim.patch(this.hosts.get(hostId)!.sessions.get(sessionId)!, p);
+  }
+
+  /**
+   * What the agent of a session does besides the turns the UI starts (tests, demos): tasks that run in the
+   * background, a subagent's own lines, a turn it starts by itself. Each is the event the engine would journal, and the
+   * snapshot follows from the events.
+   */
+  work(hostId: HostId, sessionId: string) {
+    const e = this.hosts.get(hostId)!.sessions.get(sessionId)!;
+    const sim = this.sim;
+    return {
+      startTask: (t: Parameters<SessionSim["startTask"]>[1]) => sim.startTask(e, t),
+      endTask: (taskId: string, status?: string, summary?: string) => sim.endTask(e, taskId, status, summary),
+      scoped: (scope: Parameters<SessionSim["scoped"]>[1], event: Parameters<SessionSim["scoped"]>[2]) => sim.scoped(e, scope, event),
+      startOwnTurn: () => sim.startOwnTurn(e),
+      finishOwnTurn: (reply: string, origin?: Parameters<SessionSim["finishOwnTurn"]>[2]) => sim.finishOwnTurn(e, reply, origin),
+      /** A turn started by a prompt, as the daemon runs it (it ends by itself unless `finish` is called). */
+      startTurn: (prompt: string) => sim.startTurn(e, prompt),
+      finishTurn: (reply: string) => sim.finishTurn(e, reply),
+    };
   }
 
   /** The next start of a process for this session fails with `reason` (a prompt to it is then refused with `continue_failed`). */

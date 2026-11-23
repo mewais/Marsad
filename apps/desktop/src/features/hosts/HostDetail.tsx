@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { WslDistros } from "../../bridge/wire";
 import { useNavigate, sessionPath } from "../../router";
-import { linkView, osWord, sameMachineAs, useActions, useDeveloperMode, useReach, useSessionView, useApi, useAppState, usePending, type HostView } from "../../state";
+import { backgroundWords, linkView, osWord, sameMachineAs, useActions, useDeveloperMode, useReach, useSessionView, useApi, useAppState, usePending, type HostView } from "../../state";
 import { Button, ConfirmDialog, ConnState, DriverBadge, ErrorBoundary, Icon, STATUS, Wrap, hostIcon, makeDriver, useNow } from "../../ui";
 import { address, linkSub } from "./linkText";
 import { WslDistroPicker, defaultDistro } from "./WslDistroPicker";
@@ -117,7 +117,7 @@ function SessionLine({ sessionKey }: { sessionKey: string }) {
   if (!v) return null;
   return (
     <button type="button" className="h hbtn" onClick={() => nav(sessionPath(v.host, v.id))}>
-      <span className={v.stale ? "faint" : `c-${v.status}`}><Icon name={STATUS[v.status].icon} size="sm" spin={v.status === "working" && !v.stale} /></span><span className="ell">{v.name}</span><span className={v.stale ? "w lk" : `w c-${v.status}`}>{STATUS[v.status].label}{v.stale ? " · last known" : ""}</span>
+      <span className={v.stale ? "faint" : `c-${v.status}`}><Icon name={STATUS[v.status].icon} size="sm" spin={v.status === "working" && !v.stale} /></span><span className="ell">{v.name}</span><span className={v.stale ? "w lk" : `w c-${v.status}`} title={v.backgroundOnly && !v.stale ? backgroundWords(v.backgroundOnly) : undefined}>{STATUS[v.status].label}{v.stale ? " · last known" : ""}</span>
     </button>
   );
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DriverInventory, EndCode, NotContinuable, SessionSnapshot } from "../../src/bridge/wire";
 import { commandLine, quoteArg } from "../../src/lib/commandLine";
 import { endedSentence, endWords } from "../../src/lib/endWords";
-import { canInterrupt, continueState, escapeInterrupts, notContinuableWords } from "../../src/state/domain";
+import { backgroundOnly, backgroundWords, canInterrupt, continueState, escapeInterrupts, interruptWords, notContinuableWords, sessionLine } from "../../src/state/domain";
 import { phaseToStatus, STATUS, STATUS_ORDER } from "../../src/ui/status";
 import { ownerNote, resumeRows, startTarget, validate, type NewSessionForm } from "../../src/features/newsession/model";
 import { nodeStatus, summary } from "../../src/features/workstreams/model";
@@ -30,10 +30,14 @@ describe("the daemon's verdict on continuing, in words", () => {
 });
 
 describe("interrupt and Esc", () => {
-  const snap = (state: SessionSnapshot["phase"]["state"], interrupt = true) => ({ capabilities: { interrupt }, phase: { state } }) as Pick<SessionSnapshot, "capabilities" | "phase">;
+  /** `turn`: a turn is open; `background`: tasks running in the background. */
+  const snap = (state: SessionSnapshot["phase"]["state"], interrupt = true, turn = true, background = 0) =>
+    ({ capabilities: { interrupt }, phase: { state }, turn: turn ? { started_at_ms: 0, trigger: "input", tool_calls: 0 } : null, background_running: background }) as Pick<SessionSnapshot, "capabilities" | "phase" | "turn" | "background_running">;
 
   it("the button interrupts a turn that starts, runs or waits for a decision, when the agent can be interrupted", () => {
     for (const s of ["starting", "working", "needs_you"] as const) expect(canInterrupt(snap(s))).toBe(true);
+    // Working with no turn open (only background work): the daemon stops the background tasks, so the button applies.
+    expect(canInterrupt(snap("working", true, false, 2))).toBe(true);
     for (const s of ["idle", "exited", "failed", "lost"] as const) expect(canInterrupt(snap(s))).toBe(false);
     expect(canInterrupt(snap("working", false))).toBe(false);
   });
@@ -42,6 +46,37 @@ describe("interrupt and Esc", () => {
     expect(escapeInterrupts(snap("working"))).toBe(true);
     for (const s of ["starting", "needs_you", "idle", "exited", "failed", "lost"] as const) expect(escapeInterrupts(snap(s))).toBe(false);
     expect(escapeInterrupts(snap("working", false))).toBe(false);
+  });
+
+  it("Esc never ends background work: with no turn open the daemon's interrupt would stop the background tasks, so only the button does", () => {
+    expect(escapeInterrupts(snap("working", true, false, 2))).toBe(false);
+    // A turn running next to background tasks: Esc stops the turn and leaves the tasks (the daemon's rule).
+    expect(escapeInterrupts(snap("working", true, true, 2))).toBe(true);
+  });
+
+  it("the tooltip says what the daemon will stop", () => {
+    expect(interruptWords(snap("working"))).toBe("Cancel the current turn; the agent keeps running");
+    expect(interruptWords(snap("working", true, true, 2))).toBe("Cancel the current turn; the agent stays open and the 2 background tasks keep running.");
+    expect(interruptWords(snap("working", true, true, 1))).toBe("Cancel the current turn; the agent stays open and the 1 background task keeps running.");
+    expect(interruptWords(snap("working", true, false, 2))).toBe("No turn is running. Stop the 2 background tasks; the agent stays open.");
+  });
+});
+
+describe("background work: the session is Working, and says why when no turn is open", () => {
+  const s = (phase: string, turn: boolean, background: number) => ({ phase: { state: phase }, turn: turn ? { started_at_ms: 0, trigger: "input", tool_calls: 0 } : null, background_running: background, plan: [] }) as unknown as SessionSnapshot;
+
+  it("only a working session with no turn open and tasks running is working in the background", () => {
+    expect(backgroundOnly(s("working", false, 2))).toBe(2);
+    expect(backgroundOnly(s("working", true, 2))).toBe(0);
+    expect(backgroundOnly(s("working", false, 0))).toBe(0);
+    expect(backgroundOnly(s("idle", false, 0))).toBe(0);
+  });
+
+  it("the line the Inbox shows says so; the status stays the phase", () => {
+    expect(backgroundWords(1)).toBe("Working in the background: 1 task");
+    expect(sessionLine(s("working", false, 3))).toBe("Working in the background: 3 tasks");
+    expect(sessionLine(s("working", true, 3))).toBe("Working");
+    expect(phaseToStatus("working")).toBe("working");
   });
 });
 
@@ -66,6 +101,15 @@ describe("status: ended is its own", () => {
     const node = (state: string) => ({ host: "h", session: { phase: { state }, pending_gates: [], usage: { cost_usd: 0 } }, launching: false });
     const v = { workstream: { state: "running", nodes: [] }, nodes: [node("exited"), node("exited"), node("idle")], edges: [], cost: { sessions_usd: 0 }, pending_spawns: [] } as unknown as WorkstreamView;
     expect(summary(v).parts.map((p) => p.text)).toEqual(["2 ended"]);
+  });
+});
+
+describe("a workstream node working only in the background", () => {
+  const working = (turn: boolean, background: number) => ({ phase: { state: "working" }, pending_gates: [], turn: turn ? { started_at_ms: 0, trigger: "input", tool_calls: 0 } : null, background_running: background }) as unknown as SessionSnapshot;
+
+  it("stays Working, and says in the background when no turn is open", () => {
+    expect(nodeStatus(undefined, working(false, 2))).toMatchObject({ status: "working", word: "Working in the background" });
+    expect(nodeStatus(undefined, working(true, 2))).toMatchObject({ status: "working", word: "Working" });
   });
 });
 

@@ -80,3 +80,21 @@
 .own p{margin:0;line-height:1.45}
 .own-row{display:flex;align-items:flex-start;gap:6px}
 .own-row code{flex:1;min-width:0;padding:4px 6px;border-radius:6px;background:var(--sunken);border:1px solid var(--line);font-size:11.5px;overflow-wrap:anywhere}
+
+/* Subagent transcript: the bar above it (who, how it stands, the way back) and the note where the composer would be. */
+.subbar{display:flex;align-items:center;gap:8px;padding:8px 24px;border-bottom:1px solid var(--line);font-size:12px;background:var(--win);min-width:0}
+.subbar .btn.sm{text-decoration:none}
+.subbar .back{transform:rotate(90deg)}
+.subfoot{display:flex;align-items:center;gap:6px;padding:8px 24px 12px;border-top:1px solid var(--line);background:var(--win)}
+.subag[data-running]{border-left-color:var(--working)}
+.subag-h{flex-wrap:wrap}
+.subag-h .btn{text-decoration:none}
+
+/* Sidebar: work the agent runs besides its turn (subagents, background tasks). A subagent's row opens its transcript. */
+.hist.work{gap:2px}
+.wk{display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--line)}
+.wk-main{display:grid;grid-template-columns:16px minmax(0,auto) minmax(0,1fr) auto;gap:6px 8px;align-items:center;font-size:12px;color:var(--fg);text-decoration:none;border-radius:var(--r2)}
+a.wk-main:hover{background:var(--surface-2)}
+a.wk-main[aria-current="page"]{background:var(--accent-bg)}
+.wk-main .w{font-size:11px;color:var(--fg-3);white-space:nowrap}
+.wk-meta{display:flex;align-items:center;gap:8px;font-size:11px;padding-left:24px;min-height:24px}

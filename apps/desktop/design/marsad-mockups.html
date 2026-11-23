@@ -362,6 +362,17 @@ h1,h2,h3{margin:0;text-wrap:balance}
 .subag{border:1px solid var(--line);border-left:3px solid var(--d-oc);border-radius:var(--r2);background:var(--surface);padding:8px 12px;display:flex;flex-direction:column;gap:6px}
 .subag-h{display:flex;align-items:center;gap:8px;font-size:12px}
 .subag ul{margin:0;padding-left:18px;font-size:12px;color:var(--fg-2)}
+.subbar{display:flex;align-items:center;gap:8px;padding:8px 24px;border-bottom:1px solid var(--line);font-size:12px;background:var(--win);min-width:0}
+.subbar .back{transform:rotate(90deg)}
+.subfoot{display:flex;align-items:center;gap:6px;padding:8px 24px 12px;border-top:1px solid var(--line);background:var(--win);font-size:12px;color:var(--fg-3)}
+.subag[data-running]{border-left-color:var(--working)}
+.subag-h{flex-wrap:wrap}
+.hist.work{gap:2px}
+.wk{display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--line)}
+.wk-main{display:grid;grid-template-columns:16px 1fr auto;gap:8px;align-items:center;font-size:12px;color:var(--fg);text-decoration:none;border-radius:var(--r2)}
+a.wk-main:hover{background:var(--surface-2)} a.wk-main[aria-current="page"]{background:var(--accent-bg)}
+.wk-main .w{font-size:11px;color:var(--fg-3);white-space:nowrap}
+.wk-meta{display:flex;align-items:center;gap:8px;font-size:11px;padding-left:24px;min-height:24px;color:var(--fg-3)}
 .gate{border:1px solid var(--needs-line);background:var(--needs-bg);border-radius:var(--r3);padding:12px 14px;display:flex;flex-direction:column;gap:10px}
 .gate-h{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--needs);font-size:12.5px}
 .gate-h .sp{flex:1}
@@ -920,7 +931,7 @@ const kbd=k=>`<kbd>${k}</kbd>`;
 /* ================= REVIEW BAR STATE ================= */
 const SCREENS=[
  {id:'home',n:1,label:'Home',short:'Home',vars:[['a','A · Inbox'],['c','C · Attention board']]},
- {id:'session',n:2,label:'Session',short:'Session',vars:[['run','Running'],['ended','Ended'],['blocked','Ended · cannot continue'],['fail','Ended · prompt refused']]},
+ {id:'session',n:2,label:'Session',short:'Session',vars:[['run','Running'],['bg','Working in the background'],['sub','Subagent transcript'],['ended','Ended'],['blocked','Ended · cannot continue'],['fail','Ended · prompt refused']]},
  {id:'workstreams',n:3,label:'Workstreams',short:'Streams',vars:[['list','List'],['new','New workstream']]},
  {id:'graph',n:4,label:'Workstream',short:'Graph',vars:[['run','Running'],['spawn','Spawning'],['design','Design']]},
  {id:'new',n:5,label:'New session',short:'New',vars:[['s','New session'],['w','Add agent'],['c','Continue · Marsad session'],['f','Folder refused']]},
@@ -1158,17 +1169,18 @@ function composer(withSlash,ended){
 }
 
 /* ================= SCREEN: SESSION ================= */
+const BG=()=>state.vars.session==='bg'||state.vars.session==='sub';
 function sessionHead(){
-  const ended=state.vars.session!=='run';
-  const s=ended?by('s16'):by('s7');
+  const ended=!['run','bg','sub'].includes(state.vars.session);
+  const s=ended?by('s16'):BG()?{name:'route-auth-audit'}:by('s7');
   const tabs=[['activity','Activity'],['changes','Changes','7'],['config','Config'],['terminal','Terminal']];
   return `<div class="sd-head">
    <div class="crumbs"><a data-go="home">${I('i-inbox','xs')} Inbox</a>${I('i-chevr','xs')}<span>ledgerline</span>${I('i-chevr','xs')}<span style="color:var(--fg)">${s.name}</span></div>
-   <div class="sd-title"><h1 class="h1">${s.name}</h1>${ended?stPill('ended'):stPill('needs','Waiting for you · 1 permission, 1 question')}<span style="flex:1"></span>
+   <div class="sd-title"><h1 class="h1">${s.name}</h1>${ended?stPill('ended'):BG()?stPill('working','Working in the background: 2 tasks'):stPill('needs','Waiting for you · 1 permission, 1 question')}<span style="flex:1"></span>
      ${ended?(state.vars.session==='blocked'
        ?`<button class="btn sm" disabled title="This agent cannot pick a conversation back up.">${I('i-refresh','xs')}Continue</button><button class="btn sm ghost">${I('i-x','xs')}Delete</button>`
        :`<button class="btn sm" title="Start the agent again, with this session's earlier transcript">${I('i-refresh','xs')}Continue</button><button class="btn sm ghost">${I('i-x','xs')}Delete</button>`)
-      :`<button class="btn sm" title="Cancel the current turn; the agent keeps running">${I('i-pause','xs')}Interrupt</button><button class="btn sm" title="Shut the agent down. The session is kept and can be continued.">${I('i-stop','xs')}End session</button>`}<button class="iconbtn" title="More">${I('i-dots','sm')}</button></div>
+      :`<button class="btn sm" title="${BG()?'No turn is running. Stop the 2 background tasks; the agent stays open.':'Cancel the current turn; the agent keeps running'}">${I('i-pause','xs')}Interrupt</button><button class="btn sm" title="Shut the agent down. The session is kept and can be continued.">${I('i-stop','xs')}End session</button>`}<button class="iconbtn" title="More">${I('i-dots','sm')}</button></div>
    ${state.vars.session==='blocked'?`<div class="sd-ended" role="status">${I('i-stop','sm')}This agent cannot pick a conversation back up.</div>`:''}
    <div class="sd-meta">
      <span class="kv">${drv('cc')}<span class="faint mono">v2.1.4</span></span>
@@ -1199,7 +1211,38 @@ function endedActivity(){
    ${blocked?'':ownTerminal()}
   </aside></div>`;
 }
+const workSide=(sel)=>`<div><h4>Subagents · 2</h4><div class="hist work">
+     <div class="wk"><a class="wk-main"${sel?' aria-current="page"':''}>${I('i-working','sm c-working spin')}<span class="ell"><b>Explore</b><span class="faint"> · Audit the billing routes</span></span><span class="w">Running</span></a>
+       <div class="wk-meta"><span>3 tool calls · 1m 35s</span><span style="flex:1"></span><button class="btn sm ghost" aria-label="Stop subagent Audit the billing routes">${I('i-stop','xs')}Stop</button></div></div>
+     <div class="wk"><a class="wk-main">${I('i-done','sm c-done')}<span class="ell"><b>Explore</b><span class="faint"> · Audit the invoice routes</span></span><span class="w">Finished</span></a>
+       <div class="wk-meta"><span>2 tool calls · 17s</span></div></div></div></div>
+   <div><h4>Background tasks · 1</h4><div class="hist work">
+     <div class="wk"><div class="wk-main">${I('i-working','sm c-working spin')}<span class="ell"><b>pnpm test --run</b></span><span class="w">Running</span></div>
+       <div class="wk-meta"><span><span class="mono">local_bash</span> · 1m 32s</span><span style="flex:1"></span><button class="btn sm ghost" aria-label="Stop task pnpm test --run">${I('i-stop','xs')}Stop</button></div></div></div></div>`;
+function backgroundActivity(){
+  const sub=state.vars.session==='sub';
+  return `<div class="sd-body"><div class="tr-wrap">${sub?`<div class="subbar"><a class="btn sm ghost">${I('i-chev','xs back')}Back to the session</a>${I('i-sub','sm')}<b>Subagent · Explore</b><span class="muted ell">“Audit the billing routes”</span><span style="flex:1"></span>${stPill('working','Running')}<span class="faint">3 tool calls · 1m 36s</span><button class="btn sm ghost">${I('i-stop','xs')}Stop</button></div>`:''}
+   <div class="transcript"><div class="tr">${sub?`
+   <div class="faint" style="font-size:12px">Background task started · local_agent · “Audit the billing routes”</div>
+   <div class="msg-ai"><div class="who">${drv('cc',true)} Claude Code</div><p>The billing module has webhook handlers and the customer-facing routes; I'll check both.</p></div>
+   <div class="tool run"><div class="tool-h">${I('i-done','sm c-done')}<span class="nm">3 tool calls</span><span class="arg">Read apps/api/src/routes/plans.ts</span><span class="res">done</span>${I('i-chevr','xs faint')}</div></div>`:`
+   <div class="msg-user">Audit every route for a missing auth check. Use subagents for the two big modules and run the whole test suite in the background; I will check back.</div>
+   <div class="msg-ai"><div class="who">${drv('cc',true)} Claude Code</div><p>I'll audit the billing and invoice routes with a subagent each, and run the test suite in the background.</p></div>
+   <!-- The tool call returned at once; the subagent runs until the daemon says its task ended. Selecting the card opens its transcript. -->
+   <div class="subag" data-running><div class="subag-h">${I('i-sub','sm')}<b>Subagent · Explore</b><span class="muted">“Audit the billing routes”</span><span style="flex:1"></span>${stPill('working','Running')}<span class="faint">3 tool calls · 1m 35s</span><button class="btn sm ghost">${I('i-stop','xs')}Stop</button><a class="btn sm ghost">${I('i-chevr','xs')}Open transcript</a></div><p style="margin:0;font-size:12.5px">Launched Explore in the background: Audit the billing routes</p></div>
+   <div class="faint" style="font-size:12px">Background task started · local_agent · “Audit the billing routes”</div>
+   <div class="subag"><div class="subag-h">${I('i-sub','sm')}<b>Subagent · Explore</b><span class="muted">“Audit the invoice routes”</span><span style="flex:1"></span>${stPill('done','Finished')}<span class="faint">2 tool calls · 17s</span><a class="btn sm ghost">${I('i-chevr','xs')}Open transcript</a></div></div>
+   <div class="faint" style="font-size:12px">Background task ended · local_agent · “Audit the invoice routes” · completed — Both invoice routes are guarded; the PDF route checks the organisation too.</div>
+   <!-- A turn the agent started by itself: noticed when it starts; its end adds the agent's own reason -->
+   <div class="faint" style="font-size:12px">The agent started a turn on its own · origin: task-notification (session-task) · Audit the invoice routes</div>
+   <div class="msg-ai"><div class="who">${drv('cc',true)} Claude Code</div><p>The invoice audit is done: both routes are guarded. Still waiting on the billing audit and the test suite.</p></div>`}
+  </div></div>${sub?`<div class="subfoot">${I('i-lock','xs')}This is the transcript of the subagent “Audit the billing routes” (Explore). It is read only: messages go to the session’s own agent, in the session.</div>`:composer(false)}</div>
+  <aside class="side">${workSide(sub)}
+   <div><h4>Session</h4><dl class="kvl"><dt>Model</dt><dd class="mono">claude-sonnet-4.5</dd><dt>Mode</dt><dd>Default</dd><dt>Cost so far</dt><dd>$1.74 <span class="faint">· 1 turn</span></dd><dt>Started</dt><dd>02:56</dd></dl></div>
+  </aside></div>`;
+}
 function activityTab(){
+  if(BG()) return backgroundActivity();
   if(state.vars.session!=='run') return endedActivity();
   return `<div class="sd-body"><div class="tr-wrap"><div class="transcript"><div class="tr">
    <div class="msg-user">Move session auth from express-session to the new <span class="code-inline">authMiddleware</span> in packages/auth. Existing cookies must keep working during the rollout. Don't touch the billing routes.</div>
@@ -1211,7 +1254,7 @@ apps/api/src/routes/logout.ts:9        req.session.destroy(done)
 apps/api/src/routes/me.ts:14           if (!req.session.userId) return res.sendStatus(401)
 apps/api/src/routes/invoices.ts:31     const org = req.session.orgId
 <span class="faint">… 10 more</span></div></div>
-   <div class="subag"><div class="subag-h">${I('i-sub','sm')}<b>Subagent · Explore</b><span class="muted">“List routes that depend on session shape”</span><span style="flex:1"></span>${stPill('done','Finished')}<span class="faint">9 tool calls · 41s</span></div>
+   <div class="subag"><div class="subag-h">${I('i-sub','sm')}<b>Subagent · Explore</b><span class="muted">“List routes that depend on session shape”</span><span style="flex:1"></span>${stPill('done','Finished')}<span class="faint">9 tool calls · 41s</span><a class="btn sm ghost">${I('i-chevr','xs')}Open transcript</a></div>
      <ul><li>6 routes read <span class="code-inline">userId</span>; 2 also read <span class="code-inline">orgId</span> (invoices, members).</li><li>Billing webhooks never touch the session, safe to leave alone.</li><li><span class="code-inline">connect-redis</span> TTL is 30 days, so legacy cookies live at most that long.</li></ul></div>
    <div class="tool"><div class="tool-h">${I('i-done','sm c-done')}<span class="nm">Edit</span><span class="arg">apps/api/src/server.ts</span><span class="res"><span class="add">+6</span> <span class="del">−4</span></span>${I('i-chev','xs faint')}</div>
      <div class="diff"><div class="hunk">@@ -18,10 +18,12 @@ const app = express()</div>

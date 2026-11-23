@@ -152,7 +152,7 @@ function projectAgent(events: readonly SessionEvent[], i: number): Entry[] {
     case "turn_started": {
       // The agent's first sign of life for an input is its acknowledgement, unless it said so already.
       const acked = a.input != null && events.slice(0, i).some((e) => e.kind === "agent" && e.event.type === "input_acknowledged" && e.event.input === a.input);
-      return [...(a.input != null && !acked ? [{ ev: "input.acknowledged" as const, input: a.input, steered: false }] : []), nonNull({ ev: "turn.started" as const, input: a.input, native_turn_id: a.native_turn_id })];
+      return [...(a.input != null && !acked ? [{ ev: "input.acknowledged" as const, input: a.input, steered: false }] : []), nonNull({ ev: "turn.started" as const, trigger: a.trigger, input: a.input, native_turn_id: a.native_turn_id })];
     }
     case "input_sent":
       return [{ ev: "input.sent", input: a.input }, { ev: "input.written", input: a.input }];
@@ -161,11 +161,28 @@ function projectAgent(events: readonly SessionEvent[], i: number): Entry[] {
     case "input_dropped":
       return [nonNull({ ev: "input.dropped" as const, input: a.input, reason: a.reason, error: a.error ? foreignError("dropped", a.error) : undefined })];
     case "turn_completed":
-      return [nonNull({ ev: "turn.completed" as const, interrupted: a.was_interrupted, num_turns: a.num_turns, input_tokens: a.usage.input_tokens, output_tokens: a.usage.output_tokens, cost_usd_micros: Math.round(a.usage.cost_usd * 1e6), reply_chars: [...(a.reply ?? "")].length, end_reason: a.end_reason })];
+      return [nonNull({ ev: "turn.completed" as const, interrupted: a.was_interrupted, num_turns: a.num_turns, input_tokens: a.usage.input_tokens, output_tokens: a.usage.output_tokens, cost_usd_micros: Math.round(a.usage.cost_usd * 1e6), reply_chars: [...(a.reply ?? "")].length, end_reason: a.end_reason, origin: a.origin?.kind })];
     case "tool_call_started":
       return [{ ev: "tool.started", call_id: a.call_id, name: a.name, subagent: a.is_subagent }];
     case "tool_call_finished":
       return [{ ev: "tool.finished", call_id: a.call_id, ok: a.ok }];
+    // A subagent's own tool calls are tool calls with a scope; the rest of what it produces is content like the session's own.
+    case "scoped": {
+      const inner = a.event;
+      if (inner.type === "tool_call_started") return [{ ev: "tool.started", call_id: inner.call_id, name: inner.name, subagent: inner.is_subagent, scope: a.scope.call_id }];
+      if (inner.type === "tool_call_finished") return [{ ev: "tool.finished", call_id: inner.call_id, ok: inner.ok, scope: a.scope.call_id }];
+      return [];
+    }
+    case "task_started":
+      return [nonNull({ ev: "task.started" as const, task_id: a.task_id, background: a.background, kind: a.kind || undefined, call_id: a.call_id })];
+    case "task_progress":
+      return [nonNull({ ev: "task.progress" as const, task_id: a.task_id, tool: a.last_tool, total_tokens: a.usage?.total_tokens, tool_uses: a.usage?.tool_uses, duration_ms: a.usage?.duration_ms })];
+    case "task_updated":
+      return [nonNull({ ev: "task.updated" as const, task_id: a.task_id, status: a.status })];
+    case "task_ended":
+      return [nonNull({ ev: "task.ended" as const, task_id: a.task_id, ok: a.ok, summary_chars: [...(a.summary ?? "")].length, status: a.status || undefined, call_id: a.call_id, total_tokens: a.usage?.total_tokens, duration_ms: a.usage?.duration_ms })];
+    case "background_tasks_changed":
+      return [{ ev: "background.tasks", running: a.tasks.length }];
     case "gate_requested": {
       const g = a.gate;
       return [nonNull({ ev: "gate.raised" as const, request_id: g.request_id, gate_type: g.gate_type, choices: g.gate_type === "question" ? 0 : g.choices.length, tool: g.gate_type === "permission" ? g.tool_name : undefined })];
@@ -218,8 +235,8 @@ export function scriptedTrail(specN: number, events: readonly SessionEvent[]): T
     at(E(2), 0, { ev: "input.applied", input: 3, kind: "prompt", chars: 61, attachments: 0, bytes: 0, status: "sent", trace }),
     at(E(2), 1, { ev: "input.written", input: 3 }),
     at(E(3), 0, { ...ok, input: 3 }),
-    at(E(3), 1, { ev: "turn.started", input: 3 }),
-    at(E(3), 2, { ev: "phase", to: "working", cause: { kind: "turn_started", input: 3 } }),
+    at(E(3), 1, { ev: "turn.started", trigger: "input", input: 3 }),
+    at(E(3), 2, { ev: "phase", to: "working", cause: { kind: "turn_started", trigger: "input", input: 3 } }),
   ];
   // A long working session: prompts typed while it worked were held and then lost to an interrupt (a few minutes ago); the agent kept producing output after its turn had ended.
   if (specN === 10) {
@@ -236,7 +253,7 @@ export function scriptedTrail(specN: number, events: readonly SessionEvent[]): T
       at(E(mid), 6, { ev: "phase", to: "idle", cause: { kind: "turn_completed", interrupted: true, end_reason: "cancelled" } }, 510),
       at(E(mid), 7, { ev: "tool.started", call_id: "late-1", name: "Edit", subagent: false }, 600),
       at(E(mid), 8, { ev: "anomaly", kind: "activity_while_idle", first: "tool_call_started" }, 610),
-      at(E(mid), 9, { ev: "phase", to: "working", cause: { kind: "turn_started" } }, 700),
+      at(E(mid), 9, { ev: "phase", to: "working", cause: { kind: "turn_started", trigger: "unreported" } }, 700),
       ...events.slice(mid + 1).flatMap((_, i) => projectEvent(events, i + mid + 1)),
     ];
   }

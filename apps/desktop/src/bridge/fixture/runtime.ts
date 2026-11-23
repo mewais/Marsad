@@ -1,7 +1,8 @@
-import type { Command, CommandReply, GateReason, GateRequest, HostId, InputDropReason, InputId, NotContinuable, PhaseCause, RpcError, SessionEvent, SessionSnapshot, TrailItem } from "../wire";
+import type { AgentEvent, Command, CommandReply, GateReason, GateRequest, HostId, InputDropReason, InputId, NotContinuable, PhaseCause, RpcError, Scope, SessionEvent, SessionSnapshot, TrailItem, TurnOrigin } from "../wire";
 import { conversationFacts } from "./catalog";
 import { projectEvent } from "./diagnostics";
 import type { SessionEventKind } from "./transcripts";
+import { endAllWork, reduceWork } from "./work";
 
 /** Fixture-only: one scripted session per entry; reacts to commands like an agent would. */
 
@@ -76,9 +77,9 @@ export class SessionSim {
         const text = c.command === "prompt" ? c.text : `/${c.name} ${c.args}`.trim();
         const input = this.nextInput(e);
         const phase = e.snap.phase.state;
-        // What a prompt does while the agent is busy is the driver's capability, as in the daemon.
+        // What a prompt does while the agent is busy is the driver's capability, as in the daemon. Background work alone (no turn open) is not busy: the prompt starts a turn.
         const busy = e.snap.capabilities.prompt_while_busy;
-        if (phase === "idle") {
+        if (phase === "idle" || (phase === "working" && !e.snap.turn)) {
           this.emit(e, { kind: "input", input, command: c, status: { status: "sent" }, ...traced(trace) });
           this.startTurn(e, text, input);
           return { outcome: "sent" };
@@ -107,13 +108,22 @@ export class SessionSim {
         this.resolveGate(e, c.request_id, denied ? "Understood, I will not do that." : "Thanks, continuing.");
         return { outcome: "sent" };
       }
-      case "interrupt":
+      case "interrupt": {
         this.journal(e, c, trace);
         this.dropQueued(e, "interrupted");
-        e.turn = (e.turn ?? 0) + 1;
         this.declineGates(e, { code: "turn_interrupted" });
-        e.snap = { ...e.snap, turn: null };
-        this.setPhase(e, { state: "idle" });
+        // The daemon stops the running turn and leaves background work alone; with no turn open it stops the background tasks.
+        const turnOpen = !!e.snap.turn || e.snap.pending_gates.length > 0 || ["starting", "needs_you"].includes(e.snap.phase.state);
+        if (turnOpen) {
+          e.turn = (e.turn ?? 0) + 1;
+          e.snap = { ...e.snap, turn: null };
+          this.settle(e, { kind: "turn_completed", interrupted: true }, true);
+        } else for (const t of e.snap.tasks.filter((x) => x.running && x.background)) this.stopTask(e, t.task_id);
+        return { outcome: "sent" };
+      }
+      case "stop_task":
+        this.journal(e, c, trace);
+        this.stopTask(e, c.task_id);
         return { outcome: "sent" };
       case "set_model":
         this.journal(e, c, trace);
@@ -240,7 +250,7 @@ export class SessionSim {
     this.dropQueued(e, "shutdown");
     e.turn = (e.turn ?? 0) + 1;
     this.declineGates(e, { code: "session_stopped" });
-    e.snap = { ...e.snap, turn: null, exit: { code: 0, at_ms: this.h.now(), requested: true } };
+    e.snap = { ...e.snap, ...endAllWork(e.snap, this.h.now()), turn: null, exit: { code: 0, at_ms: this.h.now(), requested: true } };
     this.setPhase(e, { state: "exited", code: 0 }, { kind: "exited", requested: true, handshake_timeout: false });
   }
 
@@ -248,9 +258,9 @@ export class SessionSim {
     const now = this.h.now();
     const turn = (e.turn = (e.turn ?? 0) + 1);
     const live = (fn: () => void) => () => e.turn === turn && fn();
-    e.snap = { ...e.snap, turn: { started_at_ms: now, prompt, tool_calls: 0 }, last_activity_ms: now };
-    this.setPhase(e, { state: "working" }, { kind: "turn_started", input });
-    this.emit(e, { kind: "agent", event: { type: "turn_started", input } });
+    e.snap = { ...e.snap, turn: { started_at_ms: now, input, trigger: "input", prompt, tool_calls: 0 }, last_activity_ms: now };
+    this.setPhase(e, { state: "working" }, { kind: "turn_started", input, trigger: "input" });
+    this.emit(e, { kind: "agent", event: { type: "turn_started", input, trigger: "input" } });
     this.h.after(450, live(() => this.emit(e, { kind: "agent", event: { type: "assistant_delta", text: `On it: ${prompt.slice(0, 80)}`, message_id: `r${now}` } })));
     this.h.after(900, live(() => this.fakeTool(e, "Read", { file_path: "README.md" }, true, "# Project\n")));
     this.h.after(1700, live(() => this.finishTurn(e, `Done: ${prompt.slice(0, 80)}. Nothing else needs your attention.`)));
@@ -270,8 +280,65 @@ export class SessionSim {
     this.emit(e, { kind: "agent", event: { type: "assistant_delta", text: reply, message_id: `d${now}` } });
     this.emit(e, { kind: "agent", event: { type: "turn_completed", was_interrupted: false, num_turns: 1, usage, reply } });
     e.snap = { ...e.snap, usage, turn: null, turns_completed: e.snap.turns_completed + 1, last_turn: { ended_at_ms: now, was_interrupted: false, num_turns: 1, reply }, last_activity_ms: now };
-    this.setPhase(e, { state: "idle" }, { kind: "turn_completed", interrupted: false });
+    this.settle(e, { kind: "turn_completed", interrupted: false });
     this.drain(e);
+  }
+
+  /**
+   * The phase follows what runs: Working while a turn is open or a background task runs, else Idle (a phase that is
+   * `needs_you` or ended is left to its own causes unless `force`). Said (journaled) only when it changes, with the cause.
+   */
+  private settle(e: Entry, cause: PhaseCause, force = false) {
+    const now = e.snap.phase.state;
+    if (!force && now !== "working" && now !== "idle") return this.h.publish(e);
+    const next = e.snap.turn || e.snap.background_running > 0 ? "working" : "idle";
+    if (next !== now) this.setPhase(e, { state: next }, cause);
+    else this.h.publish(e);
+  }
+
+  // ── what the agent does besides the turns we start: scripted by tests and by the demo scenario ──
+
+  /** A task starts (a background subagent, a shell command): the session is working while it runs, with or without a turn. */
+  startTask(e: Entry, task: { task_id: string; kind: string; description?: string; call_id?: string; subagent_type?: string; background?: boolean; run_id?: string }) {
+    const background = task.background ?? true;
+    this.emit(e, { kind: "agent", event: { type: "task_started", task_id: task.task_id, kind: task.kind, call_id: task.call_id, description: task.description, subagent_type: task.subagent_type, background, run_id: task.run_id } });
+    this.settle(e, { kind: "task_started", task_id: task.task_id });
+  }
+
+  /** The agent ends a task with its status word. */
+  endTask(e: Entry, taskId: string, status = "completed", summary?: string) {
+    const call_id = e.snap.tasks.find((t) => t.task_id === taskId)?.call_id;
+    this.emit(e, { kind: "agent", event: { type: "task_ended", task_id: taskId, call_id, status, ok: status === "completed", summary } });
+    this.settle(e, { kind: "task_ended", task_id: taskId });
+  }
+
+  /** `stop_task`: the agent ends a task it runs as stopped; a task it does not know is a success that does nothing. */
+  private stopTask(e: Entry, taskId: string) {
+    if (e.snap.tasks.some((t) => t.task_id === taskId && t.running)) this.endTask(e, taskId, "stopped");
+  }
+
+  /** A line of a subagent's own conversation. */
+  scoped(e: Entry, scope: Scope, event: AgentEvent) {
+    this.emit(e, { kind: "agent", event: { type: "scoped", scope, event } });
+    this.h.publish(e);
+  }
+
+  /** The agent starts a turn by itself (nobody sent an input): it is working without a prompt. */
+  startOwnTurn(e: Entry) {
+    const now = this.h.now();
+    e.turn = (e.turn ?? 0) + 1;
+    e.snap = { ...e.snap, turn: { started_at_ms: now, trigger: "agent", tool_calls: 0 }, last_activity_ms: now };
+    this.emit(e, { kind: "agent", event: { type: "turn_started", trigger: "agent" } });
+    this.settle(e, { kind: "turn_started", trigger: "agent" });
+  }
+
+  /** The turn the agent started by itself ends, with the origin the agent gives for it. */
+  finishOwnTurn(e: Entry, reply: string, origin?: TurnOrigin) {
+    const now = this.h.now();
+    this.emit(e, { kind: "agent", event: { type: "assistant_delta", text: reply, message_id: `o${now}` } });
+    this.emit(e, { kind: "agent", event: { type: "turn_completed", was_interrupted: false, num_turns: 1, usage: e.snap.usage, reply, origin } });
+    e.snap = { ...e.snap, turn: null, turns_completed: e.snap.turns_completed + 1, last_turn: { ended_at_ms: now, was_interrupted: false, num_turns: 1, reply, origin }, last_activity_ms: now };
+    this.settle(e, { kind: "turn_completed", interrupted: false });
   }
 
   resolveGate(e: Entry, requestId: string, reply: string) {
@@ -320,6 +387,7 @@ export class SessionSim {
     if (kind.kind === "agent" && kind.event.type === "gate_requested") {
       e.snap = { ...e.snap, pending_gates: [...e.snap.pending_gates, { gate: kind.event.gate, raised_at_ms: ev.t, cursor: ev.cursor }] };
     }
+    if (kind.kind === "agent") e.snap = { ...e.snap, ...reduceWork(e.snap, kind.event, ev.t) };
     e.subs.forEach((s) => s(ev));
     if (e.trailSubs?.size) for (const item of projectEvent(e.events, e.events.length - 1)) e.trailSubs.forEach((s) => s(item));
   }

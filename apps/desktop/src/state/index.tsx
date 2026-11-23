@@ -12,6 +12,7 @@ import { reachBlock, selectCounts, selectDeveloperMode, selectGroups, selectHost
 import { createTails, createTrails, type Tails, type Trails } from "./diagnostics";
 import { createExports, type Exports } from "./exports";
 import { createTranscripts, type Transcripts } from "./transcript";
+import { MAIN, subagentScope, type TranscriptScope } from "./scope";
 import type { SessionView } from "./domain";
 import type { HostView } from "./hosts";
 import type { DriverDescriptor } from "../ui/DriverBadge";
@@ -19,6 +20,7 @@ import type { DriverDescriptor } from "../ui/DriverBadge";
 export * from "./model";
 export * from "./selectors";
 export * from "./domain";
+export * from "./scope";
 export * from "./actions";
 export * from "./debug";
 export * from "./hosts";
@@ -108,10 +110,11 @@ export function useStaleHosts(): ReadonlySet<HostId> {
 /** Whether Developer mode is on: the hub's setting, once the hub has told us (never assumed before). */
 export const useDeveloperMode = (): boolean => useAppState(selectDeveloperMode);
 
-/** Open a session's transcript (history + live) while the component is mounted. */
-export function useTranscriptOpen(key: SessionKey) {
+/** Open a session's transcript, or with `scope` a subagent's (history + live), while the component is mounted. */
+export function useTranscriptOpen(key: SessionKey, scope: TranscriptScope = MAIN) {
   const { transcripts } = useApp();
-  useEffect(() => transcripts.open(key), [transcripts, key]);
+  const callId = scope.kind === "subagent" ? scope.call_id : null;
+  useEffect(() => transcripts.open(key, callId === null ? MAIN : subagentScope(callId)), [transcripts, key, callId]);
 }
 
 export function useActions(): Actions {

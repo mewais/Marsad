@@ -1,4 +1,5 @@
 import type { EdgePolicy, EdgeView, HostId, NodeView, SessionSnapshot, TaskView, WorkstreamNode, WorkstreamView } from "../../bridge/wire";
+import { backgroundOnly } from "../../state/domain";
 import { phaseToStatus, type StatusKey } from "../../ui/status";
 import type { IconName } from "../../ui";
 
@@ -25,7 +26,8 @@ export function nodeStatus(nv: NodeView | undefined, s: SessionSnapshot | null |
   const say = (word: string) => ({ status: st, word: stale ? `${word} · last known` : word, stale });
   if (st === "needs" && s.pending_gates.some((g) => g.gate.gate_type === "handoff")) return say("Handoff waiting");
   if (st === "needs" && s.pending_gates.some((g) => g.gate.gate_type === "spawn")) return say("Spawn waiting");
-  return say(st === "needs" ? "Needs you" : st === "failed" ? "Failed" : st === "working" ? "Working" : st === "ended" ? "Ended" : "Idle");
+  // Working stays what the daemon says; with no turn open it says why.
+  return say(st === "needs" ? "Needs you" : st === "failed" ? "Failed" : st === "working" ? (backgroundOnly(s) ? "Working in the background" : "Working") : st === "ended" ? "Ended" : "Idle");
 }
 
 export interface WsSummary {

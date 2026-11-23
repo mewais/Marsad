@@ -2,6 +2,8 @@ import type { Attachment, Command, CommandStatus, CompactionInfo, ContentPart, G
 import { endedSentence } from "../../lib/endWords";
 import { clockTime, compactNumber } from "../../lib/format";
 import { gateWhat } from "../../lib/gatewords";
+import { admits, MAIN, type TranscriptScope } from "../../state/scope";
+import { originWords, taskEndedWords, taskStartedWords } from "./tasks";
 
 /** Why a message the user wrote did not reach the agent. */
 export type NotSentCause = InputDropReason | Exclude<CommandStatus["status"], "sent" | "queued"> | "write_failed";
@@ -72,13 +74,26 @@ interface State {
   commands: Map<InputId, string>;
   /** The gates raised so far, by request id: what to call one that was taken down. */
   gates: Map<string, GateRequest>;
+  /** The tasks that started, by task id: what to call one that ended, and (by run id) the one a turn the agent started answers. */
+  tasks: Map<string, TaskFacts>;
+  runs: Map<string, TaskFacts>;
+  /** The notice of the turn the agent started by itself, while that turn runs: its end may say why it ran. */
+  selfTurn: number | undefined;
   lastMsg: string | undefined;
   /** Events processed so far (a prefix of the events array). */
   count: number;
   dirty: boolean;
+  /** Whose transcript this is: the events of any other scope are not in it. */
+  scope: TranscriptScope;
 }
 
-const blank = (): State => ({ items: [], tools: new Map(), users: new Map(), commands: new Map(), gates: new Map(), lastMsg: undefined, count: 0, dirty: false });
+interface TaskFacts {
+  kind: string;
+  description: string;
+  background: boolean;
+}
+
+const blank = (scope: TranscriptScope): State => ({ items: [], tools: new Map(), users: new Map(), commands: new Map(), gates: new Map(), tasks: new Map(), runs: new Map(), selfTurn: undefined, lastMsg: undefined, count: 0, dirty: false, scope });
 
 const push = (st: State, item: Item) => {
   st.items.push(item);
@@ -113,6 +128,7 @@ const notice = (st: State, key: string, text: string, tone: NoticeItem["tone"]) 
 
 /** Fold one event into the state. Kinds this build does not know are ignored, never an error. */
 function apply(st: State, e: SessionEvent) {
+  if (!admits(st.scope, e)) return;
   const key = String(e.cursor);
   const items = st.items;
   switch (e.kind) {
@@ -145,8 +161,9 @@ function apply(st: State, e: SessionEvent) {
     default:
       return;
   }
-  const a = e.event;
-  if (!a) return;
+  if (!e.event) return;
+  // A subagent's own lines arrive wrapped in their scope: in its transcript they are the transcript.
+  const a = e.event.type === "scoped" ? e.event.event : e.event;
   switch (a.type) {
     case "assistant_delta":
     case "thinking_delta": {
@@ -202,6 +219,32 @@ function apply(st: State, e: SessionEvent) {
       if (deliver(st, id, (cur) => (cur.state === "not_sent" ? cur : { state: "not_sent", cause: reason, detail }))) return;
       const what = id ? st.commands.get(id) : undefined;
       if (what) notice(st, key, `${what} was not sent: ${dropWords(reason)}${detail ? ` (${detail})` : ""}`, reason === "unencodable" || reason === "refused" ? "err" : "info");
+      return;
+    }
+    case "turn_started":
+      // A turn nobody asked for is said; one whose trigger the agent did not report is not guessed at.
+      st.selfTurn = a.trigger === "agent" ? items.length : undefined;
+      if (a.trigger === "agent") notice(st, key, "The agent started a turn on its own", "info");
+      return;
+    case "turn_completed": {
+      // Only now does the agent say why, when it does.
+      const at = st.selfTurn;
+      st.selfTurn = undefined;
+      const n = at === undefined ? undefined : items[at];
+      if (a.origin && n?.kind === "notice") replace(st, at!, { ...n, text: `${n.text} · ${originWords(a.origin, a.origin.run_id ? st.runs.get(a.origin.run_id) : undefined)}` });
+      return;
+    }
+    case "task_started": {
+      const facts = { kind: a.kind, description: a.description ?? "", background: a.background };
+      st.tasks.set(a.task_id, facts);
+      if (a.run_id) st.runs.set(a.run_id, facts);
+      // Work that runs inside a turn is that turn's tool call; a subagent's own transcript says how it began.
+      if (a.background || st.scope.kind === "subagent") notice(st, key, taskStartedWords(facts), "info");
+      return;
+    }
+    case "task_ended": {
+      const facts = st.tasks.get(a.task_id);
+      if (!facts || facts.background || st.scope.kind === "subagent") notice(st, key, taskEndedWords(facts, a), a.ok ? "info" : "warn");
       return;
     }
     case "gate_requested":
@@ -302,8 +345,8 @@ export interface TranscriptFold {
   update(events: readonly SessionEvent[]): readonly Item[];
 }
 
-export function createTranscriptFold(): TranscriptFold {
-  let st = blank();
+export function createTranscriptFold(scope: TranscriptScope = MAIN): TranscriptFold {
+  let st = blank(scope);
   let seen: readonly SessionEvent[] = [];
   let out: readonly Item[] = [];
   return {
@@ -315,7 +358,7 @@ export function createTranscriptFold(): TranscriptFold {
       let before: readonly Item[] | null = null;
       if (!extended) {
         before = out;
-        st = blank();
+        st = blank(scope);
         from = 0;
       }
       for (let i = from; i < events.length; i++) apply(st, events[i]);
@@ -339,8 +382,8 @@ export function createTranscriptFold(): TranscriptFold {
 }
 
 /** Fold wire events into renderable transcript items (deltas merge, tool calls join by call_id). */
-export function buildItems(events: readonly SessionEvent[]): readonly Item[] {
-  return createTranscriptFold().update(events);
+export function buildItems(events: readonly SessionEvent[], scope: TranscriptScope = MAIN): readonly Item[] {
+  return createTranscriptFold(scope).update(events);
 }
 
 /** Short one-line summary of a tool's input (file, command, pattern ...). */
