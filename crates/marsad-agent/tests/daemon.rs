@@ -7,17 +7,20 @@ mod common;
 use std::process::Stdio;
 
 use common::*;
-use marsad_client::MarsadClient;
+use marsad_client::{ClientError, MarsadClient};
 use marsad_proto::agentconfig::{
     ItemOverride, ItemValue, LaunchRequest, LayerScope, OverrideAction, OverrideLayer,
 };
 use marsad_proto::runtime::{Phase, SessionEvent, SessionEventKind};
 use marsad_proto::store::{NotificationPrefs, RecentProject, SeenMark};
-use marsad_proto::{AgentEvent, Command, ConfigItemKind, GateDecision, HostId, McpTransport};
-use serde_json::json;
+use marsad_proto::{
+    codes, methods, AgentEvent, Command, ConfigItemKind, GateDecision, HostId, McpTransport,
+};
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use wasit_control::Hello;
+use wasit_control::{CallError, Hello};
 use wasit_fake_cli::scenario::{Scenario, Turn};
+use wasit_runtime::wire::{codes as engine, ResumeRequest};
 
 /// A client told its runtime directory starts its hub daemon there: the endpoint and the lock
 /// (and the endpoints of its shims) are inside it and nothing is made at the machine's default
@@ -803,4 +806,104 @@ async fn recent_project_is_the_host_normalised_directory() {
     assert_eq!(recent.len(), 1);
     assert_eq!(recent[0].path, canonical.to_string_lossy());
     assert_ne!(recent[0].path, typed);
+}
+
+/// What the desktop bridge's `rpc` rejects with for a failed call: `From<ClientError> for
+/// BridgeError` in `apps/desktop/src-tauri/src/bridge.rs` (`ClientError::Marsad(m)` becomes
+/// `m.into_rpc()`, `ClientError::Call(CallError::Rpc(r))` becomes `r`), serialised as the webview
+/// gets it. The call is `call_traced`, the one the bridge makes.
+async fn refused_launch(c: &MarsadClient, req: LaunchRequest) -> Value {
+    let reply: Result<Value, ClientError> = c
+        .call_traced(None, methods::SESSIONS_LAUNCH, req, None)
+        .await;
+    let e = reply.expect_err("the launch is refused");
+    let rpc = match e {
+        ClientError::Marsad(m) => m.into_rpc(),
+        ClientError::Call(CallError::Rpc(r)) => r,
+        other => panic!("not a refusal of the daemon: {other:?}"),
+    };
+    serde_json::to_value(rpc).unwrap()
+}
+
+/// The message the app's `runtimeRefusal(e, code)` returns for a refusal with `code`
+/// (`apps/desktop/src/bridge/api.ts`):
+///
+/// ```ts
+/// const r = e as Partial<W.RpcError> | undefined;
+/// if (r?.code === code) return r.message ?? null;
+/// const data = r?.data as { marsad_error?: string; cause?: Partial<W.RpcError> } | null | undefined;
+/// return data?.marsad_error === "upstream" && data.cause?.code === code ? data.cause.message ?? null : null;
+/// ```
+fn runtime_refusal<'a>(e: &'a Value, code: &str) -> Option<&'a str> {
+    if e["code"] == code {
+        return e["message"].as_str();
+    }
+    let data = &e["data"];
+    if data["marsad_error"] == codes::UPSTREAM && data["cause"]["code"] == code {
+        return data["cause"]["message"].as_str();
+    }
+    None
+}
+
+/// A launch in a folder that does not exist is refused by the host with the engine's
+/// `bad_working_directory`, which reaches the app through the hub as an `upstream` error (its
+/// `cause` is the host's error), and nothing is created.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn launching_in_a_missing_folder_is_refused_with_the_engines_reason() {
+    let d = TempDir::new();
+    let c = client(&d.path().join("d"));
+    let missing = d.path().join("no-such-folder");
+    let mut req = LaunchRequest::new("claude");
+    req.cwd = Some(missing.to_string_lossy().into_owned());
+    let e = refused_launch(&c, req).await;
+    assert_eq!(e["code"], codes::UPSTREAM, "{e:#}");
+    assert!(
+        runtime_refusal(&e, engine::BAD_WORKING_DIRECTORY).is_some(),
+        "the app does not find the engine's code: {e:#}"
+    );
+    let named = format!("{:?}", missing.to_string_lossy());
+    let msg = runtime_refusal(&e, engine::BAD_WORKING_DIRECTORY).unwrap();
+    assert!(msg.contains(&named), "{msg}");
+    assert!(
+        runtime_refusal(&e, engine::NOTHING_TO_CONTINUE).is_none(),
+        "{e:#}"
+    );
+    assert!(c.runtime(None).list().await.unwrap().is_empty());
+}
+
+/// "Continue the most recent conversation" in an existing, empty folder, where the stand-in agent
+/// has no conversation (its config directory is this test's own, empty): refused with the
+/// engine's `nothing_to_continue`, reaching the app as the same `upstream` shape, and no session
+/// is created.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn continue_most_recent_with_nothing_to_continue_is_refused_with_the_engines_reason() {
+    let d = TempDir::new();
+    let c = client(&d.path().join("d"));
+    let folder = d.path().join("empty");
+    std::fs::create_dir_all(&folder).unwrap();
+    let config = d.path().join("claude-config");
+    std::fs::create_dir_all(&config).unwrap();
+    let mut req = LaunchRequest::new("claude");
+    req.cwd = Some(folder.to_string_lossy().into_owned());
+    req.resume = ResumeRequest::Latest;
+    req.overrides = OverrideLayer {
+        env: vec![(
+            "CLAUDE_CONFIG_DIR".into(),
+            config.to_string_lossy().into_owned(),
+        )],
+        ..OverrideLayer::default()
+    };
+    let e = refused_launch(&c, req).await;
+    assert_eq!(e["code"], codes::UPSTREAM, "{e:#}");
+    let msg = runtime_refusal(&e, engine::NOTHING_TO_CONTINUE)
+        .unwrap_or_else(|| panic!("the app does not find the engine's code: {e:#}"));
+    assert!(msg.contains(folder.to_string_lossy().as_ref()), "{msg}");
+    assert!(
+        runtime_refusal(&e, engine::BAD_WORKING_DIRECTORY).is_none(),
+        "{e:#}"
+    );
+    assert!(
+        c.runtime(None).list().await.unwrap().is_empty(),
+        "a session was created for the refused launch"
+    );
 }
