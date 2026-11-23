@@ -24,7 +24,7 @@ use marsad_proto::workstream::{
 use marsad_proto::{Command, GateDecision, GateRequest, HostId, SessionId, SessionSnapshot};
 use serde_json::{json, Value};
 use wasit_fake_cli::scenario::{Scenario, Turn};
-use wasl_proto::{SpawnDecision, SpawnReply};
+use wasl_proto::{End, EndCode, SpawnDecision, SpawnReply};
 
 fn hub_client(dir: &Path) -> MarsadClient {
     let mut cfg =
@@ -831,7 +831,7 @@ async fn fake_agent_spawns_through_its_mcp_tools() {
 
 /// A spawn gate raised from a turn (the agent's `spawn_agent` call blocks it) is withdrawn when
 /// the user interrupts that turn: the call fails "withdrawn", the gate leaves the session with
-/// `gate_resolved` reason "withdrawn", a late "allow" is refused with the typed
+/// `gate_resolved` reason `turn_interrupted`, a late "allow" is refused with the typed
 /// `gate_withdrawn` error, and nothing is launched.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn spawn_gate_is_withdrawn_when_the_asking_turn_is_interrupted() {
@@ -882,7 +882,8 @@ async fn spawn_gate_is_withdrawn_when_the_asking_turn_is_interrupted() {
         &ev.kind,
         marsad_proto::runtime::SessionEventKind::Agent {
             event: marsad_proto::AgentEvent::GateResolved { request_id, reason }
-        } if request_id == gate.request_id() && reason.as_deref() == Some("withdrawn")
+        } if request_id == gate.request_id()
+            && reason.as_ref().is_some_and(|r| r.code == "turn_interrupted")
     )));
     let late = rt
         .command(
@@ -904,5 +905,151 @@ async fn spawn_gate_is_withdrawn_when_the_asking_turn_is_interrupted() {
     );
     assert!(c.workstreams().await.unwrap().is_empty());
     assert_eq!(rt.list().await.unwrap().len(), 1);
+    stop_hub(&c).await;
+}
+
+/// How a workstream's spawn requests ended is in its view, whoever asked and however it ended:
+/// denied by the human, the asking turn interrupted, refused by the supervisor. Wasl's node
+/// publishes each ending (`wasl.spawns`); the view lists the latest, newest first, and a hub
+/// restart gets them back from the node's journal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_workstream_view_lists_how_spawn_requests_ended() {
+    let d = TempDir::new();
+    let c = hub_client(&d.path().join("l"));
+    let work = d.path().join("w");
+    std::fs::create_dir_all(&work).unwrap();
+    set_host_layers(&c, d.path(), &[&HostId::new("hub")]).await;
+    // An orchestrator whose turns run until interrupted.
+    let mut l = NodeLaunch::new("claude");
+    l.cwd = Some(work.to_string_lossy().into_owned());
+    l.overrides = OverrideLayer {
+        env: scenario_env(
+            d.path(),
+            &Scenario::builder()
+                .turn(Turn::builder().say("thinking").wait_for_interrupt())
+                .build(),
+        ),
+        ..OverrideLayer::default()
+    };
+    let ws = c
+        .create_workstream(WorkstreamDraft {
+            name: "Outcomes".into(),
+            nodes: vec![WorkstreamNode::launched("orch", "orchestrator", l)],
+            limits: Limits::default(),
+            ..WorkstreamDraft::default()
+        })
+        .await
+        .unwrap();
+    let mut views = Views::new(&c);
+    let launched = c.launch_workstream(&ws.id).await.unwrap();
+    let orch = session_of(&launched.workstream, "orch");
+    wait_snap(&c, &orch, "idle", |s| s.phase.name() == "idle").await;
+    let rt = c.runtime(None);
+
+    // 1. Denied by the human, with a reason.
+    let mut pending = spawn_bg(
+        &c,
+        &orch,
+        "d1",
+        json!({"name": "scout", "role": "looks around"}),
+    );
+    let gate = gate_on(&c, &orch, &mut pending).await;
+    answer(
+        &c,
+        &orch,
+        gate.request_id(),
+        SpawnDecision::Deny {
+            reason: Some("do it yourself".into()),
+        }
+        .to_gate(),
+    )
+    .await;
+    let e = pending.await.unwrap().expect_err("denied");
+    assert!(e.contains("do it yourself"), "{e}");
+    let v = views
+        .until(&ws.id, "the denied request in the view", |v| {
+            v.recent_spawns.iter().any(|o| o.request_id == "d1")
+        })
+        .await;
+    assert!(v.pending_spawns.is_empty());
+    let denied = &v.recent_spawns[0];
+    assert_eq!(denied.end, End::new(EndCode::Denied));
+    assert_eq!(
+        (denied.node.as_str(), denied.name.as_str()),
+        ("orch", "scout")
+    );
+    assert_eq!(denied.session, orch.session);
+    assert_eq!(denied.host, orch.host);
+    assert!(denied
+        .detail
+        .as_deref()
+        .is_some_and(|t| t.contains("do it yourself")));
+
+    // 2. The asking turn is interrupted while the gate waits.
+    rt.command(&orch.session, Command::prompt("go"))
+        .await
+        .unwrap();
+    wait_snap(&c, &orch, "turn running", |s| s.turn.is_some()).await;
+    let mut pending = spawn_bg(&c, &orch, "i1", json!({"name": "helper", "role": "helps"}));
+    gate_on(&c, &orch, &mut pending).await;
+    rt.command(&orch.session, Command::Interrupt).await.unwrap();
+    let e = pending.await.unwrap().expect_err("withdrawn");
+    assert!(e.contains("interrupted"), "{e}");
+    let v = views
+        .until(&ws.id, "the interrupted request in the view", |v| {
+            v.recent_spawns.iter().any(|o| o.request_id == "i1")
+        })
+        .await;
+    assert!(v.pending_spawns.is_empty());
+    let interrupted = &v.recent_spawns[0];
+    assert_eq!(interrupted.end, End::new(EndCode::TurnInterrupted));
+    assert_eq!(interrupted.name, "helper");
+    assert!(interrupted
+        .detail
+        .as_deref()
+        .is_some_and(|t| t.contains("interrupted")));
+
+    // 3. The supervisor (the hub) refuses the plan: no gate was ever shown.
+    let e = spawn_now(
+        &c,
+        &orch,
+        "p1",
+        json!({"name": "x", "role": "x", "host": "nowhere"}),
+    )
+    .await
+    .expect_err("unknown host");
+    assert!(e.contains("no host"), "{e}");
+    let v = views
+        .until(&ws.id, "the refused request in the view", |v| {
+            v.recent_spawns.iter().any(|o| o.request_id == "p1")
+        })
+        .await;
+    let refused = &v.recent_spawns[0];
+    assert_eq!(
+        refused.end,
+        End::caused_by(EndCode::Refused, wasl_proto::codes::SPAWN_REFUSED)
+    );
+    assert!(refused
+        .detail
+        .as_deref()
+        .is_some_and(|t| t.contains("no host")));
+    // Newest first.
+    let ids: Vec<&str> = v
+        .recent_spawns
+        .iter()
+        .map(|o| o.request_id.as_str())
+        .collect();
+    assert_eq!(ids, ["p1", "i1", "d1"]);
+    let before = v.recent_spawns.clone();
+
+    // 4. A hub restart: the view lists the same endings again, rebuilt from the node's journal.
+    stop_hub(&c).await;
+    let mut views = Views::new(&c);
+    let v = views
+        .until(&ws.id, "the endings after the hub restarted", |v| {
+            v.recent_spawns.len() == 3
+        })
+        .await;
+    assert_eq!(v.recent_spawns, before);
     stop_hub(&c).await;
 }

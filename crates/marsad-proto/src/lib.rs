@@ -105,7 +105,7 @@
 //! | [`topics::HOSTS_LINKS`] (hub) | [`hosts::LinkStates`] | `"<epoch>.<n>"`; every event is the full map |
 //! | [`topics::WORKSTREAMS`] (hub) | [`workstream::WorkstreamsEvent`] | `"<epoch>.<n>"`; unknown/expired ⇒ starts with `Reset` |
 //! | [`topics::DIAGNOSTICS_EXPORTS`] (hub) | [`export::ExportsEvent`] | `"<epoch>.<n>"`; unknown/expired ⇒ starts with `Reset` |
-//! | Wasl: `wasl.tasks`, `wasl.edges` (any host) | see [`wasl`] | journal sequence (decimal) |
+//! | Wasl: `wasl.tasks`, `wasl.edges`, `wasl.spawns` (any host) | see [`wasl`] | journal sequence (decimal) |
 //!
 //! # Errors
 //!
@@ -144,8 +144,8 @@ pub use wasit_control::{
 };
 pub use wasit_core::{
     AgentConfig, AgentEvent, ChoiceText, Command, ConfigItem, ConfigItemKind, ConfigItemRef,
-    ConfigSource, DriverId, GateChoice, GateChoiceKind, GateDecision, GateRequest, McpServerConfig,
-    McpTransport, QuestionAnswer, Unsupported,
+    ConfigSource, DriverId, GateChoice, GateChoiceKind, GateDecision, GateReason, GateRequest,
+    McpServerConfig, McpTransport, QuestionAnswer, Unsupported,
 };
 pub use wasit_core::{Attachment, ContentPart, FileInput, MediaSource, PromptInput};
 pub use wasit_runtime::wire::{Ack, SessionId, SessionSnapshot};

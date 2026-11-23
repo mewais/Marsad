@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use wasit_control::HostId;
 use wasit_core::{DriverId, GateRequest};
 use wasit_runtime::wire::{ResumeRequest, SessionId, SessionSnapshot};
-use wasl_proto::{EdgePolicy, Limits, TaskView};
+use wasl_proto::{EdgePolicy, End, Limits, TaskView};
 
 use crate::agentconfig::OverrideLayer;
 
@@ -562,6 +562,33 @@ pub struct SpawnGateView {
     pub gate: GateRequest,
 }
 
+/// How many ended spawn requests a [`WorkstreamView`] lists.
+pub const RECENT_SPAWNS: usize = 20;
+
+/// A spawn request of one of the workstream's agents that has ended, launched or not. Wasl
+/// owns the fact (its spawn record) and the vocabulary ([`End`]); the hub only relays it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SpawnOutcomeView {
+    pub request_id: String,
+    /// The asking node.
+    pub node: String,
+    pub host: HostId,
+    pub session: SessionId,
+    /// The name the agent asked for (what the spawn gate showed).
+    pub name: String,
+    /// When it ended (ms since the epoch).
+    pub ended_ms: u64,
+    /// Why: `end.code` is `launched` or the reason it was not (see
+    /// [`wasl_proto::EndCode`]); `end.cause` is the supervisor's error code for `refused` and
+    /// `launch_failed`.
+    pub end: End,
+    /// The sentence the asking agent was told, in words (what the human or the supervisor said
+    /// included); absent when it launched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
 /// One connection with what is moving over it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -614,6 +641,11 @@ pub struct WorkstreamView {
     /// Spawn gates waiting on its sessions.
     #[serde(default)]
     pub pending_spawns: Vec<SpawnGateView>,
+    /// The latest ended spawn requests of its agents (at most [`RECENT_SPAWNS`], newest first):
+    /// launched, or why not. Requests of agents that are not nodes of any workstream are not
+    /// listed.
+    #[serde(default)]
+    pub recent_spawns: Vec<SpawnOutcomeView>,
 }
 
 /// Payload of the `workstreams` topic. Apply in order; `reset` replaces everything.
@@ -663,5 +695,41 @@ mod tests {
         let back: WorkstreamTemplate = serde_json::from_value(json).unwrap();
         assert_eq!(back.spawn, SpawnSettings::default());
         assert_eq!(back.id, "old");
+    }
+
+    /// A view from a hub that did not list ended spawn requests has no `recent_spawns`; it
+    /// still reads, as an empty list, and an ending keeps its code, cause and detail.
+    #[test]
+    fn view_without_recent_spawns_loads_and_an_outcome_round_trips() {
+        let v = WorkstreamView {
+            workstream: Workstream::new("ws", "W"),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            sync: Vec::new(),
+            cost: WorkstreamCost::default(),
+            pending_spawns: Vec::new(),
+            recent_spawns: vec![SpawnOutcomeView {
+                request_id: "r1".into(),
+                node: "orch".into(),
+                host: HostId::new("hub"),
+                session: SessionId::parse("abcdefghijkl").unwrap(),
+                name: "scout".into(),
+                ended_ms: 5,
+                end: End::caused_by(wasl_proto::EndCode::Refused, "spawn_limit"),
+                detail: Some("at most 3".into()),
+            }],
+        };
+        let mut json = serde_json::to_value(&v).unwrap();
+        assert_eq!(json["recent_spawns"][0]["end"]["code"], "refused");
+        assert_eq!(json["recent_spawns"][0]["end"]["cause"], "spawn_limit");
+        assert_eq!(
+            serde_json::from_value::<WorkstreamView>(json.clone()).unwrap(),
+            v
+        );
+        json.as_object_mut().unwrap().remove("recent_spawns");
+        assert!(serde_json::from_value::<WorkstreamView>(json)
+            .unwrap()
+            .recent_spawns
+            .is_empty());
     }
 }
