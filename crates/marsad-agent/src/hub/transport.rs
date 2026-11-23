@@ -4,8 +4,11 @@
 //! One connection per connect attempt does everything, so a user who signs in interactively
 //! does so once: the bootstrap reports `MARSAD-BOOT <os> <arch> <installed --version|none>`,
 //! then reads one command line from stdin — `RUN`, `RESTART` (stop the running daemon) or
-//! `UPLOAD <n>` followed by exactly `n` bytes of binary (written to `marsad-agent.new`,
-//! renamed into place atomically, old daemon stopped; on Windows see [`WINDOWS_BOOT_CS`]) —
+//! `UPLOAD <n>` followed by exactly `n` bytes of binary (written to `marsad-agent.new`, checked
+//! to be exactly `n` bytes long — `head -c` ends cleanly on a short input, so a truncated upload
+//! would otherwise be installed — then renamed into place atomically, old daemon stopped; any
+//! failure ends the bootstrap with exit status 70 and its reason on stderr, which the hub
+//! shows; on Windows see [`WINDOWS_BOOT_CS`]) —
 //! answers `MARSAD-OK`, and finally
 //! `exec`s `marsad-agent bridge --host-id <id>` on the same channel (so a daemon it starts
 //! knows itself by the id the hub routes by; its Wasl node addresses agents with it). The hub
@@ -87,7 +90,9 @@ pub const POSIX_BOOTSTRAP: &str = concat!(
     "echo \"MARSAD-BOOT $(uname -s) $(uname -m) $v\"; ",
     "read c n || exit 65; ",
     "case \"$c\" in ",
-    "UPLOAD) t=\"$b.new.$(uname -n).$$\"; mkdir -p \"${b%/*}\" && head -c \"$n\" > \"$t\" && chmod 755 \"$t\" && mv -f \"$t\" \"$b\" || { rm -f \"$t\"; exit 70; }; ",
+    "UPLOAD) t=\"$b.new.$(uname -n).$$\"; mkdir -p \"${b%/*}\" && head -c \"$n\" > \"$t\" && ",
+    "{ s=$(wc -c < \"$t\" | tr -d \" \"); [ \"$s\" = \"$n\" ] || { echo \"marsad bootstrap: received $s of $n bytes of the helper; not installed\" >&2; false; }; } && ",
+    "chmod 755 \"$t\" && mv -f \"$t\" \"$b\" || { rm -f \"$t\"; exit 70; }; ",
     "\"$b\" stop >/dev/null 2>&1; echo MARSAD-OK;; ",
     "RESTART) \"$b\" stop >/dev/null 2>&1; echo MARSAD-OK;; ",
     "RUN) echo MARSAD-OK;; ",

@@ -23,7 +23,9 @@ impl TempDir {
     pub fn new() -> Self {
         static N: AtomicU64 = AtomicU64::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!("mrs-{}-{n}", std::process::id()));
+        // Fixed width: the cleanup below matches processes by this path as a prefix, and
+        // `mrs-1-1` must not match `mrs-1-10`.
+        let p = std::env::temp_dir().join(format!("mrs-{}-{n:03}", std::process::id()));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         TempDir(p)
