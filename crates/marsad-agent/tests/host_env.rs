@@ -123,7 +123,8 @@ async fn terminal(
             },
         )
         .await
-        .unwrap();
+        .unwrap()
+        .pty;
     let mut out = c.pty_output(host, &info.id, None);
     c.pty_input(host, &info.id, &format!("{cmd}\n"))
         .await

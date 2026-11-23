@@ -17,7 +17,7 @@ use marsad_proto::git::{
     GitCommitRequest, GitDiffRequest, GitDiscardRequest, GitStatusRequest, GitTarget,
 };
 use marsad_proto::pty::{PtyInputRequest, PtyList, PtyRef, PtyResizeRequest, PtyStartRequest};
-use marsad_proto::{methods, topics, Ack, MarsadError};
+use marsad_proto::{methods, topics, Ack, MarsadError, SessionId};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use wasit_control::{CallContext, Cursor, EventStream, RpcError, Service};
@@ -143,11 +143,24 @@ impl Service for HostServices {
                 methods::PTY_START => {
                     let r: PtyStartRequest = params(p).map_err(rpc_to)?;
                     let (dir, session) = self.resolve(&r.target)?;
-                    ok(self
+                    let started = self
                         .ptys
-                        .start(&dir, session, r.cols, r.rows, r.shell)
-                        .await?)
-                    .map_err(rpc_to)?
+                        .start(&dir, session.clone(), r.cols, r.rows, r.shell)
+                        .await?;
+                    // The session may have been deleted between resolving it and the terminal
+                    // entering the table, after which no `Removed` event is coming for it: this
+                    // check, made after the insertion, is what ends that terminal.
+                    if let Some(id) = session {
+                        if SessionId::parse(&id)
+                            .is_none_or(|sid| self.manager.snapshot(&sid).is_err())
+                        {
+                            self.ptys.close_session(&id);
+                            return Err(MarsadError::NotFound {
+                                what: format!("session {id}"),
+                            });
+                        }
+                    }
+                    ok(started).map_err(rpc_to)?
                 }
                 methods::PTY_INPUT => {
                     let r: PtyInputRequest = params(p).map_err(rpc_to)?;
@@ -161,7 +174,7 @@ impl Service for HostServices {
                 }
                 methods::PTY_CLOSE => {
                     let r: PtyRef = params(p).map_err(rpc_to)?;
-                    self.ptys.close(&r.id)?;
+                    self.ptys.close(&r.id).await?;
                     ok(Ack {}).map_err(rpc_to)?
                 }
                 methods::PTY_LIST => ok(PtyList {

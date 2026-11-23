@@ -272,10 +272,13 @@ pub async fn serve(o: Options) -> ExitCode {
         build.clone(),
     )
     .with_environment(env);
+    // Terminals end with their session, and with this daemon (below).
+    let ptys = Ptys::default();
+    ptys.follow_sessions(manager.clone());
     let host = HostServices {
         manager: manager.clone(),
         discovery,
-        ptys: Ptys::default(),
+        ptys: ptys.clone(),
         info,
         shutdown: shutdown.clone(),
     };
@@ -407,6 +410,8 @@ pub async fn serve(o: Options) -> ExitCode {
     };
     emit(MarsadEvent::DaemonShutdown { why, signal, error });
     server.shutdown(Duration::from_secs(2)).await;
+    // No shell outlives the daemon that owns it.
+    ptys.shutdown().await;
     if let Some(h) = hub_handle {
         h.shutdown().await;
     }

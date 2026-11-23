@@ -197,7 +197,8 @@ async fn pty_echo_and_scrollback_replay() {
             },
         )
         .await
-        .unwrap();
+        .unwrap()
+        .pty;
     let mut out = c.pty_output(None, &info.id, None);
     c.pty_input(None, &info.id, &line(ECHO_42)).await.unwrap();
     let mut text = String::new();

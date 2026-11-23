@@ -55,6 +55,7 @@ fn run(dir: &Path) -> Result<usize, String> {
         p::git::GitDiscardRequest,
         p::pty::PtyStartRequest,
         p::pty::PtyInfo,
+        p::pty::PtyStarted,
         p::pty::PtyList,
         p::pty::PtyRef,
         p::pty::PtyInputRequest,

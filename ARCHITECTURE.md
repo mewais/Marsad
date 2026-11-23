@@ -45,6 +45,23 @@ Remote daemons are started by the link's bootstrap as `bridge --host-id <hub's i
 host>`, so their Wasl node addresses agents with the id the hub routes by; a running daemon
 of the same build but another id is restarted by the next attempt.
 
+### Terminals (`pty.*`)
+
+A session has at most one terminal, identified by the session and owned by the daemon of the
+session's host (`host/pty.rs`). `pty.start` for a session is "open": it returns the live terminal
+(`created: false`), replaces an exited one, or starts a shell (`created: true`); clients attach
+with `pty.output:<id>` (replay from a byte offset, then live) and detaching is just
+unsubscribing. A terminal lives until its shell exits, a client closes it, its session is
+deleted (the daemon follows the runtime's `host.sessions` feed: the `Removed` event, and a check
+against the manager after a `Reset`), or the daemon shuts down (every shell is hung up, killed
+if it ignores that, and reaped before the daemon exits). An *ended* session keeps its terminal:
+the shell is the user's, not the agent's. A shell that exited stays readable, with its status
+and an `exited` event at the end of its stream that a later subscriber replays, until it is
+closed or replaced, so a session holds one entry at most. Directory terminals (no session) have
+no slot and are capped (`limit_reached`). The app's Terminal tab asks the host which terminal the
+session has, starts one only when there is none, and shows only what the host confirmed; its
+Close terminal button is the only thing besides the shell's own exit that ends it.
+
 ## Workstreams (§5)
 
 The hub owns typed workstream documents (`marsad_proto::workstream`): nodes (a session

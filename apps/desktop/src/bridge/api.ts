@@ -44,7 +44,8 @@ export interface MethodMap {
   [M.GIT_DIFF]: [W.GitDiffRequest, W.GitDiff];
   [M.GIT_COMMIT]: [W.GitCommitRequest, W.GitCommitReply];
   [M.GIT_DISCARD]: [W.GitDiscardRequest, W.Ack];
-  [M.PTY_START]: [W.PtyStartRequest, W.PtyInfo];
+  [M.PTY_START]: [W.PtyStartRequest, W.PtyStarted];
+  [M.PTY_LIST]: [void, W.PtyList];
   [M.PTY_INPUT]: [W.PtyInputRequest, W.Ack];
   [M.PTY_RESIZE]: [W.PtyResizeRequest, W.Ack];
   [M.PTY_CLOSE]: [W.PtyRef, W.Ack];
@@ -170,12 +171,16 @@ export function createApi(b: Backend) {
       discard: (host: W.HostId, r: W.GitDiscardRequest) => call(b, M.GIT_DISCARD, r, { host }),
     },
     pty: {
+      /** Open the session's terminal: the host returns the live one (`created: false`), or starts one. */
       start: (host: W.HostId, r: W.PtyStartRequest) => call(b, M.PTY_START, r, { host }),
+      /** The host's terminals (a session has at most one), live or exited. */
+      list: async (host: W.HostId) => (await call(b, M.PTY_LIST, undefined, { host })).ptys,
       input: (host: W.HostId, id: string, data: string) => call(b, M.PTY_INPUT, { id, data }, { host }),
       resize: (host: W.HostId, id: string, cols: number, rows: number) => call(b, M.PTY_RESIZE, { id, cols, rows }, { host }),
       close: (host: W.HostId, id: string) => call(b, M.PTY_CLOSE, { id }, { host }),
-      output: (host: W.HostId, id: string, from: number | undefined, cb: (e: W.PtyEvent) => void): Unsubscribe =>
-        b.subscribe(T.ptyOutput(id), { host, from }, (e) => cb(e as W.PtyEvent)),
+      /** From byte offset `from` (0: the whole scrollback the host still has), then live; ends after `exited`. */
+      output: (host: W.HostId, id: string, from: number | undefined, cb: (e: W.PtyEvent) => void, onEnd?: End): Unsubscribe =>
+        b.subscribe(T.ptyOutput(id), { host, from }, (e) => cb(e as W.PtyEvent), onEnd),
     },
     fs: {
       list: (host: W.HostId, r: W.FsListRequest) => call(b, M.FS_LIST, r, { host }),

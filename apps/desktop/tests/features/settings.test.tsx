@@ -58,7 +58,7 @@ describe("settings", () => {
     const sw = await screen.findByRole("switch", { name: /A session finished/ });
     expect(sw).toHaveAttribute("aria-checked", "true");
     await user.click(sw);
-    await waitFor(() => expect(backend.requests.find((r) => r.method === "store.notifications.set")?.params).toEqual({ needs_you: true, failed: true, finished: false, host_lost: true }));
+    await waitFor(() => expect(backend.requests.find((r) => r.method === "store.notifications.set")?.params).toEqual({ needs_you: true, failed: true, finished: false, host_lost: true, sign_in_needed: true }));
     expect(sw).toHaveAttribute("aria-checked", "false");
     await user.click(screen.getByRole("switch", { name: "Do not disturb" }));
     await waitFor(() => expect(backend.requests.some((r) => r.method === "store.settings.set" && (r.params as { key: string }).key === "notify.dnd")).toBe(true));

@@ -8,9 +8,12 @@ import type { HostPlatform } from "./HostPlatform";
  */
 export type HostEntry = { id: HostId, name: string, kind: HostKind, platform?: HostPlatform | null, created_at_ms: number, 
 /**
- * The host has needed an interactive answer (password, code, push, host key) to sign in.
- * Such a link never reconnects on its own: after a drop it waits in `auth_needed` for an
- * explicit `hosts.reconnect`.
+ * The host needs the user at login: the last connect that reached it asked the user for
+ * something other than a host-key confirmation (a password, a one-time code, a key
+ * passphrase; see [`PromptKind::needs_user`]). Such a link never reconnects on its own,
+ * since every attempt would spend a code or fire a push: after a drop, and at the hub's
+ * start, it waits in `auth_needed` (`held`) for an explicit `hosts.reconnect`. Learned by
+ * the hub from each successful sign-in, and un-learned by one that asked for nothing.
  */
 interactive_auth: boolean, 
 /**
