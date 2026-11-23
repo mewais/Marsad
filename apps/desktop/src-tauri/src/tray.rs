@@ -1,10 +1,12 @@
-//! Tray / menu-bar item: shows how many sessions need an answer; clicking it (or "Show")
-//! brings the window forward. Where the platform has no tray (e.g. Linux without an
+//! Tray / menu-bar item: shows what needs the user (sessions that need an answer, hosts that
+//! wait for a sign-in); clicking it (or "Show") brings the window forward. Where the platform has no tray (e.g. Linux without an
 //! AppIndicator host) the app runs without it.
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
+
+use crate::notify::Attention;
 
 /// The tray and its attention line (managed state when the tray exists).
 pub struct Tray {
@@ -45,16 +47,13 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Show `n` sessions needing an answer.
-pub fn set_attention(app: &AppHandle, n: usize) {
+/// Show what needs the user: sessions needing an answer and hosts waiting for a sign-in.
+pub fn set_attention(app: &AppHandle, a: Attention) {
     let Some(t) = app.try_state::<Tray>() else {
         return;
     };
-    let text = match n {
-        0 => "Nothing needs you".to_string(),
-        1 => "1 session needs you".to_string(),
-        n => format!("{n} sessions need you"),
-    };
+    let n = a.total();
+    let text = a.words();
     let tooltip = if n == 0 {
         "Marsad".to_string()
     } else {

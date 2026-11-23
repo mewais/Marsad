@@ -5,6 +5,7 @@ import { STATUS_ORDER, type StatusKey } from "../ui/status";
 import { buildView, type SessionView } from "./domain";
 import { hostView, hubView, linkView, type HostView } from "./hosts";
 import type { AppState } from "./model";
+import { heldLink, type HeldLink, type SignInQuestion, type WaitingHost } from "./signin";
 
 const wsIndex = new WeakMap<Record<string, WorkstreamView>, Map<SessionKey, string>>();
 /** Session key → workstream name, from the hub's workstream documents. */
@@ -106,13 +107,15 @@ export interface Counts {
   idle: number;
   ended: number;
   stale: number;
+  /** Hosts that wait for the user to sign in (live fleet only): the hub does not reconnect them by itself. */
+  hostsWaiting: number;
   total: number;
   todayCost: number;
   todaySessions: number;
 }
 
 export function selectCounts(s: AppState): Counts {
-  const c: Counts = { needs: 0, failed: 0, done: 0, working: 0, idle: 0, ended: 0, stale: 0, total: 0, todayCost: 0, todaySessions: 0 };
+  const c: Counts = { needs: 0, failed: 0, done: 0, working: 0, idle: 0, ended: 0, stale: 0, hostsWaiting: heldHosts(s).length, total: 0, todayCost: 0, todaySessions: 0 };
   const midnight = new Date();
   midnight.setHours(0, 0, 0, 0);
   for (const key of Object.keys(s.sessions)) {
@@ -139,3 +142,40 @@ export const selectHost = (s: AppState, id: HostId): HostView | undefined => (s.
 /** Hosts whose data is last-known (see `hostStale`), as one comparable string for `useAppState`. */
 export const selectStaleHosts = (s: AppState): string => s.hostOrder.filter((id) => hostStale(s, id)).join("|");
 export const sessionsOnHost = (s: AppState, id: HostId): SessionKey[] => Object.keys(s.sessions).filter((k) => k.startsWith(id + "/"));
+
+/** The hosts' held links (see `heldLink`), in fleet order; none while the fleet is not live (every link is then the last known, not something to act on). */
+function heldHosts(s: AppState): { id: HostId; held: HeldLink }[] {
+  if (!fleetLive(s)) return [];
+  const out: { id: HostId; held: HeldLink }[] = [];
+  for (const id of s.hostOrder) {
+    const h = s.hosts[id];
+    const held = h && h.link.link === "remote" ? heldLink(h.link.state) : null;
+    if (held) out.push({ id, held });
+  }
+  return out;
+}
+
+/** Hosts waiting for the user to sign in, in fleet order. */
+export const selectWaitingHosts = (s: AppState): WaitingHost[] =>
+  heldHosts(s).map(({ id, held }) => ({
+    id,
+    name: s.hosts[id].entry.name,
+    ...(held.cause ? { cause: held.cause } : {}),
+    detail: held.detail,
+    sessions: Object.keys(s.sessions).filter((k) => k.startsWith(`${id}/`)).length,
+  }));
+
+/**
+ * Every question waiting for the user, oldest first. The daemon numbers prompts in the order it
+ * raises them (across hosts), so the order is stable: an answer or a new question never reorders
+ * the ones already waiting.
+ */
+export function selectSignInQueue(s: AppState): SignInQuestion[] {
+  const out: SignInQuestion[] = [];
+  for (const id of s.hostOrder) {
+    const h = s.hosts[id];
+    if (h?.authPrompt) out.push({ prompt: h.authPrompt, hostName: h.entry.name });
+  }
+  return out.sort((a, b) => a.prompt.id - b.prompt.id);
+}
+

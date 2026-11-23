@@ -31,7 +31,7 @@ export interface HubCore {
 /** Fixture-only: the hub's services (hosts, store documents, effective config, launch). */
 export class FixtureHub {
   settings: Record<string, unknown> = { theme: "system", "defaults.driver": "claude" };
-  notifications: NotificationPrefs = { needs_you: true, failed: true, finished: true, host_lost: true };
+  notifications: NotificationPrefs = { needs_you: true, failed: true, finished: true, host_lost: true, sign_in_needed: true };
   layers: StoredLayer[] = seedLayers();
   seen: SeenMark[] = [];
   recent: RecentProject[];

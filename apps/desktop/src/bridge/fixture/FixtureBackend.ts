@@ -5,7 +5,7 @@ import type {
   FileReadRequest,
   FilesStatRequest,
   AuthAnswer, AuthCancel, AuthPrompt, BaseRequest, HostEntry, FleetEvent, FleetHost, FsListRequest, FsPathRequest, GateReason, GateRequest, GitCommitRequest, GitDiffRequest,
-  GitDiscardRequest, GitRefresh, GitStatus, GitStatusRequest, GitSummary, GitTarget, HistoryRequest, RenameSession, HostId, InventoryRequest, LinkState, SessionRef, SessionSnapshot, CommandRequest,
+  GitDiscardRequest, GitRefresh, GitStatus, GitStatusRequest, GitSummary, GitTarget, HistoryRequest, RenameSession, HostId, InventoryRequest, LinkState, SessionRef, SignInRepeat, SessionSnapshot, CommandRequest,
   HostEnvironment, HostEnvSettings, HostRef, UiEvent, ExportRequest, DiagTailParams, TrailItem, TrailRequest, LaunchRequest, LaunchReply,
 } from "../wire";
 import { methods as M, topics as T } from "../wire";
@@ -38,7 +38,14 @@ interface HostRec {
   def: FixtureHost;
   prompt: AuthPrompt | null;
   sessions: Map<string, Entry>;
+  /** Why the link was last down, in the hub's words (kept while the hub waits for the user, like the daemon). */
+  cause?: string;
+  /** The next successful sign-in is followed by a second one, for this reason (see `repeatNext`). */
+  repeat?: SignInRepeat;
 }
+
+/** The hub's words for a link it parks until the user asks (`SupervisorHooks::hold`). */
+const HELD_DETAIL = "this host signs in interactively: connect to sign in";
 
 const connected = (id: string): LinkState => ({ state: "connected", hello: { protocol: { major: 1, minor: 0 }, build: "fixture", host_id: id, role: "daemon", features: [] } });
 const nextAt = (ms: number) => ({ secs_since_epoch: Math.floor(ms / 1000), nanos_since_epoch: (ms % 1000) * 1e6 });
@@ -73,6 +80,7 @@ export class FixtureBackend implements Backend {
   readonly sim: SessionSim;
   readonly envs: FixtureHostEnvs;
   private invSubs = new Map<HostId, Set<(e: unknown) => void>>();
+  private navigators = new Set<(t: { host: HostId; session?: string }) => void>();
   /** The app's link to its local daemon (what the desktop shell reports); starts connected. */
   private hubLink: HubLinkInfo = { state: "connected" };
   private hubWatchers = new Set<(l: HubLinkInfo) => void>();
@@ -653,26 +661,37 @@ export class FixtureBackend implements Backend {
     this.fleet({ kind: "host_removed", id });
   }
 
+  /** `hosts.reconnect`: the user's click arms one attempt; an interactive host's attempt asks the user something. */
   private reconnect(id: HostId) {
     const h = this.hosts.get(id);
     if (!h) throw err("not_found", `No host ${id}`);
     if (!h.def.link) return;
     this.setLink(id, { state: "connecting" });
     if (h.def.entry.interactive_auth) {
-      this.later(300 * this.opts.speed, () => this.setAuthPrompt(id, { prompt: `${h.def.entry.kind.kind === "ssh" ? h.def.entry.kind.target : id}'s password: `, kind: "secret", attempt: 1 }));
+      this.later(300 * this.opts.speed, () => this.setAuthPrompt(id, { prompt: this.passwordPrompt(h), kind: "secret", attempt: 1 }));
     } else this.later(800 * this.opts.speed, () => this.setLink(id, connected(id)));
   }
 
+  private passwordPrompt(h: HostRec): string {
+    const k = h.def.entry.kind;
+    return `${k.kind === "ssh" ? k.target : h.def.entry.id}'s password: `;
+  }
+
+  /** The daemon answers a prompt id it does not hold (answered, withdrawn, or from an attempt that ended) with `not_found`. */
+  private pending(host: HostId, id: number): HostRec & { prompt: AuthPrompt } {
+    const h = this.hosts.get(host);
+    if (!h?.prompt || h.prompt.id !== id) throw err("not_found", `not found: prompt ${id} of ${host}`);
+    return h as HostRec & { prompt: AuthPrompt };
+  }
+
   private answerAuth(a: AuthAnswer) {
-    const h = this.hosts.get(a.host);
-    if (!h?.prompt || h.prompt.id !== a.id) throw err("not_found", "That sign-in prompt has expired.");
-    const p = h.prompt;
+    const p = this.pending(a.host, a.id).prompt;
     if (p.kind === "secret") {
-      if (a.answer === "wrong") return this.setAuthPrompt(a.host, { prompt: p.prompt, kind: "secret", attempt: p.attempt + 1 });
-      return this.setAuthPrompt(a.host, { prompt: "Verification code: ", kind: "code", attempt: 1 });
+      if (a.answer === "wrong") return this.setAuthPrompt(a.host, { prompt: p.prompt, kind: "secret", attempt: p.attempt + 1, ...(p.repeat ? { repeat: p.repeat } : {}) });
+      return this.setAuthPrompt(a.host, { prompt: "Verification code: ", kind: "code", attempt: 1, ...(p.repeat ? { repeat: p.repeat } : {}) });
     }
     if (p.kind === "code") {
-      this.setAuthPrompt(a.host, { prompt: "Duo Push sent to “iPhone 15”. Approve the request on your device to continue.", kind: "info", attempt: 1 });
+      this.setAuthPrompt(a.host, { prompt: "Duo Push sent to “iPhone 15”. Approve the request on your device to continue.", kind: "info", attempt: 1, ...(p.repeat ? { repeat: p.repeat } : {}) });
       this.later(2500 * (this.opts.speed || 1), () => this.finishAuth(a.host, p.id + 1));
       return;
     }
@@ -682,15 +701,74 @@ export class FixtureBackend implements Backend {
   private finishAuth(id: HostId, promptId: number) {
     const h = this.hosts.get(id);
     if (!h?.prompt || h.prompt.id !== promptId) return;
+    const repeat = h.repeat;
+    if (repeat) {
+      // The hub has to connect again within this sign-in (a helper update, say): the user is asked again, and told why.
+      h.repeat = undefined;
+      this.setAuthPrompt(id, { prompt: this.passwordPrompt(h), kind: "secret", attempt: 1, repeat });
+      return;
+    }
     this.setAuthPrompt(id, null);
+    h.cause = undefined;
     this.setLink(id, connected(id));
   }
 
   private cancelAuth(a: AuthCancel) {
-    const h = this.hosts.get(a.host);
-    if (!h?.prompt) return;
+    const h = this.pending(a.host, a.id);
     this.setAuthPrompt(a.host, null);
-    this.setLink(a.host, { state: "auth_needed", problem: "auth_needed", detail: "Sign-in was cancelled." });
+    // The user's own cancel is an attempt that failed, not a link the hub holds: no `held`.
+    this.setLink(a.host, { state: "auth_needed", problem: "auth_needed", detail: "Sign-in was cancelled.", ...(h.cause ? { cause: h.cause } : {}) });
+  }
+
+  // ── what the hub does on its own (tests, demos) ───────────────────────────
+
+  /** The prompt the fleet shows for `id` now (tests): what an answer must be bound to. */
+  promptOf(id: HostId): AuthPrompt | null {
+    return this.hosts.get(id)?.prompt ?? null;
+  }
+
+  /** Play the desktop shell's `navigate` event: a notification brought the app forward on a session of `host`, or on the host itself. */
+  navigate(target: { host: HostId; session?: string }) {
+    this.navigators.forEach((cb) => cb(target));
+  }
+
+  onNavigate(cb: (t: { host: HostId; session?: string }) => void): Unsubscribe {
+    this.navigators.add(cb);
+    return () => void this.navigators.delete(cb);
+  }
+
+  /**
+   * A connected host's link drops, as the hub reports it: a host that asks for a sign-in each time is parked
+   * until the user connects it (`auth_needed`, `held`, with the drop's reason as `cause`); any other is
+   * reconnected by the hub itself.
+   */
+  dropLink(id: HostId, cause: string) {
+    const h = this.hosts.get(id)!;
+    h.cause = cause;
+    if (h.def.entry.interactive_auth) this.setLink(id, { state: "auth_needed", problem: "auth_needed", detail: HELD_DETAIL, cause, held: true });
+    else this.setLink(id, { state: "reconnecting", attempt: 1, next_at: nextAt(this.opts.now() + 250), last_error: cause });
+  }
+
+  /**
+   * The connect attempt that raised the host's prompt ends (it ran out of time, or its connection closed):
+   * the hub withdraws the prompt, and a host that asks each time is held again.
+   */
+  endAttempt(id: HostId) {
+    const h = this.hosts.get(id)!;
+    this.setAuthPrompt(id, null);
+    if (h.def.entry.interactive_auth) this.setLink(id, { state: "auth_needed", problem: "auth_needed", detail: HELD_DETAIL, ...(h.cause ? { cause: h.cause } : {}), held: true });
+  }
+
+  /** What the hub learns from a connect that asked the user something: the host signs in interactively. */
+  markInteractive(id: HostId) {
+    const h = this.hosts.get(id)!;
+    h.def.entry = { ...h.def.entry, interactive_auth: true };
+    this.fleet({ kind: "host_upserted", host: h.def.entry });
+  }
+
+  /** After the host's next successful sign-in the hub has to connect again within it, and the user is asked again for `why`. */
+  repeatNext(id: HostId, why: SignInRepeat) {
+    this.hosts.get(id)!.repeat = why;
   }
 
   private createSession(host: HostId, snap: SessionSnapshot, first: string | null) {

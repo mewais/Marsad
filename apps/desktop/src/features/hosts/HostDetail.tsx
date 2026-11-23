@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import type { WslDistros } from "../../bridge/wire";
 import { useNavigate, sessionPath } from "../../router";
-import { backgroundWords, linkView, osWord, sameMachineAs, useActions, useDeveloperMode, useReach, useSessionView, useApi, useAppState, usePending, type HostView } from "../../state";
+import { askWords, backgroundWords, droppedWords, keepRunningWords, linkView, NO_RETRY_WORDS, osWord, reconnectPendingKey, sameMachineAs, useActions, useDeveloperMode, useReach, useSessionView, useApi, useAppState, usePending, useSignInQueue, type HostView } from "../../state";
 import { Button, ConfirmDialog, ConnState, DriverBadge, ErrorBoundary, Icon, STATUS, Wrap, hostIcon, makeDriver, useNow } from "../../ui";
 import { address, linkSub } from "./linkText";
+import { SignInButton } from "./SignInButton";
 import { WslDistroPicker, defaultDistro } from "./WslDistroPicker";
 import { EnvironmentSection } from "./EnvironmentSection";
 import { HostDiagnostics } from "../diagnostics/HostDiagnostics";
@@ -19,12 +20,12 @@ export function HostDetail({ host }: { host: HostView }) {
   const drivers = useAppState((s) => s.drivers);
   const twins = useAppState((s) => sameMachineAs(s.hosts, host.id).join(", "));
   const [confirm, setConfirm] = useState(false);
-  const reconnectPk = `reconnect:${host.id}`;
-  const busy = !!usePending(reconnectPk);
+  const busy = !!usePending(reconnectPendingKey(host.id));
+  const queue = useSignInQueue();
   const now = useNow(true);
   const lv = linkView(host.link, host.authPrompt, now);
   const st = host.link.link === "remote" ? host.link.state : null;
-  const reconnect = () => void actions.run(reconnectPk, `Could not connect to ${host.name}`, () => api.hosts.reconnect(host.id));
+  const reconnect = () => void actions.reconnectHost(host.id, host.name);
   const reach = useReach();
   const developer = useDeveloperMode();
   // The local host is reached through the app's own link to the local daemon, not through the hub.
@@ -46,7 +47,18 @@ export function HostDetail({ host }: { host: HostView }) {
       </div>
     );
   } else if (host.authPrompt) {
-    card = <div className="gate"><div className="gate-h"><Icon name="key" size="sm" />Waiting for you to sign in</div><div className="small">{host.name} asked for {host.authPrompt.kind === "secret" ? "a password" : host.authPrompt.kind === "code" ? "a one-time code" : host.authPrompt.kind === "confirm" ? "a yes or no" : "approval"}. The sign-in dialog is open.</div></div>;
+    const ahead = queue.findIndex((q) => q.prompt.host === host.id);
+    card = (
+      <div className="gate"><div className="gate-h"><Icon name="key" size="sm" />{host.name} has a question for you</div>
+        <div className="small">{host.name} asked for {askWords(host.authPrompt.kind)}. {ahead <= 0 ? "Answer it in the sign-in dialog." : `It is asked after ${ahead === 1 ? "one other question" : `${ahead} other questions`} in the sign-in dialog.`}</div></div>
+    );
+  } else if (st?.state === "auth_needed" && st.held) {
+    card = (
+      <div className="gate" data-testid="host-held"><div className="gate-h"><Icon name="key" size="sm" />Needs you to sign in</div>
+        <div className="small">{droppedWords(host.name, st.cause)} {NO_RETRY_WORDS}</div>
+        <div className="small faint">Every attempt asks you for something (a password, a code or an approval on your phone), so it waits for your click.</div>
+        <div className="acts"><SignInButton host={host} /></div></div>
+    );
   } else if (st?.state === "auth_needed") {
     card = (
       <div className="gate bad"><div className="gate-h"><Icon name="key" size="sm" />{lv.word}</div><div className="small">{st.detail}</div>
@@ -98,6 +110,7 @@ export function HostDetail({ host }: { host: HostView }) {
       {lv.connected ? <EnvironmentSection hostId={host.id} hostName={host.name} windows={entry?.platform?.os === "windows"} now={now} /> : null}
       <div>
         <h4 className="eyebrow">Sessions here</h4>
+        {st?.state === "auth_needed" && st.held && keys ? <div className="small faint" data-testid="held-sessions">{keepRunningWords(keys.split("|").length)}</div> : null}
         <div className="hist">
           {keys ? keys.split("|").map((key) => <SessionLine key={key} sessionKey={key} />) : <div className="faint small">No sessions on this host.</div>}
         </div>

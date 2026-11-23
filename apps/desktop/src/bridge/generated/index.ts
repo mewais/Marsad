@@ -225,6 +225,7 @@ export type * from "./SettingSet";
 export type * from "./Settings";
 export type * from "./SetupReport";
 export type * from "./Side";
+export type * from "./SignInRepeat";
 export type * from "./SkillRef";
 export type * from "./SlashCommandInfo";
 export type * from "./SpawnDriver";

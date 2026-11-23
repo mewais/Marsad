@@ -6,6 +6,8 @@ import { openNewSession, openNewWorkstream } from "./dialogs";
 export function TitleBar({ onPalette }: { onPalette: () => void }) {
   const counts = useCounts();
   const nav = useNavigate();
+  // Everything that waits for the user: sessions that need an answer and hosts that need a sign-in (the tray counts the same).
+  const waiting = counts.needs + counts.hostsWaiting;
   return (
     <header className="titlebar">
       <div className="brand">
@@ -18,7 +20,7 @@ export function TitleBar({ onPalette }: { onPalette: () => void }) {
         <Kbd>Ctrl K</Kbd>
       </button>
       <div className="tb-right">
-        <IconButton icon="bell" label="Notifications" badge={counts.needs || undefined} onClick={() => nav(counts.needs ? "/inbox" : "/settings?s=notifications")} />
+        <IconButton icon="bell" label="Notifications" badge={waiting || undefined} onClick={() => nav(waiting ? "/inbox" : "/settings?s=notifications")} />
         <SplitButton
           label="New session"
           icon="plus"

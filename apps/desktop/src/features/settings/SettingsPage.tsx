@@ -143,6 +143,7 @@ const EVENTS: { key: keyof NotificationPrefs; label: string; icon: IconName; cls
   { key: "failed", label: "A session failed", icon: "failed", cls: "failed" },
   { key: "finished", label: "A session finished", icon: "done", cls: "done" },
   { key: "host_lost", label: "A host lost its connection", icon: "refresh", cls: "needs" },
+  { key: "sign_in_needed", label: "A host needs you to sign in", icon: "key", cls: "needs" },
 ];
 
 function Notifications() {
@@ -150,7 +151,7 @@ function Notifications() {
   const { store } = useApp();
   const api = useApi();
   const actions = useActions();
-  // One key for all four: each write sends every choice, so two in flight would overwrite each other.
+  // One key for all of them: each write sends every choice, so two in flight would overwrite each other.
   const saving = !!usePending("notify");
   const { value: unfocused, set: setUnfocused, pending: unfocusedPending } = useSetting<boolean>("notify.only_unfocused", true);
   const { value: dnd, set: setDnd, pending: dndPending } = useSetting<boolean>("notify.dnd", false);

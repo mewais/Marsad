@@ -66,6 +66,9 @@ export function parseRoute(path: string): Route {
 
 export const workstreamPath = (id: string, q?: Record<string, string>) => `/workstreams/${encodeURIComponent(id)}${q ? `?${new URLSearchParams(q)}` : ""}`;
 
+/** A host's page on the Hosts screen. */
+export const hostPath = (host: string) => `/hosts?h=${encodeURIComponent(host)}`;
+
 /** A session's address: a section of it (Activity when none), or a subagent's transcript (`sub`: its call id). */
 export const sessionPath = (host: string, id: string, tab?: string, sub?: string) => {
   const q = new URLSearchParams();

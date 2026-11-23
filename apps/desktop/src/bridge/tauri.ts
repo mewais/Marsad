@@ -38,11 +38,11 @@ export class TauriBackend implements Backend {
     for (let i = 0; i < events.length; i += DIAG_BATCH_MAX) await invoke("diag_log", { events: events.slice(i, i + DIAG_BATCH_MAX) });
   }
 
-  onNavigate(cb: (target: { host: string; session: string }) => void): Unsubscribe {
+  onNavigate(cb: (target: { host: string; session?: string }) => void): Unsubscribe {
     let stop: (() => void) | undefined;
     let cancelled = false;
     void import("@tauri-apps/api/event").then(({ listen }) =>
-      listen<{ host: string; session: string }>("navigate", (e) => cb(e.payload)).then((un) => {
+      listen<{ host: string; session?: string }>("navigate", (e) => cb(e.payload)).then((un) => {
         stop = un;
         if (cancelled) un();
       }),

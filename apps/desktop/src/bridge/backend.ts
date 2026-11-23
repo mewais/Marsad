@@ -67,6 +67,6 @@ export interface Backend {
   reconnectHub(): Promise<void>;
   /** This app's own version (the shell's, or the package's in a browser). */
   appVersion(): Promise<string>;
-  /** Desktop shell only: after a notification brings the app forward, the session it was about. */
-  onNavigate?(cb: (target: { host: HostId; session: string }) => void): Unsubscribe;
+  /** Desktop shell only: after a notification brings the app forward, what it was about: a session of `host`, or (no `session`) the host itself. */
+  onNavigate?(cb: (target: { host: HostId; session?: string }) => void): Unsubscribe;
 }

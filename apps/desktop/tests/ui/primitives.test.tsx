@@ -43,7 +43,7 @@ describe("DriverBadge and host link", () => {
     expect(linkView({ link: "remote", state: { state: "reconnecting", attempt: 2, next_at: at(now + 4000), last_error: "reset" } }, null, now).detail).toBe("Reconnecting in 4s");
     expect(linkView({ link: "remote", state: { state: "provisioning", reason: { kind: "command_not_found", detail: "" } } }).word).toBe("Installing helper");
     render(<ConnState host={{ link: { link: "remote", state: { state: "auth_needed", problem: "auth_needed", detail: "key rejected" } }, authPrompt: null }} />);
-    expect(screen.getByText("Sign-in needed")).toBeInTheDocument();
+    expect(screen.getByText("Sign-in did not succeed")).toBeInTheDocument();
   });
 });
 

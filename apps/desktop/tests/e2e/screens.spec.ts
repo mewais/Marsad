@@ -52,7 +52,7 @@ for (const theme of ["dark", "light"] as const) {
       await shot(page, `hosts-${theme}-1440`);
       if (theme === "light") return;
       await go(page, "/hosts?h=gpu");
-      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await page.getByRole("complementary", { name: "gpu-box details" }).getByRole("button", { name: "Sign in", exact: true }).click();
       const dlg = page.getByRole("dialog", { name: "Sign in to gpu-box" });
       await expect(dlg.getByText("ml@10.0.4.21's password:")).toBeVisible();
       await shot(page, "hosts-signin-dark-1440");

@@ -13,7 +13,8 @@ export function Rail() {
   const route = useRoute();
   const nav = useNavigate();
   const counts = useCounts();
-  const item = (to: string, label: string, icon: IconName, current: boolean, badge?: number) => (
+  const hostsWaiting = counts.hostsWaiting;
+  const item = (to: string, label: string, icon: IconName, current: boolean, badge?: number, badgeLabel = `${badge} need you`) => (
     <a
       key={label}
       href={`#${to}`}
@@ -25,12 +26,18 @@ export function Rail() {
     >
       <Icon name={icon} size="lg" />
       {label}
-      {badge ? <span className="badge" aria-label={`${badge} need you`}>{badge}</span> : null}
+      {badge ? <span className="badge" aria-label={badgeLabel}>{badge}</span> : null}
     </a>
   );
   return (
     <nav className="rail" aria-label="Main">
-      {ITEMS.map((i) => item(i.to, i.label, i.icon, i.match.includes(route.name), i.label === "Inbox" ? counts.needs : undefined))}
+      {ITEMS.map((i) =>
+        i.label === "Inbox"
+          ? item(i.to, i.label, i.icon, i.match.includes(route.name), counts.needs)
+          : i.label === "Hosts"
+            ? item(i.to, i.label, i.icon, i.match.includes(route.name), hostsWaiting, `${hostsWaiting} ${hostsWaiting === 1 ? "host needs" : "hosts need"} you to sign in`)
+            : item(i.to, i.label, i.icon, i.match.includes(route.name)),
+      )}
       <span className="sp" />
       {item("/settings", "Settings", "gear", route.name === "settings")}
     </nav>

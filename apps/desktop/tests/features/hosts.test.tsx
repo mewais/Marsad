@@ -19,15 +19,17 @@ describe("hosts", () => {
     const list = screen.getByRole("listbox", { name: "Hosts" });
     const row = (id: string) => list.querySelector(`[data-host="${id}"]`) as HTMLElement;
     expect(within(row("win")).getByText(/Reconnecting/)).toBeInTheDocument();
-    expect(within(row("gpu")).getByText("Sign-in needed")).toBeInTheDocument();
+    expect(within(row("gpu")).getByText("Needs you to sign in")).toBeInTheDocument();
     expect(within(row("pi")).getByText(/Updating helper/)).toBeInTheDocument();
     await waitFor(() => expect(within(row("x1")).getByText("2.1.4")).toBeInTheDocument());
   });
 
-  it("auth_needed waits for an explicit Connect, then walks secret, one-time code and push prompts", async () => {
+  it("a held host waits for the explicit Sign in click, then walks secret, one-time code and push prompts", async () => {
     const user = userEvent.setup();
     const { backend } = await hostsPage("/hosts?h=gpu");
-    await user.click(screen.getByRole("button", { name: "Connect" }));
+    // Nothing was asked of the host without the click.
+    expect(backend.requests.some((r) => r.method === "hosts.reconnect")).toBe(false);
+    await user.click(within(screen.getByRole("complementary", { name: "gpu-box details" })).getByRole("button", { name: "Sign in" }));
     const dlg = await screen.findByRole("dialog", { name: "Sign in to gpu-box" });
     expect(within(dlg).getByTestId("auth-prompt-text")).toHaveTextContent("ml@10.0.4.21's password:");
     const pw = within(dlg).getByLabelText("Password or passphrase");

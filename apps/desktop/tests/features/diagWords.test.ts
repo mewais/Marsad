@@ -198,6 +198,7 @@ const RECORDS: Record<string, [Record<string, unknown>, string]> = {
   "auth.cancelled": [{ host: "gpu", prompt: 4, why: "timeout" }, "Sign-in prompt 4 was cancelled: it timed out"],
   "hosts.changed": [{ host: "gpu", op: "added", kind: "ssh", target_kind: "user_at_host" }, "Host added (ssh, target user_at_host)"],
   "hosts.learned": [{ host: "gpu", what: "platform" }, "Learned the host's platform"],
+  "hosts.held": [{ host: "gpu" }, "gpu needs you at sign-in, so the hub did not connect it: it waits for you to ask (no automatic retry)"],
   "hosts.failed": [{ host: "gpu", op: "learn", error: { code: "io", os: 5 } }, "The host registry failed at learn — io (OS error 5; the text itself is never recorded)"],
   "hostenv.apply": [{ host: "hz", revision: "r3", outcome: "failed", ms: 120, setup_ok: false, error: { code: "setup", text: "exit 2" } }, "Host settings failed (revision r3) in 120 ms, the setup commands failed — setup: exit 2"],
   "fleet.feed": [{ host: "hz", event: "lagged" }, "The session feed of hz lagged"],
@@ -254,6 +255,25 @@ describe("log record words", () => {
     expect(recordWords(rec("brand.new"))).toBe("brand.new");
     expect(recordWords(rec("constructor"))).toBe("constructor");
     expect(recordWords(rec("__proto__"))).toBe("__proto__");
+  });
+
+  it("the sign-in vocabulary of a host that needs the user: held hosts, repeated prompts, what is learned, why a prompt ended", () => {
+    // Every value the daemon's vocabulary has (marsad-proto diag.rs: RepeatWord, LearnedWord, CancelWhy) reads as words, never raw.
+    const prompt = (repeat?: string) => recordWords(rec("auth.prompt", { host: "gpu", prompt: 7, kind: "secret", attempt: 1, ...(repeat ? { repeat } : {}) }));
+    expect(prompt()).toBe("Sign-in prompt 7 (secret), attempt 1");
+    expect(prompt("helper_restart")).toBe("Sign-in prompt 7 (secret), attempt 1, a second approval within the same sign-in: the helper on the host was updated and restarted");
+    expect(prompt("id_restart")).toContain("the host's daemon was restarted under this host's id");
+    expect(prompt("windows_shell")).toContain("the host was connected again as a Windows machine");
+    expect(prompt("something_new")).toContain("a second approval within the same sign-in: something_new");
+    const learned = (what: string) => recordWords(rec("hosts.learned", { host: "gpu", what }));
+    expect(learned("interactive")).toBe("Learned the host's sign-in: it asks you for something each time, so Marsad does not reconnect it on its own");
+    expect(learned("not_interactive")).toBe("Learned the host's sign-in: it no longer asks you for anything, so Marsad reconnects it on its own again");
+    expect(learned("machine")).toBe("Learned the host's machine identity");
+    expect(learned("brand_new")).toBe("Learned the host's brand_new");
+    const cancelled = (why: string) => recordWords(rec("auth.cancelled", { host: "gpu", prompt: 7, why }));
+    expect(cancelled("attempt_ended")).toBe("Sign-in prompt 7 was cancelled: the connect attempt it belonged to ended");
+    expect(cancelled("helper_gone")).toBe("Sign-in prompt 7 was cancelled: the ssh helper went away");
+    expect(recordTone(rec("hosts.held", { host: "gpu" }))).toBe("warn");
   });
 
   it("tones", () => {

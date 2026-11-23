@@ -29,6 +29,8 @@ export interface LinkView {
   /** Longer words, may change over time ("Reconnecting in 4s"). Pass `now` to compute. */
   detail: string;
   connected: boolean;
+  /** The hub is not reconnecting this host: it waits for the user at sign-in (`auth_needed` with `held`). */
+  held?: true;
 }
 
 export function nextAtMs(l: Extract<LinkState, { state: "reconnecting" }>): number {
@@ -36,7 +38,7 @@ export function nextAtMs(l: Extract<LinkState, { state: "reconnecting" }>): numb
 }
 
 const PROBLEM: Record<string, string> = {
-  auth_needed: "Sign-in needed",
+  auth_needed: "Sign-in did not succeed",
   host_key_unknown: "Host key not trusted yet",
   host_key_changed: "Host key changed",
   unreachable: "Unreachable",
@@ -74,7 +76,7 @@ export function linkView(link: HostLink, prompt: AuthPrompt | null = null, now =
 }
 
 function remoteView(l: LinkState, prompt: AuthPrompt | null, now: number): LinkView {
-  if (prompt) return { key: "signing_in", tone: "warn", word: "Waiting for sign-in", detail: "Waiting for you to sign in", connected: false };
+  if (prompt) return { key: "signing_in", tone: "warn", word: "Waiting for your answer", detail: "Waiting for your answer", connected: false };
   switch (l.state) {
     case "connected":
       return { key: l.state, tone: "ok", word: "Connected", detail: "Connected", connected: true };
@@ -89,6 +91,8 @@ function remoteView(l: LinkState, prompt: AuthPrompt | null, now: number): LinkV
       return { key: l.state, tone: "warn", word: "Reconnecting", detail: nextAtMs(l) > now ? `Reconnecting in ${s}s` : "Reconnecting now", connected: false };
     }
     case "auth_needed":
+      // Held: the hub waits for the user (every attempt asks them something), so this is an ask, not an error.
+      if (l.held) return { key: l.state, tone: "warn", word: "Needs you to sign in", detail: "Waiting for you to sign in", connected: false, held: true };
       return { key: l.state, tone: "bad", word: PROBLEM[l.problem] ?? "Cannot connect", detail: l.detail || (PROBLEM[l.problem] ?? ""), connected: false };
     case "incompatible":
       return { key: l.state, tone: "bad", word: "Incompatible version", detail: `Helper speaks ${l.theirs.major}.${l.theirs.minor}, Marsad ${l.ours.major}.${l.ours.minor}`, connected: false };

@@ -25,7 +25,7 @@ export function ConnState({ host, short }: { host: Pick<HostView, "link" | "auth
   const now = useNow(ticking);
   const v = linkView(host.link as FleetLink, host.authPrompt, now);
   return (
-    <span className={`conn ${v.tone}`} data-link={v.key}>
+    <span className={`conn ${v.tone}`} data-link={v.key} data-held={v.held ? "" : undefined}>
       <span className="pip" aria-hidden="true" />
       {short || v.key === "auth_needed" || v.key === "failed" ? v.word : v.detail.split(" · ")[0]}
     </span>
