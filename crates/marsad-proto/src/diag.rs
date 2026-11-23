@@ -14,7 +14,7 @@
 //! that short-lived processes append to ([`crate::layout::DIAG_AUX`]).
 
 use wasit_control::TraceId;
-use wasit_diag::{Bytes, Code, DiagText, ErrorInfo, HomePath, Ident, Ms, ProjectPath};
+use wasit_diag::{Bytes, Code, DiagText, ErrorInfo, HomePath, Ident, Ms, ProjectPath, TimeMs};
 
 use crate::hosts::{HostKind, PromptKind};
 
@@ -668,6 +668,47 @@ wasit_diag::diag_events! {
         FleetFeed {
             host: Ident,
             event: FeedEvent,
+            error: Option<ErrorInfo>,
+        },
+        // ── the diagnostics export (design §6.5-§6.7; the exporter is a task of the hub) ──
+
+        /// An export began. `since_ms`: the start of its window. `hosts`: the fleet's hosts it
+        /// will visit. `mode`: `hub`, or `local_files` (the CLI found no hub serving).
+        #[diag(ev = "export.start", budget = 30)]
+        ExportStart {
+            id: Ident,
+            since_ms: TimeMs,
+            hosts: u32,
+            include_trails: bool,
+            mode: Code,
+        },
+        /// One source of an export ended. `source`: `app`, `host` or `local`; `host`: the host's
+        /// id. `outcome`: `done`, `partial`, `not_connected` or `failed`. `bytes`: raw bytes of
+        /// records it contributed; `sections`: how many; `skipped`: sections left out (the size
+        /// cap, the host's budget or time). `error`: what the host said when a read of it failed
+        /// (the first time).
+        #[diag(ev = "export.source", budget = 300)]
+        ExportSource {
+            id: Ident,
+            source: Code,
+            host: Option<Ident>,
+            outcome: Code,
+            bytes: Bytes,
+            sections: u32,
+            skipped: u32,
+            ms: Ms,
+            error: Option<ErrorInfo>,
+        },
+        /// An export ended: `complete` when nothing planned is missing; `bytes` is the raw size
+        /// of the records in the file; `skipped` the sections left out; `error` is why no file
+        /// was produced.
+        #[diag(ev = "export.done", budget = 30)]
+        ExportDone {
+            id: Ident,
+            bytes: Bytes,
+            complete: bool,
+            skipped: u32,
+            ms: Ms,
             error: Option<ErrorInfo>,
         },
     }

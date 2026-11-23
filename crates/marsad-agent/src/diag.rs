@@ -241,6 +241,21 @@ pub fn shape(text: &str) -> DiagText {
     transport(&head)
 }
 
+/// What a host's environment capture wrote about itself (a note on why an attempt failed, how its
+/// setup commands ended): scrubbed and cut to its first line (`Origin::HostShell`). Never the
+/// output of the setup commands. For the export's manifest (`hub/export/facts.rs`).
+pub fn host_note(text: &str) -> DiagText {
+    DiagText::new(Origin::HostShell, text)
+}
+
+/// One entry of a host's `PATH`, as the manifest of an export shows it (design §6.5: the
+/// host's `PATH` is included, scrubbed and bounded). Scrubbing replaces what is registered with
+/// the hub (secrets, this machine's home directory); the host's own home directory is not known
+/// here and shows as it is.
+pub fn host_path(entry: &str) -> DiagText {
+    DiagText::new(Origin::Own, entry)
+}
+
 /// Characters of a host's preamble that [`shape`] keeps.
 pub const SHAPE_CHARS: usize = 120;
 

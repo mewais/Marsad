@@ -14,6 +14,8 @@
 //! * Every daemon embeds a Wasl node (`wasl.*`, journal under `<data>/wasl/`); the hub also
 //!   owns the workstream documents and pushes their topologies to the nodes
 //!   ([`hub::workstreams`]).
+//! * `diagnostics export` writes the diagnostics export (the file the app's Settings saves) for
+//!   when the app cannot start ([`export_cli`]).
 //! * `--version` prints [`marsad_proto::daemon::VersionInfo`] as one JSON line.
 
 #![forbid(unsafe_code)]
@@ -21,6 +23,7 @@
 pub mod askmcp;
 pub mod cli;
 pub mod diag;
+pub mod export_cli;
 pub mod host;
 pub mod hub;
 pub mod hub_events;

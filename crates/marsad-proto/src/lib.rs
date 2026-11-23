@@ -62,6 +62,11 @@
 //! | [`methods::STORE_SEEN_MARK_ALL`] | — | [`store::SeenMarkers`] |
 //! | [`methods::STORE_RECENT_LIST`] | — | [`store::RecentProjects`] |
 //! | [`methods::STORE_RECENT_ADD`] | [`store::RecentProject`] | [`store::RecentProjects`] |
+//! | [`methods::DIAGNOSTICS_EXPORT_START`] | [`export::ExportRequest`] | [`export::ExportStarted`] (at once; progress on [`topics::DIAGNOSTICS_EXPORTS`]) |
+//!
+//! Diagnostics of any host (`diag.sources`, `diag.read`, topic `diag.tail`, served by
+//! `wasit_runtime::DiagService` on every daemon) are routed by `host` like the host services:
+//! see [`runtime`] (`wasit_runtime::wire::DIAG_ROUTES`).
 //!
 //! Workstreams (hub; see [`workstream`] for the model):
 //!
@@ -99,6 +104,7 @@
 //! | [`topics::FLEET`] (hub) | [`fleet::FleetEvent`] | `"<epoch>.<n>"`; unknown/expired ⇒ starts with `Reset` |
 //! | [`topics::HOSTS_LINKS`] (hub) | [`hosts::LinkStates`] | `"<epoch>.<n>"`; every event is the full map |
 //! | [`topics::WORKSTREAMS`] (hub) | [`workstream::WorkstreamsEvent`] | `"<epoch>.<n>"`; unknown/expired ⇒ starts with `Reset` |
+//! | [`topics::DIAGNOSTICS_EXPORTS`] (hub) | [`export::ExportsEvent`] | `"<epoch>.<n>"`; unknown/expired ⇒ starts with `Reset` |
 //! | Wasl: `wasl.tasks`, `wasl.edges` (any host) | see [`wasl`] | journal sequence (decimal) |
 //!
 //! # Errors
@@ -112,6 +118,7 @@ pub mod agentconfig;
 pub mod ask;
 pub mod daemon;
 pub mod diag;
+pub mod export;
 pub mod fleet;
 pub mod fs;
 pub mod git;
@@ -193,6 +200,10 @@ pub mod methods {
     pub const HOSTS_ENVIRONMENT_TEST: &str = "hosts.environment.test";
     pub const HOSTS_ENVIRONMENT_SECRETS: &str = "hosts.environment.secrets";
 
+    /// Export the diagnostics of this app, the hub's computer and every connected host as one
+    /// file (hub; returns at once, see [`crate::export`]).
+    pub const DIAGNOSTICS_EXPORT_START: &str = "diagnostics.export.start";
+
     pub const STORE_SETTINGS_GET: &str = "store.settings.get";
     pub const STORE_SETTINGS_SET: &str = "store.settings.set";
     pub const STORE_NOTIFICATIONS_GET: &str = "store.notifications.get";
@@ -239,6 +250,7 @@ pub mod topics {
     pub const FLEET: &str = "fleet";
     pub const HOSTS_LINKS: &str = "hosts.links";
     pub const WORKSTREAMS: &str = "workstreams";
+    pub const DIAGNOSTICS_EXPORTS: &str = "diagnostics.exports";
 
     /// The output topic of one terminal.
     pub fn pty_output(id: &str) -> String {
@@ -259,6 +271,7 @@ pub const HUB_ROUTES: &[&str] = &[
     "sessions.launch",
     "workstreams",
     "workstreams.",
+    "diagnostics.",
 ];
 
 /// Error codes of [`MarsadError`].
@@ -410,7 +423,11 @@ mod tests {
                 assert!(!h.starts_with(u) && !u.starts_with(h), "{h} vs {u}");
             }
         }
-        for r in wasit_runtime::wire::ROUTES.iter().chain(wasl_proto::ROUTES) {
+        for r in wasit_runtime::wire::ROUTES
+            .iter()
+            .chain(wasit_runtime::wire::DIAG_ROUTES)
+            .chain(wasl_proto::ROUTES)
+        {
             for m in HOST_ROUTES.iter().chain(HUB_ROUTES) {
                 assert!(
                     !r.starts_with(m) && !(m.starts_with(r) && *m != methods::SESSIONS_LAUNCH),

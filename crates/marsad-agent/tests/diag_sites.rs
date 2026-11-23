@@ -8,21 +8,30 @@ use std::path::Path;
 
 use wasit_process::scan;
 
-/// Patterns that extend what may reach a log record. Marsad has no allowed file for these: its
-/// events are made of Wasit's value types.
+/// Patterns that extend what may reach a log record or an export line. Marsad registers no field
+/// type (`diag_value!`) and implements none by hand: its events are made of Wasit's value types.
+/// `diag_data!` (an enum served over a wire or written into a file, made only of value types) is
+/// used in one file, [`PATTERN_ALLOW`].
 const PATTERNS: &[&str] = &[
     "diag_value!",
+    "diag_data!",
     "DiagValue for ",
     "DiagEvent for ",
     "Sealed for ",
     "SealedEvent for ",
 ];
 
+/// The one file that declares `diag_data!` types: the lines of the diagnostics export file
+/// (manifest, host facts, section headers, the end summary). Every field of every one of them is
+/// a `wasit-diag` value type, so the exporter's own lines cannot hold content; the records between
+/// them are copied from content-free logs and trails.
+const PATTERN_ALLOW: &[&str] = &["marsad-proto/src/export.rs"];
+
 const OURS: &str = "ErrorInfo::ours(";
 const TEXT: &str = "DiagText::new(";
 
 /// Files allowed to call `DiagText::new(`: `marsad-agent/src/diag.rs`, the one place free text
-/// is made, with three kinds of text and no others:
+/// is made, with four kinds of text and no others:
 /// * `transport` and `shape` (`Origin::Transport`): what ssh, `wsl.exe` or a host's bootstrap
 ///   printed, the reason a connect failed as the user is shown it, and the first 120
 ///   characters of what a host printed before its report. Design §4.4 keeps these "bounded,
@@ -31,6 +40,10 @@ const TEXT: &str = "DiagText::new(";
 ///   connect". Called from `hub/provision.rs` only.
 /// * `Reason` (`Origin::Own`): the same scrubbing for the words `serve` prints on stderr, so
 ///   that the line carries what the record carries.
+/// * `host_note` (`Origin::HostShell`, first line only) and `host_path` (`Origin::Own`): what a
+///   host's environment capture wrote about itself (why an attempt failed, how its setup ended;
+///   never what the setup printed) and the entries of its `PATH`, for the manifest of a
+///   diagnostics export (design §6.5). Called from `hub/export/facts.rs` only.
 const TEXT_ALLOW: &[&str] = &["marsad-agent/src/diag.rs"];
 
 /// Files allowed to call `ErrorInfo::ours(`, and what they pass:
@@ -48,7 +61,7 @@ const OURS_ALLOW: &[&str] = &["marsad-agent/src/diag.rs"];
 #[test]
 fn field_types_and_free_text_only_in_reviewed_places() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let found = scan::find(&root, &[], |line| {
+    let found = scan::find(&root, PATTERN_ALLOW, |line| {
         PATTERNS.iter().any(|p| scan::mentions(line, p))
     });
     assert!(
@@ -106,6 +119,7 @@ fn the_allow_lists_are_live() {
 fn the_scan_sees_each_pattern() {
     for line in [
         "wasit_diag::diag_value!(TraceId => Ident, |t| Ident::new(&t.0));",
+        "wasit_diag::diag_data! {",
         "impl DiagValue for Prompt {",
         "impl wasit_diag::DiagEvent for X {",
     ] {
