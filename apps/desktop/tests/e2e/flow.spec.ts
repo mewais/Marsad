@@ -19,11 +19,18 @@ test("inbox to answered gate to session to prompt", async ({ page }) => {
   await list.getByRole("button", { name: "migrate-auth-middleware" }).click();
   await expect(page.getByRole("heading", { name: "migrate-auth-middleware" })).toBeVisible();
   await expect(page.getByText("Question from Claude Code")).toBeVisible();
+  const aiBefore = await page.locator(".msg-ai").count();
   const box = page.getByRole("textbox", { name: "Message" });
   await box.fill("also add a rollback note");
   await box.press("Enter");
-  // The agent is waiting on its questions, so it takes nothing new yet: the message is there, no reply is.
-  await expect(page.locator(".msg-user", { hasText: "also add a rollback note" })).toBeVisible();
+  // The prompt is written to the agent (shown as "sent", not "Not sent"). The agent is still waiting on
+  // its question, and no assistant reply has been added to the transcript.
+  const mine = page.locator(".msg-user", { hasText: "also add a rollback note" });
+  await expect(mine).toBeVisible();
+  await expect(mine).toHaveAttribute("data-delivery", "sent");
+  await expect(mine.getByTestId("delivery")).toHaveCount(0);
+  await expect(page.getByText("Question from Claude Code")).toBeVisible();
+  await expect(page.locator(".msg-ai")).toHaveCount(aiBefore);
 
   // An idle agent runs a prompt at once and answers.
   await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: /Inbox/ }).click();
