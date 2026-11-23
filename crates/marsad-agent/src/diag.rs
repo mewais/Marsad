@@ -154,7 +154,8 @@ pub fn finish() {
 /// never a message or a field). Its text goes nowhere unless `MARSAD_LOG` is set: then plain
 /// text (no colour codes) goes to stderr.
 pub fn init_tracing() {
-    let text = developer().then(|| {
+    let dev = developer();
+    let text = dev.then(|| {
         tracing_subscriber::fmt::layer()
             .with_ansi(false)
             .with_writer(std::io::stderr)
@@ -164,10 +165,14 @@ pub fn init_tracing() {
             )
     });
     // Only fails when a subscriber is already set.
-    let _ = tracing_subscriber::registry()
+    let installed = tracing_subscriber::registry()
         .with(wasit_diag::tracing_layer())
         .with(text)
-        .try_init();
+        .try_init()
+        .is_ok();
+    if dev && installed {
+        tracing::info!("MARSAD_LOG is set: developer log text goes to stderr");
+    }
 }
 
 /// The panic hook of a process that has no sink (`mcp`, `ask-mcp`: they run inside an agent CLI

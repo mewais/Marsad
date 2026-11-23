@@ -711,6 +711,29 @@ wasit_diag::diag_events! {
             ms: Ms,
             error: Option<ErrorInfo>,
         },
+        // ── the daemon's start-up scan and signals ──
+
+        /// `serve` adopted the sessions found under the data directory: how many are running,
+        /// how many have finished, and how many could not be adopted (each is a
+        /// `daemon.adopt_error`).
+        #[diag(ev = "daemon.adopted")]
+        DaemonAdopted {
+            running: u32,
+            finished: u32,
+            errors: u32,
+        },
+        /// One session directory found at start-up could not be adopted. `session`: the
+        /// session's id (the directory's name); `error`: the reason, from the stored session
+        /// data (code, length and fingerprint only).
+        #[diag(ev = "daemon.adopt_error", lvl = warn)]
+        DaemonAdoptError { session: Ident, error: ErrorInfo },
+        /// The sessions directory could not be scanned: no session was adopted.
+        #[diag(ev = "daemon.scan_failed", lvl = error)]
+        DaemonScanFailed { error: ErrorInfo },
+        /// The daemon could not install its SIGTERM / SIGINT handlers: it serves on, and a signal
+        /// does not end it (no error value is available: the OS's reason is not recorded).
+        #[diag(ev = "daemon.signal_handlers_failed", lvl = error)]
+        DaemonSignalHandlersFailed {},
     }
 }
 

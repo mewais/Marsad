@@ -205,16 +205,24 @@ pub async fn serve(o: Options) -> ExitCode {
     let phase = Instant::now();
     match manager.adopt_all().await {
         Ok(r) => {
-            tracing::info!(
-                running = r.running.len(),
-                finished = r.finished.len(),
-                "adopted sessions"
-            );
+            emit(MarsadEvent::DaemonAdopted {
+                running: u32::try_from(r.running.len()).unwrap_or(u32::MAX),
+                finished: u32::try_from(r.finished.len()).unwrap_or(u32::MAX),
+                errors: u32::try_from(r.errors.len()).unwrap_or(u32::MAX),
+            });
             for (dir, e) in r.errors {
-                tracing::warn!(dir = %dir.display(), error = %e, "session not adopted");
+                emit(MarsadEvent::DaemonAdoptError {
+                    session: Ident::new(
+                        &dir.file_name()
+                            .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+                    ),
+                    error: diag::foreign("adopt", &e),
+                });
             }
         }
-        Err(e) => tracing::error!(error = %e, "cannot scan sessions"),
+        Err(e) => emit(MarsadEvent::DaemonScanFailed {
+            error: diag::foreign("scan", &e.to_string()),
+        }),
     }
     let adopt_ms = diag::ms(phase);
     let phase = Instant::now();
@@ -602,7 +610,7 @@ async fn termination() -> &'static str {
             _ = i.recv() => "SIGINT",
         },
         _ => {
-            tracing::error!("cannot install signal handlers");
+            emit(MarsadEvent::DaemonSignalHandlersFailed {});
             std::future::pending().await
         }
     }

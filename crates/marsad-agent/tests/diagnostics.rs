@@ -233,7 +233,7 @@ async fn marsad_log_prints_plain_text_to_stderr() {
         .await
         .unwrap();
     let text = String::from_utf8(stderr).unwrap();
-    assert!(text.contains("adopted sessions"), "stderr: {text:?}");
+    assert!(text.contains("MARSAD_LOG is set"), "stderr: {text:?}");
     assert!(!text.contains('\u{1b}'), "colour codes in {text:?}");
     let daemon = records(&l.diag().join("daemon.ndjson"));
     assert_eq!(one(&daemon, "daemon.start")["free_text_logging"], true);
