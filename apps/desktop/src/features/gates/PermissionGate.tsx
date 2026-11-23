@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { GateRequest, PendingGate } from "../../bridge/wire";
 import { agoLong } from "../../lib/format";
 import { useShortcut } from "../../shortcuts/useShortcut";
 import { useDriver, useHost, type SessionView } from "../../state";
 import { Button, Icon } from "../../ui";
-import { ChoiceButtons, ReasonBox, SourceCaption } from "./parts";
+import { ChoiceButtons, ChoiceEffects, ReasonBox, SourceCaption } from "./parts";
 import type { GateDensity } from "./Gate";
 import { usePermissionGate } from "./useGate";
 import { permissionKind, permissionLine, permissionTitle } from "../../lib/gatewords";
@@ -34,6 +34,7 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
   const g = usePermissionGate(view, pg);
   const d = useDriver(view.driver);
   const host = useHost(view.host);
+  const effectsPrefix = useId();
   const [details, setDetails] = useState(false);
   const reasonRef = useRef<HTMLInputElement>(null);
   const focusReason = () => setTimeout(() => reasonRef.current?.focus(), 0);
@@ -64,10 +65,11 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
           <Icon name={isPlan ? "list" : isQuestion ? "needs" : "shield"} size="sm" className="c-needs" />
           <span className="gs"><Line g={gate} /></span>
           {src}
-          <ChoiceButtons choices={g.set.choices} busy={g.busy} blocked={g.blocked} onChoose={choose} />
+          <ChoiceButtons choices={g.set.choices} busy={g.busy} blocked={g.blocked} onChoose={choose} effectsPrefix={effectsPrefix} />
           <button type="button" className="iconbtn" aria-label="Review details" title="Review details" onClick={onActivate}>
             <Icon name="chevr" size="sm" />
           </button>
+          <ChoiceEffects choices={g.set.choices} prefix={effectsPrefix} />
         </div>
       ) : density === "row" ? (
         <div className="gate-inline" data-gate="permission">
@@ -80,13 +82,14 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
             </div>
           </div>
           <div className="acts">
-            <ChoiceButtons choices={g.set.choices} busy={g.busy} blocked={g.blocked} onChoose={choose} keys={keys} />
+            <ChoiceButtons choices={g.set.choices} busy={g.busy} blocked={g.blocked} onChoose={choose} keys={keys} effectsPrefix={effectsPrefix} />
             <span className="sp" />
             {src}
             <Button size="sm" variant="ghost" onClick={() => setDetails((v) => !v)} aria-expanded={details}>
               Review details <Icon name="chevr" size="xs" />
             </Button>
           </div>
+          <ChoiceEffects choices={g.set.choices} prefix={effectsPrefix} />
           {detailBox}
           {showReason ? <ReasonBox who={d?.displayName ?? "the agent"} value={g.reason} onChange={g.setReason} inputRef={reasonRef} onSubmit={() => textChoice && g.choose(textChoice)} label={textChoice ? textChoice.label.map((p) => p.text).join("") : undefined} /> : null}
         </div>
@@ -99,9 +102,9 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
             <span className="faint fw5">asked {agoLong(pg.raised_at_ms)}</span>
           </div>
           {isPlan ? <div className="q prewrap">{gate.summary}</div> : isQuestion ? <div className="q prewrap">{gate.command}</div> : <div className="cmd">{gate.command}</div>}
-          {g.set.choices.some((c) => c.description) ? (
+          {g.set.choices.some((c) => c.description && c.effects.length === 0) ? (
             <ul className="choice-notes faint fs115">
-              {g.set.choices.filter((c) => c.description).map((c) => (
+              {g.set.choices.filter((c) => c.description && c.effects.length === 0).map((c) => (
                 <li key={c.id}><b>{c.label.map((p) => p.text).join("")}</b>: {c.description}</li>
               ))}
             </ul>
@@ -113,10 +116,11 @@ export function PermissionGate({ view, pg, density, active, expanded, onActivate
             </div>
           ) : null}
           <div className="acts">
-            <ChoiceButtons choices={g.set.choices} busy={g.busy} blocked={g.blocked} onChoose={choose} keys={keys} />
+            <ChoiceButtons choices={g.set.choices} busy={g.busy} blocked={g.blocked} onChoose={choose} keys={keys} effectsPrefix={effectsPrefix} />
             <span className="sp" />
             {src}
           </div>
+          <ChoiceEffects choices={g.set.choices} prefix={effectsPrefix} />
           {showReason ? <ReasonBox who={d?.displayName ?? "the agent"} value={g.reason} onChange={g.setReason} inputRef={reasonRef} onSubmit={() => textChoice && g.choose(textChoice)} label={textChoice ? textChoice.label.map((p) => p.text).join("") : undefined} /> : null}
         </div>
       )}

@@ -63,6 +63,10 @@
 .gate .acts .btn.lg{min-height:28px}
 .payload .mono{white-space:pre-line;font-size:11.5px}
 .choice-notes{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:2px}
+/* What a choice applies beyond the answer: always shown, under the buttons (own line in the compact row). */
+.choice-effects{display:flex;flex-direction:column;gap:6px;min-width:0}
+.gate-inline.compact .choice-effects{flex-basis:100%}
+.choice-effect ul{margin:2px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--fg-2);overflow-wrap:anywhere}
 .spawnfacts{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;margin:8px 0;font-size:12.5px}
 .spawnfacts dt{color:var(--fg-2);font-weight:500}
 .spawnfacts dd{margin:0;min-width:0;overflow-wrap:anywhere}

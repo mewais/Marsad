@@ -1,6 +1,6 @@
 import { useDriver } from "../../state";
 import { DriverBadge, Icon, Button, Kbd } from "../../ui";
-import type { GateChoice, LabelPart } from "./choices";
+import { labelText, type GateChoice, type LabelPart } from "./choices";
 
 export function Label({ parts }: { parts: LabelPart[] }) {
   return (
@@ -43,6 +43,33 @@ export function SourceCaption({ source, driver }: { source: "agent" | "neutral" 
   );
 }
 
+/** The id of the block that lists a choice's effects, unique per gate (`prefix` comes from `useId`). */
+export const effectsId = (prefix: string, choiceId: string) => `${prefix}-effects-${choiceId}`;
+
+/**
+ * What each choice applies beyond this answer, always visible under the buttons: a lead-in naming
+ * the choice by its own label, then one line per effect, exactly as the daemon sent them.
+ * Choices without effects render nothing here.
+ */
+export function ChoiceEffects({ choices, prefix }: { choices: GateChoice[]; prefix: string }) {
+  const withEffects = choices.filter((c) => c.effects.length > 0);
+  if (withEffects.length === 0) return null;
+  return (
+    <div className="choice-effects">
+      {withEffects.map((c) => (
+        <div key={c.id} id={effectsId(prefix, c.id)} className="choice-effect" data-effects={c.id}>
+          <div className="fs115 fw5">{labelText(c.label)} will also:</div>
+          <ul>
+            {c.effects.map((e, i) => (
+              <li key={i}>{e}</li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export interface ChoiceButtonsProps {
   choices: GateChoice[];
   busy: boolean;
@@ -51,13 +78,15 @@ export interface ChoiceButtonsProps {
   onChoose: (c: GateChoice) => void;
   keys?: boolean;
   size?: "sm" | "md";
+  /** The `prefix` of the matching {@link ChoiceEffects}: a choice with effects references its block. */
+  effectsPrefix?: string;
 }
 
-export function ChoiceButtons({ choices, busy, blocked, onChoose, keys, size = "sm" }: ChoiceButtonsProps) {
+export function ChoiceButtons({ choices, busy, blocked, onChoose, keys, size = "sm", effectsPrefix }: ChoiceButtonsProps) {
   return (
     <div className="choices" role="group" aria-label="Answer choices" aria-busy={busy || undefined}>
       {choices.map((c, i) => (
-        <Button key={c.id} size={size} variant={c.kind} disabled={busy} blocked={blocked} icon={i === 0 ? "check" : undefined} onClick={() => onChoose(c)} className={size === "md" ? "lg" : undefined} title={c.description || undefined} data-choice={c.id}>
+        <Button key={c.id} size={size} variant={c.kind} disabled={busy} blocked={blocked} icon={i === 0 ? "check" : undefined} onClick={() => onChoose(c)} className={size === "md" ? "lg" : undefined} title={c.description || undefined} aria-describedby={effectsPrefix && c.effects.length ? effectsId(effectsPrefix, c.id) : undefined} data-choice={c.id}>
           <Label parts={c.label} />
           {c.text === "required" && size === "sm" ? "…" : null}
           {keys ? <Kbd>{String(i + 1)}</Kbd> : null}

@@ -26,6 +26,13 @@ neutral_label?: boolean,
  */
 description?: string, 
 /**
+ * What choosing this will apply beyond answering this one request, one entry per effect,
+ * in the agent's own terms (e.g. a rule it will remember, a directory it will allow, a mode
+ * it will switch to). Empty when the choice does nothing more. A UI must show these before
+ * the user chooses.
+ */
+effects?: Array<string>, 
+/**
  * Free text accepted with this choice.
  */
 text?: ChoiceText, };

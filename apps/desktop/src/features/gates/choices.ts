@@ -21,6 +21,8 @@ export interface GateChoice {
   kind: "allow" | "always" | "deny";
   /** What the choice does beyond its label (e.g. the rules it remembers). */
   description: string;
+  /** What choosing it applies beyond this answer, one entry per effect, as the agent's daemon sent them. Shown before the click. */
+  effects: string[];
   /** Free text sent to the agent with this choice. */
   text: ChoiceText;
   decision: (text?: string) => GateDecision;
@@ -46,6 +48,7 @@ export function toChoice(c: WireChoice): GateChoice {
     label: labelParts(c.label),
     kind: variant(c.kind),
     description: c.description ?? "",
+    effects: c.effects ?? [],
     text,
     decision: (t) => (text !== "none" && t?.trim() ? { choice: c.id, text: t.trim() } : { choice: c.id }),
   };

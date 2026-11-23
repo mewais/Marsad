@@ -29,11 +29,14 @@ export interface Spec {
   backgroundOnly?: boolean;
 }
 
-/** What wasit-claude offers for a `can_use_tool` request (neutral labels; see wasit-core `GateChoice`). */
-export function claudeChoices(remember?: string): GateChoice[] {
+/**
+ * What wasit-claude offers for a `can_use_tool` request (neutral labels; see wasit-core `GateChoice`).
+ * `remember` is the choice's description; `effects` is what "Allow and remember" applies, one per suggestion.
+ */
+export function claudeChoices(remember?: string, effects: string[] = []): GateChoice[] {
   return [
     { id: "allow", label: "Allow", kind: "allow_once", neutral_label: true },
-    ...(remember ? [{ id: "allow_always", label: "Allow and remember", kind: "allow_always" as const, neutral_label: true, description: remember }] : []),
+    ...(remember ? [{ id: "allow_always", label: "Allow and remember", kind: "allow_always" as const, neutral_label: true, description: remember, effects }] : []),
     { id: "deny", label: "Deny", kind: "reject_once", neutral_label: true, text: "optional" },
     { id: "deny_stop", label: "Deny and stop the turn", kind: "cancel", neutral_label: true, text: "optional" },
   ];
@@ -79,12 +82,12 @@ export const SPECS: Spec[] = [
         ] }] },
       { gate_type: "permission", request_id: "p-prisma", tool_name: "Bash", command: "pnpm prisma migrate dev --name session_tokens", cwd: "~/src/ledgerline",
         explanation: "Writes to a database. Creates prisma/migrations/20261117_session_tokens and applies it to postgres://localhost:5432/ledgerline_dev. Reversible with migrate reset; dev data would be lost.",
-        choices: claudeChoices("allow rule Bash(pnpm prisma migrate:*) (localSettings)"), raw_input: { command: "pnpm prisma migrate dev --name session_tokens" } },
+        choices: claudeChoices("allow rule Bash(pnpm prisma migrate:*) (localSettings)", ["allow rule Bash(pnpm prisma migrate:*) (localSettings)", "add directory ~/src/ledgerline (session)"]), raw_input: { command: "pnpm prisma migrate dev --name session_tokens" } },
     ] },
   { n: 2, name: "pdf-renderer-worker", driver: "claude", host: "hz", proj: "ledgerline", branch: "feat/invoice-pdf", ws: "Invoice export v2", agoMin: 3, cost: 1.12, kind: "needs",
     line: "Wants to run pnpm add @react-pdf/renderer@4.1.0",
     gates: [{ gate_type: "permission", request_id: "p-pdf", tool_name: "Bash", command: "pnpm add @react-pdf/renderer@4.1.0 --filter @ledgerline/export", cwd: "~/src/ledgerline", explanation: "",
-      choices: claudeChoices("allow rule Bash(pnpm add:*) (localSettings)"), raw_input: { command: "pnpm add @react-pdf/renderer@4.1.0 --filter @ledgerline/export" } }] },
+      choices: claudeChoices("allow rule Bash(pnpm add:*) (localSettings)", ["allow rule Bash(pnpm add:*) (localSettings)", "switch to mode acceptEdits (session)"]), raw_input: { command: "pnpm add @react-pdf/renderer@4.1.0 --filter @ledgerline/export" } }] },
   { n: 15, name: "ws-reconnect-backoff", driver: "codex", host: "hz", proj: "marsad", branch: "fix/ws-backoff", agoMin: 4, cost: 0.58, kind: "needs",
     line: "Wants to run cargo test -p marsad-net --features e2e",
     gates: [{ gate_type: "permission", request_id: "p-cargo", tool_name: "shell", command: "cargo test -p marsad-net --features e2e", cwd: "~/src/marsad", explanation: "",

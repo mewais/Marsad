@@ -6,13 +6,14 @@ import { describe, expect, it } from "vitest";
 import { Gate } from "../../src/features/gates/Gate";
 import type { GateDensity } from "../../src/features/gates/Gate";
 import { gateChoices } from "../../src/features/gates/choices";
+import { installShortcuts } from "../../src/shortcuts/registry";
 import type { GateRequest } from "../../src/bridge/wire";
 import { claudeChoices, SPAWN_CHOICES } from "../../src/bridge/fixture/sessions";
 import { memoryHistory, RouterProvider } from "../../src/router";
 import { AppProvider, createApp, selectView } from "../../src/state";
 import { quietBackend, sessionByName } from "../helpers";
 
-async function setup(name: string, density: GateDensity = "full", gate?: GateRequest) {
+async function setup(name: string, density: GateDensity = "full", gate?: GateRequest, expanded = true) {
   localStorage.clear();
   const backend = quietBackend();
   const app = createApp(backend);
@@ -28,7 +29,7 @@ async function setup(name: string, density: GateDensity = "full", gate?: GateReq
   render(
     <AppProvider value={app}>
       <RouterProvider history={memoryHistory()}>
-        <Gate view={view()} pg={pg()} density={density} active expanded />
+        <Gate view={view()} pg={pg()} density={density} active expanded={expanded} />
       </RouterProvider>
     </AppProvider>,
   );
@@ -64,6 +65,53 @@ describe("gate components", () => {
     const { sent } = await setup("pdf-renderer-worker");
     await user.click(screen.getByRole("button", { name: /Allow and remember/ }));
     await waitFor(() => expect(sent()[0].params).toMatchObject({ command: { decision: { choice: "allow_always" } } }));
+  });
+
+  describe("what a choice applies beyond the answer", () => {
+    const EFFECTS = ["allow rule Bash(pnpm test:*) (localSettings)", "add directory ~/src/ledgerline (session)", "switch to mode acceptEdits (session)"];
+    const remembered = (effects: string[]): GateRequest => ({
+      gate_type: "permission", request_id: "p-effects", tool_name: "Bash", command: "pnpm test", cwd: "~/src/ledgerline", explanation: "", raw_input: { command: "pnpm test" },
+      choices: claudeChoices("allow rule Bash(pnpm test:*) (localSettings)", effects),
+    });
+
+    it.each([
+      ["the session view", "full", true],
+      ["the inbox row, expanded", "row", true],
+      ["the inbox row, one line", "row", false],
+    ] as const)("is listed under its label before any click (%s)", async (_where, density, expanded) => {
+      const user = userEvent.setup();
+      const { sent, s } = await setup("csv-schema-worker", density, remembered(EFFECTS), expanded);
+      const block = document.querySelector('[data-effects="allow_always"]') as HTMLElement;
+      expect(block).toHaveTextContent("Allow and remember will also:");
+      expect(within(block).getAllByRole("listitem").map((li) => li.textContent)).toEqual(EFFECTS);
+      const remember = screen.getByRole("button", { name: /^Allow and remember/ });
+      expect(remember).toHaveAttribute("aria-describedby", block.id);
+      expect(sent()).toHaveLength(0);
+      await user.click(remember);
+      await waitFor(() => expect(sent().length).toBe(1));
+      expect(sent()[0].params).toMatchObject({ id: s.id, command: { command: "answer_gate", request_id: "p-effects", decision: { choice: "allow_always" } } });
+    });
+
+    it("its number key still answers with it", async () => {
+      const user = userEvent.setup();
+      // The global key listener is installed by the App; this test mounts the gate alone.
+      const off = installShortcuts();
+      try {
+        const { sent } = await setup("csv-schema-worker", "full", remembered(EFFECTS));
+        await user.keyboard("2");
+        await waitFor(() => expect(sent().length).toBe(1));
+        expect(sent()[0].params).toMatchObject({ command: { request_id: "p-effects", decision: { choice: "allow_always" } } });
+      } finally {
+        off();
+      }
+    });
+
+    it("a gate whose choices have no effects renders no such block", async () => {
+      const gate: GateRequest = { gate_type: "permission", request_id: "p-plain", tool_name: "Bash", command: "pnpm test", cwd: "~/src/ledgerline", explanation: "", raw_input: null, choices: claudeChoices() };
+      await setup("csv-schema-worker", "full", gate);
+      expect(document.querySelector(".choice-effects")).toBeNull();
+      expect(screen.getByRole("button", { name: /^Allow/ })).not.toHaveAttribute("aria-describedby");
+    });
   });
 
   it("permission (Codex): exactly the decisions codex offers", async () => {
