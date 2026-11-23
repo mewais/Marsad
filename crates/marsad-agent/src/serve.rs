@@ -959,11 +959,14 @@ async fn stop_daemon(o: &Options) -> Stopped {
 /// print the answer. Exit 1 on cancel, timeout or any failure (ssh then gives up that prompt).
 /// Its record names the host's id and the outcome; never the prompt, never the answer.
 pub async fn askpass(prompt: String) -> ExitCode {
-    use crate::hub::provision::{ASKPASS_HOST_ENV, ASKPASS_SOCKET_ENV};
+    use crate::hub::provision::{ASKPASS_ATTEMPT_ENV, ASKPASS_HOST_ENV, ASKPASS_SOCKET_ENV};
     let began = Instant::now();
-    let (Ok(host), Some(socket)) = (
+    let (Ok(host), Some(socket), Some(attempt)) = (
         std::env::var(ASKPASS_HOST_ENV),
         std::env::var_os(ASKPASS_SOCKET_ENV),
+        std::env::var(ASKPASS_ATTEMPT_ENV)
+            .ok()
+            .and_then(|a| a.parse::<u64>().ok()),
     ) else {
         emit(MarsadEvent::AskpassEnd {
             host: None,
@@ -993,6 +996,7 @@ pub async fn askpass(prompt: String) -> ExitCode {
             methods::HOSTS_ASKPASS,
             marsad_proto::hosts::AskpassRequest {
                 host: HostId::new(host),
+                attempt,
                 prompt,
             },
             Duration::from_secs(24 * 3600),

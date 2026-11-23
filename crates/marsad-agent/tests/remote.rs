@@ -9,66 +9,16 @@
 mod common;
 
 use std::path::Path;
-use std::time::Duration;
 
 use common::*;
-use marsad_client::{MarsadClient, Subscription};
 use marsad_proto::agentconfig::{LaunchRequest, OverrideLayer};
 use marsad_proto::fleet::FleetEvent;
 use marsad_proto::git::GitTarget;
-use marsad_proto::hosts::{AuthPrompt, HostDraft, HostKind, PromptKind};
+use marsad_proto::hosts::{HostDraft, HostKind, PromptKind};
 use marsad_proto::runtime::{SessionEvent, SessionEventKind};
 use marsad_proto::{AgentEvent, Command, CommandFailureKind, GateDecision, HostId, LinkState};
 use serde_json::json;
 use wasit_fake_cli::scenario::{Scenario, Turn};
-
-fn hub_client(dir: &Path, extra: &[&str]) -> MarsadClient {
-    let mut cfg =
-        marsad_client::ClientConfig::new(dir, wasit_control::Hello::new("test", "gui", "gui"));
-    cfg.agent_bin = Some(agent());
-    cfg.serve_args = serve_args();
-    cfg.serve_args.extend(extra.iter().map(|s| s.to_string()));
-    cfg.supervise.backoff.initial = Duration::from_millis(50);
-    MarsadClient::connect(cfg)
-}
-
-/// Wait on the fleet until `pred` matches an event.
-async fn until(
-    f: &mut Subscription<FleetEvent>,
-    what: &str,
-    pred: impl Fn(&FleetEvent) -> bool,
-) -> FleetEvent {
-    let fut = async {
-        loop {
-            let (_, e) = next(f).await;
-            if pred(&e) {
-                return e;
-            }
-        }
-    };
-    tokio::time::timeout(Duration::from_secs(120), fut)
-        .await
-        .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
-}
-
-fn link_is(e: &FleetEvent, host: &str, p: impl Fn(&LinkState) -> bool) -> bool {
-    matches!(e, FleetEvent::Link { host: h, state } if h.as_str() == host && p(state))
-}
-
-async fn prompt(f: &mut Subscription<FleetEvent>, host: &str) -> AuthPrompt {
-    match until(
-        f,
-        "a sign-in prompt",
-        |e| matches!(e, FleetEvent::AuthPrompt { host: h, prompt: Some(_) } if h.as_str() == host),
-    )
-    .await
-    {
-        FleetEvent::AuthPrompt {
-            prompt: Some(p), ..
-        } => p,
-        _ => unreachable!(),
-    }
-}
 
 fn kill_ssh(port: u16) {
     pkill(&format!("^ssh -T .*-p {port} "));
@@ -81,12 +31,6 @@ async fn session_event(sub: &mut wasit_runtime::TypedSubscription<SessionEvent>)
             "no session event: {:?}",
             other.map(|o| o.map(|r| r.map(|(c, _)| c)))
         ),
-    }
-}
-
-async fn stop_hub(c: &MarsadClient) {
-    if let Ok(i) = c.daemon_info(None).await {
-        stop_pid(i.pid);
     }
 }
 

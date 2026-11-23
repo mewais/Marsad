@@ -42,7 +42,11 @@ enum Input {
     HostRemoved(HostId),
     Link(HostId, LinkState),
     Feed(HostId, HostEvent),
-    Prompt(HostId, Option<AuthPrompt>),
+    /// A prompt is shown for the host.
+    PromptShown(HostId, Box<AuthPrompt>),
+    /// The prompt with this id is over: taken off the host if it is the one showing (a newer
+    /// prompt's is not).
+    PromptEnded(HostId, u64),
     Git(HostId, GitSummary),
     SetGitWatch(GitWatch),
     Subscribe(Option<String>, oneshot::Sender<Joined<FleetEvent>>),
@@ -169,12 +173,30 @@ impl State {
                     }
                 }
             }
-            Input::Prompt(id, prompt) => {
+            Input::PromptShown(id, prompt) => {
                 let Some(h) = self.hosts.get_mut(&id) else {
                     return;
                 };
-                h.auth_prompt = prompt.clone();
-                self.emit(FleetEvent::AuthPrompt { host: id, prompt });
+                h.auth_prompt = Some((*prompt).clone());
+                self.emit(FleetEvent::AuthPrompt {
+                    host: id,
+                    prompt: Some(*prompt),
+                });
+            }
+            Input::PromptEnded(id, prompt) => {
+                let Some(h) = self.hosts.get_mut(&id) else {
+                    return;
+                };
+                // Whoever ends a prompt may do so after a newer one was shown (the order of
+                // their messages is not the order of their prompts): only the prompt that is
+                // showing can be taken down.
+                if h.auth_prompt.as_ref().is_some_and(|p| p.id == prompt) {
+                    h.auth_prompt = None;
+                    self.emit(FleetEvent::AuthPrompt {
+                        host: id,
+                        prompt: None,
+                    });
+                }
             }
             Input::Git(id, summary) => {
                 let Some(h) = self.hosts.get_mut(&id) else {
@@ -246,8 +268,15 @@ impl Fleet {
         self.send(Input::HostUpserted(Box::new(entry), link)).await
     }
 
-    pub async fn auth_prompt(&self, id: HostId, prompt: Option<AuthPrompt>) {
-        self.send(Input::Prompt(id, prompt)).await
+    /// Show `prompt` to the user (it replaces the host's previous one).
+    pub async fn show_prompt(&self, id: HostId, prompt: AuthPrompt) {
+        self.send(Input::PromptShown(id, Box::new(prompt))).await
+    }
+
+    /// The prompt `prompt` of `id` is over (answered, cancelled, timed out, withdrawn): take it
+    /// off, unless a newer prompt has replaced it.
+    pub async fn end_prompt(&self, id: HostId, prompt: u64) {
+        self.send(Input::PromptEnded(id, prompt)).await
     }
 
     /// Report a refreshed git summary.

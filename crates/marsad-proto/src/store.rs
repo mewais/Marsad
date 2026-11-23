@@ -24,14 +24,20 @@ pub struct SettingSet {
     pub value: Value,
 }
 
-/// Which notifications the single notifier raises.
+/// Which notifications the single notifier raises. A stored value without a key (written by
+/// an older build) takes the key's default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(default)]
 pub struct NotificationPrefs {
     pub needs_you: bool,
     pub failed: bool,
     pub finished: bool,
     pub host_lost: bool,
+    /// A host that asks for a sign-in at each connect (a code, a push approval) dropped, or the
+    /// hub started without it connected: its link is parked, not retried, until the user
+    /// connects it (a `link` fleet state `auth_needed` with `held`).
+    pub sign_in_needed: bool,
 }
 
 impl Default for NotificationPrefs {
@@ -41,6 +47,7 @@ impl Default for NotificationPrefs {
             failed: true,
             finished: true,
             host_lost: true,
+            sign_in_needed: true,
         }
     }
 }

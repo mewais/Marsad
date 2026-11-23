@@ -476,7 +476,7 @@ impl HubServices {
                         what: format!("host {}", r.host),
                     });
                 }
-                let answer = self.prompts.ask(r.host, r.prompt).await?;
+                let answer = self.prompts.ask(r.host, r.attempt, r.prompt).await?;
                 enc(ok(AskpassReply { answer }))
             }
             methods::HOSTS_ENVIRONMENT_GET => {

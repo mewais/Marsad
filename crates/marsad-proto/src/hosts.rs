@@ -48,9 +48,12 @@ pub struct HostEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<HostPlatform>,
     pub created_at_ms: u64,
-    /// The host has needed an interactive answer (password, code, push, host key) to sign in.
-    /// Such a link never reconnects on its own: after a drop it waits in `auth_needed` for an
-    /// explicit `hosts.reconnect`.
+    /// The host needs the user at login: the last connect that reached it asked the user for
+    /// something other than a host-key confirmation (a password, a one-time code, a key
+    /// passphrase; see [`PromptKind::needs_user`]). Such a link never reconnects on its own,
+    /// since every attempt would spend a code or fire a push: after a drop, and at the hub's
+    /// start, it waits in `auth_needed` (`held`) for an explicit `hosts.reconnect`. Learned by
+    /// the hub from each successful sign-in, and un-learned by one that asked for nothing.
     #[serde(default)]
     pub interactive_auth: bool,
     /// The host's files are directly reachable from the hub's machine (the GUI machine): true
@@ -92,8 +95,9 @@ impl HostEntry {
     }
 }
 
-/// What an authentication prompt asks for (a guess from its text, for presentation only;
-/// the prompt text itself is shown verbatim).
+/// What an authentication prompt asks for (a guess from its text, for presentation only,
+/// except that [`PromptKind::Confirm`] is exactly ssh's host-key confirmation, which is what
+/// [`PromptKind::needs_user`] rests on; the prompt text itself is shown verbatim).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
@@ -102,15 +106,26 @@ pub enum PromptKind {
     Secret,
     /// A one-time code.
     Code,
-    /// A yes/no confirmation (e.g. an unknown host key).
+    /// ssh's own question whether to trust a host's key (never a question a site asks).
     Confirm,
     Info,
 }
 
 impl PromptKind {
+    /// ssh's own host-key confirmation: the question about an unknown (or differently
+    /// addressed) host key, and its repeat after an answer that was none of yes, no or the
+    /// fingerprint. OpenSSH writes these words itself (they are not translated and no site can
+    /// set them), so they are the one thing in a prompt that can be relied on. ssh gives the
+    /// askpass helper no other sign of what it asks: `SSH_ASKPASS_PROMPT` is not set for this
+    /// question (measured with OpenSSH 9.6; it hints only ssh-agent's confirmations and
+    /// security-key notices), nor for a password or a passphrase.
+    pub fn is_host_key_confirmation(prompt: &str) -> bool {
+        prompt.contains("continue connecting (yes/no") || prompt.starts_with("Please type 'yes'")
+    }
+
     pub fn guess(prompt: &str) -> PromptKind {
         let p = prompt.to_ascii_lowercase();
-        if p.contains("yes/no") || p.contains("(yes/no") || p.contains("continue connecting") {
+        if Self::is_host_key_confirmation(prompt) {
             PromptKind::Confirm
         } else if [
             "verification code",
@@ -132,6 +147,36 @@ impl PromptKind {
             PromptKind::Info
         }
     }
+
+    /// THE rule for "this host needs the user at login": a prompt of this kind asks the user
+    /// for something (a password, a passphrase, a one-time code, a push approval or anything
+    /// else a site asks), so a connect that raised one cannot be repeated without them. Only
+    /// the host-key confirmation does not count: it is asked once, then ssh remembers the
+    /// answer. What cannot be told apart (and need not be): a password, a passphrase, a code
+    /// and a site's own question are all entries to ssh and differ only in words. A push
+    /// approval that ssh asks no entry for (only prints) never reaches the helper at all, so
+    /// it cannot be seen from here.
+    pub fn needs_user(self) -> bool {
+        !matches!(self, PromptKind::Confirm)
+    }
+}
+
+/// Why a sign-in prompt is a repeat: it belongs to a second connection within the same
+/// sign-in, which the hub makes on its own after the user's one Connect, so the user is asked
+/// again (a second approval, a second code) and is told why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum SignInRepeat {
+    /// The Marsad helper on the host runs another build (or cannot be used as it is) and is
+    /// being replaced and restarted over a new connection.
+    HelperRestart,
+    /// The helper's daemon on the host knew itself under another host id and is being
+    /// restarted under this host's.
+    IdRestart,
+    /// The host turned out to be a Windows machine: the connection is made again the way
+    /// Windows hosts need.
+    WindowsShell,
 }
 
 /// A pending authentication prompt of a host's link (answer with `hosts.auth_answer`).
@@ -148,6 +193,11 @@ pub struct AuthPrompt {
     pub attempt: u32,
     /// When the prompt gives up (ms since the Unix epoch); the link then goes `auth_needed`.
     pub expires_at_ms: u64,
+    /// Set when this prompt comes from a second connection within one sign-in (the user was
+    /// already asked on the first): why the hub connected again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub repeat: Option<SignInRepeat>,
 }
 
 /// `hosts.auth_answer`. The answer is passed to ssh and never logged or stored.
@@ -171,6 +221,11 @@ pub struct AuthCancel {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AskpassRequest {
     pub host: HostId,
+    /// The connect attempt whose ssh runs the helper (the number the hub put in its
+    /// environment): a prompt is only taken for the attempt in progress, so a helper left over
+    /// from an ended attempt can never put a prompt before the user or answer one of a newer
+    /// attempt. `0`: no attempt (a host nobody is connecting to).
+    pub attempt: u64,
     pub prompt: String,
 }
 
@@ -441,6 +496,50 @@ Host=eqhost
         assert_eq!(h[1].port, Some(2222));
         assert_eq!(h[1].identity_file.as_deref(), Some("~/.ssh/id_box"));
         assert_eq!(h[2].hostname.as_deref(), Some("eq.example"));
+    }
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::*;
+
+    /// What ssh itself writes when it asks to trust a host's key, as OpenSSH 9.6 does (the
+    /// question comes with the fingerprint lines before it; the repeat after a wrong answer is
+    /// its own sentence).
+    const HOST_KEY: [&str; 4] = [
+        "The authenticity of host '[127.0.0.1]:22 ([127.0.0.1]:22)' can't be established.\nED25519 key fingerprint is SHA256:abc.\nThis key is not known by any other names.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? ",
+        "Are you sure you want to continue connecting (yes/no)? ",
+        "Please type 'yes', 'no' or the fingerprint: ",
+        "Please type 'yes' or 'no': ",
+    ];
+
+    #[test]
+    fn only_ssh_own_host_key_confirmation_does_not_need_the_user() {
+        for p in HOST_KEY {
+            assert_eq!(PromptKind::guess(p), PromptKind::Confirm, "{p}");
+            assert!(PromptKind::is_host_key_confirmation(p), "{p}");
+            assert!(!PromptKind::guess(p).needs_user(), "{p}");
+        }
+        // Everything else a user can be asked at login does.
+        for (p, kind) in [
+            ("user@host's password: ", PromptKind::Secret),
+            (
+                "Enter passphrase for key '/home/u/.ssh/id_ed25519': ",
+                PromptKind::Secret,
+            ),
+            ("Verification code: ", PromptKind::Code),
+            ("Duo passcode or option (1-3): ", PromptKind::Code),
+            ("One-time password (OATH) for `u': ", PromptKind::Code),
+            (
+                "Confirm user presence for key ED25519-SK SHA256:abc",
+                PromptKind::Info,
+            ),
+            // A site's own yes/no question is not ssh's, and is the user's.
+            ("Do you accept the terms of use (yes/no)?", PromptKind::Info),
+        ] {
+            assert_eq!(PromptKind::guess(p), kind, "{p}");
+            assert!(PromptKind::guess(p).needs_user(), "{p}");
+        }
     }
 }
 

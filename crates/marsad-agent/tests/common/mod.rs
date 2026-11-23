@@ -9,9 +9,11 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use marsad_client::{ClientConfig, MarsadClient, Subscription};
+use marsad_proto::fleet::FleetEvent;
+use marsad_proto::hosts::AuthPrompt;
 use marsad_proto::layout::Layout;
 use marsad_proto::runtime::{SessionEvent, SessionEventKind};
-use marsad_proto::AgentEvent;
+use marsad_proto::{AgentEvent, LinkState};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use wasit_control::Hello;
@@ -149,6 +151,64 @@ pub fn client(data: &Path) -> MarsadClient {
     MarsadClient::connect(cfg)
 }
 
+/// A hub daemon (started on demand by its client) under `dir` with `extra` serve options, whose
+/// client retries quickly.
+pub fn hub_client(dir: &Path, extra: &[&str]) -> MarsadClient {
+    let mut cfg = ClientConfig::new(dir, Hello::new("test", "gui", "gui"));
+    cfg.agent_bin = Some(agent());
+    cfg.serve_args = serve_args();
+    cfg.serve_args.extend(extra.iter().map(|s| s.to_string()));
+    cfg.supervise.backoff.initial = Duration::from_millis(50);
+    MarsadClient::connect(cfg)
+}
+
+/// Wait on the fleet until `pred` matches an event.
+pub async fn until(
+    f: &mut Subscription<FleetEvent>,
+    what: &str,
+    pred: impl Fn(&FleetEvent) -> bool,
+) -> FleetEvent {
+    let fut = async {
+        loop {
+            let (_, e) = next(f).await;
+            if pred(&e) {
+                return e;
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(120), fut)
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+}
+
+/// Whether `e` is a link event of `host` whose state satisfies `p`.
+pub fn link_is(e: &FleetEvent, host: &str, p: impl Fn(&LinkState) -> bool) -> bool {
+    matches!(e, FleetEvent::Link { host: h, state } if h.as_str() == host && p(state))
+}
+
+/// The next sign-in prompt of `host`.
+pub async fn prompt(f: &mut Subscription<FleetEvent>, host: &str) -> AuthPrompt {
+    match until(
+        f,
+        "a sign-in prompt",
+        |e| matches!(e, FleetEvent::AuthPrompt { host: h, prompt: Some(_) } if h.as_str() == host),
+    )
+    .await
+    {
+        FleetEvent::AuthPrompt {
+            prompt: Some(p), ..
+        } => p,
+        _ => unreachable!(),
+    }
+}
+
+/// Stops the hub daemon `c` talks to (SIGTERM by its pid).
+pub async fn stop_hub(c: &MarsadClient) {
+    if let Ok(i) = c.daemon_info(None).await {
+        stop_pid(i.pid);
+    }
+}
+
 /// Write a scenario next to `dir` and return the env that makes the fake CLI play it.
 pub fn scenario_env(dir: &Path, sc: &Scenario) -> Vec<(String, String)> {
     static N: AtomicU64 = AtomicU64::new(0);
@@ -218,13 +278,17 @@ mod sshd {
         pub wrong_key: PathBuf,
         pub known_hosts: PathBuf,
         pub remote_home: PathBuf,
-        child: std::process::Child,
+        /// What an `authorized_keys` line starts with for a key that logs in as the "remote"
+        /// machine (its `HOME`, `PATH` and shell), or nothing.
+        authorized_prefix: String,
+        sshd_bin: PathBuf,
+        /// The listener; `None` while [`Sshd::stop`] has it down.
+        child: Option<std::process::Child>,
     }
 
     impl Drop for Sshd {
         fn drop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            self.stop();
         }
     }
 
@@ -279,17 +343,21 @@ mod sshd {
             keygen(&wrong);
             let pubkey = std::fs::read_to_string(key.with_extension("pub")).unwrap();
             let path = format!("{}:/usr/local/bin:/usr/bin:/bin", fakebin.display());
-            let ak = if env_home {
+            let authorized_prefix = if env_home {
                 format!(
                     "environment=\"HOME={}\",environment=\"PATH={path}\",\
-                     environment=\"SHELL={}\" {pubkey}",
+                     environment=\"SHELL={}\" ",
                     remote_home.display(),
                     fakebin.join("loginsh").display()
                 )
             } else {
-                pubkey.clone()
+                String::new()
             };
-            std::fs::write(dir.join("authorized_keys"), ak).unwrap();
+            std::fs::write(
+                dir.join("authorized_keys"),
+                format!("{authorized_prefix}{pubkey}"),
+            )
+            .unwrap();
             let port = {
                 let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
                 l.local_addr().unwrap().port()
@@ -306,14 +374,7 @@ mod sshd {
                 ),
             )
             .unwrap();
-            let _ = std::fs::create_dir_all("/run/sshd");
-            let child = std::process::Command::new(&sshd)
-                .args(["-D", "-e", "-f"])
-                .arg(dir.join("sshd_config"))
-                .stdout(Stdio::null())
-                .stderr(std::fs::File::create(dir.join("sshd.log")).unwrap())
-                .spawn()
-                .unwrap();
+            let child = Self::spawn(&sshd, &dir);
             let hostpub = std::fs::read_to_string(hostkey.with_extension("pub")).unwrap();
             let mut parts = hostpub.split_whitespace();
             let known_hosts = dir.join("known_hosts");
@@ -326,22 +387,7 @@ mod sshd {
                 ),
             )
             .unwrap();
-            // Readiness: connect with a backoff schedule until sshd listens.
-            let mut delay = Duration::from_millis(5);
-            let mut up = false;
-            for _ in 0..12 {
-                if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                    up = true;
-                    break;
-                }
-                std::thread::sleep(delay);
-                delay *= 2;
-            }
-            assert!(
-                up,
-                "sshd did not start: {}",
-                std::fs::read_to_string(dir.join("sshd.log")).unwrap_or_default()
-            );
+            Self::await_listening(port, &dir);
             let user = String::from_utf8(
                 std::process::Command::new("id")
                     .arg("-un")
@@ -360,8 +406,76 @@ mod sshd {
                 wrong_key: wrong,
                 known_hosts,
                 remote_home,
-                child,
+                authorized_prefix,
+                sshd_bin: sshd,
+                child: Some(child),
             }
+        }
+
+        fn spawn(sshd: &Path, dir: &Path) -> std::process::Child {
+            let _ = std::fs::create_dir_all("/run/sshd");
+            std::process::Command::new(sshd)
+                .args(["-D", "-e", "-f"])
+                .arg(dir.join("sshd_config"))
+                .stdout(Stdio::null())
+                .stderr(std::fs::File::create(dir.join("sshd.log")).unwrap())
+                .spawn()
+                .unwrap()
+        }
+
+        /// Readiness: connect with a backoff schedule until sshd listens.
+        fn await_listening(port: u16, dir: &Path) {
+            let mut delay = Duration::from_millis(5);
+            let mut up = false;
+            for _ in 0..12 {
+                if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                    up = true;
+                    break;
+                }
+                std::thread::sleep(delay);
+                delay *= 2;
+            }
+            assert!(
+                up,
+                "sshd did not start: {}",
+                std::fs::read_to_string(dir.join("sshd.log")).unwrap_or_default()
+            );
+        }
+
+        /// Takes the listener down (this test's own sshd, by its child handle): nothing listens
+        /// on the port until [`Sshd::start_again`]. Sessions it already has are its children's.
+        pub fn stop(&mut self) {
+            if let Some(mut c) = self.child.take() {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+        }
+
+        /// Brings the listener back on the same port with the same keys.
+        pub fn start_again(&mut self) {
+            assert!(self.child.is_none(), "sshd is running");
+            self.child = Some(Self::spawn(&self.sshd_bin, &self.dir));
+            Self::await_listening(self.port, &self.dir);
+        }
+
+        /// A new key with `passphrase` that logs in as the "remote" machine: a host that uses
+        /// it must ask the user for the passphrase at every sign-in (the host's ssh options
+        /// should keep ssh from using or filling an agent: `IdentityAgent=none`,
+        /// `AddKeysToAgent=no`).
+        pub fn passphrase_key(&self, passphrase: &str) -> PathBuf {
+            let key = self.dir.join("id-passphrase");
+            let st = std::process::Command::new("ssh-keygen")
+                .args(["-q", "-t", "ed25519", "-N", passphrase, "-f"])
+                .arg(&key)
+                .status()
+                .expect("ssh-keygen");
+            assert!(st.success());
+            let pubkey = std::fs::read_to_string(key.with_extension("pub")).unwrap();
+            let path = self.dir.join("authorized_keys");
+            let mut lines = std::fs::read_to_string(&path).unwrap();
+            lines.push_str(&format!("{}{pubkey}", self.authorized_prefix));
+            std::fs::write(&path, lines).unwrap();
+            key
         }
 
         /// One "machine" of several that share the home directory `home`: its own machine key
@@ -388,6 +502,15 @@ mod sshd {
             )
             .unwrap();
             s.remote_home = home.to_path_buf();
+            s.authorized_prefix = format!(
+                "environment=\"HOME={}\",environment=\"PATH={path}\",\
+                 environment=\"SHELL={}/bin/loginsh\",\
+                 environment=\"MARSAD_MACHINE_KEY={machine}\",\
+                 environment=\"MARSAD_RUNTIME_DIR={}\" ",
+                home.display(),
+                s.dir.display(),
+                run.display()
+            );
             s
         }
 

@@ -8,9 +8,16 @@
 //! classified from ssh's exit status and stderr (wasit-control's classifier), so anything
 //! needing a human parks the link in `auth_needed`.
 //!
-//! A host that has needed an interactive answer only connects when armed by an explicit
-//! `hosts.reconnect`; otherwise an attempt fails at once with `auth_needed`, so a dropped link
-//! never fires prompts or pushes on its own.
+//! A host that needs the user at login (a connect asked them for something other than a
+//! host-key confirmation, see [`marsad_proto::hosts::PromptKind::needs_user`]) is never tried
+//! on the connector's own account: the link's supervisor asks [`BootstrapConnector::hold`]
+//! before every attempt it would start by itself, and a host that needs the user and has not
+//! been asked for (`hosts.reconnect` arms the next attempt) is parked in `auth_needed` instead,
+//! so a dropped link, a hub start or a retry never fires a prompt or a push on its own. The
+//! click is spent when an attempt asks the user something or connects, not when it starts: an
+//! attempt that fails before the host answered (no network) asked nobody anything, and the link
+//! goes on trying, armed. The fact is learned and un-learned here, once per successful sign-in
+//! (see [`Learned`]).
 //!
 //! Every attempt records its steps (`boot.*`, see [`Trail`]) under the attempt number the
 //! supervisor passes in, and every failure says where it happened and why: the transport
@@ -33,7 +40,7 @@
 //! No build for the platform, or a missing file, fails the link (no retry loop) with a message
 //! saying what to do.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -43,7 +50,7 @@ use marsad_proto::daemon::VersionInfo;
 use marsad_proto::diag::{
     BootShell, BootStage, HelperAction, HostsOp, MarsadEvent, WindowsRetryWhy,
 };
-use marsad_proto::hosts::{HostEntry, HostKind, HostPlatform};
+use marsad_proto::hosts::{HostEntry, HostKind, HostPlatform, SignInRepeat};
 use marsad_proto::HostId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -54,7 +61,7 @@ use wasit_control::{
 };
 use wasit_diag::{Bytes, Code, Ident, Ms};
 
-use super::auth::Prompts;
+use super::auth::{Prompts, SignInAttempt};
 use super::transport::{
     bootstrap_argv, helper_target, native_windows_sign, platform_from, triple_platform, RemoteShell,
 };
@@ -64,6 +71,9 @@ use crate::diag::{self, emit};
 pub const BIN_DIR_ENV: &str = "MARSAD_AGENT_BIN_DIR";
 /// Set for the askpass helper: which host's link is asking.
 pub const ASKPASS_HOST_ENV: &str = "MARSAD_ASKPASS_HOST";
+/// Set for the askpass helper: the connect attempt whose ssh runs it (see
+/// [`Prompts::begin_attempt`]).
+pub const ASKPASS_ATTEMPT_ENV: &str = "MARSAD_ASKPASS_ATTEMPT";
 /// Set for the askpass helper: the hub's endpoint path.
 pub const ASKPASS_SOCKET_ENV: &str = "MARSAD_ASKPASS_SOCKET";
 /// Set for the askpass helper: the hub machine's diagnostics directory (the helper appends its
@@ -80,8 +90,10 @@ pub enum Learned {
         host: HostId,
         platform: HostPlatform,
     },
-    /// The host asked an interactive question while signing in.
+    /// A sign-in of the host asked the user for something other than a host-key confirmation.
     Interactive { host: HostId },
+    /// A sign-in of a host marked interactive asked the user nothing: the mark is cleared.
+    NotInteractive { host: HostId },
     /// The machine key the host's daemon reported in its hello.
     Machine { host: HostId, machine: String },
 }
@@ -92,13 +104,15 @@ impl Learned {
         match self {
             Learned::Platform { host, .. }
             | Learned::Interactive { host }
+            | Learned::NotInteractive { host }
             | Learned::Machine { host, .. } => host,
         }
     }
 }
 
-/// Hosts whose next attempt must restart the remote daemon.
-pub type Restarts = Arc<Mutex<HashSet<HostId>>>;
+/// Hosts whose next attempt must restart the remote daemon, and why (the user is told when that
+/// asks them to sign in again).
+pub type Restarts = Arc<Mutex<HashMap<HostId, SignInRepeat>>>;
 
 pub struct BootstrapConnector {
     pub entries: Entries,
@@ -678,7 +692,7 @@ impl BootstrapConnector {
     /// Classify an attempt that ended before the protocol started.
     async fn failed(
         &self,
-        host: &HostId,
+        signin: &SignInAttempt,
         child: &wasit_control::ChildHandle,
         what: &str,
     ) -> ConnectError {
@@ -686,7 +700,7 @@ impl BootstrapConnector {
         let stderr = child.stderr_tail();
         let code = exit.and_then(|e| e.code);
         let mut kind = classify_command_failure(code, &stderr);
-        if self.prompts.asked(host) > 0 && kind == CommandFailureKind::Other {
+        if signin.asked() > 0 && kind == CommandFailureKind::Other {
             // A cancelled or timed-out prompt makes ssh give up without a recognisable message.
             kind = CommandFailureKind::AuthNeeded;
         }
@@ -704,7 +718,7 @@ impl BootstrapConnector {
     async fn remote_gone(
         &self,
         stage: BootStage,
-        host: &HostId,
+        signin: &SignInAttempt,
         child: &wasit_control::ChildHandle,
         what: &str,
         e: &std::io::Error,
@@ -712,7 +726,7 @@ impl BootstrapConnector {
         Failure {
             stage,
             error: self
-                .failed(host, child, &format!("{what} ({})", e.kind()))
+                .failed(signin, child, &format!("{what} ({})", e.kind()))
                 .await,
         }
     }
@@ -722,12 +736,12 @@ impl BootstrapConnector {
     async fn no_bootstrap(
         &self,
         entry: &HostEntry,
+        signin: &SignInAttempt,
         child: &wasit_control::ChildHandle,
         stdout: &str,
         preamble: &Preamble,
         why: Missing,
     ) -> ConnectError {
-        let host = &entry.id;
         let exit = child.wait_exit(CLOSED_EXIT_WAIT).await;
         let stderr = child.stderr_tail();
         let code = exit.and_then(|e| e.code);
@@ -737,7 +751,7 @@ impl BootstrapConnector {
             (false, false) => format!("{stdout}\n{stderr}"),
         };
         let mut kind = classify_command_failure(code, &both);
-        if self.prompts.asked(host) > 0 && kind == CommandFailureKind::Other {
+        if signin.asked() > 0 && kind == CommandFailureKind::Other {
             // A cancelled or timed-out prompt makes ssh give up without a recognisable message.
             kind = CommandFailureKind::AuthNeeded;
         }
@@ -809,8 +823,30 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// What the supervisor is told when a link must wait for the user (`auth_needed`, `held`).
+const HELD_DETAIL: &str =
+    "this host asks you to sign in each time it connects: connect it to sign in";
+
 #[async_trait]
 impl LinkConnector for BootstrapConnector {
+    /// The one place that decides a link must not be tried on its own: the host needs the user at
+    /// login ([`HostEntry::interactive_auth`]) and the user has not asked for this attempt.
+    fn hold(&self, spec: &HostSpec) -> Option<String> {
+        let needs_user = self
+            .entries
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&spec.id)
+            .is_some_and(|e| e.interactive_auth);
+        if !needs_user || self.prompts.armed(&spec.id) {
+            return None;
+        }
+        emit(MarsadEvent::HostsHeld {
+            host: Ident::new(spec.id.as_str()),
+        });
+        Some(HELD_DETAIL.to_owned())
+    }
+
     async fn connect(
         &self,
         spec: &HostSpec,
@@ -841,22 +877,17 @@ impl BootstrapConnector {
         let entry = self.entry(&spec.id).map_err(at(BootStage::Prepare))?;
         let host = entry.id.clone();
         let mut shell = RemoteShell::for_entry(&entry);
-        let armed = entry.interactive_auth && self.prompts.take_arm(&host);
-        trail.attempt(shell, &entry, armed);
-        if entry.interactive_auth && !armed {
-            return Err(Failure {
-                stage: BootStage::Prepare,
-                error: cmd_err(
-                    CommandFailureKind::AuthNeeded,
-                    None,
-                    "this host signs in interactively: connect to sign in",
-                ),
-            });
-        }
+        // (The supervisor asked `hold` before it started this attempt: a host that needs the
+        // user is only here because the user asked, or because this follows their sign-in.)
+        trail.attempt(shell, &entry, self.prompts.armed(&host));
         let exe = std::env::current_exe()
             .map_err(|e| ConnectError::Spawn(e.to_string()))
             .map_err(at(BootStage::Prepare))?;
-        self.prompts.begin_attempt(&host);
+        // This attempt's prompts are its own: they end with it, whichever way it ends. A restart
+        // the previous attempt asked for makes this a second sign-in of one Connect: its prompts
+        // say so.
+        let repeat = locked(&self.restarts).get(&host).copied();
+        let signin = self.prompts.begin_attempt(&host, repeat);
         // A host never connected is tried with `sh`. One that turns out to be native Windows
         // is asked again at once with PowerShell (its platform is then learned): its `sh` is a
         // Windows port that reports MINGW/MSYS/CYGWIN, or the remote command ran but printed no
@@ -878,6 +909,7 @@ impl BootstrapConnector {
                 ("SSH_ASKPASS_REQUIRE".into(), "force".into()),
                 ("DISPLAY".into(), ":0".into()),
                 (ASKPASS_HOST_ENV.into(), host.to_string()),
+                (ASKPASS_ATTEMPT_ENV.into(), signin.tag().to_string()),
                 (ASKPASS_SOCKET_ENV.into(), self.socket.display().to_string()),
                 (ASKPASS_DIAG_ENV.into(), self.diag_dir.display().to_string()),
             ];
@@ -896,6 +928,8 @@ impl BootstrapConnector {
                     if first_posix && native_windows_sign(&report.os) {
                         trail.windows_retry(WindowsRetryWhy::MingwSh);
                         shell = RemoteShell::PowerShell;
+                        // Another connection: the user may be asked again, and is told why.
+                        signin.again(SignInRepeat::WindowsShell);
                         continue;
                     }
                     break (io, child, report);
@@ -903,12 +937,20 @@ impl BootstrapConnector {
                 BootRead::Missing(why) => {
                     let preamble = trail.record_preamble();
                     let err = self
-                        .no_bootstrap(&entry, &child, preamble.text().trim(), &preamble, why)
+                        .no_bootstrap(
+                            &entry,
+                            &signin,
+                            &child,
+                            preamble.text().trim(),
+                            &preamble,
+                            why,
+                        )
                         .await;
                     if first_posix && remote_command_ran(&err) {
                         trail.windows_retry(WindowsRetryWhy::NoReport);
                         posix_failed = Some(err);
                         shell = RemoteShell::PowerShell;
+                        signin.again(SignInRepeat::WindowsShell);
                         continue;
                     }
                     return Err(Failure {
@@ -929,9 +971,19 @@ impl BootstrapConnector {
                 }
             }
         };
-        if self.prompts.asked(&host) > 0 && !entry.interactive_auth {
-            self.learn(Learned::Interactive { host: host.clone() })
-                .await;
+        // The host answered and the sign-in worked. Whether it needs the user at login is a
+        // fact of this sign-in: what it asked, nothing more (a host-key confirmation is not the
+        // user's at login). Learned when it is true, un-learned when it stopped being true.
+        match (signin.needed_user(), entry.interactive_auth) {
+            (true, false) => {
+                self.learn(Learned::Interactive { host: host.clone() })
+                    .await
+            }
+            (false, true) => {
+                self.learn(Learned::NotInteractive { host: host.clone() })
+                    .await
+            }
+            _ => {}
         }
         trail.reach(BootStage::Platform);
         let platform = platform_from(&report.os, &report.arch).ok_or_else(|| Failure {
@@ -949,11 +1001,7 @@ impl BootstrapConnector {
             })
             .await;
         }
-        let restart = self
-            .restarts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&host);
+        let restart = locked(&self.restarts).remove(&host).is_some();
         let up_to_date = report
             .installed
             .as_ref()
@@ -972,7 +1020,7 @@ impl BootstrapConnector {
                 return Err(self
                     .remote_gone(
                         BootStage::Ok,
-                        &host,
+                        &signin,
                         &child,
                         "the host closed the connection",
                         &e,
@@ -1008,7 +1056,7 @@ impl BootstrapConnector {
                     return Err(self
                         .remote_gone(
                             BootStage::Upload,
-                            &host,
+                            &signin,
                             &child,
                             &format!(
                                 "the host stopped reading while the Marsad helper was being sent ({sent} of {len} bytes)"
@@ -1026,7 +1074,7 @@ impl BootstrapConnector {
                 BootStage::Ok
             };
             return Err(self
-                .remote_gone(stage, &host, &child, "the host closed the connection", &e)
+                .remote_gone(stage, &signin, &child, "the host closed the connection", &e)
                 .await);
         }
         if let Some((len, took)) = uploaded {
@@ -1050,7 +1098,7 @@ impl BootstrapConnector {
                 return Err(Failure {
                     stage: BootStage::Ok,
                     error: self
-                        .failed(&host, &child, "installing marsad-agent failed")
+                        .failed(&signin, &child, "installing marsad-agent failed")
                         .await,
                 })
             }
@@ -1113,10 +1161,8 @@ impl BootstrapConnector {
                 n: trail.n(),
                 theirs: Ident::new(theirs.as_str()),
             });
-            self.restarts
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(host.clone());
+            locked(&self.restarts).insert(host.clone(), SignInRepeat::IdRestart);
+            // The user's sign-in is not over: the restart attempt is part of it.
             self.prompts.arm(&host);
             return Err(Failure {
                 stage: BootStage::Check,
@@ -1125,6 +1171,8 @@ impl BootstrapConnector {
                 )),
             });
         }
+        // Connected: whatever click there was is spent, asked or not (a key may have done it).
+        self.prompts.disarm(&host);
         Ok(client
             .with_attachment(child.clone())
             .with_diagnostics(child))
@@ -1151,10 +1199,7 @@ impl Provisioner for AgentProvisioner {
                 found: Ident::new(found),
             });
         }
-        self.restarts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(host.id.clone());
+        locked(&self.restarts).insert(host.id.clone(), SignInRepeat::HelperRestart);
         // The user just signed in for this link; the restart attempt is part of that.
         self.prompts.arm(&host.id);
         Ok(())

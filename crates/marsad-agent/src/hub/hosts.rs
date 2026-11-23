@@ -59,6 +59,9 @@ struct Inner {
     local: HostEntry,
     prompts: Prompts,
     feeds: Mutex<HashMap<HostId, JoinHandle<()>>>,
+    /// Held across every read-modify-write of a stored entry (`update`, `learned`): an edit and
+    /// something a connect learned at the same time cannot overwrite each other.
+    edits: tokio::sync::Mutex<()>,
 }
 
 fn slug(name: &str) -> String {
@@ -96,6 +99,7 @@ impl Registry {
                 local,
                 prompts,
                 feeds: Mutex::new(HashMap::new()),
+                edits: tokio::sync::Mutex::new(()),
             }),
         };
         r.inner
@@ -262,6 +266,7 @@ impl Registry {
         if let HostKind::Wsl { distro } = &entry.kind {
             check_wsl_distro(distro).await?;
         }
+        let _edit = self.inner.edits.lock().await;
         let Some(old) = self.get(&entry.id) else {
             return Err(MarsadError::NotFound {
                 what: format!("host {}", entry.id),
@@ -286,6 +291,7 @@ impl Registry {
         self.inner.store.put_host(entry.clone()).await?;
         if entry.kind != old.kind {
             self.unlink(&entry.id).await;
+            self.inner.prompts.forget(&entry.id);
             self.link(entry.clone()).await?;
         } else {
             self.inner
@@ -312,9 +318,12 @@ impl Registry {
         if *id == self.inner.local.id {
             return Err(MarsadError::invalid("the local host cannot be removed"));
         }
+        let _edit = self.inner.edits.lock().await;
         let removed = self.get(id);
         self.inner.store.remove_host(id).await?;
         self.unlink(id).await;
+        // After the link (its attempt ended with it): no prompt, no click is left for the host.
+        self.inner.prompts.forget(id);
         self.inner
             .entries
             .write()
@@ -327,13 +336,21 @@ impl Registry {
         Ok(())
     }
 
-    /// Connect now; for a host that signs in interactively this is the user's explicit
-    /// "Connect" (one attempt is allowed).
+    /// Connect now. For a host that needs the user at login this is the user's explicit
+    /// "Connect": it allows the next attempt (the click is spent when that attempt asks them
+    /// something or connects, see [`Prompts`]), which then asks.
     pub fn reconnect(&self, id: &HostId) -> Result<(), MarsadError> {
+        if self.inner.hub.link(id).is_none() {
+            return Err(MarsadError::NotFound {
+                what: format!("link to {id}"),
+            });
+        }
         self.inner.prompts.arm(id);
         if self.inner.hub.reconnect_now(id) {
             Ok(())
         } else {
+            // The link went away between the two calls: nothing is left to allow.
+            self.inner.prompts.forget(id);
             Err(MarsadError::NotFound {
                 what: format!("link to {id}"),
             })
@@ -342,6 +359,7 @@ impl Registry {
 
     async fn learned(&self, l: Learned) -> Result<(), MarsadError> {
         let id = l.host().clone();
+        let _edit = self.inner.edits.lock().await;
         let Some(mut entry) = self.get(&id) else {
             return Ok(());
         };
@@ -350,9 +368,23 @@ impl Registry {
                 entry.platform = Some(platform);
                 LearnedWord::Platform
             }
+            // Who owns "this host needs the user at login": this registry, which stores it
+            // with the host. It changes here and nowhere else (and by a change of the host's
+            // route, which forgets everything learned): set by the connect that was asked
+            // something, cleared by one that was not.
             Learned::Interactive { .. } => {
+                if entry.interactive_auth {
+                    return Ok(());
+                }
                 entry.interactive_auth = true;
                 LearnedWord::Interactive
+            }
+            Learned::NotInteractive { .. } => {
+                if !entry.interactive_auth {
+                    return Ok(());
+                }
+                entry.interactive_auth = false;
+                LearnedWord::NotInteractive
             }
             Learned::Machine { machine, .. } => {
                 if entry.machine.as_deref() == Some(machine.as_str()) {

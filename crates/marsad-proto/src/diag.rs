@@ -16,7 +16,7 @@
 use wasit_control::TraceId;
 use wasit_diag::{Bytes, Code, DiagText, ErrorInfo, HomePath, Ident, Ms, ProjectPath, TimeMs};
 
-use crate::hosts::{HostKind, PromptKind};
+use crate::hosts::{HostKind, PromptKind, SignInRepeat};
 
 wasit_diag::diag_enum! {
     /// The step of `serve`'s startup that failed (the process then exits).
@@ -294,7 +294,12 @@ wasit_diag::diag_enum! {
     /// What a connect attempt taught the registry about a host.
     pub enum LearnedWord {
         Platform,
+        /// The host asked the user for something other than a host-key confirmation while
+        /// signing in: it is not reconnected on its own from now on.
         Interactive,
+        /// A sign-in of a host marked `Interactive` asked the user nothing (a key or an agent
+        /// now does it): the mark is cleared, and the host reconnects on its own again.
+        NotInteractive,
         Machine,
     }
 }
@@ -321,6 +326,28 @@ wasit_diag::diag_enum! {
     }
 }
 
+wasit_diag::diag_enum! {
+    /// Why a sign-in prompt belongs to a second connection within one sign-in.
+    pub enum RepeatWord {
+        /// The helper on the host is being replaced or restarted.
+        HelperRestart,
+        /// The host's daemon is being restarted under this host's id.
+        IdRestart,
+        /// The host is a Windows machine and is connected again as one.
+        WindowsShell,
+    }
+}
+
+impl From<SignInRepeat> for RepeatWord {
+    fn from(r: SignInRepeat) -> Self {
+        match r {
+            SignInRepeat::HelperRestart => RepeatWord::HelperRestart,
+            SignInRepeat::IdRestart => RepeatWord::IdRestart,
+            SignInRepeat::WindowsShell => RepeatWord::WindowsShell,
+        }
+    }
+}
+
 impl From<PromptKind> for PromptWord {
     fn from(k: PromptKind) -> Self {
         match k {
@@ -343,6 +370,9 @@ wasit_diag::diag_enum! {
         Superseded,
         /// The askpass helper that asked went away (ssh gave up, or was killed).
         HelperGone,
+        /// The connect attempt that raised it ended (its time ran out, it was cancelled, its
+        /// link was stopped or removed, or it finished) or a newer attempt of the host began.
+        AttemptEnded,
     }
 }
 
@@ -493,9 +523,12 @@ wasit_diag::diag_events! {
         // `link.attempt_begin` / `link.attempt_end` of `hosts:<host>` on `(host, n)` ──
 
         /// The hub's connector began attempt `n` of `host`. `first_contact`: the host has
-        /// never connected (its platform is unknown). `interactive`: it has needed a sign-in
-        /// answer. `armed`: the user asked for this attempt (an interactive host connects only
-        /// then).
+        /// never connected (its platform is unknown). `interactive`: the host needs the user at
+        /// login (its last sign-in asked them for something other than a host-key
+        /// confirmation). `armed`: the user's click was waiting when the attempt began (such a
+        /// host is only tried then; the click is spent when an attempt asks them something or
+        /// connects, so an attempt that failed before that is followed by another that is armed
+        /// too).
         #[diag(ev = "boot.attempt", budget = 300)]
         BootAttempt {
             host: Ident,
@@ -605,13 +638,15 @@ wasit_diag::diag_events! {
         // ── sign-in prompts (never the prompt's text, never the answer) ──
 
         /// A sign-in prompt was raised for `host`; `attempt` counts how often this same
-        /// prompt came in the current connect attempt (2: the previous answer was wrong).
+        /// prompt came in the current connection (2: the previous answer was wrong). `repeat`:
+        /// the prompt belongs to a second connection within one sign-in, and why the hub made it.
         #[diag(ev = "auth.prompt", budget = 300)]
         AuthPrompt {
             host: Ident,
             prompt: u64,
             kind: PromptWord,
             attempt: u32,
+            repeat: Option<RepeatWord>,
         },
         /// The prompt was answered, `ms` after it was raised.
         #[diag(ev = "auth.answered", budget = 300)]
@@ -643,6 +678,12 @@ wasit_diag::diag_events! {
         /// A connect attempt taught the registry something about a host (and it was stored).
         #[diag(ev = "hosts.learned", budget = 300)]
         HostsLearned { host: Ident, what: LearnedWord },
+        /// The hub did not start a connect attempt of `host` because it needs the user at login
+        /// (and the user has not asked): its link is parked as `auth_needed` (`held`) until
+        /// `hosts.reconnect`. Recorded each time the link's supervisor asked and was told so (at
+        /// the hub's start, after a drop, after a failure that came after the user was asked).
+        #[diag(ev = "hosts.held", budget = 300)]
+        HostsHeld { host: Ident },
         /// The registry could not do something for a host (`host` is absent when it is not
         /// known).
         #[diag(ev = "hosts.failed", lvl = warn, budget = 300)]

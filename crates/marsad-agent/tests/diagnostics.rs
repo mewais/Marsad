@@ -726,6 +726,8 @@ mod signin {
         tokio::process::Command::new(agent())
             .arg(prompt)
             .env("MARSAD_ASKPASS_HOST", HOST)
+            // No connect attempt is running for the hub's own entry.
+            .env("MARSAD_ASKPASS_ATTEMPT", "0")
             .env("MARSAD_ASKPASS_SOCKET", l.socket())
             .env("MARSAD_ASKPASS_DIAG", l.diag())
             .stdin(Stdio::null())
@@ -1338,7 +1340,9 @@ mod connect {
         })
         .await;
         let FleetEvent::Link {
-            state: LinkState::AuthNeeded { problem, detail },
+            state: LinkState::AuthNeeded {
+                problem, detail, ..
+            },
             ..
         } = state
         else {

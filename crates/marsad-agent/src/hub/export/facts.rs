@@ -88,7 +88,11 @@ impl HostSpec {
                 } else {
                     let last_error = match state {
                         LinkState::Reconnecting { last_error, .. } => Some(last_error.clone()),
-                        LinkState::AuthNeeded { detail, .. } => Some(detail.clone()),
+                        // Why the link is down: how it dropped when it did, else what the
+                        // attempt that needed a person said.
+                        LinkState::AuthNeeded { detail, cause, .. } => {
+                            Some(cause.clone().unwrap_or_else(|| detail.clone()))
+                        }
                         LinkState::Failed { reason, .. } => Some(reason.clone()),
                         _ => None,
                     };
