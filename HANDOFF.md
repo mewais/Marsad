@@ -1,18 +1,260 @@
-# Handoff — integrate and harden Marsad (branch `claude/awesome-euler-r7x45r`)
+# Handoff — integrate and harden Marsad (branch `session-flows`)
 
 ## State
 
-Everything below is committed and pushed in Marsad, Wasit and Wasl.
-Marsad's `Cargo.lock` files pin the Wasit/Wasl branch revisions (git sources); local builds use the
-untracked `.cargo/config.toml` path patches, which rewrite the locks to path sources — never commit
-those. Re-pin after pushing Wasit with: move `.cargo/config.toml` aside, `cargo update -p <crate>`
+The current work is the branch `session-flows` in Marsad, Wasit and Wasl, each started from that
+repo's `origin/main` (Marsad 090dee9, Wasit 6127d6e, Wasl 6ddfab9; `main` is the tip of the previous
+branch `claude/awesome-euler-r7x45r`, whose rounds are described further down). Heads when this
+round was written down: Wasit 7adfba4, Wasl fef0b92, Marsad d929132 plus this note. All three
+branches are pushed; nothing of this round is merged to `main` (the owner has not asked for it), and
+its commits are authored as `Claude <noreply@anthropic.com>` by the owner's instruction.
+Marsad's `Cargo.toml` names `branch = "session-flows"` for every Wasit and Wasl git dependency
+(Wasl's manifests do the same for Wasit). The two Marsad `Cargo.lock` files pin the revisions of
+that branch (git sources): the root lock Wasit and Wasl, the shell's `apps/desktop/src-tauri/Cargo.lock`
+Wasit only; they are pinned to Wasit 7adfba4 / Wasl fef0b92. Local builds use the untracked,
+git-ignored `.cargo/config.toml` path patches (they must list every Wasit crate Marsad uses,
+including the new `wasit-diag`), which rewrite the locks to path sources — never commit those.
+Re-pin after pushing Wasit or Wasl with: move `.cargo/config.toml` aside, `cargo update -p <crate>`
 for the wasit/wasl crates in `.` and `apps/desktop/src-tauri`, move it back. Release builds use
 `--locked`.
 
 CI (`ci.yml`, Linux/Windows/macOS + `linux-helper` + `windows-e2e` (WSL, ssh to WSL, native
 Windows over ssh) + the Windows WebDriver translucency step in `desktop (windows-latest)` + a
-Secret Service step on Linux): see the branch's latest run. Pin helper: replace the Wasit/Wasl
+Secret Service step on Linux) runs on every push; this round did not change `.github/`, and
+whether it ran green on `session-flows` is not verified here. Pin helper: replace the Wasit/Wasl
 hash in both Cargo.lock files (index only), or re-resolve with the patches moved aside.
+
+### Session-flows round (diagnostics, session lifecycle, turns, hosts; owner's work order of 2026-11-22)
+The owner's work order had three parts, in this order: (1) diagnostics, built first as the tool for
+(2) nine bugs seen with Claude Code, mostly on a WSL host (B1–B9), and (3) agreed changes to session
+control, the session view, hosts and workstreams. The owner tests with the real Claude CLI on
+Windows + WSL + ssh hosts and sends a diagnostics export when something fails; the automated tests
+use stand-in CLIs, so a green run is not proof that a flow works in the real app. The work order,
+the manager's log, the root-cause investigations (written before the fixes: where they differ from
+the code, the code is right) and the test audits are NOT in the repos, they are under
+`/work/mewais/Marsad/.notes/` on the development box: `ASKS-session-flows.md`,
+`PLAN-session-flows.md`, `investigation/{turns,lifecycle,hosts,ui}.md`, `design/diagnostics.md`,
+`checkpoint2/tests-changed-{wasit,wasl,marsad}.md`. Status: diagnostics done; B1, B2, B3, B5, B6, B7
+(cause a), B8, B9 fixed in code; B4 not established; section 3 done except reusing one
+authenticated ssh connection. This round's code was not run on Windows or macOS (compile check only).
+
+**Diagnostics** (Wasit `ARCHITECTURE.md` §9; Marsad `ARCHITECTURE.md` "Diagnostics", `docs/INSTALL.md`)
+- *What is recorded:* typed records of starts and stops, every step of a host connect and why it
+  failed, session state changes with their cause, the path of every prompt, failures with their
+  codes, sizes and timings. *Never:* prompt or response text, thinking, tool input or output, file
+  contents, attachment names, session or workstream names, secrets. Project folders appear hashed;
+  an agent CLI's error text only as code, length and fingerprint; what ssh or a host printed on a
+  failed connect is kept shortened with registered secrets and project paths masked. The owner
+  accepted these defaults.
+- *Where:* on every machine that runs a Marsad process, under `<root>/machines/<key>/` (root `~/.marsad`
+  on Linux and macOS, `%LOCALAPPDATA%\Marsad` on Windows; a remote or WSL host has its own root and
+  files): `diag/app.ndjson` (the desktop shell, 4 MiB, two older generations;
+  `apps/desktop/src-tauri/src/diag.rs`), `diag/daemon.ndjson` (8 MiB, three older;
+  `crates/marsad-agent/src/diag.rs`), `diag/aux.ndjson` (bridge, `stop`, askpass; the daemon rotates it
+  over 1 MiB), `sessions/<id>/shim.log` (256 KiB, one older; Wasit `wasit-shim/src/diag.rs`),
+  `diag/exports/`. `marsad-agent.log` is the daemon's raw stderr: never a record, never exported.
+  Directories 0700, files 0600 on Unix.
+- *Bounds:* one sink per process (`wasit-diag`): emitting is a budget check, serialisation, a ring
+  push and a non-blocking queue push; a full queue drops and counts (`diag.dropped`); one writer thread
+  rotates by size. Records are lifecycle-level (no per-delta, per-line logging); nothing awaits.
+- *Trails:* the session trail (`wasit-runtime/src/trail.rs`, topic `session.trail:<id>`, method
+  `session.trail.page`) is computed on the host from the journal and never written to a file. A prompt's
+  path in it: `InputApplied` (status sent / queued / rejected / not_running …), `InputSent` (left the
+  driver queue), `InputWritten` or `InputWriteFailed`, `InputAcknowledged` (the CLI said so), `InputDropped`
+  with the reason; the first stage, "accepted by the app", is the app's `ui.prompt` record in
+  `app.ndjson`; both carry the request's trace id (`u-` + 16 hex digits). Also: turn start/end with
+  trigger, tools, tasks, gates, phase changes with cause, process spawn/exit, earlier-history state.
+  The connection trail is the `boot.*`, `auth.*`, `hostenv.*` records (`marsad-proto/src/diag.rs`) and
+  the link and transport records (`wasit-control/src/diag.rs`), each with host and attempt number.
+- *Developer mode* (Settings → Diagnostics, hub setting `developer.mode`, off by default) adds a
+  Diagnostics tab to each session (`features/diagnostics/SessionDiagnostics.tsx`) and a connection log
+  to each host (`HostDiagnostics.tsx`), in time order. `MARSAD_LOG=<level>` separately prints tracing text.
+- *Export* (Settings → Diagnostics, no Developer mode needed; CLI `marsad-agent diagnostics export`
+  when the app will not start): the hub's `Exports` actor (`marsad-agent/src/hub/export/`) collects the
+  app, the local daemon and every connected host into
+  `diag/exports/marsad-diagnostics-<host>-<id>.ndjson.gz` and the UI saves it where the user chooses.
+  Window 24 h (3 d, 7 d offered; CLI up to 31 d),
+  20 MiB total, 16 MiB per host, 180 s per host, newest 3 exports kept; an unreachable host is listed
+  as such. Session trails are included.
+- *Leak tests* (the owner's marked prompt and secret): `crates/marsad-agent/tests/diagnostics.rs`
+  `no_content_in_any_log_or_export` (Linux, a test sshd host: about twenty markers through every
+  content channel, searched raw, JSON-escaped, base64 and UTF-16LE in both machines' `diag/`, shim logs,
+  stderr logs and the export; the same test checks the markers ARE in the journal) and
+  `no_session_content_reaches_any_diagnostic_file`; opt-in `live_diagnostics.rs` with the real Claude CLI
+  (`MARSAD_LIVE=1 cargo test -p marsad-agent --test live_diagnostics -- --ignored`; it passed once mid-round
+  with claude 2.1.293, not recorded as re-run on the final heads); Wasl `crates/wasl/tests/diag_content.rs`;
+  Wasit `wasit-runtime/tests/{diag_daemon,diag_service,trail_wire}.rs`.
+- *Adding an event:* declare it in the crate's `diag_events!` enum (`MarsadEvent`, `HubEvent`, `ClientEvent`,
+  `StoreEvent`, Wasit's `ShimEvent`/runtime events, Wasl's `WaslEvent`); field types must be `wasit-diag`
+  value types (`Ident`, `Code`, `Bytes`, `Ms`, `ErrorInfo`, …), never `String`; data types use
+  `diag_data!`, enums `diag_enum!`. Free text exists only through `DiagText::new` and `ErrorInfo::ours`,
+  and every call site is on an allow-list in a source-scan test that fails on a new one until it is
+  listed with a reason: Wasit `crates/wasit-diag/tests/value_sites.rs`, Marsad
+  `crates/marsad-agent/tests/diag_sites.rs`, Wasl `crates/wasl/tests/diag_sites.rs`. A new `AgentEvent`
+  or `SessionEventKind` forces a decision in `trail.rs` (exhaustive match). The webview may only send `UiEvent` variants
+  (`marsad-proto/src/diag.rs`); the shell refuses anything else.
+
+**Bugs** (root cause → change → checks → what still needs the owner's real CLI)
+- **B1 first prompt missing.** The dialog's first prompt went to the agent at start outside the input
+  path, so no user message was recorded. `Core::on_start` (`wasit-runtime/src/core.rs`) now splits it off
+  the spawn spec and applies it as an ordinary input in the same journal note as `start` (its id is that
+  note's seq); drivers no longer read `first_prompt`; old journals replay it the same way. Checks: core
+  `the_first_prompt_is_an_ordinary_input_applied_with_the_start`, `wasit-runtime/tests/drivers.rs`
+  `*_first_prompt_is_an_input` (four drivers). Owner: the first prompt showing with the real Claude CLI.
+- **B2 no earlier transcript on continue.** (a) The app's Continue launched a new Marsad session;
+  (b) the engine never brought in the agent's own conversation. Now the app continues the existing
+  session (`sessions.continue`: `ContinueButton` in `features/common/SessionBits.tsx`; a prompt typed
+  into the dialog for an ended session continues it, `NewSessionDialog.tsx` `resume`). The engine
+  imports the earlier conversation (Wasit §3.8): Claude through a parser its driver describes
+  (`DriverDescriptor::history_storage`/`history_parser`, `wasit-claude/src/history.rs`), read-only from the
+  agent's own storage by the runtime (`wasit-runtime/src/history.rs`); codex and ACP agents through what
+  their protocols replay. History is a list kept apart from the live events (paged with
+  `session.history` and `earlier: true`), shown above them (`features/session/EarlierPart.tsx`,
+  `earlierWords.ts`) with loading, gaps (omitted older messages, cut items, unreadable lines, missing files) and an
+  "unavailable" reason. "Continue most recent" is resolved to a real conversation id at create or
+  refused with `nothing_to_continue` (`manager.rs`). Bounds (`wasit-core/src/history.rs`,
+  `wasit-runtime/src/history.rs`): the most recent 64 MiB of the conversation's files, items cut at
+  256 KiB, an event above 4 MiB replaced by a notice, a main file above 1 GiB not imported at all
+  (`unavailable: too_large`); older messages are counted and not loadable (no load-older).
+  Checks: `wasit-runtime/tests/earlier_history.rs`, `wasit-fake-cli/tests/history_wire.rs`, `wasit-claude/src/history_tests.rs` (sanitised fixtures with
+  the structure of real claude 2.1.293 transcripts), opt-in `live_earlier.rs`; vitest `earlier.test.tsx`,
+  `earlierTranscript.test.tsx`, `nothingToContinue.test.tsx`. Owner: continuing on a WSL host and an ssh
+  host with real Claude and a conversation of real size; no test continued a session on a WSL host.
+- **B3 Idle while working.** Turn boundaries were inferred from what we wrote, and background tasks and
+  subagents were not tracked. Now turn start/end are the CLI's own (claude: `system/init` … `result`),
+  background tasks are tracked (`wasit-core/src/tasks.rs` `apply`), `Working` means a turn is open or a
+  task runs, subagent output arrives as `AgentEvent::Scoped` and never lands in the session's own
+  transcript, `Interrupt` stops background work when no turn runs, `StopTask` stops one task
+  (Wasit §3.6). Wasl follows a delivered task through its own turn and waits for background work
+  (`287c8e6`). The app lists tasks and subagents in Activity and opens a subagent's transcript
+  (`SessionWork.tsx`, `SubagentView.tsx`); the shell raises "finished" only after a completed,
+  not interrupted turn with no background work (`src-tauri/src/notify.rs`). Checks: recordings of the
+  real claude 2.1.293 (`wasit-claude/tests/fixtures/{background-*,agent-turn-*,lifecycle,stop-task}.ndjson`),
+  `wasit-runtime/tests/background.rs`, `wasit-fake-cli/tests/{background,reference}.rs`; vitest
+  `tasks.test.ts`, `subagents.test.tsx`, `transcriptScope.test.ts`. Owner: a long real run with subagents.
+- **B4 prompt after a finished turn never arrived — NOT established.** In the owner's own journal the
+  prompt was written to the agent; the CLI stayed silent and later exited. No Marsad delivery fault was
+  found. The prompt trail (accepted, queued, written, acknowledged, dropped with reason) and the export
+  exist to catch it next time; it needs the owner's export. The app shows a user message as sent,
+  queued, or not sent with the reason (`features/session/transcript.ts`).
+- **B5 queued prompts not cleared.** Prompts sent mid-turn are queued inside the agent CLI, which
+  Marsad neither cancelled nor tracked. Now every input is tracked to acknowledgement; `Interrupt` and
+  `End session` drop the pending ones and report each (`InputDropped`: interrupted, shutdown, unencodable,
+  refused, process_ended); for Claude the messages in the CLI's own queue are cancelled
+  (`cancel_async_message`). Checks: `drivers.rs` `*_queued_prompt_dropped_by_{interrupt,stop}` (claude,
+  opencode, kilo), `*_prompt_is_acknowledged_by_the_cli`; vitest `prompts.test.tsx`, `lifecycle.test.tsx`.
+  Owner: the cancel against the real CLI.
+- **B6 no Continue after End.** Marsad did not reliably hold the agent's conversation id and the app had
+  no continue path for an ended session. Now the id is chosen at start where the agent allows it
+  (`DriverDescriptor::chosen_session_id`; claude `--session-id`), the snapshot says `continuable` or
+  `not_continuable` with the reason, the app shows Continue, and a prompt or slash command to an ended
+  session continues it and then delivers it as one operation (`wasit-runtime/src/continuation.rs`).
+  Checks: `wasit-runtime/tests/lifecycle.rs` (four drivers: never prompted, after a turn, prompt to an
+  ended session, two prompts during a continue, a process that dies at once), `drivers.rs`
+  `*_crash_mid_turn`; vitest `lifecycle.test.tsx`. Owner: End then Continue with the real CLI.
+- **B7 not findable from the user's own CLI.** (a) A working directory given as `~` was not normalised, so
+  the conversation was filed under another project folder: `wasit-runtime/src/cwd.rs` now resolves it once
+  at create (home, absolute, canonical; refused naming the path as given); test
+  `lifecycle.rs::a_tilde_working_directory_is_the_home_and_is_used_everywhere`. (b) Claude's interactive
+  picker does not list conversations started through its non-interactive entrypoint; changing that would
+  mean pretending to be the interactive CLI, which was decided against. `claude --resume <id>` works: the
+  snapshot carries `resume_command` (`DriverDescriptor::user_resume_argv`), the session facts show the
+  agent's conversation id and a copyable command (`SessionFacts.tsx`), and the session's name is passed as
+  the conversation title (`--name`, only for a conversation the session starts, never a resumed one).
+  Owner: run that command in a terminal, while the session runs and after it ended.
+- **B8 model menu wrapping, B9 Markdown in user prompts:** fixed in the app (`ui/Select.tsx`; user
+  prompts render as Markdown with their line breaks, `features/session/Markdown.tsx`). Checks: vitest
+  `chat.test.tsx`, `ui/primitives.test.tsx`; jsdom has no layout, so the menu's look needs the owner's eyes.
+
+**Agreed changes** (all in the app unless noted)
+- Interrupt cancels the turn and keeps the agent; Esc interrupts a running turn only, never background
+  work (`SessionPage.tsx`, `escapeInterrupts`). "Stop" is "End session" (shuts the process down, keeps
+  the session). Ended sessions show Continue and form their own group (`state/selectors.ts`). A prompt to
+  an ended session continues it (B6). A session can be named in the new-session dialog (`LaunchRequest.name`).
+- Usage tab removed; cost, cost per model and the context window are in the sidebar (`SessionFacts.tsx`);
+  subagents in Activity; a run of consecutive tool calls is one expandable row (`toolRuns.ts`); copy
+  buttons on prompts, responses and code (`ui/CopyButton.tsx`); Up/Down recall earlier prompts, also those
+  of an earlier conversation (`usePromptRecall.ts`; a recalled one-line prompt can be walked from any caret
+  position, otherwise only at the start/end of the text — a rule the owner accepted).
+- Hosts: csh, tcsh and bsd-csh run setup commands in the user's own shell and syntax, from a private file
+  (Wasit `wasit-runtime/src/environment.rs`); a csh user must write csh. ssh keep-alive was already there
+  (`hub/transport.rs`: `ServerAliveInterval=15`, `ServerAliveCountMax=3`, `ConnectTimeout=15`,
+  `ControlMaster=no`). A host that needed interactive or multi-factor login and dropped is held: no ssh is
+  started, a notification (preference `sign_in_needed`) and one Sign in click start one attempt; its
+  sessions keep running (`hub/auth.rs`, `hub/fleet.rs`, `wasit-control` `supervised.rs` hold hook,
+  `src-tauri/src/notify.rs`, `state/signin.ts`; test `marsad-agent/tests/interactive_hosts.rs`). A host
+  needs the user when a connect asked anything besides ssh's own host-key confirmation. **Not done:** reuse of one
+  authenticated ssh connection on Linux/macOS (needs a lifetime choice and has a security trade-off; a
+  Windows hub gains nothing; measured design in `investigation/hosts.md` §H4) — waits for the owner.
+- "Allow and remember": each thing a choice will also apply is listed under the buttons before the
+  click (`GateChoice.effects`, Wasit `d103a5e`; `features/gates/parts.tsx`).
+- Workstreams: why a spawn request went away is shown (Wasl's `EndCode` in `wasl-proto/src/end.rs`, topic
+  `wasl.spawns`, the hub's `recent_spawns`, `workstreams/Spawning.tsx`); a template holds designed agents
+  only (`hub/ws_methods.rs`, test `template_leaves_out_spawned_agents_and_session_identity`); a node's
+  session is created with the node's name. Terminal: one pty per session, reaped (`host/pty.rs`,
+  `tests/pty_lifecycle.rs`).
+
+**Engine concepts added** (a newcomer needs these)
+- *Input id and acknowledgement:* every command is an input whose id is its journal seq (`InputId`,
+  `wasit-core`); drivers report `InputSent`, `InputAcknowledged` (only on the CLI's own word; claude:
+  `command_lifecycle` frames), `InputDropped` (`wasit-core/src/event.rs`); the core adds written / write-failed.
+- *Turn trigger:* `TurnStarted{input, trigger}` is `input`, `agent` (the CLI started it itself) or `unreported`.
+- *Background tasks, scoped events:* `tasks.rs`, `AgentEvent::Scoped`, `session.history {scope}` (§3.6).
+- *`continuable`, auto-continue, chosen id:* §3.3 and `continuation.rs`.
+- *Earlier history:* `history.rs` in core, runtime and `wasit-claude` (§3.8).
+- *Turn-bound external gates:* `raise_gate_for_turn` with `TurnBinding` (`wasit-core/src/event.rs`); the
+  session's `Core` resolves the gate when the turn is interrupted or ends, in journal order; Wasl's handoff
+  and spawn gates and Marsad's `ask_user` (`host/ask.rs`) only observe it. A gate carries a typed
+  `GateReason{code, detail}` (§3.7).
+- *Held hosts / sign-in:* a link can be held until the user clicks (`Supervised` hold hook, `hub/auth.rs`).
+- *Spawn end codes:* `EndCode` in `wasl-proto/src/end.rs`, one vocabulary for how a spawn or handoff ended.
+- *Link failures:* `helper_failed` (a remote program that ends before the handshake) parks the link; one
+  classifier in `wasit-control/src/command.rs`, used by Marsad's `hub/provision.rs`.
+
+**Tests.** Integrated run, 2026-11-23: Wasit 863 passed / 0 failed / 21 ignored; Wasl 56 / 0 / 3; Marsad
+169 / 0 / 6; desktop vitest 728 in 51 files (729 after the small changes below); desktop shell (`src-tauri`) 36; clippy `-D warnings` and fmt
+clean; `cargo xwin check` (Windows) clean, 0 warnings. Not verified anywhere: behaviour on Windows and
+macOS, the cross-built installer (never run by its builder), real Codex and OpenCode, the real-app suite
+`e2e-real` (cannot run on the dev box; its scripts were only updated as text), and everything with the
+real Claude CLI except what the opt-in `live*.rs` tests cover (`#[ignore]`d; Wasit
+`cargo test -p wasit-runtime --test live -- --ignored`, `--test live_earlier`; they fail loudly without
+the CLI). After that run only tests, the fixture backend and documents changed (Wasit 3f4e237, 7adfba4; Marsad
+a758318, d929132); those were run on their own (stand-in CLI scenarios 85 passed, `flow.spec.ts` 3 runs,
+vitest 729 passed). Run everything with `/work/mewais/Marsad/.notes/verify-all.sh` (see Build / run). Tests run real
+processes (daemons, shims, the stand-in CLI), so after a Wasit change run
+`cargo build --workspace --all-targets` in Wasl and Marsad before their tests, or stale binaries give
+false results. Hygiene: tests end every process they start (`wasit_fake_cli::harness::stop_all_under`, from `TempDir::drop`), leave no
+directory behind (guards `no_leftovers.rs` in the three repos) and give every test daemon an explicit
+runtime directory under its temp dir (`--run-dir`, `ClientConfig::run_dir`).
+Test audits (existing tests that were changed; every finding below is from the audit files, which read
+diffs and ran nothing; nothing was re-audited here): *Wasit* — `lifecycle.rs` `a_new_process_that_dies_at_once` and
+`a_resume_the_agent_refuses_fails_the_continue_with_its_reason` accept `Err(ContinueFailed)` or
+`Ok(Queued)` (a real race between two processes; a unit test in `actor.rs` pins each order); `recovery.rs`
+`continue_starts_a_second_generation…` and the live helper `live_turn` compare the snapshot at the exit,
+not while running; `host_setup_shells.rs` no longer asserts "a syntax error runs nothing" for csh and
+bsd-csh (product change); `drivers.rs` `crash_mid_turn` accepts a prompt after a crash as queued or sent
+(it auto-continues); the stand-in's `claude_resume_argument_sets_session_id` was replaced (the stand-in now
+follows the real storage rules) and one `model == "claude-haiku-5-5"` line was dropped
+and restored afterwards (Wasit 3f4e237, in `claude_stores_a_conversation_with_its_first_prompt_and_resume_needs_it`); the two new reference recordings (claude lifecycle, codex steer) are compared more loosely; the
+stand-in CLI changed a lot, so every test that uses it runs against a changed stand-in; allow-lists in
+`value_sites.rs` grow by design. *Wasl* — no loosening; assertions became stricter (typed reason codes); one
+gap: no test reads an old journal whose gate reason is the old "withdrawn". *Marsad* — two vitest tests
+about the Usage tab were deleted and replaced by `usage.test.tsx`; the screens e2e now sees a fixture
+terminal; the unreachable-host gates test was rewritten with a stricter replacement; the `flow.spec.ts`
+prompt step first asserted less than its comment said and was strengthened afterwards (Marsad a758318: the
+prompt to an agent waiting on a question shows as sent, the question stays pending, no reply is added); `store.test.tsx` triggers on an interrupt instead of a
+prompt; `notify.rs` `transitions_become_notes` follows the new "finished" rule; 24 trailing stop calls
+were removed because `TempDir::drop` ends everything; `stop_hub` is strict and waits for the exit; two
+`live_workstream` tests that returned silently without their environment variable now fail with
+instructions. `e2e-real/run.mjs` changes (End session, Sign in) were matched against the product by
+grep only.
+
+**Layering rule (owner's).** Agent-CLI specifics live only in Wasit's driver crates or behind the driver
+descriptor (`DriverDescriptor`: chosen ids, storage and parser of history, the user's resume command,
+conversation listing); agent-to-agent lives in Wasl; Marsad only displays and forwards. No agent names in
+Marsad's control flow, no workarounds for one agent in the hub or the UI. A search of the lines this round
+added to Marsad's non-test sources found an agent name only in a comment and in unit-test code; audit new
+diffs the same way.
 
 ### Gap-closing round (11 items; Wasit, Wasl, Marsad on this branch)
 1. **Save vs. launch ordering** (Marsad 253db74): the per-host lock now spans storing *and*
@@ -31,7 +273,9 @@ hash in both Cargo.lock files (index only), or re-resolve with the patches moved
    `-c` (reads `.cshrc`/`.tcshrc`) sourcing `/etc/csh.login` + `~/.login`; fish setup lines are
    parsed with `fish -n` first (a syntax error used to be "applied" as status 123). Setup lines
    for csh-family logins stay POSIX, run by `/bin/sh` (documented; a csh `module` alias is not
-   available there — source the module system's sh init). Test `tests/host_setup_shells.rs`.
+   available there — source the module system's sh init) (changed in the session-flows round: csh,
+   tcsh and bsd-csh now run the setup lines in their own syntax, so a csh user writes csh). Test
+   `tests/host_setup_shells.rs`.
 4. **Native Windows over SSH** (Marsad d559836..1392f62, Wasit 3f916dd): windows-e2e runs Win32
    OpenSSH Server on the runner (port 2223: 127.0.0.1:22 is the WSL distro's sshd via WSL
    localhost forwarding) and `windows.rs::native_windows_host_over_ssh_end_to_end` connects it
@@ -104,7 +348,8 @@ hash in both Cargo.lock files (index only), or re-resolve with the patches moved
 8. **`ask_user` on interrupt** (Wasit 1313078, Marsad 152cb25): a CLI waits for its tool call
    before acting on a cancel, so the turn never ended. The session's `Interrupt` input after the
    gate went up withdraws the gate and answers the tool; turn ends/interrupts before the gate's
-   `GateRequested` are ignored (the old "earlier turn" gap). Fake OpenCode/Kilo now call MCP
+   `GateRequested` are ignored (the old "earlier turn" gap) (changed in the session-flows round: the
+   session's own reducer resolves a turn-bound gate; no watcher withdraws it any more). Fake OpenCode/Kilo now call MCP
    servers from `OPENCODE_CONFIG_CONTENT`/`KILO_CONFIG_CONTENT`; test
    `daemon.rs::ask_user_gate_is_withdrawn_when_the_turn_is_interrupted` (hung before the fix).
 9. **Deadline inheritance** (Wasl 6ddfab9): a delegated task gets min(own, parent's deadline);
@@ -183,7 +428,7 @@ hash in both Cargo.lock files (index only), or re-resolve with the patches moved
   `__WASIT_SETUP` and run with `eval` inside `{ …; } </dev/null 2>&1` between nonce markers,
   deadline 30 s, process group killed; the environment it leaves is taken (capture's PATH
   entries kept after its own); fish runs them as fish, csh/tcsh/nu/elvish/xonsh/pwsh login
-  shells via `/bin/sh`. **Native Windows: PowerShell `-NoProfile -NonInteractive` in the
+  shells via `/bin/sh` (csh, tcsh and bsd-csh changed in the session-flows round: their own shell and syntax). **Native Windows: PowerShell `-NoProfile -NonInteractive` in the
   captured environment, lines in `& { }`; `$env:` changes taken; exit status = a thrown error
   (1) or `$LASTEXITCODE`; non-terminating cmdlet errors do not count as failure; a parse error
   means nothing runs ("the shell did not run the commands" + PowerShell's message).** Failure ⇒
@@ -341,7 +586,9 @@ hash in both Cargo.lock files (index only), or re-resolve with the patches moved
   snapshot first now; Wasl withdrawals run to the end even when the RPC caller disconnects; a
   spawn/handoff gate raised just before a daemon kill is adopted after restart.
 - **Gate lifecycle** (Wasit runtime + Wasl node): a gate lives as long as the request that raised
-  it. Withdrawal = `gate_resolved { reason: "withdrawn" }`, gone from the snapshot, late answer →
+  it. Withdrawal = `gate_resolved { reason: "withdrawn" }` (changed in the session-flows round: the reason is a
+  typed `{code, detail}`, e.g. `turn_interrupted`, `turn_ended`, `cancelled`, `caller_gone`; old journals read as
+  `withdrawn`), gone from the snapshot, late answer →
   `CommandError::GateWithdrawn` (`gate_withdrawn`), id never re-raisable; process exit withdraws
   external gates. Handoff: task cancelled/expired, sending process ended, delegating turn
   interrupted (a normal turn end keeps it). Spawn: asking turn ended or interrupted, MCP call
@@ -419,7 +666,7 @@ hash in both Cargo.lock files (index only), or re-resolve with the patches moved
   this machine first in host lists and as the dialog default; graph lanes with agents first.
 
 ### Real-app suite `apps/desktop/e2e-real/` (`pnpm --dir apps/desktop test:real [-- --real] [--shots DIR]`)
-Default (fake CLIs): 35 scenarios (incl. `spawn`, `translucent-window`, `media`, `polish`, `host-environment`), last full run 35/35 (gap round) — incl. notifications per prefs (Settings
+Default (fake CLIs): 35 scenarios (incl. `spawn`, `translucent-window`, `media`, `polish`, `host-environment`), last full run 35/35 (gap round; not run in the session-flows round, whose script edits — "End session", "Sign in" — are text only) — incl. notifications per prefs (Settings
 page → shell log), kill -9 of the app mid-turn + relaunch, daemon kill -9, ssh key / password
 hosts, and a **real second factor**: sshd keyboard-interactive through PAM (pam_unix +
 pam_oath TOTP; needs `libpam-oath`, the run swaps `/etc/pam.d/sshd` and restores it).
@@ -444,12 +691,65 @@ Rebuild the app after `pnpm build` (the UI is embedded).
 
 Screenshots: `--real --shots DIR` (dark set via the UI's localStorage preference).
 
+Two scripts live OUTSIDE the repos, on the development box, in `/work/mewais/Marsad/.notes/`:
+- `build-windows.sh [branch]` cross-builds the Windows x64 NSIS installer from a clean local clone of
+  Marsad's `session-flows` (no path patches, so the committed `Cargo.lock` pins must be current and
+  Wasit/Wasl pushed): `marsad-agent` for `x86_64-pc-windows-msvc` (`cargo xwin`) and
+  `x86_64-unknown-linux-musl` with `--locked`, `scripts/stage-bundle.sh`, then `pnpm tauri build --runner
+  cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis -- --locked`; it copies
+  `Marsad_<version>_x64-setup-<commit>.exe` to the owner's Windows Downloads folder (path set in the
+  script). Needs cargo-xwin and makensis; about 18 minutes. It bundles only the Windows x64 and linux-musl
+  x64 helpers (no aarch64 or macOS). The installer it produced was never run by the builder.
+- `verify-all.sh` is the integrated verification of the three checkouts (with the path patches): per
+  repo build of all targets, tests, clippy `-D warnings`, fmt; `cargo xwin check` for Windows (the whole Wasit
+  workspace, only `marsad-agent` and its tests for Marsad); Marsad also regenerates the TypeScript types and counts diffs, `pnpm build`, vitest and the
+  shell's `cargo test`; it restores Marsad's two lock files at the end. It sets `WASIT_TEST_SHELL_DIR` to a
+  directory holding real csh/tcsh/bsd-csh (Wasit's shell tests fail when a shell is missing) and runs
+  Marsad's clippy with `-A clippy::nonminimal_bool`.
+
 ## Not done / known
 - Free models are slow/flaky: `opencode run` occasionally stalls (retried); a /review on the
   free model can run for minutes (the slash scenario interrupts after a minute). A failing live
   scenario can cascade into the next ones on the same session — rerun with `--only`.
-- Spawning: templates saved from a workstream keep spawned nodes as ordinary nodes; `--real` e2e
-  has no live spawn scenario (Rust live test only); the hub view does not say *why* a spawn gate
-  went away (the asking agent gets the reason).
+- Spawning: `--real` e2e has no live spawn scenario (Rust live test only).
 - The fake CLI's `mcp_call` step is synchronous, so the interrupt-while-a-tool-blocks tests drive
   `wasl.spawn` over RPC during a `wait_for_interrupt` turn instead of through the fake agent.
+- Session-flows round, open:
+  - **B4 (a prompt after a finished turn never arrived) is not established.** Only the owner's real CLI can
+    show it; ask for a diagnostics export (Settings → Diagnostics) and read the session's prompt path.
+  - **Reusing one authenticated ssh connection on Linux/macOS is not done**, waiting for the owner's choice
+    of lifetime and the security trade-off (`hub/transport.rs` still passes `ControlMaster=no`); a Windows
+    hub gains nothing from it. Every connect starts a new ssh, so a host that needs interactive login asks
+    again after the app or its daemon restarts.
+  - In the app, "queued" means a prompt still held by Marsad's driver and not yet written to the agent; one
+    written to an agent that queues prompts itself shows as sent, and the app has no separate mark for
+    "written but not yet acknowledged by the agent" (`features/session/transcript.ts`; the acknowledgement is
+    in the session trail in Developer mode). For B4 this means a prompt the agent never took looks like any
+    sent prompt in the transcript.
+  - After the last background task ends the session reads Idle for 10–100 ms (in the recordings) until
+    the turn the CLI starts by itself: the CLI gives no notice, so this is the truthful reading. If no turn
+    follows, no "finished" notification is raised at all (`src-tauri/src/notify.rs` documents it).
+  - Earlier history is bounded (most recent 64 MiB, items cut at 256 KiB, a main file above 1 GiB not
+    imported) and has no load-older: omitted messages are only counted. A subagent that appears only in
+    earlier history is not in the snapshot's subagent list, so its transcript view shows the generic label
+    "Subagent" and says the session has no record of it (`SubagentView.tsx`).
+  - A gate raised after its turn ended (between turns, or while only background work runs) belongs to the
+    session, not to a turn, and is not withdrawn when a turn is interrupted or ends (Wasit §3.7).
+  - One-key gate answers are unchanged: `a`, `d` and `1`–`4` answer the active gate without confirmation
+    (`features/gates/PermissionGate.tsx`; the investigation listed this as the owner's product rule).
+  - Nothing in Marsad or Wasit stops two sessions, or a session and the user's own terminal, from driving the
+    same agent conversation at once (no check found in `manager.rs` create or the hub; the investigation
+    proposed refusing it on one host, not implemented): the transcript can branch.
+  - csh and tcsh cannot check setup commands without running them: for csh and bsd-csh the commands before a
+    syntax error have already run; only a real tcsh pre-checks, and lexical errors only. Wasit's
+    `ARCHITECTURE.md` §3.5 and the module doc of `wasit-runtime/src/environment.rs` describe this.
+  - The terminal's close grace is `HANG_UP_GRACE` = 2 s (then the shell is killed; reaping bounded by
+    `KILL_WAIT` = 10 s) in `crates/marsad-agent/src/host/pty.rs`; the values are not measured, the code
+    comment only says a shell takes milliseconds.
+  - Not verified: any of this round on Windows or macOS (compile check only), real Codex and OpenCode
+    (their earlier history, acknowledgements and queue behaviour were tested against the stand-ins and
+    recorded fixtures only), the real-app suite `e2e-real`, the cross-built installer, and the visual
+    result of the new UI (tool-run row, not-sent bubbles, model menu, sidebar, sign-in dialog) by a
+    person. The owner answered "Defaults are good" to the diagnostics defaults only. The interactive-login rule
+    and the "Allow and remember" listing were built as the manager recommended; the owner was asked at
+    checkpoint 1 and has not answered yet.
