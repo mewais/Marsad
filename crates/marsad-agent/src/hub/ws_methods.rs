@@ -279,32 +279,18 @@ impl HubServices {
     ) -> Result<LaunchWorkstreamReply, MarsadError> {
         let (doc, todo) = self.workstreams.begin_launch(id).await?;
         let launches = todo.iter().map(|(node, spec)| {
-            let req = self.node_launch_request(id, node, spec);
             let name = doc
                 .nodes
                 .iter()
                 .find(|n| n.id == *node)
                 .map(|n| n.name.trim().to_string())
                 .filter(|n| !n.is_empty());
+            let req = self.node_launch_request(id, node, name, spec);
             async move {
                 let r = match self.host_of(spec.host.clone()) {
                     Ok(_) => self.launch(ctx, req).await,
                     Err(e) => Err(e),
                 };
-                // A node's session is called what the node is called (a node often has no
-                // first prompt, which would otherwise name it).
-                if let (Ok(reply), Some(name)) = (&r, name) {
-                    let rename = wasit_runtime::wire::RenameSession {
-                        id: reply.id.clone(),
-                        display_name: Some(name),
-                    };
-                    let done: Result<marsad_proto::Ack, _> = self
-                        .on_host(ctx, &reply.host, rt_methods::SESSIONS_RENAME, rename)
-                        .await;
-                    if let Err(e) = done {
-                        hub_events::node_name_failed(&node, &e);
-                    }
-                }
                 (node.clone(), r)
             }
         });
@@ -380,12 +366,21 @@ impl HubServices {
         })
     }
 
-    fn node_launch_request(&self, ws: &str, node: &str, spec: &NodeLaunch) -> LaunchRequest {
+    /// The request for one node's session. `name` is the node's (trimmed) name: the session is
+    /// created with it, so the agent's own conversation is titled with it where it can be.
+    fn node_launch_request(
+        &self,
+        ws: &str,
+        node: &str,
+        name: Option<String>,
+        spec: &NodeLaunch,
+    ) -> LaunchRequest {
         let mut req = LaunchRequest::new(spec.driver.clone());
         req.host = spec.host.clone();
         req.cwd = spec.cwd.clone();
         req.model = spec.model.clone();
         req.mode = spec.mode.clone();
+        req.name = name;
         req.labels = spec.labels.clone();
         req.resume = spec.resume.clone();
         req.id = spec.session_id.clone();

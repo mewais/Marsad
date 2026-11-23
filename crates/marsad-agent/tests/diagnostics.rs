@@ -12,7 +12,7 @@ use common::*;
 use marsad_proto::agentconfig::{LaunchReply, LaunchRequest};
 use marsad_proto::layout::Layout;
 use marsad_proto::runtime::{SessionEvent, SessionEventKind};
-use marsad_proto::{methods, AgentEvent, Command};
+use marsad_proto::{methods, Command};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use wasit_fake_cli::scenario::{Scenario, Turn};
@@ -2073,7 +2073,7 @@ mod connect {
         use marsad_proto::export::ExportRequest;
         use marsad_proto::hosts::HostVar;
         use marsad_proto::{
-            ConfigItemKind, GateDecision, GateRequest, McpTransport, QuestionAnswer,
+            AgentEvent, ConfigItemKind, GateDecision, GateRequest, McpTransport, QuestionAnswer,
         };
         const FIRST: &str = "LEAK\"first-prompt\"a1b2c3";
         const QUEUED: &str = "LEAK\"queued-prompt\"d4e5f6";
