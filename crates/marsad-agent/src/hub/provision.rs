@@ -337,6 +337,7 @@ impl LinkConnector for BootstrapConnector {
         &self,
         spec: &HostSpec,
         opts: ClientOptions,
+        attempt: u64,
     ) -> Result<ControlClient, ConnectError> {
         let entry = self.entry(&spec.id)?;
         let host = entry.id.clone();
@@ -360,7 +361,8 @@ impl LinkConnector for BootstrapConnector {
         let (mut io, child, boot) = loop {
             let argv = bootstrap_argv(&entry, shell)
                 .ok_or_else(|| ConnectError::Spawn("the local host has no link".into()))?;
-            let mut cmd = CommandSpec::new(argv);
+            // The transport's spawn and exit are recorded under this link and attempt.
+            let mut cmd = CommandSpec::new(argv).traced(spec.diag_link(), attempt);
             cmd.env = vec![
                 (
                     "SSH_ASKPASS".into(),

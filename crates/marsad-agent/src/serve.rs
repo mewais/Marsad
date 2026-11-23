@@ -368,7 +368,7 @@ async fn start_hub(
 /// An in-process supervised connection to the hub's routing service: the workstream actor
 /// talks to every host's node (local or remote) through it, with `host` on each request.
 fn loopback(routing: Arc<dyn Service>, build: &str, host_id: &str) -> Supervised {
-    let server = ControlServer::new(
+    let server = ControlServer::in_process(
         routing,
         Hello::new(build, host_id, "hub"),
         ConnConfig::default(),
