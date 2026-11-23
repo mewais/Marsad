@@ -23,8 +23,7 @@ async fn readiness_single_instance_version_mcp_and_stop() {
     let data = d.path().join("d");
     let mut child = tokio::process::Command::new(agent())
         .arg("serve")
-        .arg("--data")
-        .arg(&data)
+        .args(data_args(&data))
         .args(serve_args())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -46,8 +45,7 @@ async fn readiness_single_instance_version_mcp_and_stop() {
     // A second daemon on the same endpoint refuses to start.
     let second = tokio::process::Command::new(agent())
         .arg("serve")
-        .arg("--data")
-        .arg(&data)
+        .args(data_args(&data))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -73,11 +71,7 @@ async fn readiness_single_instance_version_mcp_and_stop() {
     let mut mcp = tokio::process::Command::new(agent())
         .arg("mcp")
         .arg("--socket")
-        .arg(
-            marsad_proto::layout::Layout::resolve(data.clone(), None)
-                .unwrap()
-                .socket(),
-        )
+        .arg(layout(&data).socket())
         .arg("--session")
         .arg("aaaaaaaaaaaa")
         .stdin(Stdio::piped())
@@ -150,8 +144,7 @@ async fn readiness_single_instance_version_mcp_and_stop() {
     // `stop` makes the daemon exit and frees its lock.
     let st = tokio::process::Command::new(agent())
         .arg("stop")
-        .arg("--data")
-        .arg(&data)
+        .args(data_args(&data))
         .output()
         .await
         .unwrap();
@@ -167,8 +160,7 @@ async fn readiness_single_instance_version_mcp_and_stop() {
     assert!(code.success());
     let again = tokio::process::Command::new(agent())
         .arg("stop")
-        .arg("--data")
-        .arg(&data)
+        .args(data_args(&data))
         .output()
         .await
         .unwrap();

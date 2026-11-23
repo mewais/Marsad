@@ -254,7 +254,6 @@ fn asks_or_waits(e: &FleetEvent, host: &str) -> bool {
 
 /// One hub, one sshd, one passphrase host `pp` (not added yet).
 struct Rig {
-    d: TempDir,
     sshd: Sshd,
     key: PathBuf,
     data: PathBuf,
@@ -263,6 +262,8 @@ struct Rig {
     tail: Tail,
     id: HostId,
     markers: u32,
+    /// Last: what the rig started goes before the directory it lives in.
+    d: TempDir,
 }
 
 impl Rig {
@@ -964,9 +965,11 @@ async fn a_second_connection_within_one_sign_in_says_why_it_asks_again() {
     let mut old = tokio::process::Command::new(&bin)
         .arg("serve")
         .env("HOME", &r.sshd.remote_home)
+        .env("MARSAD_RUNTIME_DIR", r.sshd.runtime_dir())
         .env("MARSAD_BUILD_ID", "0.0.0+old")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .unwrap();
     let mut line = String::new();

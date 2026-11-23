@@ -32,10 +32,8 @@ use serde_json::json;
 use wasit_fake_cli::scenario::{Scenario, Turn};
 
 fn hub_client(dir: &Path) -> MarsadClient {
-    let mut cfg =
-        marsad_client::ClientConfig::new(dir, wasit_control::Hello::new("test", "gui", "gui"));
-    cfg.agent_bin = Some(agent());
-    cfg.serve_args = serve_args();
+    let mut cfg = client_config(dir, wasit_control::Hello::new("test", "gui", "gui"));
+    cfg.serve_args.extend(serve_args());
     cfg.supervise.backoff.initial = Duration::from_millis(50);
     cfg.supervise.backoff.max = Duration::from_millis(500);
     MarsadClient::connect(cfg)

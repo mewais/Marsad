@@ -2,6 +2,7 @@
 //! Shared harness: short temp dirs, the real `marsad-agent` and `wasit-fake-cli` binaries,
 //! clients, bounded waits, git repos, and a real sshd on localhost for remote hosts.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,16 +23,19 @@ use wasit_fake_cli::scenario::Scenario;
 pub const T: Duration = Duration::from_secs(60);
 pub const DRIVERS: [&str; 4] = ["claude", "codex", "opencode", "kilo"];
 
-/// Short temp dir (Unix socket paths are limited to ~104 bytes).
+/// Short temp dir (Unix socket paths are limited to ~104 bytes). Everything a test starts lives
+/// below it: the data roots, the daemons' runtime directories ([`run_dir`]), the sshd of the
+/// "remote" machines. Dropping it ends what is still running below it and removes it.
 pub struct TempDir(pub PathBuf);
+
+/// The prefix of a [`TempDir`]'s name.
+const TEMP_PREFIX: &str = "mrs-";
 
 impl TempDir {
     pub fn new() -> Self {
         static N: AtomicU64 = AtomicU64::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
-        // Fixed width: the cleanup below matches processes by this path as a prefix, and
-        // `mrs-1-1` must not match `mrs-1-10`.
-        let p = std::env::temp_dir().join(format!("mrs-{}-{n:03}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("{TEMP_PREFIX}{}-{n:03}", std::process::id()));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         TempDir(p)
@@ -41,8 +45,10 @@ impl TempDir {
     }
 }
 
-/// Kill every process whose command line mentions `needle` (test cleanup). On Windows the
-/// needle is matched as a plain substring (PowerShell `-like`), not a regex.
+/// Kill every process whose command line matches `needle`. Only for a test that names a process
+/// by a command line that is its own (the ssh to its sshd's port): ending what a test started is
+/// `TempDir`'s drop, never this. On Windows the needle is matched as a plain substring
+/// (PowerShell `-like`), not a regex.
 pub fn pkill(needle: &str) {
     #[cfg(unix)]
     let _ = std::process::Command::new("pkill")
@@ -92,13 +98,43 @@ pub fn stop_pid(pid: u32) {
     kill_pid(pid);
 }
 
+/// The data roots whose hub daemon a client starts ([`client_config`]). The product's client
+/// cannot be told a runtime directory, so such a daemon keeps it in the machine's default place
+/// (named by a hash of the data root's path, which holds the test process's id, so it is no
+/// one else's), which the harness removes with the test. Every other daemon of a test gets
+/// [`run_dir`].
+static CLIENT_ROOTS: std::sync::Mutex<BTreeSet<PathBuf>> = std::sync::Mutex::new(BTreeSet::new());
+
+fn client_roots() -> std::sync::MutexGuard<'static, BTreeSet<PathBuf>> {
+    CLIENT_ROOTS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 impl Drop for TempDir {
     fn drop(&mut self) {
         if std::env::var_os("MARSAD_TEST_KEEP").is_some() {
             return;
         }
-        // Daemons, shims and fake CLIs started under this dir.
-        pkill(&self.0.to_string_lossy());
+        let client_runs: Vec<PathBuf> = {
+            let mut all = client_roots();
+            let mine: Vec<PathBuf> = all
+                .iter()
+                .filter(|root| root.starts_with(&self.0))
+                .cloned()
+                .collect();
+            all.retain(|root| !root.starts_with(&self.0));
+            mine.into_iter()
+                .filter_map(|root| Layout::resolve(root, None).ok())
+                .map(|l| l.run)
+                .collect()
+        };
+        // Daemons and session shims (with their CLIs) started anywhere below this directory, or
+        // in the default runtime directories of the hubs the clients started, outlive their
+        // starters on purpose: end them before their files go.
+        wasit_fake_cli::harness::stop_all_under(&self.0);
+        for run in &client_runs {
+            wasit_fake_cli::harness::stop_all_under(run);
+            let _ = std::fs::remove_dir_all(run);
+        }
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
@@ -142,9 +178,49 @@ pub fn serve_args() -> Vec<String> {
     v
 }
 
-pub fn client(data: &Path) -> MarsadClient {
-    let mut cfg = ClientConfig::new(data, Hello::new("test", "gui-test", "gui"));
+/// The runtime directory of the daemon of `data`, unless a client starts it: inside the test's
+/// own [`TempDir`], so it goes with it, its socket paths stay short, and nothing lands in the
+/// machine's runtime directory, where the real installation's daemon lives. The tests give it to
+/// the daemons they start (`--run-dir`, [`data_args`]) and to the layouts they resolve
+/// ([`layout`]). (The "remote" machines get theirs from `MARSAD_RUNTIME_DIR` in their own login
+/// environment; a variable of the test process would be shared by parallel tests.)
+pub fn run_dir(data: &Path) -> PathBuf {
+    let temp = data
+        .ancestors()
+        .find(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with(TEMP_PREFIX))
+        })
+        .unwrap_or_else(|| panic!("{} is not inside a TempDir", data.display()));
+    let rel = data.strip_prefix(temp).unwrap();
+    let name = rel.to_string_lossy().replace(['/', '\\'], "_");
+    temp.join("run")
+        .join(if name.is_empty() { "root" } else { &name })
+}
+
+/// The options that say where the daemon of `data` keeps its files (`serve`, `bridge`, `stop`,
+/// `diagnostics export`): `--data <data>` and, unless a client starts it, `--run-dir`.
+pub fn data_args(data: &Path) -> Vec<String> {
+    let mut v = vec!["--data".to_string(), data.display().to_string()];
+    if !client_roots().contains(data) {
+        v.extend(["--run-dir".into(), run_dir(data).display().to_string()]);
+    }
+    v
+}
+
+/// A client that starts, on demand, the hub daemon of `data` (the daemon keeps its runtime
+/// directory in the machine's default place, see [`CLIENT_ROOTS`]) with the daemon binary of
+/// this build. The caller adds the daemon's options to `serve_args`.
+pub fn client_config(data: impl AsRef<Path>, hello: Hello) -> ClientConfig {
+    let data = data.as_ref();
+    client_roots().insert(data.to_path_buf());
+    let mut cfg = ClientConfig::new(data, hello);
     cfg.agent_bin = Some(agent());
+    cfg
+}
+
+pub fn client(data: &Path) -> MarsadClient {
+    let mut cfg = client_config(data, Hello::new("test", "gui-test", "gui"));
     cfg.serve_args = serve_args();
     cfg.supervise.backoff.initial = Duration::from_millis(50);
     cfg.supervise.backoff.max = Duration::from_millis(500);
@@ -154,8 +230,7 @@ pub fn client(data: &Path) -> MarsadClient {
 /// A hub daemon (started on demand by its client) under `dir` with `extra` serve options, whose
 /// client retries quickly.
 pub fn hub_client(dir: &Path, extra: &[&str]) -> MarsadClient {
-    let mut cfg = ClientConfig::new(dir, Hello::new("test", "gui", "gui"));
-    cfg.agent_bin = Some(agent());
+    let mut cfg = client_config(dir, Hello::new("test", "gui", "gui"));
     cfg.serve_args = serve_args();
     cfg.serve_args.extend(extra.iter().map(|s| s.to_string()));
     cfg.supervise.backoff.initial = Duration::from_millis(50);
@@ -279,7 +354,7 @@ mod sshd {
         pub known_hosts: PathBuf,
         pub remote_home: PathBuf,
         /// What an `authorized_keys` line starts with for a key that logs in as the "remote"
-        /// machine (its `HOME`, `PATH` and shell), or nothing.
+        /// machine (its `HOME`, `PATH`, shell and runtime directory), or nothing.
         authorized_prefix: String,
         sshd_bin: PathBuf,
         /// The listener; `None` while [`Sshd::stop`] has it down.
@@ -344,11 +419,13 @@ mod sshd {
             let pubkey = std::fs::read_to_string(key.with_extension("pub")).unwrap();
             let path = format!("{}:/usr/local/bin:/usr/bin:/bin", fakebin.display());
             let authorized_prefix = if env_home {
+                // The "remote" machine's daemons keep their sockets in the test's own directory.
                 format!(
                     "environment=\"HOME={}\",environment=\"PATH={path}\",\
-                     environment=\"SHELL={}\" ",
+                     environment=\"SHELL={}\",environment=\"MARSAD_RUNTIME_DIR={}\" ",
                     remote_home.display(),
-                    fakebin.join("loginsh").display()
+                    fakebin.join("loginsh").display(),
+                    dir.join("run").display()
                 )
             } else {
                 String::new()
@@ -442,6 +519,17 @@ mod sshd {
             );
         }
 
+        /// The runtime directory base of the "remote" machine's daemons (what its logins get as
+        /// `MARSAD_RUNTIME_DIR`): inside the test's own directory.
+        pub fn runtime_dir(&self) -> PathBuf {
+            self.dir.join("run")
+        }
+
+        /// The pid of the listener (it must be running).
+        pub fn pid(&self) -> u32 {
+            self.child.as_ref().expect("sshd is running").id()
+        }
+
         /// Takes the listener down (this test's own sshd, by its child handle): nothing listens
         /// on the port until [`Sshd::start_again`]. Sessions it already has are its children's.
         pub fn stop(&mut self) {
@@ -482,7 +570,7 @@ mod sshd {
         /// and runtime directory (the overrides Marsad honours), the same `HOME`.
         pub fn start_machine(dir: &Path, name: &str, home: &Path, machine: &str) -> Sshd {
             let mut s = Self::start_custom(dir, name, "", true);
-            let run = s.dir.join("run");
+            let run = s.runtime_dir();
             let pubkey = std::fs::read_to_string(s.key.with_extension("pub")).unwrap();
             let path = format!(
                 "{}:/usr/local/bin:/usr/bin:/bin",
@@ -547,8 +635,11 @@ pub fn common_bin_rel() -> String {
     };
     format!(".marsad/bin/{os}-{}/marsad-agent", std::env::consts::ARCH)
 }
+/// The layout of `data` with its daemon's runtime directory ([`run_dir`], or the machine's
+/// default one for a daemon a client starts).
 pub fn layout(data: &Path) -> Layout {
-    Layout::resolve(data.to_path_buf(), None).unwrap()
+    let run = (!client_roots().contains(data)).then(|| run_dir(data));
+    Layout::resolve(data.to_path_buf(), run).unwrap()
 }
 
 /// Every line of an NDJSON diagnostics file, parsed (a line that is not JSON fails the test).
@@ -571,8 +662,7 @@ pub async fn stop(data: &Path) -> std::process::Output {
         T,
         tokio::process::Command::new(agent())
             .arg("stop")
-            .arg("--data")
-            .arg(data)
+            .args(data_args(data))
             .output(),
     )
     .await

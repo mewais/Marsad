@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use common::*;
-use marsad_client::{ClientConfig, MarsadClient};
+use marsad_client::MarsadClient;
 use marsad_proto::agentconfig::LaunchRequest;
 use marsad_proto::export::ExportRequest;
 use marsad_proto::hosts::{HostEnvSettings, HostVar};
@@ -40,9 +40,8 @@ fn claude_on_path() -> Option<PathBuf> {
 
 /// A hub daemon started by its client with the real drivers (no stand-in binaries).
 fn live_client(data: &Path) -> MarsadClient {
-    let mut cfg = ClientConfig::new(data, Hello::new("test", "gui-live", "gui"));
-    cfg.agent_bin = Some(agent());
-    cfg.serve_args = vec!["--host-id".into(), "hub".into()];
+    let mut cfg = client_config(data, Hello::new("test", "gui-live", "gui"));
+    cfg.serve_args.extend(["--host-id".into(), "hub".into()]);
     MarsadClient::connect(cfg)
 }
 
